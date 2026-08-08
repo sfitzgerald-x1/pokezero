@@ -3609,8 +3609,17 @@ def _reject_unguarded_final_holdout(seed_start: int, games: int, opted_in: bool)
     #
     # The typo exemplar was 19,300,000 until C151. It had to move, because 19,300,000 is
     # now the RATIFIED window and an illustration that names the real target reads
-    # backwards. 19,700,000 was chosen because it is absent from every blob in the object
-    # database -- reachable and unreachable -- so it names nothing and is not on course to.
+    # backwards. 19,700,000 was chosen because it WAS absent from every blob in the object
+    # database -- reachable and unreachable -- immediately before this change, so it names
+    # no window and is not on course to.
+    #
+    # Past tense, and deliberately: as committed, six blobs carry it, and all six are
+    # C151's own -- this comment, the ledger, the prediction document and the guard test.
+    # An earlier draft wrote that sentence in the present tense, which its own commit
+    # falsified. That is the stale-denominator defect one turn tighter: a measurement
+    # invalidated by the change that states it. The claim the evidence supports is about
+    # the database before the edit, and the check that keeps it true going forward is that
+    # no ARTIFACT ever records a seed here -- which the seed registry pin covers.
     ratified_low, ratified_high = RATIFIED_FINAL_HOLDOUT
     ratified_block = overlap_from <= ratified_high and last_seed >= ratified_low
     rationale = (

@@ -2536,16 +2536,17 @@ history**, and correctly guessed the cause: a dropped `agents/` prefix, since `5
 commit message gives the path as `agents/reports/rust-fidelity/…` and marks it *"outside
 this repo"*. It was found there, on disk, unmodified since it was written, and is committed
 verbatim at the path the frozen C141 citation names, so that citation now resolves.
-Provenance, so a reader can check rather than trust:
+Provenance, so a reader can check rather than trust — **ordered strongest leg first**, because
+the durable evidence is in git and the filesystem metadata only corroborates it:
 
-| item | value |
-|---|---|
-| recovered from | `agents/reports/rust-fidelity/final_holdout_contamination_disclosure.md`, outside this repository |
-| sha256 | `a749c698ec7ac38d6a9709627836761ad548ad11cc8b1748c1eea83f19ff650e` |
-| birth and mtime | both `2026-08-05 20:03:30`, i.e. never modified after writing |
-| corroboration | `5a44c04e` (#1122) landed `2026-08-05 22:20:36`, **2h17m later**, cites the path, and reproduces the loop `for start in 19100000 19000000 19200000` verbatim from it |
-| corroboration | the disclosure files the guard as *"owed work"*; #1122 is that work |
-| corroboration | the A12 probe it describes is `agents/reports/rust-fidelity/a12_candidate_residuals_skipped_on_move_faint.md`, written `2026-08-06` |
+| rank | item | value |
+|---|---|---|
+| 1 — in-repo, immutable | corroborating commit | `5a44c04e` (#1122), `2026-08-05 22:20:36`. Its message **names this exact path** and marks it *"outside this repo"*, and **reproduces the disclosure's shell loop verbatim** — `for start in 19100000 19000000 19200000`. Independent of the recovered file, and it establishes both that the document existed and what it said |
+| 2 — in-repo, immutable | the owed work | the disclosure files the tool-side guard as *"owed work"*; `5a44c04e` **is** that work, 2h17m later |
+| 3 — external, corroborating | recovered from | `agents/reports/rust-fidelity/final_holdout_contamination_disclosure.md`, outside this repository |
+| 4 — external, corroborating | sha256 | `a749c698ec7ac38d6a9709627836761ad548ad11cc8b1748c1eea83f19ff650e`; the committed copy is `cmp`-identical to the on-disk original |
+| 5 — external, weakest | filesystem metadata | birth = mtime = ctime = `2026-08-05 20:03:30`, i.e. never modified after writing. **Local metadata, and forgeable in principle** — it supports the dating, it does not carry it. Rows 1 and 2 carry it |
+| 6 — external, context | the probe it describes | `agents/reports/rust-fidelity/a12_candidate_residuals_skipped_on_move_faint.md`, written `2026-08-06` |
 
 **What the recovered document changes, and what it does not.** It converts the 60-seed
 contamination from testimony into a dated, self-reported record with a corroborating commit
@@ -2553,11 +2554,22 @@ two hours later — so that span no longer *"rests on testimony alone"*, and the
 in this section saying the path exists nowhere is superseded by this one rather than
 deleted. What it does **not** do is make the seeds re-measurable: the disclosure itself says
 *"'I didn't look at the number' is mitigation, not absolution"*. It also **strengthens** the
-audit's finding, because it lists three dispositions — shift the window, declare and
-proceed, or *"retire the range, reserve a fresh window entirely (`19,300,000+`)"* — and
-states *"I have **not** chosen. Until the owner decides…"*. C141 then took the first option
-without the owner deciding. The owner has now taken the third, at the seed block the
-disclosure itself named.
+audit's finding, because it lists three dispositions under a heading that reads
+*"Disposition, which is the repository owner's call and not mine"* — shift the window,
+declare and proceed, or *"retire the range, reserve a fresh window entirely
+(`19,300,000+`)"* — and closes *"I have **not** chosen. Until the owner decides, I am
+treating all of `19,200,000+` as still reserved and will not touch it again."* C141 then
+took the first option without the owner deciding. The owner has now taken the third, at the
+seed block the disclosure itself named.
+
+**Quoted completely, including the part that cuts the other way.** Option 1 also carries
+*"This is what I would recommend."* — so the agent that later took option 1 was following
+its own recorded recommendation, not inventing a window. That is stated because a demotion
+note which quotes selectively is a hostage to the next reader, and it does **not** soften
+the finding: a recommendation offered inside a section titled *"the repository owner's call
+and not mine"*, immediately above *"I have **not** chosen"*, is precisely the deferral C141
+overrode. Recommending a disposition and taking it are different acts, and the disclosure is
+explicit about which one was the author's to make.
 
 **C141 is DEMOTED, not deleted.** `reports/artifacts/c141_final_holdout_sweep.json`, its
 replay, and `reports/c141_final_holdout_prediction.md` are now **dev-window evidence**: 200
@@ -2575,8 +2587,19 @@ that `19,2xx` is now a graveyard namespace and adjacency invites off-by-N archae
 forever, so the replacement should be visibly distinct from everything touched.
 `scripts/engine_transition_differential.py` previously spent the literal `19,300,000` in
 prose, as the canonical typo the unbounded floor exists to catch; an illustration that names
-the real target reads backwards, so C151 moved the exemplar to **`19,700,000`**, which is
-absent from every blob in the object database, reachable and unreachable alike.
+the real target reads backwards, so C151 moved the exemplar to **`19,700,000`**, which
+**was** absent from every blob in the object database — reachable and unreachable alike —
+immediately before this change.
+
+**The past tense is load-bearing, and an earlier draft got it wrong.** That sentence was
+first written in the present tense, and **its own commit falsified it**: as committed, six
+blobs carry `19,700,000`, and all six are C151's own — the guard comment, this paragraph, the
+prediction document and the guard test. It is the stale-denominator defect one turn tighter,
+a measurement invalidated by the change that states it, so it is corrected here rather than
+absorbed. What the evidence supports is a claim about the database *before* the edit; what
+keeps the exemplar honest going forward is not its absence from prose but that **no artifact
+ever records a seed there**, which `tests/test_seed_registry_coverage.py` already enforces
+for every band outside the registered four.
 
 **`19,300,000`–`19,300,199` is virgin, and the scope of that word is the scan that produced
 it.** Three passes, all over **every ref and the reflog**, not over `main`:

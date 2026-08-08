@@ -617,13 +617,16 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_final_holdout_guard -v 2>&1 \
             | tee /tmp/holdout.log
-          # 14 -> 24 (C151): `TheBurnedBlockAndTheOwnerRatificationTests`. Ten pins for
+          # 14 -> 25 (C151): `TheBurnedBlockAndTheOwnerRatificationTests`. Eleven pins for
           # the two properties this file did not previously have -- that
           # `19,200,000`-`19,200,259` is BURNED and no opt-in reopens it, and that
           # `OWNER_RATIFIED` carries the window and the owner's name so a blessing is a
           # reviewable diff rather than a sentence in a document an agent can walk past.
-          if ! grep -qE 'Ran 24 tests' /tmp/holdout.log; then
-            echo "::error::expected 24 final-holdout pins; the suite shrank or grew"
+          # 24 -> 25 on review: the AGGREGATION refusal's rationale was pinned nowhere, so
+          # rewriting it down to "reserved" left both suites green while the execution
+          # message's rationale was pinned three ways.
+          if ! grep -qE 'Ran 25 tests' /tmp/holdout.log; then
+            echo "::error::expected 25 final-holdout pins; the suite shrank or grew"
             exit 1
           fi
           # No pin may skip. Every one runs without a Showdown checkout by

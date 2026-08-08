@@ -740,9 +740,9 @@ class TheRatifiedC151WindowIsNotYetSweptTests(unittest.TestCase):
     Once swept, the virginity pin turns red, which is the signal to do the ratification
     bookkeeping in the prediction document's section 10 and delete this class.
 
-    MUTATION BATTERY: 18 applied across this class and
-    `TheBurnedBlockAndTheOwnerRatificationTests`, 18 caught, plus a clean-tree control that
-    stays green. Recorded because this repository has found four inert pins and eight
+    MUTATION BATTERY: 21 applied across this class and
+    `TheBurnedBlockAndTheOwnerRatificationTests`, 21 caught, plus clean-tree controls that
+    stay green. Recorded because this repository has found four inert pins and eight
     checks that assert nothing. Each mutation was applied to a clean tree, both modules run
     with caches cleared and exit codes captured directly, and the tree restored with
     `git checkout HEAD -- .` with the restoration verified by `git status --porcelain`

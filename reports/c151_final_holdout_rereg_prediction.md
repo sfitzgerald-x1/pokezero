@@ -65,14 +65,39 @@ window, 60-seed overrun) rather than merely "reserved", because a reader told on
 **The disclosure is no longer missing.** `reports/rust-fidelity/final_holdout_contamination_disclosure.md`
 — the sole justification for C141's narrowing, which the ledger recorded as existing in no
 tree in this repository's history — was recovered from outside the repo at exactly the path
-`5a44c04e`'s commit message gives, and is committed here verbatim. sha256
-`a749c698ec7ac38d6a9709627836761ad548ad11cc8b1748c1eea83f19ff650e`; birth and mtime both
-`2026-08-05 20:03:30`, unmodified since written; #1122 landed 2h17m later citing it and
-reproducing its shell loop verbatim. It **strengthens** the audit's finding rather than
-softening it: it lists three dispositions, the third being *"retire the range, reserve a
-fresh window entirely (`19,300,000+`)"*, and records *"I have **not** chosen. Until the
-owner decides…"*. C141 took the first without the owner deciding. The owner has now taken
-the third, at the block the disclosure itself named.
+`5a44c04e`'s commit message gives, and is committed here verbatim.
+
+**The evidence, strongest leg first.** The load-bearing corroboration is **in git**, not on a
+filesystem: `5a44c04e` (#1122) landed `2026-08-05 22:20:36`, **names this exact path** —
+`agents/reports/rust-fidelity/final_holdout_contamination_disclosure.md`, marked *"outside
+this repo"* — and **reproduces the disclosure's shell loop verbatim**, `for start in 19100000
+19000000 19200000`. That commit is immutable, signed into the history of this repository, and
+independent of the recovered file; it establishes both that the document existed and what it
+said, and it does so from inside the repo. The disclosure also files the guard as *"owed
+work"*, and #1122 **is** that work, 2h17m later.
+
+Only then the local metadata, which corroborates rather than carries: sha256
+`a749c698ec7ac38d6a9709627836761ad548ad11cc8b1748c1eea83f19ff650e`, and birth = mtime = ctime
+= `2026-08-05 20:03:30`, i.e. unmodified since written. That ordering is deliberate —
+filesystem timestamps are local metadata and forgeable in principle, so they are the
+supporting leg and the commit is the standing one.
+
+It **strengthens** the audit's finding rather than softening it. Under a heading reading
+*"Disposition, which is the repository owner's call and not mine"* it lists three options —
+shift the window, declare and proceed, or *"retire the range, reserve a fresh window entirely
+(`19,300,000+`)"* — and closes *"I have **not** chosen. Until the owner decides, I am treating
+all of `19,200,000+` as still reserved and will not touch it again."* C141 took the first
+without the owner deciding. The owner has now taken the third, at the block the disclosure
+itself named.
+
+**Quoted completely, including the part that cuts the other way.** Option 1 also carries
+*"This is what I would recommend."* — so C141 followed its own author's recorded
+recommendation rather than inventing a window. That is included because a record which quotes
+selectively is a hostage to the next reader, and it does **not** soften the finding:
+recommending a disposition inside a section titled *"the repository owner's call and not
+mine"*, one line above *"I have **not** chosen"*, is precisely the deferral C141 overrode.
+Recommending and taking are different acts, and the disclosure says which was the author's to
+make.
 
 ## 3. THE TRIGGER — ratified now, swept later, and the timing is part of the ratification
 
@@ -274,9 +299,22 @@ independent review.
   prose, as the canonical typo the unbounded floor exists to catch — *"a typo of 19,300,000
   should not sail through"*. An illustration that names the real target reads backwards, and a
   reader grepping for the window would find a comment calling it a typo. C151 moves the
-  exemplar to **`19,700,000`**, chosen because it is absent from **every blob in the object
-  database**, reachable and unreachable, so it names nothing and is not on course to. Pinned by
+  exemplar to **`19,700,000`**, chosen because it **was** absent from **every blob in the
+  object database** — reachable and unreachable — immediately before this change. Pinned by
   `test_the_typo_exemplar_no_longer_names_the_ratified_window`.
+
+  **⚠ CORRECTION, and it is a sharper instance of this document's own subject.** That sentence
+  was first written in the present tense — *"is absent from every blob"* — and **its own commit
+  falsified it.** As committed, **six** blobs carry `19,700,000`, and all six are C151's own:
+  the guard comment, the ledger paragraph, this document and the guard test. This is the
+  stale-denominator defect one turn tighter — not a measurement that went stale later, but one
+  **invalidated by the change that states it** — and it is the second scope defect this
+  document has had to correct about its own scans, after the `hc-*` tokenisation error in §7a.
+  The claim the evidence supports is about the object database *before* the edit. What keeps
+  the exemplar honest going forward is not its absence from prose, which C151 has already
+  ended, but that **no artifact ever records a seed there** — which
+  `test_every_committed_fidelity_seed_lies_in_a_registered_band` enforces for every band
+  outside the registered four. Caught by independent review.
 
 ## 8. Prediction
 
@@ -496,8 +534,9 @@ between a program that corrects itself and one that edits its history.
   Lines 1–80 remain byte-identical to `3687d205`, verified.
 * `reports/c151_final_holdout_rereg_prediction.md` — this document.
 * `tests/test_seed_registry_coverage.py`, `tests/test_final_holdout_guard.py` — the pins.
-* `.github/workflows/engine-fidelity-gates.yml` — two exact `Ran N tests` guards, which live in
-  YAML and **no local `unittest` or `pytest` run can see**.
+* `.github/workflows/engine-fidelity-gates.yml` — two exact `Ran N tests` guards, seed-registry
+  30 → 41 and final-holdout 14 → 25, which live in YAML and **no local `unittest` or `pytest`
+  run can see**.
 * `reports/certification_contract_lifecycle.json` — **one JSON is modified after all**, and the
   correction is recorded rather than quietly absorbed. An earlier draft of this section said "no
   JSON is added or modified". That was **false the moment the guard changed**, and the thing
@@ -523,9 +562,13 @@ changes it covers.** The differential's only edit is the seed-admission guard, a
 touches no classification is **AST-verified rather than asserted**: comparing parsed top-level
 definitions before and after gives exactly one added function
 (`_reject_burned_final_holdout`) and two changed ones (`_reject_unguarded_final_holdout`,
-`_reject_reserved_seeds_in_records`), nothing removed, 60 definitions before and 61 after. No
-matcher, classifier, attributor or counter function is in that set, so no committed number is
-re-derived and no boundary changes verdict. What *does* change is which inputs are **admitted**:
+`_reject_reserved_seeds_in_records`), **nothing removed**, 60 definitions before and 61
+after, and 35 → 39 module-level assignments with **none removed or changed**. No matcher,
+classifier, attributor or counter function is in that set, so no committed number is
+re-derived and no boundary changes verdict. The identity was re-stamped **twice** in this
+PR: once for the guard itself, and once for the comment-only past-tense fix above, which
+is AST-verified *identical* to the previous stamp and moved the hash only because the
+hash is over file bytes — the intended sensitivity, not a false alarm. What *does* change is which inputs are **admitted**:
 a run or a `--merge-from` over the burned block is now refused where the opt-in previously
 permitted it. C141's committed checkpoint carries 200 of those seeds, so that is a live effect
 rather than a hypothetical one.

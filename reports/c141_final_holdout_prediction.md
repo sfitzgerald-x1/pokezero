@@ -387,10 +387,21 @@ Three reasons, each checkable:
 1. **The window was self-blessed.** The pre-registration says so at `:16` — *"chosen by me
    rather than deferred"*. The disclosure it cites, now recovered and committed at
    `reports/rust-fidelity/final_holdout_contamination_disclosure.md`, lists three
-   dispositions for the contaminated 60 and records *"I have **not** chosen. Until the
+   dispositions for the contaminated 60, under a heading reading *"Disposition, which is the
+   repository owner's call and not mine"*, and records *"I have **not** chosen. Until the
    owner decides, I am treating all of `19,200,000+` as still reserved and will not touch
    it again."* This sweep took the first of those dispositions without the owner deciding.
    An adversarial audit ruled that this defeats completion.
+
+   **Quoted completely, including the part that cuts the other way:** option 1 — shift the
+   window to `19,200,060`–`19,200,259` — also carries *"This is what I would recommend."*
+   So this sweep followed its own author's recorded recommendation rather than inventing a
+   window, and that is said here because a demotion note which quotes selectively is a
+   hostage to the next reader. It does **not** change the finding. A recommendation made
+   inside a section titled *"the repository owner's call and not mine"*, one line above
+   *"I have **not** chosen"*, is exactly the deferral that was overridden: recommending a
+   disposition and taking it are different acts, and the disclosure says plainly which of
+   the two was the author's to make.
 2. **The engine it measured no longer ships.** `44ee1430708cbb55` / 71 patches, verified at
    `3687d205`, `16857e06` and `aa2f2d40`. `main` `2acd40ff` is `8e912b45544034e6` / 74:
    the Attract marker, the Sleep Talk double-reset guard and the Leech Seed band split

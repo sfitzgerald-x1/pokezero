@@ -399,11 +399,12 @@ class TheBurnedBlockAndTheOwnerRatificationTests(unittest.TestCase):
     "I have **not** chosen". Pinning the constant converts the blessing into a diff that
     carries the owner's name and cannot land without review.
 
-    MUTATION BATTERY: 18 applied across this class and
-    `TheRatifiedC151WindowIsNotYetSweptTests` in `tests/test_seed_registry_coverage.py`, 18
-    caught, plus a clean-tree control that stays green. Restore was `git checkout HEAD -- .`
-    with `git status --porcelain` verified empty between mutations. The ten that reach THIS
-    class, and each is a real escape route rather than a typo:
+    MUTATION BATTERY: 21 applied across this class and
+    `TheRatifiedC151WindowIsNotYetSweptTests` in `tests/test_seed_registry_coverage.py`, 21
+    caught, plus clean-tree controls that stay green. Restore was `git checkout HEAD -- .`
+    (or a file snapshot for the uncommitted round) with `git status --porcelain` verified
+    empty between mutations. The twelve that reach THIS class, and each is a real escape
+    route rather than a typo:
 
       1. the burn delegation deleted from `_reject_unguarded_final_holdout`, so the opt-in
          reopens the block -> 3 red, including the end-to-end CLI pin, which ERRORS because
@@ -421,7 +422,12 @@ class TheBurnedBlockAndTheOwnerRatificationTests(unittest.TestCase):
       8. the overrun reason stripped from the burn message -> 1 red. "Reserved" without a
          reason is what sends a reader looking for the flag that lifts it;
       9. the recovered disclosure deleted -> 1 red here and 1 in the sibling module;
-     10. and the clean-tree control, green, so none of the above is a false alarm.
+     10. the AGGREGATION refusal's rationale rewritten down to "reserved" -> 1 red. THIS
+         MUTATION WAS GREEN WHEN REVIEW RAN IT, and that is why the pin exists: the refusal
+         itself was pinned on both paths and the EXECUTION message's rationale was pinned
+         three ways, but this string was pinned nowhere;
+     11. the C141-artifact clause dropped from that same message -> 1 red;
+     12. and the clean-tree control, green, so none of the above is a false alarm.
     """
 
     def test_the_whole_burned_block_is_refused_including_both_edges(self) -> None:
@@ -494,6 +500,36 @@ class TheBurnedBlockAndTheOwnerRatificationTests(unittest.TestCase):
         self.assertIsNone(
             _reject_reserved_seeds_in_records([{"seed": RESERVED_NOT_BURNED}], True)
         )
+
+    def test_the_aggregation_refusal_says_why_and_not_merely_reserved(self) -> None:
+        # THE LOOSE STRING. Review found that rewriting this message's rationale down to
+        # "reserved" left BOTH suites green: the refusal itself was pinned on both paths
+        # and the EXECUTION message's why was pinned three ways, but the AGGREGATION
+        # message's why was pinned nowhere. That asymmetry matters more than it looks --
+        # `--merge-from` is the path an operator reaches for when they already have a
+        # checkpoint in hand, which is exactly when "reserved" sends them looking for the
+        # flag that lifts it. There is no such flag, and the message has to say so.
+        from engine_transition_differential import _reject_reserved_seeds_in_records
+
+        message = _reject_reserved_seeds_in_records(
+            [{"seed": s} for s in BURNED_FINAL_HOLDOUT], False
+        )
+        assert message is not None
+        for reason in (
+            "spent",
+            "contaminated head",
+            "self-blessed C141 window",
+            "60-seed overrun",
+        ):
+            self.assertIn(
+                reason, message,
+                f"the aggregation refusal no longer says: {reason}",
+            )
+        self.assertIn(f"{FINAL_HOLDOUT_OPT_IN} does NOT open it", message)
+        # And it must say what becomes of C141's artifacts, since this is the path that
+        # would otherwise fold them into a holdout report.
+        self.assertIn("DEV-WINDOW evidence", message)
+        self.assertIn("terminal", message)
 
     def test_the_owner_ratification_constant_is_exactly_what_was_signed(self) -> None:
         # Exact, both halves. A window without a name is a self-blessing with extra
