@@ -2609,12 +2609,22 @@ it.** Three passes, all over **every ref and the reflog**, not over `main`:
    `docs/` reachable from `git rev-list --objects --all --reflog` — **900** blobs, **145**
    reaching fidelity seed space. The union of every fidelity seed ever touched is exactly
    the four bands already in this table, and it does not intersect the window;
-2. a boundary-correct whole-number token pass over **all 8,507 reachable blobs**, any path
-   and any file type;
+2. a boundary-correct whole-number token pass over **every reachable blob**, any path and
+   any file type;
 3. the same pass over **every object in the database** — `git cat-file
-   --batch-all-objects`, **23,719** objects of which **8,742** are blobs, **235** of them
-   unreachable. The only blobs carrying a value inside the window are C151's own and the old
-   revisions of the guard comment that C151 moves.
+   --batch-all-objects` — unreachable and dangling objects included. The only blobs carrying
+   a value inside the window are C151's own, the recovered disclosure (whose option 3 names
+   `19,300,000+`), and the pre-C151 revisions of the guard comment that C151 moves. **No
+   artifact, no `seeds.min`/`max`, no `run.seed_start`.**
+
+**The object counts are deliberately not quoted here, and that is the lesson of this PR's own
+correction applied one more time.** The database grows with every commit — including the
+commit that would state the figure, and including the merge that lands it — so a permanent
+ledger carrying it would be stale on arrival, exactly as the `19,700,000` sentence above was
+falsified by its own commit. For orientation only, re-derived on the merged tree at the head
+of this PR and expected to drift: 23,778 objects, 8,766 blobs, 8,529 reachable, 237
+unreachable, 42 blobs carrying an in-window value and 0 of them artifacts. **Re-derive the
+scan; do not quote the denominator.**
 
 One blob does not parse — a conflict-marker intermediate of
 `reports/c102_consumed_choice_double_mutation.json`, reachable only from the reflog. An

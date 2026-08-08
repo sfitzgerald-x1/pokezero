@@ -234,7 +234,7 @@ database including unreachable objects:
    Overlap with `19,300,000`–`19,300,199`: **none.**
 
 2. **Raw, shape-free, every reachable blob.** A pass for any seed-shaped whole number in
-   `19,200,260`–`19,999,999` over **all 8,507 reachable blobs** — any path, any file type, so
+   `19,200,260`–`19,999,999` over **every reachable blob** — any path, any file type, so
    markdown, YAML, shell, Python and lockfiles are included, not just JSON. Tokenisation is
    **maximal numeric runs** — digits with optional `,`/`_` grouping, rejected if adjacent to
    another digit — of **exactly eight digits**. See the correction below for why that
@@ -253,14 +253,22 @@ database including unreachable objects:
    | `reports/c15_why_magnitude_statgap_current_engine.json` | `19921875` | the fractional part of the float `0.19921875`; scan 1 returns **no** interval for this file reaching fidelity space at all |
    | `uv.lock` | `19229139`, `19380991`, `19414622`, `19649463` | digit runs inside sha256 hashes and package URLs (`…d19229139cb…`, `…b427c19380991a4eaa…`) |
 
-3. **The whole object database, unreachable objects included.** The same pass over `git
-   cat-file --batch-all-objects`: **23,719** objects, of which **8,742** are blobs, **235**
-   of them unreachable from any ref. Nothing new lands in the window. The unreachable blobs
-   that carry `19,300,000` are old revisions of the guard comment that §7b moves.
+3. **The whole object database, unreachable and dangling objects included.** The same pass
+   over `git cat-file --batch-all-objects`. **No artifact lands in the window** — no
+   `seeds.min`/`max` and no `run.seed_start`, on any object in the database.
 
-**The only blobs carrying a value inside the window are C151's own** — the ledger row, this
-document, the guard constant and the CI comment — by construction, because the window has to
-be named to be registered.
+   **The object counts are deliberately not the claim.** They move with every commit,
+   including the one that states them and the merge that lands it — which is the same
+   failure the `19,700,000` sentence in §7b committed, so it is not repeated here. For
+   orientation only, re-derived on the merged tree at this PR's head and expected to drift:
+   23,778 objects, 8,766 blobs, 8,529 reachable, 237 unreachable; 42 blobs carry an in-window
+   value and **0 are artifacts**. Re-derive the scan; do not quote the denominator.
+
+**Every blob carrying a value inside the window was opened and accounted for**, and they fall
+into three groups: C151's own files, by construction, because the window has to be named to be
+registered; the **pre-C151 revisions of the guard comment** that §7b moves, which are where
+all seven of the unreachable hits live; and the **recovered disclosure**, whose disposition
+option 3 names `19,300,000+` — the block the owner went on to ratify. None is an artifact.
 
 **The one hole, closed by hand rather than left open.** Exactly one blob in pass 1 does not
 parse: a conflict-marker intermediate of `reports/c102_consumed_choice_double_mutation.json`,
