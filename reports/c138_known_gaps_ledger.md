@@ -16,15 +16,21 @@ fidelity claim can be read honestly.
 **Shape of the document.** §3 carries **80 rows** (57 engine/renderer/leaf, 23 harness/process);
 §4 considers **27** candidates and drops **26** as verified unreachable (R26 is struck — it was
 withdrawn as wrong and reclassified at G49, so it is not one of the drops); §3.5 names every exit
-the differential can emit and neither window did.
+the differential can emit and neither window did. A handful of §3 rows carry an UNREACHABLE
+verdict in place rather than moving to §4 — G28 and G32 outright, and the split rows G12, G16 and
+G27 in half — because they are named, cited gaps whose *status* a reader needs at the place they
+will look for them.
+
 ⚠ **The row count was stale by two, and both halves drifted the same way (C146, 2026-08-07).**
-It read "78 rows (55 …)". §8 last records §3 at 78 after H21, and **two** rows have joined since
-without the header following: **G33b** (C143) and **G37b** (#1166). Re-derived here by counting
-`| **<id>**` rows under §3.0–§3.4 rather than by adding to 78 — §3.0 1 + §3.1 34 + §3.2 12 +
-§3.3 23 + §3.4 10 = **80**, cross-checked as 57 G-rows + 23 H-rows with no duplicate ids. A
-document whose subject is uncounted drift may not carry an uncounted count. A handful of §3 rows carry an UNREACHABLE verdict in place rather
-than moving to §4 — G28 and G32 outright, and the split rows G12, G16 and G27 in half — because
-they are named, cited gaps whose *status* a reader needs at the place they will look for them.
+It read "78 rows (55 engine/renderer/leaf, 23 harness/process)". §8's last block records §3 at 78
+after H21, and **two** rows have joined since without the header following: **G33b** (C143) and
+**G37b** (#1166). Re-derived here by counting `| **<id>**` rows under §3.0–§3.4 rather than by
+adding to 78 — §3.0 1 + §3.1 34 + §3.2 12 + §3.3 23 + §3.4 10 = **80**, cross-checked as 57
+G-rows + 23 H-rows with no duplicate ids. Deriving it instead of incrementing is what found the
+second row: a count bumped from 78 to 79 for G37b alone would have been wrong in the same way and
+indistinguishable in the diff. The §4 figure is corrected in the same spirit — 27 candidates were
+*considered*, 26 are *drops*, because R26 was withdrawn. A document whose subject is uncounted
+drift may not carry an uncounted count.
 
 > ⚠ **Read §8's last block first if you are about to cite a negative from this document.** Five
 > "never fired"-shaped claims here have been false, four of them corrected on 2026-08-07 (H14 via
