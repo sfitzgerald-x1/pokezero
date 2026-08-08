@@ -1085,6 +1085,33 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # describes the tree that ships. Same probe, same flag, same DATA-ONLY status.
         "reports/artifacts/c147_g33b_merged_row_replay_base.json",
         "reports/artifacts/c147_g33b_merged_row_replay_gate.json",
+        # C149 builds c140 section 7a, so it adjudicates the SAME G8 row and needs the
+        # same flag-off/flag-on comparison c140 and c143 needed -- here to show that the
+        # collapsed path, once split, reproduces the enumeration oracle's mirror-heal
+        # distribution byte for byte on that boundary. PROSE ONLY: the report NAMES the
+        # variable in the sentence recording how the oracle column was produced, and is
+        # on no import path and sets nothing.
+        #
+        # Deliberately only the report. `scripts/c149_g8_row_replay.py` does NOT appear
+        # here and must not: it neither reads nor sets the flag, and the oracle column was
+        # produced by starting that script from a shell that already had the variable set,
+        # which the OnceLock requires anyway (one process is one engine). Its artifact
+        # `reports/artifacts/c149_row_replay_oracle.json` likewise does not name the flag
+        # -- unlike c140's and c143's probe artifacts, which record it as a provenance
+        # field. That is a real difference in the tools and it is left as it is rather
+        # than papered over by adding entries the grep does not produce: this ledger is
+        # exact in both directions, so an unnecessary entry fails it just as a missing
+        # one does.
+        "reports/c149_g8_leechseed_band_split.md",
+        # `tests/test_engine_terminal_residual_roll_limit.py` belongs here too and is
+        # entered ABOVE, next to the other harness entries, by #1186. This branch briefly
+        # carried a second copy of it down here: #1184 (`c2227d3a`) added the mention
+        # without the ledger entry, `origin/main` genuinely failed this gate at that commit
+        # -- verified by running this module in a clean worktree of it -- and the break
+        # landed on this PR because CI tests the merge commit. #1186 (`8158e086`) then fixed
+        # it upstream, so the duplicate was reconciled to the single upstream entry rather
+        # than left as two entries with two attributions. A set literal would have swallowed
+        # the duplicate silently, which is why it is called out here instead.
     }
 
     def test_the_set_of_files_mentioning_the_flag_is_recorded(self) -> None:

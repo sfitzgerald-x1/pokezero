@@ -4,6 +4,30 @@ After #1144, #1148 and #1152, `19000191/63` (`component_magnitude:heal`) is the 
 row on either window: dev 1/15,503, holdout 0/15,579
 (`reports/artifacts/c134_collapsed_{dev,holdout}_sweep.json`, the sweeps #1149 committed).
 
+> ### Correction, third revision — every residue count in this file was quoted bare
+>
+> **Added 2026-08-08 (C149).** This report quotes `1/15,503` three times — here, in §6 and in §8 —
+> and carried **neither the widened accept bar nor the coverage bound**, which is exactly the defect
+> the program's own rule forbids. A `grep -cn 'gating\|accept bar\|87\|sleep-counter\|hidden
+> counter\|coverage'` over this file returned **0** before this revision. Both qualifiers are stated
+> once here and apply to every occurrence of the count below; §8 repeats them because that is the
+> sentence that gets quoted.
+>
+> * **The accept bar.** `15,503` is not `15,503` exactly-matched boundaries. About **9 %** of them
+>   are accepted by an **enumerated widening over up to 64 hidden sleep-counter assignments**,
+>   accepted if *any* assignment matches, and tallied under `gating:support` — dev
+>   **1,347/15,503 = 8.689 %**, holdout **1,431/15,579 = 9.185 %**. The remainder,
+>   `gating:exact`, is 14,156 on dev and 14,148 on holdout. Ledger H21; re-derived from
+>   `reports/artifacts/c149_base_{dev,holdout}_sweep.json`, not carried.
+> * **The coverage bound.** `15,503` is not the window's boundary population either. Single-seat
+>   plies are counted in `skip:single_seat_boundary` and never in `boundaries_full_round`, and the
+>   two sets are disjoint, so real coverage is `measured / (full_round + single_seat)` —
+>   dev `15,503 / (15,968 + 1,742)` = **87.5 %**, holdout `15,579 / (16,155 + 1,813)` = **86.7 %** —
+>   against the `measured_fraction_of_full_rounds` this file's artifacts self-report, 0.9709 and
+>   0.9643. `reports/c132_single_seat_coverage_bound.md`, ledger H1. C132's own table reads 87.1 %
+>   and 86.5 % because it was computed on C131-era artifacts with 15,432 and 15,551 measured; the
+>   figures above are recomputed on the C149 artifacts rather than carried across the era.
+
 **Disposition: ENGINE gap. Not a limit — the falsifier fires, measured.** The remedy that works is
 enumeration, measured on main's shipped oracle at both the row and the sweep level. Under the
 collapsed path the row is not closable *without a trade*: any fixed representative prices exactly

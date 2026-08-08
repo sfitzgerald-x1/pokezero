@@ -1085,8 +1085,26 @@ jobs:
           # lines agreeing with the sum. Discrimination replayed against that log with this
           # step body extracted verbatim from the YAML: 452 fails, 451 passes, 451 fails on any
           # single deletion, and 450 silently absorbs one.
-          if [ "${passed:-0}" -lt 451 ]; then
-            echo "::error::expected >= 451 crate tests, got ${passed:-0}"
+          #
+          # AND A FOURTH RAISE, 451 -> 461: ledger G8's Leech Seed residual band split adds
+          # the TEN pins in `rust/pokezero-search/tests/gen3_leechseed_residual_band_split.rs`
+          # and removes none. Not `451 + 10`: measured by differencing test-NAME sets, per the
+          # discipline the paragraphs above arrived at the hard way. Base is this same tree with
+          # `third_party/poke-engine-src/src/gen3/generate_instructions.rs` reverted to its
+          # 73-patch preimage and the new test file moved aside -- the crate suite compiles the
+          # vendored engine directly, so that is a real base build and not an arithmetic one.
+          #   base 451 sum / 451 distinct names; head 461 / 461; no duplicate name in either.
+          #   ADDED 10 (all ten named in the loop below), REMOVED 0, NET +10.
+          # 451 would absorb the deletion of the entire ten, which is the blindness the
+          # paragraph above describes arriving for the fourth time.
+          #
+          # It read 459 in the first revision of this PR, when the file held eight tests. Review
+          # found the count guard -- the predicate carrying the whole "never a trade" claim -- had
+          # NO behavioural pin: all eight stayed green with it deleted, and so did this suite at
+          # 459, `--test test_gen3`, the engine lib suite, test_branch_mass_reconstruction and
+          # test_collapsed_arm_mass_oracle. The two added tests reach the guard's decline path.
+          if [ "${passed:-0}" -lt 461 ]; then
+            echo "::error::expected >= 461 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
@@ -1136,6 +1154,30 @@ jobs:
           # attach inside the panic guard, compiled, and passed a source-text ordering pin
           # written specifically to catch it, so the ordering now lives in
           # `guarded_search_with_ledger` and this test is what holds it.
+          #
+          # And the G8 band-split pins. The two `a_poisoned_defender_*` names are the load-
+          # bearing pair and they must NOT be dropped as "controls": they are the SOLE killers
+          # of the gate deletion. Measured, not argued -- replacing `if defender_leech_seeded {`
+          # with `if true {` at both call sites reddens exactly those two (plus the mass test,
+          # whose split-vs-collapsed sanity assertion also fails), while all five split
+          # assertions stay GREEN, because an unconditional split satisfies every one of them.
+          # A clean unstatused control would have been worthless here: with no residual there is
+          # no lethality threshold and no band arm on either build. The controls are POISONED,
+          # which ticks the same `maxhp / 8` Leech Seed drains, so they share the fixture's whole
+          # arithmetic and differ only in whether the killing residual transfers.
+          # Full revert to the 73-patch preimage reddens 5 of the 8 original tests.
+          #
+          # The last TWO names are the count guard's, and they are the only tests anywhere that
+          # reach its decline path. Review found that predicate pinned by nothing behavioural:
+          # deleting it left all eight original tests green, plus this whole suite, `--test
+          # test_gen3`, the engine lib suite, test_branch_mass_reconstruction and
+          # test_collapsed_arm_mass_oracle -- because both original fixtures sit on fans whose f32
+          # and integer bases AGREE, so neither can reach the decline. Fixture C (attack 66 /
+          # defense 300 / maxhp 160 / hp 47, threshold 27) does: head keeps one arm at 27, and
+          # guard-deleted emits [27, 28, 29, 30] with total branch mass 105.859375 %. That mass is
+          # the point -- it is conjured from a basis mismatch and `update_percentage` cannot see
+          # it. Measured red-with-the-guard-removed and green-with-it by deleting the predicate
+          # and running.
           for pin in the_rendered_hazard_chip_is_tagged_from_spikes \
                      two_spikes_layers_chip_the_deeper_amount_and_stay_tagged \
                      with_no_spikes_the_drag_emits_no_chip_and_no_spikes_tag \
@@ -1179,7 +1221,17 @@ jobs:
                      abort_telemetry::abort_payload_tests::the_report_object_is_sorted_compact_json \
                      abort_telemetry::abort_payload_tests::the_search_path_records_into_the_ledger_and_attaches_it_on_abort \
                      abort_telemetry::abort_payload_tests::a_contained_poke_engine_panic_still_reports_what_the_world_observed \
-                     abort_telemetry::abort_payload_tests::the_guard_attaches_on_a_returned_error_and_reports_through_the_ledger_on_success; do
+                     abort_telemetry::abort_payload_tests::the_guard_attaches_on_a_returned_error_and_reports_through_the_ledger_on_success \
+                     a_seeded_residual_kill_band_emits_one_arm_per_roll \
+                     every_split_arm_lands_on_a_roll_showdown_can_throw \
+                     a_poisoned_defender_with_the_same_band_keeps_the_single_collapsed_arm \
+                     the_split_conserves_the_bands_mass_and_prices_each_arm_at_one_sixteenth \
+                     the_crit_fan_site_splits_too_with_colliding_rolls_merged \
+                     a_poisoned_defender_on_the_crit_fan_keeps_its_single_arm \
+                     every_fixture_still_sums_to_one_hundred_percent \
+                     every_split_arm_reverts_cleanly \
+                     a_band_whose_fan_bases_disagree_declines_the_split_and_keeps_one_arm \
+                     declining_the_split_keeps_the_branch_mass_at_one_hundred_percent; do
             grep -qxE "test $pin \.\.\. ok" /tmp/cargo.log || {
               echo "::error::renderer pin $pin did not run"
               exit 1

@@ -115,7 +115,22 @@ _CORPUS_TREES = ("reports", "docs")
 # Only FOUR of the six are members of `tests/test_boundary_verdict_partition.py`'s sweep corpus
 # (87 -> 91): the two `*_census_*.json` are in-memory branch censuses with no boundaries, so they
 # carry no top-level `boundaries_measured`. The two corpora move independently, as recorded above.
-_EXPECTED_COUNTER_ARTIFACTS = 366
+# 366 -> 374 (C149, ledger G8's Leech Seed residual band split). RE-DERIVED by executing this
+# module's `counter_artifacts()` against a worktree of `origin/main` at `8d63dcce` -- 366 --
+# against 374 here, with the set difference exactly the EIGHT `reports/artifacts/c149_*.json`
+# this branch adds and NOTHING removed. Not arithmetic on the previous figure, and confirmed
+# still live at 373 and at 375.
+#
+# Measured AFTER merging `origin/main`, deliberately: that commit modifies
+# `docs/token-format/turn16-token-dump.json`, and this corpus selects on counter-shaped LEAVES
+# rather than on filenames, so a content change alone can move a member in or out. It did not
+# move here, but a base taken before the merge would not have been able to say so.
+#
+# Only FOUR of the eight are members of `tests/test_boundary_verdict_partition.py`'s sweep corpus
+# (91 -> 95): the three `c149_row_replay_*.json` are single-row replays and
+# `c149_fan_basis_census.json` is a pure-arithmetic census, so none carries a top-level
+# `boundaries_measured`. The two corpora move independently, as recorded above.
+_EXPECTED_COUNTER_ARTIFACTS = 374
 
 # ---------------------------------------------------------------------------
 # The taxonomies, derived from source rather than transcribed.

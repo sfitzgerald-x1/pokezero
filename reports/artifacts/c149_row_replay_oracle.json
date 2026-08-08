@@ -1,0 +1,22 @@
+{
+  "seed": 19000191,
+  "step": 63,
+  "verdict": "matched",
+  "misses": [],
+  "branch_count": 1015,
+  "rendered_branches": 1015,
+  "mass_sum_percent": 100.0,
+  "p2_heal_magnitude_mass_percent": {
+    "22": 5.7129,
+    "24": 5.7129,
+    "25": 5.7129,
+    "26": 5.7129,
+    "27": 5.7129,
+    "28": 5.7129,
+    "29": 59.6289
+  },
+  "provenance": {
+    "source_sweep": "reports/artifacts/c149_base_dev_sweep.json",
+    "engine_fingerprint": "8e912b45544034e67d4f168d9947bf63e769d6337f7fe27cb5c44a5addf0ca27"
+  }
+}
