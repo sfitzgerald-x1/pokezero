@@ -748,6 +748,15 @@ impl Drop for PhaseTimer<'_> {
     }
 }
 
+/// `lossy_subcases` is an OUT-PARAM, owned by the caller, and that is the whole
+/// point of it. Renders that are counted rather than refused accumulate branch by
+/// branch, but every error exit below (`return Err`, every `?`, and a contained
+/// poke-engine panic, which unwinds past this frame entirely) leaves without
+/// building the report string that used to be their only carrier. Aborts are the
+/// MAJORITY of the fallback residue, so an accumulator owned by THIS function
+/// described only the clean-completion subset. The caller keeps it alive across the
+/// error boundary and attaches it to the aborting exception
+/// (`crate::abort_telemetry`).
 fn multiply_batched_encoded_core<E: BatchLeafEval>(
     state_str: &str,
     iterations: usize,
@@ -765,6 +774,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     seed: u64,
     early_stop_min_sims: usize,
     early_stop_side_one: bool,
+    lossy_subcases: &mut crate::abort_telemetry::LossySubcaseLedger,
 ) -> PyResult<String> {
     let mut state = parse_state(state_str)?;
     if state.battle_is_over() != 0.0 {
@@ -786,13 +796,6 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let mut early_stop_runner_up_visits = 0u32;
     let mut model_evals = 0usize;
     let mut lossy_renders = 0usize;
-    // Renders that were COUNTED rather than refused, per sub-case. Without this the
-    // usable-ambiguity class is invisible in aggregate: before the split it showed up as
-    // `world_failure_reasons["...:ambiguous"]` because it refused, and after the split it
-    // would show up nowhere at all. An invisible class is how this campaign spent two eras
-    // unable to say what had changed.
-    let mut lossy_subcase_counts: std::collections::BTreeMap<String, usize> =
-        std::collections::BTreeMap::new();
     let mut attribution_unsafe_renders = 0usize;
     let mut fold_by_branch: std::collections::HashMap<(usize, usize), BranchFold> =
         std::collections::HashMap::new();
@@ -981,8 +984,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     if !rendered.lossy.is_empty() {
                         lossy_renders += 1;
                     }
+                    // Recorded BEFORE the attribution-unsafe gate below, and the ledger
+                    // outlives this frame, so a branch that aborts the world still
+                    // reports the sub-cases the world observed on its way there.
                     for subcase in &rendered.lossy_subcases {
-                        *lossy_subcase_counts.entry(subcase.clone()).or_insert(0) += 1;
+                        lossy_subcases.record(subcase);
                     }
                     if let Err(error) = seam.reject_attribution_unsafe(&rendered) {
                         attribution_unsafe_renders += 1;
@@ -1263,15 +1269,10 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         model_evals,
         lossy_renders,
         // A JSON object of sub-case -> count, so the class is countable in the shard
-        // report instead of only in a per-branch payload nobody aggregates.
-        format!(
-            "{{{}}}",
-            lossy_subcase_counts
-                .iter()
-                .map(|(name, count)| format!("\"{name}\":{count}"))
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
+        // report instead of only in a per-branch payload nobody aggregates. The SAME
+        // ledger the abort path attaches to its error, so the two exits cannot
+        // disagree and cannot both report the same observation.
+        lossy_subcases.json_object(),
         attribution_unsafe_renders,
         fold_by_branch.len(),
         model_priors,
@@ -1686,7 +1687,14 @@ impl NativeLeafModel {
             crate::events::EventContext::from_json(ctx_json).map_err(PyValueError::new_err)?;
         let fold = root_fold.inner().clone();
         drop(root_fold);
-        py.detach(|| {
+        // Owned OUT HERE, outside both `detach` and the panic guard, so it survives
+        // every way the search can fail: a `return Err` from an attribution-unsafe
+        // branch, any `?` inside the round loop, and a poke-engine panic that
+        // `catch_native_panic` converts into a fresh error of its own. Aborts are the
+        // majority of the residue and each one used to discard everything the world
+        // had observed. See `crate::abort_telemetry`.
+        let mut lossy_subcases = crate::abort_telemetry::LossySubcaseLedger::new();
+        let result = py.detach(|| {
             let spec = self.evaluator.spec();
             // Contain poke-engine's own panics. A panic here crosses the FFI
             // boundary as `PanicException`, which derives from BaseException and
@@ -1717,8 +1725,14 @@ impl NativeLeafModel {
                     seed,
                     early_stop_min_sims,
                     early_stop_side_one,
+                    &mut lossy_subcases,
                 )
             })
-        })
+        });
+        // The clean path already carries these in the report; the abort path had no
+        // carrier at all until now. Attached as an EXCEPTION ATTRIBUTE, never as text
+        // in the message: that message becomes the `world_failure_reasons` key and its
+        // bytes are compared across eras.
+        result.map_err(|error| lossy_subcases.attach_to(error))
     }
 }

@@ -24,6 +24,7 @@ from pokezero.engine_search import (  # noqa: E402
     EngineMctsPolicy,
     EngineMctsStats,
     EngineSearchFallbackError,
+    _ABORT_LOSSY_SUBCASES_ATTR,
     _FALLBACK_SAMPLE_KEY_CEILING,
     _FALLBACK_SAMPLES_PER_CLASS,
     _REASON_DETAIL_LIMIT,
@@ -981,6 +982,143 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
             policy.stats.world_failure_reasons,
         )
         self.assertEqual(policy.stats.attribution_unsafe_renders, 1)
+
+    # --- diagnostics from ABORTED worlds ------------------------------------------
+    #
+    # Aborts are ~92% of the fallback residue, and every one of them used to discard
+    # every diagnostic the world had accumulated: `model.rs` returns Err before the
+    # report string exists, and this seam salvaged exactly one number
+    # (`attribution_unsafe_renders`). So `lossy_subcase_renders` described only the
+    # clean-completion subset -- the subset that does not need diagnosing. #1158 paid
+    # for it: its Protect-marker counter reads zero both when the fix never fires and
+    # when the fix fires but the world dies at its NEXT unsafe branch.
+
+    @staticmethod
+    def _aborting_error(message: str, payload) -> Exception:
+        error = ValueError(message)
+        # The attribute the crate attaches (abort_telemetry.rs, ABORT_PAYLOAD_ATTR).
+        # Set through the module constant, so a rename cannot leave this fixture
+        # testing a name nothing produces.
+        setattr(error, _ABORT_LOSSY_SUBCASES_ATTR, payload)
+        return error
+
+    def _abort(self, policy, error) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self._run(policy, self._Native([error]), [self._world("aborting-world")])
+
+    def test_an_aborted_world_still_reports_the_subcases_it_observed(self) -> None:
+        """THE POINT. Without this the change is unpinned.
+
+        A world renders the Protect marker, then dies at a LATER unsafe branch. That is
+        the case #1158's counter was built to distinguish from "the fix never fired", and
+        the case that read zero.
+        """
+        policy = self._policy(early_stop=False)
+        message = (
+            "attribution-unsafe renderer branch rejected before tree/model fold: "
+            "sleeptalk_called_unidentified"
+        )
+        self._abort(
+            policy,
+            self._aborting_error(
+                message,
+                {
+                    "sleeptalk_called_unidentified:protect_marker_rendered": 2,
+                    "attract_immobilization_source_unknown": 1,
+                },
+            ),
+        )
+
+        self.assertEqual(
+            policy.stats.lossy_subcase_renders[
+                "sleeptalk_called_unidentified:protect_marker_rendered"
+            ],
+            2,
+        )
+        self.assertEqual(
+            policy.stats.lossy_subcase_renders["attract_immobilization_source_unknown"], 1
+        )
+        # Through to_dict(), because the in-memory Counter is not what the shard report
+        # carries and a counter that stops at the object is still invisible.
+        emitted = policy.stats.to_dict()["lossy_subcase_renders"]
+        self.assertEqual(
+            emitted["sleeptalk_called_unidentified:protect_marker_rendered"], 2
+        )
+        # The reason key must be BYTE-IDENTICAL: it is a measurement contract compared
+        # across eras, so the counts may not ride inside the message.
+        self.assertEqual(
+            list(policy.stats.world_failure_reasons), [f"crate_search: {message}"]
+        )
+        # The old salvaged counter still fires -- this adds a channel, it does not
+        # replace one.
+        self.assertEqual(policy.stats.attribution_unsafe_renders, 1)
+
+    def test_an_aborted_world_reports_each_observation_exactly_once(self) -> None:
+        """A world that both ACCUMULATES and ABORTS must not be counted twice.
+
+        The report field and the exception payload are exclusive outcomes of one native
+        invocation. Absorbing both for one world -- or absorbing the payload once per
+        handler in a chain -- would inflate the class silently, which is the same
+        category of defect as losing it.
+        """
+        policy = self._policy(early_stop=False)
+        self._abort(
+            policy,
+            self._aborting_error(
+                "attribution-unsafe renderer branch rejected before tree/model fold: x",
+                {"sleeptalk_called_unidentified:ambiguous": 5},
+            ),
+        )
+
+        self.assertEqual(
+            policy.stats.lossy_subcase_renders["sleeptalk_called_unidentified:ambiguous"],
+            5,
+        )
+        # Nothing else was invented, and 5 was not doubled to 10.
+        self.assertEqual(sum(policy.stats.lossy_subcase_renders.values()), 5)
+
+        # Now a CLEAN world reporting the SAME key in the same decision: the two
+        # channels ADD, one per invocation, exactly like lossy_renders.
+        report = self._report(70, 30, stopped=False)
+        report["lossy_subcases"] = {"sleeptalk_called_unidentified:ambiguous": 3}
+        aborted = self._aborting_error(
+            "attribution-unsafe renderer branch rejected before tree/model fold: x",
+            {"sleeptalk_called_unidentified:ambiguous": 5},
+        )
+        both = self._policy(early_stop=False)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self._run(
+                both,
+                self._Native([report, aborted]),
+                [self._world("clean"), self._world("aborted")],
+            )
+        self.assertEqual(
+            both.stats.lossy_subcase_renders["sleeptalk_called_unidentified:ambiguous"], 8
+        )
+        self.assertEqual(sum(both.stats.lossy_subcase_renders.values()), 8)
+
+    def test_a_failure_carrying_no_payload_is_a_silent_no_op(self) -> None:
+        """Older wheels attach nothing, and most failures here are not native at all.
+
+        A crash inside the handler whose entire job is to keep the other worlds alive
+        would be a strictly worse defect than the one being fixed, so the shapes that
+        cannot be counted must be ignored rather than raised.
+        """
+        for label, error in (
+            ("no attribute", ValueError("stale wheel: no payload")),
+            ("not a mapping", self._aborting_error("junk payload", "not a mapping")),
+            ("payload is None", self._aborting_error("no counts", None)),
+            ("non-native failure", RuntimeError("something else entirely")),
+        ):
+            with self.subTest(shape=label):
+                policy = self._policy(early_stop=False)
+                self._abort(policy, error)
+                self.assertEqual(policy.stats.lossy_subcase_renders, Counter())
+                # The world was still counted as a failure -- silence about the
+                # sub-cases is not silence about the abort.
+                self.assertEqual(sum(policy.stats.world_failure_reasons.values()), 1)
 
     # --- telemetry counting (model path) ------------------------------------------
     #
@@ -2260,6 +2398,57 @@ class FallbackAddressTests(unittest.TestCase):
             'report.get("lossy_subcases")', engine_py,
             "engine_search no longer reads `lossy_subcases`, so the class is invisible",
         )
+
+    def test_the_crate_and_python_agree_on_the_abort_payload_attribute(self) -> None:
+        """The ABORT arm's spelling, pinned exactly like the report key's above.
+
+        The report key covers only worlds whose search COMPLETED. Aborts are ~92% of the
+        residue and carry their counts on an exception ATTRIBUTE instead; that name is a
+        second, independent cross-language contract with the identical failure mode -- a
+        rename on either side leaves the abort arm reading zero forever, no test fails,
+        and the class goes back to describing the clean subset only.
+        """
+        repo = pathlib.Path(__file__).resolve().parent.parent
+        abort_rs = (
+            repo / "rust" / "pokezero-search" / "src" / "abort_telemetry.rs"
+        ).read_text()
+        self.assertIn(
+            f'ABORT_PAYLOAD_ATTR: &str = "{_ABORT_LOSSY_SUBCASES_ATTR}"',
+            abort_rs,
+            "the crate attaches its abort payload under a different attribute name than "
+            "engine_search reads, so every aborted world's counts are dropped silently",
+        )
+        # And the payload must never be smuggled into the message: that string is the
+        # world_failure_reasons key, whose bytes are compared across eras and which
+        # _bounded_reason_detail truncates at 512 chars.
+        model_rs = (repo / "rust" / "pokezero-search" / "src" / "model.rs").read_text()
+        engine_py = (repo / "src" / "pokezero" / "engine_search.py").read_text()
+        self.assertIn(
+            "lossy_subcases.attach_to(error)", model_rs,
+            "the crate no longer attaches the ledger to an aborting error",
+        )
+        self.assertIn(
+            "_absorb_aborted_lossy_subcases(error)", engine_py,
+            "engine_search no longer reads the abort payload at the failure seam",
+        )
+        self.assertNotIn(
+            "json_object()}", model_rs,
+            "the counts must never be interpolated into an error message",
+        )
+
+    def test_the_subcase_key_is_present_in_the_report_even_when_empty(self) -> None:
+        """Key-absent and value-zero must stay distinguishable.
+
+        A missing key reads as a genuine zero to every downstream consumer, so "the crate
+        emitted nothing" and "this build has no such counter" would collapse onto the same
+        reading. That distinction was established deliberately and is relied on -- and the
+        abort arm makes it load-bearing again, because an abort that observed nothing still
+        attaches an EMPTY object rather than no attribute.
+        """
+        emitted = EngineMctsStats().to_dict()
+        self.assertIn("lossy_subcase_renders", emitted)
+        self.assertEqual(emitted["lossy_subcase_renders"], {})
+        self.assertIsInstance(emitted["lossy_subcase_renders"], dict)
 
     def test_no_fallbacks_means_no_samples_not_a_stub(self) -> None:
         self.assertEqual(EngineMctsStats().to_dict()["fallback_samples"], {})

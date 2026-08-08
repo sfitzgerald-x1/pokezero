@@ -464,6 +464,17 @@ _FALLBACK_SAMPLES_PER_CLASS = 3
 # sample that looks complete is how a coverage claim goes wrong.
 _FALLBACK_SAMPLE_KEY_CEILING = 256
 
+# The attribute an ABORTING native search hangs its accumulated sub-case counts on, so a
+# world that dies still reports what it observed. Must equal `ABORT_PAYLOAD_ATTR` in
+# `rust/pokezero-search/src/abort_telemetry.rs`; a rename on either side silently zeroes
+# the abort arm, which is the failure mode this whole change exists to fix, so the two
+# spellings are asserted against each other in tests/test_engine_search.py.
+#
+# NAMESPACED rather than named after the report key (`lossy_subcases`). This is read off
+# an arbitrary caught exception, and a generic name would let an unrelated exception that
+# happens to carry that attribute inject counts into a measurement channel.
+_ABORT_LOSSY_SUBCASES_ATTR = "pokezero_lossy_subcases"
+
 
 def _bounded_reason_detail(text: str, limit: int = _REASON_DETAIL_LIMIT) -> str:
     """Bound a telemetry reason so overflow is VISIBLE, never silently aliasing.
@@ -1572,6 +1583,45 @@ class EngineMctsPolicy:
         for subcase, count in (report.get("lossy_subcases") or {}).items():
             self.stats.lossy_subcase_renders[str(subcase)] += int(count)
 
+    def _absorb_aborted_lossy_subcases(self, error: BaseException) -> None:
+        """Count the sub-cases an ABORTED world observed before it died.
+
+        THE MAJORITY CASE, and it used to be the discarded one. A native world that hits
+        an attribution-unsafe branch (or any other mid-search error, or a contained
+        poke-engine panic) returns before its report string is built, so the seam above --
+        which reads that report -- was never reached and every non-refusing diagnostic
+        the world had accumulated was thrown away. Aborts are ~92% of the fallback
+        residue, so `lossy_subcase_renders` described only the clean-completion subset:
+        precisely the subset that does not need diagnosing. #1158 paid for this directly
+        --- its Protect-marker counter reads zero both when the fix never fires and when
+        the fix fires but the world dies at its NEXT unsafe branch, so it answers a
+        narrower question than it was built for (see `events.rs`,
+        `protect_marker_rendered`).
+
+        The counts ride on the exception as an ATTRIBUTE, never as text in its message:
+        that message becomes the `world_failure_reasons` key, whose bytes are a
+        measurement contract compared across eras and which `_bounded_reason_detail`
+        truncates at 512 chars.
+
+        Routed through `_absorb_lossy_subcases` rather than incrementing directly, so the
+        abort path and the clean path share ONE accumulation point and land in
+        `lossy_subcase_renders` identically. They can never both fire for one invocation
+        --- a report and an exception are exclusive outcomes --- so nothing is
+        double-counted. An early-stop world replayed at full budget contributes twice, on
+        purpose: that is two invocations of real render work, the same convention
+        `lossy_renders` and `total_iterations` already follow.
+
+        Shape-checked because the attribute is read off an arbitrary caught exception.
+        Older wheels (and every non-native failure that reaches this handler) carry no
+        such attribute at all, which must be a silent no-op rather than a crash inside the
+        handler whose entire job is to keep the other worlds alive.
+        """
+
+        payload = getattr(error, _ABORT_LOSSY_SUBCASES_ATTR, None)
+        if not isinstance(payload, Mapping):
+            return
+        self._absorb_lossy_subcases({"lossy_subcases": payload})
+
     def _search_model(
         self,
         context: PolicyContext,
@@ -1661,6 +1711,9 @@ class EngineMctsPolicy:
                 # retain the same observability counter at the fallback seam.
                 if "attribution-unsafe renderer branch rejected before" in reason:
                     self.stats.attribution_unsafe_renders += 1
+                # ... and everything ELSE the world observed before it aborted, which
+                # this seam used to discard for ~92% of the residue.
+                self._absorb_aborted_lossy_subcases(error)
                 self.stats.world_failure_reasons[f"crate_search: {reason}"] += 1
                 return None
             # Invocation-level counters reflect actual compute. A stopped
