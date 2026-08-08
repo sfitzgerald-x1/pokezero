@@ -921,9 +921,17 @@ class K32ProbeScriptPathTest(unittest.TestCase):
         recorded: list = []
         state = _probe_state()
         with tempfile.TemporaryDirectory() as temp_dir:
+            # A REAL checkpoint on disk. This used to be the bare name "k32.pt", which was fine
+            # while every loader was patched -- the file was never opened. The current-family
+            # gate (`require_current_family_checkpoint_paths`, choice_sample.py:139) then began
+            # STATTING the path before any of the patched loaders run, so a non-existent file
+            # became [Errno 2] and surfaced as "requires current-family v2+ checkpoints" --
+            # a legacy-rejection message for a file that simply was not there.
+            k32_checkpoint = Path(temp_dir) / "k32.pt"
+            _save_k32_checkpoint(k32_checkpoint)
             argv = [
                 "choice_sample.py",
-                "--checkpoint", "k32.pt=k32",
+                "--checkpoint", f"{k32_checkpoint}=k32",
                 "--showdown-root", "showdown-root",
                 "--num-games", "1",
                 "--out", str(Path(temp_dir) / "out.json"),
