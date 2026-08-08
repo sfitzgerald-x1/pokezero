@@ -1,0 +1,443 @@
+--- a/src/instruction.rs
++++ b/src/instruction.rs
+@@ -105,6 +105,61 @@
+     ToggleSideOneForceSwitch,
+     ToggleSideTwoForceSwitch,
+     ToggleTerastallized(ToggleTerastallizedInstruction),
++    /// pokezero gen3 fidelity fix (Attract immobilization attribution): record
++    /// WHICH move-time immobilizer aborted this action.
++    ///
++    /// A PURE MARKER: `apply_one_instruction` and `reverse_one_instruction` are
++    /// both no-ops for it (see `state.rs`). It exists because the immobilized
++    /// branch is an EMPTY DELTA, and every immobilizer's empty delta is the same
++    /// bytes -- so the branch the engine hands the renderer for "Attract stopped
++    /// the move" was byte-identical to the one for "full paralysis stopped the
++    /// move". The renderer could not name the cause and refused the world
++    /// (`attract_empty_tail_ambiguous` in `rust/pokezero-search/src/events.rs`).
++    ///
++    /// MUST be an Instruction rather than a side-channel return value, for the
++    /// same reason `SetRestSleepPendingRefund` must be: the search explores
++    /// sibling branches by applying and reversing instruction LISTS, and a fact
++    /// carried outside a list is not carried at all. It is a marker rather than a
++    /// state field because it describes THIS branch's provenance, not the
++    /// Pokemon's condition -- nothing may read it back later, and nothing does.
++    ///
++    /// The reason is carried as an enum rather than implied by the variant name
++    /// because BOTH move-time immobilizers this generation can produce have to be
++    /// marked, and they need different protocol lines from one renderer arm.
++    ///
++    /// MARKING ONLY ONE OF THEM ACHIEVES NOTHING, which is the lesson that shaped
++    /// this patch. `reject_attribution_unsafe` aborts the WHOLE WORLD, not the
++    /// branch, so as long as the paralysis sibling of a marked Attract branch is
++    /// still an anonymous empty delta, the renderer still refuses it and the world
++    /// still falls back. Attract alone took the refusing branches on the dominant
++    /// sub-case from two to ONE -- 50.0% newly rendered, 12.5% still refusing -- and
++    /// one refusing branch aborts the world just as completely as two, so it moved
++    /// the fallback rate by NOTHING. (An earlier revision of this comment ended
++    /// "from N to N", an unfilled placeholder. The measured claim is the branch
++    /// count; no campaign-scale fallback rate is asserted here, before or after.)
++    MoveImmobilized(MoveImmobilizedInstruction),
++}
++
++/// Which move-time immobilizer aborted an action. See `Instruction::MoveImmobilized`.
++///
++/// EXACTLY the gen3 immobilizers that produce an EMPTY delta and are rolled inside
++/// `generate_instructions_from_existing_status_conditions`. Sleep, freeze, flinch,
++/// Taunt, Disable and recharge are all deliberately absent: each already leaves a
++/// distinguishable delta or is short-circuited in `cannot_use_move` before this
++/// function runs, so the renderer can already name them. A variant nothing emits is
++/// an untested branch in every match over this instruction.
++#[derive(Debug, PartialEq, Eq, Clone, Copy)]
++pub enum ImmobilizeReason {
++    /// Showdown gen3 `attract.onBeforeMove` returned false: `|cant|<ident>|Attract`.
++    Attract,
++    /// Showdown gen3 `par.onBeforeMove` lost its 1-in-4 roll: `|cant|<ident>|par`.
++    ///
++    /// This one replaces a GUESS rather than a refusal. The renderer used to infer
++    /// `|cant|..|par|` from an empty tail on a probability-mass argument, with its
++    /// own comment conceding "a real miss renders identically". With the marker the
++    /// line is a fact, and -- the half that actually reduces fallback -- an UNMARKED
++    /// empty tail is now provably not an immobilization at all.
++    Paralysis,
+ }
+ 
+ impl fmt::Debug for Instruction {
+@@ -305,6 +356,9 @@
+             Instruction::ToggleTerastallized(s) => {
+                 write!(f, "ToggleTerastallized {:?}", s.side_ref)
+             }
++            Instruction::MoveImmobilized(m) => {
++                write!(f, "MoveImmobilized {:?}: {:?}", m.side_ref, m.reason)
++            }
+             Instruction::SetLastUsedMove(s) => {
+                 write!(
+                     f,
+@@ -623,7 +677,19 @@
+     pub side_ref: SideReference,
+ }
+ 
++/// pokezero gen3 fidelity fix (Attract immobilization attribution).
++///
++/// Carries the SIDE whose action was aborted -- not the Pokemon index. The marker
++/// describes the action window, and the active Pokemon cannot change between the
++/// immobilizer firing and the branch terminating (the move never runs), so a side
++/// reference is exactly the attribution the renderer needs and nothing more.
+ #[derive(Debug, PartialEq, Clone)]
++pub struct MoveImmobilizedInstruction {
++    pub side_ref: SideReference,
++    pub reason: ImmobilizeReason,
++}
++
++#[derive(Debug, PartialEq, Clone)]
+ pub struct ChangeType {
+     pub side_ref: SideReference,
+     pub new_types: (PokemonType, PokemonType),
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -2141,6 +2141,23 @@
+             Instruction::ChangeTransformSnapshot(instruction) => {
+                 self.set_transform_snapshot(&instruction.side_ref, instruction.taking);
+             }
++            // pokezero gen3 fidelity fix (move-time immobilizer attribution):
++            // PURE MARKER, NO-OP BY DESIGN. It records why a branch has an empty
++            // delta; writing any state here would make the branch stop being an
++            // empty delta and move a LEAF STATE.
++            //
++            // Note the distinction the DE-COLLAPSE note in
++            // `gen3/generate_instructions.rs` draws, because it is easy to read
++            // that note as licence to relax this one. The markers deliberately
++            // change the branch SET -- an attracted+paralyzed attacker's single
++            // merged 62.5% branch becomes 50.0% + 12.5% -- and deliberately do NOT
++            // change any leaf state or the total mass. A state effect here breaks
++            // the second half, which nothing else guards.
++            //
++            // The arm is written out rather than folded into a catch-all because
++            // this match has no catch-all -- which is the property that makes the
++            // compiler, not a reviewer, responsible for every future variant.
++            Instruction::MoveImmobilized(_) => {}
+         }
+     }
+ 
+@@ -2375,6 +2384,10 @@
+             Instruction::ChangeTransformSnapshot(instruction) => {
+                 self.set_transform_snapshot(&instruction.side_ref, !instruction.taking);
+             }
++            // pokezero gen3 fidelity fix (Attract immobilization attribution):
++            // the inverse of a no-op. Present so `reverse_one_instruction` stays
++            // total over the enum; see the apply arm.
++            Instruction::MoveImmobilized(_) => {}
+         }
+     }
+ }
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -22,6 +22,8 @@
+     ToggleDamageDealtHitSubstituteInstruction,
+ };
+ use crate::instruction::{DecrementPPInstruction, SetLastUsedMoveInstruction};
++// pokezero gen3 fidelity fix (Attract immobilization attribution).
++use crate::instruction::{ImmobilizeReason, MoveImmobilizedInstruction};
+ 
+ use super::damage_calc::calculate_futuresight_damage;
+ use super::damage_calc::{calculate_damage, type_effectiveness_modifier, DamageRolls};
+@@ -3014,8 +3016,8 @@
+     // chance-node machinery price it exactly, as they already do for full
+     // paralysis and the confusion self-hit. Unlike confusion there is no
+     // self-damage: the immobilized branch is an empty-delta terminal (the move
+-    // never executes), identical in shape to the fully-paralyzed branch pushed
+-    // below.
++    // never executes), which used to make it identical in shape to the
++    // fully-paralyzed branch pushed below -- see the MARKER note on the push.
+     //
+     // Ordering: Showdown gen3 resolves Attract's onBeforeMove at priority 2
+     // (data/moves.ts `attract` condition), which runs AFTER confusion (priority 3)
+@@ -3035,6 +3037,77 @@
+     {
+         let mut immobilized_instruction = incoming_instructions.clone();
+         immobilized_instruction.update_percentage(ATTRACT_IMMOBILIZE_CHANCE);
++        // MARKER, and the reason this patch exists. Before it, this branch was a
++        // clone with an EMPTY DELTA -- byte-identical to the fully-paralyzed
++        // branch pushed a few lines below, because "the move did not happen" has
++        // no state representation. The renderer therefore could not name which
++        // immobilizer fired and refused the whole world
++        // (`attract_empty_tail_ambiguous`). This patch's predecessor conceded the
++        // defect in its own comment: "both immobilized branches carry the same
++        // empty delta".
++        //
++        // HOW BIG THAT REFUSED CLASS WAS, cited rather than asserted. On the
++        // validation holdout -- seeds 19,100,000-19,100,199, 200 games, 15,579
++        // measured boundaries, engine fingerprint 5fa147ffa325c887 -- it was ALL
++        // THREE of the three `strict:lossy_render` refusals, i.e. the entire
++        // lossy-render residue of that window and 0.019% of its boundaries; the
++        // dev window 19,000,000-19,000,199 (15,503 boundaries) had NONE.
++        // Artifact: `reports/artifacts/c142_rumpfix_holdout_sweep.json`, the only
++        // committed sweep that breaks the 3 down by marker; the count reproduces
++        // on all 30 holdout-window sweeps in the committed corpus, across 21
++        // engine fingerprints. Full census, and the WITHDRAWAL of the unsourced
++        // "~46% of the remaining search fallback" that stood here through two
++        // revisions, in `third_party/poke-engine-gen3-patches.txt`.
++        //
++        // DE-COLLAPSE, and it is the point rather than a side effect. Both
++        // immobilized branches were empty deltas, so
++        // `combine_duplicate_instructions` MERGED them -- with each other and with
++        // any same-shaped miss or no-op. Measured, 71-patch base vs 72-patch head,
++        // side two attracted + paralyzed: Tackle goes from 2 branches (62.5% empty
++        // + 37.5% hit) to 3 (50.0% Attract + 12.5% Paralysis + 37.5% hit); Thunder,
++        // whose 30% miss is a third empty delta, goes from 3 to 5 with the miss left
++        // deliberately UNMARKED. Total mass, leaf states and the union of the merged
++        // mass are preserved (50.0 + 12.5 == 62.5, + 11.25 == 73.75); the branch
++        // count and per-branch masses are not. The paralysis comment below records
++        // that while both branches were empty deltas their ORDER was invisible in
++        // the leaf distribution -- the reason the attract patch once called a
++        // misordering benign, before it turned out to corrupt the confusion counter.
++        // It is visible now: rolling paralysis first moves the split to 37.5/25.0,
++        // and `the_markers_de_collapse_what_combine_duplicate_instructions_had_merged`
++        // goes red.
++        //
++        // A LOSSY DOWNGRADE TO `|cant|..|par|` IS REJECTED, so do not replace this
++        // with one -- and the rejection does NOT rest on a frequency claim. An
++        // earlier revision cited "era-63, 3,344 attract slug-occurrences, pure
++        // `paralyzed` 1,284 (38.4%), contaminated joints 2,060 (61.6%)"; no
++        // artifact in the repo carries those numbers and no era-63 artifact exists,
++        // so they are WITHDRAWN. What holds regardless of frequency:
++        // `src/pokezero/public_action_capture.py:74` keys public actions as
++        // `cant:{reason}`, so `cant:Attract` and `cant:par` are DIFFERENT action
++        // ids downstream -- guessing one for the other is not a rounding error, it
++        // is a different action -- and a wrong reason label can manufacture a false
++        // MATCH in the differential, which
++        // `reports/c56_excluded_branch_census.json` rules out as strictly worse
++        // than the refusal it would replace. Moot now that BOTH immobilizers carry
++        // a marker: there is nothing left to guess, so nothing to downgrade.
++        //
++        // Pushed AFTER the clone's percentage update and NOT applied to `state`:
++        // the marker is a pure no-op (see `State::apply_one_instruction`), and
++        // this branch is terminal -- `final_instructions` entries are never
++        // reversed. Same shape as the confusion self-hit's `damage_instruction`
++        // push directly above, which is also appended to an already-cloned
++        // terminal branch.
++        //
++        // LAST in the list on purpose. The renderer consumes the marker only as
++        // the sole surviving instruction of the move phase and refuses otherwise,
++        // so appending it here -- after every bookkeeping instruction `before_move`
++        // may have pushed -- is what makes the common case renderable.
++        immobilized_instruction
++            .instruction_list
++            .push(Instruction::MoveImmobilized(MoveImmobilizedInstruction {
++                side_ref: *attacking_side_ref,
++                reason: ImmobilizeReason::Attract,
++            }));
+         final_instructions.push(immobilized_instruction);
+ 
+         incoming_instructions.update_percentage(1.0 - ATTRACT_IMMOBILIZE_CHANCE);
+@@ -3060,6 +3097,30 @@
+         // Fully-Paralyzed Branch
+         let mut fully_paralyzed_instruction = incoming_instructions.clone();
+         fully_paralyzed_instruction.update_percentage(0.25);
++        // MARKER, for the same reason the Attract branch above carries one, and it
++        // has to land in the SAME change: `reject_attribution_unsafe` aborts the
++        // whole WORLD rather than the branch, so marking only Attract leaves this
++        // sibling an anonymous empty delta, the renderer keeps refusing it, and the
++        // world keeps falling back. Two refusing branches become one and the
++        // fallback rate does not move.
++        //
++        // Unlike Attract this replaces a GUESS, not a refusal. `events.rs` inferred
++        // `|cant|..|par|` from an empty tail because full paralysis carries more mass
++        // than a miss, with its own comment admitting "a real miss renders
++        // identically". Marked, the line is a fact -- and, the part that actually
++        // reclaims worlds, an UNMARKED empty tail is now provably NOT an
++        // immobilization, so the miss/no-op renders below become reachable.
++        //
++        // NO SLEEP-GATE HAZARD HERE, unlike Attract: `status` is one field, so a
++        // paralyzed Pokemon is never also asleep or frozen, and this roll can
++        // therefore never sit on a branch whose BeforeMove chain was short-circuited
++        // by `slp.onBeforeMove`. Attract can, and `consume_move_prelude` handles it.
++        fully_paralyzed_instruction
++            .instruction_list
++            .push(Instruction::MoveImmobilized(MoveImmobilizedInstruction {
++                side_ref: *attacking_side_ref,
++                reason: ImmobilizeReason::Paralysis,
++            }));
+         final_instructions.push(fully_paralyzed_instruction);
+ 
+         // Non-Paralyzed Branch
+--- a/tests/test_gen3.rs
++++ b/tests/test_gen3.rs
+@@ -9,8 +9,9 @@
+ use poke_engine::instruction::{
+     ApplyVolatileStatusInstruction, ChangeItemInstruction, ChangeStatusInstruction,
+     ChangeVolatileStatusDurationInstruction, DamageInstruction, EnableMoveInstruction,
+-    HealInstruction, Instruction, RemoveVolatileStatusInstruction, SetSleepTurnsInstruction,
+-    StateInstructions, SwitchInstruction,
++    HealInstruction, ImmobilizeReason, Instruction, MoveImmobilizedInstruction,
++    RemoveVolatileStatusInstruction, SetSleepTurnsInstruction, StateInstructions,
++    SwitchInstruction,
+ };
+ use poke_engine::state::PokemonSideCondition;
+ use poke_engine::state::{
+@@ -1064,5 +1065,166 @@
+         }),
+         "staying asleep under Early Bird must still discard the bank: {:?}",
+         vec_of_instructions
++    );
++}
++
++// ---------------------------------------------------------------------------
++// Move-time immobilization markers (Attract / full paralysis)
++//
++// IN THIS FILE, NOT IN `src/state.rs`, and that placement is the whole point. The first
++// version of this patch put them in a `#[cfg(test)] mod` inside `src/state.rs`, i.e. the
++// `--lib` target -- and NOTHING in CI runs `--lib` for the engine. The workflow's engine
++// step is `cargo test --test test_gen3` with a pinned count, so three tests sitting in the
++// lib target were pins nothing executed: exactly the defect
++// `.github/workflows/engine-fidelity-gates.yml` was written to close, and the same shape as
++// the #1105 wheel break. The `SetRestSleepPendingRefund` precedent this patch follows put
++// its tests here for that reason.
++// ---------------------------------------------------------------------------
++
++fn attract_marker(side_ref: SideReference) -> Instruction {
++    Instruction::MoveImmobilized(MoveImmobilizedInstruction {
++        side_ref,
++        reason: ImmobilizeReason::Attract,
++    })
++}
++
++/// apply-then-reverse must return the state bit-identical.
++///
++/// TRIVIALLY TRUE for a pure marker, and written down anyway. The sibling
++/// `SetRestSleepPendingRefund` test carries the same name because this is the invariant
++/// that forces an Instruction variant rather than a bare mutation, and the next person to
++/// add a marker will not know which of the two cases they are in. If someone later gives
++/// this variant a state effect -- the obvious "while I am here" edit, since the reason field
++/// invites reading it back -- the no-op reverse arm stops being an inverse and this says so.
++#[test]
++fn immobilization_marker_apply_then_reverse_is_bit_identical() {
++    for reason in [ImmobilizeReason::Attract, ImmobilizeReason::Paralysis] {
++        let mut state = State::default();
++        let before = state.serialize();
++        let instruction = Instruction::MoveImmobilized(MoveImmobilizedInstruction {
++            side_ref: SideReference::SideOne,
++            reason,
++        });
++        state.apply_one_instruction(&instruction);
++        state.reverse_instructions(&vec![instruction]);
++        assert_eq!(
++            state.serialize(),
++            before,
++            "reverse must restore bit-identically for {:?}",
++            reason
++        );
++    }
++}
++
++/// APPLY ALONE must not move the state either, which is the half the apply-then-reverse
++/// test cannot see: a mutation with a matching inverse would pass that test while changing
++/// the leaf distribution the search prices, because the immobilized branch would stop being
++/// an empty delta.
++///
++/// This is the assertion the sibling refund test writes as `assert_ne!` -- the two markers
++/// differ in exactly this direction, so the pin has to be inverted rather than copied.
++#[test]
++fn immobilization_marker_apply_alone_does_not_change_the_state() {
++    for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
++        for reason in [ImmobilizeReason::Attract, ImmobilizeReason::Paralysis] {
++            let mut state = State::default();
++            let before = state.serialize();
++            state.apply_one_instruction(&Instruction::MoveImmobilized(
++                MoveImmobilizedInstruction { side_ref, reason },
++            ));
++            assert_eq!(
++                state.serialize(),
++                before,
++                "the marker must be a pure no-op on apply for {:?}/{:?}",
++                side_ref,
++                reason
++            );
++        }
++    }
++}
++
++/// The marker must be DISTINGUISHABLE from the empty delta it annotates, from the other
++/// side's marker, and from the OTHER REASON. That last one is the whole mechanism:
++/// `combine_duplicate_instructions` merges branches with equal instruction lists, so two
++/// immobilizers sharing one marker value would collapse right back into the ambiguity this
++/// patch exists to remove.
++#[test]
++fn immobilization_markers_are_distinguishable_from_each_other_and_from_nothing() {
++    let attract = vec![attract_marker(SideReference::SideOne)];
++    assert_ne!(attract, Vec::<Instruction>::new());
++    assert_ne!(attract, vec![attract_marker(SideReference::SideTwo)]);
++    assert_eq!(attract, vec![attract_marker(SideReference::SideOne)]);
++    assert_ne!(
++        attract,
++        vec![Instruction::MoveImmobilized(MoveImmobilizedInstruction {
++            side_ref: SideReference::SideOne,
++            reason: ImmobilizeReason::Paralysis,
++        })],
++        "Attract and paralysis must not compare equal, or the engine merges them again"
+     );
+ }
++
++/// END TO END: both immobilizers mark their own branch, and the masses prove the ORDER.
++///
++/// Showdown resolves attract's onBeforeMove at priority 2 and paralysis at 1, so attract is
++/// rolled FIRST at 1/2 and paralysis only on the surviving half at 1/4 -> 1/8 overall.
++#[test]
++fn both_gen3_immobilizers_mark_their_branch_with_their_own_reason() {
++    let mut state = State::default();
++    state
++        .side_one
++        .get_active()
++        .replace_move(PokemonMoveIndex::M0, Choices::TACKLE);
++    state
++        .side_two
++        .get_active()
++        .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
++    state
++        .side_one
++        .volatile_statuses
++        .insert(PokemonVolatileStatus::ATTRACT);
++    state.side_one.get_active().status = PokemonStatus::PARALYZE;
++
++    let branches = generate_instructions_with_state_assertion(
++        &mut state,
++        &MoveChoice::Move(PokemonMoveIndex::M0),
++        &MoveChoice::Move(PokemonMoveIndex::M0),
++    );
++    let mass = |reason: ImmobilizeReason| -> f32 {
++        branches
++            .iter()
++            .filter(|b| {
++                b.instruction_list.iter().any(|i| matches!(i,
++                    Instruction::MoveImmobilized(m)
++                        if m.reason == reason && m.side_ref == SideReference::SideOne))
++            })
++            .map(|b| b.percentage)
++            .sum()
++    };
++    assert!(
++        (mass(ImmobilizeReason::Attract) - 50.0).abs() < 1e-3,
++        "attract is rolled first at 1/2: {:?}",
++        branches
++    );
++    assert!(
++        (mass(ImmobilizeReason::Paralysis) - 12.5).abs() < 1e-3,
++        "paralysis is rolled on the surviving half at 1/4: {:?}",
++        branches
++    );
++    // Every marker is TERMINAL in its branch, which is what makes the renderer's
++    // post-prelude tail exactly `[marker]`.
++    for branch in &branches {
++        if let Some(position) = branch
++            .instruction_list
++            .iter()
++            .position(|i| matches!(i, Instruction::MoveImmobilized(_)))
++        {
++            assert_eq!(
++                position,
++                branch.instruction_list.len() - 1,
++                "the marker must close the branch: {:?}",
++                branch
++            );
++        }
++    }
++}
