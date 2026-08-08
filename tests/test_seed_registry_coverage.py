@@ -694,6 +694,39 @@ class TheProposedC151WindowIsNotRatifiedTests(unittest.TestCase):
         ratification bookkeeping listed in the prediction document's section 9 and then
         delete this class.
 
+    MUTATION BATTERY: 11 applied, 11 caught, plus a clean-tree control that stays green.
+    Recorded because this repository has found four inert pins and eight checks that
+    assert nothing, and "the tests pass" is exactly the claim those defects satisfied.
+    Each mutation was applied to a clean tree, the module run with caches cleared and the
+    exit code captured directly, and the tree restored with `git checkout HEAD --` and the
+    restoration verified with `git status --porcelain` before the next one.
+
+      1. The band added to `REGISTERED_BANDS` -> 3 red, including
+         `test_every_registered_band_has_a_committed_witness`. This is the premature
+         ratification the class exists to stop, and the witness pin catches it too.
+      2. The row's status flipped to `CONSUMED` -> 1 red.
+      3. The row deleted from the table -> 2 red (the proposal pin and the exact
+         seven-row count).
+      4. A synthetic artifact covering `19,400,000`-`19,400,199` committed under
+         `reports/artifacts/` -> 3 red, including the virginity pin. This is the shape of
+         the sweep landing, and it is the mutation that must fire.
+      5. `UNREGISTERED` replaced with `REGISTERED` throughout the prediction document
+         -> 1 red.
+      6. An `# OUTCOME` section appended to the prediction document -> 1 red. An outcome
+         under an unfrozen banner would read as pre-registered and would not be.
+      7. The owner's quoted sentence paraphrased -> 1 red.
+      8. `C151_PROPOSED_WINDOW` moved onto C141's consumed span -> 5 red.
+      9. The row's range cell re-ranged into the `19,200,000` block -> 2 red, one of them
+         the decomposition pin, which is what stops the proposal being read as a fourth
+         segment of an already-spent block.
+     10. One cell dropped from the row, leaving it ragged -> 1 red on the rectangularity
+         check. GFM silently eats the overflow, so the status column would vanish from the
+         rendered page while the bytes still looked right.
+     11. The prediction document deleted -> 1 error.
+
+    Every one of the six pins below fires on at least two of those, except the
+    rectangularity assertion, which shares a test with the status pin.
+
     Note what is NOT asserted, deliberately, in the same spirit as the module docstring:
     nothing here says the window MAY be swept, and nothing here reads on the three rows
     #1189 wrote to decompose the `19,200,000` block. Those rows were silent on whether a
