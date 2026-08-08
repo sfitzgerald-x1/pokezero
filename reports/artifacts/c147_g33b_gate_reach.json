@@ -1,0 +1,48 @@
+{
+  "counted_from": "stderr of scripts/engine_transition_differential.py --games 200, one run per window",
+  "gate_build_fingerprint": "0cfe97298c6081a21a04ec6534acebfbc7a0446e00a422c6331b20a89d84a17a",
+  "gate_build_source_commit": "e086703c0557284056089c5e12dd8f101e14d4a0",
+  "instrumentation": [
+    "eprintln!(\"G33B_PREDICATE_TRUE winner={winner} loser={loser}\");  // inside the gating arm of leftovers_slot_truncated",
+    "if active.item == Items::LEFTOVERS && leftovers_truncated[i] { eprintln!(\"G33B_SLOT_SKIPPED side={i}\"); }  // at the booking site"
+  ],
+  "instrumented_build_fingerprint": "11f34b6a3574380740204cfc1744d8c6e1ddb351baf35349535ac712f0ed3eaf",
+  "patch_stack": 72,
+  "re_derived_post_merge": "Re-measured at the FINAL head after both merges (f1c3b3aa and 99c77eb7) and after the review documentation fixes, because reach was the one merge-sensitive figure the report's own \u00a75b standard had missed. The instrumentation is byte-identical to the pre-merge run's and the counts are UNCHANGED at 52 and 56. The pre-merge instrumented build was dee00fce7912499d against a b8ff1445 gate; the figures below are the post-merge pair.",
+  "what": "C147 reach census for the G33b gate: how many times the built predicate fires inside the two swept windows. Measured with a THROWAWAY instrumented build whose only difference from the gate build is the two eprintln! lines quoted below; that build is NOT part of the patch, and its own sweep artifacts are deliberately not committed because its fingerprint is not reproducible from any committed tree.",
+  "why_a_separate_measurement": "A verdict-level sweep cannot see this gate fire. At every firing site the baseline plan was ALREADY unusable, so any mutation preserving the booking count reproduces the baseline output exactly; the only detectable change at a firing site is the one that makes the count reconcile, which is the gate itself.",
+  "windows": {
+    "dev": {
+      "games": 200,
+      "leftovers_slots_skipped": 52,
+      "predicate_true": 54,
+      "seed_start": 19000000,
+      "sweeps": {
+        "counters_identical_to_the_merged_base_sweep": true,
+        "counters_identical_to_the_uninstrumented_head_gate_sweep": true,
+        "diverged": 1,
+        "divergence_classes": {
+          "component_magnitude:heal": 1
+        },
+        "engine_errors": 0,
+        "matched": 15502,
+        "measured": 15503
+      }
+    },
+    "holdout": {
+      "games": 200,
+      "leftovers_slots_skipped": 56,
+      "predicate_true": 58,
+      "seed_start": 19100000,
+      "sweeps": {
+        "counters_identical_to_the_merged_base_sweep": true,
+        "counters_identical_to_the_uninstrumented_head_gate_sweep": true,
+        "diverged": 0,
+        "divergence_classes": {},
+        "engine_errors": 0,
+        "matched": 15579,
+        "measured": 15579
+      }
+    }
+  }
+}

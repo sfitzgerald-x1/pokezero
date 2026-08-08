@@ -1,0 +1,65 @@
+{
+  "build_check": "gated",
+  "acceptance_eligible": true,
+  "enumerate_rolls": false,
+  "games": 200,
+  "seeds": {
+    "min": 19100000,
+    "max": 19100199,
+    "distinct": 200
+  },
+  "approximate_sleep_turns": false,
+  "matcher": "strict",
+  "repro_retention": {
+    "repros_per_game": 8,
+    "keep_repro": 25,
+    "repros_retained": 0,
+    "transitions_diverged": 0,
+    "repros_complete": true,
+    "withheld_retained": 0,
+    "verdicts_withheld": 0,
+    "withheld_complete": true
+  },
+  "gating_exact": 14148,
+  "gating_support_based": 1431,
+  "elapsed_seconds": 893.27,
+  "games_per_hour": 806.0,
+  "boundaries_full_round": 16155,
+  "boundaries_measured": 15579,
+  "transitions_matched": 15579,
+  "transitions_diverged": 0,
+  "engine_errors": 0,
+  "divergent_transitions_per_game": 0.0,
+  "measured_fraction_of_full_rounds": 0.9643,
+  "divergence_classes": {},
+  "counters": {
+    "abort:max_steps": 1,
+    "boundaries_full_round": 16155,
+    "boundaries_measured": 15579,
+    "gating:exact": 14148,
+    "gating:support": 1431,
+    "hidden_counter_support:sleep": 1435,
+    "limit:world_substitute_health_unknown": 139,
+    "skip:single_seat_boundary": 1813,
+    "skip:unmappable_choice:struggle_not_submittable": 233,
+    "skip:world_unsupported:encore_move_unknown": 1,
+    "skip:world_unsupported:materialization_blocker": 8,
+    "skip:world_unsupported:volatile_unsupported": 127,
+    "strict:sleeptalk_union_branch": 106,
+    "transition:matched": 15579,
+    "world_prestate_mismatch": 68,
+    "world_prestate_mismatch:p1_hp": 6,
+    "world_prestate_mismatch:p1_status": 25,
+    "world_prestate_mismatch:p2_hp": 23,
+    "world_prestate_mismatch:p2_status": 14
+  },
+  "repros": [],
+  "withheld_repros": [],
+  "checkpoint_provenance": {
+    "records_with_provenance": 200,
+    "complete": true,
+    "distinct": [
+      "{\"engine_fingerprint\": \"770228825d53f7175ea359d0eb28e97206329019b0330c0bfa9a20119936875c\", \"enumerate_rolls\": false, \"image_commit\": null, \"source_commit\": \"f1c3b3aa02a629b4418cac8c9d3f5b6fc3a0bb83\", \"source_tree\": \"clean\"}"
+    ]
+  }
+}

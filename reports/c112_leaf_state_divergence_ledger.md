@@ -114,9 +114,23 @@ Coverage on the v4 corpus (`corpus/golden-v4`): the harness surfaces **18 `state
 rows**, and this ledger groups all 138 into six mechanisms — P1 100 + P2 28 + P3 2 + P4 1 + P5 5 +
 P6 2 = 138. **All 138 rows carry a source-level cause and a disposition.** P2 (toxic, 28 rows) was open in an
 earlier revision and is closed here: the event renderer emits status-free condition strings
-(`events.rs:751-760`), so the leaf's replay cannot see an in-branch toxic entry. Closed on a
+(`events.rs`'s `fn hp_condition`), so the leaf's replay cannot see an in-branch toxic entry. Closed on a
 counterfactual plus a 33/33 signature on v4 and 27/27 on golden-v2, with three earlier attributions
 for the class withdrawn.
+
+> **AT HEAD THESE ARE 16 FAMILIES / 135 ROWS.** P4's 1 row closed in #1156 and P3's 2 closed with
+> the freeze lift; both families are gone entirely. The figures above are the ledger-time
+> attribution and are kept because the attribution itself is what this document is for — but do
+> not quote them as current coverage. A previous correction updated the BOUNDARY count
+> (124→123→122) and left these row counts untouched, which is the unit this document actually
+> states coverage in.
+
+> **`leaf.rs` LINE CITATIONS IN THIS DOCUMENT ARE ERA-STAMPED AND HAVE DRIFTED.** The P3
+> freeze lift changed that file by **+5 lines** net, so every citation below the edit
+> (~1290) is low by roughly that much; citations above it are unaffected. They are left as
+> written rather than renumbered, because renumbering is what keeps failing: three separate
+> line references in this effort went stale **in the commit that introduced or fixed them**.
+> Resolve by symbol or by grepping the quoted expression, not by line.
 
 Every attributed row rests on source-level verification, subject to P3's row-level caveat stated in
 that section (its second row's boundary is unverified, and the id-877 reading rests on the one
@@ -133,9 +147,56 @@ of 124 is **asserted** anywhere — the numeral appears only in this withdrawal 
 BOUNDARY count. 110 + 14 colliding with it was a coincidence, not a measurement. Four consecutive edits to this paragraph each fixed the wrong
 sentence and left the composition unread.
 
-**Note on "the 124".** 124 is `class_rows.state`, a count of BOUNDARIES; 138 is the sum of
-per-family boundary incidences, which this document calls rows. They are different units and
-the Units section forbids juxtaposing them, so the coverage claim is stated over rows only.
+**Note on "the 124", and why it is now 122.** 124 is `class_rows.state`, a count of BOUNDARIES;
+138 is the sum of per-family boundary incidences, which this document calls rows. They are
+different units and the Units section forbids juxtaposing them, so the coverage claim is stated
+over rows only.
+
+**The number moved twice after this ledger was written, both times because a cause here was
+closed.** Do not read 124 as a live figure:
+
+| when | `class_rows.state` | why |
+|---|---|---|
+| at ledger time | **124** | as attributed below |
+| after #1156 | 123 | P4 closed — the candidate-derived block this ledger cites as P4's fix site was replaced wholesale |
+| after the P3 freeze lift | **122** | P3 closed — see its section |
+
+Measured at the tree that carries this correction, `python scripts/leaf_vs_reality.py --corpus
+corpus/golden-v4 --tables corpus/encoder_tables_v4.json`:
+`DEFECT-CLASS (state+turn) divergent boundaries: 122`.
+
+Lifting the P3 freeze also cleared 2 of the 3 rows in the `engine_model` class's
+`self_team/CATEGORY_VOLATILE_OFFSET` family; `engine_model` boundaries went 31 -> 30.
+
+**CORRECTED — my first explanation of this was invented.** I wrote that those rows were
+"attributed to `volatile:encore` (864) but were mustrecharge displacing the volatile written at
+that offset". Review dumped every cell in the family and it is false twice over:
+
+```
+MAIN (5 cells)                                    BRANCH (1 cell)
+  engine_model 1003 p1 12->13  got 864 want 0       engine_model 1003 p1 12->13  got 864 want 0
+  engine_model 1009 p2 15->16  got 0   want 877
+  engine_model 1009 p2 17->19  got 0   want 877
+  state        1009 p2 16->17  got 877 want 0
+  state        1009 p2 19->20  got 877 want 0
+```
+
+The two cells that left `engine_model` were **never 864** — they are `got=0 / want=877`, the leaf
+writing nothing where reality had the flag. The one genuine encore cell is the one that
+**survived**. Nothing was displaced, and `encoder.rs:1638-1641` sorts the bag by raw name, so
+`"encore" < "mustrecharge"` and mustrecharge can never displace encore from `offset+0` anyway.
+
+I read the family's printed exemplar — `got 864`, which is the survivor — and generalised it to
+all three. That is the same error C141 had already had to correct one report earlier.
+
+**What actually happened, which is the better result:** the lift fixes 4 cells in BOTH
+directions — 2 spurious (a stale flag written where reality had none) and 2 missing (no flag
+written where reality had one).
+
+**The arithmetic, stated because it otherwise reads wrong:** each class dropped 1 boundary while
+its family dropped 2 cells (`state` 123->122, `engine_model` 31->30). One boundary in each pair
+still carries another divergent family of the same class, so clearing a cell there frees no
+boundary. Classes count boundaries; families count cells.
 
 On `golden-v2`: **119 of 119 rows** — P1 (**90** = 17+17+4+4+23+23+2), P2 (24) and P5 (5). P3, P4 and P6 do not surface
 there. Scenarios: **10 of 10**, all **P5**, the same recharge-request Choice lock, corroborated on
@@ -149,24 +210,24 @@ this kind gets over-read — and its predecessor was withdrawn for exactly that.
 
 | class | rows (v4 / gv2 / scen) | cause | disposition |
 |---|---|---|---|
-| `NUMERIC_SELF_WISH_TURNS` | 17 / 17 / 0 | **P1** root-frozen md passthrough | harness fix |
-| `NUMERIC_OPP_WISH_TURNS` | 17 / 17 / 0 | **P1** | harness fix |
-| `NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF` | 6 / 4 / 0 | **P1** | harness fix |
-| `NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP` | 6 / 4 / 0 | **P1** | harness fix |
-| `NUMERIC_STALL_COUNTER` (self) | 26 / 23 / 0 | **P1** | harness fix |
-| `NUMERIC_STALL_COUNTER` (opponent) | 26 / 23 / 0 | **P1** | harness fix |
-| `NUMERIC_ENCORE_TURNS` | 2 / 2 / 0 | **P1** | harness fix |
-| `NUMERIC_TOXIC_STAGE` (self) | 14 / 12 / 0 | **P2** renderer emits status-free conditions | encoder fix |
-| `NUMERIC_TOXIC_STAGE` (opponent) | 14 / 12 / 0 | **P2**, same mechanism | encoder fix |
-| `CATEGORY_VOLATILE_OFFSET` (self) | 2 / 0 / 0 | **P3** self-side recharge root-freeze | production + gate fix → **task 4** |
-| `CATEGORY_VOLATILE_OFFSET` (opponent) | 1 / 0 / 0 | **P4** `recharging` never seeded on a faint-replacement round | harness fix |
-| `NUMERIC_ACTIVE` (action) | 1 / 1 / 2 | **P5** recharge request carries no `disabled` bits | harness fix |
-| `NUMERIC_LEGAL` (action) | 1 / 1 / 2 | **P5** | harness fix |
-| `legal_action_mask` action0 | 1 / 1 / 0 | **P5** | harness fix |
-| `legal_action_mask` action1 | 1 / 1 / 2 | **P5** | harness fix |
-| `legal_action_mask` action3 | 1 / 1 / 2 | **P5** | harness fix |
-| `NUMERIC_SLEEP_TURNS` (self) | 1 / 0 / 0 | **P6** Sleep-Talk refund not modelled | encoder fix |
-| `NUMERIC_SLEEP_TURNS` (opponent) | 1 / 0 / 0 | **P6**, same mon from the other seat | encoder fix |
+| `NUMERIC_SELF_WISH_TURNS` | 17 / 17 / 0 | **P1** root-frozen md passthrough | **production** — `leaf.rs` |
+| `NUMERIC_OPP_WISH_TURNS` | 17 / 17 / 0 | **P1** | **production** — `leaf.rs` |
+| `NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF` | 6 / 4 / 0 | **P1** | **production** — `leaf.rs` |
+| `NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP` | 6 / 4 / 0 | **P1** | **production** — `leaf.rs` |
+| `NUMERIC_STALL_COUNTER` (self) | 26 / 23 / 0 | **P1** | **production** — `leaf.rs` |
+| `NUMERIC_STALL_COUNTER` (opponent) | 26 / 23 / 0 | **P1** | **production** — `leaf.rs` |
+| `NUMERIC_ENCORE_TURNS` | 2 / 2 / 0 | **P1** | **production** — `leaf.rs` |
+| `NUMERIC_TOXIC_STAGE` (self) | 14 / 12 / 0 | **P2** renderer emits status-free conditions | **production** — `events.rs` |
+| `NUMERIC_TOXIC_STAGE` (opponent) | 14 / 12 / 0 | **P2**, same mechanism | **production** — `events.rs` |
+| `CATEGORY_VOLATILE_OFFSET` (self) | 2 / 0 / 0 | **P3** self-side recharge root-freeze | **CLOSED** — gates #1156, freeze lifted in `leaf.rs` (this branch) |
+| `CATEGORY_VOLATILE_OFFSET` (opponent) | 1 / 0 / 0 | **P4** `recharging` never seeded on a faint-replacement round | **CLOSED** — #1156 replaced the candidate-derived block |
+| `NUMERIC_ACTIVE` (action) | 1 / 1 / 2 | **P5** recharge request carries no `disabled` bits | **production** — `engine_world.py` |
+| `NUMERIC_LEGAL` (action) | 1 / 1 / 2 | **P5** | **production** — `engine_world.py` |
+| `legal_action_mask` action0 | 1 / 1 / 0 | **P5** | **production** — `engine_world.py` |
+| `legal_action_mask` action1 | 1 / 1 / 2 | **P5** | **production** — `engine_world.py` |
+| `legal_action_mask` action3 | 1 / 1 / 2 | **P5** | **production** — `engine_world.py` |
+| `NUMERIC_SLEEP_TURNS` (self) | 1 / 0 / 0 | **P6** Sleep-Talk refund not modelled | **production** — `leaf.rs` (`LeafMeta.sleep`) |
+| `NUMERIC_SLEEP_TURNS` (opponent) | 1 / 0 / 0 | **P6**, same mon from the other seat | **production** — `leaf.rs` (`LeafMeta.sleep`) |
 
 P1 100 + P2 28 + P3 2 + P4 1 + P5 5 + P6 2 = **138**.
 
@@ -316,7 +377,7 @@ exact only within a stint.
 
 ## P2 — the event renderer emits status-free condition strings, so the replay cannot see an in-branch toxic entry (28 rows on v4, 24 on gv2)
 
-**Cause.** `events.rs:751-760` (`hp_condition`) returns `"0 fnt"`, a percent form, or
+**Cause.** `events.rs`'s `fn hp_condition` (and `hp_percent_condition`) returns `"0 fnt"`, a percent form, or
 `"{hp}/{maxhp}"` and **never appends a status token**. So every condition string in a synthesized
 branch is status-free, including the `|switch|` line (`events.rs:1171-1172`). Compare
 `1000#[56,57]` p1:
@@ -508,10 +569,40 @@ family, so the second row's boundary is unverified; the id-877 reading rests on 
 **Disposition: production + gate fix → task 4**, and these 2 rows are its measured incidence —
 **not** the 8 an earlier revision claimed.
 
+**CLOSED.** The gate half landed in #1156 (`production_recharging_slots`, all four gates) and the
+symmetry half in the same PR (`_recharging_slots` returns our own slot from the parser's
+`self_must_recharge`). The freeze itself is now lifted in `leaf.rs`: both sides derive the flag
+from the branch's own `volatile_statuses`.
+
+Why the freeze had to go rather than merely being allowed to stay: making `_recharging_slots`
+symmetric meant `engine_search` started BUILDING self-recharge worlds that previously failed
+closed as `self_request_state_unsupported`, so the stale root flag became reachable in production
+search at depth > 0 where it never had been. The symmetry fix turned a dormant defect into a live
+one; leaving it would have been strictly worse than before task 4.
+
+Measured after the lift, same producing command as above:
+
+- the id-877 self-side family is **gone** (2 rows -> 0);
+- `class_rows.state` 123 -> **122**;
+- `leaf_root_parity` stays at **diverged 0** — depth-0 parity is intact, which was the freeze's
+  entire rationale and the thing that had to be checked;
+- and 2 of the 3 `engine_model` `self_team/CATEGORY_VOLATILE_OFFSET` cells cleared too. They were
+  `got=0 / want=877` — the leaf writing NOTHING where reality had the flag — not, as an earlier
+  revision of this ledger claimed, encore rows displaced by mustrecharge. See the corrected cell
+  dump in the "Note on the 124" section; the lift fixes 4 cells in both directions.
+
+The second row's boundary was unverified when this section was written (the artifact stores one
+example per family). The lift clearing exactly 2 rows confirms both were id-877.
+
 ## P4 — `recharging` is never seeded on a faint-replacement round (1 row)
 
 `CATEGORY_VOLATILE_OFFSET` (opponent) at `1009#[18,19]`, seat p1, direction **inverted**: got 0 /
 want 877 — the leaf *lost* a recharge reality still has.
+
+**CLOSED by #1156**, incidentally rather than deliberately: this section's named fix site,
+`scripts/leaf_vs_reality.py:430-439`, is the candidate-derived block that task 4 replaced
+wholesale with `production_recharging_slots`. Round 18 has no p2 decision row, so the candidate
+rule could not see p2's lock; the parser tracker can. `class_rows.state` 124 -> 123.
 
 **[CORRECTION]** An earlier revision called this "the opponent mirror" of P3 and then "the engine
 consumes the recharge a ply early". Neither: the recharge was **never in the world to consume**.
@@ -522,7 +613,15 @@ never enters the constructed world, and `leaf.rs:1320-1323` correctly reports th
 volatile that was never seeded. Slaking's Hyper Beam was at round 17, before the root, so the
 branch cannot set it either.
 
-**Disposition: harness fix** — seed `recharging` from the opponent's most recent decision row, or
+**Disposition: harness** — `scripts/leaf_vs_reality.py`, matching this file's own file-location
+table (`P4 | scripts/leaf_vs_reality.py | harness`) and its "Only P4 is harness-only" line.
+
+*Correction on a correction:* a previous pass relabelled this `production`, claiming the original
+`harness fix` contradicted the table. It did not — P4 is the one genuinely harness-only cause, and
+the table said so. That pass was fixing P5, whose body WAS wrong, and swept P4 along with it. The
+label is restored; what was actually stale here is the prescribed remedy below, which #1156
+superseded by replacing the block wholesale (see the CLOSED note above). Seed `recharging` from
+the opponent's most recent decision row, or
 from the payload's `opponent_must_recharge`, rather than from a same-round chosen candidate that
 does not exist on faint-replacement rounds. Filing this as an accepted deviation by widening a
 tag, as the previous revision proposed, would route a harness world-construction gap into an
@@ -564,7 +663,7 @@ Two corpora, two recharge-request roots, and in both the diverging slots are exa
 locked-out moves while the locked-into move agrees. The index difference (`action0/1/3` on v4 vs
 `action1/2/3` on scenarios) is just where Hyper Beam sits in each move list.
 
-**Disposition: harness fix.** Highest-severity family: the only one where the leaf is
+**Disposition: production** — `engine_world.py` world construction, per this file's own file-location table. (An earlier revision said `harness fix` here, which is the contradiction the table at the top now resolves.) Highest-severity family: the only one where the leaf is
 *permissive* rather than empty, and a search pricing illegal actions is worse than one reading a
 stale counter.
 
@@ -587,7 +686,7 @@ Snore on pivot-in (`time += skippedTime` in `slp.onSwitchIn`), applied at `belie
 (`leaf.rs:322-329`) is `(started, cant_count)` with **no skipped term**, so the leaf cannot apply
 the refund and carries the root's 2.
 
-**Disposition: encoder fix**, and the `state` class is **correct** — the previous revision's
+**Disposition: production** — `events.rs`, per this file's own file-location table (an earlier revision said the label-only `encoder fix`, which `:20`'s "All six name a file" rule forbids) — and the `state` class is **correct** — the previous revision's
 "artifact of the comparison setup, not an encoder defect" removed a genuine defect from the defect
 list on a mechanism incapable of producing it.
 
@@ -655,4 +754,6 @@ Four of the `state` families as they stood in v2's framing are columns that did 
   here (1008 and 369) and it holds. Mechanizing it is task 3's subject.
 - `self_moveset_mismatch` (11 scenarios skips) and the residue-row classes are owned by the
   fallback-burndown and rust-fidelity lanes; they appear only as skip counts and are **not**
-  attributed. A note belongs in those ledgers.
+  attributed. **FILED** for the fallback-burndown half: see the note appended to
+  `reports/c111_residue_row_causes.md`. The rust-fidelity half is still owed — this sentence
+  said "those ledgers", plural, and only one has been written to.

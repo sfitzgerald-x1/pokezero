@@ -39,7 +39,7 @@ What this file adds over ``test_observation_spec_v4.py``'s coverage, which pins 
   derivation with itself and were inert.
   This file is ADD-ONLY: that assertion is still present and is left in place deliberately, since
   it is nearly free and fails on a call-site edit even in an environment with no Showdown checkout,
-  where everything here skips. What changes is that it is no longer the only thing pinning the gate.
+  where all but the fixture lint skips. What changes is that it is no longer the only thing pinning the gate.
 
 Two traps this fixture is built to avoid, both of which produced meaningless green runs while it
 was being written:
@@ -579,33 +579,6 @@ class SpreadGateRidesCheckpointProvenanceTest(unittest.TestCase):
                     f"{species}: expected {names} to move and only {moved} did",
                 )
 
-    def test_the_fixture_literal_still_covers_both_branches_and_directions(self) -> None:
-        """A LINT on the fixture literal. Touches no encoder, deliberately separate.
-
-        This used to be tacked onto the end of the breadth test, where it read as coverage; review
-        pointed out it cannot fail on any code change, only on a fixture edit. It replaces a dead
-        `assertGreaterEqual(len(observed), 3)`, which could only fire after a subTest already had.
-        """
-        covered = {name for _, directions in DISCRIMINATING.values() for name in directions}
-        self.assertTrue(
-            any(name.startswith("NUMERIC_EXPECTED_HP") for name in covered)
-            or any(name.startswith("NUMERIC_EXPECTED_ATK") for name in covered),
-            "no Atk/HP-band column is covered, so that branch could be reverted alone",
-        )
-        self.assertTrue(
-            covered & {"NUMERIC_EXPECTED_DEF", "NUMERIC_EXPECTED_SPA", "NUMERIC_EXPECTED_SPD"},
-            "no Def/SpA/SpD column is covered, so that loop could be reverted alone",
-        )
-        self.assertEqual(
-            {"lower", "higher"},
-            {
-                value
-                for _, directions in DISCRIMINATING.values()
-                for value in directions.values()
-            },
-            "the fixture no longer covers both correction directions, so a sign error passes",
-        )
-
 
 @requires_showdown("the latch is compared against real exported tables")
 class EncoderTablesLatchRidesTheSameProvenanceTest(unittest.TestCase):
@@ -682,6 +655,46 @@ class EncoderTablesLatchRidesTheSameProvenanceTest(unittest.TestCase):
                             tables_path=tables[tables_schema],
                         )
                     self.assertIn("schema_version", str(caught.exception))
+
+
+class SpreadGateFixtureCoversBothDirectionsTest(unittest.TestCase):
+    """Fixture-only, so it runs WITHOUT a Showdown checkout -- deliberately.
+
+    Every other class in this file is @requires_showdown and therefore SKIPS in CI, so CI can
+    only detect the file shrinking, never its assertions being gutted -- review measured exactly
+    that: neutralise all 18 assertions, keep 6 tests, and the CI step still passes. This one
+    reads the module-level DISCRIMINATING literal and nothing else, so it is the single
+    assertion in this file that actually executes on the runner.
+
+    Keep it that way: nothing here may need the dex, the encoder or a checkpoint.
+    """
+
+    def test_the_fixture_literal_still_covers_both_branches_and_directions(self) -> None:
+        """A LINT on the fixture literal. Touches no encoder, deliberately separate.
+
+        This used to be tacked onto the end of the breadth test, where it read as coverage; review
+        pointed out it cannot fail on any code change, only on a fixture edit. It replaces a dead
+        `assertGreaterEqual(len(observed), 3)`, which could only fire after a subTest already had.
+        """
+        covered = {name for _, directions in DISCRIMINATING.values() for name in directions}
+        self.assertTrue(
+            any(name.startswith("NUMERIC_EXPECTED_HP") for name in covered)
+            or any(name.startswith("NUMERIC_EXPECTED_ATK") for name in covered),
+            "no Atk/HP-band column is covered, so that branch could be reverted alone",
+        )
+        self.assertTrue(
+            covered & {"NUMERIC_EXPECTED_DEF", "NUMERIC_EXPECTED_SPA", "NUMERIC_EXPECTED_SPD"},
+            "no Def/SpA/SpD column is covered, so that loop could be reverted alone",
+        )
+        self.assertEqual(
+            {"lower", "higher"},
+            {
+                value
+                for _, directions in DISCRIMINATING.values()
+                for value in directions.values()
+            },
+            "the fixture no longer covers both correction directions, so a sign error passes",
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
