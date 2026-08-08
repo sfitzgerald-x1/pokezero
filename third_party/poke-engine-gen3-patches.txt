@@ -1644,19 +1644,47 @@ poke-engine-gen3-attract-marker.patch
 # same serialized state by different routes. A population that separates them is not
 # committed.
 #
-# REACHABILITY, and it bounds every claim above. `Side::serialize`
-# (third_party/poke-engine-src/src/state.rs:1292) formats 29 fields and
-# `damage_dealt` is not one of them; `Side::deserialize` (:1394) hardcodes
-# `damage_dealt: DamageDealt::default()`. The field cannot survive a round trip, so
-# any consumer handing the engine a SERIALIZED state presents a zero carry-over, and
-# a zero carry cannot be doubled. That is `branch_events` and `env_step`, each
-# opening with `parse_state` -> `State::deserialize`; `env_step` also returns
-# `post_state: state.serialize()`, so the carry cannot survive between calls either.
-# `State::deserialize` DOES call `set_conditional_mechanics`, so the FLAG is set from
-# movesets while the VALUE is zeroed. scripts/engine_transition_differential.py:2057
-# reaches the engine only through `branch_events`, so THE SWEEP CORPUS STRUCTURALLY
-# CANNOT OBSERVE THIS FIX. Only the in-memory tree fold (`model.rs` / `tree.rs`,
-# apply/reverse on a live `State`) can, at depth >= 2.
+# REACHABILITY, and it bounds every claim above. An earlier revision of this comment
+# said the differential "reaches the engine only through `branch_events`". THAT WAS A
+# FALSE TOTALITY CLAIM in a change whose whole purpose is retiring one, and it was
+# wrong: `branch_events` is one of THREE entry points. The conclusion survives, but
+# on a mechanism that revision never cited. The enumeration, from
+# `grep -n 'poke_engine\.\|pokezero_search\.' scripts/engine_transition_differential.py`:
+#
+#  1. `:2057` `pokezero_search.branch_events(state.to_string(), ...)`. SERIALIZES
+#     first, so `State::deserialize` runs. `Side::serialize`
+#     (third_party/poke-engine-src/src/state.rs:1292) formats 29 fields and
+#     `damage_dealt` is not one of them, and `Side::deserialize` (:1394) hardcodes
+#     `damage_dealt: DamageDealt::default()`. Carry presented: ZERO.
+#  2. `:2304` `poke_engine.generate_instructions(state, ...)` on the LIVE Python
+#     `State` -- `state`, not `state.to_string()` -- built by
+#     `build_poke_engine_state` (`src/pokezero/poke_engine_adapter.py:298`) through
+#     the pyo3 constructors, which never call `from_string`. So `State::deserialize`
+#     is NOT involved on this route, and it does reach the guarded function:
+#     `poke-engine-py/src/lib.rs:1067` -> `:1092`
+#     `generate_instructions_from_move_pair`. The carry is zeroed anyway, by a
+#     DIFFERENT mechanism: the `PySide -> Side` conversion hardcodes
+#     `damage_dealt: Default::default()` at `poke-engine-py/src/lib.rs:263`, and
+#     `PyState -> State` sets `use_damage_dealt: false` at `:84` before calling
+#     `state.set_conditional_mechanics()` at `:86`. Carry presented: ZERO.
+#  3. `:842` and `:2075` `poke_engine.calculate_damage(...)` ->
+#     `poke-engine-py/src/lib.rs:1099` -> `calculate_both_damage_rolls`
+#     (`src/gen3/generate_instructions.rs:6437`) -> `calculate_damage_rolls`. This
+#     route never calls `generate_instructions_from_move` at all, so the guarded
+#     block is not on it. (`:841` feeds it a `State.from_string` state, i.e. route 1's
+#     zeroing as well.)
+#
+# `DamageDealt::default()` is `{damage: 0, move_category: Physical, hit_substitute:
+# false}` (state.rs:586), and all three of `reset_damage_dealt`'s guards test against
+# exactly those values -- so on a zero carry it emits NOTHING, and emitting nothing
+# twice is emitting nothing. Both zeroing routes still run
+# `set_conditional_mechanics`, so the FLAG is set from movesets while the VALUE is
+# zero. THE SWEEP CORPUS THEREFORE CANNOT OBSERVE THIS FIX ON ANY OF ITS THREE ENTRY
+# POINTS. `env_step` is a fourth consumer outside the differential and is zeroed by
+# route 1's mechanism, and additionally returns `post_state: state.serialize()`, so
+# the carry cannot survive between calls either. Only the in-memory tree fold
+# (`model.rs` / `tree.rs`, apply/reverse on a live `State`) can reach it, at depth
+# >= 2.
 # Regression pins: rust/pokezero-search/tests/gen3_sleeptalk_damage_dealt_reset.rs
 # (SEVEN tests -- note the second-moving arm: the callee inherits `first_move` from
 # the outer Sleep Talk, so a guard written `!sleep_talk_move || !first_move` passes a

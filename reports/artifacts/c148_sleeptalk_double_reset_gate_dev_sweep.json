@@ -22,8 +22,8 @@
   },
   "gating_exact": 14156,
   "gating_support_based": 1347,
-  "elapsed_seconds": 647.27,
-  "games_per_hour": 1112.4,
+  "elapsed_seconds": 648.44,
+  "games_per_hour": 1110.4,
   "boundaries_full_round": 15968,
   "boundaries_measured": 15503,
   "transitions_matched": 15502,
@@ -148,7 +148,7 @@
       ],
       "protocol": [
         "|",
-        "|t:|1786161844",
+        "|t:|1786165219",
         "|move|p1a: Raichu|Thunderbolt|p2a: Tangela",
         "|-resisted|p2a: Tangela",
         "|-damage|p2a: Tangela|201/277",
@@ -172,7 +172,7 @@
     "records_with_provenance": 200,
     "complete": true,
     "distinct": [
-      "{\"engine_fingerprint\": \"7207128b6a4b779b148f9c5f0f042ec040252e090ce2c5ac01423bb9471fb478\", \"enumerate_rolls\": false, \"image_commit\": null, \"source_commit\": \"cf3c03d3703d3a850c2c172c09332d2a1660ca04\", \"source_tree\": \"dirty\"}"
+      "{\"engine_fingerprint\": \"de29e3dc79c80659859fbe09ca9fc45dc9bc444bc8fb38cbe44bfa569259e840\", \"enumerate_rolls\": false, \"image_commit\": null, \"source_commit\": \"abbaff9a99c35b586fca581c02687a7f57695ee8\", \"source_tree\": \"dirty\"}"
     ]
   }
 }

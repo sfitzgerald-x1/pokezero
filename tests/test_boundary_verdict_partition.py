@@ -211,7 +211,10 @@ _EXPECTED_SWEEP_ARTIFACTS = 91
 #
 # 87 -> 91 (C148, the Sleep Talk double `damage_dealt` reset guard). RE-DERIVED by the same two-tree
 # procedure, calling `_sweep_reports()` itself in both trees rather than reasoning about membership:
-# 87 on a worktree of `origin/main` at `b71bc2fd` and 91 here, set difference exactly
+# 87 on a worktree of `origin/main` at `32829210` and 91 here, set difference exactly
+# (RE-DERIVED a second time after this branch merged `32829210`; the first derivation was
+# against `b71bc2fd` and #1169 adds no JSON under `reports/` or `docs/`, so 87 held -- but it
+# was re-run rather than assumed, because a base that moves is how these figures go stale)
 # `reports/artifacts/c148_sleeptalk_double_reset_{base,gate}_{dev,holdout}_sweep.json` and NOTHING
 # removed. Confirmed still live at 90 and at 92.
 #
@@ -222,10 +225,19 @@ _EXPECTED_SWEEP_ARTIFACTS = 91
 # and the same reason the directory count and the corpus count cannot check each other.
 #
 # WHAT THESE FOUR SHOW IS A NULL, and that is the point rather than a disappointment. The C148 gate
-# cannot move any boundary in this corpus, structurally: `Side::serialize` does not emit
-# `damage_dealt` and `Side::deserialize` hardcodes `DamageDealt::default()`, while the differential
-# reaches the engine only through `pokezero_search.branch_events`, which opens with `parse_state` ->
-# `State::deserialize`. The pair is committed so the null is ON RECORD rather than absent.
+# cannot move any boundary in this corpus, structurally -- on ALL THREE of the differential's engine
+# entry points, which is the enumeration an earlier revision of this comment got wrong by naming
+# only the first:
+#   1. `engine_transition_differential.py:2057` `branch_events(state.to_string(), ...)` -- serializes,
+#      so `Side::serialize` (which does not emit `damage_dealt`) and `Side::deserialize` (which
+#      hardcodes `DamageDealt::default()`) zero the carry;
+#   2. `:2304` `poke_engine.generate_instructions(state, ...)` on the LIVE pyo3-built `State`, which
+#      never deserializes and DOES reach the guarded function -- zeroed instead by
+#      `damage_dealt: Default::default()` at `poke-engine-py/src/lib.rs:263`;
+#   3. `:842`/`:2075` `poke_engine.calculate_damage`, which never calls
+#      `generate_instructions_from_move` at all.
+# See `reports/c148_sleeptalk_double_reset.md` section 2. The pair is committed so the null is ON
+# RECORD rather than absent.
 
 
 def _sweep_reports() -> list[tuple[str, dict]]:

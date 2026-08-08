@@ -105,7 +105,9 @@ _CORPUS_TREES = ("reports", "docs")
 # (79 -> 87), because that one selects on a top-level `boundaries_measured` and this one takes
 # every committed JSON under `reports/` and `docs/`.
 # 360 -> 366 (C148, the Sleep Talk double `damage_dealt` reset guard). RE-DERIVED by importing
-# this module into a worktree of `origin/main` at `b71bc2fd` and calling `counter_artifacts()`
+# this module into a worktree of `origin/main` at `32829210` and calling `counter_artifacts()`
+# (re-derived after this branch merged that commit; #1169 adds no JSON under `reports/` or
+# `docs/`, so the base is still 360 -- re-run, not assumed)
 # there -- 360 -- against 366 here, with the set difference exactly the six
 # `reports/artifacts/c148_sleeptalk_double_reset_*.json` this branch adds and NOTHING removed.
 # Not arithmetic on the previous figure, and confirmed still live at 365 and at 367.

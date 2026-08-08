@@ -6,8 +6,9 @@ output — and corrects the record where the merged text overstates what was mea
 
 **Scope, stated first.** #1170 closes a real engine defect on the **in-memory tree fold**
 (`model.rs` / `tree.rs`), at depth ≥ 2. It closes **nothing** on the transition-differential sweep
-corpus, and it cannot: that corpus reaches the engine only through a serialized state, and the
-field being repaired does not survive serialization. The four committed sweeps are a **null**, and
+corpus, and it cannot: on all three of that corpus's engine entry points the carry-over the defect
+needs is presented as zero — two of them because the field does not survive serialization, the
+third because the pyo3 binding hardcodes it away (§2). The four committed sweeps are a **null**, and
 the null was **predicted from a committed control arm before the sweeps were read**, not discovered
 afterwards.
 
@@ -57,27 +58,56 @@ though they are not adjacent (`[reset, SetSleepTurns, reset, …]`), while
 the class registers `shape_length` and never `shape_branch_is_prefix_of_tail` or
 `shape_tail_is_prefix_of_branch`.
 
-## 2. Reachability, which is the part the first revision under-stated
+## 2. Reachability — the full enumeration, and a correction to my own
 
-`Side::serialize` (`third_party/poke-engine-src/src/state.rs:1292`) formats **29 fields and
-`damage_dealt` is not one of them**. `Side::deserialize` (`:1394`) hardcodes
-`damage_dealt: DamageDealt::default()`. The field therefore **cannot survive a round trip**.
+**A previous revision of this report said `engine_transition_differential.py:2057` calling
+`pokezero_search.branch_events` was "the only way the sweep corpus enters the engine". That was a
+false totality claim, in the report whose purpose is retiring one, and it appeared in four places.**
+It is wrong: `branch_events` is **one of three** entry points, and the other two were never
+examined. The conclusion survives — but on a mechanism I had not cited, and the correction matters
+more than the citation, because §3's control arm is only as good as the enumeration behind it. I
+predicted the null correctly via one route while two went unchecked. The enumeration below is
+re-derived from
+`grep -n 'poke_engine\.\|pokezero_search\.' scripts/engine_transition_differential.py`, not taken
+from review.
 
-Every consumer that hands the engine a *serialized* state presents a **zero** carry-over on the ply
-it parses, and a zero carry-over cannot be doubled:
+**Route 1 — `:2057`, `pokezero_search.branch_events(state.to_string(), …)`.** Serializes first, so
+`State::deserialize` runs. `Side::serialize` (`third_party/poke-engine-src/src/state.rs:1292`)
+formats **29 fields and `damage_dealt` is not one of them**, and `Side::deserialize` (`:1394`)
+hardcodes `damage_dealt: DamageDealt::default()`. **Carry presented: zero.**
 
-| Entry point | Opens with | Consequence |
-|---|---|---|
-| `pokezero_search.branch_events` (`events.rs:5816`) | `parse_state` → `State::deserialize` | carry zeroed on every call |
-| `pokezero_search.env_step` (`envstep.rs`) | same, **and** returns `post_state: state.serialize()` | carry zeroed, and cannot survive *between* calls either |
+**Route 2 — `:2304`, `poke_engine.generate_instructions(state, …)` on the LIVE Python `State`.**
+This is the route the previous revision missed, and it is the interesting one: the argument is
+`state`, **not** `state.to_string()`. Those states come from `build_poke_engine_state`
+(`src/pokezero/poke_engine_adapter.py:298`), which builds through the pyo3 constructors and never
+calls `from_string` — so **`State::deserialize` is never involved**. And it *does* reach the guarded
+function: `poke-engine-py/src/lib.rs:1067` → `:1092` `generate_instructions_from_move_pair`, the
+caller of `generate_instructions_from_move`. The carry is zeroed anyway, by a **different
+mechanism**: the `PySide → Side` conversion hardcodes `damage_dealt: Default::default()` at
+`poke-engine-py/src/lib.rs:263`, and `PyState → State` sets `use_damage_dealt: false` at `:84`
+before calling `state.set_conditional_mechanics()` at `:86`. **Carry presented: zero.**
 
-`State::deserialize` *does* call `set_conditional_mechanics`, so the **flag** is set correctly from
-movesets while the **value** is zeroed — which is exactly the configuration that makes this
-defect invisible to a serialized corpus while leaving it live in the fold.
+**Route 3 — `:842` and `:2075`, `poke_engine.calculate_damage(…)`.**
+`poke-engine-py/src/lib.rs:1099` → `calculate_both_damage_rolls`
+(`src/gen3/generate_instructions.rs:6437`) → `calculate_damage_rolls`. This route **never calls
+`generate_instructions_from_move` at all**, so the guarded block is not on it — a stronger statement
+than a zero carry. (`:841` additionally feeds it a `State.from_string` state, i.e. route 1's
+zeroing.)
 
-`scripts/engine_transition_differential.py:2057` calls `pokezero_search.branch_events`. That is the
-only way the sweep corpus enters the engine. **So the sweeps cannot observe this fix**, and §5 is a
-null by construction.
+**Why zero is decisive.** `DamageDealt::default()` is
+`{damage: 0, move_category: Physical, hit_substitute: false}` (`state.rs:586`), and all three of
+`reset_damage_dealt`'s guards test against exactly those values — so on a zero carry it emits
+**nothing**, and emitting nothing twice is emitting nothing. Both zeroing routes still run
+`set_conditional_mechanics`, so the **flag** is set correctly from movesets while the **value** is
+zero: exactly the configuration that makes this defect invisible to the corpus while leaving it live
+in the fold.
+
+**So the sweep corpus cannot observe this fix on any of its three entry points**, and §5 is a null
+by construction.
+
+`pokezero_search.env_step` (`envstep.rs`) is a fourth consumer, outside the differential. It is
+zeroed by route 1's mechanism and additionally returns `post_state: state.serialize()`, so the carry
+cannot survive *between* calls either.
 
 The one reachable path is the in-memory tree fold, which applies and reverses instructions on a
 live `State` without re-serializing, at **depth ≥ 2** — a ply-1 `set_damage_dealt` supplies the
@@ -181,7 +211,7 @@ The final holdout was **not** run.
 
 | | dev `19,000,000–19,000,199` | | validation holdout `19,100,000–19,100,199` | |
 |---|---|---|---|---|
-| | **base** `8c0f24da…` | **gate** `7207128b…` | **base** `8c0f24da…` | **gate** `7207128b…` |
+| | **base** `30f8b1f8…` | **gate** `de29e3dc…` | **base** `30f8b1f8…` | **gate** `de29e3dc…` |
 | `boundaries_full_round` | 15968 | 15968 | 16155 | 16155 |
 | `boundaries_measured` | 15503 | 15503 | 15579 | 15579 |
 | `transitions_matched` | 15502 | 15502 | 15579 | 15579 |
@@ -192,10 +222,24 @@ The final holdout was **not** run.
 | `gating:support` | 1347 | 1347 | 1431 | 1431 |
 
 **The whole `counters` block is byte-identical between base and gate on both windows** — compared
-as dicts, 23 keys on dev and 19 on holdout. Stronger than the table: diffing the *entire* artifact
-leaf-by-leaf, base and gate differ in exactly **two** leaves across both windows, and neither is
-engine behaviour — `checkpoint_provenance.distinct[0].engine_fingerprint` (the two builds, by
-design) and one `|t:|` wall-clock timestamp line inside the retained dev repro.
+as dicts, 23 keys on dev and 19 on holdout.
+
+Diffing the *entire* artifact leaf-by-leaf, with **no key excluded**, base and gate differ in
+**seven** leaves across both windows — four on dev, three on holdout — and none is engine
+behaviour:
+
+| leaf | windows | what it is |
+|---|---|---|
+| `/checkpoint_provenance/distinct[0]` | dev, holdout | the `engine_fingerprint`: two different builds, by design |
+| `/elapsed_seconds` | dev, holdout | wall clock |
+| `/games_per_hour` | dev, holdout | wall clock |
+| `/repros[0]/protocol[1]` | dev | a `\|t:\|` Unix-timestamp protocol line in the retained repro |
+
+A previous revision of this report said **two**, and got there by filtering `elapsed_seconds` and
+`games_per_hour` out of the comparison and then describing the result as *"the entire artifact
+leaf-by-leaf"*. The four timing leaves were named nowhere. The substance is unchanged — none of the
+seven is engine behaviour — but this count was offered as the *stronger* claim than the `counters`
+comparison above it, so it had to be right and was not. It is now derived with no filter at all.
 
 **Zero rows opened and zero closed. That is the registered expectation from §3's control arm, not a
 disappointment**, and it is committed so the null is on record rather than absent. A reader who
@@ -207,11 +251,11 @@ behave like `main` outside the guarded block.
 
 **Build identity, and the ordering discipline.** Both trees were built from clean with
 `scripts/build_search_crate_engine.sh`, exit captured directly and not through a pipe. Gate:
-`cf3c03d3` plus this branch's edits, 73 patches, fingerprint **`7207128b6a4b779b`**, confirmed by
-both `--print` (source-derived from tracked bytes) and `--check` (against the installed stamp).
-Base: the same commit with the guard predicate reverted and the tree-sha pin disabled -- a
-throwaway measurement tree that is never committed -- 73 patches, fingerprint
-**`8c0f24dafd56b08c`**. `diff -r` over the two vendored `third_party/poke-engine-src` trees returns
+the merged head (`origin/main` `32829210` merged in) plus this branch's edits, 73 patches,
+fingerprint **`de29e3dc79c80659`**, confirmed by both `--print` (source-derived from tracked bytes)
+and `--check` (against the installed stamp). Base: the same merged commit with the guard predicate
+reverted and the tree-sha pin disabled -- a throwaway measurement tree that is never committed --
+73 patches, fingerprint **`30f8b1f855e4fade`**. `diff -r` over the two vendored `third_party/poke-engine-src` trees returns
 that one hunk and nothing else.
 
 Every edit to a fingerprint-covered tracked file (here, `third_party/poke-engine-gen3-patches.txt`)
@@ -240,13 +284,50 @@ going stale within the hour:
 
 The floor stays **443** and the pin loop stays **36**: this branch adds a cargo *example*, which
 `cargo test` compiles but does not run and which contributes no test name. Both figures come from a
-run on this tree, not from `main`'s comment. Note for anyone reconciling numbers in flight — a
-figure of **451** with a **44**-name pin union was circulating for `main`; it does not describe
-`cf3c03d3`, where a real run gives 443 and 36.
+run on this tree, not from `main`'s comment.
+
+**Then `main` moved to `32829210` (#1169) and this branch merged it, so the figures above are
+superseded — recorded rather than overwritten, because the drift is the lesson.** #1169 adds
+`rust/pokezero-search/src/abort_telemetry.rs` and touches `events.rs`, both fingerprint-covered, so
+nothing was carried across the merge. Re-measured on the merged tree:
+
+| | at `cf3c03d3` | on the merged tree | how |
+|---|---|---|---|
+| crate suite | 443 / 443 distinct / 0 failed | **451 / 451 distinct / 0 failed** | the gate step's own summing expression |
+| named CI pins | 36, all resolving | **44, all resolving** | the workflow's own `grep -qxE` |
+| `#[should_panic]` | 5 | **5** (so a strict `^test NAME \.\.\. ok` grep returns 446) | — |
+| floor | 443 | **451**, unchanged from `main` | fails at a measured 450, passes at 451 |
+
+An earlier revision of this report's PR body said *"a figure of 451 with a 44-name pin union does
+not describe `main`"* and *"`main`'s own workflow reads 443"*. Both were true of `cf3c03d3` and are
+**false of `32829210`**: a real run on the merged tree gives exactly **451** and **44**. Withdrawn,
+and the reason it happened is worth naming — it was a correctly-scoped statement about a base that
+moved, which is the same failure mode as an uncited totality claim: right when written, unqualified
+when read.
 
 ## 6. Withdrawn, and not verified
 
-**Withdrawn — three claims from the first revision of this PR.**
+**Withdrawn — two claims this branch itself made, found in review of this PR.**
+
+0a. **"`engine_transition_differential.py:2057` … is the only way the sweep corpus enters the
+   engine."** A **false totality claim in the report that exists to retire one**, and it appeared
+   in four places — the same count as the "~46%" another PR withdrew. There are **three** entry
+   points; §2 now enumerates all three, re-derived from the source rather than from review, and
+   cites the `poke-engine-py/src/lib.rs:263` / `:84` / `:86` mechanism that actually zeroes the
+   route I had missed. The conclusion is unchanged; the enumeration behind it was not there.
+   This is the more serious of the two, because §3's control arm is presented as having
+   **predicted** the null — and a prediction is worth exactly as much as the enumeration behind
+   it. I predicted correctly through one route while two went unexamined.
+
+0b. **"base and gate differ in exactly two leaves."** The measured answer is **seven**:
+   `/checkpoint_provenance/distinct[0]` ×2, `/elapsed_seconds` ×2, `/games_per_hour` ×2 and
+   `/repros[0]/protocol[1]` ×1. My comparison filtered `elapsed_seconds` and `games_per_hour` out
+   and then described the result as *"the entire artifact leaf-by-leaf"*. The substance holds —
+   none of the seven is engine behaviour — but the leaf count was offered as the **stronger**
+   claim than the `counters` comparison, so being wrong about it is not a footnote. Corrected in
+   §5, with all seven named.
+
+**Withdrawn — three claims from #1170, the merged change this follows up.**
 
 1. **The title's "which is all of `none_matched:shape_length`".** The class was never measured on
    the sweep corpus — `grep -rl none_matched` over `reports/*.json`, `reports/artifacts/*.json`
