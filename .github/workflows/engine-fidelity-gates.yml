@@ -617,8 +617,16 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_final_holdout_guard -v 2>&1 \
             | tee /tmp/holdout.log
-          if ! grep -qE 'Ran 14 tests' /tmp/holdout.log; then
-            echo "::error::expected 14 final-holdout pins; the suite shrank or grew"
+          # 14 -> 25 (C151): `TheBurnedBlockAndTheOwnerRatificationTests`. Eleven pins for
+          # the two properties this file did not previously have -- that
+          # `19,200,000`-`19,200,259` is BURNED and no opt-in reopens it, and that
+          # `OWNER_RATIFIED` carries the window and the owner's name so a blessing is a
+          # reviewable diff rather than a sentence in a document an agent can walk past.
+          # 24 -> 25 on review: the AGGREGATION refusal's rationale was pinned nowhere, so
+          # rewriting it down to "reserved" left both suites green while the execution
+          # message's rationale was pinned three ways.
+          if ! grep -qE 'Ran 25 tests' /tmp/holdout.log; then
+            echo "::error::expected 25 final-holdout pins; the suite shrank or grew"
             exit 1
           fi
           # No pin may skip. Every one runs without a Showdown checkout by
@@ -1347,8 +1355,22 @@ jobs:
           # 27 -> 30 on review: the three pins that hold `_load_or_die` to raising
           # rather than swallowing a decode error, which is the fail-open the sibling
           # census removed and this module briefly reintroduced.
-          if ! grep -qE 'Ran 30 tests' /tmp/seedregistry.log; then
-            echo "::error::expected 30 seed-registry pins; the suite shrank or grew"
+          # 30 -> 41 (C151): `TheRatifiedC151WindowIsNotYetSweptTests`, the eleven pins
+          # that keep "RATIFIED" and "SWEPT" apart for `19,300,000`-`19,300,199` -- absent
+          # from `REGISTERED_BANDS` because ratification is not a witness, disjoint from
+          # every consumed band and from the burned block, untouched by any committed
+          # artifact, and tied to `OWNER_RATIFIED` in the guard so the ledger row, the
+          # prediction document and the code cannot drift apart. That class is meant to go
+          # RED when the sweep lands, so this number drops back when it is deleted as part
+          # of the ratification bookkeeping.
+          #
+          # NOTE for whoever edits that module next: it must keep running WITHOUT the
+          # engine. This job is a bare checkout plus setup-python -- no build, no install --
+          # so a plain `from engine_transition_differential import ...` raises
+          # ModuleNotFoundError here while passing on any dev machine. That is why the
+          # module reads the guard's constants with `ast` instead. See `guard_constant`.
+          if ! grep -qE 'Ran 41 tests' /tmp/seedregistry.log; then
+            echo "::error::expected 41 seed-registry pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. `TheSelectorItselfIsExercisedTests` and the two

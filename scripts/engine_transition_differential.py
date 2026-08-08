@@ -3515,29 +3515,118 @@ FINAL_HOLDOUT_SEED_FLOOR = 19_200_000
 
 FINAL_HOLDOUT_OPT_IN = "--final-holdout-i-mean-it"
 
+# THE BURNED BLOCK. `19,200,000`-`19,200,259` is spent, in three different ways, and no
+# part of it is salvageable:
+#
+#   * `19,200,000`-`19,200,059` was executed by the pre-guard convenience loop above.
+#     The disclosure is `reports/rust-fidelity/final_holdout_contamination_disclosure.md`,
+#     recovered and committed by C151 -- it records that only a `grep -c 'A12_HIT'` count
+#     reached the operator and that the JSON was deleted unread, which is mitigation and
+#     not absolution: the seeds were executed.
+#   * `19,200,060`-`19,200,199` was swept by C141. That window was chosen by the executing
+#     agent -- its own pre-registration says "chosen by me rather than deferred" -- while
+#     the disclosure above explicitly left the disposition to the owner and recorded
+#     "I have **not** chosen". An adversarial audit ruled the self-blessing defeats the
+#     terminal claim.
+#   * `19,200,200`-`19,200,259` was swept by the same run OVERRUNNING its registration by
+#     60 seeds, so those seeds were consumed without ever appearing in the seed registry.
+#
+# Refused UNCONDITIONALLY -- `--final-holdout-i-mean-it` does not open it. The opt-in
+# exists to permit the one ratified terminal measurement, and this block can no longer be
+# that measurement for any of the three reasons above. A flag that can reopen a burned
+# block is a flag that will reopen it.
+BURNED_FINAL_HOLDOUT = (19_200_000, 19_200_259)
+
+# THE RATIFIED REPLACEMENT WINDOW, and the owner who ratified it.
+#
+# This constant exists to convert owner blessing from a doc sentence an agent can walk
+# past -- as one just did, "chosen by me rather than deferred" -- into a mechanical check.
+# It is pinned by `tests/test_final_holdout_guard.py`, so any change to the window or to
+# the name beside it is a diff carrying the owner's name and requires review to land.
+# Do not edit it to match a window you chose; get it ratified and then edit it.
+OWNER_RATIFIED = ("19,300,000-19,300,199", "scott, 2026-08-08")
+
+RATIFIED_FINAL_HOLDOUT = (19_300_000, 19_300_199)
+
+# Ratification is NOT permission to run today. The sweep's trigger is a precondition on
+# the program state, pre-registered in `reports/c151_final_holdout_rereg_prediction.md`:
+# the ledger must be terminal and the engine fingerprint declared frozen for the claim.
+# C116 already places item 13 last. This constant is documentation for a reader of the
+# guard; the trigger is not machine-checkable and is deliberately not asserted here.
+RATIFIED_SWEEP_PRECONDITION = (
+    "ledger terminal AND engine fingerprint declared frozen for the claim"
+)
+
+
+def _reject_burned_final_holdout(seed_start: int, games: int) -> str | None:
+    """Refuse the burned block `19,200,000`-`19,200,259`, opt-in or not.
+
+    Separate from `_reject_unguarded_final_holdout` on purpose: that one is a
+    reservation an opt-in can lift, and this one is not. Keeping them in one function
+    would mean the burn's unconditionality depended on the order of two `if`s.
+    """
+
+    low, high = BURNED_FINAL_HOLDOUT
+    last_seed = seed_start + max(games, 1) - 1
+    if last_seed < low or seed_start > high:
+        return None
+    return (
+        f"refusing to run on BURNED seeds: {max(seed_start, low)}..{min(last_seed, high)} "
+        f"lie in {low}..{high}, which is spent and cannot be re-measured by anyone for "
+        f"any reason. {low}-19200059 was executed by the pre-guard convenience loop "
+        f"(see reports/rust-fidelity/final_holdout_contamination_disclosure.md); "
+        f"19200060-19200199 was swept by C141 on a window the executing agent chose "
+        f"itself rather than deferring to the owner; 19200200-{high} was consumed by that "
+        f"same run overrunning its registration by 60 seeds. {FINAL_HOLDOUT_OPT_IN} does "
+        f"NOT open this block. The ratified replacement window is {OWNER_RATIFIED[0]} "
+        f"({OWNER_RATIFIED[1]}), and it runs only once the precondition holds: "
+        f"{RATIFIED_SWEEP_PRECONDITION}."
+    )
+
 
 def _reject_unguarded_final_holdout(seed_start: int, games: int, opted_in: bool) -> str | None:
     """Return an error message if this run would touch the reserved final holdout.
 
     Checks the whole span, not just the start: `--seed-start 19199990 --games 200`
     runs into the reserved range even though its start is below the floor.
+
+    The burned block is checked FIRST and ignores `opted_in`, so an opt-in cannot buy
+    access to seeds that are spent rather than merely reserved.
     """
 
+    burned = _reject_burned_final_holdout(seed_start, games)
+    if burned is not None:
+        return burned
     last_seed = seed_start + max(games, 1) - 1
     if last_seed < FINAL_HOLDOUT_SEED_FLOOR or opted_in:
         return None
     overlap_from = max(seed_start, FINAL_HOLDOUT_SEED_FLOOR)
-    # The registered final-holdout block is 19,200,000-19,200,199. The floor is an
-    # unbounded half-line above it on purpose -- a typo of 19,300,000 should not
-    # sail through -- but that also catches already-consumed historical bands such
-    # as c73's 19,500,000. So the "exactly one measurement" sentence is scoped to
-    # the registered block rather than asserted about every seed above the floor,
-    # where it would simply be false.
-    registered_block = overlap_from <= FINAL_HOLDOUT_SEED_FLOOR + 199
+    # The floor is an unbounded half-line on purpose -- a typo of 19,700,000 should not
+    # sail through -- but that also catches already-consumed historical bands such as
+    # c73's 19,500,000. So the "exactly one measurement" sentence is scoped to the
+    # ratified block rather than asserted about every seed above the floor, where it
+    # would simply be false.
+    #
+    # The typo exemplar was 19,300,000 until C151. It had to move, because 19,300,000 is
+    # now the RATIFIED window and an illustration that names the real target reads
+    # backwards. 19,700,000 was chosen because it WAS absent from every blob in the object
+    # database -- reachable and unreachable -- immediately before this change, so it names
+    # no window and is not on course to.
+    #
+    # Past tense, and deliberately: as committed, six blobs carry it, and all six are
+    # C151's own -- this comment, the ledger, the prediction document and the guard test.
+    # An earlier draft wrote that sentence in the present tense, which its own commit
+    # falsified. That is the stale-denominator defect one turn tighter: a measurement
+    # invalidated by the change that states it. The claim the evidence supports is about
+    # the database before the edit, and the check that keeps it true going forward is that
+    # no ARTIFACT ever records a seed here -- which the seed registry pin covers.
+    ratified_low, ratified_high = RATIFIED_FINAL_HOLDOUT
+    ratified_block = overlap_from <= ratified_high and last_seed >= ratified_low
     rationale = (
-        "This is the registered final-holdout block, reserved for exactly ONE "
-        "measurement, ever."
-        if registered_block
+        f"This is the ratified final-holdout block ({OWNER_RATIFIED[0]}, "
+        f"{OWNER_RATIFIED[1]}), reserved for exactly ONE measurement, ever, and only "
+        f"once this precondition holds: {RATIFIED_SWEEP_PRECONDITION}."
+        if ratified_block
         else "This is above the final-holdout floor and is reserved by default."
     )
     return (
@@ -3561,22 +3650,45 @@ def _reject_reserved_seeds_in_records(
     prompted this guard may well have left such a checkpoint behind.
     """
 
-    if opted_in:
-        return None
     # Coerce through float, because `.isdigit()` FAILED OPEN. A review found that a
     # record carrying `"seed": 19200008.0` or `" 19200009"` produced
     # `str(...).isdigit() == False`, skipped the seed, and wrote an
     # `acceptance_eligible` report over the reserved range with exit 0. Floats do
     # reach here: the dedupe above already does `int(record.get("seed", -1))`.
     # A guard on a reserved range must fail CLOSED or it is decoration.
+    #
+    # The burned-block scan runs BEFORE the `opted_in` early return, and that ordering is
+    # the whole point: the execution guard refuses `19,200,000`-`19,200,259`
+    # unconditionally, so an aggregation path that an opt-in can still walk would be the
+    # exact fail-open this function was written to close, one level up. C141's own
+    # checkpoint carries 200 of these seeds and is committed, so this is a live input and
+    # not a hypothetical one.
+    burned_low, burned_high = BURNED_FINAL_HOLDOUT
+    burned = set()
     reserved = set()
     for record in records:
         try:
             seed = int(float(record["seed"]))
         except (KeyError, TypeError, ValueError):
             continue
-        if seed >= FINAL_HOLDOUT_SEED_FLOOR:
+        if burned_low <= seed <= burned_high:
+            burned.add(seed)
+        elif seed >= FINAL_HOLDOUT_SEED_FLOOR:
             reserved.add(seed)
+    if burned:
+        burned = sorted(burned)
+        shown = ", ".join(str(x) for x in burned[:5])
+        more = f" (+{len(burned) - 5} more)" if len(burned) > 5 else ""
+        return (
+            f"refusing to aggregate records from the BURNED final-holdout block: "
+            f"{len(burned)} seed(s) in {burned_low}..{burned_high} -- {shown}{more}. "
+            f"That block is spent -- contaminated head, self-blessed C141 window, "
+            f"60-seed overrun -- and {FINAL_HOLDOUT_OPT_IN} does NOT open it. "
+            f"C141's artifacts stay committed as DEV-WINDOW evidence; they are terminal "
+            f"for nothing and must not be re-aggregated into a holdout report."
+        )
+    if opted_in:
+        return None
     reserved = sorted(reserved)
     if not reserved:
         return None
