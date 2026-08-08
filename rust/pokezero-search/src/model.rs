@@ -42,6 +42,7 @@ use poke_engine::state::State;
 
 use crate::priors::{
     branch_seats, is_single_none, resolve_root_priors, resolve_round_priors, root_seats, HeadPair,
+    HeadSource,
 };
 use crate::tree::{
     finalize, multiply_report_json, root_visit_lock, traverse, BranchSeam, LeafPrice,
@@ -669,14 +670,20 @@ struct BranchFold {
 ///
 /// Only when the flag is ON: a flag-off run must make byte-for-byte the search
 /// it always made, including on an artifact whose opponent head is unusable.
+impl HeadSource for LeafBatchOutput {
+    fn acting_head(&self) -> &[f32] {
+        &self.priors
+    }
+    fn opponent_head(&self) -> &[f32] {
+        &self.opponent_priors
+    }
+    fn action_count(&self) -> usize {
+        self.action_count
+    }
+}
+
 fn head_pair(output: &LeafBatchOutput, use_opponent_priors: bool) -> PyResult<HeadPair<'_>> {
-    HeadPair::new(
-        &output.priors,
-        &output.opponent_priors,
-        output.action_count,
-        use_opponent_priors,
-    )
-    .map_err(PyValueError::new_err)
+    HeadPair::from_source(output, use_opponent_priors).map_err(PyValueError::new_err)
 }
 
 /// Multi-ply batched search where every model row is a REAL leaf observation:
@@ -813,7 +820,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         // Both seats' option lists, selected once from `self_side_one`. No
         // caller-side `if self_side_one { s2 } else { s1 }` anywhere in this
         // path: that expression is a seat swap no libtorch-less test can see.
-        let seats = root_seats(&tree.decisions[0], self_side_one);
+        let seats = root_seats(&tree.decisions[0], leaf_ctx);
         let root_options = seats.acting_options;
         if !is_single_none(&root_options) {
             // One extra forward on the ROOT observation prices the root
@@ -855,7 +862,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             let resolved = resolve_root_priors(
                 &mut tree.decisions[0],
                 &heads,
-                self_side_one,
+                leaf_ctx,
                 &map,
                 opponent_map.as_deref(),
             );
@@ -1005,7 +1012,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         // Both seats' lists from one selection, so neither
                         // `if self_side_one { .. }` nor a `!self_side_one`
                         // appears in this scope. Same reason as `root_seats`.
-                        let seats = branch_seats(leaf, self_side_one);
+                        let seats = branch_seats(leaf, leaf_ctx);
                         let options = seats.acting_options;
                         if !is_single_none(&options) {
                             let map_started = Instant::now();
@@ -1107,7 +1114,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 &pending_maps,
                 &pending_opponent_maps,
                 &heads,
-                self_side_one,
+                leaf_ctx,
             );
             prior_branches += resolved.applied;
             prior_fallbacks += resolved.fallbacks;

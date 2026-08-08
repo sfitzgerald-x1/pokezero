@@ -78,6 +78,11 @@ class DefaultsAreOffTest(unittest.TestCase):
         )
 
 
+# A sentinel for the FoldState handle: asserted by IDENTITY below, so the
+# contract pins WHICH object reaches slot 6 and not merely that something did.
+FOLD = object()
+
+
 class NativeCallContractTest(unittest.TestCase):
     """The positional call the crate receives, captured without running search.
 
@@ -105,7 +110,7 @@ class NativeCallContractTest(unittest.TestCase):
             record,
             tables_json="tables",
             root_inputs="root",
-            rust_fold=object(),
+            rust_fold=FOLD,
             early_stop_min_sims=early_stop_min_sims,
         )
 
@@ -118,10 +123,11 @@ class NativeCallContractTest(unittest.TestCase):
             args[:12],
             [
                 "state", cfg.search_sims, cfg.search_batch, "tables", "root",
-                "ctx", args[6], cfg.search_depth, cfg.c_puct, 7,
+                "ctx", FOLD, cfg.search_depth, cfg.c_puct, 7,
                 cfg.deep_ko_split, cfg.model_priors,
             ],
         )
+        self.assertIs(args[6], FOLD, "the fold handle must reach slot 6 itself")
 
     def test_early_stop_alone_appends_the_pair_and_not_the_flag(self) -> None:
         args = self._captured_args(early_stop_min_sims=64)
@@ -136,7 +142,7 @@ class NativeCallContractTest(unittest.TestCase):
             "side_key": "side_two",
         }
         args = native_search_args(
-            cfg, record, tables_json="t", root_inputs="r", rust_fold=object(),
+            cfg, record, tables_json="t", root_inputs="r", rust_fold=FOLD,
             early_stop_min_sims=64,
         )
         self.assertIs(args[13], False)

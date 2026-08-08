@@ -39,14 +39,61 @@
 //! opponent-priors gate exists to rule out.
 //!
 //! So the coupling is structural here instead. [`PriorSeat`] derives its own
-//! side flag and selects its own head out of a [`HeadPair`]; callers pass
-//! `self_side_one` once and never name a seat's side or its array. Three of
-//! those four mutations are now unrepresentable and the fourth is killed by a
-//! test in this module.
+//! side flag and selects its own head out of a [`HeadPair`], and the searching
+//! seat crosses the gate as [`SearchingSeat`] rather than as a `bool` — a
+//! `&dyn SearchingSeat` cannot be negated at a call site the way a `bool` can.
+//!
+//! What that does and does not buy, MEASURED rather than predicted (an earlier
+//! version of this note predicted three of the four would become
+//! unrepresentable; a mutation run falsified it):
+//!
+//! * one of the four is unrepresentable — `PriorSeat` no longer appears in
+//!   `model.rs`;
+//! * the four `self_side_one` arguments that used to cross the gate are now
+//!   type errors to negate, and the knob they carried survives in ONE place:
+//!   the `impl SearchingSeat for LeafContext` below;
+//! * the two-slice head construction is likewise collapsed into
+//!   `impl HeadSource for LeafBatchOutput`.
+//!
+//! A seat or head swap at the `model.rs` boundary is therefore reduced and
+//! concentrated, NOT eliminated. It is still unkilled by any test, because
+//! killing it needs an integration test over the real core, which is blocked on
+//! an encoder-tables fixture rather than on libtorch. That residue belongs to
+//! the campaign's in-image gate item, not to this one.
 
 use crate::tree::{apply_self_priors, DecisionNode, Tree};
 use poke_engine::engine::state::MoveChoice;
 use poke_engine::state::State;
+
+/// Which engine side the SEARCHING seat occupies.
+///
+/// Taken as a trait object rather than a `bool` for one reason: a `bool` handed
+/// across the `model` feature gate can be negated at the call site, and four
+/// such arguments used to cross it. `&dyn SearchingSeat` cannot be negated, so
+/// those four one-token mutations become type errors. The knob does not vanish
+/// — it relocates into the single impl below, which is one line in a module
+/// that has tests. That is the whole claim; it is a reduction from four sites
+/// to one, not an elimination.
+pub(crate) trait SearchingSeat {
+    fn searching_side_one(&self) -> bool;
+}
+
+impl SearchingSeat for crate::leaf::LeafContext {
+    fn searching_side_one(&self) -> bool {
+        self.self_is_side_one()
+    }
+}
+
+/// The two policy heads of one batched forward, named rather than positional.
+///
+/// Same reasoning as [`SearchingSeat`]: `HeadPair::new(a, b)` let a caller swap
+/// two same-typed slice arguments. Behind the feature gate that is a silent
+/// head swap. Naming them collapses the swap into the implementing type.
+pub(crate) trait HeadSource {
+    fn acting_head(&self) -> &[f32];
+    fn opponent_head(&self) -> &[f32];
+    fn action_count(&self) -> usize;
+}
 
 /// Gather a leaf's action-block priors onto a seat's option list.
 ///
@@ -56,8 +103,7 @@ use poke_engine::state::State;
 /// Returns `None` — leaving the node uniform — when any option lacks an
 /// action-block slot (the whole node falls back rather than zeroing arms the
 /// model cannot see) or the mapped mass underflows.
-#[cfg_attr(not(feature = "model"), allow(dead_code))]
-pub(crate) fn gather_self_priors(priors_row: &[f32], map: &[Option<usize>]) -> Option<Vec<f32>> {
+fn gather_self_priors(priors_row: &[f32], map: &[Option<usize>]) -> Option<Vec<f32>> {
     if map.is_empty() {
         return None;
     }
@@ -88,8 +134,7 @@ pub(crate) fn gather_self_priors(priors_row: &[f32], map: &[Option<usize>]) -> O
 /// stays fallible because "silently read a window straddling two leaves'
 /// distributions" is the failure this module exists to prevent, and a total
 /// signature would have to invent a value to do it.
-#[cfg_attr(not(feature = "model"), allow(dead_code))]
-pub(crate) fn prior_row(flat: &[f32], row: usize, action_count: usize) -> Option<&[f32]> {
+fn prior_row(flat: &[f32], row: usize, action_count: usize) -> Option<&[f32]> {
     if action_count == 0 {
         return None;
     }
@@ -158,8 +203,22 @@ impl<'a> HeadPair<'a> {
     /// wrong width still runs exactly the search it always ran — flag-off
     /// equivalence is the campaign's anchor and must not acquire a new way to
     /// fail.
+    /// The only public constructor. Callers name a SOURCE, never two slices,
+    /// so the two heads cannot be transposed at the call site.
     #[cfg_attr(not(feature = "model"), allow(dead_code))]
-    pub(crate) fn new(
+    pub(crate) fn from_source(
+        source: &'a dyn HeadSource,
+        use_opponent_priors: bool,
+    ) -> Result<Self, String> {
+        Self::new(
+            source.acting_head(),
+            source.opponent_head(),
+            source.action_count(),
+            use_opponent_priors,
+        )
+    }
+
+    fn new(
         acting: &'a [f32],
         opponent: &'a [f32],
         action_count: usize,
@@ -193,10 +252,6 @@ impl<'a> HeadPair<'a> {
             opponent,
             action_count,
         })
-    }
-
-    fn action_count(&self) -> usize {
-        self.action_count
     }
 
     /// One seat's row. The head is chosen BY THE SEAT — a caller cannot pair
@@ -287,8 +342,9 @@ pub(crate) fn resolve_round_priors(
     acting_pending: &[((usize, usize), usize, Vec<Option<usize>>)],
     opponent_pending: &[((usize, usize), usize, Vec<Option<usize>>)],
     heads: &HeadPair<'_>,
-    self_side_one: bool,
+    seat_source: &dyn SearchingSeat,
 ) -> PriorResolution {
+    let self_side_one = seat_source.searching_side_one();
     let acting = resolve_pending_priors(
         tree,
         acting_pending,
@@ -338,8 +394,24 @@ pub(crate) fn is_single_none(options: &[MoveChoice]) -> bool {
 /// both seats (the two-call version could not disagree, but it could be edited
 /// to).
 #[cfg_attr(not(feature = "model"), allow(dead_code))]
-pub(crate) fn branch_seats(state: &State, self_side_one: bool) -> RootSeats {
+pub(crate) fn branch_seats(state: &State, seat: &dyn SearchingSeat) -> RootSeats {
     let (s1_options, s2_options) = state.get_all_options();
+    seat_split(s1_options, s2_options, seat.searching_side_one())
+}
+
+/// The pure half of [`branch_seats`], split out so the empty-side defence below
+/// is reachable from a test. It is NOT reachable through a real `State`: on the
+/// gen3-patched engine `get_all_options` returned at least one option for both
+/// seats in every state probed, including one with a wholly fainted side and
+/// `battle_is_over`. The defence stays because it mirrors
+/// `new_decision_node`'s, and the two must not disagree about how many arms a
+/// node has — but "cannot currently happen" is not "cannot happen", and an
+/// untested defence is the one that rots.
+fn seat_split(
+    s1_options: Vec<MoveChoice>,
+    s2_options: Vec<MoveChoice>,
+    self_side_one: bool,
+) -> RootSeats {
     let (acting, opponent) = if self_side_one {
         (s1_options, s2_options)
     } else {
@@ -351,6 +423,8 @@ pub(crate) fn branch_seats(state: &State, self_side_one: bool) -> RootSeats {
     }
 }
 
+/// A decision node must always offer at least one arm, or the prior vector and
+/// the node's stat vector disagree on length and every gather falls back.
 fn non_empty(mut options: Vec<MoveChoice>) -> Vec<MoveChoice> {
     if options.is_empty() {
         options.push(MoveChoice::None);
@@ -359,8 +433,8 @@ fn non_empty(mut options: Vec<MoveChoice>) -> Vec<MoveChoice> {
 }
 
 #[cfg_attr(not(feature = "model"), allow(dead_code))]
-pub(crate) fn root_seats(root: &DecisionNode, self_side_one: bool) -> RootSeats {
-    let (acting_options, opponent_options) = if self_side_one {
+pub(crate) fn root_seats(root: &DecisionNode, seat: &dyn SearchingSeat) -> RootSeats {
+    let (acting_options, opponent_options) = if seat.searching_side_one() {
         (&root.s1_options, &root.s2_options)
     } else {
         (&root.s2_options, &root.s1_options)
@@ -393,10 +467,11 @@ pub(crate) struct RootPriorResolution {
 pub(crate) fn resolve_root_priors(
     root: &mut DecisionNode,
     heads: &HeadPair<'_>,
-    self_side_one: bool,
+    seat_source: &dyn SearchingSeat,
     acting_map: &[Option<usize>],
     opponent_map: Option<&[Option<usize>]>,
 ) -> RootPriorResolution {
+    let self_side_one = seat_source.searching_side_one();
     let mut resolution = RootPriorResolution::default();
     for (seat, map) in [
         (PriorSeat::Acting, Some(acting_map)),
@@ -426,6 +501,36 @@ mod tests {
     use crate::MoveStats;
     use poke_engine::engine::state::MoveChoice;
     use std::collections::HashMap;
+
+    /// A [`SearchingSeat`] that is just a side. Production's only implementor is
+    /// `LeafContext`, which a unit test cannot build (it needs the ~475 KB
+    /// encoder tables); this stands in for it and exercises the same code.
+    struct Seat(bool);
+
+    impl SearchingSeat for Seat {
+        fn searching_side_one(&self) -> bool {
+            self.0
+        }
+    }
+
+    /// Named heads for `HeadPair::from_source`, mirroring `LeafBatchOutput`.
+    struct Heads {
+        acting: Vec<f32>,
+        opponent: Vec<f32>,
+        action_count: usize,
+    }
+
+    impl HeadSource for Heads {
+        fn acting_head(&self) -> &[f32] {
+            &self.acting
+        }
+        fn opponent_head(&self) -> &[f32] {
+            &self.opponent
+        }
+        fn action_count(&self) -> usize {
+            self.action_count
+        }
+    }
 
     /// A recognizable non-uniform, non-monotone row over 9 action slots
     /// (schema v1's action count). Every entry is distinct, so ANY wrong slot
@@ -640,10 +745,15 @@ mod tests {
     /// same-width block of a distinguishable constant, so a test that reads the
     /// wrong head gets visibly wrong numbers rather than the right ones.
     fn opponent_only_heads(row: &[f32]) -> HeadPair<'_> {
-        // Leaked so the acting head outlives the borrow; test-only, one tiny
-        // allocation per call.
-        let acting: &'static [f32] = Vec::leak(vec![1.0f32 / row.len() as f32; row.len()]);
-        HeadPair::new(acting, row, row.len(), true).expect("same width")
+        // A distinguishable constant acting head of the same width, so a test
+        // that reads the wrong head gets visibly wrong numbers.
+        const ACTING: [f32; 9] = [1.0 / 9.0; 9];
+        assert_eq!(
+            row.len(),
+            ACTING.len(),
+            "helper is sized for the 9-slot row"
+        );
+        HeadPair::new(&ACTING, row, row.len(), true).expect("same width")
     }
 
     /// Root decision + one chance node whose single branch already has a child
@@ -808,21 +918,65 @@ mod tests {
     /// search makes. The two seats must end up with their own head's
     /// distribution — a mutant that feeds one array to both seats leaves the
     /// two stat vectors equal.
+    ///
+    /// The two pending lists are DELIBERATELY different — different branch
+    /// keys, different rows, different maps, different arities. Passing the
+    /// same list twice (as this test first did) makes transposing the two
+    /// arguments a no-op, and that transposition is a real live-path defect:
+    /// `pending_opponent_maps` is gated on the flag AND on the opponent having
+    /// a real choice, so in production it is a strict subset carrying different
+    /// maps. Under the swap the acting seat is priced off the opponent's map
+    /// and its own branches are never resolved.
     #[test]
     fn the_two_heads_stay_separated_when_resolved_off_one_batch() {
-        let mut tree = tree_with_child(2, 2);
-        let self_row = [0.7f32, 0.1, 0.1, 0.1];
-        let opponent_row = [0.1f32, 0.1, 0.1, 0.7];
-        let heads = HeadPair::new(&self_row, &opponent_row, 4, true).expect("same width");
-        let map = vec![Some(0), Some(3)];
-        let pending = vec![((0usize, 0usize), 0usize, map)];
-        let resolution = resolve_round_priors(&mut tree, &pending, &pending, &heads, true);
+        // branch 0 -> child decision 1 (2 arms each seat)
+        // branch 1 -> child decision 2 (3 arms on side one, 2 on side two)
+        let mut tree = Tree {
+            decisions: vec![decision(2, 2), decision(2, 2), decision(3, 2)],
+            chances: vec![ChanceNode {
+                branches: vec![branch(Some(1)), branch(Some(2))],
+            }],
+        };
+        // Two batch rows; the acting head favours slot 0, the opponent head
+        // slot 3, and rows 0/1 differ so a row mix-up is visible too.
+        let self_rows = [0.7f32, 0.1, 0.1, 0.1, 0.1, 0.7, 0.1, 0.1];
+        let opponent_rows = [0.1f32, 0.1, 0.1, 0.7, 0.7, 0.1, 0.1, 0.1];
+        let heads = HeadPair::new(&self_rows, &opponent_rows, 4, true).expect("same width");
+        // The acting seat has BOTH branches; the opponent only branch 0 (its
+        // arity at branch 1 is 2 while the acting node there has 3 arms, so a
+        // swapped call would also change the fallback count).
+        let acting_pending = vec![
+            ((0usize, 0usize), 0usize, vec![Some(0), Some(3)]),
+            ((0usize, 1usize), 1usize, vec![Some(0), Some(1), Some(3)]),
+        ];
+        // A different map from the acting seat's, so a transposed call also
+        // changes what lands on side one at branch 0.
+        let opponent_pending = vec![((0usize, 0usize), 0usize, vec![Some(1), Some(3)])];
+        let resolution = resolve_round_priors(
+            &mut tree,
+            &acting_pending,
+            &opponent_pending,
+            &heads,
+            &Seat(true),
+        );
         assert_eq!(
             resolution,
             PriorResolution {
-                applied: 2,
+                applied: 3,
                 fallbacks: 0
             }
+        );
+        // Branch 1 is the acting seat's alone: its child's side-one arms carry
+        // row 1 of the ACTING head, and its side-two arms stay uniform. A
+        // transposed call leaves this node untouched entirely.
+        approx(
+            &priors_of_stats(&tree.decisions[2].s1_stats),
+            &[0.1 / 0.9, 0.7 / 0.9, 0.1 / 0.9],
+        );
+        approx(&priors_of_stats(&tree.decisions[2].s2_stats), &[0.5, 0.5]);
+        assert!(
+            tree.chances[0].branches[1].child_opponent_priors.is_none(),
+            "the opponent had no pending map for branch 1"
         );
         let child = &tree.decisions[1];
         approx(
@@ -1051,16 +1205,54 @@ mod tests {
             "this fixture must distinguish the seats or the swap is untestable"
         );
 
-        let seats = branch_seats(&state, true);
+        let seats = branch_seats(&state, &Seat(true));
         assert_eq!(seats.acting_options, s1);
         assert_eq!(seats.opponent_options, s2);
 
-        let seats = branch_seats(&state, false);
+        let seats = branch_seats(&state, &Seat(false));
         assert_eq!(
             seats.acting_options, s2,
             "searching on side two makes side two's options the acting list"
         );
         assert_eq!(seats.opponent_options, s1);
+    }
+
+    /// The empty-side defence. A seat the engine offers nothing must still get
+    /// one arm, because `new_decision_node` gives it one and a prior vector of
+    /// length 0 against a stat vector of length 1 falls back on every branch.
+    ///
+    /// Driven through `seat_split` rather than `branch_seats` because the case
+    /// is not reachable through a real `State` — see that function's docs.
+    #[test]
+    fn a_seat_the_engine_offers_nothing_still_gets_one_arm() {
+        let seats = seat_split(Vec::new(), vec![MoveChoice::None; 2], true);
+        assert_eq!(
+            seats.acting_options,
+            vec![MoveChoice::None],
+            "an empty acting side must be widened to one arm"
+        );
+        assert_eq!(seats.opponent_options.len(), 2);
+
+        let seats = seat_split(Vec::new(), vec![MoveChoice::None; 2], false);
+        assert_eq!(seats.acting_options.len(), 2);
+        assert_eq!(
+            seats.opponent_options,
+            vec![MoveChoice::None],
+            "an empty opponent side must be widened too"
+        );
+
+        let seats = seat_split(Vec::new(), Vec::new(), true);
+        assert_eq!(seats.acting_options, vec![MoveChoice::None]);
+        assert_eq!(seats.opponent_options, vec![MoveChoice::None]);
+    }
+
+    /// The widened arm must read as "no real choice", so the caller skips it
+    /// rather than building a one-slot map for an absent seat.
+    #[test]
+    fn a_widened_empty_seat_reads_as_no_real_choice() {
+        let seats = seat_split(Vec::new(), Vec::new(), true);
+        assert!(is_single_none(&seats.acting_options));
+        assert!(is_single_none(&seats.opponent_options));
     }
 
     #[test]
@@ -1076,11 +1268,11 @@ mod tests {
         node.s1_options = vec![MoveChoice::None; 3];
         node.s2_options = vec![MoveChoice::None; 2];
 
-        let seats = root_seats(&node, true);
+        let seats = root_seats(&node, &Seat(true));
         assert_eq!(seats.acting_options.len(), 3, "side one is searching");
         assert_eq!(seats.opponent_options.len(), 2);
 
-        let seats = root_seats(&node, false);
+        let seats = root_seats(&node, &Seat(false));
         assert_eq!(seats.acting_options.len(), 2, "side two is searching");
         assert_eq!(seats.opponent_options.len(), 3);
     }
@@ -1095,7 +1287,7 @@ mod tests {
         let opponent_row = [0.1f32, 0.1, 0.1, 0.7];
         let heads = HeadPair::new(&acting_row, &opponent_row, 4, true).expect("same width");
         let map = vec![Some(0), Some(3)];
-        let resolution = resolve_root_priors(&mut node, &heads, true, &map, Some(&map));
+        let resolution = resolve_root_priors(&mut node, &heads, &Seat(true), &map, Some(&map));
         assert_eq!(resolution.fallbacks, 0);
         approx(
             &resolution
@@ -1115,7 +1307,7 @@ mod tests {
         let opponent_row = [0.1f32, 0.1, 0.1, 0.7];
         let heads = HeadPair::new(&acting_row, &opponent_row, 4, true).expect("same width");
         let map = vec![Some(0), Some(3)];
-        resolve_root_priors(&mut node, &heads, false, &map, Some(&map));
+        resolve_root_priors(&mut node, &heads, &Seat(false), &map, Some(&map));
         approx(&priors_of_stats(&node.s2_stats), &[0.875, 0.125]);
         approx(&priors_of_stats(&node.s1_stats), &[0.125, 0.875]);
     }
@@ -1128,7 +1320,7 @@ mod tests {
         let acting_row = [0.7f32, 0.1, 0.1, 0.1];
         let heads = HeadPair::new(&acting_row, &[], 4, true).expect("no opponent head");
         let map = vec![Some(0), Some(3)];
-        let resolution = resolve_root_priors(&mut node, &heads, true, &map, None);
+        let resolution = resolve_root_priors(&mut node, &heads, &Seat(true), &map, None);
         assert_eq!(resolution.fallbacks, 0);
         approx(&priors_of_stats(&node.s1_stats), &[0.875, 0.125]);
         approx(&priors_of_stats(&node.s2_stats), &[0.5, 0.5]);
@@ -1144,14 +1336,16 @@ mod tests {
         let heads = HeadPair::new(&acting_row, &opponent_row, 4, true).expect("same width");
         let good = vec![Some(0), Some(3)];
         let unmapped = vec![Some(0), None];
-        let resolution = resolve_root_priors(&mut node, &heads, true, &good, Some(&unmapped));
+        let resolution =
+            resolve_root_priors(&mut node, &heads, &Seat(true), &good, Some(&unmapped));
         assert_eq!(resolution.fallbacks, 1);
         assert!(resolution.acting.is_some());
         approx(&priors_of_stats(&node.s1_stats), &[0.875, 0.125]);
         approx(&priors_of_stats(&node.s2_stats), &[0.5, 0.5]);
 
         let mut node = decision(2, 2);
-        let resolution = resolve_root_priors(&mut node, &heads, true, &unmapped, Some(&good));
+        let resolution =
+            resolve_root_priors(&mut node, &heads, &Seat(true), &unmapped, Some(&good));
         assert_eq!(resolution.fallbacks, 1);
         assert!(
             resolution.acting.is_none(),
