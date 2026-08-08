@@ -416,12 +416,27 @@ mod abort_payload_tests {
         // Now that `guarded_search_with_ledger` owns construction, model.rs has no
         // legitimate reason to build one: measured 0 occurrences here, 1 under the
         // mutant.
+        //
+        // BOTH SPELLINGS, because this pins a PROPERTY (model.rs constructs no ledger)
+        // through the only two ways to spell it. `LossySubcaseLedger` derives `Default`,
+        // so `::default()` is not hypothetical: it compiles, is the exact same throwaway
+        // ledger, and a `::new()`-only check waves it through. Nothing in the crate
+        // constructs this type via `::default()` today -- `new()` is its own
+        // `Self::default()` and lives here, not in model.rs -- so the second assertion
+        // is measured at 0 occurrences alongside the first.
         assert!(
             !model_rs.contains("LossySubcaseLedger::new()"),
             "model.rs constructs its own ledger. The one the search records into must be \
              the one `guarded_search_with_ledger` attaches, or the abort arm silently \
              carries an empty payload for every world -- the pre-PR state, with the \
              clean path's report still correct so nothing looks wrong"
+        );
+        assert!(
+            !model_rs.contains("LossySubcaseLedger::default()"),
+            "model.rs constructs its own ledger via `::default()`. Same defect as the \
+             `::new()` case above and the same silent empty payload: the derived \
+             `Default` is a second spelling of the same throwaway ledger, so the guard \
+             has to name it too or it only pins a spelling"
         );
 
         // ORDERING WITHIN THE SEARCH LOOP, which the helper cannot enforce. Positions
