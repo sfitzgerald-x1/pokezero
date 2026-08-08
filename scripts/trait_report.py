@@ -23,6 +23,7 @@ LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "v22-flat2m",
                  "v3-foulplay",   # FoulPlay's OWN play, profiled from the same games (contrast line)
                  "v3-k0-enthalf", "v3-k1-enthalf", "v3-k8-enthalf",   # enthalf across history lengths
                  "v3-k64-enthalf", "v3-k64-eps-entq",   # k64 experiment variants (own entities from game 0)
+                 "v4-enthalf", "v4-entfull",   # v4 production arms (own entities from game 0)
                  "m50-seq", "l200-seq"]
 PALETTE = ["#2563eb", "#dc2626", "#059669", "#0891b2", "#d97706", "#7c3aed"]
 
