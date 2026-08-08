@@ -753,6 +753,20 @@ Four of the `state` families as they stood in v2's framing are columns that did 
   `sum(all counts) == boundaries` — is not checked by the harness either; verified by hand
   here (1008 and 369) and it holds. Mechanizing it is task 3's subject.
 - `self_moveset_mismatch` (11 scenarios skips) and the residue-row classes are owned by the
+- **`scripts/engine_transition_differential.py` is a FIFTH differential and is NOT adopted.** It
+  still derives `recharging` from the RECORDED CHOSEN CANDIDATE -- the rule the four gates dropped
+  in #1156 for being circular -- and does not adopt `scripts/differential_denominator.py`. It DOES
+  publish a measured count, but nothing GATES on it: its exit is
+  `return 1 if (transitions_diverged or engine_errors) else 0`, so a run that skipped every
+  boundary still exits 0. Publishing without gating is the exact shape the denominator rule closes.
+
+  Recorded HERE rather than as a comment in that file, which is where a previous revision put it.
+  That file is under a certification pin: `tests/test_c26_damage_composition_readout.py` hashes it
+  and requires the hash to match `certification_contract_lifecycle.json`'s registered identity or
+  for the lifecycle to declare a successor-pending divergence. A comment edit changed its sha256
+  and broke that guard -- exactly what the pin exists to catch. Adopting the denominator rule there
+  means a real change plus a lifecycle re-registration, not a drive-by.
+
   fallback-burndown and rust-fidelity lanes; they appear only as skip counts and are **not**
   attributed. **FILED** for the fallback-burndown half: see the note appended to
   `reports/c111_residue_row_causes.md`. The rust-fidelity half is still owed — this sentence

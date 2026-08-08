@@ -2625,27 +2625,6 @@ def _prepare_boundary(
     )
 
     candidates_by_slot: dict[str, Sequence[Mapping[str, Any]]] = {}
-    # NOT ADOPTED, deliberately. This harness still derives `recharging` from the RECORDED
-    # CHOSEN CANDIDATE -- the rule the four gates dropped in #1156 for being circular, since it
-    # seeds the world from the very thing the harness is checking.
-    #
-    # It also does not adopt scripts/differential_denominator.py. It DOES publish a measured count
-    # -- an earlier revision of this comment said it did not, which was wrong. The problem is
-    # that nothing GATES on it: the exit is
-    # `return 1 if (transitions_diverged or engine_errors) else 0`, so a run that skipped every
-    # boundary still exits 0. (Cited by expression, not line: a first version of this comment
-    # gave five line numbers, every one off by exactly 5, because they were measured against a
-    # 14-line draft of a comment that shipped at 19.) Publishing without gating is the exact shape the denominator rule
-    # exists to close.
-    #
-    # Left as-is on purpose: this is a FIFTH differential, outside the four the denominator (#1154)
-    # and recharge (#1156) work scoped, and changing it unscoped is how a "while I'm here" edit
-    # lands without the mutation testing the other four received. Recorded here rather than only
-    # in a commit message, because a commit message is not where the next reader looks.
-    #
-    # Adopting it means: fidelity_gate_events.production_recharging_slots for the derivation,
-    # differential_denominator.check_denominator/gate for the denominator, and a red run for each
-    # per the house rule in docs/engine_fidelity_program_20260801.md.
     recharging: list[str] = []
     for slot in ("p1", "p2"):
         metadata = env.observe(slot).metadata
