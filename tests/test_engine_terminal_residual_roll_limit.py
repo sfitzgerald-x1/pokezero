@@ -1,6 +1,7 @@
 """Consumer ablation pin for the withdrawn terminal-residual roll experiment.
 
-This asserts the documented compact behavior and deliberately does not present
+This asserts the documented compact behavior -- the exact branch partition the engine
+produces for a residual-lethal non-direct roll -- and deliberately does not present
 it as a simulator-fidelity result. See docs/terminal_residual_roll_branching_limit.md.
 """
 
@@ -70,36 +71,61 @@ class TerminalResidualRollComparisonLimitTests(unittest.TestCase):
         self.assertEqual(str(state), before, "branch generation must restore the input state")
         self.assertAlmostEqual(sum(float(branch.percentage) for branch in branches), 100.0)
 
-        # WHAT THIS PIN IS FOR, asserted directly instead of by proxy.
+        # RE-DERIVED, not loosened. An earlier revision of this change replaced these numbers
+        # with (a) the withdrawn patch file's absence from third_party/ and (b) a set of residual
+        # heals. Review demonstrated both are unable to catch the withdrawn behaviour: running
+        # this same fixture under POKEZERO_ENUMERATE_ROLLS emits the 17-arm roll fan the doc
+        # attributes to the withdrawn patch, and that version PASSED while the numeric pin below
+        # correctly FAILED (17 != 2). The filename check is theatre -- patches apply from
+        # `third_party/poke-engine-gen3-patches.txt`, the hunks could fold into any listed patch
+        # (#1152's crit-straddle patch already lives in this code path), and the test exercises a
+        # prebuilt WHEEL, not repo source. The heals set collapsed cardinality, so a fan and a
+        # 2-way split were indistinguishable.
         #
-        # It used to assert `len(branches) == 2` with the message "no production residual roll
-        # splitter is installed", and a specific 113/19 damage-heal pair. Both were proxies for
-        # "the withdrawn terminal-toxic experiment is not in the patch stack", and both went
-        # stale when OTHER, deliberate splitters shipped -- `crit-kill-split` (C27, #1007) added
-        # a 1/16 crit branch and `residual-lethality-partition` (#1069) split the non-crit mass,
-        # so this state now yields three branches at 58.594 / 35.156 / 6.250 percent and the
-        # single 113 representative became 109 and 116.
+        # The expectations are derived from the roll lattice, independently of the
+        # implementation, mirroring the native twin
+        # `rust/pokezero-search/tests/gen3_battle_end_residuals.rs`, which was RE-DERIVED rather
+        # than relaxed when `residual-lethality-partition` (#1062) landed:
         #
-        # None of that is the withdrawn experiment coming back, and refreshing the numbers would
-        # turn an ablation pin into a change-detector that any future legitimate splitter breaks
-        # again. The withdrawn thing has a name, so assert its absence by name.
-        patch_dir = Path(__file__).resolve().parents[1] / "third_party"
-        withdrawn = patch_dir / "poke-engine-gen3-terminal-toxic-roll-split.patch"
-        self.assertFalse(
-            withdrawn.exists(),
-            f"{withdrawn.name} is back in the patch stack. It treated a pre-move Toxic "
-            "arithmetic threshold as the decision boundary, which cannot model gen3's "
-            "end-of-turn queue -- see docs/terminal_residual_roll_branching_limit.md. If it was "
-            "reinstated deliberately, that document and this pin both need rewriting.",
+        #   max non-crit roll 123; residual tick 66; defender HP 182, so the residual-KO
+        #   threshold is 182 - 66 = 116. Of the sixteen rolls floor(123 * r / 100), r in 85..=100,
+        #   six reach 116 and ten fall below.
+        #     surviving arm  109 (mean of the ten below) + 66 tick, attacker Leftovers 19 ticks
+        #                    because the battle has not ended        (1 - 1/16) * 10/16 = 58.5938%
+        #     residual-KO    116 + 66 == 182 exactly; NO Leftovers heal, because side two has no
+        #                    other live Pokemon so stop_residuals_if_battle_ended fires before
+        #                    order 10 reaches side one              (1 - 1/16) *  6/16 = 35.1562%
+        #     crit arm       max_crit 246 >= 182 kills on the hit, so it keeps the full base crit
+        #                    rate, unscaled by the non-crit split               1/16 =  6.2500%
+        #
+        # A fan fails this. So does a partition-arithmetic change. So does the crit arm being
+        # rescaled by the non-crit split.
+        observed = {
+            (
+                tuple(_damage_to(branch, "SideTwo")),
+                tuple(_heals_to(branch, "SideOne")),
+                round(float(branch.percentage), 4),
+            )
+            for branch in branches
+        }
+        self.assertEqual(
+            observed,
+            {
+                ((109, 66), (19,), 58.5938),
+                ((116, 66), (), 35.1562),
+                ((182,), (), 6.25),
+            },
         )
 
-        # And the durable half of the old proxy: the engine still uses a COMPACT representative
-        # for residual-lethal non-direct damage. Every branch's residual heal is the single
-        # representative value, not a fan -- that is the comparison limit the doc records, and it
-        # is what the withdrawn patch would have changed.
-        heals = {tuple(_heals_to(branch, "SideOne")) for branch in branches}
-        self.assertEqual(
-            heals,
-            {(19,), ()},
-            "residual heals are no longer a single compact representative per branch",
+        # Secondary breadcrumb only -- explicitly NOT what holds the line, per the precedent in
+        # tests/test_roll_enumeration_scope.py where a file scan was defeated in review and
+        # demoted to a change ledger.
+        withdrawn = (
+            Path(__file__).resolve().parents[1]
+            / "third_party"
+            / "poke-engine-gen3-terminal-toxic-roll-split.patch"
+        )
+        self.assertFalse(
+            withdrawn.exists(),
+            f"{withdrawn.name} is back by name; see docs/terminal_residual_roll_branching_limit.md",
         )
