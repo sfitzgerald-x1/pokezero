@@ -263,3 +263,25 @@ artifact, so no measurement above is re-derived by it — verified by
 `third_party/` and none a sweep. It does add a **second** exact corpus pin,
 `_EXPECTED_COUNTER_ARTIFACTS`, bumped **347 → 360** by set difference over both trees and confirmed
 live at 359 and 361.
+
+### 8c. Re-derived a third time, at the final head
+
+Review raised that reach was the one merge-sensitive figure §8a's own standard had missed, and that
+the committed artifacts carried `b3b0fde0…` while head had moved to a new fingerprint on two
+**comment-only** commits (the `c146` → `c147` renumber inside `events.rs`, and the review fix to its
+arm table). Both were re-derived rather than argued away.
+
+All four post-merge measurements were re-run at the final head **`0cfe97298c6081a2…`** (72 patches,
+`--check` green) and the committed artifacts replaced:
+
+* **P1/P2** — head gate dev 15968 / 15503 / 15502 / 1 / 0, holdout 16155 / 15579 / 15579 / 0 / 0.
+* **P3** — head gate `counters` byte-identical to the merged base's (23 keys dev, 19 holdout) **and**
+  byte-identical to the previously committed merged-gate figures, so the comment edits changed
+  nothing measurable and that is now measured rather than inferred.
+* **P5** — row replay on the head build: `matched`, 416 branches, 0 misses, relabels 0.
+* **Reach** — re-derived from a freshly instrumented build off the final head
+  (`11f34b6a35743807…`), byte-identical instrumentation: **52** and **56**, unchanged.
+
+The base is still a valid base for this head: `f1c3b3aa` and `99c77eb7` compute the **identical**
+engine fingerprint `770228825d53f717…` on both trees, and
+`git diff --name-only f1c3b3aa 99c77eb7 -- third_party/ rust/pokezero-search/` is empty.

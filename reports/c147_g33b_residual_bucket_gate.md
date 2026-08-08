@@ -297,8 +297,9 @@ numbers being carried across:
 | `engine_errors` | 0 | 0 | 0 | 0 |
 | `divergence_classes` | `{component_magnitude:heal: 1}` | same | `{}` | `{}` |
 
-Merged base `770228825d53f717…`, merged gate `b3b0fde0b3fda523…`, both 72 patches, both `--check`
-green. **The merged gate's `counters` block is again byte-identical to the merged base's** — 23 keys
+Merged base `770228825d53f717…`, merged gate `0cfe97298c6081a2…`, both 72 patches, both `--check`
+green. **That gate value is the FINAL head's, and the artifacts were re-swept to reach it** — see
+§5c. **The merged gate's `counters` block is again byte-identical to the merged base's** — 23 keys
 on dev, 19 on holdout — and the row replay reproduces on the merged builds too: `diverged` / 12
 misses → **`matched` / 0**, relabels **350 → 0**. Provenance `source_commit f68a3546…`, the merge
 commit, `source_tree clean`.
@@ -341,6 +342,37 @@ scripts/apply_poke_engine_patches.py` is empty, so `PATCHED_TARGET_TREE_SHA256`,
 `EXPECTED_FINAL_SHA256`, the `--test test_gen3` count of 32 and the `Engine lib suite` count of 5 are
 all untouched and unchanged. The only CI count this branch moves is the crate floor.
 
+### 5c. Two more comment-only commits moved the fingerprint, so the artifacts were re-swept to head
+
+The engine build fingerprint covers every `.rs` under `rust/pokezero-search/src`, so a **comment**
+edit moves it. Two landed after §5b's sweeps: `fd3e1b0f` renumbered a `c146` → `c147` reference
+inside `events.rs`, and the review fixes above rewrote the doc-comment arm table. The merged-gate
+sweeps therefore carried `b3b0fde0…` while head was `0cfe9729…` — behaviourally identical, and
+*documented* as identical by nothing at all. That is the same under-documentation review flagged in
+the reach artifact, one layer over.
+
+Rather than argue the delta is cosmetic, **all four post-merge measurements were re-run at the final
+head `0cfe97298c6081a2…`** (72 patches, `--check` green, `exit=0` captured directly), and the
+committed artifacts replaced with those runs:
+
+| | dev | holdout |
+|---|---|---|
+| head gate `boundaries_measured` / `matched` / `diverged` | 15503 / 15502 / 1 | 15579 / 15579 / 0 |
+| head gate `counters` == merged base `counters` | **yes**, 23 keys | **yes**, 19 keys |
+| head gate `counters` == the previously committed merged-gate figures | **yes** | **yes** |
+| reach, re-derived post-merge | **52** slots skipped (54 predicate-true) | **56** (58) |
+| row replay on the head build | `matched`, 416 branches, 0 misses, relabels 0 | — |
+
+So the comment edits changed nothing measurable, which is now a **measurement** rather than an
+inference. Provenance on both head sweeps: `source_commit e086703c…`, `source_tree clean`,
+`records_with_provenance 200`.
+
+**And the base really is a base for this head.** The merged-base pair was swept on a worktree of
+`f1c3b3aa`, while head merges `99c77eb7`. Those two commits produce the **identical** engine
+fingerprint `770228825d53f717…` — computed on both trees, not assumed — and
+`git diff --name-only f1c3b3aa 99c77eb7 -- third_party/ rust/pokezero-search/` is **empty**, so
+#1168 cannot have moved it. The baseline comes from a commit that is a valid base.
+
 ## 6. Reach — the one measurement that could have made §5 vacuous
 
 **A verdict-level sweep cannot see this gate fire**, and the reason is structural rather than
@@ -358,6 +390,13 @@ booking site — swept over both windows and counted out of the sweep's own stde
 |---|---|---|
 | dev `19,000,000–19,000,199` | 54 | **52** |
 | validation holdout `19,100,000–19,100,199` | 58 | **56** |
+
+**Re-derived at the final head, and unchanged.** The first run of this census was on a pre-merge
+build; review pointed out that reach was the one merge-sensitive figure §5b's own standard had
+missed. The instrumented build was rebuilt from the final head with byte-identical instrumentation
+(`11f34b6a35743807…` against the head gate's `0cfe97298c6081a2…`) and both counts came back the
+same, 52 and 56. The committed artifact carries the post-merge fingerprints and names the pre-merge
+pair it replaced.
 
 Artifact `reports/artifacts/c147_g33b_gate_reach.json`, which carries the instrumentation verbatim.
 The two counts differ by 2 on each window because the predicate is evaluated for both sides and
