@@ -51,7 +51,19 @@ from pokezero.fallback_replay_spec import (  # noqa: E402
 # Small on purpose: this is a correctness check on the chain, not a search-quality
 # measurement. d2/s32/w2 keeps a 40-battle sweep to a few seconds while still
 # producing real refusals -- the trapped class fires in this band.
-_CELL, _DEPTH, _SIMS, _WORLDS, _CPUCT = "hc-d2", 2, 32, 2, 1.4
+# NON-DEFAULT on purpose, all three. `EngineMctsConfig` defaults c_puct=1.4 and
+# deep_ko_split=True, and `rollout_runner` defaults max_decision_rounds=250 --
+# so a fixture that used those values left the whole spec->config WIRING
+# unexercised: deleting `**overrides` from the EngineMctsConfig call, or
+# reverting RolloutConfig to a hardcoded literal, kept the suite green even
+# WITH a Showdown checkout. The helpers were unit-tested; the wiring was not.
+_CELL, _DEPTH, _SIMS, _WORLDS, _CPUCT = "hc-d2", 2, 32, 2, 1.1
+_DEEP_KO_SPLIT = False
+# `hc_depth_grid` exposes --max-decision-rounds but does NOT record it, so the
+# spec cannot pin it and the runner must default -- and must SAY it defaulted.
+# Asserting that note is how the RolloutConfig wiring gets covered without
+# committing a shard shape no producer emits.
+_MAX_ROUNDS = 250
 _RAW_SPEC = "simple-legal"
 _SEED_START, _GAMES = 600000, 40
 
@@ -80,13 +92,14 @@ def _play_and_write_shard(out_dir: Path) -> dict:
             search_sims=_SIMS,
             search_depth=_DEPTH,
             c_puct=_CPUCT,
+            deep_ko_split=_DEEP_KO_SPLIT,
         ),
         policy_id=f"engine-mcts-hc-d{_DEPTH}-s{_SIMS}",
     )
     opponent = policy_from_spec(_RAW_SPEC)
     env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=Path(root)))
     rollout_config = RolloutConfig(
-        max_decision_rounds=250, format_id="gen3randombattle"
+        max_decision_rounds=_MAX_ROUNDS, format_id="gen3randombattle"
     )
     for offset in range(_GAMES):
         seed = _SEED_START + offset
@@ -107,7 +120,7 @@ def _play_and_write_shard(out_dir: Path) -> dict:
         "sims": _SIMS,
         "worlds": _WORLDS,
         "c_puct": _CPUCT,
-        "deep_ko_split": True,
+        "deep_ko_split": _DEEP_KO_SPLIT,
         "seed_start": _SEED_START,
         "games": _GAMES,
         "engine_stats": candidate.stats.to_dict(),
@@ -158,6 +171,10 @@ class TestReplayChainAgainstRealBattles(unittest.TestCase):
             # Read back off the document, not defaulted.
             self.assertEqual((spec.engine_depth, spec.engine_sims), (_DEPTH, _SIMS))
             self.assertEqual(spec.engine_worlds, _WORLDS)
+            self.assertEqual(spec.engine_c_puct, _CPUCT)
+            self.assertEqual(spec.deep_ko_split, _DEEP_KO_SPLIT)
+            self.assertIsNone(spec.max_decision_rounds)
+            self.assertIn("max_decision_rounds", spec.missing)
 
     def test_the_recorded_address_replays(self):
         runner = rollout_runner(showdown_root=showdown_root_str())
@@ -169,6 +186,15 @@ class TestReplayChainAgainstRealBattles(unittest.TestCase):
             f"replaying {spec.locator} gave {result.outcome}",
         )
         self.assertIsNone(result.fidelity_caveat)
+        self.assertEqual(result.instrument_errors, ())
+        self.assertTrue(result.trustworthy)
+        # The runner consulted `rollout_settings` rather than a hardcoded
+        # literal, and reported what it had to assume. Reverting RolloutConfig
+        # to a literal drops this note.
+        self.assertTrue(
+            any("max_decision_rounds not recorded" in n for n in result.runner_notes),
+            result.runner_notes,
+        )
         record = result.record
         self.assertIsNotNone(record)
         # The point of the whole exercise: state, not a boolean. A refusal that
@@ -222,6 +248,7 @@ class TestReplayChainAgainstRealBattles(unittest.TestCase):
                     search_sims=_SIMS,
                     search_depth=_DEPTH,
                     c_puct=_CPUCT,
+                    deep_ko_split=_DEEP_KO_SPLIT,
                 ),
             )
             recorder = attach_refusal_recorder(policy) if record else None
@@ -231,7 +258,7 @@ class TestReplayChainAgainstRealBattles(unittest.TestCase):
                 env=LocalShowdownEnv(LocalShowdownConfig(showdown_root=Path(root))),
                 policies={seat: policy, other: policy_from_spec(_RAW_SPEC)},
                 rollout_config=RolloutConfig(
-                    max_decision_rounds=250, format_id="gen3randombattle"
+                    max_decision_rounds=_MAX_ROUNDS, format_id="gen3randombattle"
                 ),
                 seed=spec.seed,
                 battle_id=spec.battle_id,

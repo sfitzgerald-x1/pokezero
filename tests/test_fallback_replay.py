@@ -26,6 +26,7 @@ from pokezero.fallback_replay import (
     ReplayResult,
     attach_refusal_recorder,
     format_refusal,
+    format_result,
     replay_fallback,
     results_to_json,
 )
@@ -684,21 +685,220 @@ class TestRunnerSettingsComeFromTheSpec:
 
         # A hardcoded 250 can end the battle before the recorded round is
         # reached, which renders as NO_REFUSAL and reads like a fix.
-        assert rollout_settings(
-            _spec_with(max_decision_rounds=40, format_id="gen3ou"),
+        settings, caveats = rollout_settings(
+            _spec_with(max_decision_rounds=60, format_id="gen3ou"),
             default_rounds=250,
-        ) == {"max_decision_rounds": 40, "format_id": "gen3ou"}
+        )
+        assert settings == {"max_decision_rounds": 60, "format_id": "gen3ou"}
+        assert caveats == []
 
     def test_unrecorded_settings_fall_back_and_say_so(self):
         from pokezero.fallback_replay import rollout_settings
 
-        assert rollout_settings(_spec_with(), default_rounds=250) == {
+        settings, caveats = rollout_settings(_spec_with(), default_rounds=250)
+        assert settings == {
             "max_decision_rounds": 250,
             "format_id": "gen3randombattle",
         }
+        # ...and SAYS SO. `hc_depth_grid` never records max_decision_rounds, so
+        # for the only shipped harness this branch is always taken; a silent
+        # default there is the whole defect the docstring warned about.
+        assert any("max_decision_rounds not recorded" in c for c in caveats)
+        assert any("47" in c for c in caveats)  # the recorded round is named
+
+    def test_format_id_uses_is_none_not_truthiness(self):
+        from pokezero.fallback_replay import rollout_settings
+
+        settings, caveats = rollout_settings(
+            _spec_with(format_id=""), default_rounds=250
+        )
+        assert settings["format_id"] == ""
+        assert caveats == [] or all("format_id" not in c for c in caveats)
+
+    def test_an_unreachable_recorded_round_is_refused_not_replayed(self):
+        from pokezero.fallback_replay import (
+            rollout_settings,
+            unreachable_round_problem,
+        )
+
+        # round 47 under a 40-round bound: the recorded decision provably never
+        # happens, so a replay would report NO_REFUSAL about a decision it never
+        # ran -- which this enum documents as what a fix looks like.
+        settings, _ = rollout_settings(
+            _spec_with(max_decision_rounds=40), default_rounds=250
+        )
+        problem = unreachable_round_problem(settings, _spec_with(round=47))
+        assert problem is not None and "not reachable" in problem
+        # ...and a reachable one is not refused.
+        settings, _ = rollout_settings(_spec_with(), default_rounds=250)
+        assert unreachable_round_problem(settings, _spec_with(round=47)) is None
 
 
 def _spec_with(**overrides) -> ReplaySpec:
     import dataclasses
 
     return dataclasses.replace(_spec(), **overrides)
+
+
+class TestASwallowedFailureIsNotAFinding:
+    """A broken instrument must never read as a clean run."""
+
+    def test_a_capture_failure_blocks_the_no_refusal_verdict(self):
+        # Demonstrated in review: an observation whose metadata raises gives 0
+        # records and errors == ['RuntimeError: boom'], and replay_fallback then
+        # reported NO_REFUSAL with no caveat -- which ReplayOutcome documents as
+        # "what a fix looks like". Not raising into the search was right; not
+        # surfacing was not.
+        def runner(spec):
+            runner.instrument_errors = ("RuntimeError: boom",)
+            return []
+
+        result = replay_fallback(_spec(), runner)
+        assert result.outcome is ReplayOutcome.INSTRUMENT_FAILED
+        assert result.outcome is not ReplayOutcome.NO_REFUSAL
+        assert result.instrument_errors == ("RuntimeError: boom",)
+        assert not result.trustworthy
+        assert "boom" in format_result(result)
+        assert "not trustworthy" in format_result(result)
+
+    def test_a_clean_run_still_reports_no_refusal(self):
+        result = replay_fallback(_spec(), lambda spec: [])
+        assert result.outcome is ReplayOutcome.NO_REFUSAL
+        assert result.trustworthy
+
+    def test_a_positive_match_is_not_downgraded_by_an_error(self):
+        # A match stands on its own evidence; only the ABSENCE cases are
+        # unreadable from a broken instrument.
+        def runner(spec):
+            runner.instrument_errors = ("RuntimeError: boom",)
+            return [_record()]
+
+        result = replay_fallback(_spec(), runner)
+        assert result.outcome is ReplayOutcome.REPRODUCED
+        assert not result.trustworthy  # ...but the caller can still see it
+
+    def test_runner_assumptions_are_reported_without_voiding_the_verdict(self):
+        def runner(spec):
+            runner.runner_notes = ("max_decision_rounds not recorded",)
+            return [_record()]
+
+        result = replay_fallback(_spec(), runner)
+        assert result.outcome is ReplayOutcome.REPRODUCED
+        assert result.trustworthy
+        assert "ASSUMED: max_decision_rounds not recorded" in format_result(result)
+
+    def test_a_lost_snapshot_marks_the_record_degraded(self):
+        # If `_begin_decision` fails, an earlier revision kept the PREVIOUS
+        # decision's snapshot, so the next record's deltas silently spanned two
+        # decisions -- the cumulative-vs-delta error this module exists to
+        # prevent. The baseline is cleared first now, and a record built without
+        # one says so.
+        policy = _FakePolicy()
+        recorder = attach_refusal_recorder(policy)
+        context = _Context("b", 4, "p1")
+        policy._fallback(context, None, "x")  # no select_action_with_context first
+        record = recorder.records[0]
+        assert record.degraded is True
+        assert record.to_dict()["degraded"] is True
+        assert recorder.errors and "no pre-decision snapshot" in recorder.errors[0]
+
+    def test_a_normal_record_is_not_degraded(self):
+        policy = _FakePolicy()
+        recorder = attach_refusal_recorder(policy)
+        _decide(policy, _Context("b", 4, "p1"), reason="x")
+        assert recorder.records[0].degraded is False
+
+
+class TestHookUnwindingUnderLoad:
+    def test_a_decision_between_detaches_reaches_only_the_live_recorder(self):
+        # `_Hook.remove`'s `if self.recorders: return` is the single line making
+        # unwinding order-independent, and deleting it survived the previous
+        # test -- because that test never drove a decision BETWEEN the two
+        # detaches, which is the only moment the bug is observable.
+        policy = _FakePolicy()
+        outer = attach_refusal_recorder(policy)
+        inner = attach_refusal_recorder(policy)
+        outer.detach()
+        _decide(policy, _Context("b", 1, "p1"), reason="x")
+        assert outer.records == ()
+        assert [r.round for r in inner.records] == [1]
+        inner.detach()
+        _decide(policy, _Context("b", 2, "p1"), reason="y")
+        assert [r.round for r in inner.records] == [1]
+        assert "_fallback" not in policy.__dict__
+
+    def test_map_choices_calls_do_not_leak_between_decisions(self):
+        # The round-2 rewrite dropped the `_last_aggregated = {}` reset that
+        # `test_engine_choices_do_not_leak_between_decisions` used to pin, and
+        # `map_choices_calls` is newly serialized -- so a leak would ship in
+        # to_dict().
+        policy = _FakePolicy()
+        recorder = attach_refusal_recorder(policy)
+        _decide(
+            policy,
+            _Context("b", 1, "p1"),
+            aggregated={"substitute": 1.0},
+            reason="choices_unmapped",
+        )
+        _decide(policy, _Context("b", 2, "p1"), reason="no_worlds_constructed")
+        assert recorder.records[1].map_choices_calls == ()
+        assert recorder.records[1].to_dict()["map_choices_calls"] == []
+
+    def test_capture_happens_before_the_policys_own_fallback_runs(self):
+        # Pins the ordering contract rather than asserting it in a comment. The
+        # real `_fallback` touches no counter the record reads, so the ordering
+        # is not load-bearing TODAY -- this holds it against a `_fallback` that
+        # starts incrementing one, which is exactly the change that would fold a
+        # refusal's own bookkeeping into its evidence.
+        policy = _FakePolicy()
+
+        def _fallback(context, rng, reason):
+            policy.stats.world_failure_reasons["counted_by_fallback_itself"] += 1
+            return f"fallback:{reason}"
+
+        policy._fallback = _fallback
+        recorder = attach_refusal_recorder(policy)
+        _decide(
+            policy,
+            _Context("b", 1, "p1"),
+            world_failures={_TRAPPED: 2},
+            reason="no_worlds_constructed",
+        )
+        assert recorder.records[0].world_failures == {_TRAPPED: 2}
+
+
+class TestTheConfigWiringItself:
+    """The overrides helper was unit-tested; the call that USES it was not."""
+
+    def test_recorded_search_settings_reach_the_engine_config(self):
+        pytest.importorskip("pokezero_search")
+        from pokezero.fallback_replay import engine_config_for
+
+        # Non-default on every axis, because each default is what a dropped
+        # override silently falls back to.
+        config = engine_config_for(
+            _spec_with(
+                engine_depth=6,
+                engine_sims=64,
+                engine_worlds=3,
+                engine_c_puct=1.1,
+                deep_ko_split=False,
+            )
+        )
+        assert config.leaf_eval == "hp_fraction_crate"
+        assert (config.search_depth, config.search_sims) == (6, 64)
+        assert config.worlds == 3
+        assert config.c_puct == 1.1
+        assert config.deep_ko_split is False
+
+    def test_unrecorded_settings_take_the_engines_own_defaults(self):
+        pytest.importorskip("pokezero_search")
+        from pokezero.engine_search import EngineMctsConfig
+        from pokezero.fallback_replay import engine_config_for
+
+        default = EngineMctsConfig()
+        config = engine_config_for(
+            _spec_with(engine_depth=2, engine_sims=32, engine_worlds=2)
+        )
+        assert config.c_puct == default.c_puct
+        assert config.deep_ko_split == default.deep_ko_split
