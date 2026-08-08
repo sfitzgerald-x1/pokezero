@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2_2
 from pokezero.bootstrap import TEACHER_BOOTSTRAP_SCHEMA_VERSION
 from pokezero.bootstrap_cli import build_arg_parser as build_bootstrap_arg_parser
 from pokezero.eval_cli import main as eval_cli_main
@@ -5847,8 +5848,18 @@ if __name__ == "__main__":
             first_checkpoint = temp_path / "promoted" / "first.json"
             second_checkpoint = temp_path / "promoted" / "second.json"
             first_checkpoint.parent.mkdir(parents=True)
-            first_checkpoint.write_text("{}", encoding="utf-8")
-            second_checkpoint.write_text("{}", encoding="utf-8")
+            # A linear checkpoint must carry `observation_schema_version`, or
+            # `checkpoint_policy_spec_observation_schema` cannot classify it and
+            # `opponent_pool_policy_specs` DROPS it (`legacy_mode="drop"`). Both fixtures were
+            # `{}`, so the promoted pool selected NOTHING -- `selected_policy_specs: []` against
+            # a required minimum of 1 -- and the readiness item failed as
+            # `promoted_opponent_pool_too_small`, which reads as a pool-size problem rather than
+            # a fixture that cannot be classified. The pool genuinely held 3 entries.
+            promoted_payload = json.dumps(
+                {"observation_schema_version": OBSERVATION_SCHEMA_VERSION_V2_2}
+            )
+            first_checkpoint.write_text(promoted_payload, encoding="utf-8")
+            second_checkpoint.write_text(promoted_payload, encoding="utf-8")
             write_json(
                 registry_path,
                 promotion_registry_payload(
