@@ -1315,10 +1315,23 @@ impl LeafContext {
         // reachable in production search at depth > 0 where it never was before. The fix made
         // the defect live; this closes it.
         //
+        // THE STRONGEST ARGUMENT, which the first version of this comment missed: `leaf.rs:1640`
+        // below already reads `self_side.volatile_statuses.contains(MUSTRECHARGE)` LIVE, to
+        // present the forced "recharge" pseudo-move on our own action surface. So pre-lift the
+        // SELF side carried exactly the self-contradiction cited above as the reason the OPPONENT
+        // side had to be live -- action surface live, volatile bag root-frozen, inside one
+        // observation. The lift removes a real internal inconsistency, not just an obsolete
+        // precondition.
+        //
         // Verifiable now, which it was not before: the four gates derive `recharging` from the
         // parser tracker rather than the recorded candidate, so they no longer ratify whatever
         // this function writes. reports/c141_recharge_gate_injection_proof.md shows them catching
-        // a deliberately wrong write here.
+        // a deliberately wrong write here -- read its limits section, the pre-task-4 gates also
+        // caught 4 of those 5 and the whole signal lives in one battle of twelve.
+        //
+        // Pinned by tests/test_leaf_self_recharge_derivation.py, which drives the real
+        // LeafEncoder. Added because review reverted this lift at the binary level and 146/146
+        // Python tests stayed green: the only things that caught it needed the gitignored corpus.
         for (key, side) in [("self_must_recharge", self_side), ("opponent_must_recharge", opp_side)]
         {
             md.insert(

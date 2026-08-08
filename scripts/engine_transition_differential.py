@@ -2464,9 +2464,14 @@ def _prepare_boundary(
     candidates_by_slot: dict[str, Sequence[Mapping[str, Any]]] = {}
     # NOT ADOPTED, deliberately. This harness still derives `recharging` from the RECORDED
     # CHOSEN CANDIDATE -- the rule the four gates dropped in #1156 for being circular, since it
-    # seeds the world from the very thing the harness is checking. It also does not publish
-    # `boundaries_measured` and does not adopt scripts/differential_denominator.py, so a run that
-    # skipped every boundary would still report a pass.
+    # seeds the world from the very thing the harness is checking.
+    #
+    # It also does not adopt scripts/differential_denominator.py. It DOES publish a measured count
+    # (:2606 increments, :2857/:3058 emit, :3439 prints) -- an earlier revision of this comment
+    # said it did not, which was wrong. The problem is that nothing GATES on it: :3464 is
+    # `return 1 if (transitions_diverged or engine_errors) else 0`, so a run that skipped every
+    # boundary still exits 0. Publishing without gating is the exact shape the denominator rule
+    # exists to close.
     #
     # Left as-is on purpose: this is a FIFTH differential, outside the four the denominator (#1154)
     # and recharge (#1156) work scoped, and changing it unscoped is how a "while I'm here" edit

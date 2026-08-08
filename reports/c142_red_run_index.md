@@ -104,10 +104,17 @@ The three guard pins added later (vocabulary `raise`, the `NOT CHECKED` render p
 ```python
 -    if anchor_metadata.get("self_must_recharge") is True:
 -        slots.append(seat)
-+    # derive from the RECORDED CHOSEN CANDIDATE instead of the parser tracker
-+    if any(c.get("action_index") == idx and normalize_id(c.get("move_id")) == "recharge" …):
-+        slots.append(seat)
++    cands = anchor_metadata.get("action_candidates") or []
++    idx = anchor_metadata.get("chosen_action_index")
++    if any(c.get("action_index") == idx and normalize_id(str(c.get("move_id") or "")) == "recharge"
++           for c in cands if isinstance(c, Mapping)):
++        slots.append(seat)  # MUTANT: candidate-derived, the circular rule
 ```
+
+Written out in full rather than elided. Review reconstructed the elided version, got the same
+count (`Ran 12 / FAILED (failures=3)`) but a **different pair** of names — both reconstructions are
+legitimately "candidate-derived", so an elided diff cannot be checked against its own quoted
+output. That defeats the point of this document.
 
 ```
 $ .venv/bin/python -m unittest tests.test_recharge_gate_derivation

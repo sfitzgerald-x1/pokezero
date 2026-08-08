@@ -112,7 +112,14 @@ that INERT line being the only thing distinguishing it from a pass.
 
 Coverage on the v4 corpus (`corpus/golden-v4`): the harness surfaces **18 `state` families / 138
 rows**, and this ledger groups all 138 into six mechanisms — P1 100 + P2 28 + P3 2 + P4 1 + P5 5 +
-P6 2 = 138. **All 138 rows carry a source-level cause and a disposition.** P2 (toxic, 28 rows) was open in an
+P6 2 = 138. **All 138 rows carry a source-level cause and a disposition.**
+
+> **AT HEAD THESE ARE 16 FAMILIES / 135 ROWS.** P4's 1 row closed in #1156 and P3's 2 closed with
+> the freeze lift; both families are gone entirely. The figures above are the ledger-time
+> attribution and are kept because the attribution itself is what this document is for — but do
+> not quote them as current coverage. A previous correction updated the BOUNDARY count
+> (124→123→122) and left these row counts untouched, which is the unit this document actually
+> states coverage in. P2 (toxic, 28 rows) was open in an
 earlier revision and is closed here: the event renderer emits status-free condition strings
 (`events.rs:751-760`), so the leaf's replay cannot see an in-branch toxic entry. Closed on a
 counterfactual plus a 33/33 signature on v4 and 27/27 on golden-v2, with three earlier attributions
@@ -151,11 +158,38 @@ Measured at the tree that carries this correction, `python scripts/leaf_vs_reali
 corpus/golden-v4 --tables corpus/encoder_tables_v4.json`:
 `DEFECT-CLASS (state+turn) divergent boundaries: 122`.
 
-Lifting the P3 freeze also cleared **2 of the 3** rows in the `engine_model` class's
-`self_team/CATEGORY_VOLATILE_OFFSET` family: those were attributed to `volatile:encore` (id 864)
-but were mustrecharge displacing the volatile written at that offset. `engine_model` boundaries
-went 31 -> 30. An attribution in an excuse class was wrong for the same reason a defect-class
-attribution was.
+Lifting the P3 freeze also cleared 2 of the 3 rows in the `engine_model` class's
+`self_team/CATEGORY_VOLATILE_OFFSET` family; `engine_model` boundaries went 31 -> 30.
+
+**CORRECTED — my first explanation of this was invented.** I wrote that those rows were
+"attributed to `volatile:encore` (864) but were mustrecharge displacing the volatile written at
+that offset". Review dumped every cell in the family and it is false twice over:
+
+```
+MAIN (5 cells)                                    BRANCH (1 cell)
+  engine_model 1003 p1 12->13  got 864 want 0       engine_model 1003 p1 12->13  got 864 want 0
+  engine_model 1009 p2 15->16  got 0   want 877
+  engine_model 1009 p2 17->19  got 0   want 877
+  state        1009 p2 16->17  got 877 want 0
+  state        1009 p2 19->20  got 877 want 0
+```
+
+The two cells that left `engine_model` were **never 864** — they are `got=0 / want=877`, the leaf
+writing nothing where reality had the flag. The one genuine encore cell is the one that
+**survived**. Nothing was displaced, and `encoder.rs:1638-1641` sorts the bag by raw name, so
+`"encore" < "mustrecharge"` and mustrecharge can never displace encore from `offset+0` anyway.
+
+I read the family's printed exemplar — `got 864`, which is the survivor — and generalised it to
+all three. That is the same error C141 had already had to correct one report earlier.
+
+**What actually happened, which is the better result:** the lift fixes 4 cells in BOTH
+directions — 2 spurious (a stale flag written where reality had none) and 2 missing (no flag
+written where reality had one).
+
+**The arithmetic, stated because it otherwise reads wrong:** each class dropped 1 boundary while
+its family dropped 2 cells (`state` 123->122, `engine_model` 31->30). One boundary in each pair
+still carries another divergent family of the same class, so clearing a cell there frees no
+boundary. Classes count boundaries; families count cells.
 
 On `golden-v2`: **119 of 119 rows** — P1 (**90** = 17+17+4+4+23+23+2), P2 (24) and P5 (5). P3, P4 and P6 do not surface
 there. Scenarios: **10 of 10**, all **P5**, the same recharge-request Choice lock, corroborated on
@@ -545,8 +579,10 @@ Measured after the lift, same producing command as above:
 - `class_rows.state` 123 -> **122**;
 - `leaf_root_parity` stays at **diverged 0** — depth-0 parity is intact, which was the freeze's
   entire rationale and the thing that had to be checked;
-- and 2 of the 3 `engine_model` `self_team/CATEGORY_VOLATILE_OFFSET` rows cleared too — they were
-  attributed to `volatile:encore` (864) but were mustrecharge displacing the offset.
+- and 2 of the 3 `engine_model` `self_team/CATEGORY_VOLATILE_OFFSET` cells cleared too. They were
+  `got=0 / want=877` — the leaf writing NOTHING where reality had the flag — not, as an earlier
+  revision of this ledger claimed, encore rows displaced by mustrecharge. See the corrected cell
+  dump in the "Note on the 124" section; the lift fixes 4 cells in both directions.
 
 The second row's boundary was unverified when this section was written (the artifact stores one
 example per family). The lift clearing exactly 2 rows confirms both were id-877.
@@ -570,7 +606,7 @@ never enters the constructed world, and `leaf.rs:1320-1323` correctly reports th
 volatile that was never seeded. Slaking's Hyper Beam was at round 17, before the root, so the
 branch cannot set it either.
 
-**Disposition: harness fix** — seed `recharging` from the opponent's most recent decision row, or
+**Disposition: production** — `scripts/leaf_vs_reality.py` was the named site, but #1156 replaced that block wholesale; see the CLOSED note above. (An earlier revision labelled this `harness fix`, contradicting this file's own file-location table and its rule at "Dispositions name the owning FILE".) Seed `recharging` from the opponent's most recent decision row, or
 from the payload's `opponent_must_recharge`, rather than from a same-round chosen candidate that
 does not exist on faint-replacement rounds. Filing this as an accepted deviation by widening a
 tag, as the previous revision proposed, would route a harness world-construction gap into an
@@ -612,7 +648,7 @@ Two corpora, two recharge-request roots, and in both the diverging slots are exa
 locked-out moves while the locked-into move agrees. The index difference (`action0/1/3` on v4 vs
 `action1/2/3` on scenarios) is just where Hyper Beam sits in each move list.
 
-**Disposition: harness fix.** Highest-severity family: the only one where the leaf is
+**Disposition: production** — `engine_world.py` world construction, per this file's own file-location table. (An earlier revision said `harness fix` here, which is the contradiction the table at the top now resolves.) Highest-severity family: the only one where the leaf is
 *permissive* rather than empty, and a search pricing illegal actions is worse than one reading a
 stale counter.
 
@@ -703,4 +739,6 @@ Four of the `state` families as they stood in v2's framing are columns that did 
   here (1008 and 369) and it holds. Mechanizing it is task 3's subject.
 - `self_moveset_mismatch` (11 scenarios skips) and the residue-row classes are owned by the
   fallback-burndown and rust-fidelity lanes; they appear only as skip counts and are **not**
-  attributed. A note belongs in those ledgers.
+  attributed. **FILED** for the fallback-burndown half: see the note appended to
+  `reports/c111_residue_row_causes.md`. The rust-fidelity half is still owed — this sentence
+  said "those ledgers", plural, and only one has been written to.

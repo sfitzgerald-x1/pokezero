@@ -118,9 +118,15 @@ jobs:
             # checkout, CI builds none, and the default root is outside the repo and
             # untracked -- so all 6 skip here. Without this entry a PR that DELETES the pin
             # trips no workflow at all, which is the failure mode this file forbids twice and
-            # which this very pin was subject to for four commits after #1123.
+            # which this very pin was subject to for 37 commits after #1123.
             tests/test_spread_gate_provenance.py
             tests/_showdown_root.py
+            # The leaf self-recharge derivation pin. Review found the P3 freeze lift pinned by
+            # NOTHING -- reverting it at the binary level left 146/146 green, because the only
+            # things that caught it were the two corpus-driven harnesses, and the corpus is
+            # gitignored. This test drives the real LeafEncoder and needs no corpus.
+            tests/test_leaf_self_recharge_derivation.py
+            tests/test_leaf_encoder.py
             # C116 Phase 2's scope gate. Listed for the same reason as the entries
             # above: a PR whose only change is adding a file to the mention ledger,
             # widening _IMPORT_PROBE_EXCLUSIONS, or deleting the collapsed-fan pin
@@ -459,11 +465,15 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_spread_gate_provenance -v 2>&1 | tee /tmp/spreadgate.log
-          # READ THIS BEFORE TRUSTING A GREEN. Every assertion in this file is SKIPPED in CI.
+          # READ THIS BEFORE TRUSTING A GREEN. Five of the six tests are SKIPPED in CI; only the
+          # fixture lint executes. The two-way provenance assertions do NOT run here.
           # The pin drives a real randbats set source, CI builds no Showdown (two steps in this
           # job say so), and the default root is outside the repo and untracked. So this step
-          # verifies SHAPE only: that the pin still exists, still has 6 tests, and still skips
-          # for the stated reason rather than silently shrinking.
+          # verifies SHAPE for five of them -- that the pin still exists, still has 6 tests, and
+          # still skips for the stated reason rather than silently shrinking -- plus ONE real
+          # assertion: the fixture lint was moved out of the skip-gated class so CI executes
+          # something. Review measured why that mattered: gut all 18 assertions while keeping 6
+          # tests and a shape-only step still passes.
           #
           # That is worth a step anyway. Between #1123 and this commit the file was in no
           # filter and no step, so deleting it outright would have tripped nothing -- the
@@ -474,8 +484,8 @@ jobs:
             echo "::error::spread-gate pin changed count; the two-way provenance test shrank or grew"
             exit 1
           fi
-          if ! grep -qE 'OK \(skipped=6\)' /tmp/spreadgate.log; then
-            echo "::error::expected all 6 to skip here; if they RAN, CI gained a Showdown checkout and this step's disclaimer is now wrong"
+          if ! grep -qE 'OK \(skipped=5\)' /tmp/spreadgate.log; then
+            echo "::error::expected exactly 5 skips (the fixture lint must RUN, the other five must not); if all 6 skipped, the lint regained a Showdown dependency"
             exit 1
           fi
 

@@ -18,7 +18,7 @@ above are the ones adopted here; the claim is about them, not about every harnes
 So the rule this module mechanizes:
 
 1. publish ``boundaries_measured`` — the count the harness actually compared, not the count the
-   corpus contains;
+   harness's own universe holds -- see the note on ``contained`` below;
 2. **hard-fail when it is zero**, because a run that measured nothing is not a pass; and
 3. assert ``matched + diverged == measured``, so every attempt is accounted for; and
 4. assert ``measured + skipped == contained`` whenever both are supplied — the rule that
@@ -29,7 +29,7 @@ caller counts as its universe, and that is NOT the same unit at all four sites:
 ``leaf_vs_reality`` and ``fidelity_gate_events`` pass same-seat BOUNDARIES (1271 on golden-v4),
 while ``leaf_root_parity`` and ``prior_mapping_assert`` pass decision ROWS (1295). Both are right
 for their own harness — rule 4 only requires ``measured`` and ``skipped`` to be counted in the
-same unit as ``contained`` — but the phrase "boundaries contained" in the failure message is
+same unit as ``contained`` — and the failure message no longer says "boundaries contained", which was
 wrong for two of the four, and it is the HARNESS's universe, not the corpus's.
 
 **What rule 3 actually does, stated narrowly after review.** In ``leaf_vs_reality`` the
@@ -47,7 +47,7 @@ instrument-that-cannot-move error this repo has made repeatedly.
 
 **Rule 4 is the falsifiable one, and it exists because rule 3 is not.** Rule 3 sits entirely
 on one side of the skip decision, so an increment adjacent to its classification can never
-violate it. Rule 4 SPANS that decision: every boundary the corpus contains was either compared
+violate it. Rule 4 SPANS that decision: every unit in the harness's universe was either compared
 or skipped, exactly once. It mechanically detects both bugs review found in this PR's first
 round, neither of which needed a forced-skip driver or a fixture to catch:
 
@@ -88,7 +88,7 @@ class DenominatorReport:
                 f"{self.label}: boundaries_measured == 0 — the run compared nothing, so its "
                 f"result is not a pass. "
                 + (
-                    f"The corpus contains {self.contained} boundaries"
+                    f"The harness counted {self.contained} in its universe"
                     + (f" and {self.skipped} were skipped." if self.skipped is not None else ".")
                     if self.contained is not None
                     else "Check the skip reasons."
@@ -99,7 +99,7 @@ class DenominatorReport:
             if accounted != self.contained:
                 out.append(
                     f"{self.label}: boundaries_measured + skipped ({self.measured} + "
-                    f"{self.skipped} = {accounted}) != boundaries contained "
+                    f"{self.skipped} = {accounted}) != the harness's universe "
                     f"({self.contained}) — {abs(self.contained - accounted)} boundaries were "
                     + (
                         "counted twice (compared AND skipped)"

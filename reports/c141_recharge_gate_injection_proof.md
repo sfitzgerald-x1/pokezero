@@ -2,8 +2,10 @@
 
 **Era / provenance.** `corpus/golden-v4`, 1295 decision rows / 1271 same-seat boundaries,
 **12 battles**. Tree: `main` at `9a128bec` (task 4 merged). The engine crate was rebuilt with and
-without the injection; the injection is reverted and `self_must_recharge` is confirmed absent
-from the final `.so`.
+without the injection; the injection is reverted and `self_must_recharge` was confirmed absent
+from the `.so` **as of this run**. That check no longer holds at HEAD and should not: the P3 freeze
+lift makes `leaf.rs` write that key legitimately, so the string is present by design now. Use the
+build hash, not the string, to check for a leftover injection.
 
 Producing commands. Note the `../../` — `.venv/bin/python` does not resolve after the `cd`, and
 an earlier revision of this report printed a path that could not be run:
@@ -131,7 +133,7 @@ is true on exactly those 5 and nowhere else. Two reachable shapes this run would
   observation EXACTLY" at zero branch steps -- so a write that is right at the root and goes
   stale in the branch is structurally invisible to it. That is the current root-frozen behaviour
   this report exists to discuss, and it is the shape a real P3 implementation is most likely to
-  get wrong. The gate that would have to catch it is `leaf_vs_reality`, already red at 123.
+  get wrong. The gate that would have to catch it is `leaf_vs_reality`, already red at 123 at the time of this run (122 after the lift).
 - **Right side, wrong volatile.** Caught on 2 rows rather than 5 -- same corpus, weaker signal.
 
 (An earlier revision offered "a wrong party index" as the example. That defect cannot occur on
