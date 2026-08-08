@@ -26,9 +26,8 @@ tests/test_opponent_action_mapping.py.
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
 
-from pokezero.engine_search import EngineMctsConfig
+from pokezero.engine_search import EngineMctsConfig, native_search_args
 
 
 class DefaultsAreOffTest(unittest.TestCase):
@@ -80,28 +79,67 @@ class DefaultsAreOffTest(unittest.TestCase):
 
 
 class NativeCallContractTest(unittest.TestCase):
-    """The positional call the crate receives, captured without running search."""
+    """The positional call the crate receives, captured without running search.
 
-    def _captured_args(self, **config_kwargs) -> list:
+    These call `engine_search.native_search_args` -- the REAL assembly the
+    search uses. An earlier version of this class rebuilt the list inside the
+    test and asserted against its own copy, which passed in both worlds:
+    review deleted `config.model_priors` from the production assembly (which
+    also shifts `use_opponent_priors` two slots into `early_stop_min_sims`,
+    truncating the search budget) and this file still reported 6 passed,
+    1 skipped.
+    """
+
+    def _captured_args(self, early_stop_min_sims: int = 0, **config_kwargs) -> list:
         # leaf_eval is irrelevant to the flag and "model" demands artifact
         # paths, so the default evaluator keeps this a pure config test.
         cfg = EngineMctsConfig(**config_kwargs)
-        captured: list = []
+        record = {
+            "state_str": "state",
+            "ctx_json": "ctx",
+            "seed": 7,
+            "side_key": "side_one",
+        }
+        return native_search_args(
+            cfg,
+            record,
+            tables_json="tables",
+            root_inputs="root",
+            rust_fold=object(),
+            early_stop_min_sims=early_stop_min_sims,
+        )
 
-        # Rebuild the exact argument assembly engine_search performs, so the
-        # test pins the CONTRACT rather than re-implementing the search.
-        search_args = [
-            "state", cfg.search_sims, cfg.search_batch, "tables", "root", "ctx",
-            object(), cfg.search_depth, cfg.c_puct, 7, cfg.deep_ko_split,
-            cfg.model_priors,
-        ]
-        early_stop_min_sims = 0
-        if early_stop_min_sims or cfg.use_opponent_priors:
-            search_args.extend([early_stop_min_sims, True])
-        if cfg.use_opponent_priors:
-            search_args.append(True)
-        captured.extend(search_args)
-        return captured
+    def test_the_twelve_leading_positionals_are_the_pre_flag_contract(self) -> None:
+        # Not just the COUNT: a dropped argument shifts everything after it,
+        # and a length check alone cannot see a reordering.
+        cfg = EngineMctsConfig()
+        args = self._captured_args()
+        self.assertEqual(
+            args[:12],
+            [
+                "state", cfg.search_sims, cfg.search_batch, "tables", "root",
+                "ctx", args[6], cfg.search_depth, cfg.c_puct, 7,
+                cfg.deep_ko_split, cfg.model_priors,
+            ],
+        )
+
+    def test_early_stop_alone_appends_the_pair_and_not_the_flag(self) -> None:
+        args = self._captured_args(early_stop_min_sims=64)
+        self.assertEqual(len(args), 14)
+        self.assertEqual(args[12], 64)
+        self.assertIs(args[13], True)
+
+    def test_side_two_reports_side_one_false_in_the_early_stop_pair(self) -> None:
+        cfg = EngineMctsConfig()
+        record = {
+            "state_str": "state", "ctx_json": "ctx", "seed": 7,
+            "side_key": "side_two",
+        }
+        args = native_search_args(
+            cfg, record, tables_json="t", root_inputs="r", rust_fold=object(),
+            early_stop_min_sims=64,
+        )
+        self.assertIs(args[13], False)
 
     def test_flag_off_makes_the_historical_12_argument_call(self) -> None:
         # 12 positional args and nothing appended: the pre-flag contract.

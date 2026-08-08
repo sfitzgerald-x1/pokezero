@@ -19,7 +19,7 @@ pub mod panic_guard;
 pub mod model;
 // NOT feature-gated even though `model` is its only caller: the gather/apply
 // arithmetic is pure and must stay testable on a host without libtorch.
-pub mod priors;
+pub(crate) mod priors;
 pub mod tree;
 
 use std::hint::black_box;
