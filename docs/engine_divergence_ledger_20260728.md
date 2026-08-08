@@ -2493,6 +2493,59 @@ namespace only:
 | fidelity differential, **final holdout** — as REGISTERED | `19,200,000`–`19,200,199` | terminal fidelity claim, registered as a single measurement | **partly swept, and not on the registered span.** Decomposed in the next two rows |
 | fidelity differential, final holdout — the span C141 **actually swept** | `19,200,060`–`19,200,259` | `reports/artifacts/c141_final_holdout_sweep.json` | **CONSUMED** — 200 games, 16,274 boundaries measured, 2 divergent. Overruns the registered end by **60 seeds** |
 | fidelity differential, final holdout — the registered head C141 **did not reach** | `19,200,000`–`19,200,059` | the first 60 seeds of the registered block | **unswept, and contaminated.** No committed artifact covers these 60 seeds; 60 games were run over them before the guard existed |
+| fidelity differential, final holdout — C151 **PROPOSED replacement window** | `19,400,000`–`19,400,199` | a re-registration of the terminal one-shot measurement on virgin seeds, because the `19,200,000` block has none left | **PROPOSED, NOT RATIFIED. Unswept, and no sweep is authorised by this row.** `reports/c151_final_holdout_rereg_prediction.md` is UNREGISTERED and unfrozen. Nothing may run here until the owner ratifies it in writing |
+
+**The row above proposes; it does not authorise, and it is not a blessing.** C151 adds it,
+and adds nothing else to this table. The three rows that decompose the `19,200,000` block
+are #1189's and are untouched — they were deliberately silent on whether a future sweep is
+permitted, and that silence is preserved rather than resolved here.
+
+What the proposed row records, and the whole of it:
+
+* **The `19,200,000` block has no virgin seeds left.** `19,200,000`–`19,200,059` is
+  contaminated by the pre-guard 60-game loop, `19,200,060`–`19,200,199` was consumed by
+  C141, and C141 additionally overran to `19,200,259`. So a fresh terminal window cannot be
+  a *replacement span inside* the registered block; it is a **re-registration of the
+  final-holdout namespace on a new block**, which is materially more than "sweep a new set
+  of seeds" was asked to bless. That is why this row is proposed rather than ratified.
+* **`19,400,000`–`19,400,199` is virgin**, and the scope of that word is the scan that
+  produced it: the shape-agnostic extractor `_seed_intervals` from
+  `tests/test_seed_registry_coverage.py`, run over **every** `*.json` blob under `reports/`
+  or `docs/` reachable from **every ref and the reflog** (`git rev-list --objects --all
+  --reflog`) — 900 distinct blobs, 145 of which reach fidelity seed space — plus a raw
+  regex pass for seed-shaped tokens in `19,200,260`–`19,999,999` over **all 8,499 blobs** in
+  the same ref set, any path and any file type. The union of every fidelity seed ever
+  touched in any ref is exactly the four bands already in this table. One blob does not
+  parse — a conflict-marker intermediate of
+  `reports/c102_consumed_choice_double_mutation.json`, reachable only from the reflog — and
+  it was read by hand: the only seeds in it are `19000038` and `19000113`, both in the dev
+  band.
+* **Why this block and not `19,300,000`.** `scripts/engine_transition_differential.py:3531`
+  already spends the number `19,300,000` in prose, as the canonical typo the unbounded
+  guard floor exists to catch. Registering it as a real window would make that comment read
+  backwards and would require editing the guard file. `19,400,000` follows the same
+  one-purpose-per-`19,X00,000`-block convention this table already uses, sits inside
+  `#1122`'s guarded half-line so it is unreachable without `--final-holdout-i-mean-it`, and
+  keeps 199,741 seeds of clearance from C141's true end and 99,801 from `c73`'s start — so a
+  C141-scale 60-seed overrun in either direction cannot reach a consumed band.
+* **It is deliberately absent from `REGISTERED_BANDS`** in
+  `tests/test_seed_registry_coverage.py`. That tuple's own rule is that a band joins it only
+  after the sweep that fills it is committed; adding an unwitnessed band would fail
+  `test_every_registered_band_has_a_committed_witness`. `TheProposedC151WindowIsNotRatifiedTests`
+  in that module pins the proposal's *unratified* state instead, and pins the window's
+  virginity against the live corpus, so the row cannot quietly become a ratification and
+  cannot quietly stop being true.
+* **What executing would cost is stated in the prediction document, not here**, under
+  "What executing would cost and forfeit". In short: it re-registers a one-shot namespace,
+  it is irreversible, and it must be the last time.
+* **C141's artifact stays exactly where it is.**
+  `reports/artifacts/c141_final_holdout_sweep.json`, its replay, and
+  `reports/c141_final_holdout_prediction.md` are a **superseded, unratified measurement** —
+  superseded because it measured engine fingerprint `44ee1430708cbb55` / 71 patches and
+  `main` now ships `8e912b45544034e6` / 74. They are **not to be deleted**, and the two
+  bands they witness stay in this table and in `REGISTERED_BANDS`: deleting them would break
+  `test_every_registered_band_has_a_committed_witness` and would erase the record of what
+  the seeds were spent on, which is the only thing that makes them legibly spent.
 
 **The final-holdout row was false twice over, and is corrected above.** Until this
 amendment it read `19,200,000`–`19,200,199` / *"reserved, untouched"*. The row was

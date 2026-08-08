@@ -105,6 +105,15 @@ FIDELITY_SEED_FLOOR = 19_000_000
 FINAL_HOLDOUT_REGISTERED = (19_200_000, 19_200_199)
 FINAL_HOLDOUT_UNSWEPT_HEAD = (19_200_000, 19_200_059)
 
+# C151's PROPOSED replacement window. It is deliberately NOT in `REGISTERED_BANDS` below,
+# and `TheProposedC151WindowIsNotRatifiedTests` is why that is a pinned property rather
+# than an omission: the tuple's own rule is that a band joins it only once the sweep that
+# fills it is committed, so adding this one would fail
+# `test_every_registered_band_has_a_committed_witness` -- correctly, because it has no
+# witness and no sweep has been authorised.
+C151_PROPOSED_WINDOW = (19_400_000, 19_400_199)
+C151_PREDICTION = REPO / "reports" / "c151_final_holdout_rereg_prediction.md"
+
 # Every band of fidelity seed space that the committed record actually touches.
 # MEASURED by running `_seed_intervals` over every committed JSON under `reports/` and
 # `docs/` and taking the union of what came back, NOT transcribed from the ledger --
@@ -362,6 +371,20 @@ def _ledger_text() -> str:
     return LEDGER.read_text()
 
 
+def _cells(row: str) -> list[str]:
+    """A GFM table row's cells, with the leading and trailing empties dropped.
+
+    Deliberately naive about escaped pipes -- `tests/test_ledger_table_uniformity.py` owns
+    that rule, validated against three real renderers, and duplicating it here would be a
+    second inferred copy of a rule that was already got wrong once. Every row this module
+    reads is checked rectangular against the header, so a row that would split differently
+    under the real rule fails there first.
+    """
+
+    parts = row.split("|")
+    return [part.strip() for part in parts[1:-1]] if len(parts) >= 3 else []
+
+
 class FidelitySeedCoverageTests(unittest.TestCase):
     """The registry, re-derived from the artifacts rather than read."""
 
@@ -608,10 +631,14 @@ class TheLedgerRowSaysWhatTheArtifactsSayTests(unittest.TestCase):
         # empty slice passes, and that is the whole class of failure this module was
         # written to stop.
         self.assertGreaterEqual(len(self.table.splitlines()), 10)
-        # Six fidelity rows: dev, c73, validation holdout, and the three the final
-        # holdout now decomposes into. Exact, so collapsing the decomposition back to
-        # one row -- which is how the false status got there -- is red.
-        self.assertEqual(self.table.count("fidelity differential"), 6)
+        # Seven fidelity rows: dev, c73, validation holdout, the three the final holdout
+        # decomposes into, and C151's PROPOSED replacement window. Exact, so collapsing
+        # the decomposition back to one row -- which is how the false status got there --
+        # is red. 6 -> 7 with C151's row; the guard in
+        # `.github/workflows/engine-fidelity-gates.yml` that pins this module's test COUNT
+        # is a separate number and was bumped 30 -> 36 in the same commit, because that
+        # one lives in YAML and no local run can see it.
+        self.assertEqual(self.table.count("fidelity differential"), 7)
         self.assertGreater(len(self.section), 2_000)
 
     def test_the_false_status_is_gone_from_the_table(self) -> None:
@@ -645,6 +672,151 @@ class TheLedgerRowSaysWhatTheArtifactsSayTests(unittest.TestCase):
 
     def test_the_section_points_at_the_enforced_version(self) -> None:
         self.assertIn("tests/test_seed_registry_coverage.py", self.section)
+
+
+class TheProposedC151WindowIsNotRatifiedTests(unittest.TestCase):
+    """C151 proposes `19,400,000`-`19,400,199`. Nothing here says it may be swept.
+
+    THIS CLASS IS DESIGNED TO GO RED ON THE DAY THE SWEEP LANDS, and that is its job
+    rather than a defect. The registered final holdout was spent by C141 on a window the
+    executing agent chose itself, and the ledger row that described it stayed false for
+    three days because no check re-derived it. The failure mode being guarded here is the
+    mirror image: a *proposal* quietly acquiring the status of a ratification, either by
+    someone adding the band to `REGISTERED_BANDS` before a sweep exists, or by a sweep
+    landing and nobody updating the row that still says PROPOSED.
+
+    So the pins run in both directions:
+
+      * while unswept -- the band is absent from `REGISTERED_BANDS`, the table row says
+        PROPOSED and NOT RATIFIED, the prediction document carries its UNREGISTERED
+        banner and no outcome section, and NO committed artifact touches the window;
+      * once swept -- the virginity pin turns red, which is the signal to do the
+        ratification bookkeeping listed in the prediction document's section 9 and then
+        delete this class.
+
+    Note what is NOT asserted, deliberately, in the same spirit as the module docstring:
+    nothing here says the window MAY be swept, and nothing here reads on the three rows
+    #1189 wrote to decompose the `19,200,000` block. Those rows were silent on whether a
+    future sweep is permitted; `test_the_proposal_did_not_disturb_the_final_holdout_rows`
+    pins that they stay three rows about `19,200,` seeds and that C151's row is not one
+    of them, which preserves the silence rather than resolving it.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.table = registry_table()
+        cls.section = registry_section()
+        cls.intervals = fidelity_intervals()
+
+    @staticmethod
+    def _grouped(value: int) -> str:
+        return f"{value:,}"
+
+    def _proposed_rows(self) -> list[str]:
+        low, high = C151_PROPOSED_WINDOW
+        span = f"{self._grouped(low)}`–`{self._grouped(high)}"
+        return [line for line in self.table.splitlines() if span in line]
+
+    def test_the_table_records_the_window_as_proposed_and_not_ratified(self) -> None:
+        rows = self._proposed_rows()
+        self.assertEqual(
+            len(rows), 1,
+            "C151's proposed window must appear as exactly one seed-registry row",
+        )
+        row = rows[0]
+        self.assertIn("PROPOSED", row)
+        self.assertIn("NOT RATIFIED", row)
+        # The two words that would turn a proposal into a blessing if either appeared.
+        self.assertNotIn("CONSUMED", row)
+        self.assertNotIn("ratified by", row)
+        # Rectangular, or GFM silently drops the trailing cells -- which is exactly how a
+        # status column disappears while the bytes still look right. See
+        # `tests/test_ledger_table_uniformity.py`.
+        self.assertEqual(row.count("|"), self.table.splitlines()[0].count("|"))
+
+    def test_the_proposal_is_absent_from_registered_bands(self) -> None:
+        # The load-bearing pin. `REGISTERED_BANDS` is the machine-readable registry; a
+        # band in it is a band the record says was swept. Adding an unswept one is how a
+        # proposal becomes a ratification without anyone deciding to ratify it.
+        low, high = C151_PROPOSED_WINDOW
+        self.assertNotIn(
+            (low, high), {(start, end) for start, end, _ in REGISTERED_BANDS},
+            "C151's window is in REGISTERED_BANDS, which asserts a sweep happened. "
+            "Either the sweep ran -- in which case commit its artifact, flip the ledger "
+            "row from PROPOSED to CONSUMED and delete this class -- or the band was "
+            "added prematurely and must come back out.",
+        )
+
+    def test_the_proposed_band_is_disjoint_from_every_registered_band(self) -> None:
+        # A proposal that overlapped a consumed band would be a re-sweep wearing the word
+        # "new". Containment is not enough here: any intersection at all is wrong.
+        low, high = C151_PROPOSED_WINDOW
+        collisions = [
+            (start, end, label)
+            for start, end, label in REGISTERED_BANDS
+            if start <= high and low <= end
+        ]
+        self.assertEqual(collisions, [], "the proposed window overlaps consumed seeds")
+        # And it must be inside #1122's guarded half-line, or the guard is not what is
+        # protecting it. `FINAL_HOLDOUT_SEED_FLOOR` is 19,200,000 and unbounded above.
+        self.assertGreaterEqual(low, 19_200_000)
+
+    def test_no_committed_artifact_touches_the_proposed_band(self) -> None:
+        # Virginity, RE-DERIVED from the corpus at test time rather than asserted in
+        # prose. This is the pin that fires the moment the sweep's artifact is committed.
+        low, high = C151_PROPOSED_WINDOW
+        touching = {
+            path: spans
+            for path, spans in self.intervals.items()
+            for start, end in spans
+            if start <= high and end >= low
+        }
+        self.assertEqual(
+            touching, {},
+            "a committed artifact now covers C151's proposed window. If the owner "
+            "ratified it and the sweep ran, do the bookkeeping in "
+            "reports/c151_final_holdout_rereg_prediction.md section 9 and delete this "
+            "class. If not, seeds were spent on an unratified window.",
+        )
+
+    def test_the_prediction_document_is_unregistered_and_carries_no_outcome(self) -> None:
+        # A prediction document that reads as registered when it is not is worse than no
+        # document: C141's whole value came from being frozen before the run, and the
+        # inverse error -- looking frozen while unfrozen -- would let an outcome be
+        # appended later and presented as pre-registered.
+        text = C151_PREDICTION.read_text(encoding="utf-8")
+        self.assertIn("UNREGISTERED", text)
+        self.assertIn("SWEEP NOT RUN", text.upper())
+        self.assertIn(self._grouped(C151_PROPOSED_WINDOW[0]), text)
+        self.assertNotIn("# OUTCOME", text)
+        # The owner's words are quoted, not paraphrased. They are the only authority the
+        # document rests on and they must survive edits to it verbatim.
+        self.assertIn("can we sweep a new set of seeds then?", text)
+
+    def test_the_proposal_did_not_disturb_the_final_holdout_rows(self) -> None:
+        # #1189's three rows decompose the 19,200,000 block. C151 adds a row elsewhere in
+        # the same table, and the risk is that a later edit folds the two together --
+        # which would either re-open the corrected decomposition or make the proposal look
+        # like a fourth segment of an already-spent block.
+        # Scoped to the RANGE cell, not to the row. A row may legitimately mention the
+        # 19,200,000 block in its prose -- C151's does, to say the block is exhausted --
+        # and a whole-row grep would count that as a fourth segment. The measurement is
+        # "how many rows have a range in that block", so read the range column.
+        rows_19_200 = [
+            line
+            for line in self.table.splitlines()
+            if len(_cells(line)) > 1 and "`19,200," in _cells(line)[1]
+        ]
+        self.assertEqual(
+            len(rows_19_200), 3,
+            "the 19,200,000 block must stay decomposed into exactly the three rows "
+            "#1189 wrote; C151 adds no row to it",
+        )
+        for row in rows_19_200:
+            self.assertNotIn("PROPOSED", row)
+        # Exactly one row in the whole table is a proposal, and it is C151's.
+        proposals = [line for line in self.table.splitlines() if "PROPOSED" in line]
+        self.assertEqual(proposals, self._proposed_rows())
 
 
 if __name__ == "__main__":
