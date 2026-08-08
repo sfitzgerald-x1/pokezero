@@ -74,6 +74,27 @@ def _torch_available() -> bool:
     return torch_available()
 
 
+#: Vocabulary for the v2.2 fixtures below. The eight placeholders keep them small; the
+#: tt_phase/tt2_* families are what make it a LEGAL v2.2 vocabulary.
+#:
+#: These fixtures declare `pokezero.observation.v2.2`, and
+#: `category_vocab_from_model_config` now latches the encode vocabulary FROM the checkpoint --
+#: deliberately, since re-deriving it from the build renumbers rows the model trained against.
+#: Bare `token-N` placeholders therefore reached the encoder, which refused at
+#: showdown.py:4202 because `tt_phase:turn` was not enumerated. The guard is right and the
+#: fixture was the lie: no real v2.2 model trained against a vocabulary lacking tt_phase/tt2_*.
+#: The placeholders were harmless only while nothing latched the vocabulary -- the axis
+#: `category_vocab_from_model_config`'s docstring calls "the axis nobody latched".
+_K32_FIXTURE_VOCAB = tuple(f"token-{index}" for index in range(8)) + (
+    "tt_phase:lead",
+    "tt_phase:turn",
+    "tt_phase:replacement",
+    "tt2_kind:switch",
+    "tt2_kind:move",
+    "tt2_kind:cant",
+)
+
+
 def _save_k32_checkpoint(path: Path):
     """A real saved checkpoint whose model config carries the K=32 ablation budget."""
     from pokezero.neural_policy import (
@@ -86,7 +107,7 @@ def _save_k32_checkpoint(path: Path):
 
     config = TransformerPolicyConfig.compact_category(
         policy_id="k32-arm",
-        category_vocab=tuple(f"token-{index}" for index in range(8)),
+        category_vocab=_K32_FIXTURE_VOCAB,
         category_oov_buckets=2,
         window_size=1,
         embedding_dim=8,
@@ -119,7 +140,7 @@ def _save_v2_checkpoint(path: Path):
 
     config = TransformerPolicyConfig.compact_category(
         policy_id="v2-arm",
-        category_vocab=tuple(f"token-{index}" for index in range(8)),
+        category_vocab=_K32_FIXTURE_VOCAB,
         category_oov_buckets=2,
         window_size=1,
         embedding_dim=8,
@@ -507,9 +528,16 @@ class K32HarnessPathTest(unittest.TestCase):
             return _Report()
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_path = Path(temp_dir) / "unused-candidate.pt"
+            # The candidate USED to be unread -- patching `_policy_from_checkpoint` was enough,
+            # hence the name. That stopped being true when the encode vocabulary became
+            # checkpoint-latched: `neural_cli` now reads the candidate's `model_config` for
+            # `category_vocab_from_model_config`, independently of how the policy is built. The
+            # file was never written, so the CLI exited 1 on [Errno 2] and the test saw only
+            # `1 != 0` because it redirects stderr.
+            checkpoint_path = Path(temp_dir) / "candidate.pt"
             reference_path = Path(temp_dir) / "k32-reference.pt"
             _save_k32_checkpoint(reference_path)
+            _save_k32_checkpoint(checkpoint_path)
             with (
                 patch("pokezero.neural_cli._policy_from_checkpoint", return_value=FakeCandidatePolicy()),
                 patch("pokezero.neural_cli.benchmark_rollouts", fake_benchmark_rollouts),
@@ -793,7 +821,7 @@ class V2CheckpointHarnessPathTest(unittest.TestCase):
             # axis, not the mask axis.
             v21_config = TransformerPolicyConfig.compact_category(
                 policy_id="v21-arm",
-                category_vocab=tuple(f"token-{index}" for index in range(8)),
+                category_vocab=_K32_FIXTURE_VOCAB,
                 category_oov_buckets=2,
                 window_size=1,
                 embedding_dim=8,
