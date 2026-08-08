@@ -169,7 +169,7 @@ _C141 = {
 #      disarms this pin is indistinguishable from a correct one in the diff.
 # All four c145 members close the four-term identity through the checker below: 79 + 2 + 0 + 0 == 81
 # at the two pre-fix commits, 81 + 0 + 0 + 0 == 81 at the two post-fix ones.
-_EXPECTED_SWEEP_ARTIFACTS = 87
+_EXPECTED_SWEEP_ARTIFACTS = 91
 #
 # 75 -> 79 (C142). MEASURED by step 2 below, and the measurement corrected an expectation:
 # the number was predicted as 78 on the belief that only three of C142's four sweep artifacts
@@ -208,6 +208,24 @@ _EXPECTED_SWEEP_ARTIFACTS = 87
 #
 # Step 4 was run at BOTH numbers: at 82/84 before the merge and at 86/88 after it, and this module
 # fails at each, so neither bump disarmed the pin.
+#
+# 87 -> 91 (C148, the Sleep Talk double `damage_dealt` reset guard). RE-DERIVED by the same two-tree
+# procedure, calling `_sweep_reports()` itself in both trees rather than reasoning about membership:
+# 87 on a worktree of `origin/main` at `b71bc2fd` and 91 here, set difference exactly
+# `reports/artifacts/c148_sleeptalk_double_reset_{base,gate}_{dev,holdout}_sweep.json` and NOTHING
+# removed. Confirmed still live at 90 and at 92.
+#
+# C148's other two artifacts, `c148_sleeptalk_double_reset_census_{base,gate}.json`, are outside
+# this corpus and that was verified by the set difference above, not assumed: they are branch
+# censuses from an in-memory probe with no boundaries at all, so they carry no top-level
+# `boundaries_measured`. Six files added, four corpus members -- the same asymmetry C147 recorded,
+# and the same reason the directory count and the corpus count cannot check each other.
+#
+# WHAT THESE FOUR SHOW IS A NULL, and that is the point rather than a disappointment. The C148 gate
+# cannot move any boundary in this corpus, structurally: `Side::serialize` does not emit
+# `damage_dealt` and `Side::deserialize` hardcodes `DamageDealt::default()`, while the differential
+# reaches the engine only through `pokezero_search.branch_events`, which opens with `parse_state` ->
+# `State::deserialize`. The pair is committed so the null is ON RECORD rather than absent.
 
 
 def _sweep_reports() -> list[tuple[str, dict]]:

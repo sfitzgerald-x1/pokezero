@@ -1551,16 +1551,30 @@ poke-engine-gen3-enumerate-damage-rolls.patch
 # opaque wrapper whose only method is a `{:?}` repr, so the new variant crosses
 # the binding with no arm to add (verified: the pyo3 crate compiles unchanged).
 poke-engine-gen3-attract-marker.patch
-# The Sleep Talk DOUBLE damage-dealt reset (closes `none_matched:shape_length`,
-# the largest single divergence shape in the sleep-talk attribution class).
+# The Sleep Talk DOUBLE damage-dealt reset. Closes a `none_matched` refusal class
+# ON THE IN-MEMORY FOLD PATH. Read the scope line before the numbers: this cannot
+# close anything on the transition-differential corpus, and the reason is below.
 #
-# Measured on the shipping 73-patch stack, 8,903-branch Sleep-Talk probe
-# population: `none_matched` 8,613 -> 0, partitioning exactly into 8,292 attributed
-# callee + 321 `ambiguous`. The other 290 branches were never in the class in either
-# build, so the 8,903 total does not itself partition. All 321 ambiguous are genuine
-# two-callee collisions against the probe's `State::default()` stat block (no typing,
-# uniform stats), previously MASKED because with the duplicate present nothing
-# matched at all. NO campaign-era fallback rate is claimed.
+# MEASURED by rust/pokezero-search/examples/gen3_sleeptalk_none_matched_census.rs on
+# two builds whose vendored trees differ in EXACTLY ONE LINE, over 80 cells and
+# 2,025 branches of the #1048 oracle's population carried on a LIVE `State`:
+#   guard reverted, carry 137: 2,025 refused; shape_length 2,025; shape_structure 954
+#   guarded,        carry 137:     0 refused; 1,840 attributed
+#   EITHER build,   carry   0:     0 refused; 1,840 attributed   <- reachability control
+# The zero-carry arm is what a DESERIALIZED boundary presents, and its identity
+# across the two builds is what predicted the sweep null rather than explaining it
+# afterwards. Artifacts reports/artifacts/c148_sleeptalk_double_reset_census_{base,gate}.json;
+# sweeps reports/artifacts/c148_sleeptalk_double_reset_{base,gate}_{dev,holdout}_sweep.json,
+# `counters` byte-identical on both windows. NO campaign-era fallback rate is claimed.
+#
+# WITHDRAWN, and recorded here because this file carried them: an earlier revision
+# claimed `none_matched` 8,613 -> 0 over an 8,903-branch population, partitioning
+# into 8,292 + 321 with 290 outside. No artifact ever supported those figures --
+# `grep -rl none_matched reports/artifacts/*.json` returns 0 files -- and the 8,613
+# counted AGGREGATE `none_matched`, not `shape_length`. The era-61 figure for
+# `shape_length` (4,786 worlds, 33.3 %) is a source comment in events.rs from an
+# uncommitted sweep; this change does not re-measure it and, per the reachability
+# paragraph below, could not.
 #
 # `generate_instructions_from_move` opens by emitting the turn-start
 # `damage_dealt` carry-over reset. The Sleep Talk block then calls
@@ -1585,14 +1599,13 @@ poke-engine-gen3-attract-marker.patch
 # measured 0 `shape_branch_is_prefix_of_tail` and 0
 # `shape_tail_is_prefix_of_branch`.
 #
-# Factorial isolation, 11,520 states per arm: the flag AND the carry are jointly
-# necessary. (use_damage_dealt=false, carry) -> 0; (true, no carry) -> 0;
-# (true, carry) -> 245,284 `shape_length` + 109,836 `shape_structure`. INHERITED
-# from the diagnosis run on the 71-patch stack and NOT re-measured on the shipping
-# 73-patch stack -- the absolute counts will have moved with #1166's branch
-# de-collapse, so treat them as the sign of the effect, not as current totals. The
-# jointness itself IS pinned here, by `with_damage_dealt_tracking_off_no_reset_is_emitted`
-# (the flag) and by the carry-bearing fixtures (the value).
+# The flag AND the carry are jointly necessary, which the census above shows on the
+# shipping stack: the carry-0 arm is clean on BOTH builds, and
+# `with_damage_dealt_tracking_off_no_reset_is_emitted` covers the flag. (An earlier
+# revision quoted a factorial isolation of 245,284 `shape_length` + 109,836
+# `shape_structure` over 11,520 states per arm. That was inherited from the 71-patch
+# diagnosis, never re-measured, and is DROPPED rather than restated; the census
+# figures above are measured on the stack that ships.)
 # `state.use_damage_dealt` is set by `set_conditional_mechanics` whenever any of
 # the twelve Pokemon knows Counter / Mirror Coat / Focus Punch, which is common
 # in gen3 randbats and team-dependent.
@@ -1616,21 +1629,34 @@ poke-engine-gen3-attract-marker.patch
 #     `hit_substitute == true` survives only when `set_damage_dealt` did not run --
 #     it overwrites both fields absolutely -- and that is exactly the case where no
 #     damage was dealt, so `damage > 0` is already false. Immune on both fields.
-# Measured, and it agrees: over an exhaustive 4,368-cell sweep the observable
-# projection differs in 70 cells, all 70 with a Counter defender and none with
-# Mirror Coat, spanning 26 callee triples and including 18 full-HP cells.
+# That reader exhaustion is a SOURCE argument and was independently confirmed by
+# review. An earlier revision paired it with measured counts -- 70 differing cells of
+# 4,368, 26 triples, 18 full-HP; and a 5,184-cell decomposition reporting 594
+# identical / 4,590 differing once `damage_dealt` was included. Those came from an
+# uncommitted diagnosis run and are WITHDRAWN, not restated. What ships instead is a
+# digest: the census records `(cell, serialized end state) -> mass` in integer
+# micro-percent and hashes the whole map, and all four arms return the same digest
+# over 1,899 distinct end states. Note what that does and does not say. Because
+# `Side::serialize` omits `damage_dealt`, the projection EXCLUDES the field being
+# repaired -- it says the observable outcome distribution does not move, NOT that the
+# corruption is harmless. On this population Counter's `damage * 2` is -274 under the
+# defect and 0 under the guard and neither emits a damage event, so both land on the
+# same serialized state by different routes. A population that separates them is not
+# committed.
 #
-# `Side::serialize` does not emit `damage_dealt` and `Side::deserialize` zeroes it,
-# so the naive neutrality metric cannot see the field this fixes. Decomposed over
-# 5,184 probe cells: on (percentage, serialized end state) 5,172 are identical;
-# INCLUDING `damage_dealt`, only 594 are identical and 4,590 differ -- which is the
-# repair. Mass aggregated per observable end state is preserved in ALL 5,184 cells
-# (largest deviation 1e-6 pp, f32 noise); only the branch partition moves, in 12.
-#
-# Reachability is bounded by that same serialization gap: `branch_events` and
-# `env_step` both open with `State::deserialize`, which zeroes the carry (while
-# `set_conditional_mechanics` still sets the FLAG), so neither can reach the guarded
-# block. Only the in-memory tree fold (`model.rs` / `tree.rs`) can, at depth >= 2.
+# REACHABILITY, and it bounds every claim above. `Side::serialize`
+# (third_party/poke-engine-src/src/state.rs:1292) formats 29 fields and
+# `damage_dealt` is not one of them; `Side::deserialize` (:1394) hardcodes
+# `damage_dealt: DamageDealt::default()`. The field cannot survive a round trip, so
+# any consumer handing the engine a SERIALIZED state presents a zero carry-over, and
+# a zero carry cannot be doubled. That is `branch_events` and `env_step`, each
+# opening with `parse_state` -> `State::deserialize`; `env_step` also returns
+# `post_state: state.serialize()`, so the carry cannot survive between calls either.
+# `State::deserialize` DOES call `set_conditional_mechanics`, so the FLAG is set from
+# movesets while the VALUE is zeroed. scripts/engine_transition_differential.py:2057
+# reaches the engine only through `branch_events`, so THE SWEEP CORPUS STRUCTURALLY
+# CANNOT OBSERVE THIS FIX. Only the in-memory tree fold (`model.rs` / `tree.rs`,
+# apply/reverse on a live `State`) can, at depth >= 2.
 # Regression pins: rust/pokezero-search/tests/gen3_sleeptalk_damage_dealt_reset.rs
 # (SEVEN tests -- note the second-moving arm: the callee inherits `first_move` from
 # the outer Sleep Talk, so a guard written `!sleep_talk_move || !first_move` passes a

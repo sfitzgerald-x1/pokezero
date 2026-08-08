@@ -1,0 +1,44 @@
+{
+  "population": {
+    "defenders": [
+      "COUNTER",
+      "MIRRORCOAT",
+      "SUBSTITUTE",
+      "FLAIL"
+    ],
+    "move_orders": 2,
+    "movesets": 10,
+    "path": "render_branch_events on a live State (the in-memory tree fold's regime)"
+  },
+  "probe": "gen3_sleeptalk_none_matched_census",
+  "scope_note": "Branch counts over a synthetic State::default() stat block. NOT a campaign-era rate, NOT a world-failure count, and no fallback-rate reduction is derived from them. The `carry_over: 0` arm is the reachability control: it is what a deserialized corpus boundary presents, because Side::serialize omits damage_dealt and Side::deserialize hardcodes DamageDealt::default().",
+  "shape_length_with_carry_over": 2025,
+  "shape_length_without_carry_over": 0,
+  "with_carry_over": {
+    "attributed_branches": 0,
+    "carry_over": 137,
+    "cells": 80,
+    "distinct_end_states": 1899,
+    "mass_by_end_state_digest": "5b30690cd8e937c11c76de6788901b0d898de6e5429788f0f412d000a5dc9a74",
+    "none_matched_branches": 2025,
+    "refusal_slug_counts": {
+      "sleeptalk_called_unidentified:none_matched:shape_length": 2025,
+      "sleeptalk_called_unidentified:none_matched:shape_structure": 954
+    },
+    "refused_branches": 2025,
+    "total_branches": 2025,
+    "total_mass_micropercent": 8000000324
+  },
+  "without_carry_over": {
+    "attributed_branches": 1840,
+    "carry_over": 0,
+    "cells": 80,
+    "distinct_end_states": 1899,
+    "mass_by_end_state_digest": "5b30690cd8e937c11c76de6788901b0d898de6e5429788f0f412d000a5dc9a74",
+    "none_matched_branches": 0,
+    "refusal_slug_counts": {},
+    "refused_branches": 0,
+    "total_branches": 2025,
+    "total_mass_micropercent": 8000000324
+  }
+}

@@ -954,7 +954,12 @@ jobs:
           # about itself is worth exactly one thing: running it.
           #
           # Floor RAISED 429 -> 436 by the Sleep Talk double damage-dealt reset guard, which
-          # adds SEVEN tests and removes none. 436 is the EXACT current total; the 429
+          # adds SEVEN tests and removes none. 436 WAS the exact total on that branch BEFORE it
+          # merged `origin/main`; it is NOT the current total and the floor below is 443 -- see
+          # "MERGE OF THE TWO SEVENS" further down, which is the derivation that governs. This
+          # paragraph is kept as that branch's own record, and the tense is corrected here
+          # because an "EXACT current total" sentence left standing next to a different floor is
+          # precisely the stale cross-check this block warns about three times. The 429
           # arithmetic above is the immobilizer-marker change's own derivation and stays as its
           # record. Measured the same way -- differencing test-NAME sets, not the totals --
           # against an `origin/main` 99c77eb7 worktree with its own 73-patch vendor:
