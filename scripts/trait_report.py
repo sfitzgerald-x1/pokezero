@@ -64,7 +64,21 @@ def esc(x):
     return html.escape(str(x))
 
 
+# Explicit colours, checked BEFORE the palette. The palette is indexed by position modulo its
+# length, so any report showing more than len(PALETTE) lineages necessarily repeats a colour —
+# and it repeats by position, which has nothing to do with which lineages share a chart. In the
+# v4 report that put v4-entfull on the same green as its v3-k0-enthalf control and v4-enthalf on
+# the same red as the v3-foulplay contrast line, i.e. collisions exactly where the comparison
+# matters. Pin any lineage whose colour must not drift; unpinned ones keep the palette.
+LINEAGE_COLOR_OVERRIDES = {
+    "v4-entfull": "#7c3aed",   # purple — was green, indistinguishable from v3-k0-enthalf
+    "v4-enthalf": "#d97706",   # amber  — was red, indistinguishable from v3-foulplay
+}
+
+
 def color_for(lineage):
+    if lineage in LINEAGE_COLOR_OVERRIDES:
+        return LINEAGE_COLOR_OVERRIDES[lineage]
     try:
         return PALETTE[LINEAGE_ORDER.index(lineage) % len(PALETTE)]
     except ValueError:
