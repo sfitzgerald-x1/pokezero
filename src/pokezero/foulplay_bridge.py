@@ -113,6 +113,183 @@ ControlledFoulPlayCaptureProgressCallback = Callable[[Mapping[str, Any]], None]
 _COMPARISON_MODES = {"per-seed", "per-arm"}
 _ROOT_PUCT_TIMING_FIELD_NAMES = tuple(entry.name for entry in fields(RootPUCTSearchTiming))
 
+# The OPPONENT-MOVE JOURNAL.
+#
+# `EngineMctsStats.fallback_samples` records `{battle_id, round, seat, reason}` for
+# every fallback decision, and the battle id carries the BattleStream seed. None of
+# the 1,140 addresses recorded across eras 61-64 is replayable. The blocker is the
+# OPPONENT, not our seed discipline:
+#
+#   * foul-play searches on a WALL-CLOCK budget (`fp/search/main.py:56`), so its
+#     iteration count differs run to run even on identical input;
+#   * one layer below that, poke-engine's `sample_node` (`src/mcts.rs:106-113`) does
+#     `let mut rng = rng();` -- `rand::rng()`, OS-entropy, constructed fresh on every
+#     chance-node sample. No seed reaches it from Python, and pokezero's seeding of
+#     foul-play's `random` module (`_foulplay_env`) cannot reach it.
+#
+# Measured, on one live state at a FIXED iteration count: five runs, five different
+# visit distributions. Pinning the budget does not fix it.
+#
+# So the opponent's move is not re-derivable and must be RECORDED. This journal is
+# the producer half: it files the `/choose` body foul-play actually submitted, per
+# decision round, in the same document as `fallback_samples`. A replay driver feeds
+# these back instead of re-running foul-play.
+#
+# It records; it does not replay. Nothing here rescues the existing 1,140 addresses
+# -- those battles are over and their opponent moves were never written down. Only
+# addresses recorded by a run WITH journaling on become replayable.
+#
+# A JOURNALLED ADDRESS IS NOT A ONE-TURN REPLAY. The comment on `fallback_samples`
+# (`engine_search.py:662-664`) says "any entry here replays as a single turn"; that
+# is wrong for the mode this bridge runs, and a replay driver written to it would
+# start in the wrong place. `EngineMctsPolicy._live_folds` is keyed
+# `(battle_id, seat)` and advanced over
+# exactly the new public lines at EVERY decision (`engine_search.py:983-987`,
+# `:1035-1039`), never refolded from a whole log, and `leaf_eval="model"` refuses the
+# decision outright when that fold is missing (`live_fold_broken`). So reaching round
+# R means replaying rounds 0..R-1 first. That is why the `addressed` mode below keeps
+# a PREFIX rather than the single addressed round.
+#
+# NECESSARY, NOT SUFFICIENT. Removing the opponent's nondeterminism leaves OUR side.
+# For a bridge shard the mode is not a variable: `_build_policy` HARDCODES
+# `leaf_eval="model"` (see `EngineMctsConfig(leaf_eval="model", ...)` below), and
+# `_engine_policy_stats` returns None outside `policy_mode="engine-mcts"` -- so a
+# shard that carries `fallback_samples` at all was produced by exactly one path:
+#
+#   * `leaf_eval="model"` reaches the crate through
+#     `native.search_batched_multi_encoded(*search_args)` (`engine_search.py:1732`),
+#     with the seed passed POSITIONALLY as `record["seed"]` (`:1704-1716`), drawn at
+#     `world_seed = rng.getrandbits(63)` (`:1829`). It does NOT call
+#     `puct_search_multi` -- that is the `hp_fraction_crate` branch (`:1197`), a
+#     different mode this bridge cannot select. An earlier revision of this comment
+#     cited the wrong function for the only path that ships.
+#   * `rng` there is `random.Random(f"{seed}:{player_id}:{decision_round_index}")`
+#     from `_select_policy_decision`, so the world seeds are a pure function of
+#     (battle seed, seat, round) and the draws taken before them.
+#   * The crate seeds every generator it owns with `StdRng::seed_from_u64`; there is
+#     no `rand::rng()` anywhere in `rust/pokezero-search/src`.
+#   * Iteration count is `config.search_sims`, not a clock.
+#
+# So this path plus the journal is a CANDIDATE for exact replay. The residual is
+# float and threading nondeterminism in the model forward, which is NOT verified
+# here and is not verifiable in a checkout without libtorch.
+#
+# `leaf_eval="hp_fraction"` (the `EngineMctsConfig` dataclass default) would be
+# unreplayable for the same two reasons as foul-play -- poke-engine's own wall-clock
+# `monte_carlo_tree_search` over the unseeded `rand::rng()`. It is recorded here only
+# so the contrast is not rediscovered: NO bridge shard can be in that mode, because
+# of the hardcode above. Do not read this as "the common case is unreplayable".
+OPPONENT_JOURNAL_SCHEMA_VERSION = "pokezero.opponent-journal.v1"
+
+# SIZE, measured with THIS serializer against the real era 61-64 corpus (377 bridge
+# summaries, 2,981 games, 145,163 decision rounds; journals replayed in at the real
+# per-game round counts):
+#
+#   mode        corpus bytes    delta   median summary
+#   base          14,837,932              39,149
+#   addressed     17,160,541   +15.7%     43,921
+#   full          39,647,286  +167.2%    102,748
+#
+# "addressed" (default): journal only the battles that recorded at least one fallback
+# ADDRESS, truncated to the last such round -- the prefix a replay of that address
+# needs and nothing more. 14.4% of games carry an address and 8.9% of decision rounds
+# are journalled, which is where the ~10x saving over "full" comes from.
+#
+# "full": every opponent move of every battle. Reserved for work that needs to replay
+# decisions which did NOT fall back.
+#
+# "off": record nothing.
+#
+# RECORDING TIME is negligible: the whole block costs 1.18 us per opponent decision
+# (measured, dominated by the sha256 of a ~2.3 KB request line) against a decision
+# boundary whose measured median wall is 5.02 s on our side plus foul-play's own
+# fixed 1,000 ms search -- about 2e-7 of the boundary.
+#
+# SERIALIZATION time is the axis that actually scales, and it is superlinear:
+# `_write_json` rewrites the ENTIRE summary after every game when `--summary-out` is
+# set, so journal bytes are re-serialized O(games^2). Measured against the real mean
+# per-game row (3,383 B) and mean journal bytes per game (812 addressed, 6,184 full),
+# cumulative bytes written over a run:
+#
+#   --games 250      off 106 MB    addressed 132 MB    full 300 MB
+#
+# Against a 250-game run that takes hours of search wall that is not a bottleneck at
+# the default, but "there is nothing to switch off for speed" would be wrong for
+# `full` on a long run, so it is not claimed. `off` exists for that case.
+#
+# `addressed` is the default because it serves the stated purpose at a seventh of the
+# bytes. Its known boundary is REAL AND LARGE, and is NOT the one the obvious counter
+# measures:
+#
+#   * `fallback_sample_addresses_dropped` counts ONLY the 256-KEY ceiling
+#     (`engine_search.py:2405-2411`). It is 0 across all 552 shards of eras 61-64,
+#     and that fact says nothing about the drop below.
+#   * `_FALLBACK_SAMPLES_PER_CLASS = 3` (`engine_search.py:457`, applied at `:2413`)
+#     and the one-address-per-battle rule (`:2421`) both `continue` with NO COUNTER.
+#     That is where the addresses actually go.
+#
+# HOW BIG, measured per CUMULATIVE STATS BLOCK on ONE shard family (the 377 bridge
+# summaries; the merged paired-eval shards mirror them and adding the two families
+# double-counts):
+#
+#   denominator  sum(fallback_reasons.values()) = fallback DECISIONS, uncapped.
+#                Cross-checked against the block's own `fallback_decisions`: 2,093
+#                both ways, 0 per-block mismatches.
+#   numerator    DISTINCT (battle_id, round, seat) across all keys of that block's
+#                `fallback_samples` = decisions that have a replayable address.
+#                DISTINCT is load-bearing: `:2404` files one address PER KEY, so a
+#                single decision appears under `fallback:<reason>` AND under every
+#                world-failure class in its delta.
+#
+#   2,093 fallback decisions -> 609 addressed -> 1,484 (70.9%) with NO address.
+#
+# Invariant checked, since a wrong denominator is exactly the mistake being corrected
+# here: numerator <= denominator in every one of the 313 blocks, 0 violations. All
+# 1,140 address entries have an integer `round`, so reading them by raw dict access
+# gives the same set as `fallback_addresses.iter_shard_addresses`, whose int check
+# would otherwise drop the `round=None` that `_fallback` can file from a context
+# without `decision_round_index`.
+#
+# WHICH RULE DOES THE DROPPING -- the cap of 3 is NOT the main one. Per-key bucket
+# sizes within a block are 719 x 1, 140 x 2, 47 x 3 (906 keys, none over 3). Only
+# those 47 (5.2%) ever reached `_FALLBACK_SAMPLES_PER_CLASS`; the other 859 (94.8%)
+# were never limited by it, so every address they did not retain was refused by the
+# one-address-per-battle rule at `:2421`. The per-battle rule is the dominant
+# mechanism and the cap is the ~5% tail.
+#
+# That split is in KEYS, which is what these shards can support. The DECISION-level
+# split is NOT measurable from them: attributing an unaddressed decision needs to know
+# which battles fell back, and `engine_mcts_fallbacks` is a
+# `ControlledFoulPlayGameResult` field that `to_dict` never emits -- the per-game rows
+# carry no fallback count at all. So "N fallback decisions per fallen-back battle"
+# cannot be computed here; dividing 2,093 by the 430 ADDRESSED battles instead would
+# assume every fallback lives in a battle that kept an address, which is the
+# unstated-population move that produced the withdrawn numbers below.
+#
+# None of this contradicts "14.4% of games carry an address" above -- different
+# questions in different units. 14.4% is games-with-an-address over GAMES (which
+# battles get a journal); 70.9% is unaddressed DECISIONS over fallback decisions
+# (which refusals are reachable at all).
+#
+# WITHDRAWN, recorded so it is not re-derived: an earlier revision said "45.2% of
+# 4,022 occurrences" and "30 of 35 classes at the cap". Both were unsound. 4,022 and
+# 2,203 were sums over BOTH shard families (2,203 is literally 1,140 + 1,063), the
+# ratio divided ADDRESSES by DECISIONS -- different units, and multi-key filing means
+# it can exceed 1 -- and the class count was taken corpus-wide when the cap is
+# per-block. The true gap is worse than the number that was withdrawn, not better.
+#
+# Three published figures were wrong across three review rounds and all three were the
+# same species: a counter measuring a DIFFERENT DROP, a ratio summed over TWO
+# POPULATIONS, and a count taken at the WRONG SCOPE. None was an arithmetic slip. The
+# question that catches all three, and the one to ask of any number before it is
+# written down here: WHAT UNIT, OVER WHAT POPULATION.
+#
+# That is a coverage limit, not corruption: a battle with no address needs no
+# journal, because nothing points at it to replay. It IS the reason to reach for
+# `--opponent-journal full` whenever the question is "which decisions of this class
+# can I replay" rather than "can I replay the addresses I have".
+OPPONENT_JOURNAL_MODES = ("off", "addressed", "full")
+
 
 @dataclass(frozen=True)
 class ControlledFoulPlayConfig:
@@ -182,6 +359,9 @@ class ControlledFoulPlayConfig:
     # observations. This is capture-only, not a strength-evaluation mode.
     capture_driver: str = "checkpoint"
     audit_observation_schema: str | None = None
+    # One of OPPONENT_JOURNAL_MODES; see the module-level block for the measurement
+    # behind the default.
+    opponent_journal: str = "addressed"
 
     def __post_init__(self) -> None:
         if self.games <= 0:
@@ -206,6 +386,11 @@ class ControlledFoulPlayConfig:
                     f"policy_mode='engine-mcts' requires {', '.join(missing)} "
                     "(export them with mcts_eval.materialize_search_artifacts)."
                 )
+        if self.opponent_journal not in OPPONENT_JOURNAL_MODES:
+            raise ValueError(
+                "opponent_journal must be one of "
+                f"{', '.join(OPPONENT_JOURNAL_MODES)}, got {self.opponent_journal!r}."
+            )
         if self.capture_driver not in {"checkpoint", "random-legal"}:
             raise ValueError("capture_driver must be 'checkpoint' or 'random-legal'.")
         if self.capture_driver == "checkpoint":
@@ -351,6 +536,75 @@ class ControlledFoulPlayConfig:
 
 
 @dataclass(frozen=True)
+class OpponentJournalEntry:
+    """One opponent move, as SUBMITTED -- never inferred from the transcript.
+
+    ``choice`` is the ``/choose`` body lifted off foul-play's outgoing websocket
+    message (``_choice_body_from_outgoing_message``) and handed straight to the
+    BattleStream in the ``choices`` event. There is no second derivation of it, so
+    it cannot disagree with what was played.
+
+    Field by field, each earning its bytes:
+
+    ``round``
+        ``decision_round``, the SAME counter that keys ``FallbackAddress.round``:
+        the bridge passes it as ``PolicyContext.decision_round_index`` and
+        ``engine_search._fallback`` files it verbatim. It increments once per
+        request boundary, so a force-switch is its own round. Recorded EXPLICITLY
+        rather than implied by list position, because the opponent is journalled
+        only on rounds where it is in ``requested_players`` -- our own force-switch
+        rounds leave a hole, and positional indexing would silently shift every
+        later move by one.
+    ``seat``
+        The opponent's seat. ``battle_id`` is ``f"{prefix}-{seed}"`` and carries the
+        seed and nothing else, while ``foulplay_paired_eval`` runs the SAME seed
+        band from BOTH seats -- so ``battle-...-7800000`` exists in two summaries
+        with the opponent on opposite sides. Without the seat, pooling two seat
+        summaries silently mixes two different battles. This is the same reason
+        ``FallbackAddress`` carries a seat.
+    ``action``
+        The decoded 0-8 action index. Already computed at the recording site to
+        build the trajectory step, so it is free, and it lets a consumer key on our
+        action space without re-implementing ``action_index_from_choice_string``.
+    ``request_sha256``
+        Digest (first 12 hex) of the raw ``|request|`` line this choice answers.
+        A replay must FAIL CLOSED, not play on: ``move 1`` is 1-based into *that*
+        request's active-move list, so applying it to a state that has drifted
+        picks a different move and produces a confident, wrong replay. The digest
+        is over the raw BattleStream line, not the copy forwarded to foul-play,
+        because the forwarded copy carries a bridge-assigned rqid that is an
+        artifact of the bridge rather than of the battle.
+    """
+
+    round: int
+    seat: PlayerId
+    choice: str
+    action: int
+    request_sha256: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "round": self.round,
+            "seat": self.seat,
+            "choice": self.choice,
+            "action": self.action,
+            "request_sha256": self.request_sha256,
+        }
+
+
+def _request_digest(request_line: str | None) -> str:
+    """Short digest of the request a recorded choice answers, or "" if absent.
+
+    Empty rather than absent-key or a fake digest: a consumer that cannot verify the
+    state must be able to SEE that it cannot, and "" is not a valid sha256 prefix, so
+    it can never be mistaken for a match.
+    """
+    if not request_line:
+        return ""
+    return hashlib.sha256(request_line.encode("utf-8")).hexdigest()[:12]
+
+
+@dataclass(frozen=True)
 class ControlledFoulPlayGameResult:
     battle_id: str
     seed: int
@@ -428,6 +682,17 @@ class ControlledFoulPlayGameResult:
     # mirrored-seat smoke artifacts capable of detecting a dispatch/submission-side regression.
     pokezero_decision_players: tuple[PlayerId, ...] = ()
     pokezero_submitted_choice_players: tuple[PlayerId, ...] = ()
+    # The opponent moves KEPT for this battle after the journal mode was applied.
+    # `opponent_journal_recorded` is how many were observed and
+    # `opponent_journal_failures` how many could not be recorded at all, so a
+    # truncated, suppressed or lossy journal is visible as a number rather than as
+    # an absence. That distinction is the whole lesson of
+    # `fallback_sample_addresses_dropped`, which counts only ONE of the three ways an
+    # address is discarded and reads 0 while most of them go missing -- see the
+    # module block for the measurement.
+    opponent_journal: tuple[OpponentJournalEntry, ...] = ()
+    opponent_journal_recorded: int = 0
+    opponent_journal_failures: int = 0
 
     @property
     def outcome_score(self) -> float:
@@ -485,6 +750,31 @@ class ControlledFoulPlayGameResult:
                 self.root_puct_start_override_replay_materializations
             ),
         }
+        if self.opponent_journal:
+            # `opponent_MOVES`, deliberately NOT `opponent_journal`.
+            #
+            # The summary root carries an `opponent_journal` MAPPING (the header:
+            # mode, schema version, counts). If the per-game rows used the same name
+            # for a LIST, one key would have two JSON shapes in one document -- and
+            # the idiom every consumer in this repo uses to find things
+            # (`fallback_addresses._walk_sample_blocks`, recursive, by name) would
+            # hand a driver the header's keys as if they were journal entries. One
+            # name, one shape.
+            #
+            # Neither name is one the address reader dispatches on. It accepts a
+            # mapping as a cumulative stats scope iff it contains `fallback_samples`
+            # (`_walk_stats_blocks`) and harvests addresses from any mapping so NAMED
+            # (`_walk_sample_blocks`), so both blocks are invisible to it and neither
+            # can add a scope, an address, or an occurrence count.
+            payload["opponent_moves"] = [entry.to_dict() for entry in self.opponent_journal]
+        if self.opponent_journal_recorded:
+            payload["opponent_moves_recorded"] = self.opponent_journal_recorded
+        if self.opponent_journal_failures:
+            # ON THE ROW, not only in the summary header. A header total says a run
+            # lost rounds; it cannot say WHICH battle, and an unrecorded round makes
+            # every later round of THAT battle unreplayable while leaving the others
+            # sound. Without this a driver has to treat the whole shard as suspect.
+            payload["opponent_moves_record_failures"] = self.opponent_journal_failures
         if self.root_puct_effective_total_visits:
             payload["root_puct_effective_total_visits"] = self.root_puct_effective_total_visits
         if self.root_puct_opponent_action_skip_categories:
@@ -834,6 +1124,37 @@ class ControlledFoulPlayBenchmarkResult:
                 "start_override_shared_samples": root_start_override_shared_samples,
                 "start_override_shared_samples_accepted": root_start_override_shared_samples_accepted,
                 "start_override_shared_samples_rejected": root_start_override_shared_samples_rejected,
+            },
+            # The journal's own header. Present in EVERY summary, including
+            # `mode: "off"`, because an empty journal is otherwise ambiguous three
+            # ways -- journaling off, journaling on with no fallback addresses, or a
+            # producer too old to have the feature -- and a replay driver that
+            # cannot tell those apart will report "not replayable" for all three.
+            #
+            # `recorded` vs `emitted` is the truncation, stated as a number. Under
+            # `addressed` the gap is expected and large; under `full` any gap at all
+            # is a bug.
+            "opponent_journal": {
+                "schema_version": OPPONENT_JOURNAL_SCHEMA_VERSION,
+                "mode": self.config.opponent_journal,
+                # Where the rows live, named here so a consumer never has to guess
+                # that the header key and the row key differ.
+                #
+                # THE PREFIX IS THE CONTRACT: every per-game key this feature writes
+                # is `entries_key` or `entries_key + "_" + <suffix>` --
+                # `opponent_moves`, `opponent_moves_recorded`,
+                # `opponent_moves_record_failures`. A consumer scans the row for that
+                # prefix rather than being told each name, so a later sibling counter
+                # does not need a new header field to be discoverable. Sibling keys
+                # are omitted from a row when zero/empty; absent means zero.
+                "entries_key": "opponent_moves",
+                "recorded_decisions": sum(game.opponent_journal_recorded for game in self.games),
+                "emitted_decisions": sum(len(game.opponent_journal) for game in self.games),
+                "games_with_journal": sum(1 for game in self.games if game.opponent_journal),
+                # Opponent decisions the recorder could not journal. Non-zero means
+                # the journal is INCOMPLETE for those rounds and a replay of any
+                # later round in that battle cannot be trusted.
+                "record_failures": sum(game.opponent_journal_failures for game in self.games),
             },
             "game_results": [game.to_dict() for game in self.games],
         }
@@ -1589,6 +1910,13 @@ class _ControlledBattleState:
     foulplay_terminal_sent: bool = False
     # per-decision request snapshots (both seats), for omniscient trait capture; append-only.
     request_history: list[tuple[PlayerId, str]] = field(default_factory=list)
+    # Opponent moves as submitted, in round order; append-only. Recorded in FULL
+    # under both "addressed" and "full" -- which rounds "addressed" wants is not
+    # known until the game ends and the moves cannot be recovered afterwards -- and
+    # narrowed when the game result is built. Empty under "off".
+    opponent_journal: list[OpponentJournalEntry] = field(default_factory=list)
+    # Opponent decisions the recorder raised on. See the recording site.
+    opponent_journal_failures: int = 0
 
     def all_lines(self) -> list[str]:
         return [*self.public_lines, *self.request_lines.values()]
@@ -3083,7 +3411,84 @@ async def _run_single_game(
         ),
         pokezero_decision_players=tuple(state.pokezero_decision_players),
         pokezero_submitted_choice_players=tuple(state.pokezero_submitted_choice_players),
+        opponent_journal=_opponent_journal_for_result(
+            state.opponent_journal,
+            mode=config.opponent_journal,
+            policy=policy,
+            battle_id=battle_id,
+            seat=config.pokezero_player,
+        ),
+        opponent_journal_recorded=len(state.opponent_journal),
+        opponent_journal_failures=state.opponent_journal_failures,
     )
+
+
+def _last_addressed_round(policy: Any, battle_id: str, seat: PlayerId | None = None) -> int | None:
+    """Highest round of ``(battle_id, seat)`` that filed a fallback ADDRESS, else None.
+
+    Reads ``policy.stats.fallback_samples`` -- the same store the address reader
+    consumes -- rather than a second bridge-side tally, so the journal cannot cover
+    a different set of rounds than the addresses it exists to serve.
+
+    ``seat`` is the ACTING seat, matching ``FallbackAddress.seat`` (``context.player_id``,
+    i.e. OUR seat), not the opponent seat the journal entries carry. Filtering on it
+    completes the address locator ``(battle_id, round, seat)`` rather than half of it.
+    INERT in the bridge today: ``pokezero_player`` is fixed for a whole invocation and
+    ``battle_id`` embeds a per-invocation seed, so no foreign-seat entry can reach a
+    live call. Kept because the locator is the contract, and because a caller that
+    ever shares one policy across seats -- the shape `foulplay_paired_eval` already
+    has at the process level -- would otherwise silently over-extend the prefix. It is
+    tested directly rather than through the bridge, where it cannot fire.
+
+    None (not 0) when the policy has no address store at all. Only engine-mcts keeps
+    one; the raw and root-puct arms produce no ``fallback_samples`` either, so there
+    is no address in those shards for a journal to make replayable. Distinguishing
+    "no store" from "store, zero hits" matters only to the caller's telemetry, and
+    both correctly yield an empty journal.
+    """
+    samples = getattr(getattr(policy, "stats", None), "fallback_samples", None)
+    if not isinstance(samples, Mapping):
+        return None
+    last: int | None = None
+    for entries in samples.values():
+        if not isinstance(entries, (list, tuple)):
+            continue
+        for entry in entries:
+            if not isinstance(entry, Mapping) or entry.get("battle_id") != battle_id:
+                continue
+            if seat is not None and entry.get("seat") != seat:
+                continue
+            round_index = entry.get("round")
+            if isinstance(round_index, bool) or not isinstance(round_index, int):
+                continue
+            last = round_index if last is None else max(last, round_index)
+    return last
+
+
+def _opponent_journal_for_result(
+    journal: Sequence[OpponentJournalEntry],
+    *,
+    mode: str,
+    policy: Any,
+    battle_id: str,
+    seat: PlayerId | None = None,
+) -> tuple[OpponentJournalEntry, ...]:
+    """Narrow a fully-recorded journal to what the configured mode emits."""
+    if mode == "off" or not journal:
+        return ()
+    if mode == "full":
+        return tuple(journal)
+    # "addressed": the PREFIX a replay of this battle's last address needs. A prefix,
+    # not the single round, because the live root fold is advanced incrementally per
+    # decision and never refolded from a log -- see the module block.
+    #
+    # Inclusive of the addressed round: the opponent's move at round R is submitted
+    # simultaneously with ours, so a driver that wants to step past the address
+    # rather than stop on it already has what it needs.
+    last = _last_addressed_round(policy, battle_id, seat)
+    if last is None:
+        return ()
+    return tuple(entry for entry in journal if entry.round <= last)
 
 
 def _root_puct_timing_from_metadata(
@@ -3438,6 +3843,33 @@ async def _handle_decision_boundary(
             policy_id="foul-play",
             metadata={"raw_choice": choice},
         )
+        # Journal AFTER the decode and BEFORE the submit, reading only values that
+        # already exist. Nothing here is passed to a policy, to the searcher, or to
+        # the BattleStream, and no RNG is drawn -- the pokezero decision above has
+        # already been selected and submitted into `choices`, so this cannot reorder
+        # or perturb it.
+        #
+        # ISOLATED, because this is TELEMETRY on the live decision path and it is ON
+        # BY DEFAULT. Every input is already validated by the lines above, so the
+        # except is not expected to fire -- but the failure mode it guards is losing
+        # a battle (and, in the paired-eval harness, forfeiting a scored seed band)
+        # to a bug in a field nobody scores. The count is reported per game and
+        # summed into the journal header, so a silently short journal is visible as a
+        # number: an unrecorded round makes every later round of that battle
+        # unreplayable, and that must not be inferred from a gap.
+        if config.opponent_journal != "off":
+            try:
+                state.opponent_journal.append(
+                    OpponentJournalEntry(
+                        round=decision_round,
+                        seat=foulplay_player,
+                        choice=choice,
+                        action=foulplay_action,
+                        request_sha256=_request_digest(state.request_lines.get(foulplay_player)),
+                    )
+                )
+            except Exception:  # noqa: BLE001 -- count, never fail the battle
+                state.opponent_journal_failures += 1
 
     for player in requested_players:
         decision = decisions.get(player)
@@ -4065,6 +4497,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--opponent-journal",
+        choices=OPPONENT_JOURNAL_MODES,
+        default="addressed",
+        help=(
+            "Record the opponent's submitted move per decision round, so a future "
+            "replay driver can feed recorded moves back instead of re-running "
+            "foul-play (whose search is not reproducible). No replayer exists yet. "
+            "'addressed' (default) records only battles that filed a fallback "
+            "address, as a prefix through the last such round; 'full' records every "
+            "battle and is several times larger; 'off' records nothing. See the "
+            "OPPONENT-MOVE JOURNAL block in foulplay_bridge.py for the size and "
+            "coverage measurements behind the default."
+        ),
+    )
+    parser.add_argument(
         "--no-search-fallback",
         action="store_true",
         help="Raise on search failure instead of falling back to the raw checkpoint action.",
@@ -4199,6 +4646,7 @@ def _config_from_args(
         pokezero_player=args.pokezero_player,
         capture_driver=getattr(args, "capture_driver", "checkpoint"),
         audit_observation_schema=getattr(args, "observation_schema", None),
+        opponent_journal=getattr(args, "opponent_journal", "addressed"),
     )
 
 
