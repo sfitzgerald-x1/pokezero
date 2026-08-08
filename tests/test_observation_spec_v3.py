@@ -1757,6 +1757,7 @@ class ConfusionSelfHitEncodeTest(unittest.TestCase):
         for fixture_name, lines in fixtures.items():
             state = self._state(lines)
             vocab = self._vocab()
+            _oov_before = vocab.observed_oov_tokens
             for spec in legacy_specs:
                 encoded = self._encode(state, spec, vocab=vocab)
                 payload = [
@@ -1771,7 +1772,11 @@ class ConfusionSelfHitEncodeTest(unittest.TestCase):
                 ).hexdigest()
                 with self.subTest(fixture=fixture_name, schema=spec.schema_version):
                     self.assertEqual(actual, expected[fixture_name][spec.schema_version])
-            self.assertEqual(vocab.observed_oov_tokens, frozenset())
+            # Delta, not the absolute set: gen3_category_vocabulary is CACHED, so
+            # observed_oov_tokens accumulates for the life of the process and any OOV token an
+            # earlier test provoked is already present. Asserting emptiness fails on test ORDER.
+            # What this test means is that ITS OWN encode introduced no OOV token.
+            self.assertEqual(vocab.observed_oov_tokens - _oov_before, frozenset())
 
     def test_legacy_schemas_reconstruct_folded_damage_and_v3_sets_the_flag(self) -> None:
         state = self._state(_CONFUSE_SELFHIT_LINES)
@@ -1837,6 +1842,7 @@ class ConfusionSelfHitEncodeTest(unittest.TestCase):
             if token.kind == "move" and token.action == "spikes"
         )
         vocab = self._vocab()
+        _oov_before = vocab.observed_oov_tokens
         for spec in (
             V2_REPLAY_OBSERVATION_SPEC,
             V2_1_REPLAY_OBSERVATION_SPEC,
@@ -1855,7 +1861,11 @@ class ConfusionSelfHitEncodeTest(unittest.TestCase):
         self.assertEqual(v3.numeric_features[turn1][NUMERIC_TT_SELF_HP_COST], 0.0)
         self.assertEqual(v3.numeric_features[turn1][NUMERIC_TT_KO], 0.0)
         self.assertEqual(v3.numeric_features[turn1][NUMERIC_TT_CONFUSION_SELFHIT], 1.0)
-        self.assertEqual(vocab.observed_oov_tokens, frozenset())
+        # Delta, not the absolute set: gen3_category_vocabulary is CACHED, so
+        # observed_oov_tokens accumulates for the life of the process and any OOV token an
+        # earlier test provoked is already present. Asserting emptiness fails on test ORDER.
+        # What this test means is that ITS OWN encode introduced no OOV token.
+        self.assertEqual(vocab.observed_oov_tokens - _oov_before, frozenset())
 
 
 if __name__ == "__main__":

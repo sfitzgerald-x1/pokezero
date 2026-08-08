@@ -163,8 +163,13 @@ class TurnMergedEncodeTest(unittest.TestCase):
 
     def test_merged_row_columns_and_mask(self) -> None:
         state = self._state(self._lines())
-        observation = self._encode(state)
+        # Snapshot BEFORE the encode. Review caught this: taking it afterwards folds the
+        # encode's own OOV tokens into the baseline, so the delta is always empty and the
+        # assertion is dead. Proven with a unique-token OOV probe -- these two tests stayed
+        # green while the other three went red.
         vocab = self._vocab()
+        _oov_before = vocab.observed_oov_tokens
+        observation = self._encode(state)
         self.assertEqual(len(state.turn_merged_tokens), 2)  # lead pair + turn 1
         lead_row = TRANSITION_TOKEN_OFFSET
         turn_row = TRANSITION_TOKEN_OFFSET + 1
@@ -206,7 +211,11 @@ class TurnMergedEncodeTest(unittest.TestCase):
         self.assertEqual(num[NUMERIC_TT_CALLED], 1.0)
         self.assertEqual(num[NUMERIC_TM2_PRESENT], 1.0)
         self.assertAlmostEqual(num[NUMERIC_TM2_DAMAGE_FRACTION], 0.15)
-        self.assertEqual(vocab.observed_oov_tokens, frozenset())
+        # Delta, not the absolute set: gen3_category_vocabulary is CACHED, so
+        # observed_oov_tokens accumulates for the life of the process and any OOV token an
+        # earlier test provoked is already present. Asserting emptiness fails on test ORDER.
+        # What this test means is that ITS OWN encode introduced no OOV token.
+        self.assertEqual(vocab.observed_oov_tokens - _oov_before, frozenset())
 
     def test_negated_second_sub_block_encodes_status_and_species(self) -> None:
         lines = [
@@ -227,8 +236,13 @@ class TurnMergedEncodeTest(unittest.TestCase):
             "|turn|2",
         ]
         state = self._state(lines)
-        observation = self._encode(state)
+        # Snapshot BEFORE the encode. Review caught this: taking it afterwards folds the
+        # encode's own OOV tokens into the baseline, so the delta is always empty and the
+        # assertion is dead. Proven with a unique-token OOV probe -- these two tests stayed
+        # green while the other three went red.
         vocab = self._vocab()
+        _oov_before = vocab.observed_oov_tokens
+        observation = self._encode(state)
         self.assertEqual(len(state.turn_merged_tokens), 3)  # lead + turn + cold pair
         turn_row = TRANSITION_TOKEN_OFFSET + 1
         pair_row = TRANSITION_TOKEN_OFFSET + 2
@@ -246,7 +260,11 @@ class TurnMergedEncodeTest(unittest.TestCase):
             vocab.encode("tt_phase:replacement"),
         )
         self.assertEqual(observation.numeric_features[pair_row][NUMERIC_TM2_PRESENT], 1.0)
-        self.assertEqual(vocab.observed_oov_tokens, frozenset())
+        # Delta, not the absolute set: gen3_category_vocabulary is CACHED, so
+        # observed_oov_tokens accumulates for the life of the process and any OOV token an
+        # earlier test provoked is already present. Asserting emptiness fails on test ORDER.
+        # What this test means is that ITS OWN encode introduced no OOV token.
+        self.assertEqual(vocab.observed_oov_tokens - _oov_before, frozenset())
 
     def test_budget_counts_merged_tokens(self) -> None:
         # K BUDGET UNIT CHANGE: budget=1 keeps ONE whole-turn token (the most recent),
