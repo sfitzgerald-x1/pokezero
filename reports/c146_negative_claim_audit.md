@@ -384,39 +384,43 @@ rather than split), so the `Ran 16 tests` guard needed no bump.
 with **unescaped** `|`, against the document's convention everywhere else (G31, G33b, H11 all use
 `\|`). Those two rows rendered with 20 and 9 table delimiters instead of 6, so their Class,
 Reachability and **Observed** cells landed in the wrong columns — in a document whose entire
-subject is claims being misread. 17 pipes escaped. The §3 row count is unaffected (still 80).
+subject is claims being misread. 17 pipes escaped; all 9 tables now have uniform column counts,
+verified by re-deriving delimiter counts per row. The §3 row count is unaffected (still 80).
+**Not pinned:** a markdown table-integrity check does not belong in a counter census, and adding
+a 17th test would force a `Ran 16 tests` guard bump for an unrelated reason. Filed as a follow-up
+instead.
 
-> ⚠ **CORRECTED 2026-08-08 (C150). The sentence that stood here — "all 9 tables now have
-> uniform column counts, verified by re-deriving delimiter counts per row" — was FALSE, and
-> it was false at the moment it was written, not merely later.** Re-derived escape-aware over
-> the file's own bytes at `a587e614` (the commit that asserts it), at `f876803e` (#1151, the
-> ledger's first commit) and at `553cf2c3`: **2 of 9 tables carried a non-uniform row at all
-> three** — `G21b` at 8 delimiters against a 6-column header, and `R9` at 7 against a
-> 4-column header. Both were introduced by #1151, i.e. they predate this paragraph by a day
-> and were never fixed by it. The cause in both is `\\|` — a *double* backslash, which
-> escapes the backslash and leaves the pipe live — against the document's `\|` convention;
-> a re-derivation that treats `\\|` as an escaped pipe sees uniformity that is not there.
-> The G21b consequence was substantive, not cosmetic: GFM put the row's whole
-> pool-reachability check (*"REACHABLE — every battle, every move above 10 PP … Gen3 max PP
-> … 24 for `shadowball`, 16 for `earthquake`"*) and its `no` Observed value **outside the
-> five rendered columns**, so C116 §5's standing rule — no entry joins the ledger without a
-> pool-reachability check recorded next to it — was unmet on that row for two days while a
-> paragraph in this file asserted the opposite. **Fixed in C150** (both rows now use `\|`),
-> and the corrected claim, re-derived escape-aware over all 9 tables and stated only as
-> widely as it was measured: **at `553cf2c3` 2 rows were non-uniform; after the C150 fix, 0
-> of 9 tables have a non-uniform row and the file contains 43 single-escaped `\|` and zero
-> `\\|`.** This is the program's signature defect in miniature — a negative asserted more
-> broadly than the instrument that produced it — which is why it is corrected in place
-> rather than deleted.
+> ✅ **RE-VERIFIED AND NOW PINNED, 2026-08-08 (C150).** The uniformity claim above is **true**,
+> and it is true at the commit that makes it. Re-derived with the GFM-correct delimiter rule —
+> a pipe preceded by *any* backslash is not a cell delimiter, which is cmark-gfm's actual cell
+> scanner and not an inference — over the ledger's own bytes: `f876803e` **0** over-delimited
+> rows, `a587e614^` **2** (`G37` at 20 pipes and `G37b` at 9 against a 6-pipe / 5-column
+> header, exactly the two rows this paragraph reports fixing), `a587e614` **0**, `553cf2c3`
+> **0**. Rendering the pre-fix rows through `cmarkgfm` confirms the consequence this paragraph
+> describes was real: both came back with an **empty `Reachability evidence` cell**.
 >
-> **Now pinned, which reverses the disposition below.** The paragraph that stood here said
-> *"Not pinned: a markdown table-integrity check does not belong in a counter census, and
-> adding a 17th test would force a `Ran 16 tests` guard bump for an unrelated reason. Filed
-> as a follow-up instead."* The judgement about this module was right and is kept — the
-> census stays at 16 tests and its guard is untouched. The follow-up is taken as its own
-> module, `tests/test_ledger_table_uniformity.py`, with its own CI step and its own exact
-> `Ran N tests` guard. An unpinned rendering claim in this document is what let the false
-> sentence above survive; a filed follow-up is not a control.
+> The **"Not pinned"** disposition is what C150 reverses. The judgement about *this* module was
+> right and is kept — the counter census stays at 16 tests and its `Ran 16 tests` guard is
+> untouched. The follow-up is taken as its own module, `tests/test_ledger_table_uniformity.py`,
+> with its own CI step and its own exact test-count guard, so the next `G37` is caught by a
+> check rather than by a reader. A filed follow-up is not a control.
+>
+> ⚠ **And a correction to C150's own first attempt, recorded because it is the same defect
+> class.** C150 initially replaced the sentence above with a claim that it was FALSE — that
+> `G21b` and `R9` had been dropping their reachability cells since #1151. That was wrong. It
+> came from a delimiter rule *inferred* from CommonMark's backslash-escape section (a parity
+> rule: odd runs of backslashes escape, even runs do not) instead of measured against a
+> renderer. Under GFM `\\|` is still an escaped pipe. Checked on three instruments — local
+> `cmarkgfm`, GitHub's `/markdown` API at `mode=gfm`, and the same API at `mode=markdown` —
+> for runs of 1, 2, 3 and 4 backslashes, with a bare-pipe positive control confirming each
+> instrument does detect real drops: `G21b`'s base bytes render **5 cells** with
+> `Reachability evidence` = *"REACHABLE — every battle, every move above 10 PP … 24 for
+> `shadowball`, 16 for `earthquake`"* and `Observed` = `no`; `R9` renders 3 intact cells; the
+> whole file at `553cf2c3` renders 9 tables with no ragged row. **Item 14 was met.** The two
+> rows were still edited, but for what the change actually is: `\\|` renders a stray backslash
+> inside the code span (`a \| b` where `a | b` was meant), so it is a typographic fix and
+> nothing more. Recorded here rather than dropped because a document about claims asserted
+> more broadly than their instrument should carry the one this very correction nearly added.
 
 **Scope note.** This is one test module and one CI step, and it covers only Class A. Class B (the
 27 pool-census negatives) would need the vendored Showdown checkout at a pinned commit inside CI,

@@ -723,22 +723,35 @@ that would otherwise have gone wrong:
   The rest of the inventory, sorted into measured and merely asserted, is in
   `reports/c146_negative_claim_audit.md`.
 - **The reachability check must survive RENDERING, and that is now machine-checked.** Added
-  2026-08-08 (C150). The rule above says the check must be recorded next to the entry; it was
-  silently possible to satisfy that in the bytes and fail it in the document. `G21b` and `R9`
-  shipped in #1151 with `\|` written as `\\|` — a double backslash escapes the *backslash* and
-  leaves the pipe live — so both rows carried more cell delimiters than their header and GFM
-  **dropped** the surplus. On `G21b` the surplus was its entire pool-reachability check and its
-  `Observed` value. Neither the ledger's own audits nor `reports/c146_negative_claim_audit.md`'s
-  "all 9 tables now have uniform column counts" caught it; that claim was false at the commit
-  that asserted it, and is corrected in place there. Both rows are fixed, and
-  `tests/test_ledger_table_uniformity.py` now re-derives, escape-aware and from the file's own
-  bytes: every table exactly uniform, an exact per-table row inventory (so a gap cannot join
-  without an author touching the pin and therefore the column beside it), a non-empty rendered
-  **Reachability evidence** cell on all 80 gap rows and a measurement on all 27 §4 rows, plus an
-  exact repo-wide inventory of the markdown rows whose cells GFM drops. 10 mutations applied, 10
-  caught; the two pre-fix rows are fixtures in the module, so a matcher that stops seeing the
-  defect goes red before the ledger does. **A rule the ledger states and nothing re-derives is
-  the same shape as a negative with no glob.**
+  2026-08-08 (C150). The rule above says the check must be recorded next to the entry — and it
+  is possible to satisfy that in the bytes and fail it in the document, because GFM **drops**
+  the surplus cells of a row that carries more delimiters than its header. That is not
+  hypothetical here: at `a587e614^`, `G37` (20 pipes) and `G37b` (9) against this table's
+  6-pipe / 5-column header both rendered with an **empty `Reachability evidence` cell**, their
+  pool checks and `Observed` values gone from the document. #1166 fixed them, and the file has
+  been clean at every commit since — re-derived at `f876803e` (0), `a587e614^` (2), `a587e614`
+  (0) and `553cf2c3` (0). What #1166 left behind was prose, not a control, and its own note
+  said so. `tests/test_ledger_table_uniformity.py` is now that control: every table exactly
+  uniform, an exact per-table row inventory (so a gap cannot join without an author touching
+  the pin and therefore the column beside it), a non-empty rendered **Reachability evidence**
+  cell on all 80 gap rows and a measurement on all 27 §4 rows, plus an exact repo-wide
+  inventory of the markdown rows whose cells GFM drops. 9 mutations applied, 9 caught; the two
+  pre-#1166 rows are fixtures in the module. **A rule the ledger states and nothing re-derives
+  is the same shape as a negative with no glob.**
+- **A checker for a rendering defect is validated against a RENDERER, not against a rule you
+  infer.** Added 2026-08-08 (C150), and earned the hard way in the same change. C150's first
+  attempt used a delimiter rule read off CommonMark's backslash-escape section — odd runs of
+  backslashes escape, even runs do not — and on that basis reported `G21b` and `R9` as having
+  been dropping their reachability cells since #1151, and `reports/c146_negative_claim_audit.md`
+  as having asserted uniformity falsely. **All of that was wrong.** GFM's table-cell scanner
+  treats a pipe preceded by *any* backslash as escaped; `G21b` renders 5 cells with its
+  reachability check intact, `R9` renders 3, the whole file renders 9 clean tables at
+  `553cf2c3`, and C146's claim was true when written. Verified on local `cmarkgfm`, GitHub's
+  `/markdown` API at `mode=gfm` and the same API at `mode=markdown`, over backslash runs of 1
+  to 4, with a bare-pipe positive control proving each instrument detects real drops. The two
+  rows were still edited, but only for what the change is: `\\|` renders a stray backslash
+  inside the code span. **A plausible reading of a spec is not a measurement**, and a claim
+  about what a document *looks like* has exactly one instrument.
 - **A permanent-ledger cell may not cite a number with no committed artifact.** Added 2026-08-08
   (C150). `G8` cited a 124,188-fixture review scan (44,393 fired / 79,795 declined / 25,728 arms
   kept / 18,901 dropped / 115 mutant disagreements) that was never artifacted and whose own
