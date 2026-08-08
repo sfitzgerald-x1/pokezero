@@ -83,7 +83,8 @@ jobs:
             reports/artifacts/c131_leechseed_main_holdout_sweep.json
             reports/artifacts/c131_leechseed_fix_dev_sweep.json
             reports/artifacts/c131_leechseed_fix_holdout_sweep.json
-            # C147's four G33b sweeps. Listed for the same reason as the c131 four
+            # C147's EIGHT G33b sweeps -- a pre-merge base/gate pair and a merged one, both
+            # retained. Listed for the same reason as the c131 four
             # above: they are corpus members of the exact-count pin in
             # tests/test_boundary_verdict_partition.py, so a PR whose only change is
             # deleting one of them must trip this workflow rather than skip it.

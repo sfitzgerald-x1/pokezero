@@ -71,13 +71,24 @@ reaching 0 HP with no living reserve, reserves being unable to enter during the 
 and then asks exactly one question: **was the winner's order-10.4 item slot behind that point?**
 The arms are enumerated from the engine's own section order, and only two gate:
 
-| what delivered the battle-ending faint | section | winner's 10.4 | gated |
+The third column is the fact; the fourth is what the shipped predicate does about it.
+**They differ on exactly one row**, and that row is the weather under-reach recorded two
+paragraphs down and again in §7. There is **one** speed test in the code and it guards both
+gating rows, so the fourth column — not the third — is what ships:
+
+| what delivered the battle-ending faint | section | is the winner's 10.4 behind it? | gated by the shipped predicate |
 |---|---|---|---|
-| the shared weather entry | order 8 | not reached | yes |
-| the loser's own 10.5 sap / 10.6 status / 10.9 partial trap | order 10, loser's bucket | not reached **iff the loser is faster** | on that condition |
-| the winner's 10.5 Liquid Ooze recoil | order 10, winner's bucket | already fired | no |
-| Future Sight | order 11 | already fired | no |
-| Perish Song | order 12 | already fired | no |
+| the shared weather entry | order 8 | **yes, always** — order 8 precedes every order-10 handler on both sides | **only when the loser is faster**; the winner-faster half is not gated |
+| the loser's own 10.5 sap / 10.6 status / 10.9 partial trap | order 10, loser's bucket | yes **iff the loser is faster** | yes, on exactly that condition |
+| the winner's 10.5 Liquid Ooze recoil | order 10, winner's bucket | no, it already fired | no |
+| Future Sight | order 11 | no, it already fired | no |
+| Perish Song | order 12 | no, it already fired | no |
+
+An earlier revision of this table, and of the matching one in `leftovers_slot_truncated`'s doc
+comment, wrote the weather row's fourth column as an unconditional "yes" while the prose below it
+and §7 both said otherwise. Independent review caught it. Nothing about the code or the
+measurements changed — but this document's whole subject is claims being read off tables, so the
+table is now the thing that is right rather than the paragraph that corrects it.
 
 **Why the two "no" arms at order ≥ 10.5 are excluded by state predicate rather than by
 classifying the instruction:** a lethal residual damage always equals the victim's remaining HP
@@ -198,8 +209,12 @@ reason.
 
 **And these pins run in CI.** The crate suite is executed by the *Crate suites, including the
 renderer pins* step of `.github/workflows/engine-fidelity-gates.yml`, whose test-count floor is
-raised 423 → 430 (the exact new total, measured by summing that step's own expression over a local
-run, not by adding 7) and whose named-pin list now names all seven. A count alone would let them
+raised to the exact new total — measured by summing that step's own expression over a local run,
+never by adding 7 — and whose named-pin list now names all seven. **The shipped figure is
+`429 → 436`**, re-measured on the merged tree; this paragraph said `423 → 430` in an earlier
+revision, which was the pre-merge measurement left standing in the present tense while §5b
+re-derived the merged one correctly. Two figures for one shipped number is the defect, not the
+arithmetic: §5b is the derivation and 436 is the value in the YAML. A count alone would let them
 be deleted and replaced by any other seven; a name alone would survive `#[ignore]`. Both are
 asserted, which is that step's existing discipline.
 

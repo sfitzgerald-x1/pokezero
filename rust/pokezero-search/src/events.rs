@@ -5249,15 +5249,20 @@ fn weather_chips(state: &State, side: SideReference) -> Option<&'static str> {
 /// The predicate walks the segment for the instruction that ends the battle and then
 /// asks ONE question: was the winner's 10.4 behind that point? Everything that can
 /// deliver a battle-ending faint is enumerated from the engine's own section order,
-/// and only two of the five arms gate:
+/// and only two of the five arms can gate at all:
 ///
-/// | what delivered it | where it sits | winner's 10.4 |
-/// |---|---|---|
-/// | the shared weather entry | order 8 | not yet reached — **gated** |
-/// | the loser's own 10.5 / 10.6 / 10.9 | order 10, loser's bucket | not yet reached **iff the loser is faster** — gated on that |
-/// | the winner's 10.5 Liquid Ooze recoil | order 10, winner's bucket | already fired — not gated |
-/// | Future Sight | order 11 | already fired — not gated |
-/// | Perish Song | order 12 | already fired — not gated |
+/// The third column is the FACT and the fourth is what this predicate does about it.
+/// They differ on exactly one row, deliberately, and the difference is the
+/// weather under-reach recorded below — read the fourth column for what the code
+/// does, because there is ONE speed test and it guards both gating rows:
+///
+/// | what delivered it | where it sits | is the winner's 10.4 behind it? | gated here |
+/// |---|---|---|---|
+/// | the shared weather entry | order 8 | **yes, always** — order 8 precedes every order-10 handler on both sides | only when the loser is faster, so the winner-faster half is NOT gated |
+/// | the loser's own 10.5 / 10.6 / 10.9 | order 10, loser's bucket | yes **iff the loser is faster** | yes, on exactly that condition |
+/// | the winner's 10.5 Liquid Ooze recoil | order 10, winner's bucket | no, it already fired | no |
+/// | Future Sight | order 11 | no, it already fired | no |
+/// | Perish Song | order 12 | no, it already fired | no |
 ///
 /// The two "not gated" order-10+ arms are excluded by state predicate rather than by
 /// classifying the instruction, because a lethal residual damage always equals the
@@ -5274,8 +5279,11 @@ fn weather_chips(state: &State, side: SideReference) -> Option<&'static str> {
 ///   give and this declines to guess.
 /// * **A fatal weather chip with the WINNER faster is not gated.** Order 8 precedes
 ///   all of order 10 unconditionally, so that case is a real instance of the same
-///   family; it is left unshipped because it was not measured, and the speed
-///   condition below is what keeps it out.
+///   family, and the third column of the table above says so. It is left unshipped
+///   because it was not measured, and the single speed test below is what keeps it
+///   out: that test guards BOTH order-<=10 arms, so declining to guess a tie also
+///   declines the winner-faster weather case. Do not read the table's first row as
+///   an unconditional gate -- the fourth column is the code.
 fn leftovers_slot_truncated(state: &State, segment: &[Instruction]) -> [bool; 2] {
     const NO_TRUNCATION: [bool; 2] = [false, false];
 
