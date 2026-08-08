@@ -32,7 +32,10 @@ play itself, here applied to an imperfect-information, simultaneous-move game.
 
 ![V4 observation token input](docs/observation_v4_tokens.svg)
 
-V4 is the current training schema. One decision is **23 tokens** — and deliberately nothing more:
+V4 is the newest observation schema — the one fresh training targets. (The library default for
+un-stamped encodes remains v2.2; every checkpoint resolves its own schema from its stamped config,
+so older lineages keep scoring byte-identically.) One decision is **23 tokens** — and deliberately
+nothing more:
 a global field token (weather, hazards, clauses, Wish, turn count, request kind, hazard
 credit/payoff), six self-team tokens (full knowledge: exact stats, PP, status, boosts, public
 volatile clocks), six opponent tokens (public reveals plus belief candidates, expected stats, and

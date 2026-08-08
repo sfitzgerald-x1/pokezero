@@ -34,10 +34,13 @@ frame carried one field token, six self-team tokens, six opponent tokens, nine a
 and **24 raw recent-event tokens** — 46 rows per frame, 184 per decision.
 
 **The limitation.** The per-mon tokens in each frame already encode most of what the older frames
-repeat, so the model paid four times for one battle state, and the only genuinely temporal signal
-was the unstructured event rows. Snapshot windows (h4/h8) were the measured ceiling: adding more
-frames stopped helping. The full analysis is
-[`observation_compression_design.md`](observation_compression_design.md).
+repeat, so the model paid four times for one battle state, with much of the genuinely temporal
+signal riding on the unstructured event rows. Deeper windows did help — h8 held a consistent edge
+over h4 — but each extra frame cost a full re-encode, and coverage was hard-capped at the window:
+anything older than the last few turns was simply invisible. The full analysis is
+[`observation_compression_design.md`](observation_compression_design.md), whose conclusion is that
+an ordered transition region can extend memory to effectively the whole game where snapshot
+windows were the ceiling.
 
 **Addressed in v2** by inverting the design: encode the present once, and make memory an explicit,
 structured region instead of a side effect of repetition. v1 was a one-way break — v1 checkpoints
@@ -49,7 +52,7 @@ refuse to load and replay only from their pinned tag.
 
 `window_size=1`. The stacked frames and raw event tokens are gone; in their place, one
 opponent-tendency token and a **128-slot transition block** — one typed token per *declared
-action*: who acted, what they did, damage band, miss/crit/KO flags. The `K` budget counts these
+action*: who acted, what they did, damage fraction, miss/crit/KO flags. The `K` budget counts these
 slots.
 
 **v2.1** (checkpoint-driven, no break): three facts that were public all along but never encoded —

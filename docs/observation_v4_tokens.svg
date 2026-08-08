@@ -73,16 +73,17 @@
 
   <g>
     <rect x="40" y="367" width="47.3" height="39" fill="#3e5d78"/>
-    <rect x="87.3" y="367" width="299.4" height="39" fill="#23725e"/>
-    <rect x="386.7" y="367" width="417.6" height="39" fill="#70405a"/>
+    <rect x="87.3" y="367" width="283.6" height="39" fill="#23725e"/>
+    <rect x="370.9" y="367" width="433.4" height="39" fill="#70405a"/>
     <rect x="804.3" y="367" width="47.3" height="39" fill="#315f93"/>
     <rect x="851.6" y="367" width="141.8" height="39" fill="#9b7434"/>
     <rect x="993.4" y="367" width="86.6" height="39" fill="#98563e"/>
     <g fill="#f2f5f8" font-size="9.5" font-weight="600" text-anchor="middle">
       <text x="63.7" y="390">Core 6</text>
-      <text x="237" y="385">Pokemon 38</text>
-      <text x="237" y="398" font-weight="400" fill="#cfeadf">incl. pack A</text>
-      <text x="595.5" y="390">Belief 53</text>
+      <text x="229.1" y="385">Pokemon 36</text>
+      <text x="229.1" y="398" font-weight="400" fill="#cfeadf">incl. pack A</text>
+      <text x="587.6" y="385">Belief 55</text>
+      <text x="587.6" y="398" font-weight="400" fill="#e8cfdb">incl. switch/stay-vs-active</text>
       <text x="827.9" y="390">Act. 6</text>
       <text x="922.5" y="385">Field 18</text>
       <text x="922.5" y="398" font-weight="400" fill="#f0ddb8">incl. hazard pack</text>
