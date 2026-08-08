@@ -41,6 +41,7 @@ use poke_engine::engine::state::MoveChoice;
 use poke_engine::instruction::Instruction;
 use poke_engine::state::State;
 
+use crate::priors::{gather_self_priors, prior_row, resolve_pending_priors, PriorSeat};
 use crate::tree::{
     apply_self_priors, finalize, multiply_report_json, root_visit_lock, traverse, BranchSeam,
     LeafPrice, MultiPlyConfig, MultiPlyOutcome, SearchCounters, Traversal, Tree,
@@ -654,37 +655,6 @@ struct BranchFold {
     meta: crate::leaf::LeafMeta,
 }
 
-/// Gather a leaf's action-block priors onto the acting seat's option list.
-///
-/// `priors_row` is one row of the UNMASKED softmax; the gathered subset is
-/// renormalized over the mapped options — mathematically identical to the
-/// masked softmax restricted to those actions (exp(l_i)/Σ_mapped exp(l_j)).
-/// Returns `None` — leaving the node uniform — when any option lacks an
-/// action-block slot (the whole node falls back rather than zeroing arms the
-/// model cannot see) or the mapped mass underflows.
-fn gather_self_priors(priors_row: &[f32], map: &[Option<usize>]) -> Option<Vec<f32>> {
-    if map.is_empty() {
-        return None;
-    }
-    let mut gathered = Vec::with_capacity(map.len());
-    let mut sum = 0.0f32;
-    for entry in map {
-        let index = (*entry)?;
-        let prior = *priors_row.get(index)?;
-        sum += prior;
-        gathered.push(prior);
-    }
-    // NaN comparisons are false, so a non-finite logit would slip past the
-    // underflow guard alone and propagate into stat.prior.
-    if !sum.is_finite() || sum <= 1e-8 {
-        return None;
-    }
-    for prior in &mut gathered {
-        *prior /= sum;
-    }
-    Some(gathered)
-}
-
 /// The acting seat's option list at a decision node, mirroring
 /// `new_decision_node`'s defensive empty-side handling so prior vectors align
 /// with the node's own arm order.
@@ -860,7 +830,10 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             // root world is CONSTRUCTED, so the fresh-switch-in widening still
             // applies). See LeafContext::leaf_row_inputs.
             let map = leaf_ctx.self_action_map(&state, &root_options, None, None, false)?;
-            match gather_self_priors(&output.priors[..output.action_count], &map) {
+            // The root is batch row 0 of a one-row forward.
+            match prior_row(&output.priors, 0, output.action_count)
+                .and_then(|row| gather_self_priors(row, &map))
+            {
                 Some(priors)
                     if apply_self_priors(&mut tree.decisions[0], self_side_one, &priors) =>
                 {
@@ -890,10 +863,14 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         None,
                         false,
                     )?;
-                    match gather_self_priors(
-                        &output.opponent_priors[..output.action_count],
-                        &opponent_map,
-                    ) {
+                    // Row 0 again, and via `prior_row` because the opponent
+                    // head's width is NOT the one `action_count` was read from
+                    // (that is the policy head's last dim). A head exported at
+                    // a different action width falls back to uniform here
+                    // instead of slicing past the end of the row.
+                    match prior_row(&output.opponent_priors, 0, output.action_count)
+                        .and_then(|row| gather_self_priors(row, &opponent_map))
+                    {
                         Some(priors)
                             if apply_self_priors(
                                 &mut tree.decisions[0],
@@ -1134,64 +1111,30 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             // rows: store on the branch (consumed at child creation) and
             // re-apply onto a child that was already created THIS round
             // (batch > 1 can descend a sibling before its priors resolved).
-            for (key, row, map) in &pending_maps {
-                let base = row * output.action_count;
-                let priors =
-                    gather_self_priors(&output.priors[base..base + output.action_count], map);
-                match priors {
-                    Some(priors) => {
-                        let child = tree.chances[key.0].branches[key.1].child;
-                        let applied = match child {
-                            Some(child) => apply_self_priors(
-                                &mut tree.decisions[child],
-                                self_side_one,
-                                &priors,
-                            ),
-                            None => true,
-                        };
-                        tree.chances[key.0].branches[key.1].child_self_priors =
-                            Some((self_side_one, priors));
-                        if applied {
-                            prior_branches += 1;
-                        } else {
-                            prior_fallbacks += 1;
-                        }
-                    }
-                    None => prior_fallbacks += 1,
-                }
-            }
+            let resolved = resolve_pending_priors(
+                &mut tree,
+                &pending_maps,
+                &output.priors,
+                output.action_count,
+                self_side_one,
+                PriorSeat::Acting,
+            );
+            prior_branches += resolved.applied;
+            prior_fallbacks += resolved.fallbacks;
             // Same resolution for the opponent seat, off the SAME batch rows
-            // (one forward feeds both heads). Stored under `!self_side_one`:
+            // (one forward feeds both heads). Resolved under `!self_side_one`:
             // the seat that owns these arms, which is what apply_self_priors
             // indexes on. No reflection anywhere in this block.
-            for (key, row, map) in &pending_opponent_maps {
-                let base = row * output.action_count;
-                let priors = gather_self_priors(
-                    &output.opponent_priors[base..base + output.action_count],
-                    map,
-                );
-                match priors {
-                    Some(priors) => {
-                        let child = tree.chances[key.0].branches[key.1].child;
-                        let applied = match child {
-                            Some(child) => apply_self_priors(
-                                &mut tree.decisions[child],
-                                !self_side_one,
-                                &priors,
-                            ),
-                            None => true,
-                        };
-                        tree.chances[key.0].branches[key.1].child_opponent_priors =
-                            Some((!self_side_one, priors));
-                        if applied {
-                            prior_branches += 1;
-                        } else {
-                            prior_fallbacks += 1;
-                        }
-                    }
-                    None => prior_fallbacks += 1,
-                }
-            }
+            let resolved = resolve_pending_priors(
+                &mut tree,
+                &pending_opponent_maps,
+                &output.opponent_priors,
+                output.action_count,
+                !self_side_one,
+                PriorSeat::Opponent,
+            );
+            prior_branches += resolved.applied;
+            prior_fallbacks += resolved.fallbacks;
             // SEAT ORIENTATION. The model's value is SELF-relative: every leaf
             // observation is encoded from `leaf_ctx`'s own seat (SELF /
             // OPPONENT token blocks), and the checkpoint's value target is +1
