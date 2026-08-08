@@ -106,9 +106,27 @@ FINAL_HOLDOUT_REGISTERED = (19_200_000, 19_200_199)
 FINAL_HOLDOUT_UNSWEPT_HEAD = (19_200_000, 19_200_059)
 
 # Every band of fidelity seed space that the committed record actually touches.
-# MEASURED by running `_seed_intervals` over all 374 committed JSON under `reports/`
-# and `docs/` and taking the union of what came back, NOT transcribed from the
-# ledger -- the ledger is the thing under test.
+# MEASURED by running `_seed_intervals` over every committed JSON under `reports/` and
+# `docs/` and taking the union of what came back, NOT transcribed from the ledger --
+# the ledger is the thing under test.
+#
+# The corpus is **375** files at HEAD, of which **93** reach fidelity seed space and
+# **80** answer to the naive `reports/artifacts/` + `seeds.min` selector. This comment
+# said 374 for one commit: it was measured at `89ea0361` and went stale when this
+# branch merged `8f52ac95` (#1187), which adds
+# `reports/artifacts/c150_band_split_trade_census.json`. That is the same
+# correct-when-taken, false-once-the-tree-moved shape this PR corrected in the ledger,
+# reappearing in the correction's own comment, so: re-derive the denominator on the
+# merged tree, never carry it across a merge.
+#
+# THE CORPUS GREW AND THE BANDS DID NOT MOVE, and the reason is checked rather than
+# assumed: `_seed_intervals()` on the c150 census returns `[]` -- zero intervals at any
+# depth, not merely none above the floor -- because it is a per-band trade census
+# carrying no seed-keyed integer at all. So it never enters `fidelity_intervals()`,
+# 93 is unchanged, and the four-band hull below is unmoved. It stays out of
+# `tests/test_boundary_verdict_partition.py`'s corpus for the parallel reason: no
+# top-level `boundaries_measured`. The three denominators move independently and must
+# not be used to sanity-check one another.
 #
 # Adding a band here is only correct after the sweep that fills it is committed.
 # Widening one to make a red test green is the failure mode this pin exists to
@@ -129,7 +147,8 @@ C141_SWEEP = "reports/artifacts/c141_final_holdout_sweep.json"
 
 # Anti-vacuity floor for the corpus walk, not an exact count: every fix branch adds
 # dev/holdout sweep pairs, so an exact figure here would be stale within the week and
-# would say nothing the band equality below does not already say. 93 at `553cf2c3`.
+# would say nothing the band equality below does not already say. 93 at `553cf2c3`, and
+# still 93 at HEAD after merging `8f52ac95` -- re-derived there, not carried forward.
 _MIN_FIDELITY_ARTIFACTS = 80
 
 _SKIP_DIRS = frozenset(

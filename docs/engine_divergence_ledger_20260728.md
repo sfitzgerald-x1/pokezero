@@ -2543,7 +2543,11 @@ an open owner decision and this table does not pre-empt it in either direction.
 
 **Scanning for consumed seed space: there are FOUR artifact shapes, not one.** A
 selector keyed on `seeds.min` under `reports/artifacts/` answers for 80 of the 93
-committed artifacts that reach fidelity seed space, and it is wrong. Its highest
+committed artifacts that reach fidelity seed space, and it is wrong. (Those two
+figures were measured at `8f52ac95`, out of a 375-file corpus; they move with every
+committed sweep, so re-derive them rather than quoting this line. The whole-corpus
+total is deliberately left out of the table below for the same reason — a permanent
+ledger should not carry a number that changes on every artifact commit.) Its highest
 seed is exactly `19,200,259`, which is how the claim *"everything at or above
 `19,200,260` is virgin"* got asserted here today — and refuted by
 `reports/c73_eight_hundred_game_sweep.json`, which is consumed, is named by
