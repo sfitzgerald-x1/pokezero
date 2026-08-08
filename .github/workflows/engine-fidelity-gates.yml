@@ -56,6 +56,15 @@ jobs:
             # The coverage-bound pins. Listed so a PR that only weakens them still
             # trips this workflow.
             tests/test_single_seat_coverage_bound.py
+            # C144's boundary verdict partition. The COVERAGE partition above and this
+            # VERDICT partition are different partitions of different sets, and
+            # conflating them is what produced the false two-term identity. Listed with
+            # a STEP below, and with its two counterexample artifacts, so a PR that
+            # deletes either one cannot go green without tripping this workflow.
+            tests/test_boundary_verdict_partition.py
+            scripts/cert_sweep_readout.py
+            reports/c26_structural_probe_report.json
+            reports/c27_structural_probe_report.json
             # The coverage-bound pins' ENTIRE input. Without these listed, a PR whose
             # only change is deleting one of them skips mass-gate and goes green.
             reports/artifacts/c131_leechseed_main_dev_sweep.json
@@ -63,6 +72,10 @@ jobs:
             reports/artifacts/c131_leechseed_fix_dev_sweep.json
             reports/artifacts/c131_leechseed_fix_holdout_sweep.json
             src/pokezero/**
+            # C145: the Encore-on-transform pins, which are what hold `19100170/71-72`
+            # closed. Listed so a PR that ONLY weakens the pin file still trips this
+            # workflow -- and note the file was previously run by no step at all.
+            tests/test_engine_world_encore_transform.py
             tests/test_sleep_talk_phaze_drag.py
             tests/test_instruction_event_mapping.py
             # This PR pins `Ran 8 tests` on crit-kill-split, so its own edits must trigger.
@@ -386,6 +399,54 @@ jobs:
             }
           done
 
+      # The engine's --lib target: the `#[cfg(test)] mod`s inside
+      # third_party/poke-engine-src/src/. `--test test_gen3` above selects ONE
+      # integration target and compiles nothing under src/, so the FIVE unit tests
+      # there ran in no workflow at all -- `state.rs`'s
+      # `rest_sleep_pending_refund_tests` (four, added by #1105 alongside the step
+      # above) and `instruction.rs`'s `test_instruction_size`. That is the same defect
+      # the step above is named for, one cargo TARGET down instead of one crate down.
+      #
+      # Found by review of #1166. The three immobilizer-marker tests were MOVED out of
+      # `src/state.rs` into `tests/test_gen3.rs` so the step above would run them,
+      # which fixes those three and leaves the hole. This closes the hole.
+      # `test_instruction_size` is the one that matters most for that patch: it is the
+      # only assertion anywhere on `size_of::<Instruction>()`, and a new variant is
+      # exactly what moves it.
+      #
+      # PROVEN RED BY CONSTRUCTION, not by reading this file. The body below was
+      # extracted verbatim from this YAML and run against a live patched tree:
+      #   * unmutated -> exit 0 at 5/5.
+      #   * `rest_sleep_pending_refund_tests` deleted -> exit 1 (count 1). Caught ONLY
+      #     here: `--test test_gen3` stays 32/32 green and the crate suite stays green
+      #     above its floor, so before this step those four pins were deletable with
+      #     every gate green.
+      #   * one pin renamed, count still 5 -> exit 1 on the named-pin arm.
+      - name: Engine lib suite
+        run: |
+          set -o pipefail
+          cargo test --manifest-path third_party/poke-engine-src/Cargo.toml \
+            --no-default-features --features gen3 --lib 2>&1 \
+            | tee /tmp/gen3lib.log
+          if ! grep -qE '^test result: ok\. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
+              /tmp/gen3lib.log; then
+            echo "::error::expected 5 engine lib tests to pass; the suite shrank, grew, or failed"
+            exit 1
+          fi
+          # And NAME them, for the reason the step above gives: a total can be
+          # restored by unrelated tests. Both arms measured red by construction.
+          for pin in \
+            instruction::test::test_instruction_size \
+            state::rest_sleep_pending_refund_tests::apply_then_reverse_is_bit_identical \
+            state::rest_sleep_pending_refund_tests::refund_round_trips_without_a_pre_transform \
+            state::rest_sleep_pending_refund_tests::zero_refund_is_omitted_from_serialization \
+            state::rest_sleep_pending_refund_tests::a_pre_field_serialization_still_parses; do
+            grep -qxE "test $pin \.\.\. ok" /tmp/gen3lib.log || {
+              echo "::error::engine lib pin did not run: $pin"
+              exit 1
+            }
+          done
+
       # The pyo3 boundary is a blind spot that already cost one red-CI cycle on
       # #1105: adding a field to the engine's Pokemon broke the wheel build, and
       # nothing local caught it because `cargo test -p pokezero-search` never
@@ -492,6 +553,37 @@ jobs:
           fi
           if ! grep -qE '^OK$' /tmp/coverage.log; then
             echo "::error::coverage-bound pins did not report a clean OK"
+            exit 1
+          fi
+
+      # The VERDICT partition, which is a different partition from the coverage one
+      # above and was asserted with the wrong number of terms for the whole
+      # C111-C141 era: `matched + diverged == boundaries_measured` is FALSE, because
+      # `engine_error` and `skip:strict_all_branches_lossy` are both counted after
+      # `boundaries_measured` has already incremented. reports/c144.
+      #
+      # C142 makes it FIVE-term (`skip:rump_branch_set`) and takes the module 23 -> 26,
+      # adding the two sufficiency pins for the membership rule and the artifact-shape
+      # pin. The count below is EXACT for the same reason #1163 chose an exact count over
+      # a floor: a floor was the one fail-open in its mutation battery. Note that this
+      # guard lives in YAML, so no local `unittest` or `pytest` run can see it -- it is
+      # invisible to the "run the suite and diff the failing set" check, which is how a
+      # module that grew without its guard following reached an approved PR.
+      - name: Boundary verdict partition
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_boundary_verdict_partition -v 2>&1 \
+            | tee /tmp/verdict.log
+          if ! grep -qE 'Ran 26 tests' /tmp/verdict.log; then
+            echo "::error::expected 26 verdict-partition pins; the suite shrank or grew"
+            exit 1
+          fi
+          # A clean OK with no skips. The module's anti-vacuity pins -- that the
+          # artifact corpus is non-empty, and that c26/c27 still REFUTE the two-term
+          # form -- are the only reason the rest of it means anything, so a skipIf
+          # added to either must be a red gate rather than a quieter green one.
+          if ! grep -qE '^OK$' /tmp/verdict.log; then
+            echo "::error::verdict-partition pins did not report a clean OK"
             exit 1
           fi
 
@@ -639,6 +731,31 @@ jobs:
             exit 1
           fi
 
+      # C145: the Encore-on-a-transformed-active pins. These shipped with #1148 and
+      # NO workflow ran them -- `grep -rn encore .github/workflows/` returned nothing
+      # across all three files, so the pin that closed `19100170/71-72` was inert. The
+      # same shape the two steps above condemn, one PR later. `src/pokezero/**` is
+      # already in this workflow's path filter, so a change to `engine_world.py`
+      # triggers the job; it just never ran this file.
+      # Includes LockIndexToResidualBlockTests, which renders the CONSTRUCTED world
+      # and is the only assertion tying the lock index to Showdown's
+      # `|-heal|...|[from] item: Leftovers` line. It imports pokezero_search
+      # UNGUARDED for that reason -- a skip here retires the pin silently.
+      # Red/green measured in reports/c145_itemleftovers_row_adjudication.md §5.3.
+      - name: Encore-on-transform world-construction pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_engine_world_encore_transform -v 2>&1 \
+            | tee /tmp/encoretransform.log
+          if ! grep -qE 'Ran 22 tests' /tmp/encoretransform.log; then
+            echo "::error::expected 22 tests; the suite shrank or grew"
+            exit 1
+          fi
+          if grep -q 'skipped' /tmp/encoretransform.log; then
+            echo "::error::an Encore-on-transform pin SKIPPED; they must never skip"
+            exit 1
+          fi
+
       - name: Crate suites, including the renderer pins
         run: |
           set -o pipefail
@@ -671,23 +788,53 @@ jobs:
           # those three lands on 420 and passes, while they are the sole killers of five
           # mutants. Raise it deliberately when tests are added.
           #
-          # 423 -> 430 is a NET figure and worth spelling out, because a floor is blind to a
-          # swap: the immobilizer-marker change ADDS thirteen tests and DELETES six. The four are
-          # not regressions -- `attract_empty_tail_ambiguous` and its five sub-case literals
-          # no longer exist, so the tests that pinned that refusal being open, and the
-          # two-sided keying test built on its slug, had nothing left to assert. Their
-          # properties were relocated, not dropped: the refusal tests become
-          # `no_branch_of_an_attracted_or_paralyzed_fan_refuses_any_more` (the inverse, and a
-          # stronger claim) and the keying test becomes a direct unit test of
-          # `attribution_unsafe_label`. All ten new names are pinned below.
+          # 423 -> 429 is a NET figure and worth spelling out, because a floor is blind to a
+          # SWAP as well as to a deletion. Derived by differencing the two test-NAME sets --
+          # a clean `origin/main` e0a23e4e worktree with its own 71-patch vendor, against this
+          # tree -- and not by arithmetic on the totals:
           #
-          # 430 was MEASURED from a clean tree, not derived: an earlier revision of this line
-          # said 429, counted off a run that still had a scratch probe file in `tests/`. A
-          # floor ABOVE the total fails CI on every PR, which is the one arithmetic error in
-          # this block that would have been caught immediately -- unlike a floor below it.
-          if [ "${passed:-0}" -lt 430 ]; then
-            echo "::error::expected >= 430 crate tests, got ${passed:-0}"
-            exit 1
+          #   base 423 result lines / 423 distinct names; head 429 / 429; NO duplicate name in
+          #   either build, so the set difference is exact rather than approximate
+          #   ADDED    11
+          #   REMOVED   5  a_two_sided_refusal_keys_canonically_and_fits_the_python_seam
+          #                attracted_and_paralyzed_empty_tails_fail_closed_with_or_without_confusion
+          #                every_attract_subcase_literal_is_pinned
+          #                the_attract_refusal_names_its_subcase
+          #                the_attract_subcase_reports_every_live_predicate_not_just_the_first
+          #   NET      +6, and 423 + 6 == 429 == the floor enforced below
+          #
+          # Nothing was lost. TWO of the five were RELOCATED, and both replacements are in the
+          # ADDED set and pass:
+          #   * `attracted_and_paralyzed_empty_tails_fail_closed_with_or_without_confusion` ->
+          #     its INVERSE, `no_branch_of_an_attracted_or_paralyzed_fan_refuses_any_more`,
+          #     which is the stronger claim: zero refusals across the whole matrix the old test
+          #     covered, rather than one expected refusal per case.
+          #   * `a_two_sided_refusal_keys_canonically_and_fits_the_python_seam` -> a direct unit
+          #     test of the keying function itself,
+          #     `events::tests::the_attribution_unsafe_label_is_deduplicated_and_sorted`.
+          # THREE are OBSOLETE rather than relocated: they pinned the
+          # `attract_empty_tail_ambiguous` refusal being OPEN, and its five sub-case literals,
+          # and neither exists on the render path any more -- there is no refusal left to name.
+          # Verified rather than assumed: grepping `events.rs` for a live emitter of that family
+          # returns exactly two hits and BOTH are `#[should_panic]` fixtures inside
+          # `#[cfg(test)]`, which pass the slug in deliberately to prove the paired-tag assert
+          # fires. Nothing on the production path can emit it.
+          #
+          # All ELEVEN added names are pinned in the loop below -- 22 pins total, every one of
+          # them resolving in the same run these figures came from. Counted, not recalled: an
+          # earlier revision of this block said "ten".
+          #
+          # THE COUNTS HERE HAVE BEEN WRONG TWICE, and both times a single command would have
+          # said so. First, 428 was written 429, counted off a run that still had a scratch
+          # probe file in `tests/` -- a floor ABOVE the total fails every PR, so that one
+          # announces itself. Then this block asserted "+6 with NOTHING REMOVED" alongside
+          # "DELETES six" and "the four are not regressions": three different figures against a
+          # measured five. The "nothing removed" came from a real difference that was run
+          # against the PREVIOUS branch head and then carried forward across the very commit
+          # that deleted these five, instead of being re-run. A cross-check a change makes
+          # about itself is worth exactly one thing: running it.
+          if [ "${passed:-0}" -lt 429 ]; then
+            echo "::error::expected >= 429 crate tests, got ${passed:-0}"            exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
           # The Protect-marker pins (#1157). This arm RENDERS a protocol line into a
@@ -704,17 +851,26 @@ jobs:
           # exact silent swallow a pure marker causes at the walk's bare `sim.apply`
           # fall-through. `an_asleep_..._renders_slp_not_attract` is the sole thing standing
           # between the markers and a FABRICATED `|cant|..|Attract` on a turn the sleep gate
-          # blocked. Deleting all twelve and letting the total be restored by unrelated tests
-          # is exactly the hole the floor cannot see.
+          # blocked. Deleting all ten and letting the total be restored by unrelated tests is
+          # exactly the hole the floor cannot see.
           #
-          # Two of them guard the guards, and both were found green-under-mutation by review:
-          # `the_sleep_gate_does_not_swallow_a_confusion_self_hit_phantom` is the only thing
-          # that fails when the sleep gate's marker-only test is widened to `true` -- a
-          # FAIL-OPEN across 44 reachable branches. And
+          # `the_markers_de_collapse_what_combine_duplicate_instructions_had_merged` (added in
+          # review) is the ONLY test anywhere that records the branch-set change the markers
+          # actually make -- `grep` for `62.5`, `73.75` or a branch-count assertion on an
+          # attracted/paralyzed fan finds nothing else in either suite. It is not a sole
+          # killer and is not claimed as one: two mutations were measured against it, the
+          # paralysis/Attract ordering swap and full-paralysis 1/4 -> 1/2, and two other
+          # tests redden under those too.
+          #
+          # TWO MORE, added by the follow-up review and both found green-under-mutation:
+          # `the_sleep_gate_does_not_swallow_a_confusion_self_hit_phantom` is the only test
+          # that fails when the sleep gate's marker-only remainder test is widened to `true`
+          # -- a FAIL-OPEN that swallows a confusion self-hit across 44 reachable branches.
           # `every_attracted_or_paralyzed_fan_carries_its_immobilizer_marker` is the only
           # broad cover for a REACHABILITY break: a guard added to the engine's attract or
           # paralysis block leaves the instruction, the patch and every digest intact while
-          # the branch silently reverts to an anonymous empty delta.
+          # the branch silently reverts to an anonymous empty delta, and no branch-local
+          # check can see that once the marker is gone.
           for pin in the_rendered_hazard_chip_is_tagged_from_spikes \
                      two_spikes_layers_chip_the_deeper_amount_and_stay_tagged \
                      with_no_spikes_the_drag_emits_no_chip_and_no_spikes_tag \
@@ -736,6 +892,7 @@ jobs:
                      events::tests::a_move_immobilization_marker_is_classified_by_position_and_reason \
                      events::tests::a_marker_is_attributed_to_the_side_whose_action_it_aborted \
                      events::tests::the_attribution_unsafe_label_is_deduplicated_and_sorted \
+                     the_markers_de_collapse_what_combine_duplicate_instructions_had_merged \
                      the_sleep_gate_does_not_swallow_a_confusion_self_hit_phantom \
                      every_attracted_or_paralyzed_fan_carries_its_immobilizer_marker; do
             grep -qxE "test $pin \.\.\. ok" /tmp/cargo.log || {

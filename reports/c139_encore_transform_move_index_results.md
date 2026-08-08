@@ -14,6 +14,14 @@ Outcome of `reports/c139_encore_transform_move_index_prediction.md`, which was r
 **Prediction confirmed on every clause. The falsifier did not fire: nothing opened, dev did not
 move, no boundary count changed, and the skip histogram is identical on both sweeps.**
 
+> **[CORRECTION 2026-08-07 — C144.]** All four reconciliation lines below originally quoted
+> the **two-term** identity `matched + diverged == boundaries_measured`. That is not a
+> property of the differential: `skip:strict_all_branches_lossy` and `engine_error` are both
+> counted *after* `boundaries_measured` increments, so the identity is four-term. Every line
+> has been rewritten to show all four terms with their measured values; **no number changed**,
+> because both added terms are 0 on all four committed C137/C139 artifacts. See
+> `reports/c144_boundary_identity_correction.md`.
+
 ## Re-measured on current main — the authoritative table
 
 Raised by review as a non-blocking note and promoted to a pre-merge gate: `main` moved
@@ -63,7 +71,8 @@ happen; the class name is unchanged.
 | `diverged` | 2 | 2 |
 | `engine_errors` | 0 | 0 |
 
-`matched + diverged == boundaries_measured`: `15501 + 2 == 15503`, both sides.
+`matched + diverged + engine_errors + skip:strict_all_branches_lossy == boundaries_measured`:
+`15501 + 2 + 0 + 0 == 15503`, both sides.
 `divergence_classes` (complete census): `component_magnitude:heal` 1 -> 1,
 `component_missing_in_engine:sandstorm` 1 -> 1. Not one counter in the dev report differs.
 
@@ -77,7 +86,8 @@ happen; the class name is unchanged.
 | `diverged` | 4 | **2** |
 | `engine_errors` | 0 | 0 |
 
-`matched + diverged == boundaries_measured`: `15575 + 4 == 15579` before, `15577 + 2 == 15579` after.
+`matched + diverged + engine_errors + skip:strict_all_branches_lossy == boundaries_measured`:
+`15575 + 4 + 0 + 0 == 15579` before, `15577 + 2 + 0 + 0 == 15579` after.
 
 `divergence_classes` (complete census):
 
@@ -160,7 +170,8 @@ than asserted.
 | `diverged` | 2 | 2 |
 | `engine_errors` | 0 | 0 |
 
-`matched + diverged == boundaries_measured`: `15501 + 2 == 15503` before and after.
+`matched + diverged + engine_errors + skip:strict_all_branches_lossy == boundaries_measured`:
+`15501 + 2 + 0 + 0 == 15503` before and after.
 
 `divergence_classes` (complete census, both sides):
 
@@ -182,8 +193,8 @@ not one total.
 | `diverged` | 5 | **3** |
 | `engine_errors` | 0 | 0 |
 
-`matched + diverged == boundaries_measured`: `15574 + 5 == 15579` before, `15576 + 3 == 15579`
-after.
+`matched + diverged + engine_errors + skip:strict_all_branches_lossy == boundaries_measured`:
+`15574 + 5 + 0 + 0 == 15579` before, `15576 + 3 + 0 + 0 == 15579` after.
 
 `divergence_classes` (complete census):
 

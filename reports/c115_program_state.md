@@ -55,8 +55,18 @@ this era; the 208 → 39 reduction predates it and is not itemised here. §3's
 That the denominator held is not incidental. A divergence count can fall because
 boundaries left the measured pool rather than because anything was fixed, so every
 measurement below reports `boundaries_measured`, `transitions_matched`, and the
-identity `matched + diverged == boundaries_measured`. A fidelity claim requires
-`matched` to hold or rise.
+boundary verdict partition. A fidelity claim requires `matched` to hold or rise.
+
+> **[CORRECTION 2026-08-07 — C144.]** This section stated that partition as
+> `matched + diverged == boundaries_measured`. **That two-term form is false as a
+> property of the instrument.** The identity is four-term —
+> `matched + diverged + engine_errors + skip:strict_all_branches_lossy ==
+> boundaries_measured` — because both extra terms are counted *after*
+> `boundaries_measured` has already incremented. The two-term form happens to hold on
+> every run cited in this report only because both extra terms are 0 on the dev and
+> validation-holdout windows; it is broken on artifacts that were already committed
+> when this was written. See `reports/c144_boundary_identity_correction.md`. Nothing
+> else in this report changes: every `matched` figure below is unaffected.
 
 | landed | delta |
 |---|---|

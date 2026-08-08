@@ -12,6 +12,16 @@ Window: seeds 19000000–19000199 on `main` at `9acc9d30`, artifact
 `/tmp/sweep_f1.json`: **15,224 boundaries measured, 11 divergent, 0 engine
 errors**, `matched + diverged == boundaries_measured`.
 
+> **[CORRECTION 2026-08-07 — C144.]** The identity quoted above is the **two-term**
+> form, which is not a property of the instrument: the real one is four-term
+> (`matched + diverged + engine_errors + skip:strict_all_branches_lossy ==
+> boundaries_measured`). The two-term form closes only when both extra terms are 0, and
+> `/tmp/sweep_f1.json` was never committed, so **`skip:strict_all_branches_lossy`
+> cannot be re-derived for this run** — the reported reconciliation is therefore
+> unverifiable rather than wrong. It is very likely 0 (every committed artifact on this
+> window era has it at 0), but "likely" is not a measurement. The row causes this report
+> is about do not depend on it. See `reports/c144_boundary_identity_correction.md`.
+
 **Correction (v1 error).** v1 stamped the era as engine fingerprint
 `705e015d59d9…`. That string is the value inside the artifact's
 `checkpoint_provenance` block — the fingerprint of the checkpoint that *played*

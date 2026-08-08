@@ -96,6 +96,14 @@ class SingleSeatCoverageBoundTests(unittest.TestCase):
             # `full_round` must equal measured plus the exits taken INSIDE the
             # full-round path. That catches the fold-and-recompute mutation.
             #
+            # DO NOT add `skip:strict_all_branches_lossy` to the allowlist below. It
+            # looks like a peer of the other `skip:*` counters and is not: it fires
+            # AFTER `boundaries_measured` has already incremented, so adding it would
+            # double-count that boundary and break this reconciliation on every
+            # artifact where it is nonzero. It belongs to the VERDICT partition
+            # instead -- `tests/test_boundary_verdict_partition.py`, C144 -- which is
+            # a different partition of a different set.
+            #
             # It is NOT a complete guard, and the comment here used to claim it was
             # ("breaks the moment single-seat plies are counted as full rounds"). A
             # review constructed the counterexample: fold single-seat into
