@@ -13,6 +13,7 @@ from pokezero.fallback_addresses import (
     iter_shard_addresses,
     load_addresses,
     main,
+    scan_corpus,
 )
 
 # The six keys era 64 actually emitted for what is ONE class: the request says
@@ -55,6 +56,7 @@ class TestCanonicalKey:
         collapsed = canonical_key(_TRAPPED_KEYS[0])
         assert collapsed.startswith("self_request_state_unsupported:")
         assert "constrain legality beyond this construction" in collapsed
+        assert "['trapped']" in collapsed  # the predicate is retained
         assert "foe ability" in collapsed
         # ...but not the bystander value itself.
         assert "swarm" not in collapsed
@@ -68,6 +70,7 @@ class TestCanonicalKey:
             "a: p+q, b: r",
             "materialization_blocker: baton-pass:substitute",
             "crate_search: x+y+z",
+            "volatile_unsupported: side 'x': ['perish0', 'flashfire']",
         ],
     )
     def test_does_not_disturb_the_separator_grammar(self, key):
@@ -76,8 +79,57 @@ class TestCanonicalKey:
         # invents phantom bare rows. Canonicalisation must leave both alone.
         assert canonical_key(key) == key
 
-    def test_distinct_classes_do_not_collapse_together(self):
+    @pytest.mark.parametrize(
+        ("left", "right"),
+        [
+            # Real recorded keys whose quoted operand IS the actionable content --
+            # the volatile/condition/boost-key/weather that names the fix. Blanket
+            # literal-stripping merged each of these pairs. This is the test that
+            # must go red if canonicalisation ever over-merges again.
+            (
+                "volatile_unsupported: side 'p1': ['perish0']",
+                "volatile_unsupported: side 'p1': ['flashfire']",
+            ),
+            (
+                "boost_unsupported: side 'p1' boost key 'evasion'",
+                "boost_unsupported: side 'p1' boost key 'accuracy'",
+            ),
+            (
+                "side_condition_unsupported: side 'p1' condition 'spikes'",
+                "side_condition_unsupported: side 'p1' condition 'lightscreen'",
+            ),
+            (
+                "weather_unsupported: weather 'hail' has no Gen 3 engine mapping",
+                "weather_unsupported: weather 'sandstorm' has no Gen 3 engine mapping",
+            ),
+            (
+                "self_moveset_mismatch: p1: request-known move 'shadowball' is absent",
+                "self_moveset_mismatch: p1: request-known move 'hiddenpower' is absent",
+            ),
+        ],
+    )
+    def test_actionable_operands_are_never_merged(self, left, right):
+        assert canonical_key(left) != canonical_key(right)
+
+    def test_distinct_families_do_not_collapse_together(self):
         assert canonical_key(_TRAPPED_KEYS[0]) != canonical_key(_SLEEP_TALK_KEY)
+
+    def test_seat_is_normalised_in_both_spellings(self):
+        # `{slot}:` unquoted and `side {slot!r}` quoted must agree, or the canonical
+        # key space is partitioned by an f-string accident.
+        quoted = ("encore_move_unknown: side '%s' is encored but the locked move "
+                  "cannot be determined")
+        unquoted = "self_moveset_mismatch: %s: request-known move 'toxic' is absent"
+        assert canonical_key(quoted % "p1") == canonical_key(quoted % "p2")
+        assert canonical_key(unquoted % "p1") == canonical_key(unquoted % "p2")
+
+    def test_apostrophe_inside_an_interpolated_error_is_left_alone(self):
+        # `crate_search: {reason}` interpolates arbitrary native error text. A naive
+        # `'[^']*'` matches "'t materialize '", destroying the predicate and keeping
+        # the payload.
+        key = "crate_search: can't materialize 'Zapdos'"
+        assert canonical_key(key) == key
+        assert canonical_key(key) != canonical_key("crate_search: can't refuse 'Zapdos'")
 
 
 class TestIterShardAddresses:
@@ -89,7 +141,7 @@ class TestIterShardAddresses:
         assert address.seat == "p1"
         assert address.reason == "crate_search_failed"
         assert address.key == _SLEEP_TALK_KEY
-        assert address.locator == ("battle-x-8220001", 103, "p1")
+        assert address.locator == ("", "battle-x-8220001", 103, "p1")
 
     def test_per_seat_mirroring_is_not_double_counted(self):
         # The known 2x trap: the same stats block reachable by two paths.
@@ -151,7 +203,9 @@ class TestLoadAddresses:
 
         addresses = load_addresses([tmp_path])
         assert sorted(a.battle_id for a in addresses) == ["battle-x-1", "battle-x-2"]
-        assert {a.source for a in addresses} == {"a-p1.json", "b-p2.json"}
+        # Relative to the argument root, not the basename: era directories carry
+        # duplicate basenames that differ only by parent.
+        assert {a.source for a in addresses} == {"a-p1.json", "nested/b-p2.json"}
 
     def test_accepts_explicit_file_paths(self, tmp_path):
         shard = tmp_path / "a-p1.json"
@@ -198,3 +252,120 @@ class TestCli:
         (tmp_path / "summary.json").write_text(json.dumps({"score": 1}))
         assert main([str(tmp_path)]) == 1
         assert "no fallback addresses found" in capsys.readouterr().out
+
+
+class TestCorpusCompletenessAndFrequency:
+    def test_dropped_addresses_are_surfaced_not_swallowed(self, tmp_path, capsys):
+        # `fallback_sample_addresses_dropped` non-zero means occurrences exist with
+        # no replayable address. Silent truncation reads as "covered everything".
+        (tmp_path / "a-p1.json").write_text(
+            json.dumps(
+                {
+                    "engine_mcts": {
+                        "policy_stats": {
+                            "fallback_samples": {_SLEEP_TALK_KEY: [_entry("b", 1, "p1")]},
+                            "fallback_sample_addresses_dropped": 1001,
+                        }
+                    }
+                }
+            )
+        )
+        scan = scan_corpus([tmp_path])
+        assert scan.addresses_dropped == 1001
+        assert scan.complete is False
+
+        assert main([str(tmp_path)]) == 0
+        assert "INCOMPLETE CORPUS: 1001" in capsys.readouterr().out
+
+    def test_complete_corpus_says_nothing_about_dropping(self, tmp_path, capsys):
+        (tmp_path / "a-p1.json").write_text(
+            json.dumps(_shard({_SLEEP_TALK_KEY: [_entry("b", 1, "p1")]}))
+        )
+        scan = scan_corpus([tmp_path])
+        assert scan.complete is True
+        assert main([str(tmp_path)]) == 0
+        assert "INCOMPLETE" not in capsys.readouterr().out
+
+    def test_ranking_uses_true_occurrences_not_capped_address_counts(self, tmp_path, capsys):
+        # The inversion this guards: a class capped at few addresses but with a huge
+        # true count must outrank a class with many raw variants and a small count.
+        rare_but_huge = "materialization_blocker: baton-pass:substitute"
+        common_but_small = "materialization_blocker: toxic-stage-unknown"
+        (tmp_path / "a-p1.json").write_text(
+            json.dumps(
+                {
+                    "engine_mcts": {
+                        "policy_stats": {
+                            "fallback_samples": {
+                                rare_but_huge: [_entry("b", 1, "p1")],
+                                common_but_small: [
+                                    _entry("b", 2, "p1"),
+                                    _entry("b", 3, "p1"),
+                                    _entry("b", 4, "p1"),
+                                ],
+                            },
+                            "world_failure_reasons": {
+                                rare_but_huge: 1472,
+                                common_but_small: 80,
+                            },
+                        }
+                    }
+                }
+            )
+        )
+        scan = scan_corpus([tmp_path])
+        assert scan.true_counts[rare_but_huge] == 1472
+
+        assert main([str(tmp_path)]) == 0
+        out = capsys.readouterr().out
+        # 1 address / 1472 occurrences must be printed ABOVE 3 addresses / 80.
+        assert out.index(rare_but_huge) < out.index(common_but_small)
+
+    def test_fallback_reasons_are_namespaced_into_true_counts(self, tmp_path):
+        (tmp_path / "a-p1.json").write_text(
+            json.dumps(
+                {
+                    "engine_mcts": {
+                        "policy_stats": {
+                            "fallback_samples": {
+                                "fallback:choices_unmapped": [_entry("b", 1, "p1")]
+                            },
+                            "fallback_reasons": {"choices_unmapped": 63},
+                        }
+                    }
+                }
+            )
+        )
+        assert scan_corpus([tmp_path]).true_counts["fallback:choices_unmapped"] == 63
+
+
+class TestPathHandling:
+    def test_overlapping_arguments_do_not_double_count(self, tmp_path):
+        shard = tmp_path / "a-p1.json"
+        shard.write_text(json.dumps(_shard({_SLEEP_TALK_KEY: [_entry("b", 1, "p1")]})))
+        assert len(load_addresses([tmp_path])) == 1
+        assert len(load_addresses([tmp_path, shard])) == 1
+        assert len(load_addresses([shard, shard])) == 1
+
+    def test_locator_separates_identical_seeds_in_different_shards(self, tmp_path):
+        # A depth/arm grid reuses one seed_start, so battle_id collides across
+        # shards that are genuinely different search configurations.
+        for name in ("arm-a-d1.json", "arm-c-d2.json"):
+            (tmp_path / name).write_text(
+                json.dumps(_shard({_SLEEP_TALK_KEY: [_entry("battle-600000", 5, "p1")]}))
+            )
+        addresses = load_addresses([tmp_path])
+        assert len(addresses) == 2
+        assert len({a.locator for a in addresses}) == 2
+
+    def test_a_missing_path_is_not_an_empty_corpus(self, tmp_path, capsys):
+        assert main([str(tmp_path / "typo.json")]) == 2
+        assert "path does not exist" in capsys.readouterr().out
+
+    def test_json_out_creates_missing_parent(self, tmp_path):
+        (tmp_path / "a-p1.json").write_text(
+            json.dumps(_shard({_SLEEP_TALK_KEY: [_entry("b", 1, "p1")]}))
+        )
+        out = tmp_path / "deep" / "nested" / "corpus.json"
+        assert main([str(tmp_path), "--json-out", str(out)]) == 0
+        assert len(json.loads(out.read_text())) == 1
