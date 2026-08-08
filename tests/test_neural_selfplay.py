@@ -1128,7 +1128,10 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(manifest["training_input_paths"], expected_paths)
         self.assertGreaterEqual(manifest["training_elapsed_seconds"], 0.0)
         self.assertEqual(manifest["training_input_bytes"], 6)
-        self.assertEqual(manifest["checkpoint_bytes"], len("checkpoint"))
+        # Was `len("checkpoint")`, the byte size of the old TEXT stub. The stub is now a
+        # real torch payload, because the current-family gate torch.loads it, so the
+        # literal no longer matches. What the manifest must do is report a real size.
+        self.assertGreater(manifest["checkpoint_bytes"], 0)
         self.assertFalse(manifest["training_cache_deleted_after_train"])
 
     def test_run_neural_selfplay_iterations_deletes_cache_chunks_after_ppo_train_by_default(self) -> None:
@@ -1169,7 +1172,10 @@ class NeuralSelfPlayTest(unittest.TestCase):
             self.assertGreater(manifest["training_cache_deleted_bytes"], 0)
             self.assertGreaterEqual(manifest["training_elapsed_seconds"], 0.0)
             self.assertEqual(manifest["training_input_bytes"], 4)
-            self.assertEqual(manifest["checkpoint_bytes"], len("checkpoint"))
+            # Was `len("checkpoint")`, the byte size of the old TEXT stub. The stub is now a
+            # real torch payload, because the current-family gate torch.loads it, so the
+            # literal no longer matches. What the manifest must do is report a real size.
+            self.assertGreater(manifest["checkpoint_bytes"], 0)
             self.assertEqual(manifest["training_cache_paths"], [str(path) for path in trained_cache_paths])
 
     def test_neural_selfplay_paths_byte_size_reuses_known_sizes(self) -> None:
@@ -5625,11 +5631,49 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertGreater(float(loss.detach().item()), pieces["value_loss"])
 
 
+def _write_loadable_fake_checkpoint(path: Path) -> None:
+    """A checkpoint stub that `torch.load(..., weights_only=True)` can actually read.
+
+    These were `write_text("checkpoint")` -- a text file, opened by nothing, because every
+    loader on the path was patched. `is_current_family_checkpoint_policy_spec` then began
+    calling `load_transformer_model_config`, which torch.loads the file BEFORE any patched
+    loader runs. Torch read the bytes of the word "checkpoint" as pickle opcodes and raised
+    `UnpicklingError: Unsupported global: GLOBAL heckpoin.` -- that mangled name is
+    "checkpoint" minus its first and last byte, which is what identifies the cause.
+
+    Only the two fields the gate reads are written. The policy id still comes from the PATH
+    via `_policy_id_from_fake_checkpoint_path`, so this stays a stub.
+    """
+    import torch
+
+    from pokezero.neural_policy import (
+        NEURAL_POLICY_SCHEMA_VERSION,
+        TransformerPolicyConfig,
+    )
+
+    config = TransformerPolicyConfig.compact_category(
+        policy_id=path.stem,
+        category_vocab=("token-0",),
+        category_oov_buckets=1,
+        window_size=1,
+        embedding_dim=8,
+        transformer_layers=0,
+        attention_heads=1,
+        feedforward_dim=8,
+        dropout=0.0,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {"schema_version": NEURAL_POLICY_SCHEMA_VERSION, "model_config": config.to_dict()},
+        path,
+    )
+
+
 def write_neural_report_manifest(run_dir: Path, *, top_level: bool = True, source: dict | None = None) -> None:
     checkpoint_path = run_dir / "iteration-0001" / "transformer-policy.pt"
     iteration_dir = run_dir / "iteration-0001"
     iteration_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path.write_text("checkpoint", encoding="utf-8")
+    _write_loadable_fake_checkpoint(checkpoint_path)
     iteration_manifest = {
         "schema_version": NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
         "iteration": 1,
@@ -5811,7 +5855,7 @@ def _append_neural_report_manifest_iteration(
     iteration_dir = run_dir / f"iteration-{iteration:04d}"
     iteration_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = iteration_dir / "transformer-policy.pt"
-    checkpoint_path.write_text("checkpoint", encoding="utf-8")
+    _write_loadable_fake_checkpoint(checkpoint_path)
     policy_id = f"entity-test-iter-{iteration:04d}"
     base_iteration["iteration"] = iteration
     base_iteration["checkpoint_path"] = str(checkpoint_path)
@@ -6001,7 +6045,7 @@ def patched_neural_selfplay_dependencies(
 
     def fake_save_transformer_checkpoint(path, model, *, result):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_text("checkpoint", encoding="utf-8")
+        _write_loadable_fake_checkpoint(Path(path))
 
     class FakeModel:
         def __init__(self, policy_id: str) -> None:
