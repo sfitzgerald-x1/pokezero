@@ -2467,10 +2467,12 @@ def _prepare_boundary(
     # seeds the world from the very thing the harness is checking.
     #
     # It also does not adopt scripts/differential_denominator.py. It DOES publish a measured count
-    # (:2606 increments, :2857/:3058 emit, :3439 prints) -- an earlier revision of this comment
-    # said it did not, which was wrong. The problem is that nothing GATES on it: :3464 is
+    # -- an earlier revision of this comment said it did not, which was wrong. The problem is
+    # that nothing GATES on it: the exit is
     # `return 1 if (transitions_diverged or engine_errors) else 0`, so a run that skipped every
-    # boundary still exits 0. Publishing without gating is the exact shape the denominator rule
+    # boundary still exits 0. (Cited by expression, not line: a first version of this comment
+    # gave five line numbers, every one off by exactly 5, because they were measured against a
+    # 14-line draft of a comment that shipped at 19.) Publishing without gating is the exact shape the denominator rule
     # exists to close.
     #
     # Left as-is on purpose: this is a FIFTH differential, outside the four the denominator (#1154)

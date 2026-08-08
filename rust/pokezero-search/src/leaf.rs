@@ -1315,8 +1315,9 @@ impl LeafContext {
         // reachable in production search at depth > 0 where it never was before. The fix made
         // the defect live; this closes it.
         //
-        // THE STRONGEST ARGUMENT, which the first version of this comment missed: `leaf.rs:1640`
-        // below already reads `self_side.volatile_statuses.contains(MUSTRECHARGE)` LIVE, to
+        // THE STRONGEST ARGUMENT, which the first version of this comment missed: further down
+        // this file, `let recharging = self_side.volatile_statuses.contains(&...MUSTRECHARGE)`
+        // (in the action-surface block) already reads our own side LIVE, to
         // present the forced "recharge" pseudo-move on our own action surface. So pre-lift the
         // SELF side carried exactly the self-contradiction cited above as the reason the OPPONENT
         // side had to be live -- action surface live, volatile bag root-frozen, inside one

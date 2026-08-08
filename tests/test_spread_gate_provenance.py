@@ -39,7 +39,7 @@ What this file adds over ``test_observation_spec_v4.py``'s coverage, which pins 
   derivation with itself and were inert.
   This file is ADD-ONLY: that assertion is still present and is left in place deliberately, since
   it is nearly free and fails on a call-site edit even in an environment with no Showdown checkout,
-  where everything here skips. What changes is that it is no longer the only thing pinning the gate.
+  where all but the fixture lint skips. What changes is that it is no longer the only thing pinning the gate.
 
 Two traps this fixture is built to avoid, both of which produced meaningless green runs while it
 was being written:

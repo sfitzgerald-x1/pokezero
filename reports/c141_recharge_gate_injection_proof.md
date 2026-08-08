@@ -131,7 +131,7 @@ is true on exactly those 5 and nowhere else. Two reachable shapes this run would
 - **Correct at depth 0, stale at depth > 0.** `leaf_root_parity` is a depth-0 gate by
   construction -- its own header says the construction "must reproduce the production
   observation EXACTLY" at zero branch steps -- so a write that is right at the root and goes
-  stale in the branch is structurally invisible to it. That is the current root-frozen behaviour
+  stale in the branch is structurally invisible to it. That is the root-frozen behaviour this report was written to discuss — **since lifted**, see Disposition —
   this report exists to discuss, and it is the shape a real P3 implementation is most likely to
   get wrong. The gate that would have to catch it is `leaf_vs_reality`, already red at 123 at the time of this run (122 after the lift).
 - **Right side, wrong volatile.** Caught on 2 rows rather than 5 -- same corpus, weaker signal.

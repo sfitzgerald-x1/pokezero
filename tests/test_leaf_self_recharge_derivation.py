@@ -50,7 +50,10 @@ class LeafDerivesTheSelfRechargeFlagTest(unittest.TestCase):
         if tables_json is None:
             self.skipTest("no encoder tables artifact and no Showdown checkout")
         from pokezero.dex import load_showdown_dex_cached
-        from pokezero.engine_world import battle_spec_from_payload
+        from pokezero.engine_world import (
+            EngineWorldUnsupported,
+            battle_spec_from_payload,
+        )
         from pokezero.env import BattleStartOverride
         from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
         from pokezero.poke_engine_adapter import build_poke_engine_state
@@ -86,7 +89,10 @@ class LeafDerivesTheSelfRechargeFlagTest(unittest.TestCase):
                     recharging_slots=("p1",),
                     **kwargs,
                 )
-            except Exception:
+            except EngineWorldUnsupported:
+                # A world this corpus row cannot express. Legitimately skippable -- but ONLY
+                # this exception: a bare `except Exception` here would swallow a genuine
+                # regression in world construction and report it as "no suitable row".
                 continue
             free_state = build_poke_engine_state(free.spec).to_string()
             locked_state = build_poke_engine_state(locked.spec).to_string()
@@ -102,7 +108,14 @@ class LeafDerivesTheSelfRechargeFlagTest(unittest.TestCase):
             )
             turn = int(row.observation_metadata.get("turn_number") or 0)
             return tables_json, _row_inputs(row), context, free_state, locked_state, turn
-        self.skipTest("no committed-sample p1 row could build both worlds")
+        self.fail(
+            "no committed-sample p1 row could build BOTH the free and locked world. "
+            "The sample is COMMITTED (tests/data/golden_corpus_sample/), so on any machine with "
+            "a Showdown checkout this is a regression -- most likely `recharging_slots` no "
+            "longer reaching the engine state -- not an environment difference. "
+            "`skipTest` here would be this repo's own denominator rule unapplied to its own "
+            "pin: a run that measured nothing is not a pass."
+        )
 
     def _self_flag(self, encoder, leaf_state, turn):
         md = json.loads(encoder.leaf_inputs_json(leaf_state, turn))["observation_metadata"]

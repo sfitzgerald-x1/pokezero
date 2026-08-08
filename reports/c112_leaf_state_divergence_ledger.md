@@ -112,18 +112,25 @@ that INERT line being the only thing distinguishing it from a pass.
 
 Coverage on the v4 corpus (`corpus/golden-v4`): the harness surfaces **18 `state` families / 138
 rows**, and this ledger groups all 138 into six mechanisms — P1 100 + P2 28 + P3 2 + P4 1 + P5 5 +
-P6 2 = 138. **All 138 rows carry a source-level cause and a disposition.**
+P6 2 = 138. **All 138 rows carry a source-level cause and a disposition.** P2 (toxic, 28 rows) was open in an
+earlier revision and is closed here: the event renderer emits status-free condition strings
+(`events.rs:751-760`), so the leaf's replay cannot see an in-branch toxic entry. Closed on a
+counterfactual plus a 33/33 signature on v4 and 27/27 on golden-v2, with three earlier attributions
+for the class withdrawn.
 
 > **AT HEAD THESE ARE 16 FAMILIES / 135 ROWS.** P4's 1 row closed in #1156 and P3's 2 closed with
 > the freeze lift; both families are gone entirely. The figures above are the ledger-time
 > attribution and are kept because the attribution itself is what this document is for — but do
 > not quote them as current coverage. A previous correction updated the BOUNDARY count
 > (124→123→122) and left these row counts untouched, which is the unit this document actually
-> states coverage in. P2 (toxic, 28 rows) was open in an
-earlier revision and is closed here: the event renderer emits status-free condition strings
-(`events.rs:751-760`), so the leaf's replay cannot see an in-branch toxic entry. Closed on a
-counterfactual plus a 33/33 signature on v4 and 27/27 on golden-v2, with three earlier attributions
-for the class withdrawn.
+> states coverage in.
+
+> **`leaf.rs` LINE CITATIONS IN THIS DOCUMENT ARE ERA-STAMPED AND HAVE DRIFTED.** The P3
+> freeze lift changed that file by **+5 lines** net, so every citation below the edit
+> (~1290) is low by roughly that much; citations above it are unaffected. They are left as
+> written rather than renumbered, because renumbering is what keeps failing: three separate
+> line references in this effort went stale **in the commit that introduced or fixed them**.
+> Resolve by symbol or by grepping the quoted expression, not by line.
 
 Every attributed row rests on source-level verification, subject to P3's row-level caveat stated in
 that section (its second row's boundary is unverified, and the id-877 reading rests on the one
@@ -210,8 +217,8 @@ this kind gets over-read — and its predecessor was withdrawn for exactly that.
 | `NUMERIC_STALL_COUNTER` (self) | 26 / 23 / 0 | **P1** | **production** — `leaf.rs` |
 | `NUMERIC_STALL_COUNTER` (opponent) | 26 / 23 / 0 | **P1** | **production** — `leaf.rs` |
 | `NUMERIC_ENCORE_TURNS` | 2 / 2 / 0 | **P1** | **production** — `leaf.rs` |
-| `NUMERIC_TOXIC_STAGE` (self) | 14 / 12 / 0 | **P2** renderer emits status-free conditions | encoder fix |
-| `NUMERIC_TOXIC_STAGE` (opponent) | 14 / 12 / 0 | **P2**, same mechanism | encoder fix |
+| `NUMERIC_TOXIC_STAGE` (self) | 14 / 12 / 0 | **P2** renderer emits status-free conditions | **production** — `events.rs` |
+| `NUMERIC_TOXIC_STAGE` (opponent) | 14 / 12 / 0 | **P2**, same mechanism | **production** — `events.rs` |
 | `CATEGORY_VOLATILE_OFFSET` (self) | 2 / 0 / 0 | **P3** self-side recharge root-freeze | **CLOSED** — gates #1156, freeze lifted in `leaf.rs` (this branch) |
 | `CATEGORY_VOLATILE_OFFSET` (opponent) | 1 / 0 / 0 | **P4** `recharging` never seeded on a faint-replacement round | **CLOSED** — #1156 replaced the candidate-derived block |
 | `NUMERIC_ACTIVE` (action) | 1 / 1 / 2 | **P5** recharge request carries no `disabled` bits | **production** — `engine_world.py` |
@@ -219,8 +226,8 @@ this kind gets over-read — and its predecessor was withdrawn for exactly that.
 | `legal_action_mask` action0 | 1 / 1 / 0 | **P5** | **production** — `engine_world.py` |
 | `legal_action_mask` action1 | 1 / 1 / 2 | **P5** | **production** — `engine_world.py` |
 | `legal_action_mask` action3 | 1 / 1 / 2 | **P5** | **production** — `engine_world.py` |
-| `NUMERIC_SLEEP_TURNS` (self) | 1 / 0 / 0 | **P6** Sleep-Talk refund not modelled | encoder fix |
-| `NUMERIC_SLEEP_TURNS` (opponent) | 1 / 0 / 0 | **P6**, same mon from the other seat | encoder fix |
+| `NUMERIC_SLEEP_TURNS` (self) | 1 / 0 / 0 | **P6** Sleep-Talk refund not modelled | **production** — `leaf.rs` (`LeafMeta.sleep`) |
+| `NUMERIC_SLEEP_TURNS` (opponent) | 1 / 0 / 0 | **P6**, same mon from the other seat | **production** — `leaf.rs` (`LeafMeta.sleep`) |
 
 P1 100 + P2 28 + P3 2 + P4 1 + P5 5 + P6 2 = **138**.
 
@@ -606,7 +613,15 @@ never enters the constructed world, and `leaf.rs:1320-1323` correctly reports th
 volatile that was never seeded. Slaking's Hyper Beam was at round 17, before the root, so the
 branch cannot set it either.
 
-**Disposition: production** — `scripts/leaf_vs_reality.py` was the named site, but #1156 replaced that block wholesale; see the CLOSED note above. (An earlier revision labelled this `harness fix`, contradicting this file's own file-location table and its rule at "Dispositions name the owning FILE".) Seed `recharging` from the opponent's most recent decision row, or
+**Disposition: harness** — `scripts/leaf_vs_reality.py`, matching this file's own file-location
+table (`P4 | scripts/leaf_vs_reality.py | harness`) and its "Only P4 is harness-only" line.
+
+*Correction on a correction:* a previous pass relabelled this `production`, claiming the original
+`harness fix` contradicted the table. It did not — P4 is the one genuinely harness-only cause, and
+the table said so. That pass was fixing P5, whose body WAS wrong, and swept P4 along with it. The
+label is restored; what was actually stale here is the prescribed remedy below, which #1156
+superseded by replacing the block wholesale (see the CLOSED note above). Seed `recharging` from
+the opponent's most recent decision row, or
 from the payload's `opponent_must_recharge`, rather than from a same-round chosen candidate that
 does not exist on faint-replacement rounds. Filing this as an accepted deviation by widening a
 tag, as the previous revision proposed, would route a harness world-construction gap into an
@@ -671,7 +686,7 @@ Snore on pivot-in (`time += skippedTime` in `slp.onSwitchIn`), applied at `belie
 (`leaf.rs:322-329`) is `(started, cant_count)` with **no skipped term**, so the leaf cannot apply
 the refund and carries the root's 2.
 
-**Disposition: encoder fix**, and the `state` class is **correct** — the previous revision's
+**Disposition: production** — `events.rs`, per this file's own file-location table (an earlier revision said the label-only `encoder fix`, which `:20`'s "All six name a file" rule forbids) — and the `state` class is **correct** — the previous revision's
 "artifact of the comparison setup, not an encoder defect" removed a genuine defect from the defect
 list on a mechanism incapable of producing it.
 

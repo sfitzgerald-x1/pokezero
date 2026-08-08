@@ -104,28 +104,48 @@ The three guard pins added later (vocabulary `raise`, the `NOT CHECKED` render p
 ```python
 -    if anchor_metadata.get("self_must_recharge") is True:
 -        slots.append(seat)
-+    cands = anchor_metadata.get("action_candidates") or []
-+    idx = anchor_metadata.get("chosen_action_index")
-+    if any(c.get("action_index") == idx and normalize_id(str(c.get("move_id") or "")) == "recharge"
-+           for c in cands if isinstance(c, Mapping)):
-+        slots.append(seat)  # MUTANT: candidate-derived, the circular rule
++    # MUTANT: candidate-derived -- lock the seat iff a `recharge` candidate is offered.
++    if any(
++        normalize_id(str(c.get("move_id") or "")) == "recharge"
++        for c in (anchor_metadata.get("action_candidates") or [])
++        if isinstance(c, Mapping)
++    ):
++        slots.append(seat)
 ```
-
-Written out in full rather than elided. Review reconstructed the elided version, got the same
-count (`Ran 12 / FAILED (failures=3)`) but a **different pair** of names — both reconstructions are
-legitimately "candidate-derived", so an elided diff cannot be checked against its own quoted
-output. That defeats the point of this document.
 
 ```
 $ .venv/bin/python -m unittest tests.test_recharge_gate_derivation
 FAIL: test_the_rules_differ_wherever_the_action_record_lies
-FAIL: test_it_catches_a_write_that_CONTRADICTS_the_tracker_false_case
-FAIL: test_the_fixed_rule_locks_our_own_slot_from_the_TRACKER
+FAIL: test_it_catches_a_write_that_CONTRADICTS_the_tracker_true_case
+FAIL: test_it_is_keyed_off_the_tracker_not_the_action
 Ran 12 tests … FAILED (failures=3)
 
 --- restored ---
 Ran 12 tests … OK
 ```
+
+**The control, which is the whole point of this entry.** A mutant that merely DELETES the self
+lock must redden a *different* set, or "candidate-derived" is not what was demonstrated:
+
+```
+$ # `if anchor_metadata.get("self_must_recharge") is True:` -> `if False:`
+FAIL: test_the_rules_differ_wherever_the_action_record_lies
+FAIL: test_it_catches_a_write_that_CONTRADICTS_the_tracker_false_case
+FAIL: test_the_fixed_rule_locks_our_own_slot_from_the_TRACKER
+Ran 12 tests … FAILED (failures=3)
+```
+
+Same count, **different names** — `true_case` + `keyed_off_the_tracker` for the reversion,
+`false_case` + `locks_our_own_slot` for the deletion. That distinction is what makes the run
+evidence for the property task 4 is about.
+
+**An earlier revision of this entry got this wrong, which is this document's own thesis turned on
+itself.** Its mutant read `anchor_metadata.get("chosen_action_index")` — but that is a ROW-level
+field, a sibling of `observation_metadata`, and this helper only ever receives the metadata dict.
+So `idx` was `None`, no candidate matched, and the branch never fired: the mutant was
+byte-equivalent to `if False:` and reddened the deletion set. It reproduced perfectly and
+demonstrated the wrong thing. Review caught it by running it against `if False:` and getting
+identical output — the control above now lives in the document so the next reader cannot miss it.
 
 ### The production change
 

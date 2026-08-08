@@ -100,7 +100,7 @@ class DenominatorReport:
                 out.append(
                     f"{self.label}: boundaries_measured + skipped ({self.measured} + "
                     f"{self.skipped} = {accounted}) != the harness's universe "
-                    f"({self.contained}) — {abs(self.contained - accounted)} boundaries were "
+                    f"({self.contained}) — {abs(self.contained - accounted)} units were "
                     + (
                         "counted twice (compared AND skipped)"
                         if accounted > self.contained
@@ -113,7 +113,7 @@ class DenominatorReport:
             out.append(
                 f"{self.label}: matched + diverged ({self.matched} + {self.diverged} = {total}) "
                 f"!= boundaries_measured ({self.measured}) — "
-                f"{abs(self.measured - total)} attempted boundaries were "
+                f"{abs(self.measured - total)} attempted units were "
                 + ("classified twice" if total > self.measured else "never classified")
                 + "."
             )
