@@ -2766,66 +2766,6 @@ fn render_move_phase(
             };
             side_condition_value(sim.state, target_side, sc.condition) >= cap
         });
-    // ONE QUESTION, not the four predicates that used to live here. They were
-    // `volatile_empty_tail_ambiguous`, `deterministic_noop`, `move_could_act` and
-    // `empty_tail_can_be_accuracy_miss`, and they existed to decide the two empty-tail
-    // immobilizer INFERENCES below -- both of which are gone now that the engine marks its
-    // immobilizers. An earlier revision deleted them outright; they are back, folded into a
-    // single boolean, for the OPPOSITE purpose: the fail-closed backstop further down needs
-    // to know whether an empty tail has any legitimate explanation at all.
-    //
-    // Read the name literally. `true` means "a move that executed could have left this tail
-    // empty" -- it missed, it was a deterministic no-op, it could not act, or its volatile
-    // was already present. It says NOTHING about which, and nothing downstream asks: the
-    // deterministic no-effect renders and the miss inference below each re-derive their own
-    // conditions from the same live inputs. Anyone tempted to branch on this to pick a
-    // rendering is rebuilding the guess this change deleted.
-    let (attacker_hp, attacker_maxhp) = sim.active_hp(side);
-    let empty_tail_is_otherwise_explainable = !has_any_effect
-        && (
-            // a deterministic no-op
-            (defender_protected && choice.flags.protect)
-                || (is_damaging && effectiveness == 0.0)
-                || (is_damaging && absorb.is_some())
-                || ability_immune.is_some()
-                || status_fail
-                || status_type_immune
-                || boost_has_no_effect
-                || side_condition_fail
-                // an accuracy miss
-                || (choice.target == MoveTarget::Opponent
-                    && !status_fail
-                    && !non_ghost_curse
-                    && ability_immune.is_none()
-                    && effectiveness > 0.0
-                    && choice.accuracy < 100.0)
-                // a move that could never have acted
-                || !(is_damaging
-                    || choice.status.is_some()
-                    || (choice.heal.is_some() && attacker_hp < attacker_maxhp)
-                    || choice.volatile_status.is_some()
-                    || choice.side_condition.is_some()
-                    || choice.boost.is_some())
-                // a volatile whose target already has it (or cannot take it)
-                || choice.volatile_status.as_ref().map_or(false, |volatile| {
-                    if volatile.volatile_status != PokemonVolatileStatus::SUBSTITUTE {
-                        return true;
-                    }
-                    let target = match &volatile.target {
-                        MoveTarget::User => side,
-                        MoveTarget::Opponent => defender,
-                    };
-                    let target_side = sim.state.get_side_immutable(&target);
-                    !target_side
-                        .get_active_immutable()
-                        .volatile_status_can_be_applied(
-                            &volatile.volatile_status,
-                            &target_side.volatile_statuses,
-                            choice.first_move,
-                        )
-                })
-        );
-
     // BOTH EMPTY-TAIL IMMOBILIZER INFERENCES ARE GONE, and their removal is the half
     // of the attract-marker change that actually reclaims worlds.
     //
@@ -2861,66 +2801,45 @@ fn render_move_phase(
     // means that immobilizer specifically did not fire. The backstop directly below is the
     // opposite of an inference -- it refuses rather than naming anything.
 
-    // FAIL-CLOSED BACKSTOP. There is now exactly ONE site in this file that emits an
-    // immobilizer `|cant|` line, and it is driven solely by the engine's marker. Both
-    // things that used to stand behind it -- the refusal, and the previous revision's
-    // deliberate pre-marker degradation path -- are gone, which leaves no floor under a
-    // marker that stops ARRIVING while the variant still applies.
+    // NO BRANCH-LOCAL FAIL-CLOSED GUARD HERE, and this is the third attempt at one --
+    // recorded in full so there is not a fourth.
     //
-    // THAT IS A DIFFERENT FAILURE FROM A DROPPED PATCH, and it is the one nothing else
-    // catches. A dropped patch is caught by `PATCHED_TARGET_TREE_SHA256` (and mutant P1
-    // proves it); a REACHABILITY break -- someone adds a guard to the engine's attract or
-    // paralysis block, or reorders the BeforeMove chain -- leaves the instruction, the
-    // digest and the whole patch stack intact while the branch quietly goes back to an
-    // anonymous empty delta. Without this arm the renderer would then emit a `|move|` line
-    // for a move that never happened, with NO refusal and NO lossy tag: a fabricated
-    // action in a searched world, which is the one outcome this campaign exists to prevent.
+    // The gap is real. Exactly ONE site in this file emits an immobilizer `|cant|` line and
+    // it is driven solely by the engine's marker, so if the marker ever stops ARRIVING while
+    // the variant still applies -- a REACHABILITY break, not a dropped patch -- the branch
+    // reverts to an anonymous empty delta and the renderer emits a `|move|` for a move that
+    // never happened. Two guards were written for it and BOTH were wrong:
     //
-    // Refusing is the whole behaviour. It names nothing, so it cannot be the guess this
-    // block deleted.
+    //   1. "attracted-or-paralyzed AND empty tail AND no marker". That is the shape of a
+    //      legitimate MISS. It refused a 15%-mass Thunder miss branch in this file's own
+    //      fixture -- reinstating the very refusal the paralysis marker was landed to delete.
+    //   2. The same, AND "no executed move could have left this tail empty", enumerated from
+    //      the old refusal predicates. It looked sound and is not: the enumeration treats
+    //      every `is_damaging` move as one that must leave a delta, and CONDITIONAL-DAMAGE
+    //      moves break that. Counter, Mirror Coat and Endeavor execute normally and leave an
+    //      EMPTY delta whenever their condition is unmet -- no physical hit taken, no special
+    //      hit taken, defender HP not above the user's. Measured on the shipped build with
+    //      the marker present and correct on the sibling branch, all six of
+    //      {counter, mirrorcoat, endeavor} x {attracted, paralyzed} newly REFUSED, at 50% and
+    //      75% mass; 23 branches across a 1152-case sweep, every one of them a world thrown
+    //      away by `reject_attribution_unsafe`. Worse than (1), because paralysis alone
+    //      triggers it: attract is Cute-Charm-bounded at 3 of 220 species (ledger G37) and
+    //      paralysis is everywhere.
     //
-    // `empty_tail_is_otherwise_explainable` IS THE SOUNDNESS CONDITION, and leaving it out
-    // was measured to be wrong rather than merely loose. The first version of this arm
-    // refused on "attracted-or-paralyzed AND empty tail AND no marker", and that is the
-    // shape of a legitimate MISS: it refused the 15%-mass Thunder miss branch in this
-    // change's own fixture, which is precisely the refusal blocker 1 required be deleted.
-    // A miss, a deterministic no-op, an unactable move and an already-present volatile all
-    // produce an empty tail from a move that DID execute, so none of them may refuse.
+    // THE GENERAL REASON, which is why there is no third attempt: an empty tail is
+    // legitimately produced by a miss, by a deterministic no-op, by a move that could never
+    // act, and by a conditional-damage move whose condition was unmet -- and the last class
+    // is decidable only by re-deriving what the engine already computed. A branch-local
+    // predicate that tries to tell "the marker is missing" from "this is legitimately empty"
+    // is re-implementing the engine inside the renderer, and every gap in the enumeration
+    // costs whole worlds rather than one line. That is the same open-ended enumeration the
+    // refusal this change deleted was already failing at.
     //
-    // What is left cannot be explained by an executed move at all: the move could act, is
-    // not a no-op, cannot miss, and its volatile would have applied -- so an empty tail
-    // means the move did not happen, which means an immobilizer fired, which means a marker
-    // was owed and did not arrive. Refusing that is fail-closed with no guess in it.
-    //
-    // COVERAGE LIMIT, stated because the arm looks broader than it is: if the marker stops
-    // arriving, this catches the CLEAN shapes and NOT the contaminated ones -- a vanished
-    // marker on a Thunder-miss-shaped fan still renders `|move|..|[miss]`. No branch-local
-    // check can do better, because those two branches are byte-identical once the marker is
-    // gone; that is the entire defect this change fixes. The broad cover is
-    // `every_attracted_or_paralyzed_fan_carries_its_immobilizer_marker`, which asserts the
-    // marker's PRESENCE across a matrix and is CI-named, so a reachability break in the
-    // engine goes red there rather than being absorbed here.
-    if called_tag.is_none() && !has_any_effect && !empty_tail_is_otherwise_explainable {
-        let (attracted, paralyzed) = {
-            let s = match side {
-                SideReference::SideOne => &sim.state.side_one,
-                SideReference::SideTwo => &sim.state.side_two,
-            };
-            (
-                s.volatile_statuses
-                    .contains(&PokemonVolatileStatus::ATTRACT)
-                    && s.get_active_immutable().ability != Abilities::OBLIVIOUS,
-                s.get_active_immutable().status == PokemonStatus::PARALYZE,
-            )
-        };
-        if attracted || paralyzed {
-            out.mark_attribution_unsafe("immobilizer_marker_missing_on_empty_tail");
-            for instruction in tail {
-                sim.apply(instruction);
-            }
-            return;
-        }
-    }
+    // WHERE THE COVER ACTUALLY LIVES: `every_attracted_or_paralyzed_fan_carries_its_immobilizer_marker`
+    // asserts marker PRESENCE across a 36-cell matrix and is CI-named. It catches a
+    // reachability break AT THE SOURCE instead of trying to infer one downstream from an
+    // absence, which is both sound and cheaper. A dropped patch is caught earlier still, by
+    // `PATCHED_TARGET_TREE_SHA256`.
 
     // Caller-invoked moves (Sleep Talk) render their explicit target even on
     // failure (measured; the [still] blanking does not apply to them).
@@ -7438,9 +7357,12 @@ mod tests {
         // 480 still passed.
         //
         // The numbers, because the margin is small and the next person should not re-derive
-        // them: all 18 families two-sided is 535 chars, 23 OVER this budget -- reachable only
-        // if `immobilizer` or `unclassified` ever enters a Sleep Talk tail. The 16 reachable
-        // ones are 480, leaving 32. That is not slack to spend: ONE more family of average
+        // them. Under the SAME construction used below (full set, plus that set minus its
+        // shortest token): all 18 families two-sided is 530 chars, 18 OVER this budget --
+        // reachable only if `immobilizer` or `unclassified` ever enters a Sleep Talk tail. The
+        // 16 reachable ones are 480, leaving 32. An earlier revision said "535 chars, 23
+        // OVER", computed from two IDENTICAL full slugs -- a shape dedupe collapses, so it was
+        // not a bound on anything. Review caught it; the load-bearing 480 was correct. That is not slack to spend: ONE more family of average
         // length adds ~28 and lands at ~508, and a second breaks the seam. If that happens,
         // raise `_REASON_DETAIL_LIMIT` deliberately; do not weaken this test.
         let reachable_families: Vec<&str> = UNRENDERABLE_FAMILY_ORDER

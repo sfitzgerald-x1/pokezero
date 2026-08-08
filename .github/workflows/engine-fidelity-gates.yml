@@ -820,10 +820,13 @@ jobs:
           # `#[cfg(test)]`, which pass the slug in deliberately to prove the paired-tag assert
           # fires. Nothing on the production path can emit it.
           #
-          # All THIRTEEN added names are pinned in the loop below -- 23 pins total, every one of
-          # them resolving in the same run these figures came from. "13 added" and "all pinned"
-          # are the SAME measurement: `comm -23 <(added names) <(pinned names)` is EMPTY.
-          # Counted, not recalled: earlier revisions of this block said "ten" and "eleven".
+          # All THIRTEEN added names are pinned in the loop below -- 24 pins total (11 pre-existing
+          # Spikes/Protect pins plus these 13), every one of them resolving in the same run these
+          # figures came from. "13 added" and "all pinned" are the SAME measurement:
+          # `comm -23 <(added names) <(pinned names)` is EMPTY.
+          # Counted, not recalled: earlier revisions of this block said "ten", "eleven", and
+          # "23 pins" -- the last off by one because the extraction that produced it swallowed a
+          # line of the loop body. Re-extracted and re-counted against the loop itself.
           #
           # THE COUNTS HERE HAVE BEEN WRONG TWICE, and both times a single command would have
           # said so. First, 428 was written 429, counted off a run that still had a scratch

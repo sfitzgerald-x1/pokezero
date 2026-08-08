@@ -1545,6 +1545,20 @@ fn no_branch_of_an_attracted_or_paralyzed_fan_refuses_any_more() {
                 ("cannot_act", Choices::SPLASH, false),
                 ("volatile", Choices::SUBSTITUTE, false),
                 ("noop", Choices::TACKLE, true),
+                // CONDITIONAL-DAMAGE MOVES, and they are here because their absence let a
+                // regression ship. These execute normally and leave an EMPTY delta whenever
+                // their condition is unmet -- Counter with no physical hit taken, Mirror Coat
+                // with no special hit taken, Endeavor against a defender not above the user's
+                // HP. That makes them indistinguishable, branch-locally, from an immobilized
+                // branch whose marker went missing, which is why the two fail-closed backstops
+                // written for this file were both wrong. The second looked sound and refused
+                // all six of {counter, mirrorcoat, endeavor} x {attracted, paralyzed} at 50%
+                // and 75% mass -- 23 branches over a 1152-case sweep, every one a world
+                // thrown away. The first five rows above could not see it: none of them is a
+                // damaging move that can legitimately do nothing.
+                ("conditional_damage_counter", Choices::COUNTER, false),
+                ("conditional_damage_mirrorcoat", Choices::MIRRORCOAT, false),
+                ("conditional_damage_endeavor", Choices::ENDEAVOR, false),
             ] {
                 let mut state = attracted_state(mv, confused);
                 if paralyzed {

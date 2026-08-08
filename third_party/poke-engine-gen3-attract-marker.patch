@@ -1,6 +1,6 @@
 --- a/src/instruction.rs
 +++ b/src/instruction.rs
-@@ -105,6 +105,61 @@
+@@ -105,6 +105,67 @@
      ToggleSideOneForceSwitch,
      ToggleSideTwoForceSwitch,
      ToggleTerastallized(ToggleTerastallizedInstruction),
@@ -56,13 +56,19 @@
 +    /// This one replaces a GUESS rather than a refusal. The renderer used to infer
 +    /// `|cant|..|par|` from an empty tail on a probability-mass argument, with its
 +    /// own comment conceding "a real miss renders identically". With the marker the
-+    /// line is a fact, and -- the half that actually reduces fallback -- an UNMARKED
-+    /// empty tail is now provably not an immobilization at all.
++    /// line is a fact, and -- the half that lets the refusal be DELETED rather than
++    /// merely narrowed -- an UNMARKED empty tail is now provably not an
++    /// immobilization at all.
++    ///
++    /// No claim about the fallback RATE is made here or anywhere in this patch. What
++    /// is measured is branch-level: refusing branches on the shapes this touches go
++    /// to zero. Whether that moves the campaign-scale rate is unmeasured until a
++    /// campaign run reports it.
 +    Paralysis,
  }
  
  impl fmt::Debug for Instruction {
-@@ -305,6 +356,9 @@
+@@ -305,6 +366,9 @@
              Instruction::ToggleTerastallized(s) => {
                  write!(f, "ToggleTerastallized {:?}", s.side_ref)
              }
@@ -72,26 +78,26 @@
              Instruction::SetLastUsedMove(s) => {
                  write!(
                      f,
-@@ -623,7 +677,19 @@
-     pub side_ref: SideReference,
- }
+@@ -620,7 +684,19 @@
  
+ #[derive(Debug, PartialEq, Clone)]
+ pub struct ToggleTerastallizedInstruction {
++    pub side_ref: SideReference,
++}
++
 +/// pokezero gen3 fidelity fix (Attract immobilization attribution).
 +///
 +/// Carries the SIDE whose action was aborted -- not the Pokemon index. The marker
 +/// describes the action window, and the active Pokemon cannot change between the
 +/// immobilizer firing and the branch terminating (the move never runs), so a side
 +/// reference is exactly the attribution the renderer needs and nothing more.
- #[derive(Debug, PartialEq, Clone)]
-+pub struct MoveImmobilizedInstruction {
-+    pub side_ref: SideReference,
-+    pub reason: ImmobilizeReason,
-+}
-+
 +#[derive(Debug, PartialEq, Clone)]
- pub struct ChangeType {
++pub struct MoveImmobilizedInstruction {
      pub side_ref: SideReference,
-     pub new_types: (PokemonType, PokemonType),
++    pub reason: ImmobilizeReason,
+ }
+ 
+ #[derive(Debug, PartialEq, Clone)]
 --- a/src/state.rs
 +++ b/src/state.rs
 @@ -2141,6 +2141,23 @@
@@ -118,7 +124,7 @@
          }
      }
  
-@@ -2375,6 +2384,10 @@
+@@ -2375,6 +2392,10 @@
              Instruction::ChangeTransformSnapshot(instruction) => {
                  self.set_transform_snapshot(&instruction.side_ref, !instruction.taking);
              }
@@ -229,7 +235,7 @@
          final_instructions.push(immobilized_instruction);
  
          incoming_instructions.update_percentage(1.0 - ATTRACT_IMMOBILIZE_CHANCE);
-@@ -3060,6 +3097,30 @@
+@@ -3060,6 +3133,30 @@
          // Fully-Paralyzed Branch
          let mut fully_paralyzed_instruction = incoming_instructions.clone();
          fully_paralyzed_instruction.update_percentage(0.25);
