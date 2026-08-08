@@ -179,18 +179,41 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             self.assertIn(
                 "if state.use_damage_dealt && !choice.sleep_talk_move {", generated
             )
-            # The G8 Leech Seed residual band split. Pinned on the gate predicate and
-            # on the fan helper's exact expression rather than on a comment: deleting
-            # `if defender_leech_seeded {` from either call site is the whole revert
-            # and leaves the file compiling, and swapping the integer fan for the f32
-            # accumulator would silently reprice every split arm.
+            # The G8 Leech Seed residual band split. Pinned on the three predicates that
+            # carry it rather than on comments: each one can be deleted leaving the file
+            # compiling, and two of the three leave every behavioural test green on some
+            # tree or other.
+            #
+            # 1. The gate. Deleting `if defender_leech_seeded {` from either call site is
+            #    the whole revert of the scope decision.
             self.assertEqual(
                 generated.count("if defender_leech_seeded {"),
                 2,
                 "both i16::MAX-ceiling residual-kill sites must carry the gate",
             )
+            # 2. The fan basis. Swapping the exact integer fan back for
+            #    `compare_health_with_damage_multiples`'s f32 accumulator would silently
+            #    reprice every split arm onto damage values Showdown cannot deal, and
+            #    fixtures whose two bases agree cannot see it.
             self.assertIn(
                 "*slot = (max_damage as i32 * (85 + index as i32) / 100) as i16;", generated
+            )
+            # 3. THE COUNT GUARD, which carries the whole "strict improvement or a no-op,
+            #    never a trade" claim: when the comparator's band count and the integer fan
+            #    disagree, the split declines and today's single arm survives. Review found
+            #    this predicate was the one of the three with NO behavioural pin -- all
+            #    eight tests in gen3_leechseed_residual_band_split.rs, the whole crate
+            #    suite, `--test test_gen3`, the engine lib suite,
+            #    test_branch_mass_reconstruction and test_collapsed_arm_mass_oracle stayed
+            #    green with it deleted, because both original fixtures sit on fans whose
+            #    two bases agree. A third fixture now reaches the decline path
+            #    (`a_band_whose_fan_bases_disagree_declines_the_split_and_keeps_one_arm`,
+            #    guard-deleted: arms [27,28,29,30] and total mass 105.859375 %), and this
+            #    is its source-text sibling so the predicate is pinned the same two ways
+            #    as the two above it.
+            self.assertIn(
+                "if fan.iter().filter(|roll| in_band(roll)).count() as i16 != expected_rolls {",
+                generated,
             )
             for relative_path, expected_sha256 in EXPECTED_FINAL_SHA256.items():
                 actual_sha256 = hashlib.sha256((source / relative_path).read_bytes()).hexdigest()

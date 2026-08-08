@@ -101,10 +101,36 @@ strictly above the f32 fan's floor, **288 of 27,318 windows disagree — 1.054 %
 the 591** `max_damage` values. That rectangle is the whole scope of the census and nothing wider.
 
 The consequence is the property that separates this from c140 §7c, which §6a measured as an even
-trade: **on any given band the split is a strict improvement or a no-op, never a trade.** A band
-whose collapsed arm happens to sit on the roll Showdown threw either keeps that arm (the counts
-disagree, so the split declines) or gains an arm at every roll including that one. There is no
-configuration in which the split removes a matching arm.
+trade: **on any given band the split is a strict improvement or a no-op — never a trade, given that
+`max_damage_dealt` equals Showdown's own maximum for the fan.** A band whose collapsed arm happens
+to sit on the roll Showdown threw either keeps that arm (the counts disagree, so the split declines)
+or gains an arm at every roll including that one.
+
+**That condition is real and must be stated, because an earlier revision of this sentence — and the
+`residual_band_roll_fan` doc comment in the shipped patch — assert it unconditionally.** The
+threshold comes from HP arithmetic, not from the fan, so it need not be a fan member; the guarantee
+that a *matching* arm is never removed relies on the engine's `max_damage_dealt` agreeing with
+Showdown's, since that is what makes `floor(max * r / 100)` Showdown's own roll set. Where the
+damage calc is already wrong the split can drop an arm that a correct fan would have kept — which is
+a pre-existing damage-calc defect surfacing, not a new one, but it is not nothing.
+
+**Measured, and the reason to scope rather than weaken the claim: 0 instances.** Independent review
+scanned **124,188 fixtures** across both in-scope sites — the split fired on 44,393 and declined on
+79,795; of 25,728 collapsed arms kept and 18,901 dropped, **every dropped arm sat at a damage that is
+not a member of the integer fan**, i.e. not a roll Showdown could have thrown. **Zero real trades.**
+
+Review also established that this is structural rather than lucky:
+`ResidualThresholdLadder::insert` is an insertion sort with dedup, so thresholds are strictly
+ascending; `band_window` therefore always yields `upper > lower`; so a threshold that *is* a fan
+member always lies inside its own half-open window and always keeps an arm, and skipping zero-count
+bands can only widen a window, never narrow one.
+
+> **Left as-is deliberately:** the unconditional phrasing survives in the patch's own
+> `residual_band_roll_fan` doc comment. Editing it would change the patch bytes, which are hashed
+> into the engine fingerprint — moving the shipped engine off `8e912b45544034e6`, the identity that
+> both sweeps in §3 and review's 124,188-fixture scan were measured on, for a comment. Filed as a
+> comment-only follow-up rather than taken here, because invalidating a verified build identity to
+> reword a justification comment is the worse trade.
 
 ## 2. The row, single-variable
 
@@ -219,8 +245,33 @@ whole `checkpoint_provenance` block are identical. The committed artifact is the
 
 ## 5. The pins, and what each actually kills
 
-`rust/pokezero-search/tests/gen3_leechseed_residual_band_split.rs`, **eight** tests, on two fixtures
-that reach one call site each.
+`rust/pokezero-search/tests/gen3_leechseed_residual_band_split.rs`, **ten** tests, on three fixtures:
+two that reach one in-scope call site each, and one that reaches the count guard's **decline** path.
+
+> ### The count guard shipped with no behavioural pin, and review found it
+>
+> The patch carries three predicates. Two got a source-text pin in
+> `tests/test_poke_engine_patch_stack.py`; the third — the count guard, which carries the whole
+> no-trade claim of §1 — got **neither that nor a behavioural test**. Measured by review: with the
+> guard deleted, **all eight original tests stay green**, and so do the 459-test crate suite,
+> `--test test_gen3`, the engine lib suite, `test_branch_mass_reconstruction` and
+> `test_collapsed_arm_mass_oracle`. The cause is that fixtures A and B both sit on fans where the f32
+> accumulator and the integer fan **agree**, so neither ever reaches the decline path. A predicate
+> that only the tree digest protects is weaker than the two beside it.
+>
+> **Fixture C closes it** (attack 66 / defense 300 / maxhp 160 / hp 47 → threshold 27, on a fan where
+> the two bases disagree). Head keeps the single collapsed arm at **27**; guard-deleted emits
+> **`[27, 28, 29, 30]`** at total branch mass **105.859375 %** — mass conjured out of a basis
+> mismatch, which is precisely what `update_percentage` cannot see and what no other test in the repo
+> catches. Verified red-with-the-guard-removed and green-with-it by deleting the predicate and
+> running, not by reasoning. Both figures reproduce review's independently.
+>
+> The guard now also has its **source-text sibling** alongside the other two, so all three predicates
+> are pinned the same two ways.
+>
+> Review measured the guard's efficacy directly over its 124,188-fixture scan: **0** band-mass
+> disagreements on head, **115** on the guard-deleted mutant, with total mass reaching
+> **105.859375 %** — the same figure fixture C exhibits.
 
 The controls are **poisoned, not clean**, and that is the load-bearing design choice. A clean
 unstatused control is worthless here: with no residual there is no lethality threshold,
@@ -233,11 +284,20 @@ Mutation results, run rather than reasoned about:
 
 | mutant | red | green |
 |---|---|---|
-| full revert of `generate_instructions.rs` to the 73-patch preimage | **5 of 8** | the two `a_poisoned_defender_*` controls (correctly — they assert unchanged behaviour) and `every_fixture_still_sums_to_one_hundred_percent` |
+| full revert of `generate_instructions.rs` to the 73-patch preimage | **5 of the 8 original** | the two `a_poisoned_defender_*` controls (correctly — they assert unchanged behaviour) and `every_fixture_still_sums_to_one_hundred_percent` |
 | `if defender_leech_seeded {` → `if true {` at **both** sites | **3**: both `a_poisoned_defender_*` controls and `the_split_conserves_…` | all five split assertions |
+| the **count guard** deleted (`count(...) != expected_rolls` → unconditional) | **2**, and only the two fixture-C tests | all eight original tests, plus the whole crate suite and four other modules |
 
-So the two controls are the **sole killers of the gate deletion**, and the five split assertions are
-sole killers of the split's absence. `every_fixture_still_sums_to_one_hundred_percent` kills neither
+So the two controls are the **only tests that state the gate as a property** — but they are **not
+its sole killers**, and an earlier revision of this sentence said they were. Three tests redden on
+that mutant, not two: both `a_poisoned_defender_*` controls **and**
+`the_split_conserves_the_bands_mass_and_prices_each_arm_at_one_sixteenth`, whose
+`split.len() > collapsed.len()` sanity assertion fails once both fixtures split. The table two rows
+above this sentence said 3 and `engine-fidelity-gates.yml` says 3; only the prose said 2. Corrected
+by counting the table rather than by re-running anything.
+
+The five split assertions are sole killers of the split's absence.
+`every_fixture_still_sums_to_one_hundred_percent` kills neither
 and is not claimed to: it is a conservation check on a change whose whole shape — `n` arms of `1/16`
 replacing one of `n/16` — is the shape that silently loses mass, and `update_percentage` has no
 conservation check of its own.
@@ -259,7 +319,7 @@ either site.
 | `generate_instructions.rs` | `209b938f…` → **`9fd568c65b125fa1…`** | same replay |
 | `items.rs`, `abilities.rs`, `choice_effects.rs` | **unchanged** | the drift control: vendored-source drift would have moved all four |
 | tail pin | 16 → **17** entries, **grown not slid** | `tests/test_poke_engine_patch_stack.py` |
-| crate suite floor | 451 → **459** | see below |
+| crate suite floor | 451 → **461** | see below |
 | `--test test_gen3` | **32**, unchanged | run |
 | `Engine lib suite` | **5**, unchanged | run |
 | `_EXPECTED_SWEEP_ARTIFACTS` | 91 → **95** | `_sweep_reports()` in both trees |
@@ -287,7 +347,7 @@ fail; 374 passes while 373 and 375 fail.** Neither module's test count moved (26
 workflow's `Ran 26 tests` and `Ran 16 tests` guards still match.
 
 **Everything above was re-run after the merge**, not carried across it: fingerprint `--check` still
-reports 74 patches / `8e912b45544034e6`, the crate suite still sums to 459 with all eight pins
+reports 74 patches / `8e912b45544034e6`, the crate suite still sums to 461 with all ten pins
 resolving, both engine suites are still 32 and 5, the patch-stack module is still `Ran 4 tests OK`,
 and the row still replays `matched` at 38 branches with mass 100.000000 %. `origin/main` touched no
 fingerprint-covered path, so the two sweeps were not re-run; the fingerprint is the evidence for
@@ -303,18 +363,22 @@ crate suite compiles the vendored engine directly, so that is a real base build.
 test-NAME sets, per the discipline the workflow's own comments arrived at the hard way:
 
 ```
-base   451 sum / 451 distinct names      head   459 sum / 459 distinct names
-ADDED    8   (exactly the eight in the new file, all eight named in the workflow pin loop)
+base   451 sum / 451 distinct names      head   461 sum / 461 distinct names
+ADDED   10   (exactly the ten in the new file, all ten named in the workflow pin loop)
 REMOVED  0
 ```
 
 No duplicate name in either build, so the set difference is exact. Discrimination replayed against
-the real log with the step body: **460 fails, 459 passes, 459 fails on any single deletion, 458
+the real log with the step body: **462 fails, 461 passes, 461 fails on any single deletion, 460
 silently absorbs one.**
 
-Five `#[should_panic]` tests mean a strict `^test NAME \.\.\. ok` grep returns 454, not 459; none of
-the eight new pins is `#[should_panic]`, so the workflow's `grep -qxE` is safe for them — checked by
-resolving all eight against the run these figures came from.
+Five `#[should_panic]` tests mean a strict `^test NAME \.\.\. ok` grep returns 456, not 461; none of
+the ten new pins is `#[should_panic]`, so the workflow's `grep -qxE` is safe for them — checked by
+resolving all ten against the run these figures came from.
+
+The floor read **459** in this PR's first revision, when the file held eight tests. Review's F1
+finding added the two decline-path pins, and the figure was re-derived by differencing name sets
+again rather than by adding two.
 
 ## 7. Withdrawn, and not measured
 
@@ -347,7 +411,10 @@ branch, and both verified failing identically at the base commit `1c94f071`.
 matching ledger entry, so `origin/main` fails this same gate on its own — verified by running the
 module in a clean worktree of `c2227d3a` before touching anything, rather than inferred from the
 merge. CI tests the PR *merge* commit, so the break lands on whichever branch merges main next;
-the entry is added here with that attribution rather than left for a separate PR. Both of main's
+the entry was added here with that attribution rather than left for a separate PR.
+**#1186 (`8158e086`) then fixed it upstream**, so the fix here became redundant and was reconciled
+down to main's single canonical entry — a set literal would have swallowed the duplicate silently.
+The finding about main stands and was made independently here; the fix is main's. Both of main's
 new commits touch only `tests/`, no fingerprint-covered path, so `--check` still reports 74 patches
 / `8e912b45544034e6` and neither sweep was re-run.
 

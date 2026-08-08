@@ -1086,19 +1086,25 @@ jobs:
           # step body extracted verbatim from the YAML: 452 fails, 451 passes, 451 fails on any
           # single deletion, and 450 silently absorbs one.
           #
-          # AND A FOURTH RAISE, 451 -> 459: ledger G8's Leech Seed residual band split adds
-          # the EIGHT pins in `rust/pokezero-search/tests/gen3_leechseed_residual_band_split.rs`
-          # and removes none. Not `451 + 8`: measured by differencing test-NAME sets, per the
+          # AND A FOURTH RAISE, 451 -> 461: ledger G8's Leech Seed residual band split adds
+          # the TEN pins in `rust/pokezero-search/tests/gen3_leechseed_residual_band_split.rs`
+          # and removes none. Not `451 + 10`: measured by differencing test-NAME sets, per the
           # discipline the paragraphs above arrived at the hard way. Base is this same tree with
           # `third_party/poke-engine-src/src/gen3/generate_instructions.rs` reverted to its
           # 73-patch preimage and the new test file moved aside -- the crate suite compiles the
           # vendored engine directly, so that is a real base build and not an arithmetic one.
-          #   base 451 sum / 451 distinct names; head 459 / 459; no duplicate name in either.
-          #   ADDED 8 (all eight named in the loop below), REMOVED 0, NET +8.
-          # 451 would absorb the deletion of the entire eight, which is the blindness the
+          #   base 451 sum / 451 distinct names; head 461 / 461; no duplicate name in either.
+          #   ADDED 10 (all ten named in the loop below), REMOVED 0, NET +10.
+          # 451 would absorb the deletion of the entire ten, which is the blindness the
           # paragraph above describes arriving for the fourth time.
-          if [ "${passed:-0}" -lt 459 ]; then
-            echo "::error::expected >= 459 crate tests, got ${passed:-0}"
+          #
+          # It read 459 in the first revision of this PR, when the file held eight tests. Review
+          # found the count guard -- the predicate carrying the whole "never a trade" claim -- had
+          # NO behavioural pin: all eight stayed green with it deleted, and so did this suite at
+          # 459, `--test test_gen3`, the engine lib suite, test_branch_mass_reconstruction and
+          # test_collapsed_arm_mass_oracle. The two added tests reach the guard's decline path.
+          if [ "${passed:-0}" -lt 461 ]; then
+            echo "::error::expected >= 461 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
@@ -1159,7 +1165,19 @@ jobs:
           # no lethality threshold and no band arm on either build. The controls are POISONED,
           # which ticks the same `maxhp / 8` Leech Seed drains, so they share the fixture's whole
           # arithmetic and differ only in whether the killing residual transfers.
-          # Full revert to the 73-patch preimage reddens 5 of the 8.
+          # Full revert to the 73-patch preimage reddens 5 of the 8 original tests.
+          #
+          # The last TWO names are the count guard's, and they are the only tests anywhere that
+          # reach its decline path. Review found that predicate pinned by nothing behavioural:
+          # deleting it left all eight original tests green, plus this whole suite, `--test
+          # test_gen3`, the engine lib suite, test_branch_mass_reconstruction and
+          # test_collapsed_arm_mass_oracle -- because both original fixtures sit on fans whose f32
+          # and integer bases AGREE, so neither can reach the decline. Fixture C (attack 66 /
+          # defense 300 / maxhp 160 / hp 47, threshold 27) does: head keeps one arm at 27, and
+          # guard-deleted emits [27, 28, 29, 30] with total branch mass 105.859375 %. That mass is
+          # the point -- it is conjured from a basis mismatch and `update_percentage` cannot see
+          # it. Measured red-with-the-guard-removed and green-with-it by deleting the predicate
+          # and running.
           for pin in the_rendered_hazard_chip_is_tagged_from_spikes \
                      two_spikes_layers_chip_the_deeper_amount_and_stay_tagged \
                      with_no_spikes_the_drag_emits_no_chip_and_no_spikes_tag \
@@ -1211,7 +1229,9 @@ jobs:
                      the_crit_fan_site_splits_too_with_colliding_rolls_merged \
                      a_poisoned_defender_on_the_crit_fan_keeps_its_single_arm \
                      every_fixture_still_sums_to_one_hundred_percent \
-                     every_split_arm_reverts_cleanly; do
+                     every_split_arm_reverts_cleanly \
+                     a_band_whose_fan_bases_disagree_declines_the_split_and_keeps_one_arm \
+                     declining_the_split_keeps_the_branch_mass_at_one_hundred_percent; do
             grep -qxE "test $pin \.\.\. ok" /tmp/cargo.log || {
               echo "::error::renderer pin $pin did not run"
               exit 1

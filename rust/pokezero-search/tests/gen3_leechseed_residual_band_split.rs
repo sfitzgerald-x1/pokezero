@@ -414,3 +414,58 @@ fn every_split_arm_reverts_cleanly() {
         assert_eq!(before, format!("{:?}", state), "arm did not revert");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fixture C — THE DECLINE PATH. A band where the two fan bases DISAGREE.
+//
+// Everything above exercises the split. Nothing above reaches the count guard's
+// negative arm, because fixtures A and B are both on fans where the f32
+// accumulator in `compare_health_with_damage_multiples` and the exact integer fan
+// `floor(max * r / 100)` agree about how many rolls sit in the band — so all eight
+// of the tests above stay GREEN with the guard deleted, and so does the whole
+// crate suite. This fixture closes that hole.
+//
+// Return at attack 66 into defense 300 into a 47 HP / 160 maxhp Leech-Seeded
+// defender: `maxhp / 8` is 20, so the threshold is `47 - 20 = 27`, and on this fan
+// the comparator counts a different number of rolls at or above 27 than the
+// integer fan contains. The guard therefore DECLINES, and the site keeps the
+// single collapsed arm at the threshold that it emits today.
+//
+// The mass assertion is the load-bearing half. With the guard deleted the site
+// emits one arm per integer-fan member of the window while the survive arm is
+// still discounted by the comparator's count, so the branch masses sum to
+// 105.859375 % — mass conjured out of a basis mismatch, which is exactly the
+// failure `update_percentage` cannot see and which no other test in the repo
+// would catch.
+// ---------------------------------------------------------------------------
+
+const C_ATTACK: i16 = 66;
+const C_DEFENSE: i16 = 300;
+const C_MAXHP: i16 = 160;
+const C_HP: i16 = 47;
+const C_THRESHOLD: i16 = 27;
+
+/// THE COUNT GUARD. When the comparator's band count and the integer fan disagree,
+/// the split declines and today's single arm survives — so a band that would lose
+/// its matching arm keeps it, which is the whole "strict improvement or no-op,
+/// never a trade" claim.
+#[test]
+fn a_band_whose_fan_bases_disagree_declines_the_split_and_keeps_one_arm() {
+    let mut state = fixture(C_ATTACK, C_DEFENSE, C_MAXHP, C_HP, Killer::LeechSeed);
+    let arms = residual_kill_arms(&mut state);
+    assert_eq!(
+        arms.iter().map(|(damage, _)| *damage).collect::<Vec<_>>(),
+        vec![C_THRESHOLD],
+        "the guard must decline and leave ONE arm at the threshold: {:?}",
+        arms
+    );
+}
+
+/// ...and declining is what keeps the masses summing to 100 %. Splitting a band on
+/// a basis the mass was not priced from conjures mass: the guard-deleted engine
+/// reads 105.859375 % here.
+#[test]
+fn declining_the_split_keeps_the_branch_mass_at_one_hundred_percent() {
+    let mut state = fixture(C_ATTACK, C_DEFENSE, C_MAXHP, C_HP, Killer::LeechSeed);
+    assert_close(total_mass(&mut state), 100.0, "C seeded (decline path)");
+}
