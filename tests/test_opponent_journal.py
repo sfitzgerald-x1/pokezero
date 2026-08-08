@@ -400,7 +400,9 @@ class OpponentJournalPayloadTest(unittest.TestCase):
             games=tuple(games),
         ).to_dict()
 
-    def _game(self, battle_id: str, *, emitted: int, recorded: int) -> ControlledFoulPlayGameResult:
+    def _game(
+        self, battle_id: str, *, emitted: int, recorded: int, failures: int = 0
+    ) -> ControlledFoulPlayGameResult:
         return ControlledFoulPlayGameResult(
             battle_id=battle_id,
             seed=1,
@@ -417,12 +419,23 @@ class OpponentJournalPayloadTest(unittest.TestCase):
                 for index in range(emitted)
             ),
             opponent_journal_recorded=recorded,
+            opponent_journal_failures=failures,
         )
 
     def test_header_reports_mode_and_the_truncation_as_numbers(self) -> None:
+        """`failures` is NON-ZERO on purpose.
+
+        With an all-zero fixture the `record_failures` assertion compares 0 against
+        0 and survives the summation being replaced by a literal 0 -- which is the
+        only path by which the count reaches JSON at all, since the per-game row
+        omits the key when it is zero.
+        """
         payload = self._result(
             mode="addressed",
-            games=[self._game("a", emitted=3, recorded=20), self._game("b", emitted=0, recorded=15)],
+            games=[
+                self._game("a", emitted=3, recorded=20, failures=2),
+                self._game("b", emitted=0, recorded=15, failures=1),
+            ],
         )
 
         self.assertEqual(
@@ -434,9 +447,25 @@ class OpponentJournalPayloadTest(unittest.TestCase):
                 "recorded_decisions": 35,
                 "emitted_decisions": 3,
                 "games_with_journal": 1,
-                "record_failures": 0,
+                "record_failures": 3,
             },
         )
+
+    def test_rows_name_the_battle_that_lost_rounds(self) -> None:
+        """A header total cannot say WHICH battle is unreplayable; the row can."""
+        payload = self._result(
+            mode="full",
+            games=[
+                self._game("clean", emitted=4, recorded=4),
+                self._game("lossy", emitted=3, recorded=3, failures=2),
+            ],
+        )
+
+        rows = {row["battle_id"]: row for row in payload["game_results"]}
+        self.assertNotIn("opponent_moves_record_failures", rows["clean"])
+        self.assertEqual(rows["lossy"]["opponent_moves_record_failures"], 2)
+        # The header total still agrees with the rows it summarises.
+        self.assertEqual(payload["opponent_journal"]["record_failures"], 2)
 
     def test_header_is_present_when_journaling_is_off(self) -> None:
         """Off, on-with-no-addresses and too-old-to-know must be distinguishable."""

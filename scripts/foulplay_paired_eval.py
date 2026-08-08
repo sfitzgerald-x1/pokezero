@@ -213,7 +213,25 @@ def per_seed_outcomes(summary: dict, seat: str) -> dict[int, dict]:
 
 
 def seat_block(summary: dict, seat: str) -> dict:
-    """Per-seat reporting is mandatory: seat asymmetry is the #937 bug class."""
+    """Per-seat reporting is mandatory: seat asymmetry is the #937 bug class.
+
+    THE OPPONENT-MOVE JOURNAL IS DELIBERATELY NOT LIFTED HERE, and that makes the
+    `-p1`/`-p2` bridge summaries load-bearing artifacts rather than scratch files.
+
+    The journal (`game_results[i].opponent_moves`, see the OPPONENT-MOVE JOURNAL
+    block in `pokezero/foulplay_bridge.py`) is what makes a recorded fallback address
+    replayable, since foul-play's move cannot be re-derived. It is per-battle and the
+    merged shard this function feeds has no per-battle rows at all, so lifting it
+    would roughly double the merged shard for a copy of data sitting in the sibling
+    file. Measured on eras 61-64: the merged shards' addresses are a strict subset of
+    the bridge summaries' -- 0 of 656 distinct `(battle, round, seat)` are missing
+    there -- so nothing is lost while both files are kept together.
+
+    Delete or stop shipping the `-p1`/`-p2` summaries and every address in the merged
+    shard silently becomes unreplayable again. Nothing enforces that today. If a
+    harness ever needs the merged shard to stand alone, lift the journals here rather
+    than dropping the siblings.
+    """
     engine = summary.get("engine_mcts") or {}
     timing = summary.get("policy_timing") or {}
     return {

@@ -228,12 +228,38 @@ OPPONENT_JOURNAL_SCHEMA_VERSION = "pokezero.opponent-journal.v1"
 #     and the one-address-per-battle rule (`:2421`) both `continue` with NO COUNTER.
 #     That is where the addresses actually go.
 #
-# Measured on the same corpus: 4,022 fallback DECISION occurrences produced 2,203
-# addresses, so 45.2% of occurrences are unaddressed and none of them is counted
-# anywhere; 30 of 35 classes sit at the per-class cap of 3. So `addressed` journals
-# roughly half of the battles that fell back, from the start -- not "a boundary that
-# has never bitten", which is what an earlier revision of this comment claimed off
-# the wrong counter.
+# HOW BIG, measured per CUMULATIVE STATS BLOCK on ONE shard family (the 377 bridge
+# summaries; the merged paired-eval shards mirror them and adding the two families
+# double-counts):
+#
+#   denominator  sum(fallback_reasons.values()) = fallback DECISIONS, uncapped.
+#                Cross-checked against the block's own `fallback_decisions`: 2,093
+#                both ways, 0 per-block mismatches.
+#   numerator    DISTINCT (battle_id, round, seat) across all keys of that block's
+#                `fallback_samples` = decisions that have a replayable address.
+#                DISTINCT is load-bearing: `:2404` files one address PER KEY, so a
+#                single decision appears under `fallback:<reason>` AND under every
+#                world-failure class in its delta.
+#
+#   2,093 fallback decisions -> 609 addressed -> 1,484 (70.9%) with NO address.
+#   47 of 906 per-key buckets sit at the cap of 3, counted WITHIN a block.
+#
+# Invariant checked, since a wrong denominator is exactly the mistake being corrected
+# here: numerator <= denominator in every one of the 313 blocks, 0 violations.
+#
+# This does NOT contradict the "14.4% of games carry an address" above -- they answer
+# different questions in different units. 14.4% is games-with-an-address over GAMES
+# (which battles get a journal); 70.9% is unaddressed DECISIONS over fallback
+# decisions (which refusals are reachable at all). Both are consistent with fallbacks
+# clustering into a minority of battles that each retain only a handful of addresses,
+# which is precisely what the per-battle rule and the cap of 3 are designed to do.
+#
+# WITHDRAWN, recorded so it is not re-derived: an earlier revision said "45.2% of
+# 4,022 occurrences" and "30 of 35 classes at the cap". Both were unsound. 4,022 and
+# 2,203 were sums over BOTH shard families (2,203 is literally 1,140 + 1,063), the
+# ratio divided ADDRESSES by DECISIONS -- different units, and multi-key filing means
+# it can exceed 1 -- and the class count was taken corpus-wide when the cap is
+# per-block. The true gap is worse than the number that was withdrawn, not better.
 #
 # That is a coverage limit, not corruption: a battle with no address needs no
 # journal, because nothing points at it to replay. It IS the reason to reach for
@@ -639,7 +665,8 @@ class ControlledFoulPlayGameResult:
     # truncated, suppressed or lossy journal is visible as a number rather than as
     # an absence. That distinction is the whole lesson of
     # `fallback_sample_addresses_dropped`, which counts only ONE of the three ways an
-    # address is discarded and reads 0 while 45% go missing -- see the module block.
+    # address is discarded and reads 0 while most of them go missing -- see the
+    # module block for the measurement.
     opponent_journal: tuple[OpponentJournalEntry, ...] = ()
     opponent_journal_recorded: int = 0
     opponent_journal_failures: int = 0
@@ -719,6 +746,12 @@ class ControlledFoulPlayGameResult:
             payload["opponent_moves"] = [entry.to_dict() for entry in self.opponent_journal]
         if self.opponent_journal_recorded:
             payload["opponent_moves_recorded"] = self.opponent_journal_recorded
+        if self.opponent_journal_failures:
+            # ON THE ROW, not only in the summary header. A header total says a run
+            # lost rounds; it cannot say WHICH battle, and an unrecorded round makes
+            # every later round of THAT battle unreplayable while leaving the others
+            # sound. Without this a driver has to treat the whole shard as suspect.
+            payload["opponent_moves_record_failures"] = self.opponent_journal_failures
         if self.root_puct_effective_total_visits:
             payload["root_puct_effective_total_visits"] = self.root_puct_effective_total_visits
         if self.root_puct_opponent_action_skip_categories:
