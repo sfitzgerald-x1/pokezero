@@ -163,9 +163,13 @@ class TurnMergedEncodeTest(unittest.TestCase):
 
     def test_merged_row_columns_and_mask(self) -> None:
         state = self._state(self._lines())
-        observation = self._encode(state)
+        # Snapshot BEFORE the encode. Review caught this: taking it afterwards folds the
+        # encode's own OOV tokens into the baseline, so the delta is always empty and the
+        # assertion is dead. Proven with a unique-token OOV probe -- these two tests stayed
+        # green while the other three went red.
         vocab = self._vocab()
         _oov_before = vocab.observed_oov_tokens
+        observation = self._encode(state)
         self.assertEqual(len(state.turn_merged_tokens), 2)  # lead pair + turn 1
         lead_row = TRANSITION_TOKEN_OFFSET
         turn_row = TRANSITION_TOKEN_OFFSET + 1
@@ -232,9 +236,13 @@ class TurnMergedEncodeTest(unittest.TestCase):
             "|turn|2",
         ]
         state = self._state(lines)
-        observation = self._encode(state)
+        # Snapshot BEFORE the encode. Review caught this: taking it afterwards folds the
+        # encode's own OOV tokens into the baseline, so the delta is always empty and the
+        # assertion is dead. Proven with a unique-token OOV probe -- these two tests stayed
+        # green while the other three went red.
         vocab = self._vocab()
         _oov_before = vocab.observed_oov_tokens
+        observation = self._encode(state)
         self.assertEqual(len(state.turn_merged_tokens), 3)  # lead + turn + cold pair
         turn_row = TRANSITION_TOKEN_OFFSET + 1
         pair_row = TRANSITION_TOKEN_OFFSET + 2

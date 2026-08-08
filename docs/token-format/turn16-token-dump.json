@@ -765,8 +765,8 @@
     "CATEGORY_VOLATILE_OFFSET+3",
     "CATEGORY_VOLATILE_OFFSET+4",
     "CATEGORY_VOLATILE_OFFSET+5",
-    "CATEGORY_LAST_USED_MOVE",
-    "CATEGORY_TRACED_ABILITY",
+    "CATEGORY_TM_FIRST_KIND",
+    "CATEGORY_TM_FIRST_CANT",
     "CATEGORY_TM_FIRST_BP",
     "CATEGORY_TM_SECOND_KIND",
     "CATEGORY_TM_SECOND_SPECIES",
@@ -2191,7 +2191,7 @@
      "id": 1145,
      "token": "tt_phase:lead"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -2286,7 +2286,7 @@
      "id": 641,
      "token": "species:pidgeot"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1135,
      "token": "tt_kind:move"
     },
@@ -2391,7 +2391,7 @@
      "id": 1147,
      "token": "tt_phase:turn"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -2492,7 +2492,7 @@
      "id": 1147,
      "token": "tt_phase:turn"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -2590,7 +2590,7 @@
      "id": 1147,
      "token": "tt_phase:turn"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -2670,7 +2670,7 @@
      "id": 1147,
      "token": "tt_phase:turn"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -2769,7 +2769,7 @@
      "id": 1147,
      "token": "tt_phase:turn"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -2849,7 +2849,7 @@
      "id": 1147,
      "token": "tt_phase:turn"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -2954,7 +2954,7 @@
      "id": 1146,
      "token": "tt_phase:replacement"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -3034,7 +3034,7 @@
      "id": 1147,
      "token": "tt_phase:turn"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -3132,7 +3132,7 @@
      "id": 1147,
      "token": "tt_phase:turn"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -3231,7 +3231,7 @@
      "id": 1147,
      "token": "tt_phase:turn"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -3311,7 +3311,7 @@
      "id": 1147,
      "token": "tt_phase:turn"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -3391,7 +3391,7 @@
      "id": 1147,
      "token": "tt_phase:turn"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -3505,7 +3505,7 @@
      "id": 531,
      "token": "species:cloyster"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1135,
      "token": "tt_kind:move"
     },
@@ -3606,7 +3606,7 @@
      "id": 1147,
      "token": "tt_phase:turn"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -3708,7 +3708,7 @@
      "id": 1147,
      "token": "tt_phase:turn"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -3808,7 +3808,7 @@
      "id": 1146,
      "token": "tt_phase:replacement"
     },
-    "CATEGORY_LAST_USED_MOVE": {
+    "CATEGORY_TM_FIRST_KIND": {
      "id": 1136,
      "token": "tt_kind:switch"
     },
@@ -3927,7 +3927,7 @@
       "id": 1147,
       "token": "tt_phase:turn"
      },
-     "CATEGORY_LAST_USED_MOVE": {
+     "CATEGORY_TM_FIRST_KIND": {
       "id": 1136,
       "token": "tt_kind:switch"
      },
@@ -4069,7 +4069,7 @@
         "id": 1146,
         "token": "tt_phase:replacement"
        },
-       "CATEGORY_LAST_USED_MOVE": {
+       "CATEGORY_TM_FIRST_KIND": {
         "id": 1136,
         "token": "tt_kind:switch"
        },
@@ -4218,7 +4218,7 @@
       "id": 641,
       "token": "species:pidgeot"
      },
-     "CATEGORY_LAST_USED_MOVE": {
+     "CATEGORY_TM_FIRST_KIND": {
       "id": 1135,
       "token": "tt_kind:move"
      },
@@ -4358,7 +4358,7 @@
       "id": 1146,
       "token": "tt_phase:replacement"
      },
-     "CATEGORY_LAST_USED_MOVE": {
+     "CATEGORY_TM_FIRST_KIND": {
       "id": 1136,
       "token": "tt_kind:switch"
      },
@@ -4473,7 +4473,7 @@
       "id": 1147,
       "token": "tt_phase:turn"
      },
-     "CATEGORY_LAST_USED_MOVE": {
+     "CATEGORY_TM_FIRST_KIND": {
       "id": 1136,
       "token": "tt_kind:switch"
      },
