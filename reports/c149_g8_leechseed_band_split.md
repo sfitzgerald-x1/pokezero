@@ -329,6 +329,18 @@ unedited by design; the corrected statement is at the top of this report, with *
 dev 87.5 %, holdout 86.7 % — rather than dev alone standing in for both. This is a small error of
 exactly the kind this program keeps finding: a correct figure attached to the wrong quantity.
 
+**Caught by CI, not by me.** The first push went red on one step: `_MENTION_ALLOWLIST` in
+`tests/test_roll_enumeration_scope.py` is an **exact** ledger of every tracked file naming
+`POKEZERO_ENUMERATE_ROLLS`, and this report names it in §2 where it records how the oracle column
+was produced. c140 §0 documents hitting the same gate for the same reason and I had read that
+paragraph. The cause was a process gap rather than a reasoning one: I ran the crate suite and the
+two artifact-corpus modules locally but not the workflow's full Python battery, so a gate that
+exists and does run found something eighteen locally-run modules would have found first. All
+eighteen were then run locally and the battery is green, with two modules failing only on a
+`numpy` gap in this venv — `tests.test_leaf_self_recharge_derivation` and
+`tests.test_spread_gate_provenance`, both shape-only steps that skip in CI, both untouched by this
+branch, and both verified failing identically at the base commit `1c94f071`.
+
 Not measured, and stated as such:
 
 * **The two `defender_active.hp`-ceiling call sites.** Same arithmetic, deliberately untouched. No
