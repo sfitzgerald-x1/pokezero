@@ -65,6 +65,18 @@ jobs:
             scripts/cert_sweep_readout.py
             reports/c26_structural_probe_report.json
             reports/c27_structural_probe_report.json
+            # C146's never-fired census, which re-derives §3.5's absence lists from the
+            # artifacts instead of restating them. Its taxonomy pins read
+            # `src/pokezero/engine_world.py` and `scripts/engine_transition_differential.py`
+            # by AST, and both are already listed above, so a new refusal reason or a new
+            # `classify_divergence` return site trips this workflow. The pin file and its
+            # two counterexample artifacts are listed for the same reason
+            # `test_boundary_verdict_partition.py` is: a PR whose only change weakens the
+            # census, or deletes the c32/c43 witnesses the matchers are pinned against,
+            # must not be able to go green without running it.
+            tests/test_never_fired_counter_census.py
+            reports/c32_fail_diagnosis.json
+            reports/c43_coverage_shortfall_diagnosis.json
             # The coverage-bound pins' ENTIRE input. Without these listed, a PR whose
             # only change is deleting one of them skips mass-gate and goes green.
             reports/artifacts/c131_leechseed_main_dev_sweep.json
@@ -584,6 +596,31 @@ jobs:
           # added to either must be a red gate rather than a quieter green one.
           if ! grep -qE '^OK$' /tmp/verdict.log; then
             echo "::error::verdict-partition pins did not report a clean OK"
+            exit 1
+          fi
+
+      # C146. The ledger has asserted a false "never fired" four times, and each error
+      # propagated because citing the ledger felt like verification. This module computes
+      # the fired/never-fired partition from every committed JSON under `reports/` and
+      # `docs/` and asserts it as an exact SET EQUALITY in both directions, so a counter
+      # that starts firing is red rather than a silent widening. Exact count, not a floor,
+      # for the reason #1163 established. Battery: 10 mutations applied, 9 caught; the
+      # tenth is the documented fail-open (a subset assertion carrying H15's wrong
+      # six-class expectation passes), which is why the pin asserts equality.
+      - name: Never-fired counter census
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_never_fired_counter_census -v 2>&1 \
+            | tee /tmp/neverfired.log
+          if ! grep -qE 'Ran 16 tests' /tmp/neverfired.log; then
+            echo "::error::expected 16 never-fired census pins; the suite shrank or grew"
+            exit 1
+          fi
+          # A clean OK with no skips. The three matcher pins in
+          # TheMatchersThemselvesAreExercisedTests are the only reason the absence pins
+          # mean anything -- skipping one turns every absence assertion vacuous.
+          if ! grep -qE '^OK$' /tmp/neverfired.log; then
+            echo "::error::never-fired census pins did not report a clean OK"
             exit 1
           fi
 
