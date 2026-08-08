@@ -350,8 +350,19 @@ Neither needed this window to be discovered. Both are now measured on it.
 ## The window is spent
 
 `19,200,060`–`19,200,259` must never be measured again; `19,200,000`–`19,200,059` was
-contaminated earlier and is also spent. Above `19,200,260` is the only clean reserve, and
-#1122's guard still refuses it without an explicit opt-in.
+contaminated earlier and is also spent.
+
+**Correction, added later.** The sentence that stood here — *"Above `19,200,260` is the
+only clean reserve"* — was **false**, and it was false when written.
+`19,500,000`–`19,500,799` is consumed as well, by
+`reports/c73_eight_hundred_game_sweep.json`, an 800-game sweep that records
+`run.seed_start` rather than `seeds.min` and lives in `reports/` rather than
+`reports/artifacts/`, which is exactly why a scan of the obvious shape in the obvious
+directory does not see it. The clean reserve above `19,200,260` is everything **except**
+that band. #1122's guard refuses the whole of `19,200,000`+ without an explicit opt-in,
+c73's consumed band included, so the guard is not what distinguishes clean from spent;
+the seed registry in `docs/engine_divergence_ledger_20260728.md` is, and it is now
+enforced by `tests/test_seed_registry_coverage.py`.
 
 **Neither row may be fixed against this window.** Both were diagnosed on generated
 boundaries and retained-state replays, which is not a re-measurement.
