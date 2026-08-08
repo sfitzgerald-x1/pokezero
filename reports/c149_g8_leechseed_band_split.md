@@ -114,21 +114,79 @@ Showdown's, since that is what makes `floor(max * r / 100)` Showdown's own roll 
 damage calc is already wrong the split can drop an arm that a correct fan would have kept — which is
 a pre-existing damage-calc defect surfacing, not a new one, but it is not nothing.
 
-**Measured, and the reason to scope rather than weaken the claim: 0 instances.** Independent review
-scanned **124,188 fixtures** across both in-scope sites — the split fired on 44,393 and declined on
-79,795; of 25,728 collapsed arms kept and 18,901 dropped, **every dropped arm sat at a damage that is
-not a member of the integer fan**, i.e. not a roll Showdown could have thrown. **Zero real trades.**
+**Measured, and the reason to scope rather than weaken the claim: 0 instances.**
 
-Review also established that this is structural rather than lucky:
-`ResidualThresholdLadder::insert` is an insertion sort with dedup, so thresholds are strictly
-ascending; `band_window` therefore always yields `upper > lower`; so a threshold that *is* a fan
-member always lies inside its own half-open window and always keeps an arm, and skipping zero-count
-bands can only widen a window, never narrow one.
+> ⚠ **FIGURES REPLACED 2026-08-08 (C150). The paragraph that stood here cited an independent-review
+> scan of 124,188 fixtures — "the split fired on 44,393 and declined on 79,795; of 25,728 collapsed
+> arms kept and 18,901 dropped" — and NO ARTIFACT for it was ever committed.** The figures also do
+> not reconcile with one another: `25,728 + 18,901 = 44,629`, which matches neither the 44,393 fires
+> nor the 79,795 declines, so at most one of the two partitions can have been over the same
+> population. **The conclusion is not withdrawn** — it is a theorem, argued structurally below, and a
+> later independent audit reached the same verdict of zero real trades by its own route. That audit's
+> counts are deliberately NOT quoted here: they have no committed artifact either, and citing one
+> unauditable scan to shore up another is the exact move this correction exists to stop. What a
+> ledger may cite is the structural argument plus a census that ships its own artifact and its own
+> script, which is what follows.
+
+**The structural argument, which is what actually settles it.** `ResidualThresholdLadder::insert` is
+an insertion sort with dedup, so thresholds are strictly ascending; `band_window` therefore always
+yields `upper > lower`; so a threshold that *is* a fan member always lies inside its own half-open
+window `[t_i, t_i+1)` and always keeps an arm, and skipping zero-count bands can only widen a window,
+never narrow one. A dropped collapsed arm is consequently always priced at a damage that is **not** a
+member of the integer fan — not a roll Showdown could have thrown — so dropping it trades nothing.
+There is no fan, no HP configuration and no ladder for which this can fail; it is not a sampling
+result.
+
+**The census, artifacted** (`reports/artifacts/c150_band_split_trade_census.json`, reproducible via
+`python scripts/c150_band_split_trade_census.py --json ...`). Scope, stated because it is not "all":
+`max_damage` in `10..=600`; `lower` every integer strictly above the f32 fan's floor and at most
+`max_damage`; `upper` every integer in `lower+1..=max_damage+1`, where `max_damage + 1` stands for the
+`i16::MAX` ceiling of the two in-scope sites (no fan member exceeds `max_damage`, so the two are the
+same window). Windows whose comparator population is `<= 0` are skipped, exactly as the engine's
+`band > 0` gate skips them.
+
+| measured | value |
+|---|---|
+| band windows examined | **838,560** |
+| non-empty bands (the engine emits an arm) | **796,878** |
+| split fired | **783,903** |
+| split declined (the two fan bases disagree) | **12,975** |
+| collapsed arms kept | **207,868** |
+| collapsed arms dropped | **589,010** |
+| **real trades** (a dropped arm at a damage Showdown can deal) | **0** |
+| closure `kept + dropped == bands` | true |
+| closure `fired + declined == bands` | true |
+
+Two notes on reading it. First, the dropped count is *large* and that is the expected shape, not a
+finding: most integer thresholds are simply not fan members, so most collapsed arms were already
+priced at a damage Showdown cannot deal. The number that carries the claim is the last row. Second,
+this is a **transcription census**, the same instrument and the same justification as
+`scripts/c149_fan_basis_census.py` above — the property is pure arithmetic over `(max_damage, lower,
+upper)`, and driving it through a built engine would sample hundreds of fixtures instead of hundreds
+of thousands of band windows. The transcription is **validated rather than trusted**: the script
+re-derives all three committed fixtures of
+`rust/pokezero-search/tests/gen3_leechseed_residual_band_split.rs` (A, `max_damage` 174 / threshold
+160, splits into 9 arms; B crit, 66 / 61, splits into 8 slots collapsing to 6 distinct damages; C,
+30 / 27, **declines** at comparator 10 against integer 11) and additionally reproduces the exact
+`105.859375 %` guard-deleted branch mass that fixture C's crate test pins — which is `100 %` plus
+exactly one non-crit roll, and is only reachable if the basis mismatch is one roll wide. The script
+exits non-zero if any of the three disagrees, and the agreement record is written into the artifact.
+
+**Guard efficacy, on the same artifact.** A declined band *is* precisely a band whose two bases
+disagree, which is precisely the band on which the guard-deleted mutant prices arms from one basis
+while the survive arm is discounted from the other. So head shows **0** band-mass disagreements by
+construction — it declines — against **12,975** on the guard-deleted mutant over the census's 796,878
+bands. This replaces the withdrawn "0 on head against 115 on the mutant", which came from the same
+unartifacted scan.
 
 > **Left as-is deliberately:** the unconditional phrasing survives in the patch's own
 > `residual_band_roll_fan` doc comment. Editing it would change the patch bytes, which are hashed
 > into the engine fingerprint — moving the shipped engine off `8e912b45544034e6`, the identity that
-> both sweeps in §3 and review's 124,188-fixture scan were measured on, for a comment. Filed as a
+> both sweeps in §3 were measured on, for a comment. (An earlier revision of this note also cited
+> the 124,188-fixture scan as measured on that identity; C150 withdrew those figures as
+> unartifacted, and the replacement census is pure arithmetic that does not depend on a build at
+> all — so the fingerprint argument now rests on the §3 sweeps alone, which is where it belongs.)
+> Filed as a
 > comment-only follow-up rather than taken here, because invalidating a verified build identity to
 > reword a justification comment is the worse trade.
 
@@ -269,9 +327,14 @@ two that reach one in-scope call site each, and one that reaches the count guard
 > The guard now also has its **source-text sibling** alongside the other two, so all three predicates
 > are pinned the same two ways.
 >
-> Review measured the guard's efficacy directly over its 124,188-fixture scan: **0** band-mass
-> disagreements on head, **115** on the guard-deleted mutant, with total mass reaching
-> **105.859375 %** — the same figure fixture C exhibits.
+> ⚠ **FIGURES REPLACED 2026-08-08 (C150).** This note previously read: *"Review measured the
+> guard's efficacy directly over its 124,188-fixture scan: 0 band-mass disagreements on head, 115
+> on the guard-deleted mutant."* That scan has no committed artifact and its own partitions do not
+> reconcile (§1), so the figures are withdrawn. The efficacy statement is unchanged and now rests on
+> `reports/artifacts/c150_band_split_trade_census.json`: a declined band *is* a band whose two fan
+> bases disagree, so head reads **0** band-mass disagreements by construction against **12,975** on
+> the guard-deleted mutant over 796,878 bands. The **105.859375 %** total mass is fixture C's own
+> crate-test pin and is reproduced independently by the census script's `--check-fixtures` path.
 
 The controls are **poisoned, not clean**, and that is the load-bearing design choice. A clean
 unstatused control is worthless here: with no residual there is no lethality threshold,
