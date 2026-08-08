@@ -1,4 +1,4 @@
-# C146 — registered prediction: the G33b residual-bucket gate, built in `ResidualPlan`
+# C147 — registered prediction: the G33b residual-bucket gate, built in `ResidualPlan`
 
 **Registered before any measurement of the gate exists.** Committed as its own commit, ahead of
 the two gate sweeps and ahead of the row replay. §1–§7 are frozen; outcomes are appended in §8
@@ -193,7 +193,7 @@ measurement says so, and two have already been withdrawn under it.
 ## 8. Outcomes — appended after the measurement, with §1–§7 untouched
 
 Nothing above this line was edited. Full write-up:
-`reports/c146_g33b_residual_bucket_gate.md`.
+`reports/c147_g33b_residual_bucket_gate.md`.
 
 | prediction | outcome |
 |---|---|
@@ -252,3 +252,14 @@ both trees, live at 86 and 88). This branch adds **no** engine patch, so
 `PATCHED_TARGET_TREE_SHA256`, `EXPECTED_FINAL_SHA256`, `--test test_gen3` at 32 and the
 `Engine lib suite` at 5 are untouched — verified by an empty
 `git diff origin/main...HEAD -- third_party/ scripts/apply_poke_engine_patches.py`.
+
+### 8b. And a second merge, at `99c77eb7`
+
+`origin/main` moved again to **`99c77eb7`** (#1168, the ledger negative-claims audit), which took the
+report number `c146`. This prediction and its report are renumbered **C147**; the `c146_g33b_*`
+paths named in the earlier commits are the same files. #1168 touches no engine patch and no sweep
+artifact, so no measurement above is re-derived by it — verified by
+`git diff f1c3b3aa 99c77eb7 --name-only`, which lists four files, none of them under
+`third_party/` and none a sweep. It does add a **second** exact corpus pin,
+`_EXPECTED_COUNTER_ARTIFACTS`, bumped **347 → 360** by set difference over both trees and confirmed
+live at 359 and 361.

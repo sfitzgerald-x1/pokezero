@@ -183,21 +183,21 @@ _EXPECTED_SWEEP_ARTIFACTS = 87
 # Showdown recoil ground-truth measurement with no `boundaries_measured`. Verified via the set
 # difference, not assumed.
 #
-# 79 -> 83 (C146, the G33b residual-bucket gate). RE-DERIVED by running `_sweep_reports` itself --
+# 79 -> 83 (C147, the G33b residual-bucket gate). RE-DERIVED by running `_sweep_reports` itself --
 # not a reimplementation of it -- over BOTH trees, per steps 1-2 above: 79 on a worktree of
 # `origin/main` at `e0a23e4e` and 83 here, with the set difference exactly
-# `reports/artifacts/c146_g33b_{base,gate}_{dev,holdout}_sweep.json` and NOTHING removed.
+# `reports/artifacts/c147_g33b_{base,gate}_{dev,holdout}_sweep.json` and NOTHING removed.
 #
-# C146 adds three further artifacts that are deliberately OUTSIDE this corpus, and that was
+# C147 adds three further artifacts that are deliberately OUTSIDE this corpus, and that was
 # verified by the same set difference rather than reasoned about:
-# `c146_g33b_row_replay_{base,gate}.json` are single-row enumerated replays with no top-level
-# `boundaries_measured`, and `c146_g33b_gate_reach.json` is a firing census that nests its sweep
+# `c147_g33b_row_replay_{base,gate}.json` are single-row enumerated replays with no top-level
+# `boundaries_measured`, and `c147_g33b_gate_reach.json` is a firing census that nests its sweep
 # scalars under `windows.*.sweeps` for the same reason. Seven files added, four corpus members --
 # which is exactly why the directory count and the corpus count cannot check each other.
 #
 # 83 -> 87 after this branch MERGED `origin/main` at `f1c3b3aa`. #1166 adds an engine patch (72
 # patches now) and changes the renderer, so the pre-merge base/gate pair no longer measures the tree
-# that ships; the merged pair `c146_g33b_merged_{base,gate}_{dev,holdout}_sweep.json` does, and BOTH
+# that ships; the merged pair `c147_g33b_merged_{base,gate}_{dev,holdout}_sweep.json` does, and BOTH
 # pairs are retained -- the first is what the registered prediction was made against, the second is
 # what certifies the merged head. RE-DERIVED after the merge by the same two-tree procedure: 79 on a
 # worktree of `f1c3b3aa` and 87 here, set difference exactly the eight sweeps, nothing removed. The

@@ -83,18 +83,23 @@ jobs:
             reports/artifacts/c131_leechseed_main_holdout_sweep.json
             reports/artifacts/c131_leechseed_fix_dev_sweep.json
             reports/artifacts/c131_leechseed_fix_holdout_sweep.json
-            # C146's four G33b sweeps. Listed for the same reason as the c131 four
+            # C147's four G33b sweeps. Listed for the same reason as the c131 four
             # above: they are corpus members of the exact-count pin in
             # tests/test_boundary_verdict_partition.py, so a PR whose only change is
             # deleting one of them must trip this workflow rather than skip it.
-            reports/artifacts/c146_g33b_base_dev_sweep.json
-            reports/artifacts/c146_g33b_base_holdout_sweep.json
-            reports/artifacts/c146_g33b_gate_dev_sweep.json
-            reports/artifacts/c146_g33b_gate_holdout_sweep.json
-            reports/artifacts/c146_g33b_merged_base_dev_sweep.json
-            reports/artifacts/c146_g33b_merged_base_holdout_sweep.json
-            reports/artifacts/c146_g33b_merged_gate_dev_sweep.json
-            reports/artifacts/c146_g33b_merged_gate_holdout_sweep.json
+            reports/artifacts/c147_g33b_base_dev_sweep.json
+            reports/artifacts/c147_g33b_base_holdout_sweep.json
+            reports/artifacts/c147_g33b_gate_dev_sweep.json
+            reports/artifacts/c147_g33b_gate_holdout_sweep.json
+            reports/artifacts/c147_g33b_merged_base_dev_sweep.json
+            reports/artifacts/c147_g33b_merged_base_holdout_sweep.json
+            reports/artifacts/c147_g33b_merged_gate_dev_sweep.json
+            reports/artifacts/c147_g33b_merged_gate_holdout_sweep.json
+            # The remaining five C147 artifacts -- two row replays, two merged row replays
+            # and the reach census -- are outside the sweep corpus but INSIDE the
+            # never-fired counter corpus (360), whose count is equally exact. One glob
+            # rather than five lines, and it also covers the eight named above.
+            reports/artifacts/c147_g33b_*.json
             src/pokezero/**
             # C145: the Encore-on-transform pins, which are what hold `19100170/71-72`
             # closed. Listed so a PR that ONLY weakens the pin file still trips this
@@ -883,7 +888,7 @@ jobs:
           # that deleted these five, instead of being re-run. A cross-check a change makes
           # about itself is worth exactly one thing: running it.
           #
-          # 429 -> 436 with C146's seven G33b pins, all seven named in the loop below.
+          # 429 -> 436 with C147's seven G33b pins, all seven named in the loop below.
           # MEASURED on the MERGED tree by summing this step's own expression over a local
           # run -- `429 + 7` agrees, but the figure comes from the run, not the arithmetic,
           # because this branch merged `origin/main` after its first measurement and a floor

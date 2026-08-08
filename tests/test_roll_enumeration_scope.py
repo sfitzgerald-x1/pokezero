@@ -1066,18 +1066,18 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         "reports/c143_heal_attribution_diagnosis.md",
         # The ledger's G8 and G33b cells now record that enumerated closure.
         "reports/c138_known_gaps_ledger.md",
-        # C146 runs the SAME probe, unchanged, on two builds -- `origin/main` and the
+        # C147 runs the SAME probe, unchanged, on two builds -- `origin/main` and the
         # built G33b gate -- to measure the gate's closure on `19200244/115` rather
         # than model it. DATA ONLY: each artifact is the probe's own output and
         # records the flag it ran under, which is the whole reason the field exists.
         # Neither file is on any import path and neither sets anything.
-        "reports/artifacts/c146_g33b_row_replay_base.json",
-        "reports/artifacts/c146_g33b_row_replay_gate.json",
+        "reports/artifacts/c147_g33b_row_replay_base.json",
+        "reports/artifacts/c147_g33b_row_replay_gate.json",
         # And the same replay re-run on both sides of the `f1c3b3aa` merge, because #1166
         # changes the engine (72 patches) and the renderer, so the pre-merge pair no longer
         # describes the tree that ships. Same probe, same flag, same DATA-ONLY status.
-        "reports/artifacts/c146_g33b_merged_row_replay_base.json",
-        "reports/artifacts/c146_g33b_merged_row_replay_gate.json",
+        "reports/artifacts/c147_g33b_merged_row_replay_base.json",
+        "reports/artifacts/c147_g33b_merged_row_replay_gate.json",
     }
 
     def test_the_set_of_files_mentioning_the_flag_is_recorded(self) -> None:

@@ -8937,7 +8937,7 @@ mod tests {
     // revert-failing; the other six exist because every one of them passes on
     // `main` too, and a gate that fires unconditionally would break them.
     //
-    // Red/green measured in `reports/c146_g33b_residual_bucket_gate.md` §4 by
+    // Red/green measured in `reports/c147_g33b_residual_bucket_gate.md` §4 by
     // checking out `origin/main` into its own worktree, rebuilding, and running --
     // not by reasoning about which of them the predicate must reach.
 

@@ -1,4 +1,4 @@
-# C146 — the G33b residual-bucket gate, built in `ResidualPlan` and swept
+# C147 — the G33b residual-bucket gate, built in `ResidualPlan` and swept
 
 **G33b is now shipped rather than recommended.** The Leftovers heal slot is no longer booked when
 the residual block was truncated by the opposing active's battle-ending faint. The gate is a real
@@ -6,7 +6,7 @@ change in `ResidualPlan::build`, the prediction was registered before any measur
 existed, both permitted windows are swept, and the pin that holds it is verified red on a
 separately-vendored `origin/main` checkout.
 
-Registered prediction: `reports/c146_g33b_residual_bucket_gate_prediction.md`, committed at
+Registered prediction: `reports/c147_g33b_residual_bucket_gate_prediction.md`, committed at
 `e0b8ca0f`, ahead of every gate measurement in this report. Outcomes are appended to it in a §8
 that leaves §1–§7 untouched.
 
@@ -121,7 +121,7 @@ Two deliberate under-reaches, both retaining the pre-gate booking:
 | `modelled_g33b_gate.soundness.heals_relabelled` | 350 | **0** |
 | `arms_reproducing_the_full_observed_trace` | 1 arm, 0.2189 % | 1 arm, 0.2189 % |
 
-Artifacts `reports/artifacts/c146_g33b_row_replay_base.json` and
+Artifacts `reports/artifacts/c147_g33b_row_replay_base.json` and
 `…_gate.json`.
 
 Two things worth reading off that table rather than the verdict alone:
@@ -207,7 +207,7 @@ asserted, which is that step's existing discipline.
 
 `scripts/engine_transition_differential.py --games 200`, strict matcher, collapsed roll path (the
 shipping configuration), on both builds and both windows. Four artifacts committed as
-`reports/artifacts/c146_g33b_{base,gate}_{dev,holdout}_sweep.json`.
+`reports/artifacts/c147_g33b_{base,gate}_{dev,holdout}_sweep.json`.
 
 | | dev `19,000,000–19,000,199` | | validation holdout `19,100,000–19,100,199` | |
 |---|---|---|---|---|
@@ -304,6 +304,17 @@ falsifier's clause 6 would have fired on a change made in another PR. **Both pai
 the pre-merge pair is what the registered prediction was made against, the merged pair is what
 certifies the head that ships.
 
+**`main` then moved a second time, to `99c77eb7` (#1168), and that merge took the number `c146`.**
+This report and its prediction are therefore **C147**, renumbered after the fact; the `c146_g33b_*`
+paths quoted in the two commits before the merge are the same files under their old names. #1168
+also adds a **second** exact corpus pin, `_EXPECTED_COUNTER_ARTIFACTS`, over every committed JSON
+under `reports/` and `docs/` — bumped **347 → 360** here by importing that module into a worktree of
+`99c77eb7` and calling `counter_artifacts()` there, set difference exactly the thirteen
+`c147_g33b_*.json` this branch adds, nothing removed, and confirmed live at 359 and 361. **The two
+corpora move independently**: only eight of the thirteen are sweep-corpus members, because that
+selector requires a top-level `boundaries_measured` and this one does not, so neither count can be
+used to check the other.
+
 The crate-test floor was likewise re-measured on the merged tree rather than carried: **429 → 436**,
 summed from that CI step's own expression over a local run (436 `... ok` lines, 0 failures, 1
 ignored). `429 + 7` agrees, but the figure comes from the run. And `_EXPECTED_SWEEP_ARTIFACTS` was
@@ -333,7 +344,7 @@ booking site — swept over both windows and counted out of the sweep's own stde
 | dev `19,000,000–19,000,199` | 54 | **52** |
 | validation holdout `19,100,000–19,100,199` | 58 | **56** |
 
-Artifact `reports/artifacts/c146_g33b_gate_reach.json`, which carries the instrumentation verbatim.
+Artifact `reports/artifacts/c147_g33b_gate_reach.json`, which carries the instrumentation verbatim.
 The two counts differ by 2 on each window because the predicate is evaluated for both sides and
 reports truncation whether or not the truncated side holds Leftovers; the second column is the
 gate's effective reach.
