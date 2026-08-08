@@ -74,10 +74,17 @@ __all__ = [
 # carrying the family prefix) separators are never rewritten: doing so strips
 # prefixes and invents phantom bare rows, an error this campaign has shipped twice.
 
-# A quoted run that is NOT glued to surrounding word characters. Guards against
+# A quoted run that is NOT glued to surrounding word characters, guarding against
 # apostrophes inside interpolated native error strings ("can't materialize
 # 'Zapdos'"), where a naive `'[^']*'` matches "'t materialize '" -- destroying the
 # predicate and keeping the payload, both hazards at once.
+#
+# INERT TODAY: every registered position anchors on the literal prefix "foe ability ",
+# so the lookbehind is always evaluated against that trailing space and cannot fail.
+# It is kept as defence for future UNANCHORED registrations -- the deferred species
+# positions are exactly that, and the naive pattern goes live the moment one lands.
+# `TestLiteralPattern` tests the pattern directly rather than through a key, because
+# routed through a key it passes for the trivial reason that nothing matches.
 _LITERAL = r"(?<![A-Za-z])'[^']*'(?![A-Za-z])"
 
 # (compiled pattern, replacement) for positions whose operand is a BYSTANDER: it
@@ -285,54 +292,40 @@ class CorpusScan:
 
 
 def _walk_stats_blocks(node: Any) -> Iterator[Mapping[str, Any]]:
-    """Yield every stats mapping that carries corpus context, wherever it sits.
+    """Yield every CUMULATIVE stats block, wherever it sits.
 
     Addresses are found by a recursive walk, so completeness and occurrence totals
     must be found the same way or they silently disappear on layouts the walk
-    handles. Three writers exist and only one nests under ``engine_mcts``:
-    ``scripts/foulplay_paired_eval.py`` puts stats under ``per_seat[seat]`` with no
-    top-level wrapper, and ``scripts/mcts_acceptance_h2h.py`` puts ``policy_stats``
-    at the document root. A hardcoded ``engine_mcts.policy_stats`` lookup reported
-    those as complete-with-no-counts while reading their addresses fine.
+    handles. Several writers exist and only one nests under ``engine_mcts``:
+    ``scripts/foulplay_paired_eval.py`` puts stats under ``per_seat[seat]``,
+    ``scripts/mcts_acceptance_h2h.py`` puts ``policy_stats`` at the document root,
+    and ``scripts/hc_depth_grid.py`` uses ``engine_stats``.
+
+    Acceptance is by the PRESENCE of ``fallback_samples``, which is the structural
+    marker of a cumulative scope: ``EngineMctsStats.to_dict()``
+    (``engine_search.py:834-837``) always emits it, while every mirror and every
+    delta omits it. Selecting on the count fields instead admitted three kinds of
+    non-scope and double-counted all of them:
+
+    * the ``engine_mcts``-level copy of ``fallback_reasons`` sitting beside its own
+      ``policy_stats`` -- measured 1835 -> 3670 decisions on the four-era corpus;
+    * ``seat_block``'s lift of ``world_failure_reasons`` to ``per_seat`` level
+      (``scripts/foulplay_paired_eval.py:215-247``);
+    * the PER-GAME DELTA blocks written by ``engine_search.py:2645-2654`` into the
+      same document as the cumulative totals at ``:2683-2684``. Those deltas sum
+      exactly to the cumulative, so accepting them doubles every count.
+
+    Presence, not truthiness: a scope that recorded no addresses still owns its
+    ``fallback_sample_addresses_dropped`` and its totals.
     """
     if isinstance(node, Mapping):
-        if any(
-            marker in node
-            for marker in (
-                "fallback_sample_addresses_dropped",
-                "world_failure_reasons",
-                "fallback_reasons",
-            )
-        ):
+        if "fallback_samples" in node:
             yield node
         for value in node.values():
             yield from _walk_stats_blocks(value)
     elif isinstance(node, list):
         for item in node:
             yield from _walk_stats_blocks(item)
-
-
-def _scan_document(document: Any, scan: CorpusScan, *, source: str) -> None:
-    scan.addresses.extend(iter_shard_addresses(document, source=source))
-    # De-duplicated PER FIELD by content, not per block and not by identity.
-    #
-    # Per block is wrong: `fallback_reasons` appears BOTH at `engine_mcts` and at
-    # `engine_mcts.policy_stats` in a real shard, and those two blocks differ in
-    # their other fields, so a whole-block fingerprint treats them as distinct and
-    # doubles every decision count. This is the same 2x duplication trap the address
-    # walk already guards.
-    #
-    # By identity is also wrong: a mirrored block serialises byte-identically and
-    # parses back as two separate objects, so identity dedup does nothing on
-    # anything read from disk -- which is every real shard.
-    #
-    # The trade-off is explicit: two genuinely independent occurrences of one field
-    # with byte-identical content collapse into one. That requires identical totals
-    # across every class in that field, and under-counting a true duplicate is safer
-    # than silently doubling every corpus total.
-    seen: set[tuple[str, str]] = set()
-    for stats in _walk_stats_blocks(document):
-        _scan_stats_block(stats, scan, seen=seen)
 
 
 def _fingerprint(value: Any) -> str | None:
@@ -342,25 +335,28 @@ def _fingerprint(value: Any) -> str | None:
         return None
 
 
-def _scan_stats_block(
-    stats: Mapping[str, Any], scan: CorpusScan, *, seen: set[tuple[str, str]]
-) -> None:
-    def first_sighting(name: str, value: Any) -> bool:
-        fingerprint = _fingerprint(value)
-        if fingerprint is None:
-            return True
-        token = (name, fingerprint)
-        if token in seen:
-            return False
-        seen.add(token)
-        return True
+def _scan_document(document: Any, scan: CorpusScan, *, source: str) -> None:
+    scan.addresses.extend(iter_shard_addresses(document, source=source))
+    # De-duplicated by WHOLE-BLOCK content, as a backstop against a shard that
+    # mirrors an entire `to_dict()` under two paths. Deliberately NOT per field:
+    # per-field dedup collapsed genuinely independent scopes. Two seats in one
+    # paired-eval shard are separate policy instances over the same seed band, and
+    # the fingerprint of a scalar like `fallback_sample_addresses_dropped` is a bare
+    # integer, so any two scopes sharing one equal nonzero drop count halved the
+    # total -- no dict collision required.
+    seen: set[str] = set()
+    for stats in _walk_stats_blocks(document):
+        fingerprint = _fingerprint(stats)
+        if fingerprint is not None:
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+        _scan_stats_block(stats, scan)
 
+
+def _scan_stats_block(stats: Mapping[str, Any], scan: CorpusScan) -> None:
     dropped = stats.get("fallback_sample_addresses_dropped")
-    if (
-        isinstance(dropped, int)
-        and not isinstance(dropped, bool)
-        and first_sighting("dropped", dropped)
-    ):
+    if isinstance(dropped, int) and not isinstance(dropped, bool):
         scan.addresses_dropped += dropped
     for field_name, prefix, target in (
         ("world_failure_reasons", "", scan.world_counts),
@@ -368,8 +364,6 @@ def _scan_stats_block(
     ):
         counts = stats.get(field_name)
         if not isinstance(counts, Mapping):
-            continue
-        if not first_sighting(field_name, counts):
             continue
         for key, value in counts.items():
             if isinstance(value, int) and not isinstance(value, bool):

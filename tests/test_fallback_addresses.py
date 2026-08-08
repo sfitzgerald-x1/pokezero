@@ -484,14 +484,110 @@ class TestStatsBlockDiscovery:
         _scan_document(document, scan, source="a.json")
         assert scan.decision_counts["fallback:crate_search_failed"] == 1835
 
-    def test_distinct_totals_at_two_depths_are_both_counted(self):
-        # Dedup is by CONTENT, so genuinely different numbers must still sum.
+    def test_two_independent_seat_scopes_both_count(self):
+        # paired_eval runs each seat as a SEPARATE policy instance over the same seed
+        # band. Both are real cumulative scopes and must sum.
+        def seat(n):
+            return {"policy_stats": {
+                "fallback_samples": {"fallback:crate_search_failed": [
+                    {"battle_id": f"b{n}", "round": n, "seat": f"p{n}",
+                     "reason": "crate_search_failed"}]},
+                "fallback_reasons": {"crate_search_failed": n},
+            }}
+        scan = CorpusScan()
+        _scan_document({"per_seat": {"p1": seat(10), "p2": seat(25)}}, scan, source="a")
+        assert scan.decision_counts["fallback:crate_search_failed"] == 35
+
+    def test_equal_dropped_counts_in_two_scopes_are_not_collapsed(self):
+        # The scalar fingerprint of `fallback_sample_addresses_dropped` is a bare
+        # integer, so per-FIELD content dedup halved the total whenever two
+        # independent scopes happened to share one equal nonzero value. No dict
+        # collision was required for the loss.
+        def seat(n):
+            return {"policy_stats": {
+                "fallback_samples": {"k": [
+                    {"battle_id": f"b{n}", "round": n, "seat": "p1", "reason": "r"}]},
+                "fallback_sample_addresses_dropped": 1001,
+                "world_failure_reasons": {f"class-{n}": n},
+            }}
+        scan = CorpusScan()
+        _scan_document({"per_seat": {"p1": seat(1), "p2": seat(2)}}, scan, source="a")
+        assert scan.addresses_dropped == 2002
+
+    def test_per_game_delta_blocks_are_not_summed_with_the_cumulative(self):
+        # engine_search.py:2645-2654 appends a per-game DELTA block per game, and
+        # :2683-2684 writes them beside the cumulative totals. The deltas sum exactly
+        # to the cumulative, so accepting them doubles every count. Deltas carry no
+        # `fallback_samples`, which is the marker that separates them.
         document = {
-            "per_seat": {
-                "p1": {"policy_stats": {"fallback_reasons": {"crate_search_failed": 10}}},
-                "p2": {"policy_stats": {"fallback_reasons": {"crate_search_failed": 25}}},
-            }
+            "games": [
+                {"seed": 600000, "world_failure_reasons": {"K": 10},
+                 "fallback_reasons": {"R": 4}},
+                {"seed": 600001, "world_failure_reasons": {"K": 6},
+                 "fallback_reasons": {"R": 3}},
+            ],
+            "engine_mcts": {
+                "fallback_samples": {"K": [
+                    {"battle_id": "b", "round": 1, "seat": "p1", "reason": "R"}]},
+                "world_failure_reasons": {"K": 16},
+                "fallback_reasons": {"R": 7},
+                "fallback_sample_addresses_dropped": 0,
+            },
         }
         scan = CorpusScan()
         _scan_document(document, scan, source="a.json")
-        assert scan.decision_counts["fallback:crate_search_failed"] == 35
+        assert scan.world_counts["K"] == 16
+        assert scan.decision_counts["fallback:R"] == 7
+
+    def test_identical_deltas_do_not_produce_a_fractional_multiple(self):
+        # The nastier shape: equal deltas plus content dedup gave an unpredictable
+        # 1.5x rather than a clean 2x.
+        delta = {"world_failure_reasons": {"K": 8}, "fallback_reasons": {"R": 4}}
+        document = {
+            "games": [dict(delta), dict(delta)],
+            "engine_mcts": {
+                "fallback_samples": {"K": [
+                    {"battle_id": "b", "round": 1, "seat": "p1", "reason": "R"}]},
+                "world_failure_reasons": {"K": 16},
+                "fallback_reasons": {"R": 8},
+            },
+        }
+        scan = CorpusScan()
+        _scan_document(document, scan, source="a.json")
+        assert scan.world_counts["K"] == 16
+        assert scan.decision_counts["fallback:R"] == 8
+
+
+class TestLiteralPattern:
+    def test_the_boundary_guard_is_not_the_naive_pattern(self):
+        # Inert today -- every registered position anchors on "foe ability " -- but
+        # the deferred species registration is unanchored, and the naive pattern
+        # would then destroy the predicate of any interpolated native error.
+        import re as _re
+
+        from pokezero.fallback_addresses import _LITERAL
+
+        text = "can't materialize 'Zapdos'"
+        assert _re.search(_LITERAL, text).group() == "'Zapdos'"
+        assert _re.compile(r"'[^']*'").search(text).group() == "'t materialize '"
+
+
+class TestRawKeysMode:
+    def test_raw_keys_still_resolves_occurrence_counts(self, tmp_path, capsys):
+        # Display keys are raw while the occurrence tables are keyed canonical; a
+        # missing lookup mislabelled every class "not in these shards".
+        raw = ("self_request_state_unsupported: self active request flags ['trapped'] "
+               "constrain legality beyond this construction (sampled world does not "
+               "trap: foe ability 'swarm')")
+        (tmp_path / "a-p1.json").write_text(
+            json.dumps(
+                {"engine_mcts": {"policy_stats": {
+                    "fallback_samples": {raw: [_entry("b", 1, "p1")]},
+                    "world_failure_reasons": {raw: 5216},
+                }}}
+            )
+        )
+        assert main([str(tmp_path), "--raw-keys"]) == 0
+        out = capsys.readouterr().out
+        assert "5216" in out
+        assert "not in these shards" not in out
