@@ -822,3 +822,81 @@ class TestPropertiesAreHeldNotAsserted:
         assert isinstance(spec, ReplaySpec)
         assert spec.leaf_eval == "hp_fraction_crate"
         assert spec.fidelity == FIDELITY_EXACT
+
+
+class TestRoundFourRegressions:
+    def test_the_band_caveat_survives_every_fidelity_verdict(self):
+        # The round-3 fix checked `caveats` only after the `seeded-unverified`
+        # and unmeasured-leaf branches had already returned, so for acceptance
+        # and k0 -- two of the three self-play harnesses -- the caveat it exists
+        # to carry was silently dropped. `missing` cannot cover: `pair_start`,
+        # `pairs` and `games` are not spec fields.
+        document = {
+            "schema_version": "pokezero.mcts-acceptance-shard.v1",
+            "arm": "search",
+            "config_id": "d4-s2048-b64-w8",
+            "checkpoint": "checkpoints/k0.pt",
+            # no pair_start / pairs -> the band cannot be checked
+            "policy_stats": {"fallback_samples": {}},
+        }
+        spec = resolve_address(
+            _address("accept-search-600004-p1", round_index=7, seat="p1"), document
+        )
+        assert isinstance(spec, ReplaySpec)
+        assert spec.fidelity == FIDELITY_UNVERIFIED  # not `exact`, so not the
+        # branch the round-3 test happened to exercise
+        assert "could not be checked" in " ".join(spec.fidelity_notes)
+
+    def test_the_band_caveat_survives_the_unmeasured_leaf_verdict(self):
+        document = _hc_grid_shard()
+        document["leaf_eval"] = "hp_fraction"
+        del document["games"]
+        spec = resolve_address(
+            _address("hcgrid-hc-d4-600000", round_index=12), document
+        )
+        assert isinstance(spec, ReplaySpec)
+        assert spec.fidelity == FIDELITY_OPPONENT_UNPINNED
+        assert "could not be checked" in " ".join(spec.fidelity_notes)
+
+    def test_an_empty_leaf_eval_is_not_the_healthy_default(self):
+        # `_as_str(...) or "hp_fraction_crate"` reads "" as the compiled-in
+        # value -- the truthiness pattern this module condemns elsewhere. A
+        # malformed recording must not resolve as a healthy one.
+        document = _hc_grid_shard()
+        document["leaf_eval"] = ""
+        spec = resolve_address(
+            _address("hcgrid-hc-d4-600000", round_index=12), document
+        )
+        assert isinstance(spec, ReplaySpec)
+        assert spec.leaf_eval == ""
+        assert spec.fidelity != FIDELITY_EXACT
+
+    @pytest.mark.parametrize(
+        ("config_id", "worlds"),
+        [
+            ("d4-s1024-b64-w8", 8),
+            # M17: the checkpoint tag must be stripped before the digit scan, or
+            # "w8@k1" is not a digit run, engine_worlds reads None, the spec goes
+            # underspecified and the runner refuses a resolvable address.
+            ("d4-s1024-b64-w8@k1", 8),
+            ("d4-s1024-b64-w8@transformer-policy", 8),
+        ],
+    )
+    def test_config_id_parses_with_and_without_a_checkpoint_tag(
+        self, config_id, worlds
+    ):
+        document = {
+            "schema_version": "pokezero.mcts-acceptance-shard.v1",
+            "arm": "search",
+            "config_id": config_id,
+            "checkpoint": "checkpoints/k0.pt",
+            "pair_start": 600000,
+            "pairs": 8,
+            "policy_stats": {"fallback_samples": {}},
+        }
+        spec = resolve_address(
+            _address("accept-search-600004-p1", round_index=7, seat="p1"), document
+        )
+        assert isinstance(spec, ReplaySpec)
+        assert spec.engine_worlds == worlds
+        assert "engine_worlds" not in spec.missing

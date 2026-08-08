@@ -123,7 +123,24 @@ HARNESS_ROLLOUT_K0_GRID = "rollout-k0-grid"
 
 # --- fidelity verdicts ------------------------------------------------------
 
-#: Every input to the target decision is reconstructible from this spec.
+#: Every input to the target decision that this spec MODELS is reconstructible
+#: from it, and the search it names is measured byte-identical across runs.
+#:
+#: Narrower than it sounds, and the narrowing is load-bearing for the majority
+#: refusal class. The construction loop (`engine_search.py:1049-1101`) decides a
+#: `no_worlds_constructed` refusal from six settings: `worlds`,
+#: `sample_retry_factor`, and `approximate_sleep_turns`,
+#: `approximate_substitute_health`, `approximate_partial_trap_turns`,
+#: `approximate_hidden_duration_volatiles`. Only `worlds` is a
+#: :class:`ReplaySpec` field. The other five are ASSUMED CONSTANT at their
+#: `EngineMctsConfig` defaults -- no writer records them, so `missing` cannot
+#: name them (it is derived from spec fields) and `_REQUIRED_FOR_REPLAY` cannot
+#: require them.
+#:
+#: No live wrong answer today: no producer CLI varies those five, so the
+#: assumption holds for every shard that exists. It is recorded because it is
+#: the same latent shape as the hardcoded `leaf_eval` -- correct until the day
+#: a flag appears, and silent when it does.
 FIDELITY_EXACT = "exact"
 #: The battle cannot be rebuilt: an actor in it runs a search that is
 #: nondeterministic even at a fixed iteration count. See the module docstring.
@@ -491,6 +508,18 @@ def _foulplay_fields(
     return fields, missing, None, caveats
 
 
+def _leaf_eval(document: Mapping[str, Any], compiled_in: str) -> str | None:
+    """The shard's `leaf_eval` if it records one, else the script's own value.
+
+    `is None`, not truthiness: `"leaf_eval": ""` under an `or` silently takes the
+    compiled-in value, which is the pattern this module's own docstrings condemn
+    and which `rollout_settings` was converted away from. An empty string is a
+    malformed recording, and it must not read as the healthy default.
+    """
+    recorded = _as_str(document.get("leaf_eval"))
+    return compiled_in if recorded is None else recorded
+
+
 def _seed_band_problem(
     document: Mapping[str, Any], seed: int, *, start_field: str, count_field: str
 ) -> tuple[str | None, str | None]:
@@ -567,7 +596,7 @@ def _hc_grid_fields(
         # it made the leaf-eval fidelity branch unreachable through
         # `resolve_address` -- a latent wrong answer for the day
         # `hc_depth_grid` grows a `--leaf-eval` flag. `:220` is today's value.
-        "leaf_eval": _as_str(document.get("leaf_eval")) or "hp_fraction_crate",
+        "leaf_eval": _leaf_eval(document, "hp_fraction_crate"),
         "engine_depth": _as_int(document.get("depth")),
         "engine_sims": _as_int(document.get("sims")),
         "engine_worlds": _as_int(document.get("worlds")),
@@ -621,7 +650,7 @@ def _k0_grid_fields(
         "checkpoint_sha256": _as_str(document.get("checkpoint_sha256")),
         "format_id": "gen3randombattle",  # scripts/k0_grid_h2h.py:190, hardcoded
         "policy_mode": "engine-mcts",
-        "leaf_eval": _as_str(document.get("leaf_eval")) or "model",  # :154-168
+        "leaf_eval": _leaf_eval(document, "model"),  # scripts/k0_grid_h2h.py:154-168
         "engine_depth": _as_int(document.get("depth")),
         "engine_sims": _as_int(document.get("sims")),
         "engine_batch": batch,
@@ -687,6 +716,11 @@ def _acceptance_fields(
     caveats = [caveat] if caveat else []
     config_id = _as_str(document.get("config_id")) or ""
     parsed: dict[str, int] = {}
+    # The checkpoint tag is stripped FIRST: `config_id_for` renders
+    # `f"{base}@{tag}"` (scripts/foulplay_paired_eval.py:110), so `"w8@k1"` is
+    # not a digit run and `engine_worlds` would silently read None -- the spec
+    # would go `underspecified` and the runner would refuse a perfectly
+    # resolvable address.
     for part in config_id.split("@", 1)[0].split("-"):
         if len(part) > 1 and part[0] in "dsbw" and part[1:].isdigit():
             parsed[part[0]] = int(part[1:])
@@ -694,7 +728,7 @@ def _acceptance_fields(
         "checkpoint": _as_str(document.get("checkpoint")),
         "format_id": "gen3randombattle",  # scripts/mcts_acceptance_h2h.py:435
         "policy_mode": "engine-mcts",
-        "leaf_eval": _as_str(document.get("leaf_eval")) or "model",  # :79-107
+        "leaf_eval": _leaf_eval(document, "model"),  # :79-107
         "engine_depth": parsed.get("d"),
         "engine_sims": parsed.get("s"),
         "engine_batch": parsed.get("b"),
@@ -798,7 +832,7 @@ def _fidelity(
 ) -> tuple[str, tuple[str, ...]]:
     """Verdict plus the evidence for it. See the module docstring."""
     if harness == HARNESS_FOULPLAY_BRIDGE:
-        notes = [
+        notes = [*caveats,
             "the external opponent's poke-engine MCTS is nondeterministic at a "
             "FIXED ITERATION COUNT -- measured, five runs at iterations=4000 on "
             "one captured state gave five different visit distributions -- "
@@ -829,6 +863,7 @@ def _fidelity(
         return FIDELITY_UNDERSPECIFIED, (
             "the harness would reconstruct, but this shard does not record "
             + ", ".join(unpinned),
+            *caveats,
         )
     leaf_eval = fields.get("leaf_eval")
     in_process = (
@@ -839,6 +874,12 @@ def _fidelity(
         "the decision RNG is a per-battle-per-seat stream advanced by every "
         "preceding decision, so round N is reachable only by replaying 0..N-1"
     )
+    # `caveats` is appended to EVERY branch below, not only the `exact` one.
+    # The round-3 revision checked it after these two early returns, so the band
+    # caveat it exists to carry was SILENTLY DROPPED for acceptance and k0 --
+    # two of the three self-play harnesses -- and only survived on hc_grid.
+    # `missing` cannot cover for it: `pair_start`/`pairs`/`games` are not spec
+    # fields, which is the whole reason this channel exists.
     if leaf_eval in _SEEDED_UNVERIFIED_LEAF_EVALS:
         return FIDELITY_UNVERIFIED, (
             in_process,
@@ -848,12 +889,14 @@ def _fidelity(
             "TorchScript forward that is not bitwise reproducible across devices "
             "or cuDNN algorithm selection -- treat a match as evidence, not proof",
             stream_note,
+            *caveats,
         )
     if leaf_eval not in _MEASURED_REPRODUCIBLE_LEAF_EVALS:
         return FIDELITY_OPPONENT_UNPINNED, (
             f"leaf_eval={leaf_eval!r} runs poke-engine's own "
             "monte_carlo_tree_search, measured nondeterministic at a fixed "
             "iteration count (unseeded chance sampler, src/mcts.rs sample_node)",
+            *caveats,
         )
     notes = [
         in_process,
