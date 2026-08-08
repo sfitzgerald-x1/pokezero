@@ -453,6 +453,15 @@ class CollectCacheMaskMetadataTest(unittest.TestCase):
                     "tier2_investment": False,
                     # v4 pack A2 ablation switch; pack-whole by default and inert below v4.
                     "feature_pack_last_move": True,
+                    # Added by #1027 (belief-system narrowing), which turned damage-evidence
+                    # conclusions into candidate-set constraints and retired their v4 columns.
+                    # Both default OFF. This dict is an exhaustive equality check on the emitted
+                    # mask set, so a new mask breaks it by design -- the point is that a mask
+                    # cannot be added to the recorded metadata without someone acknowledging it
+                    # here. Acknowledged: these are real switches on `FeatureMasks`
+                    # (`local_showdown.py:1801`), not stray keys.
+                    "investment_belief_narrowing": False,
+                    "item_belief_narrowing": False,
                 },
             )
             matching_model = SimpleNamespace(
