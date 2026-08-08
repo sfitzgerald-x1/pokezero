@@ -204,6 +204,13 @@ CAT_GROUPS = [
     ("Fixed slots (9)", r"^CATEGORY_(PRIMARY|SECONDARY|ROLE|SLOT|TYPE_|MOVE_)"),
     ("Belief buckets + volatiles", r"^CATEGORY_(BELIEF_|VOLATILE_)"),
     ("v2.2 turn-merged columns (12)", r"^CATEGORY_TM_"),
+    # CATEGORY_LAST_USED_MOVE and CATEGORY_TRACED_ABILITY were added to the categorical layout
+    # after this census was written and matched no pattern above, so the coverage assertion
+    # below fired and the generator could not run at all -- which is why
+    # docs/token-format/turn16-token-dump.json went stale: regenerating it was impossible.
+    # The assertion did its job (it refused to emit a doc that silently omitted columns); the
+    # census just had to learn the new ones.
+    ("Per-mon live state (2)", r"^CATEGORY_(LAST_USED_MOVE|TRACED_ABILITY)$"),
 ]
 cat_cols = list(CAT_LAYOUT["column_names"])
 cat_seen = set()
