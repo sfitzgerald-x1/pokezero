@@ -156,6 +156,15 @@ _NEVER_FIRED_STATIC_COUNTERS = (
     "no_usable_branch",
 )
 
+# NOT one of §3.5's nine, and kept separate so that list keeps meaning nine.
+# `skip:rump_branch_set` is the FIFTH term of the shipped verdict identity
+# (`cert_sweep_readout.py:1451,1611`) -- H14 states that identity as four-term, which C146
+# annotates in place, and this is its second never-exercised term alongside `engine_error`.
+# It was asserted in §3.3 and held by no pin, which is exactly the class of claim this
+# module exists to close: a verified negative nothing re-derives is an asserted one waiting
+# to rot. Measured 0 across all 347.
+_NEVER_FIRED_VERDICT_IDENTITY_TERMS = ("rump_branch_set",)
+
 # §3.5's "7 of 8 unmappable_choice reasons unobserved", plus the eighth as the
 # anti-vacuity control on the same taxonomy.
 _NEVER_FIRED_UNMAPPABLE_CHOICE = (
@@ -274,17 +283,31 @@ def counter_artifacts() -> tuple[str, ...]:
 
 @functools.lru_cache(maxsize=1)
 def _parsed_corpus() -> tuple[tuple[str, object], ...]:
-    """`(artifact, document)` for every parseable member. Cached: the pins below scan the
-    corpus several times each, and re-reading 347 files per test made the module slow
-    enough to invite a CI author to drop it."""
+    """`(artifact, document)` for every member. Cached: the pins below scan the corpus
+    several times each, and re-reading 347 files per test made the module slow enough to
+    invite a CI author to drop it.
+
+    **Nothing is skipped.** An earlier revision swallowed `OSError`/`JSONDecodeError` and
+    continued, which is not live -- all 347 parse today -- but is precisely the vacuous-green
+    failure the witness pins below exist to prevent: an artifact going unparseable would
+    silently shrink the evidence base and every absence assertion would get *easier*. A file
+    that cannot be read is a red gate, not one fewer haystack.
+    """
     loaded: list[tuple[str, object]] = []
+    unreadable: list[str] = []
     for artifact in counter_artifacts():
         try:
             loaded.append(
                 (artifact, json.loads((REPO / artifact).read_text(encoding="utf-8")))
             )
-        except (OSError, json.JSONDecodeError):
-            continue
+        except (OSError, json.JSONDecodeError) as exc:
+            unreadable.append(f"{artifact}: {type(exc).__name__}: {exc}")
+    if unreadable:
+        raise AssertionError(
+            "committed JSON in the counter-artifact corpus could not be read, so the "
+            "evidence base for every absence pin below is incomplete. Fix or remove the "
+            "file; do not let it drop out silently: " + "; ".join(unreadable)
+        )
     return tuple(loaded)
 
 
@@ -458,12 +481,16 @@ class NeverFiredPartitionsTests(unittest.TestCase):
             f"  no longer found: {sorted(set(_FIRED_DIVERGENCE_CLASSES) - fired)}",
         )
 
-    def test_the_nine_static_counters_are_still_absent(self) -> None:
-        found = scan(_NEVER_FIRED_STATIC_COUNTERS)
+    def test_the_never_fired_static_counters_are_still_absent(self) -> None:
+        # §3.5's nine, plus `skip:rump_branch_set` -- see its constant for why it is
+        # tracked separately but asserted here.
+        names = _NEVER_FIRED_STATIC_COUNTERS + _NEVER_FIRED_VERDICT_IDENTITY_TERMS
+        self.assertEqual(len(names), 10, "the never-fired static list changed shape")
+        found = scan(names)
         self.assertEqual(
             {name: found[name][:2] for name in found},
             {},
-            "a §3.5 'never-fired static counter' now has recorded evidence",
+            "a never-fired static counter now has recorded evidence",
         )
 
     def test_seven_of_the_eight_unmappable_choice_reasons_are_absent(self) -> None:

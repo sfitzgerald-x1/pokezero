@@ -212,7 +212,7 @@ H15's two structural-unreachability sub-claims **hold**, re-verified:
   `continue`s before the classification line. Nothing routes it into `classify_divergence`.
 - `no_usable_branch` — its trigger `"mapper produced no usable branch"` appears at **exactly one
   site in the whole repo**: the classifier's own test of it
-  (`engine_transition_differential.py:1915`'s guard). No producer exists. The *identifier*
+  (`engine_transition_differential.py:1914`, the `if "mapper produced no usable branch" in body:` guard; `:1915` is the `return` it protects). No producer exists. The *identifier*
   appears in 7 files, one of which reads as a hit to a prose-matching search; §1's negative
   control is what separates them.
 
@@ -243,7 +243,7 @@ A verified negative is a real result. These are recorded as such, each with the 
 | §3.5 **"Never-fired static counters (9)"** — `abort:no_legal_action`, `skip:no_action_candidates`, `skip:world_error:no_constructible_candidate`, `strict:no_damage_rolls`, `strict:branch_event_legal_error:BranchLegalRollError`, `engine_error`, `world_prestate_mismatch:side_conditions`, `mapper_lossy`, `no_usable_branch` | ✅ **VERIFIED** | all nine absent across the **347**-file corpus. C142 measured them over "260 committed JSONs under `reports/`"; the number survives a glob 87 files wider, including all of `docs/audit_artifacts/**` |
 | §3.5 **"Never-fired dynamic families (6)"** — `skip:no_materialization:`, `skip:world_error:`, `strict:branch_events_error:`, `engine_error:`, `engine_error_choice:`, `world_prestate_mismatch:weather_` | ✅ **VERIFIED** | no key under any of the six prefixes carries a nonzero value in any of the 347 |
 | §3.5 **`skip:unmappable_choice` 7 of 8 unobserved** | ✅ **VERIFIED** | seven absent; the eighth, `struggle_not_submittable`, present in **78** of the 347 — the control that makes the seven non-vacuous |
-| H14's residual — **`engine_error` is an unexercised term of the verdict identity** | ✅ **VERIFIED** | 0 on every artifact, under both `engine_error` and `engine_errors`. ⚠ And there are **two**: `skip:rump_branch_set` is also 0 across all 347. H14 states the identity as four-term; `cert_sweep_readout.py:1451,1611` and the gate's own message make it **five**-term. Annotated at H14 — a stale arity in the cell that corrected the last arity error |
+| H14's residual — **`engine_error` is an unexercised term of the verdict identity** | ✅ **VERIFIED, and pinned** | 0 on every artifact, under both `engine_error` and `engine_errors`. ⚠ And there are **two**: `skip:rump_branch_set` is also 0 across all 347. H14 states the identity as four-term; `cert_sweep_readout.py:1451,1611` and the gate's own message make it **five**-term. Annotated at H14 — a stale arity in the cell that corrected the last arity error. Review noted this was the one verified negative held by no pin; `skip:rump_branch_set` is now in the census (`_NEVER_FIRED_VERDICT_IDENTITY_TERMS`), kept separate from §3.5's nine so that list keeps meaning nine |
 | H8 — **`strict:no_damage_rolls` is 0 in both windows** | ✅ **VERIFIED, and stronger** | 0 repo-wide, not just in the two windows. H8's own UNKNOWN (how much mass rides the *per-branch* window) is untouched by this — the counter bounds the state-level fallback only, exactly as H8 says |
 | H15 — **`mapper_lossy` and `no_usable_branch` are structurally unreachable** | ✅ **VERIFIED** | see §3.1; one is `continue`d before classification, the other has no producer of its trigger string |
 | §3.5's remaining **29 of 33** `world_unsupported` reasons | ✅ **VERIFIED** | no nonzero record in the 347-file corpus under any of the four shapes in §1 |
@@ -292,7 +292,7 @@ them are prose and the counter lists' are not.
 | C1 | H17 — c119, c134, c137 absent from `reports/` | ⚠ **1 of 3** (§3.2) |
 | C2 | H11 — "no written cause anywhere in `reports/`" | already ⚠ retracted by #1165; re-confirmed false — `reports/c139_encore_transform_move_index_prediction.md` is in the tree at `f876803e` |
 | C3 | G31 — "`clearallboost` appears in the crate exactly twice, both inside that comment" | ✅ VERIFIED — `git grep -c clearallboost -- rust/` → `rust/pokezero-search/src/events.rs:2` |
-| C4 | H15 — `no_usable_branch`'s trigger string "exists nowhere in the repo" | ✅ VERIFIED as written about the **trigger string** (`git grep -c "mapper produced no usable branch"` → 1, the classifier's own guard). The bare identifier is in 7 files, so the claim needs its "trigger string" qualifier to be true, and it has it |
+| C4 | H15 — `no_usable_branch`'s trigger string "exists nowhere in the repo" | ✅ VERIFIED as written about the **trigger string**. `git grep -c` returns *per-file* counts, not a total, so state it as a file list: scoped to code, `git grep -c "mapper produced no usable branch" -- scripts/ src/ rust/ tests/` returns exactly one line, `scripts/engine_transition_differential.py:1` — one site, the classifier's own guard, no producer. Unscoped it now returns three files, two of them this audit's own prose. The bare identifier is in 8 files, so the claim needs its "trigger string" qualifier to be true, and it has it |
 | C5 | G1 — "`grep -c STICK` over the engine `src/` returns hits only for `STICKYHOLD`/`STICKYWEB`" | **UNVERIFIED — and unverifiable here.** `third_party/poke-engine-src/` is gitignored and regenerated. §1.3 cites the engine by symbol for exactly this reason; the claim is sound as a *procedure* and cannot be checked from a clean checkout |
 
 **Two of the document's own ⚠ corrections are also Class A/C negatives, and both hold:** H14's
@@ -351,12 +351,44 @@ rather than assumed:
 | M8 | kill the sibling-field matcher (the c43 shape) | ✅ caught |
 | M9 | admit prose as evidence | ✅ caught (4 failures) |
 | M11 | M5 **plus** a subset assertion instead of equality | ⚠ **PASSES** — the documented fail-open, and the reason the partitions assert equality |
+| M12 | **`scan()` returns `{}`** — total scanner failure (contributed by review) | ✅ caught, **8 pins**: 6 failures + 2 errors, **including both witness pins**. This is the direct proof the absence assertions are not vacuously green |
+| M13 | add an unparseable `.json` to the corpus | ✅ caught, 10 pins |
+| M13c | **corrupt an EXISTING member in place**, so the corpus stays 347 and the count pin cannot see it | ✅ caught, 9 pins |
+| M13d | M13c against a **non-witness** member, with the **old swallow-and-continue** `_parsed_corpus()` | ⚠ **fully green, exit 0, `OK`** — with the evidence base silently 346. This is the fail-open review identified, and it is why `_parsed_corpus()` now raises. Same corruption with the fix: **9 pins red** |
+| M14 | drop `skip:rump_branch_set` back out of the census | ✅ caught |
 
-10 mutations applied, **9 caught, 0 survivors**; M11 is not a survivor but a demonstration of the
-design choice. The YAML guard was exercised directly against the real log: `grep -qE 'Ran 16
+**14 mutations applied, 12 caught, 0 survivors.** The two that pass are not survivors but
+demonstrations of the two design choices they motivated: M11 (why the partitions assert set
+equality rather than subset) and M13d (why `_parsed_corpus()` raises rather than skips). M13d is
+worth stating plainly because it is the sharpest result in the battery: under the original code,
+corrupting any one of the **142 corpus members that contribute no evidence** — 347 files, 156
+contributors, 142 neutral in `reports/` — turned the whole module green while quietly deleting an
+artifact from the haystack. The count pin does not see it, because the file still exists. The YAML guard was exercised directly against the real log: `grep -qE 'Ran 16
 tests'` exits 0, `'Ran 15 tests'` and `'Ran 17 tests'` exit 1, and the clean-`OK` grep exits 1 on
 a deliberately reddened run — captured with `echo "exit=$?"` immediately after each command, never
 through a pipe, and with `__pycache__` cleared before every run.
+
+**Review hardening (post-approval).** Three changes the reviewer's pass produced, all in this
+PR: `_parsed_corpus()` now **raises** on an unreadable or unparseable member instead of skipping
+it — not live, since all 347 parse, but a silent skip shrinks the evidence base and makes every
+absence assertion *easier*, which is the vacuous-green shape the witness pins exist to catch;
+`skip:rump_branch_set` joined the census as `_NEVER_FIRED_VERDICT_IDENTITY_TERMS`, kept out of
+§3.5's nine so that list keeps meaning nine; and the reviewer contributed a mutation this report
+did not have — **`scan()` returning `{}`**, i.e. total scanner failure — which reddens **8** pins
+*including both witness pins*, which is the direct proof that the absence assertions are not
+vacuously green. Test count is unchanged at 16 (the nine-counter test was renamed and widened
+rather than split), so the `Ran 16 tests` guard needed no bump.
+
+**One rendering defect fixed in passing.** #1166's `G37` and `G37b` carry protocol literals
+(`` `|cant|<ident>|Attract` ``, `` `|cant|..|par|` ``, `` `|-activate|..|move: Attract|[of] <source>` ``)
+with **unescaped** `|`, against the document's convention everywhere else (G31, G33b, H11 all use
+`\|`). Those two rows rendered with 20 and 9 table delimiters instead of 6, so their Class,
+Reachability and **Observed** cells landed in the wrong columns — in a document whose entire
+subject is claims being misread. 17 pipes escaped; all 9 tables now have uniform column counts,
+verified by re-deriving delimiter counts per row. The §3 row count is unaffected (still 80).
+**Not pinned:** a markdown table-integrity check does not belong in a counter census, and adding
+a 17th test would force a `Ran 16 tests` guard bump for an unrelated reason. Filed as a follow-up
+instead.
 
 **Scope note.** This is one test module and one CI step, and it covers only Class A. Class B (the
 27 pool-census negatives) would need the vendored Showdown checkout at a pinned commit inside CI,
@@ -367,8 +399,14 @@ there, and §3.4 marks their status honestly instead.
 
 ## 5. What did not change
 
-- **No §3 row was added or removed.** §3 stays at 78. H13, H15 and H17 are corrections to existing
-  cells, not new gaps.
+- **No §3 row was added or removed by this PR.** H13, H15 and H17 are corrections to existing cells.
+  ⚠ But §1's **row count was already stale by two** and is corrected here: it read "78 rows (55
+  engine/renderer/leaf, 23 harness/process)" and the merged tree carries **80** (57 + 23).
+  §8 last records 78 after H21; **G33b** (C143) and **G37b** (#1166) both joined without the header
+  following. Re-derived by counting `| **<id>**` rows under §3.0–§3.4 — 1 + 34 + 12 + 23 + 10 = 80,
+  cross-checked as 57 G-rows + 23 H-rows, no duplicate ids — **not** by adding 2 to 78. Review
+  supplied 79; that figure counted #1166's addition and missed C143's, which is why the count was
+  re-derived rather than accepted.
 - **No sweep artifact was added**, so `_EXPECTED_SWEEP_ARTIFACTS = 79` in
   `tests/test_boundary_verdict_partition.py` is untouched. Confirmed by the selector rather than
   by inspection: no file in this PR carries a top-level `boundaries_measured`.
@@ -393,6 +431,12 @@ there, and §3.4 marks their status honestly instead.
    evidential shape this whole report is about. **Settling measurement:** the counter is now
    pinned to 0 across all 347 artifacts, so a re-appearance in any future committed sweep is a red
    gate; that is a monitor, not a proof of closure.
-4. **Whether any *other* C138 claim shape is systematically wrong.** This pass audited negatives.
+4. **§6 constraint 4 still says "27 candidate gaps … are unreachable".** §1 is corrected here to
+   "considers 27, drops 26" (R26 was withdrawn and reclassified at G49, so it is not a drop), but
+   §6's looser phrasing was left alone rather than silently changed — it says *candidate* gaps and
+   points the reader at §4, where R26 is visibly struck. Recorded so the discrepancy is on the
+   record instead of swallowed. **Settling action:** one word, in whichever PR next touches §6.
+5. **Whether any *other* C138 claim shape is systematically wrong.** This pass audited negatives.
    Positive claims — every "yes" in the Observed column, every reachability *grant* — were not
-   re-derived.
+   re-derived. The §3 row count being stale by two is one instance already found, and it was found
+   only because it sat in a sentence this PR was editing anyway.
