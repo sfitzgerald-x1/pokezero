@@ -2,25 +2,27 @@
 
 Reverting ``src/pokezero/foulplay_bridge.py`` makes every test in this file FAIL
 (the module cannot import ``OpponentJournalEntry``), which is a coarse signal. The
-falsifiability that matters was established by MUTATION: each behaviour below was
-individually broken in the producer and the suite re-run. Twelve mutants, each
-caught by the named test:
+falsifiability that matters was established by MUTATION: 28 mutants introduced one
+at a time into the producer, all 28 caught. Reproduce with the script recorded on
+the PR.
 
-    round becomes list position ......... rounds_are_explicit_...
-    seat becomes our seat ............... seat_separates_the_same_seed_...
-    digest of the wrong seat's request .. journal_digests_the_raw_request_...
-    addressed does not truncate ......... addressed_keeps_the_prefix_...
-    no address store emits everything ... addressed_emits_nothing_when_the_policy_...
-    addressed ignores battle_id ......... addressed_emits_nothing_for_a_battle_...
-    boolean round accepted .............. addressed_ignores_malformed_and_boolean_rounds
-    empty journal key still emitted ..... game_rows_carry_the_journal_and_omit_...
-    off mode still records .............. off_records_nothing_at_all
-    journaling perturbs policy stats .... stats_and_submitted_choices_are_identical_...
-    journal under the reader's key ...... the_journal_key_is_not_named_like_a_stats_scope
-    journal as address-shaped samples ... journal_changes_no_address_and_no_occurrence_count
-    journal field in EngineMctsStats .... the_stats_serializer_gained_no_journal_field
+MUTATE THE WIRING, NOT JUST THE LOGIC. The first version of this file mutated only
+the pure functions (``_opponent_journal_for_result``, ``_last_addressed_round``,
+``_request_digest``, the two ``to_dict``s) and scored 12/12 -- while SIX wiring
+edges were completely untested, because every mode test passed ``opponent_journal=``
+explicitly and nothing went through ``_config_from_args`` or ``_run_single_game``.
+Two of the six were severe:
 
-Two tests are easy to write so that they cannot fail, and are written against that:
+* flipping the recording gate ``!= "off"`` to ``== "full"`` makes the SHIPPED
+  DEFAULT record nothing, ever -- suite still green;
+* pinning ``_config_from_args`` to ``"off"`` makes ``--opponent-journal full`` a
+  silent no-op in every production entry point -- suite still green.
+
+``OpponentJournalWiringTest`` exists for that layer, and deliberately names no mode
+it does not have to: the default-mode tests construct the config with no journal
+argument at all.
+
+Three tests are easy to write so that they cannot fail, and are written against that:
 
 * ``test_stats_and_submitted_choices_are_identical_with_and_without_the_journal``
   asserts two runs are equal, which is trivially true if neither run journals. It
@@ -32,6 +34,9 @@ Two tests are easy to write so that they cannot fail, and are written against th
 * ``test_addressed_ignores_malformed_and_boolean_rounds`` puts the real address at
   round 0. At round 1 the bool guard is untestable, because ``True`` coerces to 1
   and yields the same prefix -- that version of the test survived its mutant.
+* ``test_run_single_game_carries_recorder_failures_to_the_result`` asserts a NON-ZERO
+  failure count. Its sibling asserts 0 on a clean game, which stays true if the
+  wiring drops the field entirely -- and did.
 """
 
 from __future__ import annotations
@@ -49,15 +54,19 @@ from pokezero.actions import ACTION_COUNT
 from pokezero.engine_search import EngineMctsStats
 from pokezero.fallback_addresses import scan_corpus
 from pokezero.foulplay_bridge import (
+    DEFAULT_BATTLE_ID_PREFIX,
     OPPONENT_JOURNAL_SCHEMA_VERSION,
     ControlledFoulPlayBenchmarkResult,
     ControlledFoulPlayConfig,
     ControlledFoulPlayGameResult,
     OpponentJournalEntry,
     _ControlledBattleState,
+    _config_from_args,
     _handle_decision_boundary,
+    _last_addressed_round,
     _opponent_journal_for_result,
     _request_digest,
+    _run_single_game,
     build_arg_parser,
 )
 from pokezero.policy import PolicyDecision
@@ -421,9 +430,11 @@ class OpponentJournalPayloadTest(unittest.TestCase):
             {
                 "schema_version": OPPONENT_JOURNAL_SCHEMA_VERSION,
                 "mode": "addressed",
+                "entries_key": "opponent_moves",
                 "recorded_decisions": 35,
                 "emitted_decisions": 3,
                 "games_with_journal": 1,
+                "record_failures": 0,
             },
         )
 
@@ -442,19 +453,26 @@ class OpponentJournalPayloadTest(unittest.TestCase):
 
         rows = payload["game_results"]
         self.assertEqual(
-            rows[0]["opponent_journal"],
+            rows[0]["opponent_moves"],
             [
                 {"round": 0, "seat": "p2", "choice": "move 1", "action": 0, "request_sha256": "b" * 12},
                 {"round": 1, "seat": "p2", "choice": "move 1", "action": 0, "request_sha256": "b" * 12},
             ],
         )
-        self.assertNotIn("opponent_journal", rows[1])
-        self.assertEqual(rows[1]["opponent_journal_recorded"], 9)
+        self.assertNotIn("opponent_moves", rows[1])
+        self.assertEqual(rows[1]["opponent_moves_recorded"], 9)
+        # The header key and the row key are DIFFERENT names on purpose, and the
+        # header says which is which. One name with two JSON shapes (mapping at the
+        # root, list in the rows) breaks the recursive-by-name lookup idiom that
+        # `fallback_addresses` uses and every consumer copies.
+        self.assertEqual(payload["opponent_journal"]["entries_key"], "opponent_moves")
+        self.assertIsInstance(payload["opponent_journal"], dict)
+        self.assertIsInstance(rows[0]["opponent_moves"], list)
 
     def test_the_summary_round_trips_through_json(self) -> None:
         payload = self._result(mode="full", games=[self._game("a", emitted=2, recorded=2)])
         reloaded = json.loads(json.dumps(payload, sort_keys=True))
-        self.assertEqual(reloaded["game_results"][0]["opponent_journal"][1]["round"], 1)
+        self.assertEqual(reloaded["game_results"][0]["opponent_moves"][1]["round"], 1)
 
 
 class FallbackAddressReaderInvariantTest(unittest.TestCase):
@@ -541,7 +559,7 @@ class FallbackAddressReaderInvariantTest(unittest.TestCase):
         """A literal guard on the one name the reader dispatches on."""
         document = self._shard(journal=True)
         row = document["game_results"][0]
-        self.assertIn("opponent_journal", row)
+        self.assertIn("opponent_moves", row)
         self.assertNotIn("fallback_samples", row)
         self.assertNotIn("fallback_samples", document["opponent_journal"])
 
@@ -620,6 +638,232 @@ class SearchBehaviourUnchangedTest(unittest.TestCase):
     def test_the_stats_serializer_gained_no_journal_field(self) -> None:
         """`EngineMctsStats.to_dict()` is a frozen consumer contract."""
         self.assertNotIn("opponent_journal", EngineMctsStats().to_dict())
+
+
+class OpponentJournalWiringTest(unittest.TestCase):
+    """The layer between the pure functions and production.
+
+    Independent review broke five wiring edges one at a time and the suite stayed
+    green on all five, because every mode test above passed ``opponent_journal=``
+    explicitly and none of them went through ``_config_from_args`` or
+    ``_run_single_game``. Two of the survivors were severe: flipping the recording
+    gate from ``!= "off"`` to ``== "full"`` makes the SHIPPED DEFAULT record nothing
+    ever, and pinning ``_config_from_args`` to ``"off"`` makes ``--opponent-journal
+    full`` a silent no-op in every production entry point.
+
+    So: no test in this class names a mode it does not have to. The default-mode
+    tests construct ``ControlledFoulPlayConfig`` with NO journal argument on purpose.
+    """
+
+    def test_the_shipped_default_records(self) -> None:
+        """The default config, untouched, must journal. Kills `!= "off"` -> `== "full"`."""
+        config = _config(pokezero_player="p2")  # no opponent_journal argument
+        self.assertEqual(config.opponent_journal, "addressed")
+        state = _battle_state()
+
+        _run_boundary(
+            config=config, state=state, decision_round=0, requested_players=("p1", "p2")
+        )
+
+        self.assertEqual(len(state.opponent_journal), 1)
+        self.assertEqual(state.opponent_journal[0].choice, "move icebeam")
+
+    def test_config_from_args_carries_the_flag_into_production(self) -> None:
+        """`_config_from_args` is the SOLE production path to a config."""
+        parser = build_arg_parser()
+        base = ["--checkpoint", "c.pt", "--showdown-root", "/s"]
+
+        default = _config_from_args(parser.parse_args(base))
+        explicit = _config_from_args(parser.parse_args(base + ["--opponent-journal", "full"]))
+        disabled = _config_from_args(parser.parse_args(base + ["--opponent-journal", "off"]))
+
+        self.assertEqual(default.opponent_journal, "addressed")
+        self.assertEqual(explicit.opponent_journal, "full")
+        self.assertEqual(disabled.opponent_journal, "off")
+
+    def _play_one_game(self, *, config, policy, rounds: int, failing_rounds=()):
+        """Drive the real `_run_single_game` over stubbed collaborators."""
+        seed = 7
+        battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
+        events = [{"battleId": battle_id, "type": "ready", "requested": ["p1", "p2"]}
+                  for _ in range(rounds)]
+        events.append({"battleId": battle_id, "type": "terminal"})
+        pending = iter(events)
+
+        class Server:
+            async def send_room_lines(self, *_args, **_kwargs) -> None:
+                return None
+
+        class Bridge:
+            def __init__(self) -> None:
+                self.sent: list[dict] = []
+
+            async def send(self, payload: dict) -> None:
+                self.sent.append(payload)
+
+            async def next_event(self) -> dict:
+                return next(pending)
+
+        async def boundary(*, state, decision_round, **_kwargs):
+            # Stand in for the recording site, whose own behaviour is pinned above.
+            if decision_round in failing_rounds:
+                state.opponent_journal_failures += 1
+                return None
+            state.opponent_journal.append(
+                OpponentJournalEntry(round=decision_round, seat=config.foulplay_player,
+                                     choice="move 1", action=0, request_sha256="d" * 12)
+            )
+            return None
+
+        async def notify(**_kwargs) -> None:
+            return None
+
+        with (
+            patch("pokezero.foulplay_bridge._handle_decision_boundary", side_effect=boundary),
+            patch("pokezero.foulplay_bridge._notify_foulplay_terminal", side_effect=notify),
+        ):
+            return asyncio.run(
+                _run_single_game(
+                    config=config,
+                    bridge=Bridge(),  # type: ignore[arg-type]
+                    server=Server(),  # type: ignore[arg-type]
+                    policy=policy,
+                    vocab=object(),
+                    dex=object(),
+                    observation_spec=SimpleNamespace(schema_version="v2.2"),
+                    seed=seed,
+                    foulplay_process=object(),  # type: ignore[arg-type]
+                    foulplay_logs=object(),
+                )
+            )
+
+    def test_run_single_game_applies_the_configured_mode_to_the_real_battle_id(self) -> None:
+        """Kills mode-pinned-to-full, battle_id-wrong, and recorded-count-zeroed."""
+        seed = 7
+        battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
+        policy = _StubStatsPolicy()
+        # Address at round 2 of THIS battle, acting seat = our seat.
+        policy.address(battle_id, 2, "p1")
+
+        result = self._play_one_game(
+            config=_config(pokezero_player="p1", opponent_journal="addressed"),
+            policy=policy,
+            rounds=6,
+        )
+
+        self.assertEqual(result.battle_id, battle_id)
+        # Truncated to the addressed prefix: mode really was read from the config...
+        self.assertEqual([entry.round for entry in result.opponent_journal], [0, 1, 2])
+        # ...against the real battle id (a wrong id empties this)...
+        self.assertTrue(result.opponent_journal)
+        # ...and the recorded count is the FULL observed total, not the emitted one,
+        # so the truncation is legible rather than invisible.
+        self.assertEqual(result.opponent_journal_recorded, 6)
+        self.assertEqual(result.opponent_journal_failures, 0)
+
+    def test_run_single_game_carries_recorder_failures_to_the_result(self) -> None:
+        """A lost round must reach the shard. Kills `opponent_journal_failures=0`.
+
+        The sibling test asserts this field is 0 on a clean game, which is true for
+        free if the wiring drops it -- so the non-zero case is the test.
+        """
+        result = self._play_one_game(
+            config=_config(pokezero_player="p1", opponent_journal="full"),
+            policy=_StubStatsPolicy(),
+            rounds=5,
+            failing_rounds={1, 3},
+        )
+
+        self.assertEqual(result.opponent_journal_failures, 2)
+        self.assertEqual([entry.round for entry in result.opponent_journal], [0, 2, 4])
+        self.assertEqual(result.opponent_journal_recorded, 3)
+
+    def test_run_single_game_passes_our_acting_seat_to_the_address_lookup(self) -> None:
+        """Kills `seat=None` at the `_run_single_game` call site.
+
+        The seat filter is inert in production (one `pokezero_player` per bridge
+        invocation, and `battle_id` embeds a per-invocation seed), so this feeds the
+        lookup an address whose acting seat is NOT ours -- a state the bridge cannot
+        itself produce. That is deliberate: the point is to pin the wiring edge, not
+        to claim the input is reachable. Without the seat argument the foreign
+        address extends the prefix and the journal is emitted anyway.
+        """
+        seed = 7
+        battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
+        policy = _StubStatsPolicy()
+        policy.address(battle_id, 3, "p2")  # acting seat p2; we are p1
+
+        result = self._play_one_game(
+            config=_config(pokezero_player="p1", opponent_journal="addressed"),
+            policy=policy,
+            rounds=6,
+        )
+
+        self.assertEqual(result.opponent_journal, ())
+        # ...and the same battle WITH our own acting seat does emit, so the empty
+        # result above is the seat filter and not a broken fixture.
+        policy.address(battle_id, 1, "p1")
+        emitting = self._play_one_game(
+            config=_config(pokezero_player="p1", opponent_journal="addressed"),
+            policy=policy,
+            rounds=6,
+        )
+        self.assertEqual([entry.round for entry in emitting.opponent_journal], [0, 1])
+
+    def test_run_single_game_honours_off(self) -> None:
+        policy = _StubStatsPolicy()
+        policy.address(f"{DEFAULT_BATTLE_ID_PREFIX}-7", 2, "p1")
+
+        result = self._play_one_game(
+            config=_config(pokezero_player="p1", opponent_journal="off"),
+            policy=policy,
+            rounds=4,
+        )
+
+        self.assertEqual(result.opponent_journal, ())
+
+    def test_run_single_game_full_keeps_every_round(self) -> None:
+        result = self._play_one_game(
+            config=_config(pokezero_player="p1", opponent_journal="full"),
+            policy=_StubStatsPolicy(),
+            rounds=4,
+        )
+
+        self.assertEqual([entry.round for entry in result.opponent_journal], [0, 1, 2, 3])
+        self.assertEqual(result.opponent_journal_recorded, 4)
+
+    def test_a_recorder_failure_is_counted_and_never_loses_the_battle(self) -> None:
+        """Telemetry on the live decision path, on by default: it must not throw."""
+        config = _config(pokezero_player="p2")
+        state = _battle_state()
+
+        with patch(
+            "pokezero.foulplay_bridge.OpponentJournalEntry",
+            side_effect=RuntimeError("boom"),
+        ):
+            bridge = _run_boundary(
+                config=config, state=state, decision_round=0, requested_players=("p1", "p2")
+            )
+
+        # The battle went on and the choices were still submitted.
+        self.assertEqual(bridge.messages[0]["choices"]["p1"], "move icebeam")
+        # And the loss is a number, not a gap.
+        self.assertEqual(state.opponent_journal, [])
+        self.assertEqual(state.opponent_journal_failures, 1)
+
+    def test_addressed_ignores_an_address_from_another_acting_seat(self) -> None:
+        """`_last_addressed_round` completes the locator, not half of it.
+
+        Inert through the bridge (one `pokezero_player` per invocation), so it is
+        tested directly. Documented as defence in the function's docstring.
+        """
+        policy = _StubStatsPolicy()
+        policy.address("battle-7", 5, "p2")
+
+        self.assertEqual(_last_addressed_round(policy, "battle-7", "p1"), None)
+        self.assertEqual(_last_addressed_round(policy, "battle-7", "p2"), 5)
+        # Unfiltered still works, for callers that have no seat to give.
+        self.assertEqual(_last_addressed_round(policy, "battle-7"), 5)
 
 
 class OpponentJournalCliTest(unittest.TestCase):
