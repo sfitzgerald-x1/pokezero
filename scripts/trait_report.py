@@ -23,6 +23,7 @@ LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "v22-flat2m",
                  "v3-foulplay",   # FoulPlay's OWN play, profiled from the same games (contrast line)
                  "v3-k0-enthalf", "v3-k1-enthalf", "v3-k8-enthalf",   # enthalf across history lengths
                  "v3-k64-enthalf", "v3-k64-eps-entq",   # k64 experiment variants (own entities from game 0)
+                 "v4-enthalf", "v4-entfull",   # v4 production arms (own entities from game 0)
                  "m50-seq", "l200-seq"]
 PALETTE = ["#2563eb", "#dc2626", "#059669", "#0891b2", "#d97706", "#7c3aed"]
 
@@ -63,7 +64,21 @@ def esc(x):
     return html.escape(str(x))
 
 
+# Explicit colours, checked BEFORE the palette. The palette is indexed by position modulo its
+# length, so any report showing more than len(PALETTE) lineages necessarily repeats a colour —
+# and it repeats by position, which has nothing to do with which lineages share a chart. In the
+# v4 report that put v4-entfull on the same green as its v3-k0-enthalf control and v4-enthalf on
+# the same red as the v3-foulplay contrast line, i.e. collisions exactly where the comparison
+# matters. Pin any lineage whose colour must not drift; unpinned ones keep the palette.
+LINEAGE_COLOR_OVERRIDES = {
+    "v4-entfull": "#7c3aed",   # purple — was green, indistinguishable from v3-k0-enthalf
+    "v4-enthalf": "#d97706",   # amber  — was red, indistinguishable from v3-foulplay
+}
+
+
 def color_for(lineage):
+    if lineage in LINEAGE_COLOR_OVERRIDES:
+        return LINEAGE_COLOR_OVERRIDES[lineage]
     try:
         return PALETTE[LINEAGE_ORDER.index(lineage) % len(PALETTE)]
     except ValueError:

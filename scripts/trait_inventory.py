@@ -58,6 +58,14 @@ LINEAGES = {
     "v3-k0-enthalf": (r"^v3hist-k0-enthalf-5m-.*$", []),
     "v3-k1-enthalf": (r"^v3hist-k1-enthalf-5m-.*$", []),
     "v3-k8-enthalf": (r"^v3hist-k8-enthalf-5m-.*$", []),
+    # v4 production arms (20260807). The `v4` prefix is what routes them into the v4 report, so
+    # keep it — is_v4() in trait_report.py keys off it. Anchored on `-15m-` and on the full
+    # enthalf/entfull token so the two arms cannot absorb each other as legs.
+    #
+    # NOTE: v3-k1-cont-15m-* (the k1 continuation past 10M) is deliberately NOT registered. The
+    # k1 lineage is capped at 10M by instruction, and a lineage with no key here is never swept.
+    "v4-enthalf": (r"^v4prod-enthalf-15m-.*$", []),
+    "v4-entfull": (r"^v4prod-entfull-15m-.*$", []),
 }
 
 
