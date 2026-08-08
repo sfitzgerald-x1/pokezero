@@ -27,22 +27,27 @@ the ones in the middle are the informative ones.
 
 On what a replay can and cannot claim
 -------------------------------------
-``fallback_replay_spec`` establishes that fidelity is a property of the writer.
-For the three self-play harnesses the battle rebuilds; for the foul-play writer
--- which produced the entire era 61-64 corpus -- it does not, because the
-external opponent searches on a wall-clock budget and samples its move from the
-resulting visit shares. This module does not paper over that. A spec whose
-fidelity is not ``exact`` still replays, and the run still produces real
-refusals worth reading, but :attr:`ReplayResult.outcome` will report
-:data:`ReplayOutcome.ADDRESS_ABSENT` rather than a match whenever the trajectory
-went elsewhere -- and :attr:`ReplayResult.fidelity_caveat` carries the reason, so
-a report cannot quietly upgrade "I found a refusal of the same class" into "I
-reproduced the recorded decision".
+``fallback_replay_spec`` establishes that fidelity turns on which MCTS ran, not
+on which script wrote the shard. The pokezero crate searches under an explicit
+seed (``engine_search.py:1202``) and is reproducible; poke-engine's own
+``monte_carlo_tree_search`` is not, **even at a fixed iteration count** --
+measured, five runs at ``iterations=4000`` on one captured state gave five
+different visit distributions, because its chance-node sampler builds a fresh
+unseeded ``rand::rng()`` per sample. That is what the foul-play opponent runs,
+and it produced the entire era 61-64 corpus.
+
+This module does not paper over that. A spec whose fidelity is not ``exact``
+still replays, and the run still produces real refusals worth reading, but a
+diverged trajectory reports :data:`ReplayOutcome.SAME_BATTLE_DIFFERENT_ROUND`
+rather than a match, and :attr:`ReplayResult.fidelity_caveat` carries the
+spec's evidence verbatim -- so a report cannot quietly upgrade "I found a
+refusal of the same class" into "I reproduced the recorded decision".
 
 Measured on a real self-play harness (see the PR): two full 40-seed runs are
 byte-identical, and replaying one seed alone in a fresh process reproduces the
-recorded address at the recorded round. Measured on era 64: 0 of 67 resolvable
-addresses are exactly reconstructible, because all of them are foul-play.
+recorded address at the recorded round. Measured over eras 61-64: 0 of 1,140
+resolvable addresses are exactly reconstructible, because all of them are
+foul-play.
 """
 
 from __future__ import annotations
@@ -62,7 +67,9 @@ __all__ = [
     "ReplayOutcome",
     "ReplayResult",
     "attach_refusal_recorder",
+    "engine_config_overrides",
     "replay_fallback",
+    "rollout_settings",
 ]
 
 
@@ -95,6 +102,15 @@ class DecisionSnapshot:
             worlds_constructed=stats.worlds_constructed,
             worlds_searched=stats.worlds_searched,
         )
+
+
+#: Sentinel: the wrapped name was a CLASS method, not an instance attribute.
+_ABSENT = object()
+
+#: The only reason `_map_choices` can produce (`engine_search.py:1134`, `:1234`,
+#: `:1917`). Used to decide whether a captured aggregate is the engine's actual
+#: proposal for the refused decision -- see `RefusalRecord.engine_choices`.
+_MAPPING_REASON = "choices_unmapped"
 
 
 def _delta(before: Mapping[str, int], after: Mapping[str, int]) -> dict[str, int]:
@@ -132,10 +148,24 @@ class RefusalRecord:
     worlds_constructed: int = 0
     worlds_searched: int = 0
 
-    #: The engine's proposed choices for this decision, as `_map_choices`
-    #: received them: choice string -> aggregated visit share. Empty unless the
-    #: decision reached the mapping step.
+    #: The engine's proposed choices for the refused decision: choice string ->
+    #: aggregated visit share.
+    #:
+    #: Populated ONLY when the refusal came out of the mapping step
+    #: (`reason == "choices_unmapped"`). Not a conservatism -- a correctness
+    #: rule. The early-stop lock probe calls
+    #: `_map_choices(context, Counter({locked_choice: 1.0}))`
+    #: (`engine_search.py:1858-1861`) purely to test a lock, and
+    #: `crate_search_failed` / `early_stop_replay_failed` then refuse without a
+    #: second call. Reporting the last aggregate unconditionally therefore
+    #: printed a SYNTHETIC single-choice probe as "the engine proposed", for a
+    #: decision that may have searched zero worlds. Fabricated evidence, in the
+    #: artifact this module exists to produce. Every observed call is kept on
+    #: :attr:`map_choices_calls` instead, labelled for what it is.
     engine_choices: Mapping[str, float] = field(default_factory=dict)
+    #: Every `_map_choices` invocation seen during this decision, in order,
+    #: including lock probes. Diagnostic; not "the engine's proposal".
+    map_choices_calls: tuple[Mapping[str, float], ...] = ()
     #: The request's legal choices, in the engine's own vocabulary, so the two
     #: sets are directly comparable. Built from
     #: `observation.metadata["action_candidates"]` filtered by
@@ -163,6 +193,7 @@ class RefusalRecord:
             "worlds_constructed": self.worlds_constructed,
             "worlds_searched": self.worlds_searched,
             "engine_choices": dict(self.engine_choices),
+            "map_choices_calls": [dict(call) for call in self.map_choices_calls],
             "request_legal_choices": list(self.request_legal_choices),
             "unmapped_choices": dict(self.unmapped_choices),
             "choices_unmapped_causes": dict(self.choices_unmapped_causes),
@@ -184,13 +215,29 @@ def _request_legal_choices(context: Any) -> tuple[str, ...]:
     `legal_action_mask` (`engine_search.py:2279-2284`) -- because a set built by
     a *different* rule would make every comparison against `engine_choices` a
     comparison with this function rather than with the request.
+
+    ``normalize_id`` is applied for the same reason and is NOT optional. The
+    mapping keys on ``normalize_id(move_id)`` (``engine_search.py:2286``) and
+    ``normalize_id(species)`` (``:2293-2295``), and matches the engine's own
+    choice string through ``normalize_id`` too (``:2332``, ``:2325``). Without
+    it, ``Nidoran-F``, ``Mr. Mime`` and ``Unown-C`` never intersect
+    ``engine_choices`` -- so a decision whose mapping SUCCEEDED renders as a
+    legality mismatch, on precisely the ``choices_unmapped`` case this record
+    exists to read.
     """
+    from .dex import normalize_id  # noqa: PLC0415 - keeps the module import-light
+
     observation = getattr(context, "observation", None)
     metadata = getattr(observation, "metadata", None)
     candidates = metadata.get("action_candidates") if isinstance(metadata, Mapping) else None
     if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
         return ()
-    mask = getattr(observation, "legal_action_mask", ()) or ()
+    # The bare attribute, as `_map_choices` uses it (`engine_search.py:2274`).
+    # `getattr(...) or ()` raises "truth value of an array is ambiguous" on an
+    # array-like mask -- an instrument that crashes the run it measures.
+    mask = getattr(observation, "legal_action_mask", None)
+    if mask is None:
+        return ()
     choices: list[str] = []
     for candidate in candidates:
         if not isinstance(candidate, Mapping) or not candidate.get("legal"):
@@ -199,17 +246,100 @@ def _request_legal_choices(context: Any) -> tuple[str, ...]:
         if not isinstance(index, int) or not (0 <= index < len(mask)) or not mask[index]:
             continue
         if candidate.get("kind") == "move":
-            move_id = str(candidate.get("move_id") or "")
+            move_id = normalize_id(str(candidate.get("move_id") or ""))
             if move_id:
                 choices.append(move_id)
         elif candidate.get("kind") == "switch":
             pokemon = candidate.get("pokemon")
-            species = (
+            species = normalize_id(
                 str(pokemon.get("species") or "") if isinstance(pokemon, Mapping) else ""
             )
             if species:
                 choices.append(f"switch {species}")
     return tuple(choices)
+
+
+#: Where the single wrapper layer parks its bookkeeping on the policy.
+_HOOK_ATTR = "_pz_refusal_hook"
+
+
+class _Hook:
+    """Exactly ONE wrapper layer per policy, fanning out to N recorders.
+
+    Wrapping per recorder cannot be unwound out of order: with two recorders,
+    the second captures the first's wrapper as "the original", so
+    ``r1.detach(); r2.detach()`` reinstalls r1's wrapper permanently and every
+    later decision feeds a detached recorder. Nesting is not exotic -- a corpus
+    sweep that attaches around a run which itself attaches per battle produces
+    it -- and it fails silently, which is worse than failing.
+
+    One layer, a list of subscribers, and detach as list removal is
+    order-independent by construction.
+    """
+
+    _WRAPPED = ("select_action_with_context", "_map_choices", "_fallback")
+
+    def __init__(self, policy: Any) -> None:
+        self.policy = policy
+        self.recorders: list["RefusalRecorder"] = []
+        # `_ABSENT` distinguishes "there was an instance attribute" from "it was
+        # a class method". Restoring the latter with setattr freezes a bound
+        # copy onto the instance -- a self-referential cycle that makes the
+        # policy unpicklable and a permanent divergence from its class.
+        self._saved = {
+            name: policy.__dict__.get(name, _ABSENT) for name in self._WRAPPED
+        }
+        base_select = getattr(policy, "select_action_with_context")
+        base_map = getattr(policy, "_map_choices")
+        base_fallback = getattr(policy, "_fallback")
+
+        def select_action_with_context(context: Any, *, rng: Any) -> Any:
+            for recorder in tuple(self.recorders):
+                recorder._guard(recorder._begin_decision)
+            return base_select(context, rng=rng)
+
+        def _map_choices(context: Any, aggregated: Mapping[str, float]) -> Any:
+            # Copied, not referenced: `aggregated` is a live Counter the search
+            # keeps mutating between here and the refusal, so a reference would
+            # record the state at report time rather than at call time.
+            for recorder in tuple(self.recorders):
+                recorder._guard(
+                    lambda r=recorder: r._map_choices_calls.append(dict(aggregated))
+                )
+            return base_map(context, aggregated)
+
+        def _fallback(context: Any, rng: Any, reason: str) -> Any:
+            # Recorded BEFORE delegating: `_fallback` itself increments the
+            # counters this record is a delta against, so a post-call capture
+            # would fold the refusal's own bookkeeping into its evidence.
+            for recorder in tuple(self.recorders):
+                recorder._guard(lambda r=recorder: r._record(context, reason))
+            return base_fallback(context, rng, reason)
+
+        policy.select_action_with_context = select_action_with_context
+        policy._map_choices = _map_choices
+        policy._fallback = _fallback
+        policy.__dict__[_HOOK_ATTR] = self
+
+    @classmethod
+    def for_policy(cls, policy: Any) -> "_Hook":
+        hook = policy.__dict__.get(_HOOK_ATTR)
+        return hook if isinstance(hook, cls) else cls(policy)
+
+    def add(self, recorder: "RefusalRecorder") -> None:
+        self.recorders.append(recorder)
+
+    def remove(self, recorder: "RefusalRecorder") -> None:
+        if recorder in self.recorders:
+            self.recorders.remove(recorder)
+        if self.recorders:
+            return
+        for name, original in self._saved.items():
+            if original is _ABSENT:
+                self.policy.__dict__.pop(name, None)
+            else:
+                setattr(self.policy, name, original)
+        self.policy.__dict__.pop(_HOOK_ATTR, None)
 
 
 class RefusalRecorder:
@@ -233,55 +363,75 @@ class RefusalRecorder:
     consumed.
     """
 
+    #: Read by `DecisionSnapshot.of`. Validated at attach time, because attach
+    #: is the only moment at which failing is free -- the alternative was an
+    #: AttributeError at the first decision, which replaces the engine's safe
+    #: uniform-legal fallback with a crash in the middle of a run.
+    _REQUIRED_STATS = (
+        "world_failure_reasons",
+        "unmapped_choices",
+        "choices_unmapped_causes",
+        "worlds_attempted",
+        "worlds_constructed",
+        "worlds_searched",
+    )
+
     def __init__(self, policy: Any) -> None:
         self._policy = policy
         self._records: list[RefusalRecord] = []
         self._snapshot: DecisionSnapshot | None = None
-        self._last_aggregated: Mapping[str, float] = {}
-        self._last_context: Any = None
-        self._originals: dict[str, Any] = {}
+        self._map_choices_calls: list[Mapping[str, float]] = []
+        self._detached = False
+        #: Instrument failures, never silently swallowed and never raised into
+        #: the run. Non-empty means some record is incomplete.
+        self.errors: list[str] = []
         self._attach()
 
     # -- lifecycle --
 
+    def _validate(self) -> None:
+        stats = getattr(self._policy, "stats", None)
+        if stats is None:
+            raise AttributeError("policy has no `stats`; cannot record refusals")
+        absent = [name for name in self._REQUIRED_STATS if not hasattr(stats, name)]
+        if absent:
+            raise AttributeError(
+                f"policy.stats is missing {', '.join(absent)}; the recorder would "
+                "attach and then fail inside the decision path"
+            )
+        for name in _Hook._WRAPPED:
+            if not callable(getattr(self._policy, name, None)):
+                raise AttributeError(f"policy has no callable {name}")
+
     def _attach(self) -> None:
-        for name in ("select_action_with_context", "_map_choices", "_fallback"):
-            self._originals[name] = getattr(self._policy, name)
-        policy = self._policy
+        self._validate()
+        _Hook.for_policy(self._policy).add(self)
 
-        original_select = self._originals["select_action_with_context"]
-        original_map = self._originals["_map_choices"]
-        original_fallback = self._originals["_fallback"]
+    def _guard(self, action: Any) -> None:
+        """Run instrument code so it can never break the run it is measuring.
 
-        def select_action_with_context(context: Any, *, rng: Any) -> Any:
-            self._snapshot = DecisionSnapshot.of(policy.stats)
-            self._last_aggregated = {}
-            self._last_context = context
-            return original_select(context, rng=rng)
+        A diagnostic that turns a handled refusal into an unhandled exception
+        has changed the outcome it exists to explain -- and does it in
+        production, since the recorder is meant to be attachable to any harness.
+        Failures are collected on `errors` instead, which is checkable.
+        """
+        try:
+            action()
+        except Exception as error:  # noqa: BLE001 -- an instrument must not raise
+            self.errors.append(f"{type(error).__name__}: {error}")
 
-        def _map_choices(context: Any, aggregated: Mapping[str, float]) -> Any:
-            # Copied, not referenced: `aggregated` is a live Counter the caller
-            # may keep mutating, and a reference would record the state at
-            # report time rather than at refusal time.
-            self._last_aggregated = dict(aggregated)
-            return original_map(context, aggregated)
-
-        def _fallback(context: Any, rng: Any, reason: str) -> Any:
-            # Recorded BEFORE delegating: `_fallback` itself increments the
-            # counters this record is a delta against, so a post-call capture
-            # would fold the refusal's own bookkeeping into its evidence.
-            self._record(context, reason)
-            return original_fallback(context, rng, reason)
-
-        policy.select_action_with_context = select_action_with_context
-        policy._map_choices = _map_choices
-        policy._fallback = _fallback
+    def _begin_decision(self) -> None:
+        self._snapshot = DecisionSnapshot.of(self._policy.stats)
+        self._map_choices_calls = []
 
     def detach(self) -> None:
-        """Restore the policy's own methods. Idempotent."""
-        for name, original in self._originals.items():
-            setattr(self._policy, name, original)
-        self._originals.clear()
+        """Stop recording. Idempotent, and correct in ANY unwind order."""
+        if self._detached:
+            return
+        self._detached = True
+        hook = self._policy.__dict__.get(_HOOK_ATTR)
+        if hook is not None:
+            hook.remove(self)
 
     def __enter__(self) -> "RefusalRecorder":
         return self
@@ -315,7 +465,14 @@ class RefusalRecorder:
                 worlds_attempted=stats.worlds_attempted - before.worlds_attempted,
                 worlds_constructed=stats.worlds_constructed - before.worlds_constructed,
                 worlds_searched=stats.worlds_searched - before.worlds_searched,
-                engine_choices=dict(self._last_aggregated),
+                engine_choices=(
+                    dict(self._map_choices_calls[-1])
+                    if reason == _MAPPING_REASON and self._map_choices_calls
+                    else {}
+                ),
+                map_choices_calls=tuple(
+                    dict(call) for call in self._map_choices_calls
+                ),
                 request_legal_choices=_request_legal_choices(context),
                 unmapped_choices=_delta(before.unmapped_choices, stats.unmapped_choices),
                 choices_unmapped_causes=_delta(
@@ -370,9 +527,17 @@ class ReplayOutcome(str, Enum):
     SAME_BATTLE_DIFFERENT_ROUND = "same-battle-different-round"
     #: The battle ran and took no fallback at all. Under exact fidelity, this is
     #: what a fix looks like.
+    #:
+    #: NOTE the limit of this verdict, which the runner cannot see past: a
+    #: refusal-free run and a run that ended before reaching `round` are
+    #: indistinguishable from the refusal list alone. Distinguishing them needs
+    #: the decision count, which no `BattleRunner` currently returns.
     NO_REFUSAL = "no-refusal"
-    #: The battle did not produce a decision at that address -- it ended first,
-    #: or the seat never acted there.
+    #: Refusals came back, but none of them from the recorded battle. Only
+    #: reachable from a runner that replays MORE than the one battle -- a corpus
+    #: sweep, or a harness that batches. `rollout_runner` always passes
+    #: `spec.battle_id`, so it cannot produce this; that is a property of that
+    #: runner, not of the verdict.
     ADDRESS_ABSENT = "address-absent"
 
 
@@ -529,11 +694,49 @@ class UnsupportedHarness(RuntimeError):
     """The spec names a harness :func:`rollout_runner` cannot stand up."""
 
 
+def engine_config_overrides(spec: ReplaySpec) -> dict[str, Any]:
+    """Search settings the spec pins, as `EngineMctsConfig` keyword overrides.
+
+    Split out of :func:`rollout_runner` purely so it is testable without a
+    Showdown build -- the falsy-vs-None distinction below is the kind of defect
+    that hides behind an integration-only test.
+
+    ``is not None``, never truthiness. A recorded ``c_puct: 0.0`` is a real
+    setting (pure-visit selection) and ``deep_ko_split: false`` is a real
+    producer flag (`hc_depth_grid.py:107`); a falsy test silently substitutes
+    the dataclass defaults 1.4 and True, i.e. replays a different search and
+    reports it as the recorded one.
+    """
+    overrides: dict[str, Any] = {}
+    if spec.engine_c_puct is not None:
+        overrides["c_puct"] = spec.engine_c_puct
+    if spec.deep_ko_split is not None:
+        overrides["deep_ko_split"] = spec.deep_ko_split
+    return overrides
+
+
+def rollout_settings(spec: ReplaySpec, *, default_rounds: int) -> dict[str, Any]:
+    """Battle-level settings from the spec, defaulted only where unrecorded.
+
+    ``max_decision_rounds`` bounds the battle, so a hardcoded value can end the
+    replay before the recorded round is ever reached -- which renders as
+    ``NO_REFUSAL`` and reads like a fix.
+    """
+    return {
+        "max_decision_rounds": (
+            spec.max_decision_rounds
+            if spec.max_decision_rounds is not None
+            else default_rounds
+        ),
+        "format_id": spec.format_id or "gen3randombattle",
+    }
+
+
 def rollout_runner(
     *,
     showdown_root: str,
     node_binary: str = "node",
-    max_decision_rounds: int = 250,
+    max_decision_rounds: int = 250,  # fallback only; the spec wins when it pins one
 ) -> BattleRunner:
     """A :data:`BattleRunner` for the in-process ``hc_depth_grid`` harness.
 
@@ -570,9 +773,6 @@ def rollout_runner(
     env_config = LocalShowdownConfig(
         showdown_root=Path(showdown_root), node_binary=node_binary
     )
-    rollout_config = RolloutConfig(
-        max_decision_rounds=max_decision_rounds, format_id="gen3randombattle"
-    )
 
     def run(spec: ReplaySpec) -> Iterable[RefusalRecord]:
         if spec.harness != HARNESS_ROLLOUT_HC_GRID:
@@ -593,6 +793,7 @@ def rollout_runner(
 
         from .collection import policy_from_spec  # noqa: PLC0415
 
+        overrides = engine_config_overrides(spec)
         candidate = EngineMctsPolicy(
             dex=dex,
             set_source=set_source,
@@ -601,9 +802,12 @@ def rollout_runner(
                 worlds=spec.engine_worlds,
                 search_sims=spec.engine_sims,
                 search_depth=spec.engine_depth,
-                **({"c_puct": spec.engine_c_puct} if spec.engine_c_puct else {}),
+                **overrides,
             ),
             policy_id=f"engine-mcts-replay-d{spec.engine_depth}-s{spec.engine_sims}",
+        )
+        rollout_config = RolloutConfig(
+            **rollout_settings(spec, default_rounds=max_decision_rounds)
         )
         opponent = policy_from_spec(spec.opponent_policy_id)
         # scripts/hc_depth_grid.py:235 -- seat is seed parity, and the spec

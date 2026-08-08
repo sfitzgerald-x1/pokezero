@@ -185,21 +185,56 @@ class TestRecorderCapturesPerDecisionState:
         assert recorder.records[0].world_failures == {}
 
     def test_engine_choices_are_captured_at_refusal_time(self):
-        # `aggregated` is a live Counter. A recorder holding a REFERENCE would
-        # report whatever it contained when the record was read, not when the
-        # decision refused.
+        # `aggregated` is a live Counter that the SEARCH keeps mutating between
+        # the `_map_choices` call and the `_fallback` call -- which is the window
+        # a reference would report from. Mutating it after `_fallback` (the
+        # earlier version) could not fail: the copy is already made. So mutate it
+        # BETWEEN the two calls, which is the real hazard.
         policy = _FakePolicy()
         recorder = attach_refusal_recorder(policy)
         aggregated = Counter({"substitute": 0.75, "protect": 0.25})
-        policy.select_action_with_context(_Context("b", 9, "p1"), rng=None)
-        policy._map_choices(_Context("b", 9, "p1"), aggregated)
-        policy._fallback(_Context("b", 9, "p1"), None, "choices_unmapped")
+        context = _Context("b", 9, "p1")
+        policy.select_action_with_context(context, rng=None)
+        policy._map_choices(context, aggregated)
         aggregated.clear()
         aggregated["earthquake"] = 1.0
+        policy._fallback(context, None, "choices_unmapped")
         assert recorder.records[0].engine_choices == {
             "substitute": 0.75,
             "protect": 0.25,
         }
+
+    def test_a_lock_probe_is_not_reported_as_the_engines_proposal(self):
+        # `engine_search.py:1858-1861` calls `_map_choices(context,
+        # Counter({locked_choice: 1.0}))` purely to test an early-stop lock;
+        # `crate_search_failed` then refuses with no second call. Reporting the
+        # last aggregate unconditionally printed that synthetic single-choice
+        # probe as "the engine proposed", for a decision that searched zero
+        # worlds -- fabricated evidence in the artifact this module produces.
+        policy = _FakePolicy()
+        recorder = attach_refusal_recorder(policy)
+        context = _Context("b", 11, "p1")
+        policy.select_action_with_context(context, rng=None)
+        policy._map_choices(context, Counter({"psychic": 1.0}))  # the lock probe
+        policy._fallback(context, None, "crate_search_failed")
+        record = recorder.records[0]
+        assert record.engine_choices == {}
+        # ...but it is not thrown away either: kept, labelled for what it is.
+        assert record.map_choices_calls == ({"psychic": 1.0},)
+
+    def test_a_real_mapping_refusal_still_reports_the_proposal(self):
+        # The other side of the rule: `choices_unmapped` IS produced by
+        # `_map_choices`, so its aggregate is the engine's actual proposal.
+        policy = _FakePolicy()
+        recorder = attach_refusal_recorder(policy)
+        context = _Context("b", 11, "p1")
+        policy.select_action_with_context(context, rng=None)
+        policy._map_choices(context, Counter({"psychic": 1.0}))  # lock probe
+        policy._map_choices(context, Counter({"substitute": 0.6, "rest": 0.4}))
+        policy._fallback(context, None, "choices_unmapped")
+        record = recorder.records[0]
+        assert record.engine_choices == {"substitute": 0.6, "rest": 0.4}
+        assert len(record.map_choices_calls) == 2
 
     def test_engine_choices_do_not_leak_between_decisions(self):
         policy = _FakePolicy()
@@ -218,7 +253,7 @@ class TestRecorderCapturesPerDecisionState:
     def test_request_legal_set_mirrors_the_mapping_admission_rule(self):
         # The set must be built by `_map_choices`'s rule -- `legal` AND permitted
         # by the mask -- or every comparison against engine_choices is a
-        # comparison with this helper. Three candidates, only one admissible.
+        # comparison with this helper. Four candidates, only two admissible.
         policy = _FakePolicy()
         recorder = attach_refusal_recorder(policy)
         context = _Context("b", 5, "p1")
@@ -239,7 +274,84 @@ class TestRecorderCapturesPerDecisionState:
         )
         policy.select_action_with_context(context, rng=None)
         policy._fallback(context, None, "choices_unmapped")
-        assert recorder.records[0].request_legal_choices == ("surf", "switch Zapdos")
+        assert recorder.records[0].request_legal_choices == ("surf", "switch zapdos")
+
+    @pytest.mark.parametrize(
+        ("species", "expected"),
+        [
+            ("Nidoran-F", "switch nidoranf"),
+            ("Mr. Mime", "switch mrmime"),
+            ("Unown-C", "switch unownc"),
+            ("Ho-Oh", "switch hooh"),
+        ],
+    )
+    def test_request_species_are_normalised_like_the_mapping(self, species, expected):
+        # THE null-world case for this helper, and the one `switch Zapdos` could
+        # not reach: `normalize_id("Zapdos") == "zapdos"` differs only in case,
+        # so a helper with no normalisation at all passed that assertion. These
+        # species do not survive without it, and the engine's own choice strings
+        # go through `normalize_id` (`engine_search.py:2325`, `:2293-2295`) -- so
+        # without it a SUCCESSFUL mapping renders as a legality mismatch.
+        policy = _FakePolicy()
+        recorder = attach_refusal_recorder(policy)
+        context = _Context("b", 5, "p1")
+        context.observation = _Observation(
+            candidates=[
+                {
+                    "kind": "switch",
+                    "pokemon": {"species": species},
+                    "legal": True,
+                    "action_index": 0,
+                }
+            ],
+            mask=(True,),
+        )
+        policy.select_action_with_context(context, rng=None)
+        policy._fallback(context, None, "choices_unmapped")
+        assert recorder.records[0].request_legal_choices == (expected,)
+
+    def test_move_ids_are_normalised_like_the_mapping(self):
+        policy = _FakePolicy()
+        recorder = attach_refusal_recorder(policy)
+        context = _Context("b", 5, "p1")
+        context.observation = _Observation(
+            candidates=[
+                {
+                    "kind": "move",
+                    "move_id": "Hidden Power [Rock]",
+                    "legal": True,
+                    "action_index": 0,
+                }
+            ],
+            mask=(True,),
+        )
+        policy.select_action_with_context(context, rng=None)
+        policy._fallback(context, None, "choices_unmapped")
+        assert recorder.records[0].request_legal_choices == ("hiddenpowerrock",)
+
+    def test_an_array_like_mask_does_not_crash_the_instrument(self):
+        # `getattr(obs, "legal_action_mask", ()) or ()` raises "truth value of
+        # an array is ambiguous" on a numpy mask -- and the recorder sits in the
+        # production decision path, so that is an instrument crashing the run it
+        # measures. `_map_choices` uses the bare attribute; so do we.
+        class _AmbiguousTruth(tuple):
+            def __bool__(self):
+                raise ValueError("truth value of an array with more than one "
+                                 "element is ambiguous")
+
+        policy = _FakePolicy()
+        recorder = attach_refusal_recorder(policy)
+        context = _Context("b", 5, "p1")
+        context.observation = _Observation(
+            candidates=[
+                {"kind": "move", "move_id": "surf", "legal": True, "action_index": 0}
+            ],
+            mask=_AmbiguousTruth((True,)),
+        )
+        policy.select_action_with_context(context, rng=None)
+        policy._fallback(context, None, "choices_unmapped")
+        assert recorder.records[0].request_legal_choices == ("surf",)
+        assert recorder.errors == []
 
     def test_decision_rng_seed_is_reconstructed_from_the_context(self):
         policy = _FakePolicy()
@@ -271,6 +383,97 @@ class TestRecorderCapturesPerDecisionState:
         with attach_refusal_recorder(policy):
             pass
         assert policy._fallback == original
+
+    def test_detach_leaves_no_instance_attribute_behind(self):
+        # The earlier `detach` did `setattr(policy, name, bound_method)`, which
+        # freezes a bound copy onto the instance -- a self-referential cycle
+        # that makes the policy unpicklable, and a permanent divergence from the
+        # class. Detach must remove what attach added.
+        import pickle
+
+        policy = _FakePolicy()
+        assert "_fallback" not in policy.__dict__
+        recorder = attach_refusal_recorder(policy)
+        assert "_fallback" in policy.__dict__
+        recorder.detach()
+        assert "_fallback" not in policy.__dict__
+        pickle.dumps(policy)  # must not raise
+
+    def test_nested_recorders_unwind_in_any_order(self):
+        # r1.detach() then r2.detach() previously left r1's wrapper bound
+        # permanently: r2 had captured r1's wrapper as "the original", and r1
+        # restored the class method only for r2 to overwrite it again. Every
+        # later decision then fed a detached recorder.
+        policy = _FakePolicy()
+        outer = attach_refusal_recorder(policy)
+        inner = attach_refusal_recorder(policy)
+        outer.detach()
+        inner.detach()
+        assert "_fallback" not in policy.__dict__
+        _decide(policy, _Context("b", 1, "p1"), reason="x")
+        assert outer.records == ()
+        assert inner.records == ()
+
+    def test_detach_is_idempotent(self):
+        policy = _FakePolicy()
+        recorder = attach_refusal_recorder(policy)
+        recorder.detach()
+        recorder.detach()
+        assert "_fallback" not in policy.__dict__
+
+
+class TestRecorderCannotBreakTheRun:
+    """An instrument that crashes the decision path has changed the outcome."""
+
+    def test_attach_refuses_a_policy_whose_stats_it_cannot_read(self):
+        # Previously `_attach` only checked three method NAMES, so it succeeded
+        # against any object and then AttributeError'd at the first decision --
+        # replacing the engine's safe uniform-legal fallback with a crash,
+        # mid-run.
+        class _Incomplete(_FakePolicy):
+            def __init__(self):
+                super().__init__()
+                del self.stats.worlds_searched
+
+        with pytest.raises(AttributeError, match="worlds_searched"):
+            attach_refusal_recorder(_Incomplete())
+
+    def test_attach_refuses_an_object_with_no_stats(self):
+        class _NoStats:
+            def select_action_with_context(self, context, *, rng):
+                return None
+
+            def _map_choices(self, context, aggregated):
+                return None
+
+            def _fallback(self, context, rng, reason):
+                return None
+
+        with pytest.raises(AttributeError, match="stats"):
+            attach_refusal_recorder(_NoStats())
+
+    def test_a_capture_failure_is_collected_not_raised(self):
+        # The decision must still complete and still return the engine's own
+        # safe fallback, with the failure visible on `errors`.
+        policy = _FakePolicy()
+        recorder = attach_refusal_recorder(policy)
+        context = _Context("b", 3, "p1")
+        # An observation whose metadata access explodes -- stands in for any
+        # shape the recorder was not written against.
+        class _Exploding:
+            @property
+            def metadata(self):
+                raise RuntimeError("boom")
+
+            legal_action_mask = ()
+
+        context.observation = _Exploding()
+        policy.select_action_with_context(context, rng=None)
+        assert policy._fallback(context, None, "crate_search_failed") == (
+            "fallback:crate_search_failed"
+        )
+        assert policy.stats.fallback_decisions == 1
+        assert recorder.errors and "boom" in recorder.errors[0]
 
     def test_recording_does_not_change_what_the_policy_returns(self):
         policy = _FakePolicy()
@@ -449,3 +652,53 @@ class TestRunnerRefusesWhatItCannotStandUp:
         with pytest.raises(UnsupportedHarness) as excinfo:
             runner(_spec(harness=HARNESS_FOULPLAY_BRIDGE))
         assert HARNESS_FOULPLAY_BRIDGE in str(excinfo.value)
+
+
+class TestRunnerSettingsComeFromTheSpec:
+    """`rollout_runner`'s own rule is that nothing may be substituted."""
+
+    def test_a_recorded_zero_c_puct_survives(self):
+        from pokezero.fallback_replay import engine_config_overrides
+
+        # `if spec.engine_c_puct:` is falsy at 0.0, so a recorded pure-visit
+        # search was silently replaced by the 1.4 default -- a different search
+        # reported as the recorded one. A test that only used 1.4 could not see
+        # this, because 1.4 is truthy AND equal to the default.
+        assert engine_config_overrides(_spec_with(engine_c_puct=0.0)) == {
+            "c_puct": 0.0
+        }
+        assert "c_puct" not in engine_config_overrides(_spec_with())
+
+    def test_a_recorded_false_deep_ko_split_survives(self):
+        from pokezero.fallback_replay import engine_config_overrides
+
+        assert engine_config_overrides(_spec_with(deep_ko_split=False)) == {
+            "deep_ko_split": False
+        }
+        assert engine_config_overrides(_spec_with(deep_ko_split=True)) == {
+            "deep_ko_split": True
+        }
+
+    def test_max_decision_rounds_and_format_come_from_the_spec(self):
+        from pokezero.fallback_replay import rollout_settings
+
+        # A hardcoded 250 can end the battle before the recorded round is
+        # reached, which renders as NO_REFUSAL and reads like a fix.
+        assert rollout_settings(
+            _spec_with(max_decision_rounds=40, format_id="gen3ou"),
+            default_rounds=250,
+        ) == {"max_decision_rounds": 40, "format_id": "gen3ou"}
+
+    def test_unrecorded_settings_fall_back_and_say_so(self):
+        from pokezero.fallback_replay import rollout_settings
+
+        assert rollout_settings(_spec_with(), default_rounds=250) == {
+            "max_decision_rounds": 250,
+            "format_id": "gen3randombattle",
+        }
+
+
+def _spec_with(**overrides) -> ReplaySpec:
+    import dataclasses
+
+    return dataclasses.replace(_spec(), **overrides)
