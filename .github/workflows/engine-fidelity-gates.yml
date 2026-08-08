@@ -712,6 +712,51 @@ jobs:
             exit 1
           fi
 
+      # C150. C116 item 14 requires a pool-reachability check recorded next to every
+      # known-gaps entry, and the ledger records it in a column -- so a row that gains a
+      # cell delimiter has that check DROPPED by GFM while it stays in the bytes. That
+      # happened to G21b and R9 in #1151 (`\\|` where the convention is `\|`), and #1166's
+      # follow-up then asserted "all 9 tables now have uniform column counts" in
+      # reports/c146 while both rows were still ragged, at the very commit that says it.
+      # The disposition recorded there was "not pinned ... filed as a follow-up"; this step
+      # is that follow-up, as its own module so the census above keeps its `Ran 16 tests`
+      # guard untouched. Battery: 10 mutations applied, 10 caught, listed in the module
+      # docstring. Exact count, not a floor, for the reason #1163 established.
+      - name: Ledger table uniformity
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_ledger_table_uniformity -v 2>&1 \
+            | tee /tmp/ledgertables.log
+          if ! grep -qE 'Ran 18 tests' /tmp/ledgertables.log; then
+            echo "::error::expected 18 ledger-table pins; the suite shrank or grew"
+            exit 1
+          fi
+          # A clean OK with no skips. TheTwoRowsThisModuleWasWrittenForTests feeds the
+          # checker the pre-fix bytes of both defective rows; skipping one of those turns
+          # every uniformity assertion into an unverified matcher.
+          if ! grep -qE '^OK$' /tmp/ledgertables.log; then
+            echo "::error::ledger table-uniformity pins did not report a clean OK"
+            exit 1
+          fi
+
+      # C150. The ledger's G8 cell cites this census by number, and a cited number that
+      # nothing re-derives is exactly how the 124,188-fixture figures it replaced became
+      # unauditable. Re-run the census and require the committed artifact to match it
+      # byte-for-byte. The script also exits non-zero on `real_trades != 0`, on a broken
+      # closure identity, and on any of the three crate fixtures disagreeing with the
+      # transcription -- so a transcription that drifts away from the engine is red here
+      # rather than silently wrong in the ledger.
+      - name: G8 band-split trade census reproduces its artifact
+        run: |
+          set -o pipefail
+          python scripts/c150_band_split_trade_census.py --json /tmp/c150_census.json \
+            > /dev/null
+          if ! diff -u reports/artifacts/c150_band_split_trade_census.json \
+                      /tmp/c150_census.json; then
+            echo "::error::the committed G8 trade census does not match a fresh run"
+            exit 1
+          fi
+
       # The transport attestation, which nothing ran before this. Its
       # member-coverage test fails automatically whenever a PokemonSpec field is
       # added without extending the spec-vs-native comparison -- which is exactly

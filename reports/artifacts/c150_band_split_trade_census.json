@@ -1,0 +1,83 @@
+{
+  "what_this_measures": "for every residual band window the shipped partition can emit an arm for, whether the G8 split drops a collapsed arm priced at a damage Showdown could actually deal (a REAL TRADE)",
+  "scope": {
+    "max_damage_range": [
+      10,
+      600
+    ],
+    "lower": "every integer strictly above the f32 fan floor, up to max_damage",
+    "upper": "every integer in lower+1..=max_damage+1; max_damage+1 stands for the i16::MAX ceiling of the two in-scope call sites",
+    "skipped": "windows whose comparator population is <= 0, per the engine's band > 0 gate"
+  },
+  "windows_examined": 838560,
+  "bands_examined": 796878,
+  "split_fired": 783903,
+  "split_declined": 12975,
+  "collapsed_arms_kept": 207868,
+  "collapsed_arms_dropped": 589010,
+  "real_trades": 0,
+  "real_trade_examples": [],
+  "identity_check": {
+    "kept_plus_dropped_equals_bands": true,
+    "fired_plus_declined_equals_bands": true
+  },
+  "guard_deleted_mutant_band_mass_disagreements": 12975,
+  "crate_fixture_agreement": {
+    "fixtures": [
+      {
+        "fixture": "A_non_crit_site",
+        "max_damage": 174,
+        "threshold": 160,
+        "crate_expects_split": true,
+        "transcription_splits": true,
+        "agrees": true,
+        "expected_rolls": 9,
+        "integer_rolls_in_band": 9,
+        "split_arm_damages": [
+          160,
+          161,
+          163,
+          165,
+          167,
+          168,
+          170,
+          172,
+          174
+        ]
+      },
+      {
+        "fixture": "B_crit_site_colliding_rolls",
+        "max_damage": 66,
+        "threshold": 61,
+        "crate_expects_split": true,
+        "transcription_splits": true,
+        "agrees": true,
+        "expected_rolls": 8,
+        "integer_rolls_in_band": 8,
+        "split_arm_damages": [
+          61,
+          62,
+          63,
+          64,
+          65,
+          66
+        ]
+      },
+      {
+        "fixture": "C_count_guard_declines",
+        "max_damage": 30,
+        "threshold": 27,
+        "crate_expects_split": false,
+        "transcription_splits": false,
+        "agrees": true,
+        "expected_rolls": 10,
+        "integer_rolls_in_band": 11,
+        "split_arm_damages": [],
+        "excess_rolls_over_comparator": 1,
+        "crate_pinned_guard_deleted_mass_percent": 105.859375,
+        "mass_implied_by_this_transcription_percent": 105.859375
+      }
+    ],
+    "all_agree": true
+  }
+}
