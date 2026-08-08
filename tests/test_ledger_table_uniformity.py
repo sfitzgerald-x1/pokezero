@@ -85,6 +85,17 @@ SCOPE, and it is deliberately two-tier.
      `docs/engine_divergence_ledger_20260728.md` is a different document from the
      known-gaps ledger. The inventory means a NEW one cannot appear anywhere without
      reddening this module.
+
+     **A KNOWN AND DELIBERATE LIMITATION of tier 2, recorded so the next reader does not
+     mistake it for an oversight.** The inventory keys on a PER-FILE COUNT, not on row
+     identities or line numbers. That is what makes it robust to unrelated edits -- a PR
+     that only shifts line numbers in a quarantined document does not touch it, which is
+     why C150 and the concurrent ledger change could both land -- but it also means one row
+     FIXED and one NEW offender ADDED **in the same file, in the same change** cancel out
+     and this module stays green. Cross-file it is exact in both directions; within a
+     single file it is exact only on the total. Tightening it to row identities would trade
+     that robustness for brittleness against every line shift, so the count is the
+     deliberate choice; the residual hole is one file's simultaneous fix-and-regress.
 """
 
 from __future__ import annotations
