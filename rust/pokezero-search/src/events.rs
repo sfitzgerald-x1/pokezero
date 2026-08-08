@@ -54,7 +54,7 @@ use poke_engine::engine::abilities::Abilities;
 use poke_engine::engine::damage_calc::type_effectiveness_modifier;
 use poke_engine::engine::generate_instructions::{
     calculate_both_damage_rolls, generate_instructions_from_move,
-    generate_instructions_from_move_pair,
+    generate_instructions_from_move_pair, residual_speed_order,
 };
 use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Weather};
@@ -5072,11 +5072,148 @@ fn weather_chips(state: &State, side: SideReference) -> Option<&'static str> {
     None
 }
 
+/// G33b — whether each side's order-**10.4** Leftovers slot is UNREACHABLE because
+/// the residual phase was truncated by the opposing active's battle-ending faint.
+///
+/// This is the one over-booking the `NOTE:` on the Leftovers slot below cannot fix.
+/// That note refuses an `hp < maxhp` guard because the plan is built on the
+/// PRE-residual state and Leftovers fires later, so HP moves underneath the
+/// predicate. The truncation is worse than that: the slot is not skipped because a
+/// predicate evaluated false, it is skipped because the engine **never reached the
+/// handler**. No HP predicate can see it — in the row that motivated this
+/// (`19200244/115`, `reports/c143_heal_attribution_diagnosis.md`) the winner ends at
+/// 260/268, comfortably below max.
+///
+/// Ground truth, and it is the engine's own structure rather than an inference:
+/// `add_end_of_turn_instructions` runs `stop_residuals_if_battle_ended!` at every
+/// entry boundary, mirroring `sim/battle.ts:565-566`'s
+/// `this.faintMessages(); if (this.ended) return;`. Order 10 is the SPEED-MAJOR
+/// class — one Pokemon at a time, fastest first, each running its whole 10.x set in
+/// subOrder before the other side runs any of its own — so a faster loser whose own
+/// 10.5 Leech Seed sap kills it ends the battle before the slower winner's 10.3 is
+/// ever entered, and the winner's 10.4 Leftovers tick never fires. `ResidualPlan`
+/// books it anyway, the count mismatch sets `plan.usable[winner] = false`, and every
+/// heal on that side drops to `residual_heal_cause` — a constant function of state
+/// which, since C131 change 3, tests Leftovers FIRST. So the bare Leech Seed drain
+/// mirror comes back tagged `[from] item: Leftovers`. The HP arithmetic is right;
+/// only the attribution is wrong.
+///
+/// The predicate walks the segment for the instruction that ends the battle and then
+/// asks ONE question: was the winner's 10.4 behind that point? Everything that can
+/// deliver a battle-ending faint is enumerated from the engine's own section order,
+/// and only two of the five arms gate:
+///
+/// | what delivered it | where it sits | winner's 10.4 |
+/// |---|---|---|
+/// | the shared weather entry | order 8 | not yet reached — **gated** |
+/// | the loser's own 10.5 / 10.6 / 10.9 | order 10, loser's bucket | not yet reached **iff the loser is faster** — gated on that |
+/// | the winner's 10.5 Liquid Ooze recoil | order 10, winner's bucket | already fired — not gated |
+/// | Future Sight | order 11 | already fired — not gated |
+/// | Perish Song | order 12 | already fired — not gated |
+///
+/// The two "not gated" order-10+ arms are excluded by state predicate rather than by
+/// classifying the instruction, because a lethal residual damage always equals the
+/// victim's remaining HP exactly and therefore carries no information about which
+/// phase produced it. Liquid Ooze is separable structurally instead: it is the only
+/// residual source that writes a NEGATIVE `Heal`, never a `Damage`.
+///
+/// Two deliberate under-reaches, both leaving the pre-gate booking in place:
+///
+/// * **A speed TIE is not gated.** `residual_speed_order` returns `None` on an exact
+///   tie because `speedSort` shuffles it (`sim/battle.ts:455-457`) and the engine
+///   forks BOTH orders, keeping both when they differ. One of the two live orders
+///   fires the winner's tick and the other does not, so there is no single answer to
+///   give and this declines to guess.
+/// * **A fatal weather chip with the WINNER faster is not gated.** Order 8 precedes
+///   all of order 10 unconditionally, so that case is a real instance of the same
+///   family; it is left unshipped because it was not measured, and the speed
+///   condition below is what keeps it out.
+fn leftovers_slot_truncated(state: &State, segment: &[Instruction]) -> [bool; 2] {
+    const NO_TRUNCATION: [bool; 2] = [false, false];
+
+    let sides = [&state.side_one, &state.side_two];
+    let mut hp = [
+        sides[0].get_active_immutable().hp,
+        sides[1].get_active_immutable().hp,
+    ];
+    // Reserves cannot enter during the residual phase, so an active that faints
+    // with no living reserve loses the battle then and there. COUNTED rather than
+    // indexed: the active is itself a party member, so "a living reserve exists"
+    // is "more living Pokemon than the active contributes".
+    let mut has_reserve = [false; 2];
+    for i in 0..2 {
+        let mut living = 0usize;
+        let mut iter = sides[i].pokemon.into_iter();
+        while let Some(mon) = iter.next() {
+            if mon.hp > 0 {
+                living += 1;
+            }
+        }
+        has_reserve[i] = living > usize::from(hp[i] > 0);
+        // Already over before the residual block began. `add_end_of_turn_instructions`
+        // returns at its own entry guard in that case, so the segment carries nothing
+        // and there is no label to get wrong.
+        if hp[i] <= 0 && !has_reserve[i] {
+            return NO_TRUNCATION;
+        }
+    }
+
+    for ins in segment {
+        let (loser, by_damage) = match ins {
+            Instruction::Damage(d) => {
+                let side = side_index(d.side_ref);
+                hp[side] -= d.damage_amount;
+                (side, true)
+            }
+            Instruction::Heal(h) => {
+                let side = side_index(h.side_ref);
+                hp[side] += h.heal_amount;
+                (side, false)
+            }
+            _ => continue,
+        };
+        if hp[loser] > 0 || has_reserve[loser] {
+            continue;
+        }
+        // The battle ends on this instruction: the entry that caused it runs to
+        // completion, `faintMessages()` resolves the faint, `checkWin` sets `ended`,
+        // and every REMAINING entry is skipped.
+        if !by_damage {
+            // Liquid Ooze is the only residual effect that writes a negative `Heal`,
+            // and it writes it at the SEEDED side's 10.5 — inside the winner's own
+            // bucket, after the winner's 10.4. The tick fired.
+            return NO_TRUNCATION;
+        }
+        let winner = 1 - loser;
+        if sides[winner].future_sight.0 == 1 {
+            // Order 11, after every order-10 handler on BOTH sides.
+            return NO_TRUNCATION;
+        }
+        if sides[loser]
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::PERISH1)
+        {
+            // Order 12, likewise after all of order 10.
+            return NO_TRUNCATION;
+        }
+        return match residual_speed_order(state) {
+            Some(first) if side_index(first) == loser => {
+                let mut truncated = NO_TRUNCATION;
+                truncated[winner] = true;
+                truncated
+            }
+            _ => NO_TRUNCATION,
+        };
+    }
+    NO_TRUNCATION
+}
+
 impl ResidualPlan {
     /// Build from the PRE-residual state, in the engine's own emission order.
     pub(crate) fn build(state: &State, segment: &[Instruction]) -> ResidualPlan {
         let mut plan = ResidualPlan::default();
         let mut drains_opponent = [false; 2];
+        let leftovers_truncated = leftovers_slot_truncated(state, segment);
         for side in [SideReference::SideOne, SideReference::SideTwo] {
             let i = side_index(side);
             let (s, opponent) = match side {
@@ -5131,7 +5268,13 @@ impl ResidualPlan {
             // :psn 2 -> 7). The rows became divergences, not skips. Same trap as the drain slot documented in
             // `a_near_full_hp_seeder_still_over_books_the_drain_slot`: these
             // predicates cannot use HP without modelling the phase order.
-            if active.item == Items::LEFTOVERS {
+            //
+            // G33b: the ONE case where the slot must not be booked, and it is not an
+            // HP question at all — the handler is never reached, because the residual
+            // block was truncated by the opposing active's battle-ending faint. See
+            // `leftovers_slot_truncated` for the enumeration of what can deliver that
+            // faint and where each sits in the engine's section order.
+            if active.item == Items::LEFTOVERS && !leftovers_truncated[i] {
                 plan.heal[i].push("item: Leftovers".to_string());
             }
             // Liquid Ooze reverses the drain: the seeder takes damage instead of
@@ -8427,6 +8570,198 @@ mod tests {
             !rendered.lines[0].contains("item: Leftovers"),
             "the drain heal was attributed to Leftovers: {:?}",
             rendered.lines
+        );
+    }
+
+    // ---------------------------------------------------------------- G33b
+    //
+    // The residual block truncated by the opposing active's battle-ending faint.
+    // `leftovers_slot_truncated`'s seven arms, three end-to-end through the
+    // renderer and four directly on the predicate. Only the FIRST is
+    // revert-failing; the other six exist because every one of them passes on
+    // `main` too, and a gate that fires unconditionally would break them.
+    //
+    // Red/green measured in `reports/c146_g33b_residual_bucket_gate.md` §4 by
+    // checking out `origin/main` into its own worktree, rebuilding, and running --
+    // not by reasoning about which of them the predicate must reach.
+
+    /// Set up the G33b shape: side two is seeded, its active is its LAST living
+    /// Pokemon, and side one holds Leftovers below max HP.
+    ///
+    /// `speed_of_side_two` is the whole experiment. The engine's order-10 class is
+    /// speed-major, so a faster seeded victim resolves its entire 10.x set --
+    /// including the 10.5 sap that kills it -- before side one's 10.3 is entered,
+    /// and `stop_residuals_if_battle_ended!` then skips side one's 10.4 Leftovers.
+    fn g33b_state(speed_of_side_two: i16) -> State {
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+        {
+            let active = state.side_one.get_active();
+            active.maxhp = 268;
+            active.hp = 219;
+            active.item = Items::LEFTOVERS;
+            active.speed = 100;
+        }
+        {
+            let active = state.side_two.get_active();
+            active.maxhp = 96;
+            active.hp = 12;
+            active.item = Items::NONE;
+            active.speed = speed_of_side_two;
+        }
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        state
+    }
+
+    fn damage_two(amount: i16) -> Instruction {
+        Instruction::Damage(poke_engine::instruction::DamageInstruction {
+            side_ref: SideReference::SideTwo,
+            damage_amount: amount,
+        })
+    }
+
+    fn heal_two(amount: i16) -> Instruction {
+        Instruction::Heal(poke_engine::instruction::HealInstruction {
+            side_ref: SideReference::SideTwo,
+            heal_amount: amount,
+        })
+    }
+
+    /// **The revert-failing pin.** G33b, and the row it comes from is
+    /// `19200244/115` (`reports/c143_heal_attribution_diagnosis.md`).
+    ///
+    /// Side two is the FASTER seeded victim and its own 10.5 sap kills it as its
+    /// last living Pokemon. The battle ends inside side two's own order-10 bucket,
+    /// so side one's 10.4 Leftovers tick is never reached -- the segment carries
+    /// side one's silent drain mirror and nothing else.
+    ///
+    /// On `main` `ResidualPlan::build` books that unreached slot anyway, `plan.heal`
+    /// comes out one longer than `emitted_heal`, `plan.usable[0]` goes false, and the
+    /// bare drain falls through to `residual_heal_cause` -- which since C131 change 3
+    /// tests Leftovers FIRST. So the drain comes back tagged `[from] item: Leftovers`
+    /// on a heal Showdown renders `[silent]`.
+    #[test]
+    fn a_truncated_leftovers_slot_is_not_booked_so_the_drain_stays_silent() {
+        let mut state = g33b_state(200);
+        // The sap kills side two (12 of 12) and heals side one by the same amount.
+        // Nothing follows: the battle is over and side one's 10.4 never runs.
+        let segment = vec![damage_two(12), heal_one(12)];
+        assert_eq!(
+            residual_tags(&mut state, &segment, "p1a"),
+            Vec::<String>::new(),
+            "the drain mirror must render bare; a [from] tag here is the G33b mislabel"
+        );
+    }
+
+    /// The converse, and it is what stops the gate from being "never book
+    /// Leftovers". Side one is the FASTER seeder, so its whole order-10 bucket --
+    /// 10.4 Leftovers included -- resolves before side two's 10.5 kills side two.
+    /// The tick really did fire and must keep its tag. c143 §1a variant C.
+    #[test]
+    fn a_faster_seeder_keeps_its_leftovers_tag() {
+        let mut state = g33b_state(50);
+        let segment = vec![heal_one(16), damage_two(12), heal_one(12)];
+        assert_eq!(
+            residual_tags(&mut state, &segment, "p1a"),
+            vec!["item: Leftovers".to_string()],
+            "the faster seeder's tick fired before the victim's sap and keeps its tag"
+        );
+    }
+
+    /// A spare Pokemon behind the victim, which is the ONE bit c143 §1a varied
+    /// between its variants A and B. The victim still faints to its own sap, but the
+    /// battle does not end, so nothing is truncated and the slower seeder's 10.4
+    /// still runs. Pins the living-reserve half of the predicate: without it the
+    /// gate would fire on every residual faint.
+    #[test]
+    fn a_spare_pokemon_behind_the_victim_keeps_the_leftovers_tag() {
+        let mut state = g33b_state(200);
+        state.side_two.pokemon[PokemonIndex::P1].hp = 100;
+        let segment = vec![damage_two(12), heal_one(12), heal_one(16)];
+        assert_eq!(
+            residual_tags(&mut state, &segment, "p1a"),
+            vec!["item: Leftovers".to_string()],
+            "a non-final faint truncates nothing, so the seeder's tick still fires"
+        );
+    }
+
+    /// An exact speed tie is deliberately NOT gated. `speedSort` shuffles a tie
+    /// (`sim/battle.ts:455-457`) and the engine forks BOTH residual orders, keeping
+    /// both when they differ -- so one live order fires the tick and the other does
+    /// not, and there is no single answer. The pre-gate booking is retained rather
+    /// than guessed, which is a documented under-reach and not an oversight.
+    #[test]
+    fn a_speed_tie_is_not_gated() {
+        let state = g33b_state(100);
+        assert_eq!(
+            leftovers_slot_truncated(&state, &[damage_two(12), heal_one(12)]),
+            [false, false],
+            "a tie forks into both orders; the gate must not pick one"
+        );
+    }
+
+    /// Future Sight is order **11**, after every order-10 handler on BOTH sides, so
+    /// a kill by the winner's Future Sight lands AFTER the winner's own 10.4. The
+    /// tick fired and its slot must stay booked.
+    ///
+    /// Excluded by state predicate rather than by classifying the instruction: a
+    /// lethal residual damage always equals the victim's remaining HP exactly, so
+    /// the instruction itself carries no information about which phase produced it.
+    #[test]
+    fn a_future_sight_kill_is_not_gated() {
+        let mut state = g33b_state(200);
+        state.side_one.future_sight.0 = 1;
+        // Side two's sap is survivable here; the Future Sight tick at order 11 is
+        // what finishes it, one entry after side one's Leftovers.
+        state.side_two.get_active().hp = 20;
+        let segment = vec![damage_two(12), heal_one(12), heal_one(16), damage_two(8)];
+        assert_eq!(
+            leftovers_slot_truncated(&state, &segment),
+            [false, false],
+            "order 11 is after the winner's 10.4, so nothing was truncated"
+        );
+    }
+
+    /// Perish Song is order **12**, likewise after all of order 10. Same argument
+    /// as Future Sight, different section.
+    #[test]
+    fn a_perish_song_kill_is_not_gated() {
+        let mut state = g33b_state(200);
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::PERISH1);
+        state.side_two.get_active().hp = 20;
+        let segment = vec![damage_two(12), heal_one(12), heal_one(16), damage_two(8)];
+        assert_eq!(
+            leftovers_slot_truncated(&state, &segment),
+            [false, false],
+            "order 12 is after the winner's 10.4, so nothing was truncated"
+        );
+    }
+
+    /// Liquid Ooze is the only residual effect that writes a NEGATIVE `Heal`, and it
+    /// writes it at the SEEDED side's 10.5 -- inside the winner's own bucket, one
+    /// sub-order after the winner's 10.4. So a battle ended by ooze recoil comes
+    /// after the tick, and this is the one arm separated structurally (by
+    /// instruction kind) rather than by a state predicate.
+    #[test]
+    fn a_liquid_ooze_kill_is_not_gated() {
+        let mut state = g33b_state(200);
+        // Side ONE is the seeded one here, and its ooze turns the sap into recoil on
+        // the seeder. Side two is the faster loser.
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        state.side_one.get_active().ability = Abilities::LIQUIDOOZE;
+        let segment = vec![heal_one(16), damage_one(33), heal_two(-12)];
+        assert_eq!(
+            leftovers_slot_truncated(&state, &segment),
+            [false, false],
+            "ooze recoil fires at 10.5, after the winner's 10.4"
         );
     }
 
