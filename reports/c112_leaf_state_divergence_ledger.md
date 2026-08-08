@@ -114,7 +114,7 @@ Coverage on the v4 corpus (`corpus/golden-v4`): the harness surfaces **18 `state
 rows**, and this ledger groups all 138 into six mechanisms — P1 100 + P2 28 + P3 2 + P4 1 + P5 5 +
 P6 2 = 138. **All 138 rows carry a source-level cause and a disposition.** P2 (toxic, 28 rows) was open in an
 earlier revision and is closed here: the event renderer emits status-free condition strings
-(`events.rs:751-760`), so the leaf's replay cannot see an in-branch toxic entry. Closed on a
+(`events.rs`'s `fn hp_condition`), so the leaf's replay cannot see an in-branch toxic entry. Closed on a
 counterfactual plus a 33/33 signature on v4 and 27/27 on golden-v2, with three earlier attributions
 for the class withdrawn.
 
@@ -377,7 +377,7 @@ exact only within a stint.
 
 ## P2 — the event renderer emits status-free condition strings, so the replay cannot see an in-branch toxic entry (28 rows on v4, 24 on gv2)
 
-**Cause.** `events.rs:751-760` (`hp_condition`) returns `"0 fnt"`, a percent form, or
+**Cause.** `events.rs`'s `fn hp_condition` (and `hp_percent_condition`) returns `"0 fnt"`, a percent form, or
 `"{hp}/{maxhp}"` and **never appends a status token**. So every condition string in a synthesized
 branch is status-free, including the `|switch|` line (`events.rs:1171-1172`). Compare
 `1000#[56,57]` p1:
