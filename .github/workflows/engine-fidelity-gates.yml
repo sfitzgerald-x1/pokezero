@@ -106,6 +106,12 @@ jobs:
             # closed. Listed so a PR that ONLY weakens the pin file still trips this
             # workflow -- and note the file was previously run by no step at all.
             tests/test_engine_world_encore_transform.py
+            # The engine-search telemetry pins, with a STEP below. Listed for the reason
+            # every other test file here is: a PR whose only change weakens these pins --
+            # deleting the abort-path tests, or the cross-language attribute-name pin that
+            # is the sole guard against the Rust and Python spellings drifting -- must still
+            # trip the gate. `src/pokezero/**` covers the module they pin but not the pins.
+            tests/test_engine_search.py
             tests/test_sleep_talk_phaze_drag.py
             tests/test_instruction_event_mapping.py
             # This PR pins `Ran 8 tests` on crit-kill-split, so its own edits must trigger.
@@ -875,6 +881,67 @@ jobs:
             exit 1
           fi
 
+      # The engine-search telemetry seam, which NO workflow ran before this. Checked with
+      # `grep -rn test_engine_search .github/workflows/` on main: zero hits across all
+      # three files, while `src/pokezero/**` has been in this job's path filter all along
+      # -- so every PR that edited `engine_search.py` triggered the gate and the module
+      # holding that file's pins was not a step. The same "guard nothing runs" shape the
+      # three steps above each document one PR after the other.
+      #
+      # It holds the abort-path pins added with the sub-case carry: that an ABORTED world
+      # still reports what it observed (which this seam silently discarded), that it is not
+      # double-counted, that a payload of the wrong shape is a no-op rather than a crash
+      # inside the handler whose job is to keep the other worlds alive, and the two
+      # CROSS-LANGUAGE pins. Those last two
+      # matter most here: the Rust unit tests read the attribute name through the crate's
+      # own constant, so they are insensitive to a rename by construction, and the Python
+      # pin is the ONLY thing that fails when the two sides drift. RE-MEASURED on the
+      # merged tree: changing `ABORT_PAYLOAD_ATTR`'s value in Rust alone leaves all 451
+      # crate tests green (0 failed), and reddens exactly one thing anywhere --
+      # `test_the_crate_and_python_agree_on_the_abort_payload_attribute` in the step
+      # below, 112 of 113. An earlier revision of this comment said 429, a total this
+      # branch never had at any point; the figure is the one the run printed.
+      #
+      # EXACT count, not a floor, for the reason #1163 gave: a floor was the one fail-open
+      # in its mutation battery, and this guard lives in YAML where no local `unittest`
+      # run can see it.
+      - name: Engine-search telemetry pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
+          if ! grep -qE 'Ran 113 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 113 engine-search tests; the suite shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE '^OK$' /tmp/enginesearch.log; then
+            echo "::error::the engine-search suite did not report a clean OK"
+            exit 1
+          fi
+          # Name the abort-path pins. A total is restorable by unrelated tests, and these
+          # SEVEN are the only guards that an aborted world reports anything at all.
+          # Counted, not recalled: an earlier revision of this comment said "five" while
+          # listing six, which is the same off-by-one the crate block below records
+          # having made twice.
+          #
+          # Matched as "declared and RAN", not "... ok". These tests have docstrings, so
+          # unittest -v prints the verdict on the FOLLOWING line, and the policy's own
+          # fallback logging interleaves into it -- a `\.\.\. ok` pattern silently matches
+          # nothing and the loop becomes decoration. Verified locally against the real log.
+          # Ran + exact count + a clean `^OK$` above is what establishes they PASSED; this
+          # loop establishes they EXIST. Same construction as the attestation step.
+          for pin in test_an_aborted_world_still_reports_the_subcases_it_observed \
+                     test_an_aborted_world_reports_each_observation_exactly_once \
+                     test_a_failure_carrying_no_payload_is_a_silent_no_op \
+                     test_the_crate_and_python_agree_on_the_abort_payload_attribute \
+                     test_the_subcase_key_is_present_in_the_report_even_when_empty \
+                     test_countable_entries_survive_alongside_uncountable_ones \
+                     test_the_failure_reason_is_recorded_before_the_diagnostics_are_absorbed; do
+            grep -qE "^$pin \(.*\)( |\$)" /tmp/enginesearch.log || {
+              echo "::error::engine-search abort pin $pin did not run"
+              exit 1
+            }
+          done
+
       - name: Crate suites, including the renderer pins
         run: |
           set -o pipefail
@@ -993,8 +1060,24 @@ jobs:
           # arithmetic: 443 result lines, 443 distinct names,
           # 0 failures, no NAME removed against either parent. All 36 pins below resolve in
           # that same run.
-          if [ "${passed:-0}" -lt 443 ]; then
-            echo "::error::expected >= 443 crate tests, got ${passed:-0}"
+          #
+          # AND NOW A THIRD SEVEN-PLUS-EIGHT, by the same route the paragraph above just
+          # documented. The abort-path sub-case carry adds eight `abort_telemetry.rs`
+          # pins, all eight named in the loop below. This branch has now been merged
+          # forward TWICE and re-measured BOTH times, because every figure it could have
+          # carried was stale on arrival: it enforced 431 against its own base of 423,
+          # main went to 436 under it, and then main went to 443 by merging two
+          # independent sevens that each read 436. 431, 436 and 443 are each a floor that
+          # stays GREEN on the merged tree while absorbing deletions -- 443 would absorb
+          # this change's entire eight. So, not differenced and not `443 + 8`: the figure
+          # below is the sum this step's own expression produces over a local
+          # `RUSTFLAGS="-C debug-assertions=yes" cargo test --release` of the merged tree
+          # -- 451 passed, 0 failed, 1 pre-existing ignore, and 451 `... ok`
+          # lines agreeing with the sum. Discrimination replayed against that log with this
+          # step body extracted verbatim from the YAML: 452 fails, 451 passes, 451 fails on any
+          # single deletion, and 450 silently absorbs one.
+          if [ "${passed:-0}" -lt 451 ]; then
+            echo "::error::expected >= 451 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
@@ -1031,6 +1114,19 @@ jobs:
           # `a_second_moving_sleep_talk_user_also_emits_the_reset_exactly_once` is the SOLE
           # killer of the `|| !choice.first_move` escape hatch and must not be dropped as a
           # near-duplicate of the sleeper-first pin: move order is the discriminator.
+          #
+          # And the abort-path carry pins (`abort_telemetry::*`). Named for a reason the
+          # others do not have: `model.rs` is behind the `model` cargo feature, so it needs
+          # libtorch and `cargo test` NEVER COMPILES IT. Two of these carry the whole
+          # wiring between the search loop and the ledger.
+          # `the_search_path_records_into_the_ledger_and_attaches_it_on_abort` is a
+          # source-text assertion over `include_str!("model.rs")` -- delete it and the
+          # abort arm can be removed from the search path with everything else green (the
+          # 418/418 shape). `a_contained_poke_engine_panic_still_reports_what_the_world_
+          # observed` is the ORDERING guard: review demonstrated a regression that put the
+          # attach inside the panic guard, compiled, and passed a source-text ordering pin
+          # written specifically to catch it, so the ordering now lives in
+          # `guarded_search_with_ledger` and this test is what holds it.
           for pin in the_rendered_hazard_chip_is_tagged_from_spikes \
                      two_spikes_layers_chip_the_deeper_amount_and_stay_tagged \
                      with_no_spikes_the_drag_emits_no_chip_and_no_spikes_tag \
@@ -1066,7 +1162,15 @@ jobs:
                      a_damaging_callee_records_its_own_damage_with_no_carry_over_offset \
                      counter_after_a_non_damaging_sleep_talk_callee_reads_a_cleared_record \
                      an_ordinary_move_still_resets_its_own_carry_over \
-                     with_damage_dealt_tracking_off_no_reset_is_emitted; do
+                     with_damage_dealt_tracking_off_no_reset_is_emitted \
+                     abort_telemetry::abort_payload_tests::an_aborting_error_carries_the_counts_accumulated_before_it_died \
+                     abort_telemetry::abort_payload_tests::attaching_leaves_the_reason_key_and_the_exception_type_untouched \
+                     abort_telemetry::abort_payload_tests::an_abort_that_observed_nothing_still_carries_an_empty_payload \
+                     abort_telemetry::abort_payload_tests::a_world_that_accumulates_and_aborts_reports_each_observation_exactly_once \
+                     abort_telemetry::abort_payload_tests::the_report_object_is_sorted_compact_json \
+                     abort_telemetry::abort_payload_tests::the_search_path_records_into_the_ledger_and_attaches_it_on_abort \
+                     abort_telemetry::abort_payload_tests::a_contained_poke_engine_panic_still_reports_what_the_world_observed \
+                     abort_telemetry::abort_payload_tests::the_guard_attaches_on_a_returned_error_and_reports_through_the_ledger_on_success; do
             grep -qxE "test $pin \.\.\. ok" /tmp/cargo.log || {
               echo "::error::renderer pin $pin did not run"
               exit 1
