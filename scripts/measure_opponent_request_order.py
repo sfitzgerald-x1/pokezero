@@ -57,9 +57,15 @@ def wrong_unevolved(party, _truth):
 
 
 def wrong_one_swap(party, truth):
-    """Attempt 3, and the crate's fallback: one slot-0 swap. ~91% wrong.
+    """Attempt 3, and FORMERLY the crate's fallback: one slot-0 swap. ~91% wrong.
 
     Correct only while the opponent has made at most one switch-in.
+
+    The crate no longer substitutes this when `ctx["opponent_request_order"]`
+    is absent -- it fails closed to an all-`None` action map, leaving the node
+    uniform and counting the refusal in `prior_fallbacks`
+    (`LeafContext::root_opponent_order`). It stayed a control here because the
+    controls are what make the subject's score readable.
     """
     if not truth:
         return list(party)

@@ -73,6 +73,30 @@ def _tables_json() -> str | None:
         return None
 
 
+def _committed_sample_request_order(world, slot: str) -> list[str]:
+    """The opponent's request order for a COMMITTED-SAMPLE row.
+
+    The crate has no way to compute this and now refuses to guess: without
+    `ctx["opponent_request_order"]` the opponent map is all-`None`, so every
+    fixture below has to supply it or it would be pinning the refusal instead
+    of the mapping.
+
+    Active-first over the engine party order is the honest answer for THIS
+    corpus and only this corpus. Showdown's request order accumulates one
+    slot-0 swap per switch-in, so active-first is exact while the seat has
+    switched at most once and transposed from the second switch onward
+    (`scripts/measure_opponent_request_order.py::wrong_one_swap`, ~91% wrong on
+    live rows). The committed sample contains at most ONE opponent switch --
+    which is precisely why `test_multi_switch_request_order_needs_the_ctx_channel`
+    has to CONSTRUCT a three-switch history rather than read one.
+    """
+    party = list(world.party_species[slot])
+    active = getattr(world.spec, world.slot_sides[slot]).active_index
+    if 0 < active < len(party):
+        party[0], party[active] = party[active], party[0]
+    return party
+
+
 def _row_inputs(row) -> str:
     sys.path.insert(0, str(SCRIPTS_DIR))
     from golden_encoder_backends import row_inputs_from_decision_row  # noqa: E402
@@ -125,11 +149,15 @@ class OpponentActionMappingTest(unittest.TestCase):
                 state = build_poke_engine_state(world.spec)
             except EngineWorldUnsupported:
                 continue
+            opponent_slot = "p2" if row.player_id == "p1" else "p1"
             ctx = json.dumps(
                 {
                     "p1": list(world.party_species["p1"]),
                     "p2": list(world.party_species["p2"]),
                     "turn": int(row.public_materialization.get("turn") or 0),
+                    "opponent_request_order": _committed_sample_request_order(
+                        world, opponent_slot
+                    ),
                 }
             )
             state_str = state.to_string()
@@ -233,10 +261,16 @@ class OpponentActionMappingTest(unittest.TestCase):
             state = build_poke_engine_state(world.spec)
         except EngineWorldUnsupported:
             return None
+        # Seat-relative: the ctx order describes the OPPONENT of the context
+        # that reads it, and only `row_a`'s context reads it here (`rooted_b`
+        # is asked for its OWN map, which comes from `md["self_team"]`).
         ctx = json.dumps({
             "p1": list(world.party_species["p1"]),
             "p2": list(world.party_species["p2"]),
             "turn": int(row_a.public_materialization.get("turn") or 0),
+            "opponent_request_order": _committed_sample_request_order(
+                world, "p2" if row_a.player_id == "p1" else "p1"
+            ),
         })
         state_str = state.to_string()
         return (
@@ -350,9 +384,19 @@ class OpponentActionMappingTest(unittest.TestCase):
         passed with the defect present -- which is why this fixture constructs
         a THREE-switch history instead of reading one.
 
-        `ctx.opponent_request_order` is the channel that fixes it. This asserts
-        both halves: that the in-crate approximation is genuinely wrong here
-        (or the test proves nothing), and that supplying the order corrects it.
+        `ctx.opponent_request_order` is the channel that fixes it, and the
+        crate now FAILS CLOSED without it. Three states are asserted, because
+        two of them pass in a world where the map ALWAYS refuses:
+
+        * withheld -- every switch arm refused (`None`), so the node stays
+          uniform and `prior_fallbacks` counts it. `engine_search` omits the
+          key precisely when it cannot determine the order, and that refusal
+          has to survive the layer boundary instead of being converted into a
+          guess;
+        * the one-swap order the crate USED to guess -- wrong slots. Supplied
+          explicitly, so the discrimination check no longer depends on the
+          crate implementing a wrong answer for the test to measure;
+        * the real order -- correct slots.
         """
         cases = self._cases()
         encoder, state_str, row = cases[0]
@@ -375,13 +419,27 @@ class OpponentActionMappingTest(unittest.TestCase):
         bench = [s for s in expected if s != expected[0]]
         truth = {species: 4 + n for n, species in enumerate(bench)}
 
-        approximated = self._switch_slots(row, state_str, {})
+        # The order the crate used to substitute when the channel was silent:
+        # the packed party order with the active swapped to slot 0
+        # (`scripts/measure_opponent_request_order.py::wrong_one_swap`).
+        one_swap = order_after([expected[0]])
+
+        refused = self._switch_slots(row, state_str, {})
+        approximated = self._switch_slots(
+            row, state_str, {"opponent_request_order": one_swap}
+        )
         corrected = self._switch_slots(
             row, state_str, {"opponent_request_order": expected}
         )
+        self.assertEqual(
+            refused, dict.fromkeys(truth),
+            "withholding the request order must refuse every switch arm -- a "
+            "substituted order is a confident wrong prior, which is neither "
+            "counted nor visible, unlike the refusal it replaces",
+        )
         self.assertNotEqual(
             approximated, truth,
-            "fixture does not discriminate: the in-crate approximation already "
+            "fixture does not discriminate: the one-swap approximation already "
             "matches, so this would pass with the defect present",
         )
         self.assertEqual(
