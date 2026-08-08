@@ -132,29 +132,52 @@ class GutsFacadeWakeTurnTests(unittest.TestCase):
             move="facade", status="sleep", sleep_turns=1)
         # Crit branches are excluded, because a crit legitimately looks boosted.
         #
-        # #1152 (`poke-engine-gen3-crit-straddle-residual-split.patch`) sub-split the critical-hit
-        # band, so this state now yields three damage branches instead of one. The original
-        # `assertNotIn(226, damages)` read the higher crit band as the Guts/doubling bug it was
-        # written to catch. Measured: the wake branches are 23.438 / 0.586 / 0.977 percent, and
-        # the latter two are 0.0625 of that mass -- exactly the gen3 crit rate. A raw damage
-        # value was the wrong proxy for "boosted", because a crit produces a boosted-looking
-        # number legitimately.
+        # `poke-engine-gen3-crit-kill-split.patch` (C27, commit 97fe2c60, #1007) applied the
+        # kill-split identity to the crit arm, turning this state's two damage branches into
+        # three. The original `assertNotIn(226, damages)` was written when the crit arm was a
+        # single collapsed branch at floor(240 * 0.925) = 222, so 226 could only mean the
+        # Guts/doubling bug. It no longer can:
         #
-        # The property is unchanged: on the NON-crit wake branch, Facade on the wake turn is
-        # floor(120 * 0.925) = 111 -- no 2x, no Guts 1.5x.
+        #   111 @ 23.438%  25% wake x 15/16 non-crit
+        #   226 @  0.586%  25% x 1/16 x 6/16 -- the crit KILL arm, priced at the DEFENDER'S HP
+        #                  (226), not at a roll; 6 of the 16 rolls in the 240 crit fan reach it
+        #   214 @  0.977%  25% x 1/16 x 10/16 -- mean of the ten sub-lethal crit rolls
+        #
+        # The two crit branches are 0.0625 of the wake mass: exactly the gen3 crit rate. So
+        # `assertNotIn(226)` became unsatisfiable under CORRECT behaviour -- any engine emitting
+        # a crit-kill arm against a 226-HP target emits 226. A raw damage value was the wrong
+        # proxy for "boosted".
+        #
+        # (#1152's crit-straddle patch sub-splits this further, but only when residual_thresholds
+        # is non-empty; this state has no residuals so it does not fire. An earlier revision of
+        # this comment credited #1152 for the split, which was wrong by six days and the wrong
+        # mechanism.)
+        #
+        # The Guts bug remains detectable: it lives in the 15/16 non-crit branch, which is NOT
+        # excluded. The property is unchanged -- Facade on the wake turn is
+        # floor(120 * 0.925) = 111, no 2x, no Guts 1.5x.
         wake = [b for b in branches if self._damages([b])]
         wake_mass = sum(float(b.percentage) for b in wake)
         crit = [b for b in wake if float(b.percentage) / wake_mass < 0.05]
+        damages = self._damages([b for b in wake if b not in crit])
+
+        # PROPERTY FIRST, guard second. Under a real Guts regression the wake branch is a
+        # guaranteed kill, so there is no crit split and the excluded mass is 0 -- if the guard
+        # ran first it would fail as "the baseline moved, re-derive this pin", which is the
+        # wrong nudge for an actual regression and how a pin gets relaxed instead of fixed.
+        # Ordered this way it fails as "111 not found in [226]".
+        self.assertIn(111, damages)
+        for boosted in (226, 258):  # HP-capped kill values of any boosted NON-CRIT calc
+            self.assertNotIn(boosted, damages)
+
+        # Now the guard: the exclusion must be the crit band and nothing else, so the filter
+        # cannot quietly grow to swallow the branch under test.
         self.assertAlmostEqual(
             sum(float(b.percentage) for b in crit) / wake_mass,
             1.0 / 16.0,
             places=3,
             msg="the excluded branches are not the 1/16 crit band; re-derive this pin",
         )
-        damages = self._damages([b for b in wake if b not in crit])
-        self.assertIn(111, damages)
-        for boosted in (226, 258):  # HP-capped kill values of any boosted NON-CRIT calc
-            self.assertNotIn(boosted, damages)
 
 
 @unittest.skipIf(poke_engine is None, "poke-engine wheel not installed")
