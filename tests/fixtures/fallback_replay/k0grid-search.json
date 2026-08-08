@@ -1,0 +1,31 @@
+{
+  "_fixture_note": "HYPOTHETICAL SHAPE. scripts/k0_grid_h2h.py:236-246 lifts counts straight off the stats object and never calls EngineMctsStats.to_dict(), so it emits no fallback_samples at all and no shard like this exists. Kept so the k0 reader is exercised at all; the producer gap is tracked separately. Do not cite this file as evidence that k0 shards carry addresses.",
+  "arm": "search",
+  "checkpoint": "checkpoints/k0.pt",
+  "checkpoint_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "config": "d4-s1024-b64-w4",
+  "depth": 4,
+  "engine_stats": {
+    "fallback_sample_addresses_dropped": 0,
+    "fallback_samples": {
+      "fallback:crate_search_failed": [
+        {
+          "battle_id": "k0grid-600002",
+          "reason": "crate_search_failed",
+          "round": 5,
+          "seat": "p1"
+        }
+      ]
+    }
+  },
+  "games": 8,
+  "per_game": [
+    {
+      "search_seat": "p1",
+      "seed": 600002
+    }
+  ],
+  "seed_start": 600000,
+  "sims": 1024,
+  "worlds": 4
+}
