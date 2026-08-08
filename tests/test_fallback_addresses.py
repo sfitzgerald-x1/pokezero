@@ -314,7 +314,8 @@ class TestCorpusCompletenessAndFrequency:
             )
         )
         scan = scan_corpus([tmp_path])
-        assert scan.true_counts[rare_but_huge] == 1472
+        assert scan.world_counts[rare_but_huge] == 1472
+        assert scan.count_for(rare_but_huge) == (1472, "worlds")
 
         assert main([str(tmp_path)]) == 0
         out = capsys.readouterr().out
@@ -336,7 +337,36 @@ class TestCorpusCompletenessAndFrequency:
                 }
             )
         )
-        assert scan_corpus([tmp_path]).true_counts["fallback:choices_unmapped"] == 63
+        scan = scan_corpus([tmp_path])
+        assert scan.decision_counts["fallback:choices_unmapped"] == 63
+        assert scan.count_for("fallback:choices_unmapped") == (63, "decisions")
+
+    def test_worlds_and_decisions_are_never_co_ranked(self, tmp_path, capsys):
+        # A world count of 10000 must not be printed above a decision count of 5 as
+        # though they were the same quantity.
+        (tmp_path / "a-p1.json").write_text(
+            json.dumps(
+                {
+                    "engine_mcts": {
+                        "policy_stats": {
+                            "fallback_samples": {
+                                "big-world-class": [_entry("b", 1, "p1")],
+                                "fallback:choices_unmapped": [_entry("b", 2, "p1")],
+                            },
+                            "world_failure_reasons": {"big-world-class": 10000},
+                            "fallback_reasons": {"choices_unmapped": 5},
+                        }
+                    }
+                }
+            )
+        )
+        assert main([str(tmp_path)]) == 0
+        out = capsys.readouterr().out
+        assert "ordered by true decisions" in out
+        assert "ordered by true worlds" in out
+        # Decisions section comes first and the world class is not inside it.
+        decisions_block = out.split("ordered by true decisions")[1].split("ordered by true worlds")[0]
+        assert "big-world-class" not in decisions_block
 
 
 class TestPathHandling:

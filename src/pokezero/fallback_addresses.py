@@ -18,7 +18,9 @@ Design notes, each paid for by a prior defect:
   ranks a class by how many raw variants it shattered into, not by how often it
   fired -- an inversion of 18x is reachable. :class:`CorpusScan` therefore also
   reads the uncapped ``world_failure_reasons`` / ``fallback_reasons`` totals, and
-  the CLI orders by those.
+  the CLI orders by those -- **within unit**. The two are different quantities
+  (worlds vs decisions; one class can abort many worlds inside one decision), so
+  they are held in separate counters and never co-ranked.
 * **Completeness is reported, never assumed.** ``fallback_sample_addresses_dropped``
   is surfaced; non-zero means occurrences exist with no replayable address.
 * **Canonicalisation is allowlist-based** -- see the block above
@@ -236,10 +238,22 @@ class CorpusScan:
     #: Sum of ``fallback_sample_addresses_dropped``. Non-zero means the address
     #: corpus is INCOMPLETE -- occurrences existed that no address was kept for.
     addresses_dropped: int = 0
-    #: Uncapped occurrence counts from ``world_failure_reasons`` /
-    #: ``fallback_reasons``, canonicalised. THIS is class frequency; address counts
-    #: are not, because the producer caps samples per class.
-    true_counts: Counter = field(default_factory=Counter)
+    #: Uncapped occurrence counts, canonicalised, KEPT SEPARATE BY UNIT.
+    #: ``world_failure_reasons`` counts WORLDS; ``fallback_reasons`` counts
+    #: DECISIONS. One world-failure class can abort many worlds within a single
+    #: decision, so the two are not on the same scale and summing or co-ranking
+    #: them is the same cite-a-number-for-a-different-quantity error that the
+    #: capped-address ranking was.
+    world_counts: Counter = field(default_factory=Counter)
+    decision_counts: Counter = field(default_factory=Counter)
+
+    def count_for(self, key: str) -> tuple[int | None, str]:
+        """Return ``(count, unit)`` for a canonical key, or ``(None, "")``."""
+        if key in self.decision_counts:
+            return self.decision_counts[key], "decisions"
+        if key in self.world_counts:
+            return self.world_counts[key], "worlds"
+        return None, ""
     shards_read: int = 0
     shards_unreadable: int = 0
 
@@ -256,14 +270,16 @@ def _scan_document(document: Any, scan: CorpusScan, *, source: str) -> None:
     dropped = stats.get("fallback_sample_addresses_dropped")
     if isinstance(dropped, int) and not isinstance(dropped, bool):
         scan.addresses_dropped += dropped
-    for field_name in ("world_failure_reasons", "fallback_reasons"):
+    for field_name, prefix, target in (
+        ("world_failure_reasons", "", scan.world_counts),
+        ("fallback_reasons", "fallback:", scan.decision_counts),
+    ):
         counts = stats.get(field_name)
         if not isinstance(counts, Mapping):
             continue
-        prefix = "" if field_name == "world_failure_reasons" else "fallback:"
         for key, value in counts.items():
             if isinstance(value, int) and not isinstance(value, bool):
-                scan.true_counts[canonical_key(f"{prefix}{key}")] += value
+                target[canonical_key(f"{prefix}{key}")] += value
 
 
 def scan_corpus(paths: Sequence[Path]) -> CorpusScan:
@@ -362,15 +378,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     # at _FALLBACK_SAMPLES_PER_CLASS, so address counts rank a class by how many raw
     # variants it shattered into -- measured 18x inversions. Address count is reported
     # only as replay COVERAGE of the class.
-    print(f"{'occurrences':>12}  {'addrs':>5}  class (ordered by true occurrences)")
-    ordered = sorted(
-        counts,
-        key=lambda key: (-scan.true_counts.get(key, 0), -counts[key], key),
-    )
-    for key in ordered:
-        true = scan.true_counts.get(key)
-        shown = f"{true:12d}" if true is not None else f"{'unknown':>12}"
-        print(f"{shown}  {counts[key]:5d}  {key}")
+    #
+    # Ranked WITHIN unit, never across it. world_failure_reasons counts WORLDS and
+    # fallback_reasons counts DECISIONS; one class can abort many worlds inside a
+    # single decision, so a combined ordering would compare two different quantities
+    # -- the same error as ranking by capped address counts.
+    for unit, table in (("decisions", scan.decision_counts), ("worlds", scan.world_counts)):
+        in_unit = [key for key in counts if key in table]
+        if not in_unit:
+            continue
+        print(f"\n{unit:>12}  {'addrs':>5}  class (ordered by true {unit})")
+        for key in sorted(in_unit, key=lambda k: (-table[k], -counts[k], k)):
+            print(f"{table[key]:12d}  {counts[key]:5d}  {key}")
+
+    unranked = [key for key in counts if scan.count_for(key)[0] is None]
+    if unranked:
+        print(f"\n{'no count':>12}  {'addrs':>5}  class (occurrence total not in these shards)")
+        for key in sorted(unranked, key=lambda k: (-counts[k], k)):
+            print(f"{'unknown':>12}  {counts[key]:5d}  {key}")
 
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
