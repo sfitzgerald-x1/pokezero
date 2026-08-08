@@ -51,7 +51,6 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import pokezero_search  # noqa: E402
 
-from pokezero.dex import normalize_id  # noqa: E402
 from pokezero.env import BattleStartOverride  # noqa: E402
 from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
@@ -68,7 +67,6 @@ from pokezero.poke_engine_adapter import build_poke_engine_state  # noqa: E402
 
 from fidelity_gate_events import (  # noqa: E402
     anchor_observation_metadata,
-    chosen_candidate,
     production_recharging_slots,
     truant_loaf_slots,
 )
@@ -303,14 +301,6 @@ def run_corpus(
     }
 
 
-def chosen_candidate_from_row(row: Any) -> Mapping[str, Any] | None:
-    index = row.chosen_action_index
-    for candidate in row.observation_metadata.get("action_candidates") or ():
-        if candidate.get("action_index") == index:
-            return candidate
-    return None
-
-
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--corpus", type=Path, action="append", required=True)
@@ -364,9 +354,3 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-# The fidelity harness's chosen_candidate operates on raw JSONL dicts; the
-# loader used here yields dataclasses — chosen_candidate_from_row above is the
-# dataclass twin. `chosen_candidate` stays imported for interface parity.
-_ = chosen_candidate

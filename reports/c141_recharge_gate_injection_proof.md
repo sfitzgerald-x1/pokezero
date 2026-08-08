@@ -2,8 +2,10 @@
 
 **Era / provenance.** `corpus/golden-v4`, 1295 decision rows / 1271 same-seat boundaries,
 **12 battles**. Tree: `main` at `9a128bec` (task 4 merged). The engine crate was rebuilt with and
-without the injection; the injection is reverted and `self_must_recharge` is confirmed absent
-from the final `.so`.
+without the injection; the injection is reverted and `self_must_recharge` was confirmed absent
+from the `.so` **as of this run**. That check no longer holds at HEAD and should not: the P3 freeze
+lift makes `leaf.rs` write that key legitimately, so the string is present by design now. Use the
+build hash, not the string, to check for a leftover injection.
 
 Producing commands. Note the `../../` — `.venv/bin/python` does not resolve after the `cd`, and
 an earlier revision of this report printed a path that could not be run:
@@ -28,7 +30,7 @@ made me soften three "pinned two-way" claims to:
 
 > no test or measurement shows a gate catching an end-to-end bad write
 
-That is the gap this closes. No code change — this is a measurement.
+That is the gap this closes. This is a measurement; the only source edits are comments and one docs row, no behaviour.
 
 ## The injected write
 
@@ -129,9 +131,9 @@ is true on exactly those 5 and nowhere else. Two reachable shapes this run would
 - **Correct at depth 0, stale at depth > 0.** `leaf_root_parity` is a depth-0 gate by
   construction -- its own header says the construction "must reproduce the production
   observation EXACTLY" at zero branch steps -- so a write that is right at the root and goes
-  stale in the branch is structurally invisible to it. That is the current root-frozen behaviour
+  stale in the branch is structurally invisible to it. That is the root-frozen behaviour this report was written to discuss — **since lifted**, see Disposition —
   this report exists to discuss, and it is the shape a real P3 implementation is most likely to
-  get wrong. The gate that would have to catch it is `leaf_vs_reality`, already red at 123.
+  get wrong. The gate that would have to catch it is `leaf_vs_reality`, already red at 123 at the time of this run (122 after the lift).
 - **Right side, wrong volatile.** Caught on 2 rows rather than 5 -- same corpus, weaker signal.
 
 (An earlier revision offered "a wrong party index" as the example. That defect cannot occur on
@@ -150,6 +152,17 @@ fixtures.
 
 ## Disposition
 
-No code change. C112's **P3 stays open**: `leaf.rs`'s self-side MUSTRECHARGE volatile is still
-root-frozen, and this run is evidence that when someone lifts it, the gates will hold the
-implementation honest — the property #1156 claimed and could not previously show.
+No behavioural change here — comments and one docs row.
+
+**C112's P3 was open when this ran, and is now closed.** At the time of this measurement
+`leaf.rs` still root-froze the self-side MUSTRECHARGE volatile, and this run was the evidence
+that the gates could hold an implementation honest once someone lifted it — the property #1156
+claimed and could not previously show.
+
+An audit then pointed out the sharper consequence: because #1156 made `engine_search` BUILD
+self-recharge worlds that previously failed closed, the stale root flag became **reachable in
+production search** at depth > 0 where it never had been. The symmetry fix turned a dormant
+defect live. The freeze is therefore lifted in the follow-up (both sides now derive from the
+branch's own `volatile_statuses`), verified exactly as this report's method prescribes:
+`leaf_root_parity` stays at `diverged 0` — depth-0 parity, the freeze's entire rationale — while
+the id-877 self-side family goes 2 rows to 0 and `class_rows.state` goes 123 to 122.

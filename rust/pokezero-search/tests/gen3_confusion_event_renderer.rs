@@ -10,11 +10,11 @@ use poke_engine::engine::abilities::Abilities;
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
 use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus};
-use poke_engine::instruction::{Instruction, StateInstructions};
+use poke_engine::instruction::{ImmobilizeReason, Instruction, StateInstructions};
 use poke_engine::state::{
     PokemonIndex, PokemonMoveIndex, PokemonStatus, PokemonType, SideReference, State,
 };
-use pokezero_search::events::{attribution_unsafe_label, render_branch_events, EventContext};
+use pokezero_search::events::{render_branch_events, EventContext};
 
 fn confused_state(move_id: Choices) -> State {
     let mut state = State::default();
@@ -861,8 +861,10 @@ fn successful_memento_is_not_a_confusion_self_faint_collision() {
     );
 }
 
-fn attracted_paralyzed_state(confused: bool) -> State {
-    let mut state = confused_state(Choices::TACKLE);
+/// Side two attracted, NOT paralyzed: the CLEAN attract fixture. The paralyzed sibling
+/// above exists to produce the contaminated empty tail; this one isolates the marker.
+fn attracted_state(move_id: Choices, confused: bool) -> State {
+    let mut state = confused_state(move_id);
     if !confused {
         state
             .side_two
@@ -873,52 +875,245 @@ fn attracted_paralyzed_state(confused: bool) -> State {
         .side_two
         .volatile_statuses
         .insert(PokemonVolatileStatus::ATTRACT);
-    state.side_two.get_active().status = PokemonStatus::PARALYZE;
     state
 }
 
+fn carries_attract_marker(branch: &StateInstructions, side: SideReference) -> bool {
+    branch.instruction_list.iter().any(|instruction| {
+        matches!(instruction, Instruction::MoveImmobilized(marker)
+            if marker.side_ref == side && marker.reason == ImmobilizeReason::Attract)
+    })
+}
+
+/// Every branch whose action was aborted by Attract.
+///
+/// More than one is legitimate: the move phase is identical across them, but a later
+/// END-OF-TURN fork (the confusion ladder parking its snap-out) splits the branch after the
+/// marker. So this returns the set and each caller pins the count it expects.
+fn attract_marked_branches(
+    branches: &[StateInstructions],
+    side: SideReference,
+) -> Vec<&StateInstructions> {
+    let marked: Vec<&StateInstructions> = branches
+        .iter()
+        .filter(|branch| carries_attract_marker(branch, side))
+        .collect();
+    assert!(
+        !marked.is_empty(),
+        "no branch was Attract-immobilized; branches={branches:?}"
+    );
+    marked
+}
+
+/// The instruction list up to AND INCLUDING the marker: the engine's move phase for an
+/// Attract-immobilized action. Everything after the marker is end-of-turn.
+fn through_the_attract_marker(branch: &StateInstructions, side: SideReference) -> &[Instruction] {
+    let position = branch
+        .instruction_list
+        .iter()
+        .position(|instruction| {
+            matches!(instruction, Instruction::MoveImmobilized(marker) if marker.side_ref == side)
+        })
+        .unwrap_or_else(|| panic!("branch carries no marker: {branch:?}"));
+    &branch.instruction_list[..=position]
+}
+
+/// THE DEFECT THIS FIXES, pinned at the engine seam.
+///
+/// The Attract-immobilized branch used to be `incoming_instructions.clone()` with NOTHING
+/// appended -- an empty delta, byte-identical to the fully-paralyzed branch pushed a few
+/// lines later in the same function, because "the move did not happen" has no state
+/// representation. The previous patch conceded it in its own comment: "both immobilized
+/// branches carry the same empty delta". So no renderer could name the cause, and the whole
+/// class refused.
+///
+/// Pinned properties, each one a separate mutant:
+///   * the marker EXISTS on exactly one branch (delete the push -> fails);
+///   * it names ATTRACT rather than being an anonymous tag (change the reason -> fails);
+///   * it is credited to the ACTING side (flip `side_ref` -> fails);
+///   * it CLOSES the move phase, which is what makes the renderer's post-prelude tail
+///     exactly `[marker]` and therefore renderable (push it before the clone's other
+///     instructions -> fails);
+///   * the branch still carries the 1/2 Attract mass, so the marker is not a probability
+///     change wearing an attribution change's clothes. With confusion also live the
+///     immobilized mass is 1/4, because confusion's self-hit (priority 3) already took
+///     half BEFORE Attract is rolled -- pinning both numbers is what makes the ordering
+///     claim in the engine comment testable.
 #[test]
-fn attracted_and_paralyzed_empty_tails_fail_closed_with_or_without_confusion() {
+fn the_engine_marks_which_immobilizer_aborted_the_attract_branch() {
+    // Clean: `[marker]` and nothing else, at exactly half the mass.
+    let mut state = attracted_state(Choices::TACKLE, false);
+    let branches = generate(&mut state);
+    let marked = attract_marked_branches(&branches, SideReference::SideTwo);
+    assert_eq!(marked.len(), 1, "{branches:?}");
+    assert_eq!(
+        marked[0].instruction_list,
+        vec![Instruction::MoveImmobilized(
+            poke_engine::instruction::MoveImmobilizedInstruction {
+                side_ref: SideReference::SideTwo,
+                reason: ImmobilizeReason::Attract,
+            }
+        )],
+        "an immobilized action's whole delta is the marker -- no PP, no last-move, no \
+         damage: {marked:?}"
+    );
+    assert!(
+        (marked[0].percentage - 50.0).abs() < 1e-3,
+        "the immobilized branch must keep exactly the 1/2 Attract mass: {marked:?}"
+    );
+    assert!(
+        !carries_attract_marker(marked[0], SideReference::SideOne),
+        "side one is not attracted and must carry no marker: {marked:?}"
+    );
+
+    // Confused as well: the confusion counter's increment is the only thing ahead of the
+    // marker, and it is silent bookkeeping the renderer's prelude consumes. The immobilized
+    // mass is now 1/4 -- confusion's self-hit roll runs FIRST.
+    let mut confused_state = attracted_state(Choices::TACKLE, true);
+    let confused_branches = generate(&mut confused_state);
+    let confused_marked = attract_marked_branches(&confused_branches, SideReference::SideTwo);
+    let confused_mass: f32 = confused_marked.iter().map(|branch| branch.percentage).sum();
+    assert!(
+        (confused_mass - 25.0).abs() < 1e-3,
+        "confusion (onBeforeMove priority 3) is rolled before Attract (2), so the \
+         immobilized mass is 1/2 * 1/2: got {confused_mass}, branches={confused_branches:?}"
+    );
+    for branch in &confused_marked {
+        let move_phase = through_the_attract_marker(branch, SideReference::SideTwo);
+        assert_eq!(
+            move_phase.len(),
+            2,
+            "only the confusion counter may precede the marker: {branch:?}"
+        );
+        assert!(
+            matches!(&move_phase[0], Instruction::ChangeVolatileStatusDuration(change)
+                if change.volatile_status == PokemonVolatileStatus::CONFUSION
+                    && change.amount == 1),
+            "{branch:?}"
+        );
+    }
+}
+
+/// ...and the renderer now NAMES it instead of refusing the world.
+///
+/// This is the coverage half of the fix: every branch in `attract_empty_tail_ambiguous` was
+/// thrown away. On the validation holdout (seeds 19,100,000-19,100,199, 200 games, 15,579
+/// measured boundaries, engine fingerprint 5fa147ffa325c887) that class was ALL THREE of the
+/// three `strict:lossy_render` refusals -- artifact
+/// `reports/artifacts/c142_rumpfix_holdout_sweep.json` -- and the dev window
+/// 19,000,000-19,000,199 had none. The census, and the withdrawal of the unsourced "~46% of
+/// the remaining search-fallback residue" that stood in this sentence through two revisions,
+/// are in `third_party/poke-engine-gen3-patches.txt` under the marker patch's entry.
+///
+/// Mutants this kills: deleting the renderer arm (no `|cant|` line); deleting the engine
+/// push (the branch has no marker, so `attract_marked_branch` panics); rendering a `|move|`
+/// line as well; dropping the `attract_immobilization_source_unknown` lossy tag; adding a
+/// refusal; and -- the ordering one -- emitting the attract `|cant|` BEFORE confusion's
+/// `|-activate|`, which inverts Showdown's onBeforeMove priorities (confusion 3, attract 2).
+#[test]
+fn the_marked_attract_branch_renders_its_cant_line_instead_of_refusing() {
     for confused in [false, true] {
-        let mut state = attracted_paralyzed_state(confused);
+        let mut state = attracted_state(Choices::TACKLE, confused);
         let branches = generate(&mut state);
-        let rendered = branches
-            .iter()
-            .map(|branch| rendered(&mut state, branch))
-            .find(|events| {
-                events
-                    .attribution_unsafe
-                    .iter()
-                    .any(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
-            })
-            .unwrap_or_else(|| {
-                panic!(
-                    "expected the combined Attract/paralysis empty tail to fail closed; \\
-                     confused={confused}, branches={branches:?}"
-                )
-            });
+        let marked = attract_marked_branches(&branches, SideReference::SideTwo)[0].clone();
+        let rendered = rendered(&mut state, &marked);
         let text = rendered.lines.join("\n");
+
         assert!(
-            !text.contains("|cant|p2a: Opponent|Attract"),
-            "the collapsed branch cannot be attributed wholly to Attract: {text}"
+            text.contains("|cant|p2a: Opponent|Attract"),
+            "the marked branch must name Attract as the cause: {text}"
         );
         assert!(
-            !text.contains("|cant|p2a: Opponent|par"),
-            "the collapsed branch cannot be attributed wholly to paralysis: {text}"
+            !text.contains("|move|p2a: Opponent|tackle"),
+            "Attract's onBeforeMove returns false, so the move is never used: {text}"
         );
+        assert!(
+            rendered.attribution_unsafe.is_empty(),
+            "a marked branch is fully attributed and must not refuse: {rendered:?}"
+        );
+        // The pre-existing telemetry-only tag, and ONLY it. The engine still does not track
+        // WHO the mon is infatuated with, so Showdown's companion
+        // `|-activate|..|move: Attract|[of] <source>` line stays unrenderable -- and
+        // `engine_transition_differential.py` allowlists exactly this tag, so a second tag
+        // here would make every marked branch unusable for matching.
+        assert_eq!(
+            rendered.lossy,
+            vec!["attract_immobilization_source_unknown".to_string()],
+            "{rendered:?}"
+        );
+
         if confused {
+            let activate = text
+                .find("|-activate|p2a: Opponent|confusion")
+                .unwrap_or_else(|| panic!("confusion's check announces itself: {text}"));
+            let cant = text.find("|cant|p2a: Opponent|Attract").unwrap();
             assert!(
-                text.contains("|-activate|p2a: Opponent|confusion"),
-                "confusion still precedes the fail-closed mixed tail: {text}"
-            );
-        } else {
-            assert!(
-                !text.contains("|-activate|p2a: Opponent|confusion"),
-                "unexpected confusion activation without the volatile: {text}"
+                activate < cant,
+                "confusion is onBeforeMove priority 3 and Attract is 2, so the activation \
+                 comes FIRST: {text}"
             );
         }
     }
 }
+
+/// THE TRAP. A pure marker has no state effect, so the unnamed-callee walk's fall-through
+/// (`} else { sim.apply(instruction) }`) renders NOTHING for it -- the marker is silently
+/// swallowed and the fix fails with the entire suite green.
+///
+/// A Sleep Talk click is the only way to get there: `slp.onBeforeMove` emits `|cant|..|slp`
+/// and returns UNDEFINED for a `sleepUsable` move, so the BeforeMove chain keeps running
+/// down to Attract (priority 2). Before this test, the marker tail reached the Sleep Talk
+/// block, no callee reproduced `[marker]`, the branch was classified `none_matched`, and the
+/// walk applied the marker and emitted nothing.
+///
+/// So this test fails if the marker arm is moved BELOW the Sleep Talk block -- which is
+/// exactly the edit that looks harmless. Note Showdown emits BOTH cant lines here: the sleep
+/// gate announces itself and then infatuation aborts the move.
+#[test]
+fn an_attracted_sleeptalk_user_never_reaches_the_unnamed_callee_walk() {
+    let mut state = attracted_state(Choices::SLEEPTALK, false);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    // Rest sleep with turns left is the DETERMINISTIC "stays asleep" arm -- no wake branch
+    // to pick the wrong one of.
+    state.side_two.get_active().rest_turns = 2;
+    // Sleep Talk needs something to call, or `get_sleep_talk_choices()` is empty and the
+    // branch set never reaches the walk this test is about. That vacuity is a documented
+    // failure mode of the sibling sleep-talk fixtures.
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
+
+    let branches = generate(&mut state);
+    let marked = attract_marked_branches(&branches, SideReference::SideTwo);
+    assert_eq!(marked.len(), 1, "{branches:?}");
+    let marked = marked[0].clone();
+    let rendered = rendered(&mut state, &marked);
+    let text = rendered.lines.join("\n");
+
+    assert!(
+        text.contains("|cant|p2a: Opponent|Attract"),
+        "the marker must be consumed BEFORE the Sleep Talk block, or the callee walk \
+         swallows it: {text}"
+    );
+    assert!(
+        !text.contains("|move|p2a: Opponent|sleeptalk"),
+        "Attract aborts the action before the move is used, so no Sleep Talk line: {text}"
+    );
+    assert!(
+        rendered.attribution_unsafe.is_empty(),
+        "the branch must not fall into a sleeptalk refusal -- that is the swallow this test \
+         exists to catch: {rendered:?}"
+    );
+    assert!(
+        !rendered
+            .lossy
+            .iter()
+            .any(|reason| reason == "sleeptalk_called_unidentified"),
+        "no callee was ever invoked, so nothing is unidentified: {rendered:?}"
+    );
+}
+
 
 #[test]
 fn switching_away_clears_confusion_silently_without_an_early_end_line() {
@@ -1135,263 +1330,414 @@ fn an_ordinary_confusion_check_is_not_misread_as_a_snap_out() {
     );
 }
 
-/// The refusal must name WHICH ambiguity refused, not just that one did.
+/// A MARKER MUST NEVER OUTRANK THE SLEEP GATE. Review found this as a fabricated line.
 ///
-/// The five predicates behind `attract_empty_tail_ambiguous` were function-local
-/// and discarded at the refusal, so nothing recorded the split -- which meant the
-/// only available plan for this refusal class was "patch the engine and hope".
-/// The split decides the fix: the `paralyzed` arm is downgradeable to lossy (both
-/// outcomes are "no move used, no reveal, no PP", and Attract dominates 4:1),
-/// while the noop/miss arms are not downgradeable at any price because they erase
-/// a `|move|` reveal.
+/// Showdown gen3's `slp.onBeforeMove` returns FALSE for a move that is not `sleepUsable`,
+/// which short-circuits the whole BeforeMove chain -- so attract's handler (priority 2)
+/// never runs on a turn the sleep gate blocked, and `|cant|<ident>|Attract` cannot exist
+/// for such a turn. The only correct line is `|cant|<ident>|slp`.
 ///
-/// Pinned so the sub-case cannot silently collapse back to a single bare slug,
-/// which would quietly destroy the measurement again.
+/// The engine still produces a branch that looks otherwise. At `chance_to_wake == 0.0`
+/// with a non-`sleepUsable` move it pushes the real "still asleep" outcome to
+/// `final_instructions` and then zeroes `incoming`'s mass WITHOUT waking the Pokemon and
+/// WITHOUT clearing `reaches_confusion_handler` -- so a ZERO-MASS phantom flows on into the
+/// Attract roll with the mon still asleep and comes back carrying a marker.
+///
+/// Zero mass is NOT a defence: `branch_render_is_usable` allowlists this branch's lossy
+/// set, so the differential will happily match the line, and `sample_branch_index`'s
+/// `branches.len() - 1` fallback can still select a zero-weight last branch. A fabricated
+/// protocol line in a searched world is the doctrine violation this campaign exists to
+/// prevent.
+///
+/// Swept across move shapes because the first fix attempt was keyed on the move and this
+/// is a property of the GATE: damage, status, self-target, self-faint, charge and the
+/// pending-slot move all reproduce it.
 #[test]
-fn the_attract_refusal_names_its_subcase() {
-    let mut state = attracted_paralyzed_state(false);
-    let branches = generate(&mut state);
-    let reasons: Vec<String> = branches
-        .iter()
-        .flat_map(|branch| rendered(&mut state.clone(), branch).attribution_unsafe)
-        .filter(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
-        .collect();
-    assert!(!reasons.is_empty(), "expected an attract refusal to measure");
-    for reason in &reasons {
-        assert_ne!(
-            reason, "attract_empty_tail_ambiguous",
-            "the bare slug carries no sub-case and cannot be measured: {reasons:?}"
-        );
-        assert!(
-            reason.starts_with("attract_empty_tail_ambiguous:"),
-            "malformed sub-case slug: {reason}"
-        );
+fn an_asleep_attracted_mon_that_never_passed_the_sleep_gate_renders_slp_not_attract() {
+    for mv in [
+        Choices::TACKLE,
+        Choices::SPLASH,
+        Choices::THUNDER,
+        Choices::REST,
+        Choices::EXPLOSION,
+        Choices::FUTURESIGHT,
+        Choices::SOLARBEAM,
+    ] {
+        let mut state = attracted_state(mv, false);
+        state.side_two.get_active().status = PokemonStatus::SLEEP;
+        // sleep_turns 0 is the turn on which gen3 cannot wake, i.e. chance_to_wake == 0.0.
+        state.side_two.get_active().sleep_turns = 0;
+        let branches = generate(&mut state);
+        for branch in &branches {
+            let rendered = rendered(&mut state.clone(), branch);
+            let text = rendered.lines.join("\n");
+            assert!(
+                !text.contains("|cant|p2a: Opponent|Attract"),
+                "move {mv:?}: the sleep gate blocked this turn, so attract's handler never \
+                 ran and this line is fabricated (branch mass {}): {text}",
+                branch.percentage
+            );
+            if branch
+                .instruction_list
+                .iter()
+                .any(|i| matches!(i, Instruction::MoveImmobilized(_)))
+            {
+                assert!(
+                    text.contains("|cant|p2a: Opponent|slp"),
+                    "move {mv:?}: the marked phantom branch must defer to the sleep gate: \
+                     {text}"
+                );
+            }
+        }
     }
-    // Tackle at 100% accuracy into a normal target: paralysis is the only live
-    // predicate, so this is the CLEAN paralyzed case -- the one where the cheap
-    // lossy downgrade really would be safe.
-    assert!(
-        reasons
+}
+
+/// THE CLASS IS CLOSED, and this test replaces the two that pinned it being open.
+///
+/// `attract_empty_tail_ambiguous` and its five sub-case literals are GONE from
+/// `events.rs`, so the tests that asserted an attracted/paralyzed empty tail "fails
+/// closed" and that its slug names every live predicate cannot be updated -- there is no
+/// refusal left to name. They are replaced by their inverse, which is a strictly stronger
+/// claim: over the whole matrix they covered, NOTHING refuses and every branch is
+/// attributed exactly.
+///
+/// The matrix is the union of the deleted tests' fixtures: attracted, attracted+paralyzed,
+/// with and without confusion, across the five moves that made each of the five old
+/// predicates live -- Tackle (none: the clean case), Thunder (70% accuracy -> `miss`),
+/// Splash (`cannot_act`), Substitute (`volatile`), and Tackle into a Ghost (`noop`).
+///
+/// This is the assertion that says the change reduces FALLBACK rather than merely being
+/// more correct: `reject_attribution_unsafe` aborts the whole WORLD, not the branch, so a
+/// single refusing branch anywhere in a state's fan means the world falls back. Zero
+/// refusals across the fan is the only shape that reclaims it -- which is why the
+/// paralysis marker had to land in the same change as the Attract one.
+#[test]
+fn no_branch_of_an_attracted_or_paralyzed_fan_refuses_any_more() {
+    for confused in [false, true] {
+        for paralyzed in [false, true] {
+            for (label, mv, ghost_target) in [
+                ("clean", Choices::TACKLE, false),
+                ("miss", Choices::THUNDER, false),
+                ("cannot_act", Choices::SPLASH, false),
+                ("volatile", Choices::SUBSTITUTE, false),
+                ("noop", Choices::TACKLE, true),
+            ] {
+                let mut state = attracted_state(mv, confused);
+                if paralyzed {
+                    state.side_two.get_active().status = PokemonStatus::PARALYZE;
+                }
+                if ghost_target {
+                    state.side_one.get_active().types =
+                        (PokemonType::GHOST, PokemonType::TYPELESS);
+                }
+                let branches = generate(&mut state);
+                assert!(!branches.is_empty(), "{label}");
+                for branch in &branches {
+                    let rendered = rendered(&mut state.clone(), branch);
+                    assert!(
+                        rendered.attribution_unsafe.is_empty(),
+                        "case {label} (confused={confused} paralyzed={paralyzed}) still \
+                         refuses, so its world still falls back: {rendered:?} for {branch:?}"
+                    );
+                }
+                // ...and the fan still sums to 100%, so nothing was reclaimed by dropping
+                // mass on the floor.
+                let mass: f32 = branches.iter().map(|b| b.percentage).sum();
+                assert!(
+                    (mass - 100.0).abs() < 1e-2,
+                    "case {label}: mass {mass} != 100"
+                );
+            }
+        }
+    }
+}
+
+/// THE BRANCH SET CHANGES, and this is the pin for the part that changes.
+///
+/// "A pure marker, so it cannot move the leaf distribution" was too strong, and it hid the
+/// mechanism. `combine_duplicate_instructions` merges branches with EQUAL instruction lists,
+/// and before the markers every empty delta was equal to every other empty delta -- so the
+/// Attract-immobilized branch, the fully-paralyzed branch, and an accuracy miss with no
+/// observable effect were ONE branch. That merge is exactly what destroyed the attribution.
+/// Marking them un-merges them, which is the fix rather than a side effect of it.
+///
+/// Measured base-vs-head by vendoring both stacks and dumping
+/// `generate_instructions_from_move_pair` on these two fixtures:
+///
+///   Tackle, attracted + paralyzed
+///     base `origin/main` e0a23e4e (71 patches)   2 branches:  62.5 `[]`  / 37.5 hit
+///     head (72 patches)                          3 branches:  50.0 Attract / 12.5 Paralysis
+///                                                             / 37.5 hit
+///   Thunder (70% accuracy), attracted + paralyzed  -- a THREE-way merge on base
+///     base                                       3 branches:  73.75 `[]` / 18.375 / 7.875
+///     head                                       5 branches:  50.0 Attract / 12.5 Paralysis
+///                                                             / 11.25 `[]` / 18.375 / 7.875
+///
+/// PRESERVED: total mass, every leaf STATE (each immobilized branch is still an empty delta,
+/// so it lands where it always landed), and the union of the merged mass -- 50.0 + 12.5 ==
+/// 62.5 and 50.0 + 12.5 + 11.25 == 73.75, the exact figures base carried in one branch.
+/// NOT PRESERVED: the branch count, or any per-branch mass inside the old merged branch.
+/// Both halves are asserted below, because a future edit could satisfy either alone.
+///
+/// The residual `[]` on the Thunder fixture is load-bearing in the other direction: a miss
+/// is genuinely not an immobilization, so it must stay unmarked. If a future edit marked
+/// everything with an empty delta, the count would still be 5 and the masses still right,
+/// which is why the empty branch is asserted to be empty rather than merely counted.
+///
+/// DISCRIMINATION, measured by construction rather than argued -- two independent mutations of
+/// the vendored `generate_instructions.rs`, each turning this test red:
+///   * E7, paralysis block moved ABOVE the Attract block: the Tackle split becomes 37.5/25.0.
+///   * E8, `fully_paralyzed_instruction.update_percentage(0.25)` -> `0.5`, order unchanged,
+///     tags unchanged: the split becomes 50.0/25.0 and the union stops being 62.5.
+/// NOT a sole killer, and recorded as such: `attract_and_paralysis_each_render_their_own_cant_tag`
+/// also reddens under both, and `no_branch_of_an_attracted_or_paralyzed_fan_refuses_any_more`
+/// under E8. What is unique to this test is the FACT it records -- `grep` for `62.5`, `73.75`
+/// or a branch-count assertion on an attracted/paralyzed fan finds nothing else anywhere in
+/// either suite, so the de-collapse itself was undocumented and unasserted before it.
+#[test]
+fn the_markers_de_collapse_what_combine_duplicate_instructions_had_merged() {
+    fn marked(
+        branches: &[StateInstructions],
+        reason: ImmobilizeReason,
+    ) -> Vec<&StateInstructions> {
+        branches
             .iter()
-            .any(|reason| reason == "attract_empty_tail_ambiguous:paralyzed"),
-        "{reasons:?}"
+            .filter(|branch| {
+                branch.instruction_list.iter().any(|instruction| {
+                    matches!(instruction, Instruction::MoveImmobilized(marker)
+                        if marker.side_ref == SideReference::SideTwo
+                            && marker.reason == reason)
+                })
+            })
+            .collect()
+    }
+    fn only(branches: Vec<&StateInstructions>, what: &str) -> f32 {
+        assert_eq!(
+            branches.len(),
+            1,
+            "expected exactly one {what} branch, got {branches:?}"
+        );
+        branches[0].percentage
+    }
+    fn empty(branches: &[StateInstructions]) -> Vec<&StateInstructions> {
+        branches
+            .iter()
+            .filter(|branch| branch.instruction_list.is_empty())
+            .collect()
+    }
+    fn mass(branches: &[StateInstructions]) -> f32 {
+        branches.iter().map(|branch| branch.percentage).sum()
+    }
+
+    // TWO-WAY: the two immobilizers and nothing else with an empty delta.
+    let mut state = attracted_state(Choices::TACKLE, false);
+    state.side_two.get_active().status = PokemonStatus::PARALYZE;
+    let branches = generate(&mut state);
+    assert_eq!(
+        branches.len(),
+        3,
+        "base merged the two immobilized empty deltas into ONE branch (2 total); both \
+         markers split them (3 total): {branches:?}"
+    );
+    let attract = only(marked(&branches, ImmobilizeReason::Attract), "Attract-marked");
+    let paralysis = only(
+        marked(&branches, ImmobilizeReason::Paralysis),
+        "Paralysis-marked",
+    );
+    assert!(
+        (attract - 50.0).abs() < 1e-3,
+        "Attract is rolled FIRST (onBeforeMove priority 2 vs paralysis 1), so it keeps the \
+         undivided 1/2 -- 37.5 here means paralysis was rolled before it: {branches:?}"
+    );
+    assert!(
+        (paralysis - 12.5).abs() < 1e-3,
+        "paralysis is rolled only on the half Attract let through, so 1/2 * 1/4 -- 25.0 here \
+         means it was rolled first: {branches:?}"
+    );
+    assert!(
+        (attract + paralysis - 62.5).abs() < 1e-3,
+        "the union must equal the single collapsed branch base carried: {branches:?}"
+    );
+    assert!(
+        empty(&branches).is_empty(),
+        "with only the two immobilizers live, every empty delta is marked: {branches:?}"
+    );
+    assert!(
+        (mass(&branches) - 100.0).abs() < 1e-3,
+        "de-collapsing must conserve mass: {branches:?}"
+    );
+
+    // THREE-WAY: Thunder is 70% accurate in gen3, so a miss is a third empty delta -- and it
+    // must stay UNMARKED, because a miss is not an immobilization.
+    let mut miss_state = attracted_state(Choices::THUNDER, false);
+    miss_state.side_two.get_active().status = PokemonStatus::PARALYZE;
+    let miss_branches = generate(&mut miss_state);
+    assert_eq!(
+        miss_branches.len(),
+        5,
+        "base merged Attract, paralysis AND the miss into one 73.75% branch (3 total); the \
+         markers split the two immobilizers out and leave the miss (5 total): {miss_branches:?}"
+    );
+    let miss_attract = only(
+        marked(&miss_branches, ImmobilizeReason::Attract),
+        "Attract-marked",
+    );
+    let miss_paralysis = only(
+        marked(&miss_branches, ImmobilizeReason::Paralysis),
+        "Paralysis-marked",
+    );
+    let unmarked = empty(&miss_branches);
+    let miss = only(unmarked, "unmarked empty-delta (the miss)");
+    assert!(
+        (miss_attract - 50.0).abs() < 1e-3 && (miss_paralysis - 12.5).abs() < 1e-3,
+        "the immobilizer masses do not depend on the move's accuracy: {miss_branches:?}"
+    );
+    assert!(
+        (miss - 11.25).abs() < 1e-3,
+        "the miss is 1/2 * 3/4 * 3/10 and carries NO marker, because a miss is not an \
+         immobilization: {miss_branches:?}"
+    );
+    assert!(
+        (miss_attract + miss_paralysis + miss - 73.75).abs() < 1e-3,
+        "the union must equal the single collapsed branch base carried: {miss_branches:?}"
+    );
+    assert!(
+        (mass(&miss_branches) - 100.0).abs() < 1e-3,
+        "de-collapsing must conserve mass: {miss_branches:?}"
     );
 }
 
-/// The slug must report EVERY live predicate, not just the first one.
+/// Each immobilizer renders its OWN `|cant|` tag, and the tags are not interchangeable.
 ///
-/// Found by independent review, and it is the difference between a probe that
-/// answers its question and one that answers it backwards. `attacker_paralyzed`
-/// is a property of the ATTACKER; `miss` and `noop` are properties of the MOVE.
-/// They co-occur freely, so a first-match bucket files the non-downgradeable
-/// arms under the one label that looks safe to downgrade -- and the contamination
-/// is unrecoverable from the emitted data, because the other predicates are
-/// discarded at the refusal.
-///
-/// Measured masses at the refusal: a paralyzed attacker using a 70%-accuracy move
-/// carries 15.3% miss, and one whose target is immune carries 37.5% noop. Reading
-/// either as "paralyzed" would say "ship the lossy downgrade" over mass that
-/// erases a `|move|` reveal.
+/// This is what the deleted `every_attract_subcase_literal_is_pinned` becomes. The old
+/// test pinned five REFUSAL literals; this pins the two RENDER tags, which is where the
+/// information went. The tags are load-bearing downstream:
+/// `src/pokezero/public_action_capture.py` builds `event_id = f"cant:{reason}"`, so
+/// `cant:Attract` and `cant:par` are different public action ids -- swapping them reports
+/// a different action, not a different label.
 #[test]
-fn the_attract_subcase_reports_every_live_predicate_not_just_the_first() {
-    fn slugs(state: &mut State) -> Vec<String> {
-        let branches = generate(state);
+fn attract_and_paralysis_each_render_their_own_cant_tag() {
+    let mut state = attracted_state(Choices::TACKLE, false);
+    state.side_two.get_active().status = PokemonStatus::PARALYZE;
+    let branches = generate(&mut state);
+
+    let mut seen: Vec<(ImmobilizeReason, String)> = Vec::new();
+    for branch in &branches {
+        let reason = branch.instruction_list.iter().find_map(|i| match i {
+            Instruction::MoveImmobilized(marker)
+                if marker.side_ref == SideReference::SideTwo =>
+            {
+                Some(marker.reason)
+            }
+            _ => None,
+        });
+        if let Some(reason) = reason {
+            let rendered = rendered(&mut state.clone(), branch);
+            let cant = rendered
+                .lines
+                .iter()
+                .find(|line| line.starts_with("|cant|p2a: Opponent|"))
+                .unwrap_or_else(|| panic!("a marked branch must render a cant: {rendered:?}"))
+                .clone();
+            seen.push((reason, cant));
+        }
+    }
+    seen.sort_by_key(|(_, line)| line.clone());
+    assert_eq!(
+        seen,
+        vec![
+            (ImmobilizeReason::Attract, "|cant|p2a: Opponent|Attract".to_string()),
+            (ImmobilizeReason::Paralysis, "|cant|p2a: Opponent|par".to_string()),
+        ],
+        "both immobilizers must be marked AND rendered, each with its own tag"
+    );
+
+    // The mass split proves the ORDER Showdown resolves them in: attract (onBeforeMove
+    // priority 2) is rolled first at 1/2, then paralysis (priority 1) at 1/4 of what is
+    // left. Swapping them keeps the product but moves these two numbers.
+    let mass = |reason: ImmobilizeReason| -> f32 {
         branches
             .iter()
-            .flat_map(|branch| rendered(&mut state.clone(), branch).attribution_unsafe)
-            .filter(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
-            .collect()
-    }
+            .filter(|b| {
+                b.instruction_list.iter().any(|i| matches!(i,
+                    Instruction::MoveImmobilized(m) if m.reason == reason))
+            })
+            .map(|b| b.percentage)
+            .sum()
+    };
+    assert!((mass(ImmobilizeReason::Attract) - 50.0).abs() < 1e-3, "{branches:?}");
+    assert!((mass(ImmobilizeReason::Paralysis) - 12.5).abs() < 1e-3, "{branches:?}");
+}
 
-    // Paralyzed + a move that can miss. THUNDER is 70% accuracy in gen3.
-    let mut miss_state = attracted_paralyzed_state(false);
-    miss_state
+
+/// A PARALYZED attacker's `|cant|..|par|` is now a FACT, not a probability guess.
+///
+/// This replaces the deleted two-sided refusal test, whose whole subject -- how two
+/// simultaneous `attract_empty_tail_ambiguous` refusals key into one
+/// `world_failure_reasons` bucket -- no longer exists. What is worth pinning in its place
+/// is the guess it stood next to: `events.rs` used to render `|cant|..|par|` from an EMPTY
+/// tail on a probability-mass argument, with its own comment conceding "a real miss renders
+/// identically". Both sides here are paralyzed and both use a 70%-accuracy move, so
+/// pre-marker BOTH empty tails were par-or-miss coin flips.
+///
+/// Now the par branch carries a marker and the miss branch does not, so the two render
+/// differently and neither is guessed. The mutation that matters: deleting the engine's
+/// paralysis push collapses them back together and this test goes red.
+#[test]
+fn a_paralyzed_attackers_cant_par_is_marked_not_inferred_from_an_empty_tail() {
+    let mut state = confused_state(Choices::THUNDER);
+    state
         .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::PARALYZE;
+    // Side one uses a 70%-accuracy move too, so BOTH sides have a miss branch that used to
+    // be indistinguishable from full paralysis.
+    state.side_one.get_active().status = PokemonStatus::PARALYZE;
+    state
+        .side_one
         .get_active()
         .replace_move(PokemonMoveIndex::M0, Choices::THUNDER);
-    let miss = slugs(&mut miss_state);
-    assert!(!miss.is_empty(), "expected an attract refusal to measure");
-    assert!(
-        // Exact joint string, not two `contains` calls. Order is source-order so
-        // the bucket key is stable across builds; asserting the parts separately
-        // let a swap of the pushes pass green, which would split one bucket into
-        // permutations and silently halve both counts.
-        miss.iter()
-            .any(|reason| reason == "attract_empty_tail_ambiguous:paralyzed+miss"),
-        "a paralyzed attacker using a 70%-accuracy move must report BOTH          predicates, or the miss mass hides inside the paralyzed bucket: {miss:?}"
-    );
-    assert!(
-        !miss.iter().any(|r| r == "attract_empty_tail_ambiguous:paralyzed"),
-        "the clean-paralyzed slug must not be emitted when miss is also live: {miss:?}"
-    );
-}
 
-/// Every sub-case literal must be pinned, not just the two that were convenient.
-///
-/// Found by independent review: renaming `noop`, `volatile` or `cannot_act` left
-/// the entire suite green. `noop` is the worst of those to leave unpinned -- it
-/// carries the largest non-downgradeable mass (37.5% when the target is immune),
-/// so a refactor that renamed or dropped it would make the probe read the
-/// non-downgradeable share as ZERO. That is the same wrong-direction error as the
-/// first-match bucketing this telemetry was written to fix.
-///
-/// Also pins the joint slug's FIXED ordering. Order is source-order rather than
-/// evaluation-order so the key is stable, but nothing asserted it, and a swap
-/// would silently split one bucket into permutations across builds.
-#[test]
-fn every_attract_subcase_literal_is_pinned() {
-    fn slug_for(state: &mut State) -> Vec<String> {
-        let branches = generate(state);
-        branches
-            .iter()
-            .flat_map(|branch| rendered(&mut state.clone(), branch).attribution_unsafe)
-            .filter(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
-            .collect()
-    }
-
-    // noop: the move cannot change anything -- a Normal move into a Ghost.
-    let mut noop_state = attracted_paralyzed_state(false);
-    noop_state.side_one.get_active().types =
-        (poke_engine::state::PokemonType::GHOST, poke_engine::state::PokemonType::TYPELESS);
-    let noop = slug_for(&mut noop_state);
-    assert!(
-        noop.iter().any(|reason| reason.contains("noop")),
-        "the immune-target arm must report `noop`: {noop:?}"
-    );
-    // ...and the joint order is source-order, not evaluation-order.
-    assert!(
-        noop.iter().any(|reason| reason.contains("paralyzed+noop")),
-        "joint slug order must be fixed as `paralyzed+noop`: {noop:?}"
-    );
-
-    // cannot_act: Splash can never act. Note the ATTACKER is side TWO -- that is
-    // where `attracted_paralyzed_state` puts ATTRACT and PARALYZE -- so the move
-    // has to be replaced there. Replacing side one's move instead leaves the
-    // attacker on Tackle and the slug comes back a bare `:paralyzed`, which is
-    // how this fixture was wrong the first time.
-    let mut cant_state = attracted_paralyzed_state(false);
-    cant_state
-        .side_two
-        .get_active()
-        .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
-    let cant = slug_for(&mut cant_state);
-    assert!(
-        cant.iter().any(|reason| reason.contains("cannot_act")),
-        "Splash must report `cannot_act`: {cant:?}"
-    );
-}
-
-/// Mirror of `_REASON_DETAIL_LIMIT` in `src/pokezero/engine_search.py`.
-///
-/// The refusal message crosses into Python and becomes a `world_failure_reasons`
-/// key; that seam is the only place a length limit exists. Pinning it from this
-/// side means a future slug that outgrows the budget fails HERE, in the crate
-/// suite that owns the slug, rather than silently at the seam in a campaign run.
-const PY_REASON_DETAIL_LIMIT: usize = 512;
-
-/// Both sides refusing with DIFFERENT sub-case sets must key canonically and fit.
-///
-/// Found by independent review. The first fix deduped IDENTICAL reasons, which
-/// missed the likelier case: `miss`/`noop`/`cannot_act` are properties of the
-/// MOVE, and the two sides have different moves, so two-sided refusals usually
-/// carry two DIFFERENT slugs. Two bugs lived in that gap:
-///
-/// 1. **Truncation.** At the old 160-char seam the joined pair overflowed and the
-///    tail label was cut. `{paralyzed+cannot_act, paralyzed+miss}` and
-///    `{paralyzed+cannot_act, paralyzed+miss+volatile}` both landed in the same
-///    `...paralyzed+mis` bucket — the `+volatile` arm, which is exactly the
-///    non-downgradeable mass this whole split exists to measure, vanished into a
-///    bucket that looked like a different question.
-/// 2. **Order.** The join preserved render order, which is SPEED order, so the
-///    same pair of sub-cases keyed two ways depending only on who moved first.
-///
-/// Asserting the label rather than the `PyErr` keeps this test interpreter-free.
-#[test]
-fn a_two_sided_refusal_keys_canonically_and_fits_the_python_seam() {
-    // Both sides attracted AND paralyzed, with moves that add DIFFERENT second
-    // predicates: Splash can never act, Thunder is 70% accurate in gen3.
-    fn two_sided_state(lead_is_faster: bool) -> State {
-        let mut state = attracted_paralyzed_state(false);
-        state
-            .side_one
-            .volatile_statuses
-            .insert(PokemonVolatileStatus::ATTRACT);
-        state.side_one.get_active().status = PokemonStatus::PARALYZE;
-        state
-            .side_one
-            .get_active()
-            .replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
-        state
-            .side_two
-            .get_active()
-            .replace_move(PokemonMoveIndex::M0, Choices::THUNDER);
-        // Speed decides RENDER order, which is what the sort has to neutralise.
-        state.side_one.get_active().speed = if lead_is_faster { 500 } else { 1 };
-        state.side_two.get_active().speed = if lead_is_faster { 1 } else { 500 };
-        state
-    }
-
-    let mut labels = Vec::new();
-    for lead_is_faster in [true, false] {
-        let mut state = two_sided_state(lead_is_faster);
-        let branches = generate(&mut state);
-        let two_sided = branches
-            .iter()
-            .map(|branch| rendered(&mut state.clone(), branch))
-            .find(|events| {
-                events
-                    .attribution_unsafe
-                    .iter()
-                    .filter(|reason| reason.starts_with("attract_empty_tail_ambiguous"))
-                    .count()
-                    >= 2
-            })
-            .unwrap_or_else(|| {
-                panic!(
-                    "expected a branch where BOTH sides refuse; \
-                     lead_is_faster={lead_is_faster}"
-                )
-            });
-
-        let label = attribution_unsafe_label(&two_sided);
-
-        // Distinct slugs, so dedupe alone could not have saved this.
+    let branches = generate(&mut state);
+    let mut par_renders = 0usize;
+    let mut miss_renders = 0usize;
+    for branch in &branches {
+        let rendered = rendered(&mut state.clone(), branch);
+        let text = rendered.lines.join("\n");
         assert!(
-            label.contains("cannot_act") && label.contains("miss"),
-            "fixture must produce two DIFFERENT sub-case sets, got: {label}"
+            rendered.attribution_unsafe.is_empty(),
+            "nothing in a paralyzed fan may refuse any more: {rendered:?}"
         );
-
-        // Canonical order: sorted, never render/speed order.
-        let mut sorted = label.split(',').collect::<Vec<_>>();
-        sorted.sort_unstable();
-        assert_eq!(
-            label,
-            sorted.join(","),
-            "reasons must be sorted so one measurement lands in one bucket: {label}"
-        );
-
-        // Fits the seam WITH the prefix the Python side prepends. The lane string
-        // varies; `tree/model fold` is the longest in use.
-        let full = format!(
-            "attribution-unsafe renderer branch rejected before tree/model fold: {label}"
-        );
-        assert!(
-            full.len() <= PY_REASON_DETAIL_LIMIT,
-            "refusal message is {} chars, over the {PY_REASON_DETAIL_LIMIT}-char seam \
-             budget -- it would be truncated into a `world_failure_reasons` key: {full}",
-            full.len()
-        );
-
-        labels.push(label);
+        let marked_par = branch.instruction_list.iter().any(|i| matches!(i,
+            Instruction::MoveImmobilized(m) if m.reason == ImmobilizeReason::Paralysis));
+        for ident in ["p1a: Lead", "p2a: Opponent"] {
+            let cant = text.contains(&format!("|cant|{ident}|par"));
+            if cant {
+                par_renders += 1;
+                assert!(
+                    marked_par,
+                    "a `|cant|..|par|` line without a paralysis marker is the GUESS this \
+                     change removed: {text}"
+                );
+            }
+        }
+        if text.contains("|[miss]") {
+            miss_renders += 1;
+            assert!(
+                !marked_par || text.contains("|cant|"),
+                "a miss branch must not also be an immobilization: {text}"
+            );
+        }
     }
-
-    // The whole point of the sort: speed order must not change the key.
-    assert_eq!(
-        labels[0], labels[1],
-        "the same pair of sub-cases keyed two ways depending on who moved first, \
-         splitting one measurement across two buckets"
+    assert!(par_renders > 0, "expected marked paralysis renders: {branches:?}");
+    assert!(
+        miss_renders > 0,
+        "expected a distinguishable miss branch -- if this is 0 the two collapsed again: \
+         {branches:?}"
     );
 }
+
 /// The sleep-talk refusal must name its cause in `attribution_unsafe` while
 /// leaving the `lossy` tag exactly as it was.
 ///

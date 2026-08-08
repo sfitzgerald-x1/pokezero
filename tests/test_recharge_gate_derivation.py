@@ -7,8 +7,11 @@ mon's recorded action was the `recharge` pseudo-move, the gate locked that slot 
 exactly what a symmetric self-side MUSTRECHARGE write would produce. The gate would agree with
 such a write rather than test it.
 
-Production does not build its world that way. `engine_search.py::_recharging_slots` locks the
-OPPONENT slot only, from the parser's `must_recharge` tracker, never from the chosen action.
+Production does not build its world that way: `engine_search.py::_recharging_slots` reads the
+parser's `must_recharge` tracker, never the chosen action. (When this file was written it locked
+the OPPONENT slot only; step 3 of the same PR made it symmetric, and an earlier revision of this
+docstring was left describing the pre-symmetry behaviour while the test at
+`test_the_fixed_rule_locks_our_own_slot_from_the_TRACKER` asserted the opposite.)
 
 So the acceptance here is TWO-WAY, and neither direction is an assertion about intent:
 

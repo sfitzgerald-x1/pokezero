@@ -65,12 +65,42 @@ jobs:
             scripts/cert_sweep_readout.py
             reports/c26_structural_probe_report.json
             reports/c27_structural_probe_report.json
+            # C146's never-fired census, which re-derives §3.5's absence lists from the
+            # artifacts instead of restating them. Its taxonomy pins read
+            # `src/pokezero/engine_world.py` and `scripts/engine_transition_differential.py`
+            # by AST, and both are already listed above, so a new refusal reason or a new
+            # `classify_divergence` return site trips this workflow. The pin file and its
+            # two counterexample artifacts are listed for the same reason
+            # `test_boundary_verdict_partition.py` is: a PR whose only change weakens the
+            # census, or deletes the c32/c43 witnesses the matchers are pinned against,
+            # must not be able to go green without running it.
+            tests/test_never_fired_counter_census.py
+            reports/c32_fail_diagnosis.json
+            reports/c43_coverage_shortfall_diagnosis.json
             # The coverage-bound pins' ENTIRE input. Without these listed, a PR whose
             # only change is deleting one of them skips mass-gate and goes green.
             reports/artifacts/c131_leechseed_main_dev_sweep.json
             reports/artifacts/c131_leechseed_main_holdout_sweep.json
             reports/artifacts/c131_leechseed_fix_dev_sweep.json
             reports/artifacts/c131_leechseed_fix_holdout_sweep.json
+            # C147's EIGHT G33b sweeps -- a pre-merge base/gate pair and a merged one, both
+            # retained. Listed for the same reason as the c131 four
+            # above: they are corpus members of the exact-count pin in
+            # tests/test_boundary_verdict_partition.py, so a PR whose only change is
+            # deleting one of them must trip this workflow rather than skip it.
+            reports/artifacts/c147_g33b_base_dev_sweep.json
+            reports/artifacts/c147_g33b_base_holdout_sweep.json
+            reports/artifacts/c147_g33b_gate_dev_sweep.json
+            reports/artifacts/c147_g33b_gate_holdout_sweep.json
+            reports/artifacts/c147_g33b_merged_base_dev_sweep.json
+            reports/artifacts/c147_g33b_merged_base_holdout_sweep.json
+            reports/artifacts/c147_g33b_merged_gate_dev_sweep.json
+            reports/artifacts/c147_g33b_merged_gate_holdout_sweep.json
+            # The remaining five C147 artifacts -- two row replays, two merged row replays
+            # and the reach census -- are outside the sweep corpus but INSIDE the
+            # never-fired counter corpus (360), whose count is equally exact. One glob
+            # rather than five lines, and it also covers the eight named above.
+            reports/artifacts/c147_g33b_*.json
             src/pokezero/**
             # C145: the Encore-on-transform pins, which are what hold `19100170/71-72`
             # closed. Listed so a PR that ONLY weakens the pin file still trips this
@@ -132,6 +162,24 @@ jobs:
             scripts/fidelity_gate_events.py
             tests/test_differential_denominator.py
             tests/test_denominator_adoption.py
+            # The spread-gate provenance pin. Listed with a STEP below, and the step is
+            # honest that it cannot execute the assertions: the pin needs a pokemon-showdown
+            # checkout, CI builds none, and the default root is outside the repo and
+            # untracked -- so 5 of the 6 skip here; only the fixture lint executes. Without this entry a PR that DELETES the pin
+            # trips no workflow at all, which is the failure mode this file forbids twice and
+            # which this very pin was subject to for 37 commits after #1123.
+            tests/test_spread_gate_provenance.py
+            tests/_showdown_root.py
+            # The leaf self-recharge derivation pin. Review found the P3 freeze lift pinned by
+            # NOTHING -- reverting it at the binary level left 146/146 green, because the only
+            # things that caught it were the two corpus-driven harnesses, and the corpus is
+            # gitignored. This test needs no CORPUS but does need a Showdown checkout for the
+            # dex, so like the spread-gate pin above it SKIPS here; the step below pins that
+            # skip count so the file cannot shrink unnoticed. Listing a filter with no step is
+            # the "guard nothing runs" pattern this file names twice, and a first version of
+            # this entry did exactly that.
+            tests/test_leaf_self_recharge_derivation.py
+            tests/test_leaf_encoder.py
             # C116 Phase 2's scope gate. Listed for the same reason as the entries
             # above: a PR whose only change is adding a file to the mention ledger,
             # widening _IMPORT_PROBE_EXCLUSIONS, or deleting the collapsed-fan pin
@@ -372,9 +420,9 @@ jobs:
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml \
             --no-default-features --features gen3 --test test_gen3 2>&1 \
             | tee /tmp/gen3suite.log
-          if ! grep -qE '^test result: ok\. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
+          if ! grep -qE '^test result: ok\. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
               /tmp/gen3suite.log; then
-            echo "::error::expected 28 gen3 engine tests to pass; the suite shrank, grew, or failed"
+            echo "::error::expected 32 gen3 engine tests to pass; the suite shrank, grew, or failed"
             exit 1
           fi
           # And NAME the pins. A total can be restored by unrelated tests, which
@@ -394,9 +442,61 @@ jobs:
             test_a_sleep_usable_attempt_banks_a_turn \
             test_using_rest_again_discards_the_previous_stints_refund \
             test_a_non_rest_sleeper_with_a_stale_bank_is_not_credited \
-            test_early_bird_staying_asleep_discards_the_refund; do
+            test_early_bird_staying_asleep_discards_the_refund \
+            immobilization_marker_apply_then_reverse_is_bit_identical \
+            immobilization_marker_apply_alone_does_not_change_the_state \
+            immobilization_markers_are_distinguishable_from_each_other_and_from_nothing \
+            both_gen3_immobilizers_mark_their_branch_with_their_own_reason; do
             grep -qxE "test $pin \.\.\. ok" /tmp/gen3suite.log || {
               echo "::error::gen3 pin did not run: $pin"
+              exit 1
+            }
+          done
+
+      # The engine's --lib target: the `#[cfg(test)] mod`s inside
+      # third_party/poke-engine-src/src/. `--test test_gen3` above selects ONE
+      # integration target and compiles nothing under src/, so the FIVE unit tests
+      # there ran in no workflow at all -- `state.rs`'s
+      # `rest_sleep_pending_refund_tests` (four, added by #1105 alongside the step
+      # above) and `instruction.rs`'s `test_instruction_size`. That is the same defect
+      # the step above is named for, one cargo TARGET down instead of one crate down.
+      #
+      # Found by review of #1166. The three immobilizer-marker tests were MOVED out of
+      # `src/state.rs` into `tests/test_gen3.rs` so the step above would run them,
+      # which fixes those three and leaves the hole. This closes the hole.
+      # `test_instruction_size` is the one that matters most for that patch: it is the
+      # only assertion anywhere on `size_of::<Instruction>()`, and a new variant is
+      # exactly what moves it.
+      #
+      # PROVEN RED BY CONSTRUCTION, not by reading this file. The body below was
+      # extracted verbatim from this YAML and run against a live patched tree:
+      #   * unmutated -> exit 0 at 5/5.
+      #   * `rest_sleep_pending_refund_tests` deleted -> exit 1 (count 1). Caught ONLY
+      #     here: `--test test_gen3` stays 32/32 green and the crate suite stays green
+      #     above its floor, so before this step those four pins were deletable with
+      #     every gate green.
+      #   * one pin renamed, count still 5 -> exit 1 on the named-pin arm.
+      - name: Engine lib suite
+        run: |
+          set -o pipefail
+          cargo test --manifest-path third_party/poke-engine-src/Cargo.toml \
+            --no-default-features --features gen3 --lib 2>&1 \
+            | tee /tmp/gen3lib.log
+          if ! grep -qE '^test result: ok\. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
+              /tmp/gen3lib.log; then
+            echo "::error::expected 5 engine lib tests to pass; the suite shrank, grew, or failed"
+            exit 1
+          fi
+          # And NAME them, for the reason the step above gives: a total can be
+          # restored by unrelated tests. Both arms measured red by construction.
+          for pin in \
+            instruction::test::test_instruction_size \
+            state::rest_sleep_pending_refund_tests::apply_then_reverse_is_bit_identical \
+            state::rest_sleep_pending_refund_tests::refund_round_trips_without_a_pre_transform \
+            state::rest_sleep_pending_refund_tests::zero_refund_is_omitted_from_serialization \
+            state::rest_sleep_pending_refund_tests::a_pre_field_serialization_still_parses; do
+            grep -qxE "test $pin \.\.\. ok" /tmp/gen3lib.log || {
+              echo "::error::engine lib pin did not run: $pin"
               exit 1
             }
           done
@@ -466,6 +566,52 @@ jobs:
       # failure mode the guard exists to prevent, one level up. The ordering pin now
       # stubs its collaborators and needs no checkout, so the no-skip assertion
       # below is meaningful rather than self-defeating.
+      - name: Spread-gate provenance pin (shape only -- CANNOT run here)
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_spread_gate_provenance -v 2>&1 | tee /tmp/spreadgate.log
+          # READ THIS BEFORE TRUSTING A GREEN. Five of the six tests are SKIPPED in CI; only the
+          # fixture lint executes. The two-way provenance assertions do NOT run here.
+          # The pin drives a real randbats set source, CI builds no Showdown (two steps in this
+          # job say so), and the default root is outside the repo and untracked. So this step
+          # verifies SHAPE for five of them -- that the pin still exists, still has 6 tests, and
+          # still skips for the stated reason rather than silently shrinking -- plus ONE real
+          # assertion: the fixture lint was moved out of the skip-gated class so CI executes
+          # something. Review measured why that mattered: gut all 18 assertions while keeping 6
+          # tests and a shape-only step still passes.
+          #
+          # That is worth a step anyway. Between #1123 and this commit the file was in no
+          # filter and no step, so deleting it outright would have tripped nothing -- the
+          # "guard nothing runs" pattern this workflow's header forbids, applied to the guard
+          # that pins checkpoint provenance in both directions. The assertions are exercised on
+          # a developer machine with POKEZERO_SHOWDOWN_ROOT set; see reports/ for the red runs.
+          if ! grep -qE 'Ran 6 tests' /tmp/spreadgate.log; then
+            echo "::error::spread-gate pin changed count; the two-way provenance test shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE 'OK \(skipped=5\)' /tmp/spreadgate.log; then
+            echo "::error::expected exactly 5 skips (the fixture lint must RUN, the other five must not); if all 6 skipped, the lint regained a Showdown dependency"
+            exit 1
+          fi
+
+      - name: Leaf self-recharge derivation pin (shape only -- CANNOT run here)
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_leaf_self_recharge_derivation -v 2>&1 | tee /tmp/leafrecharge.log
+          # Skips in CI: _pair() needs a Showdown checkout for the dex. Shape only, same
+          # bargain as the spread-gate step above and disclosed for the same reason.
+          # It is worth a step because the thing it pins -- leaf.rs deriving our own
+          # MUSTRECHARGE rather than passing the root's -- was pinned by NOTHING until this
+          # PR: reverting it at the binary level left 146/146 Python tests green.
+          if ! grep -qE 'Ran 4 tests' /tmp/leafrecharge.log; then
+            echo "::error::leaf self-recharge pin changed count; the derivation pin shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE 'OK \(skipped=4\)' /tmp/leafrecharge.log; then
+            echo "::error::expected all 4 to skip here; if they RAN, CI gained a Showdown checkout and this disclaimer is wrong"
+            exit 1
+          fi
+
       - name: Final-holdout guard pins
         run: |
           set -o pipefail
@@ -538,6 +684,31 @@ jobs:
           # added to either must be a red gate rather than a quieter green one.
           if ! grep -qE '^OK$' /tmp/verdict.log; then
             echo "::error::verdict-partition pins did not report a clean OK"
+            exit 1
+          fi
+
+      # C146. The ledger has asserted a false "never fired" four times, and each error
+      # propagated because citing the ledger felt like verification. This module computes
+      # the fired/never-fired partition from every committed JSON under `reports/` and
+      # `docs/` and asserts it as an exact SET EQUALITY in both directions, so a counter
+      # that starts firing is red rather than a silent widening. Exact count, not a floor,
+      # for the reason #1163 established. Battery: 10 mutations applied, 9 caught; the
+      # tenth is the documented fail-open (a subset assertion carrying H15's wrong
+      # six-class expectation passes), which is why the pin asserts equality.
+      - name: Never-fired counter census
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_never_fired_counter_census -v 2>&1 \
+            | tee /tmp/neverfired.log
+          if ! grep -qE 'Ran 16 tests' /tmp/neverfired.log; then
+            echo "::error::expected 16 never-fired census pins; the suite shrank or grew"
+            exit 1
+          fi
+          # A clean OK with no skips. The three matcher pins in
+          # TheMatchersThemselvesAreExercisedTests are the only reason the absence pins
+          # mean anything -- skipping one turns every absence assertion vacuous.
+          if ! grep -qE '^OK$' /tmp/neverfired.log; then
+            echo "::error::never-fired census pins did not report a clean OK"
             exit 1
           fi
 
@@ -788,19 +959,83 @@ jobs:
           # a file-count assertion. `#[ignore]` on a pin was equally invisible.
           passed=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo.log \
             | grep -oE '[0-9]+' | paste -sd+ - | bc)
-          # Floor RAISED 366 -> 423 with #1157, which is the EXACT current total. A floor
-          # set below the total is the same blindness the comment above describes: at 366 it
-          # would have absorbed every Protect pin with 55 to spare, and at 420 it still
-          # absorbed the three UNIT pins -- deleting exactly those three lands on 420 and
-          # passes, while they are the sole killers of five mutants. Set it to the total and
-          # raise it deliberately when tests are added.
-          # RAISED 423 -> 431 with the abort-path sub-case carry: eight pins in
-          # src/abort_telemetry.rs. Measured on this branch, not assumed --
-          # `RUSTFLAGS="-C debug-assertions=yes" cargo test --release` reports 431 passed
-          # and 1 pre-existing ignore. Another branch is concurrently taking main to 428;
-          # whichever lands second must re-measure rather than add its delta to this.
-          if [ "${passed:-0}" -lt 431 ]; then
-            echo "::error::expected >= 431 crate tests, got ${passed:-0}"
+          # Floor RAISED 366 -> 423 (#1157) -> 428 (immobilizer markers), and it is always
+          # set to the EXACT current total. A floor below the total is the same blindness the
+          # comment above describes: at 366 it would have absorbed every Protect pin with 55
+          # to spare, and at 420 it still absorbed the three UNIT pins -- deleting exactly
+          # those three lands on 420 and passes, while they are the sole killers of five
+          # mutants. Raise it deliberately when tests are added.
+          #
+          # 423 -> 429 is a NET figure and worth spelling out, because a floor is blind to a
+          # SWAP as well as to a deletion. Derived by differencing the two test-NAME sets --
+          # a clean `origin/main` e0a23e4e worktree with its own 71-patch vendor, against this
+          # tree -- and not by arithmetic on the totals:
+          #
+          #   base 423 result lines / 423 distinct names; head 429 / 429; NO duplicate name in
+          #   either build, so the set difference is exact rather than approximate
+          #   ADDED    11
+          #   REMOVED   5  a_two_sided_refusal_keys_canonically_and_fits_the_python_seam
+          #                attracted_and_paralyzed_empty_tails_fail_closed_with_or_without_confusion
+          #                every_attract_subcase_literal_is_pinned
+          #                the_attract_refusal_names_its_subcase
+          #                the_attract_subcase_reports_every_live_predicate_not_just_the_first
+          #   NET      +6, and 423 + 6 == 429 == the floor enforced below
+          #
+          # Nothing was lost. TWO of the five were RELOCATED, and both replacements are in the
+          # ADDED set and pass:
+          #   * `attracted_and_paralyzed_empty_tails_fail_closed_with_or_without_confusion` ->
+          #     its INVERSE, `no_branch_of_an_attracted_or_paralyzed_fan_refuses_any_more`,
+          #     which is the stronger claim: zero refusals across the whole matrix the old test
+          #     covered, rather than one expected refusal per case.
+          #   * `a_two_sided_refusal_keys_canonically_and_fits_the_python_seam` -> a direct unit
+          #     test of the keying function itself,
+          #     `events::tests::the_attribution_unsafe_label_is_deduplicated_and_sorted`.
+          # THREE are OBSOLETE rather than relocated: they pinned the
+          # `attract_empty_tail_ambiguous` refusal being OPEN, and its five sub-case literals,
+          # and neither exists on the render path any more -- there is no refusal left to name.
+          # Verified rather than assumed: grepping `events.rs` for a live emitter of that family
+          # returns exactly two hits and BOTH are `#[should_panic]` fixtures inside
+          # `#[cfg(test)]`, which pass the slug in deliberately to prove the paired-tag assert
+          # fires. Nothing on the production path can emit it.
+          #
+          # All ELEVEN added names are pinned in the loop below -- 22 pins total, every one of
+          # them resolving in the same run these figures came from. Counted, not recalled: an
+          # earlier revision of this block said "ten".
+          #
+          # THE COUNTS HERE HAVE BEEN WRONG TWICE, and both times a single command would have
+          # said so. First, 428 was written 429, counted off a run that still had a scratch
+          # probe file in `tests/` -- a floor ABOVE the total fails every PR, so that one
+          # announces itself. Then this block asserted "+6 with NOTHING REMOVED" alongside
+          # "DELETES six" and "the four are not regressions": three different figures against a
+          # measured five. The "nothing removed" came from a real difference that was run
+          # against the PREVIOUS branch head and then carried forward across the very commit
+          # that deleted these five, instead of being re-run. A cross-check a change makes
+          # about itself is worth exactly one thing: running it.
+          #
+          # 429 -> 436 with C147's seven G33b pins, all seven named in the loop below.
+          # MEASURED on the MERGED tree by summing this step's own expression over a local
+          # run -- `429 + 7` agrees, but the figure comes from the run, not the arithmetic,
+          # because this branch merged `origin/main` after its first measurement and a floor
+          # carried across a merge is exactly the stale cross-check the paragraph above
+          # describes. Same run: 436 `... ok` lines, 0 failures, 1 ignored, and no NAME
+          # removed against the pre-merge head.
+          #
+          # 436 -> 444 with the abort-path sub-case carry's eight `abort_telemetry.rs`
+          # pins, all eight named in the loop below. RE-MEASURED on the MERGED tree, and
+          # this is the case the paragraph above was written for. This branch enforced 431
+          # against its OWN base of 423, and said in this very block that "another branch
+          # is concurrently taking main to 428; whichever lands second must re-measure
+          # rather than add its delta to this." Main landed first and went to 436. Carrying
+          # 431 across the merge would put the floor THIRTEEN below the merged total and
+          # absorb thirteen deletions -- including all eight pins this change adds, so the
+          # step naming them would be the only thing left holding them. Not differenced,
+          # not `431 + 13`: the figure is the sum this step's own expression produces over a
+          # local `RUSTFLAGS="-C debug-assertions=yes" cargo test --release` of the merged
+          # tree -- 444 passed, 0 failed, 1 pre-existing ignore, and 444 `... ok` lines,
+          # which agree with the sum. Discrimination checked at the boundary: 445 fails,
+          # 444 passes, 443 would absorb a deletion.
+          if [ "${passed:-0}" -lt 444 ]; then
+            echo "::error::expected >= 444 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
@@ -810,6 +1045,24 @@ jobs:
           # refused so nothing is reclaimed. Review demonstrated BOTH with the suite green
           # before these fixtures existed -- deleting the entire walk arm passed 418/418.
           # Named here because the count gate cannot see four tests vanish out of 421.
+          #
+          # The immobilizer-marker pins (this change). Same argument, and review demonstrated
+          # it concretely: `an_attracted_sleeptalk_user_never_reaches_the_unnamed_callee_walk`
+          # is the SOLE killer of two mutants -- moving the marker arm below the Sleep Talk
+          # block, and doing that with the walk's explicit arm also deleted, which is the
+          # exact silent swallow a pure marker causes at the walk's bare `sim.apply`
+          # fall-through. `an_asleep_..._renders_slp_not_attract` is the sole thing standing
+          # between the markers and a FABRICATED `|cant|..|Attract` on a turn the sleep gate
+          # blocked. Deleting all ten and letting the total be restored by unrelated tests is
+          # exactly the hole the floor cannot see.
+          #
+          # `the_markers_de_collapse_what_combine_duplicate_instructions_had_merged` (added in
+          # review) is the ONLY test anywhere that records the branch-set change the markers
+          # actually make -- `grep` for `62.5`, `73.75` or a branch-count assertion on an
+          # attracted/paralyzed fan finds nothing else in either suite. It is not a sole
+          # killer and is not claimed as one: two mutations were measured against it, the
+          # paralysis/Attract ordering swap and full-paralysis 1/4 -> 1/2, and two other
+          # tests redden under those too.
           #
           # And the abort-path carry pins (`abort_telemetry::*`). Named for a reason the
           # others do not have: `model.rs` is behind the `model` cargo feature, so it needs
@@ -834,6 +1087,24 @@ jobs:
                      events::none_matched_shape_tests::the_protect_marker_renders_only_when_the_state_proves_it \
                      events::none_matched_shape_tests::the_protect_marker_is_defender_side_and_zero_amount_only \
                      events::none_matched_shape_tests::the_absorb_guard_covers_exactly_the_zero_heal_producers \
+                     the_engine_marks_which_immobilizer_aborted_the_attract_branch \
+                     the_marked_attract_branch_renders_its_cant_line_instead_of_refusing \
+                     an_attracted_sleeptalk_user_never_reaches_the_unnamed_callee_walk \
+                     an_asleep_attracted_mon_that_never_passed_the_sleep_gate_renders_slp_not_attract \
+                     no_branch_of_an_attracted_or_paralyzed_fan_refuses_any_more \
+                     attract_and_paralysis_each_render_their_own_cant_tag \
+                     a_paralyzed_attackers_cant_par_is_marked_not_inferred_from_an_empty_tail \
+                     events::tests::a_move_immobilization_marker_is_classified_by_position_and_reason \
+                     events::tests::a_marker_is_attributed_to_the_side_whose_action_it_aborted \
+                     events::tests::the_attribution_unsafe_label_is_deduplicated_and_sorted \
+                     the_markers_de_collapse_what_combine_duplicate_instructions_had_merged \
+                     events::tests::a_truncated_leftovers_slot_is_not_booked_so_the_drain_stays_silent \
+                     events::tests::a_faster_seeder_keeps_its_leftovers_tag \
+                     events::tests::a_spare_pokemon_behind_the_victim_keeps_the_leftovers_tag \
+                     events::tests::a_speed_tie_is_not_gated \
+                     events::tests::a_future_sight_kill_is_not_gated \
+                     events::tests::a_perish_song_kill_is_not_gated \
+                     events::tests::a_liquid_ooze_kill_is_not_gated \
                      abort_telemetry::abort_payload_tests::an_aborting_error_carries_the_counts_accumulated_before_it_died \
                      abort_telemetry::abort_payload_tests::attaching_leaves_the_reason_key_and_the_exception_type_untouched \
                      abort_telemetry::abort_payload_tests::an_abort_that_observed_nothing_still_carries_an_empty_payload \
