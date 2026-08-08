@@ -16,6 +16,7 @@ names here are placeholders on purpose -- the real ones name a cluster.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -23,12 +24,15 @@ from pokezero.fallback_addresses import FallbackAddress
 from pokezero.fallback_replay_spec import (
     FIDELITY_EXACT,
     FIDELITY_OPPONENT_UNPINNED,
+    FIDELITY_UNDERSPECIFIED,
+    _PINNABLE_FIELDS,
     HARNESS_FOULPLAY_BRIDGE,
     HARNESS_ROLLOUT_ACCEPTANCE,
     HARNESS_ROLLOUT_HC_GRID,
     HARNESS_ROLLOUT_K0_GRID,
     ReplaySpec,
     UnresolvedAddress,
+    BattleIdGrammar,
     battle_id_grammar,
     main,
     parse_battle_id,
@@ -199,9 +203,30 @@ class TestBattleIdGrammar:
         assert parse_battle_id(battle_id) is None
 
     def test_longest_prefix_wins(self):
-        grammar = battle_id_grammar("battle-gen3randombattle-controlled-1")
-        assert grammar is not None
-        assert grammar.harness == HARNESS_FOULPLAY_BRIDGE
+        # The earlier version asserted only that the bridge prefix resolves to
+        # the bridge, which no registered grammar contests -- it passed under
+        # `matches[0]`, under `min(...)`, and under any ordering. Contest it:
+        # register two grammars where one prefix extends the other and the
+        # SHORTER one is registered first, so first-match and shortest-match
+        # both give the wrong answer.
+        import pokezero.fallback_replay_spec as module
+
+        short = BattleIdGrammar("short-harness", "grid-")
+        long_ = BattleIdGrammar("long-harness", "grid-hc-")
+        original = module.GRAMMARS
+        module.GRAMMARS = (short, long_)
+        try:
+            grammar = battle_id_grammar("grid-hc-600000")
+            assert grammar is not None
+            assert grammar.harness == "long-harness"
+        finally:
+            module.GRAMMARS = original
+
+    def test_grammar_lookup_is_by_prefix_not_by_membership(self):
+        assert battle_id_grammar("battle-gen3randombattle-controlled-1").harness == (
+            HARNESS_FOULPLAY_BRIDGE
+        )
+        assert battle_id_grammar("prefixed-accept-600004-p1") is None
 
 
 # --- foul-play sidecar resolution ------------------------------------------
@@ -262,20 +287,51 @@ class TestFoulplaySidecar:
         assert isinstance(spec, UnresolvedAddress)
         assert "sidecar's seat" in spec.problem
 
-    def test_fidelity_is_opponent_unpinned_with_evidence(self):
+    def test_fidelity_notes_name_the_mechanism_that_actually_holds(self):
+        # These notes are surfaced verbatim as `ReplayResult.fidelity_caveat`,
+        # so a wrong mechanism here is a wrong mechanism in the artifact. The
+        # earlier revision blamed the wall-clock budget, which is refutable:
+        # `monte_carlo_tree_search(iterations=N)` exists, and switching to it
+        # would NOT make the opponent reproducible. Measured: five runs at
+        # iterations=4000 on one captured state, five distinct visit
+        # distributions. The cause is the unseeded chance sampler.
         spec = resolve_address(_address(), _foulplay_sidecar())
         assert isinstance(spec, ReplaySpec)
         assert spec.fidelity == FIDELITY_OPPONENT_UNPINNED
         assert not spec.replayable_exactly
         joined = " ".join(spec.fidelity_notes)
-        assert "wall-clock" in joined
-        assert "random.choices" in joined
+        assert "FIXED ITERATION COUNT" in joined
+        assert "sample_node" in joined
+        # ...and it must say the obvious remedy does not work, because a reader
+        # who reaches for `iterations=` will otherwise believe it does.
+        assert "does NOT fix this" in joined
+        # The refuted claim must be gone, not merely supplemented: `random.choices`
+        # consumes exactly one draw whatever the weights, so the stream is not
+        # what desynchronises.
+        assert "does not desynchronise" in joined
+        assert "wall-clock budget" not in joined
 
     def test_device_is_reported_missing_not_defaulted(self):
         spec = resolve_address(_address(), _foulplay_sidecar())
         assert isinstance(spec, ReplaySpec)
         assert spec.device is None
         assert "device" in spec.missing
+
+    def test_missing_names_every_unpinned_field(self):
+        # The contract on `ReplaySpec.missing` is "a driver must not discover an
+        # omission by getting None". The earlier hand-maintained per-reader
+        # lists broke it silently. Derived now, so this is checkable in general.
+        spec = resolve_address(_address(), _foulplay_sidecar())
+        assert isinstance(spec, ReplaySpec)
+        unpinned = {
+            name
+            for name in _PINNABLE_FIELDS
+            if getattr(spec, name) is None
+        }
+        assert unpinned, "fixture pins everything; this test would be vacuous"
+        assert unpinned <= set(spec.missing)
+        # ...and nothing is named missing that is in fact pinned.
+        assert all(getattr(spec, name) is None for name in spec.missing)
 
     def test_paired_shard_defers_to_the_sidecar(self):
         # The merged paired shard carries the addresses under per_seat but keeps
@@ -385,6 +441,69 @@ class TestSelfPlayWriters:
         assert (spec.engine_batch, spec.engine_worlds) == (64, 8)
         assert spec.fidelity == FIDELITY_EXACT
 
+    def test_hc_grid_reads_deep_ko_split(self):
+        # A real producer setting (`hc_depth_grid.py:107` BooleanOptionalAction,
+        # written :288, consumed `engine_search.py:1203`). Dropping it let a
+        # `false` shard resolve `exact` and replay under the dataclass default
+        # `true` -- a different search reported as the recorded one.
+        document = _hc_grid_shard()
+        document["deep_ko_split"] = False
+        spec = resolve_address(
+            _address("hcgrid-hc-d4-600000", round_index=12), document
+        )
+        assert isinstance(spec, ReplaySpec)
+        assert spec.deep_ko_split is False
+        assert "deep_ko_split" not in spec.missing
+
+    def test_hc_grid_cell_must_match_the_document(self):
+        # The cell selects the depth (`hc_depth_grid.py:196`). An hc-d8 address
+        # read against an hc-d4 shard previously resolved with depth=4 and
+        # fidelity=exact -- the collision `ReplaySpec.source` exists to name.
+        document = _hc_grid_shard(cell="hc-d4", seed=600000)
+        spec = resolve_address(
+            _address("hcgrid-hc-d8-600000", round_index=12), document
+        )
+        assert isinstance(spec, UnresolvedAddress)
+        assert "names cell 'hc-d8'" in spec.problem
+
+    def test_hc_grid_seed_outside_the_band_is_unresolved(self):
+        document = _hc_grid_shard(seed=600000)  # games: 1
+        spec = resolve_address(
+            _address("hcgrid-hc-d4-600400", round_index=12), document
+        )
+        assert isinstance(spec, UnresolvedAddress)
+        assert "outside this shard's band" in spec.problem
+
+    def test_acceptance_arm_must_match_the_document(self):
+        document = {
+            "schema_version": "pokezero.mcts-acceptance-shard.v1",
+            "arm": "search",
+            "config_id": "d4-s2048-b64-w8",
+            "checkpoint": "checkpoints/k0.pt",
+            "policy_stats": {"fallback_samples": {}},
+        }
+        spec = resolve_address(
+            _address("accept-control-600004-p1", round_index=7), document
+        )
+        assert isinstance(spec, UnresolvedAddress)
+        assert "names arm 'control'" in spec.problem
+
+    def test_k0_grid_seed_outside_the_band_is_unresolved(self):
+        document = {
+            "arm": "search",
+            "config": "d4-s1024-b64-w4",
+            "per_game": [{"seed": 600002}],
+            "checkpoint": "checkpoints/k0.pt",
+            "depth": 4,
+            "sims": 1024,
+            "worlds": 4,
+            "seed_start": 600000,
+            "games": 8,
+        }
+        spec = resolve_address(_address("k0grid-700000", round_index=5), document)
+        assert isinstance(spec, UnresolvedAddress)
+        assert "outside this shard's band" in spec.problem
+
     def test_acceptance_unparseable_config_id_names_the_gap(self):
         # The control arm's config_id is "control-raw-v-raw" and carries no
         # numbers. Inventing defaults would replay a different search.
@@ -402,6 +521,30 @@ class TestSelfPlayWriters:
         assert {"engine_depth", "engine_sims", "engine_batch", "engine_worlds"} <= set(
             spec.missing
         )
+        # AND it must not claim to be exactly replayable. The earlier `_fidelity`
+        # read only the harness, so this spec -- which pins no search whatsoever
+        # -- reported fidelity='exact' and replayable_exactly=True.
+        assert spec.fidelity == FIDELITY_UNDERSPECIFIED
+        assert not spec.replayable_exactly
+        assert "engine_sims" in " ".join(spec.fidelity_notes)
+
+    def test_unseeded_leaf_eval_is_not_exact(self):
+        # `leaf_eval="hp_fraction"` calls poke-engine's own MCTS, measured
+        # nondeterministic at a fixed iteration count. A pokezero-only harness
+        # is therefore not sufficient for exactness -- the search engine decides.
+        import pokezero.fallback_replay_spec as module
+
+        fidelity, notes = module._fidelity(
+            module.HARNESS_ROLLOUT_HC_GRID,
+            {
+                "leaf_eval": "hp_fraction",
+                "engine_depth": 4,
+                "engine_sims": 1024,
+                "engine_worlds": 4,
+            },
+        )
+        assert fidelity == FIDELITY_OPPONENT_UNPINNED
+        assert "sample_node" in " ".join(notes)
 
     def test_k0_grid_layout_resolves(self):
         document = {
@@ -502,9 +645,49 @@ class TestCorpus:
         assert payload["specs"][0]["decision_rng_seed"] == "8220001:p1:103"
         assert payload["specs"][0]["fidelity"] == FIDELITY_OPPONENT_UNPINNED
 
+    def test_int_fields_reject_booleans(self):
+        # `isinstance(True, int)` is True in Python, so a shard with
+        # `"sims": true` would otherwise resolve to sims=1 and replay a
+        # one-simulation search reported as the recorded one. The guard exists
+        # in `_as_int`; nothing asserted it.
+        document = _hc_grid_shard()
+        document["sims"] = True
+        spec = resolve_address(
+            _address("hcgrid-hc-d4-600000", round_index=12), document
+        )
+        assert isinstance(spec, ReplaySpec)
+        assert spec.engine_sims is None
+        assert "engine_sims" in spec.missing
+        assert spec.fidelity == FIDELITY_UNDERSPECIFIED
+
     def test_cli_rejects_a_missing_path(self, tmp_path, capsys):
         assert main([str(tmp_path / "nope")]) == 2
         assert "does not exist" in capsys.readouterr().out
+
+    def test_committed_fixture_shards_cover_every_grammar(self):
+        # Until this existed, no artifact IN THE REPO exercised the resolver:
+        # `docs/audit_artifacts/hc-depth-grid-20260729/` predates #1178's
+        # producer and carries `fallback_samples: {}`, so every number quoted
+        # for this module rested on an uncommitted volume and CI checked none
+        # of it. One small shard per grammar, shaped from the real layouts.
+        fixtures = Path(__file__).parent / "fixtures" / "fallback_replay"
+        resolutions = resolve_corpus([fixtures])
+        specs = [r for r in resolutions if isinstance(r, ReplaySpec)]
+        assert len(specs) == len(resolutions), [
+            r.problem for r in resolutions if isinstance(r, UnresolvedAddress)
+        ]
+        assert {spec.harness for spec in specs} == {
+            HARNESS_FOULPLAY_BRIDGE,
+            HARNESS_ROLLOUT_ACCEPTANCE,
+            HARNESS_ROLLOUT_HC_GRID,
+            HARNESS_ROLLOUT_K0_GRID,
+        }
+        by_harness = {spec.harness: spec for spec in specs}
+        # The two verdicts, both reachable from committed data.
+        assert by_harness[HARNESS_FOULPLAY_BRIDGE].fidelity == (
+            FIDELITY_OPPONENT_UNPINNED
+        )
+        assert by_harness[HARNESS_ROLLOUT_HC_GRID].fidelity == FIDELITY_EXACT
 
     def test_cli_reports_no_addresses(self, tmp_path, capsys):
         (tmp_path / "empty.json").write_text(json.dumps({"schema_version": "x"}))

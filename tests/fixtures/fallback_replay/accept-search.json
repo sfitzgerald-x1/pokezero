@@ -1,0 +1,21 @@
+{
+  "arm": "search",
+  "checkpoint": "checkpoints/k0.pt",
+  "config_id": "d4-s2048-b64-w8",
+  "pair_start": 600000,
+  "pairs": 8,
+  "policy_stats": {
+    "fallback_sample_addresses_dropped": 0,
+    "fallback_samples": {
+      "fallback:choices_unmapped": [
+        {
+          "battle_id": "accept-search-600004-p1",
+          "reason": "choices_unmapped",
+          "round": 7,
+          "seat": "p1"
+        }
+      ]
+    }
+  },
+  "schema_version": "pokezero.mcts-acceptance-shard.v1"
+}

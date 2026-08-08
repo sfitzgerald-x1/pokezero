@@ -1,0 +1,30 @@
+{
+  "arm": "search",
+  "checkpoint": "checkpoints/k0.pt",
+  "checkpoint_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "config": "d4-s1024-b64-w4",
+  "depth": 4,
+  "engine_stats": {
+    "fallback_sample_addresses_dropped": 0,
+    "fallback_samples": {
+      "fallback:crate_search_failed": [
+        {
+          "battle_id": "k0grid-600002",
+          "reason": "crate_search_failed",
+          "round": 5,
+          "seat": "p1"
+        }
+      ]
+    }
+  },
+  "games": 8,
+  "per_game": [
+    {
+      "search_seat": "p1",
+      "seed": 600002
+    }
+  ],
+  "seed_start": 600000,
+  "sims": 1024,
+  "worlds": 4
+}

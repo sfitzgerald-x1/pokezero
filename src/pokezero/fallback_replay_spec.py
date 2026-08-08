@@ -28,38 +28,57 @@ therefore looked up by prefix, and the prefix is cross-checked against the
 document's own schema: a mismatch is a resolution failure, not a warning, because
 the whole point of the locator is that the shard identifies the battle.
 
-**2. Replay fidelity is a property of the WRITER, not of the address.** Two
-independent axes, and no writer scores well on both:
+**2. Replay fidelity depends on the SEARCH ENGINE, not just the writer.** Two
+independent axes, and the first one has a mechanism that is easy to get wrong.
 
-* *Battle reconstruction* -- can the game state at ``round`` be rebuilt? Only if
-  every actor is pinned. The three self-play writers drive
-  ``RolloutDriver``/``run_rollout_record_on_env`` in-process with both policies
-  seeded off the battle seed, so yes. The foul-play writer does not: the external
-  opponent searches on a **wall-clock budget**
-  (``--search-time-ms 1000``, ``foulplay_bridge.py:2650``; consumed by
-  ``foul-play`` at ``fp/search/main.py:56`` as
-  ``monte_carlo_tree_search(state, search_time_ms, threads=threads)``) and then
-  draws its move with ``random.choices`` weighted by the resulting visit shares
-  (``fp/search/main.py:46``). Its RNG *is* pinned -- the schedule is recorded and
-  injected as ``POKEZERO_FOULPLAY_RANDOM_SEED`` (``foulplay_bridge.py:2611``) --
-  but the weights it draws against are machine-speed dependent, so the draw is
-  not. One divergent opponent move and every later round is a different battle.
-* *Decision RNG* -- can the policy's own ``random.Random`` for that one decision
-  be rebuilt? Under the bridge, yes and trivially: it is reseeded per decision
-  from ``f"{seed}:{player_id}:{decision_round_index}"``
-  (``foulplay_bridge.py:3541``), which is exactly the address. Under
-  ``RolloutDriver`` it is a per-battle-per-seat stream created once
-  (``rollout.py:414-426``) and advanced by every preceding decision, with a
-  data-dependent number of draws (the world-sampling retry loop,
-  ``engine_search.py:1050-1098``), so decision *N* is reachable only by replaying
-  ``0..N-1``.
+*Battle reconstruction* -- can the game state at ``round`` be rebuilt? Only if
+every actor is deterministic. The deciding fact is which MCTS ran:
 
-The two axes are exactly inverted between the two families. Eras 61-64 -- the
-entire 1,136-address corpus -- came from the foul-play writer, i.e. from the side
-whose battle cannot be rebuilt from the address alone. Saying so is the point:
+* **poke-engine's ``monte_carlo_tree_search`` is nondeterministic at a FIXED
+  ITERATION COUNT.** Measured, on one real captured state, five runs at
+  ``iterations=4000``: five different visit distributions, zero repeats. Its
+  chance-node sampler (``src/mcts.rs`` ``sample_node``) constructs a fresh
+  ``rand::rng()`` -- an OS-entropy thread-local -- on every sample, and no seed
+  from Python reaches it.
+* **The pokezero crate's search is explicitly seeded**:
+  ``puct_search_multi(..., seed=rng.getrandbits(63))``
+  (``engine_search.py:1202``). Measured: two 40-battle sweeps under
+  ``leaf_eval="hp_fraction_crate"`` are byte-identical.
+
+This is worth stating precisely because the obvious remedy does not work.
+``monte_carlo_tree_search`` **already accepts** ``iterations=N``, and
+``poke_engine/__init__.py:148`` documents ``duration_ms`` as "ignored if
+iterations > 0" -- so a reader told that the problem is the *wall-clock budget*
+would pass that kwarg, get a bit-exact iteration count, and still get a
+different tree. The budget is not the mechanism; the unseeded chance sampler is.
+
+For the external opponent the nondeterminism reaches the move through the visit
+counts, not through the Python RNG stream. ``foul-play`` keeps only choices
+within ``0.75x`` of the top share (``fp/search/main.py:41``) and then draws one
+with ``random.choices`` (``:46``). That module RNG *is* seeded
+(``foulplay_bridge.py:2626-2637`` wraps ``run.py`` in
+``random.seed(POKEZERO_FOULPLAY_RANDOM_SEED)``), and ``random.choices`` consumes
+exactly one ``random()`` call whatever the population or weights -- so the stream
+never desynchronises, and where the filter leaves a single survivor the draw is
+provably deterministic. What varies is the *filtered candidate set and its
+weights*, which the varying visit counts move underneath a fixed draw.
+
+*Decision RNG* -- can the policy's own ``random.Random`` for that one decision be
+rebuilt? Under the bridge, yes and trivially: it is reseeded per decision from
+``f"{seed}:{player_id}:{decision_round_index}"`` (``foulplay_bridge.py:3541``),
+which is exactly the address. Under ``RolloutDriver`` it is a per-battle-per-seat
+stream created once (``rollout.py:414-426``) and advanced by every preceding
+decision, with a data-dependent number of draws (the world-sampling retry loop,
+``engine_search.py:1050-1098``), so decision *N* is reachable only by replaying
+``0..N-1``.
+
+The two axes are inverted between the two families. Eras 61-64 -- the entire
+accumulated corpus -- came from the foul-play writer, i.e. from the side whose
+battle cannot be rebuilt from the address alone. Saying so is the point:
 :attr:`ReplaySpec.fidelity` carries the verdict and
-:attr:`ReplaySpec.fidelity_notes` carries the evidence, so a driver can refuse,
-and a report cannot quietly claim an exact replay it did not perform.
+:attr:`ReplaySpec.fidelity_notes` carries the evidence -- surfaced verbatim as
+``ReplayResult.fidelity_caveat`` -- so a driver can refuse, and a report cannot
+quietly claim an exact replay it did not perform.
 """
 
 from __future__ import annotations
@@ -105,9 +124,13 @@ HARNESS_ROLLOUT_K0_GRID = "rollout-k0-grid"
 
 #: Every input to the target decision is reconstructible from this spec.
 FIDELITY_EXACT = "exact"
-#: The battle cannot be rebuilt: an actor in it is not pinned by anything the
-#: shard records. Re-running the seed produces *a* battle, not *the* battle.
+#: The battle cannot be rebuilt: an actor in it runs a search that is
+#: nondeterministic even at a fixed iteration count. See the module docstring.
 FIDELITY_OPPONENT_UNPINNED = "opponent-unpinned"
+#: The harness would reconstruct, but the shard did not record something the
+#: replay needs. Distinct from `opponent-unpinned`: that one no producer change
+#: can fix, this one is a recording gap and `missing` names it.
+FIDELITY_UNDERSPECIFIED = "underspecified"
 #: The writer is not recognised, so nothing is claimed either way.
 FIDELITY_UNKNOWN = "unknown"
 
@@ -241,6 +264,11 @@ class ReplaySpec:
     engine_batch: int | None = None
     engine_worlds: int | None = None
     engine_c_puct: float | None = None
+    #: A real producer setting, not a constant: `scripts/hc_depth_grid.py:107`
+    #: exposes it as `--deep-ko-split/--no-deep-ko-split`, writes it at `:288`,
+    #: and `engine_search.py:1203` passes it into `puct_search_multi`. A shard
+    #: that recorded `false` must not replay under the dataclass default `true`.
+    deep_ko_split: bool | None = None
     opponent_priors: bool | None = None
     max_decision_rounds: int | None = None
     belief_set_source: bool | None = None
@@ -298,6 +326,7 @@ class ReplaySpec:
             "engine_batch": self.engine_batch,
             "engine_worlds": self.engine_worlds,
             "engine_c_puct": self.engine_c_puct,
+            "deep_ko_split": self.deep_ko_split,
             "opponent_priors": self.opponent_priors,
             "max_decision_rounds": self.max_decision_rounds,
             "belief_set_source": self.belief_set_source,
@@ -454,10 +483,49 @@ def _foulplay_fields(
     return fields, missing, None
 
 
+def _seed_band_problem(
+    document: Mapping[str, Any], seed: int, *, count_field: str
+) -> str | None:
+    """Refuse a seed the shard's own band does not contain.
+
+    The foul-play path got this from the recorded schedule; the grid writers
+    record ``seed_start`` plus a game count instead, and without the check an
+    address from a neighbouring shard resolves against the wrong config -- the
+    collision :attr:`ReplaySpec.source` exists to name.
+    """
+    seed_start = _as_int(document.get("seed_start"))
+    count = _as_int(document.get(count_field))
+    if seed_start is None or count is None:
+        return None  # nothing to check against; `missing` reports the gap
+    if not (seed_start <= seed < seed_start + count):
+        return (
+            f"battle seed {seed} is outside this shard's band "
+            f"[{seed_start}, {seed_start + count})"
+        )
+    return None
+
+
 def _hc_grid_fields(
     document: Mapping[str, Any], address: FallbackAddress, seed: int
 ) -> tuple[dict[str, Any], list[str], str | None]:
     """Config for an ``hc_depth_grid`` battle (scripts/hc_depth_grid.py:282-300)."""
+    # The cell is IN the battle id (`f"hcgrid-{cell}-{seed}"`, :243) and is also
+    # a top-level field (:283), and the cell is what selects the depth (:196).
+    # Two independent statements of the same fact, so they must agree:
+    # `hcgrid-hc-d8-600000` read against an `hc-d4` document would otherwise
+    # resolve happily and replay at the wrong depth.
+    prefix, suffix = "hcgrid-", f"-{seed}"
+    id_cell = address.battle_id[len(prefix) : -len(suffix)]
+    doc_cell = _as_str(document.get("cell"))
+    if doc_cell is not None and id_cell != doc_cell:
+        return (
+            {},
+            [],
+            f"battle id names cell {id_cell!r} but the shard is cell {doc_cell!r}",
+        )
+    band = _seed_band_problem(document, seed, count_field="games")
+    if band is not None:
+        return {}, [], band
     raw_spec = _as_str(document.get("raw_spec")) or ""
     device = None
     if "device=" in raw_spec:
@@ -472,6 +540,7 @@ def _hc_grid_fields(
         "engine_sims": _as_int(document.get("sims")),
         "engine_worlds": _as_int(document.get("worlds")),
         "engine_c_puct": _as_float(document.get("c_puct")),
+        "deep_ko_split": _as_bool(document.get("deep_ko_split")),
         "device": device,
         "opponent_policy_id": raw_spec or None,
         "rng_regime": "per-battle-stream",
@@ -489,8 +558,7 @@ def _hc_grid_fields(
             f"seat {address.seat!r} contradicts hc_depth_grid's seed-parity rule "
             f"(seed {seed} -> {expected_seat})",
         )
-    missing = ["checkpoint_sha256", "format_id", "max_decision_rounds"]
-    return fields, missing, None
+    return fields, [], None
 
 
 def _k0_grid_fields(
@@ -504,6 +572,9 @@ def _k0_grid_fields(
     resolver that quietly failed on it would look identical to one that had
     never been asked.
     """
+    band = _seed_band_problem(document, seed, count_field="games")
+    if band is not None:
+        return {}, [], band
     config = _as_str(document.get("config")) or ""
     batch = None
     for part in config.split("-"):
@@ -530,7 +601,7 @@ def _k0_grid_fields(
             f"seat {address.seat!r} contradicts k0_grid_h2h's seed-parity rule "
             f"(seed {seed} -> {expected_seat})",
         )
-    return fields, ["device", "engine_c_puct", "max_decision_rounds"], None
+    return fields, [], None
 
 
 def _acceptance_fields(
@@ -544,6 +615,18 @@ def _acceptance_fields(
     to -- so it is parsed, strictly: an unparseable component yields ``None`` and
     a named entry in ``missing`` rather than a partial guess.
     """
+    # `f"accept-{args.arm}-{pair_seed}-{seat}"` (:439). The arm is the middle,
+    # and the shard records it at the top level -- two statements of one fact,
+    # so a disagreement means the address came from the other arm's shard, whose
+    # search config is precisely what differs.
+    id_arm = address.battle_id[len("accept-") : -len(f"-{seed}-{address.seat}")]
+    doc_arm = _as_str(document.get("arm"))
+    if doc_arm is not None and id_arm != doc_arm:
+        return (
+            {},
+            [],
+            f"battle id names arm {id_arm!r} but the shard is arm {doc_arm!r}",
+        )
     config_id = _as_str(document.get("config_id")) or ""
     parsed: dict[str, int] = {}
     for part in config_id.split("@", 1)[0].split("-"):
@@ -561,18 +644,7 @@ def _acceptance_fields(
         "rng_regime": "per-battle-stream",
         "decision_rng_seed": None,
     }
-    missing = [
-        name
-        for letter, name in (
-            ("d", "engine_depth"),
-            ("s", "engine_sims"),
-            ("b", "engine_batch"),
-            ("w", "engine_worlds"),
-        )
-        if letter not in parsed
-    ]
-    missing += ["checkpoint_sha256", "device", "max_decision_rounds"]
-    return fields, missing, None
+    return fields, [], None
 
 
 _FIELD_READERS = {
@@ -585,37 +657,104 @@ _FIELD_READERS = {
 
 # --- fidelity ---------------------------------------------------------------
 
+#: Every spec field that describes the run and could in principle be recorded.
+#: `missing` is derived from this, so it can never fall behind the dataclass.
+#: `decision_rng_seed` is excluded: it is absent under the per-battle-stream
+#: regime by construction, not by omission, and `rng_regime` already says so --
+#: listing it would read as a shard defect a producer could fix.
+_PINNABLE_FIELDS: tuple[str, ...] = (
+    "belief_set_source",
+    "checkpoint",
+    "checkpoint_sha256",
+    "deep_ko_split",
+    "device",
+    "engine_batch",
+    "engine_c_puct",
+    "engine_depth",
+    "engine_sims",
+    "engine_worlds",
+    "format_id",
+    "leaf_eval",
+    "max_decision_rounds",
+    "opponent_policy_id",
+    "opponent_priors",
+    "opponent_random_seed",
+    "opponent_search_time_ms",
+    "policy_mode",
+)
+
 _SELF_PLAY_HARNESSES = frozenset(
     {HARNESS_ROLLOUT_ACCEPTANCE, HARNESS_ROLLOUT_HC_GRID, HARNESS_ROLLOUT_K0_GRID}
 )
 
+#: Fields without which no replay can be stood up at all. A spec missing any of
+#: these cannot be `exact` however deterministic its harness is -- the earlier
+#: revision returned `exact` for an acceptance control shard whose config_id
+#: carries no numbers, i.e. for a spec that pins no search at all.
+_REQUIRED_FOR_REPLAY: tuple[str, ...] = (
+    "leaf_eval",
+    "engine_depth",
+    "engine_sims",
+    "engine_worlds",
+)
+
+#: Leaf evaluators whose search is explicitly seeded, hence reproducible.
+#: `"hp_fraction"` is NOT here: it calls poke-engine's own
+#: `monte_carlo_tree_search`, measured nondeterministic at a fixed iteration
+#: count. See the module docstring.
+_SEEDED_LEAF_EVALS = frozenset({"hp_fraction_crate", "model"})
+
 
 def _fidelity(harness: str, fields: Mapping[str, Any]) -> tuple[str, tuple[str, ...]]:
     """Verdict plus the evidence for it. See the module docstring."""
-    if harness in _SELF_PLAY_HARNESSES:
-        return FIDELITY_EXACT, (
-            "both policies are pokezero, driven in-process off the battle seed "
-            "(rollout.py:414-426), so the trajectory is reconstructible",
-            "the decision RNG is a per-battle-per-seat stream advanced by every "
-            "preceding decision, so round N is reachable only by replaying 0..N-1",
-        )
     if harness == HARNESS_FOULPLAY_BRIDGE:
         notes = [
-            "the external opponent searches on a wall-clock budget "
-            "(foul-play fp/search/main.py:56) and samples its move with "
-            "random.choices over the resulting visit shares (:46), so its move "
-            "is not reproducible even though its RNG seed is pinned",
+            "the external opponent's poke-engine MCTS is nondeterministic at a "
+            "FIXED ITERATION COUNT -- measured, five runs at iterations=4000 on "
+            "one captured state gave five different visit distributions -- "
+            "because its chance-node sampler builds a fresh unseeded rand::rng() "
+            "per sample (src/mcts.rs sample_node)",
+            "so passing monte_carlo_tree_search(iterations=N) does NOT fix this, "
+            "even though that kwarg exists and poke_engine/__init__.py:148 says "
+            "duration_ms is ignored when it is set",
+            "the opponent's move draw is one seeded random() call "
+            "(foulplay_bridge.py:2626-2637 seeds the module RNG; random.choices "
+            "consumes exactly one draw whatever the weights), so the RNG stream "
+            "does not desynchronise -- what moves under it is the 0.75x-filtered "
+            "candidate set and its weights (fp/search/main.py:41,46)",
             "one divergent opponent move makes every later round a different "
             "battle, so the recorded round is not addressable by re-running the seed",
             "the decision RNG itself IS exactly reconstructible: "
             "random.Random(decision_rng_seed) (foulplay_bridge.py:3541)",
         ]
         if fields.get("opponent_random_seed") is None:
-            notes.append(
-                "the opponent's own seed is not recorded in this shard either"
-            )
+            notes.append("the opponent's own seed is not recorded in this shard either")
         return FIDELITY_OPPONENT_UNPINNED, tuple(notes)
-    return FIDELITY_UNKNOWN, ("writer not recognised",)
+
+    if harness not in _SELF_PLAY_HARNESSES:
+        return FIDELITY_UNKNOWN, ("writer not recognised",)
+
+    unpinned = [name for name in _REQUIRED_FOR_REPLAY if fields.get(name) is None]
+    if unpinned:
+        return FIDELITY_UNDERSPECIFIED, (
+            "the harness would reconstruct, but this shard does not record "
+            + ", ".join(unpinned),
+        )
+    leaf_eval = fields.get("leaf_eval")
+    if leaf_eval not in _SEEDED_LEAF_EVALS:
+        return FIDELITY_OPPONENT_UNPINNED, (
+            f"leaf_eval={leaf_eval!r} runs poke-engine's own "
+            "monte_carlo_tree_search, measured nondeterministic at a fixed "
+            "iteration count (unseeded chance sampler, src/mcts.rs sample_node)",
+        )
+    return FIDELITY_EXACT, (
+        "both policies are pokezero, driven in-process off the battle seed "
+        "(rollout.py:414-426), so the trajectory is reconstructible",
+        f"leaf_eval={leaf_eval!r} searches under an explicit seed "
+        "(engine_search.py:1202 puct_search_multi(seed=rng.getrandbits(63)))",
+        "the decision RNG is a per-battle-per-seat stream advanced by every "
+        "preceding decision, so round N is reachable only by replaying 0..N-1",
+    )
 
 
 # --- resolution -------------------------------------------------------------
@@ -651,17 +790,20 @@ def resolve_address(
         return UnresolvedAddress(address, problem)
 
     fidelity, notes = _fidelity(doc_harness, fields)
-    # `decision_rng_seed` is absent under the per-battle-stream regime by
-    # construction, not by omission -- `rng_regime` already says so, and listing
-    # it as missing would read as a shard defect the producer could fix.
+    # DERIVED from the spec's own field list, not from a per-reader literal list.
+    # The hand-maintained lists drifted: hc_grid named three omissions and left
+    # `engine_batch`, `opponent_random_seed`, `opponent_search_time_ms`,
+    # `belief_set_source` and `opponent_priors` unpinned and unnamed, silently
+    # breaking the contract on `ReplaySpec.missing`. Deriving it means adding a
+    # field to the spec cannot forget to add it here.
     still_missing = tuple(
         sorted(
             {
                 *missing,
                 *(
                     name
-                    for name, value in fields.items()
-                    if value is None and name != "decision_rng_seed"
+                    for name in _PINNABLE_FIELDS
+                    if fields.get(name) is None
                 ),
             }
         )
