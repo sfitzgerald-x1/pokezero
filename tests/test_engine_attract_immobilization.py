@@ -115,10 +115,17 @@ class AttractImmobilizationTests(unittest.TestCase):
         self.assertAlmostEqual(moved, 50.0, places=3)
         self.assertAlmostEqual(immobilized, 50.0, places=3)
 
-    def test_immobilized_branch_is_empty_delta(self) -> None:
-        # The immobilized outcome must carry NO self-damage and NO move effect
-        # (attract, unlike confusion, deals no damage) — an empty-delta terminal
-        # in the same shape as the fully-paralyzed branch.
+    def test_immobilized_branch_carries_only_its_marker(self) -> None:
+        # RENAMED AND STRENGTHENED. This was `test_immobilized_branch_is_empty_delta`,
+        # asserting the immobilized outcome carried "an empty-delta terminal in the same
+        # shape as the fully-paralyzed branch" — and that SHAPE COLLISION was the defect:
+        # `combine_duplicate_instructions` merges equal instruction lists, so the two
+        # immobilizers became one branch and no renderer could name which fired.
+        #
+        # The old assertion also passed VACUOUSLY once the marker landed, because it
+        # grepped only for "Damage"/"Boost". What the test should say is what attract
+        # still must NOT do (no self-damage, no move effect) AND what it now must do
+        # (name itself), so the shape collision cannot come back.
         state = _AttractFixture.build(status="none")
         branches = poke_engine.generate_instructions(state, "swordsdance", "splash")
         _, _, immobilized_deltas = _AttractFixture.partition(branches)
@@ -126,20 +133,40 @@ class AttractImmobilizationTests(unittest.TestCase):
         for delta in immobilized_deltas:
             self.assertFalse(
                 any("Damage" in s or "Boost" in s for s in delta),
-                f"immobilized branch must be empty-delta, got {delta}",
+                f"attract deals no damage and executes no move, got {delta}",
+            )
+            self.assertEqual(
+                [s for s in delta if "MoveImmobilized" in s],
+                ["MoveImmobilized SideOne: Attract"],
+                f"the immobilized branch must name Attract as its cause, got {delta}",
             )
 
     def test_paralysis_composition_move_probability(self) -> None:
-        # Paralyzed AND attracted: fully-para (25%) then attract (50% of the
-        # remaining 75%). Net "moves" probability = 0.75 * 0.5 = 0.375; total
-        # immobilized = 0.625. This is the search-relevant quantity and matches
-        # Showdown exactly (multiplication is commutative); the engine's internal
-        # par-vs-attract reason split is not observable here (both empty-delta).
+        # Paralyzed AND attracted: attract is rolled first (50%), then full paralysis on
+        # the surviving half (25%). Net "moves" probability = 0.5 * 0.75 = 0.375; total
+        # immobilized = 0.625, which matches Showdown exactly.
+        #
+        # The last clause of this comment used to read "the engine's internal
+        # par-vs-attract reason split is not observable here (both empty-delta)". That is
+        # now FALSE, and its being true was the defect: each immobilizer marks its own
+        # branch, so the split is observable and is asserted below.
         state = _AttractFixture.build(status="paralyze")
         branches = poke_engine.generate_instructions(state, "swordsdance", "splash")
-        moved, immobilized, _ = _AttractFixture.partition(branches)
+        moved, immobilized, deltas = _AttractFixture.partition(branches)
         self.assertAlmostEqual(moved, 37.5, places=3)
         self.assertAlmostEqual(immobilized, 62.5, places=3)
+
+        reasons = sorted(
+            line.split(": ", 1)[1]
+            for delta in deltas
+            for line in delta
+            if "MoveImmobilized" in line
+        )
+        self.assertEqual(
+            reasons,
+            ["Attract", "Paralysis"],
+            f"both immobilizers must name themselves, got {deltas}",
+        )
 
     def test_no_attract_moves_freely(self) -> None:
         # Control: without the ATTRACT volatile the mon moves 100% of the time,

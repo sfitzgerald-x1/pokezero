@@ -88,12 +88,26 @@ patch by `scripts/setup_poke_engine.sh` / `scripts/vendor_poke_engine_src.sh`
 `generate_instructions_from_existing_status_conditions`, directly mirroring the
 confusion self-hit branch immediately above it: it clones the incoming
 instructions, weights the clone 0.5 and pushes it as a terminal (the move never
-executes), and reduces the surviving branch to 0.5. Unlike confusion the
-immobilized branch carries an **empty delta** (attract deals no self-damage) —
-the same shape as the fully-paralyzed branch. This is a weighted two-outcome
+executes), and reduces the surviving branch to 0.5. This is a weighted two-outcome
 split, not a point mutation, so the exact-expectation backup and chance-node
 machinery price it exactly, as they already do for full paralysis and the
 confusion self-hit.
+
+**Superseded (immobilizer markers).** This paragraph used to end: "Unlike
+confusion the immobilized branch carries an **empty delta** (attract deals no
+self-damage) — the same shape as the fully-paralyzed branch." That shape
+collision was a DEFECT, not a property. `combine_duplicate_instructions` merges
+branches with equal instruction lists, so the Attract-immobilized branch and the
+fully-paralyzed branch became ONE branch, and no renderer could say which
+immobilizer had fired: `events.rs` refused the attracted case
+(`attract_empty_tail_ambiguous`) and guessed the paralyzed one from probability
+mass. `third_party/poke-engine-gen3-attract-marker.patch` adds
+`Instruction::MoveImmobilized { side_ref, reason }` — apply and reverse both
+no-ops, so masses are untouched — and pushes it into BOTH immobilized branches.
+Attract still deals no self-damage; its branch now carries exactly one marker
+instead of nothing. Marking only one of the two would have been pointless:
+`reject_attribution_unsafe` aborts the whole WORLD rather than the branch, so an
+unmarked sibling keeps the world falling back regardless.
 
 **Composition ordering (verified vs Showdown gen3 source).** Showdown resolves
 `onBeforeMove` high-priority-first: flinch (8) → confusion (3) → attract (2) →
