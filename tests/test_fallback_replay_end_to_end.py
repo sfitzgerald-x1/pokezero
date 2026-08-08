@@ -12,8 +12,19 @@ runs the whole chain against a real Showdown simulator and a real search:
 
 Nothing here is a fixture: the addresses are whatever the engine actually
 refused on, and the assertion is that replaying one of them lands on the same
-decision. If the search, the recorder, the id grammar, the resolver or the
-seat-parity rule is wrong, this fails; a mock cannot make it pass.
+decision. If the recorder, the id grammar, the resolver, the seat-parity rule,
+the opponent policy or the belief-sampling stream is wrong, this fails; a mock
+cannot make it pass.
+
+**It does NOT cover the search parameters, and an earlier version of this
+docstring claimed it did.** The refusals this band produces are construction-side
+(`no_worlds_constructed`), and `engine_search.py:1049-1101` reads only `worlds`,
+`sample_retry_factor` and the four `approximate_*` flags before refusing -- never
+`search_sims`, `search_depth`, `c_puct`, `deep_ko_split` or `leaf_eval`. Deleting
+the override splat from `engine_config_for` left this suite green, twice,
+including with non-default recorded values. The search config is therefore
+asserted directly, off `BattleRun.engine_config`, rather than inferred from a
+reproduction.
 
 It also pins the determinism claim the whole driver rests on for this harness,
 by replaying twice and requiring the same refusal both times.
@@ -195,6 +206,7 @@ class TestReplayChainAgainstRealBattles(unittest.TestCase):
             any("max_decision_rounds not recorded" in n for n in result.runner_notes),
             result.runner_notes,
         )
+
         record = result.record
         self.assertIsNotNone(record)
         # The point of the whole exercise: state, not a boolean. A refusal that
@@ -209,9 +221,16 @@ class TestReplayChainAgainstRealBattles(unittest.TestCase):
         )
 
     def test_replay_is_deterministic(self):
-        # The claim this harness's EXACT fidelity verdict rests on. Two
-        # independent replays of the same address, each in a fresh env with a
-        # fresh policy, must produce the same refusal and the same evidence.
+        # Half the justification for the only `exact` verdict in the codebase.
+        #
+        # The record comparison alone is NOT search-sensitive: these refusals
+        # are construction-side, so `worlds_searched` is 0 and `engine_choices`
+        # is empty in every record, and a nondeterministic search would not move
+        # them. The sweep comparison in `_play_and_write_shard` is the
+        # search-sensitive half (battle outcomes depend on the search), and the
+        # explicit `total_iterations` assertion below makes this half
+        # search-sensitive too, so the verdict does not rest on a comparison of
+        # zeros.
         runner = rollout_runner(showdown_root=showdown_root_str())
         spec = self.specs[0]
         first = replay_fallback(spec, runner)
@@ -221,6 +240,60 @@ class TestReplayChainAgainstRealBattles(unittest.TestCase):
             [r.to_dict() for r in first.all_records],
             [r.to_dict() for r in second.all_records],
         )
+        self.assertEqual(first.instrument_errors, second.instrument_errors)
+
+    def test_the_search_itself_is_deterministic(self):
+        # A search-sensitive quantity, measured twice. `total_iterations` is
+        # charged per searched world, so it moves the moment the search does --
+        # unlike everything on a construction-side refusal record.
+        from pokezero.collection import policy_from_spec, run_rollout_record_on_env
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.engine_search import EngineMctsPolicy
+        from pokezero.fallback_replay import engine_config_for
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+        from pokezero.randbat import load_gen3_randbat_source_cached
+        from pokezero.rollout import RolloutConfig
+
+        root = showdown_root_str()
+        dex = load_showdown_dex_cached(root)
+        set_source = load_gen3_randbat_source_cached(root)
+        spec = self.specs[0]
+
+        def play() -> dict:
+            policy = EngineMctsPolicy(
+                dex=dex, set_source=set_source, config=engine_config_for(spec)
+            )
+            seat = "p1" if spec.seed % 2 == 0 else "p2"
+            other = "p2" if seat == "p1" else "p1"
+            env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=Path(root)))
+            try:
+                record = run_rollout_record_on_env(
+                    env=env,
+                    policies={seat: policy, other: policy_from_spec(_RAW_SPEC)},
+                    rollout_config=RolloutConfig(
+                        max_decision_rounds=_MAX_ROUNDS,
+                        format_id="gen3randombattle",
+                    ),
+                    seed=spec.seed,
+                    battle_id=spec.battle_id,
+                )
+            finally:
+                env.close()
+            stats = policy.stats.to_dict()
+            return {
+                "total_iterations": stats["total_iterations"],
+                "worlds_searched": stats["worlds_searched"],
+                "searched_decisions": stats["searched_decisions"],
+                "winner": record.terminal.winner,
+            }
+
+        first, second = play(), play()
+        self.assertGreater(
+            first["total_iterations"],
+            0,
+            "no world was searched, so this measures nothing",
+        )
+        self.assertEqual(first, second)
 
     def test_recording_does_not_perturb_the_run(self):
         # An instrument that changes the run cannot be used to diagnose it. The
@@ -279,3 +352,20 @@ class TestReplayChainAgainstRealBattles(unittest.TestCase):
             "worlds_constructed",
         ):
             self.assertEqual(recorded[key], plain[key], f"recorder perturbed {key}")
+
+    def test_the_runner_searches_under_the_recorded_config(self):
+        # The assertion the reproduction cannot make. `BattleRun.engine_config`
+        # is what the runner actually handed the policy, so an inline config
+        # that drops the recorded overrides fails here even though the address
+        # still reproduces.
+        from pokezero.fallback_replay import rollout_runner
+
+        runner = rollout_runner(showdown_root=showdown_root_str())
+        run = runner(self.specs[0])
+        self.assertIsNotNone(run.engine_config)
+        self.assertEqual(run.engine_config.c_puct, _CPUCT)
+        self.assertEqual(run.engine_config.deep_ko_split, _DEEP_KO_SPLIT)
+        self.assertEqual(run.engine_config.search_sims, _SIMS)
+        self.assertEqual(run.engine_config.search_depth, _DEPTH)
+        self.assertEqual(run.engine_config.worlds, _WORLDS)
+        self.assertEqual(run.engine_config.leaf_eval, "hp_fraction_crate")

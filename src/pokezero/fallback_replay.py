@@ -61,6 +61,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from .fallback_replay_spec import FIDELITY_EXACT, ReplaySpec
 
 __all__ = [
+    "BattleRun",
     "DecisionSnapshot",
     "RefusalRecord",
     "RefusalRecorder",
@@ -316,9 +317,16 @@ class _Hook:
             return base_map(context, aggregated)
 
         def _fallback(context: Any, rng: Any, reason: str) -> Any:
-            # Recorded BEFORE delegating: `_fallback` itself increments the
-            # counters this record is a delta against, so a post-call capture
-            # would fold the refusal's own bookkeeping into its evidence.
+            # Recorded BEFORE delegating. Precisely: the real `_fallback`
+            # increments `fallback_decisions`, `fallback_reasons` and
+            # `fallback_samples` -- NONE of which `DecisionSnapshot` reads, so
+            # the ordering is not load-bearing today and a post-call capture
+            # would currently produce identical records. It is held against a
+            # `_fallback` that starts touching `world_failure_reasons`,
+            # `unmapped_choices`, `choices_unmapped_causes` or the `worlds_*`
+            # counters, at which point a post-call capture would fold the
+            # refusal's own bookkeeping into its evidence. Pinned by
+            # `test_capture_happens_before_the_policys_own_fallback_runs`.
             for recorder in tuple(self.recorders):
                 recorder._guard(lambda r=recorder: r._record(context, reason))
             return base_fallback(context, rng, reason)
@@ -544,6 +552,16 @@ class ReplayOutcome(str, Enum):
 
     #: A fallback occurred at the recorded (battle, round, seat) with the
     #: recorded reason. The record is the recorded decision.
+    #:
+    #: READ THE CLASS BEFORE READING TOO MUCH INTO THIS. For a construction-side
+    #: refusal -- `no_worlds_constructed`, which is 43 of era 64's 67 resolvable
+    #: addresses, i.e. the MAJORITY -- the refusal happens at
+    #: `engine_search.py:1101`, before the search reads `search_sims`,
+    #: `search_depth`, `c_puct`, `deep_ko_split` or `leaf_eval`. So a match here
+    #: establishes that the seed, the id grammar, the resolver, the seat-parity
+    #: rule, the opponent policy, the belief-sampling stream and
+    #: `worlds`/`sample_retry_factor` were all rebuilt correctly -- and says
+    #: NOTHING about the search parameters, which were never consulted.
     REPRODUCED = "reproduced"
     #: A fallback occurred at exactly that decision, but for a different reason.
     #: The decision still refuses; something ahead of it in the order changed.
@@ -621,13 +639,66 @@ class ReplayResult:
         }
 
 
-#: A callable that runs the battle a spec names and returns the refusals taken.
+@dataclass(frozen=True)
+class BattleRun:
+    """What a :data:`BattleRunner` hands back: the refusals AND its own health.
+
+    A plain list of records was not enough, and the way it failed is worth
+    keeping written down. The errors used to travel as an attribute set on the
+    runner callable, which `replay_fallback` read with `getattr`. That survives
+    exactly one call shape. Measured:
+
+    ==========================  ==================  ============
+    runner                      outcome             trustworthy
+    ==========================  ==================  ============
+    `runner`                    instrument-failed   False
+    `lambda s: runner(s)`       no-refusal          **True**
+    `functools.partial(runner)` no-refusal          **True**
+    ==========================  ==================  ============
+
+    Any retry wrapper, timing decorator, corpus sweeper or test double reopened
+    the hole -- and did not merely lose the errors, it affirmatively reported the
+    result as trustworthy and the run as a clean `NO_REFUSAL`, which
+    :class:`ReplayOutcome` documents as what a fix looks like. Returning the
+    health alongside the records makes composition carry it by default: a
+    wrapper that forwards the return value forwards everything.
+    """
+
+    records: tuple[RefusalRecord, ...] = ()
+    #: Instrument failures. Non-empty blocks the absence verdicts.
+    instrument_errors: tuple[str, ...] = ()
+    #: Things the runner had to assume. These qualify, they do not invalidate.
+    runner_notes: tuple[str, ...] = ()
+    #: The search configuration the runner actually built, when it built one.
+    #:
+    #: Published because nothing else could bind the runner to
+    #: :func:`engine_config_for`: replacing that call with an inline
+    #: `EngineMctsConfig(...)` that drops the recorded overrides stayed green,
+    #: including end-to-end -- construction-side refusals never read a search
+    #: parameter, so the recorded address reproduces under a wrong search. The
+    #: `RolloutConfig` half was already closed by `runner_notes` being
+    #: observable; this gives the engine half the same behavioural hook.
+    engine_config: Any = None
+
+
+#: A callable that runs the battle a spec names and reports what happened.
 #: Injected rather than hard-wired: the four writers stand their battles up four
 #: different ways (two in-process drivers, one subprocess bridge, one grid
 #: script), and binding the verdict logic to any one of them would make it
 #: testable only where a Showdown build, a checkpoint and a patched engine are
 #: all present.
-BattleRunner = Callable[[ReplaySpec], Iterable[RefusalRecord]]
+#:
+#: Returning a bare iterable of records is still accepted, for runners that have
+#: no health to report -- but such a runner cannot report one, and
+#: :func:`replay_fallback` treats its silence as "nothing to say" rather than as
+#: "nothing went wrong". Prefer :class:`BattleRun`.
+BattleRunner = Callable[[ReplaySpec], "BattleRun | Iterable[RefusalRecord]"]
+
+
+def _as_battle_run(result: Any) -> BattleRun:
+    if isinstance(result, BattleRun):
+        return result
+    return BattleRun(records=tuple(result))
 
 
 def _classify(
@@ -660,10 +731,8 @@ def replay_fallback(spec: ReplaySpec, run_battle: BattleRunner) -> ReplayResult:
     ``run_battle`` stands the battle up however its harness requires and returns
     the refusals it took; see :data:`BattleRunner`.
     """
-    records = tuple(run_battle(spec))
-    # A runner may expose the recorder's own failures; `rollout_runner` does.
-    errors = tuple(getattr(run_battle, "instrument_errors", ()) or ())
-    notes = tuple(getattr(run_battle, "runner_notes", ()) or ())
+    run = _as_battle_run(run_battle(spec))
+    records, errors, notes = run.records, run.instrument_errors, run.runner_notes
     outcome, record = _classify(spec, records, errors)
     caveat = None
     if spec.fidelity != FIDELITY_EXACT:
@@ -690,6 +759,17 @@ def format_refusal(record: RefusalRecord) -> str:
     lines = [
         f"REFUSAL  {record.battle_id}  round={record.round}  seat={record.seat}",
         f"  reason: {record.reason}",
+    ]
+    if record.degraded:
+        # Without this the zeros below print as a confident measurement -- the
+        # same fabricated-evidence shape the lock-probe fix removed. `trustworthy`
+        # catches it only through `ReplayResult`, and the recorder is documented
+        # as usable with no address, no shard and no driver, where none exists.
+        lines.append(
+            "  *** DEGRADED: the pre-decision baseline was lost, so every delta "
+            "below may span more than one decision ***"
+        )
+    lines += [
         f"  worlds: attempted={record.worlds_attempted} "
         f"constructed={record.worlds_constructed} searched={record.worlds_searched}",
     ]
@@ -791,12 +871,25 @@ def engine_config_for(spec: ReplaySpec) -> Any:
     """Build the `EngineMctsConfig` a replay of ``spec`` must search under.
 
     A named function, not an inline call inside :func:`rollout_runner`, because
-    the WIRING needs its own test. Under the shipped harness the refusals that
-    actually occur are construction-side (`no_worlds_constructed`), so they are
-    reached before any search parameter is consulted -- which means an
-    end-to-end replay reproduces the recorded address even if every search
-    setting is silently wrong. Deleting the override splat survived the whole
-    integration suite. The config is therefore asserted directly.
+    the WIRING needs its own test.
+
+    Under the shipped harness the refusals that actually occur are
+    construction-side (`no_worlds_constructed`), and the construction loop
+    (`engine_search.py:1049-1101`) reads only `worlds`, `sample_retry_factor`
+    and the four `approximate_*` flags before refusing at `:1101`. It does NOT
+    read `search_sims`, `search_depth`, `c_puct`, `deep_ko_split`, `leaf_eval`,
+    `search_batch` or `model_priors`. So an end-to-end replay reproduces the
+    recorded address even when every one of those is silently wrong -- deleting
+    the override splat survived the whole integration suite, twice, including
+    with non-default recorded values.
+
+    `worlds` is the exception and is consulted: `attempts_budget = worlds *
+    sample_retry_factor` at `:1050`, which is why a refusal in that class shows
+    exactly `worlds * sample_retry_factor` attempts. An earlier revision of this
+    docstring said "before any search parameter is consulted", which is wrong.
+
+    The config is therefore asserted directly, and published on
+    :attr:`BattleRun.engine_config` so the runner's use of it is observable too.
     """
     from .engine_search import EngineMctsConfig  # noqa: PLC0415
 
@@ -897,9 +990,7 @@ def rollout_runner(
         showdown_root=Path(showdown_root), node_binary=node_binary
     )
 
-    def run(spec: ReplaySpec) -> Iterable[RefusalRecord]:
-        run.instrument_errors = ()
-        run.runner_notes = ()
+    def run(spec: ReplaySpec) -> BattleRun:
         if spec.harness != HARNESS_ROLLOUT_HC_GRID:
             raise UnsupportedHarness(
                 f"rollout_runner stands up {HARNESS_ROLLOUT_HC_GRID!r} battles; "
@@ -918,17 +1009,17 @@ def rollout_runner(
 
         from .collection import policy_from_spec  # noqa: PLC0415
 
+        config = engine_config_for(spec)
         candidate = EngineMctsPolicy(
             dex=dex,
             set_source=set_source,
-            config=engine_config_for(spec),
+            config=config,
             policy_id=f"engine-mcts-replay-d{spec.engine_depth}-s{spec.engine_sims}",
         )
         settings, notes = rollout_settings(spec, default_rounds=max_decision_rounds)
         unreachable = unreachable_round_problem(settings, spec)
         if unreachable is not None:
             raise UnsupportedHarness(unreachable)
-        run.runner_notes = tuple(notes)
         rollout_config = RolloutConfig(**settings)
         opponent = policy_from_spec(spec.opponent_policy_id)
         # scripts/hc_depth_grid.py:235 -- seat is seed parity, and the spec
@@ -945,11 +1036,15 @@ def rollout_runner(
                     seed=spec.seed,
                     battle_id=spec.battle_id,
                 )
-                # Published on the callable so `replay_fallback` can refuse to
-                # read an empty record list as NO_REFUSAL. A recorder whose
-                # failures go nowhere turns a broken instrument into a finding.
-                run.instrument_errors = tuple(recorder.errors)
-                return recorder.records
+                # Returned, not smuggled onto the callable: a recorder whose
+                # failures go nowhere turns a broken instrument into a finding,
+                # and an attribute on `run` is lost the moment anyone wraps it.
+                return BattleRun(
+                    records=recorder.records,
+                    instrument_errors=tuple(recorder.errors),
+                    runner_notes=tuple(notes),
+                    engine_config=config,
+                )
         finally:
             # A replay sweep opens one env per address; leaking the node
             # subprocess exhausts file descriptors long before the corpus ends.

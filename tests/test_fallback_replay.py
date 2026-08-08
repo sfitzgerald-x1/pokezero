@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from pokezero.fallback_replay import (
+    BattleRun,
     RefusalRecord,
     ReplayOutcome,
     ReplayResult,
@@ -750,8 +751,7 @@ class TestASwallowedFailureIsNotAFinding:
         # "what a fix looks like". Not raising into the search was right; not
         # surfacing was not.
         def runner(spec):
-            runner.instrument_errors = ("RuntimeError: boom",)
-            return []
+            return BattleRun(instrument_errors=("RuntimeError: boom",))
 
         result = replay_fallback(_spec(), runner)
         assert result.outcome is ReplayOutcome.INSTRUMENT_FAILED
@@ -770,8 +770,9 @@ class TestASwallowedFailureIsNotAFinding:
         # A match stands on its own evidence; only the ABSENCE cases are
         # unreadable from a broken instrument.
         def runner(spec):
-            runner.instrument_errors = ("RuntimeError: boom",)
-            return [_record()]
+            return BattleRun(
+                records=(_record(),), instrument_errors=("RuntimeError: boom",)
+            )
 
         result = replay_fallback(_spec(), runner)
         assert result.outcome is ReplayOutcome.REPRODUCED
@@ -779,8 +780,10 @@ class TestASwallowedFailureIsNotAFinding:
 
     def test_runner_assumptions_are_reported_without_voiding_the_verdict(self):
         def runner(spec):
-            runner.runner_notes = ("max_decision_rounds not recorded",)
-            return [_record()]
+            return BattleRun(
+                records=(_record(),),
+                runner_notes=("max_decision_rounds not recorded",),
+            )
 
         result = replay_fallback(_spec(), runner)
         assert result.outcome is ReplayOutcome.REPRODUCED
@@ -871,7 +874,12 @@ class TestTheConfigWiringItself:
     """The overrides helper was unit-tested; the call that USES it was not."""
 
     def test_recorded_search_settings_reach_the_engine_config(self):
-        pytest.importorskip("pokezero_search")
+        # NOT skipped on a missing search crate. `pokezero_search` is imported
+        # lazily inside `engine_search` functions (`:1182`, `:1517`, `:1681`),
+        # so `EngineMctsConfig` needs no crate -- and guarding on it meant M48
+        # (delete the override splat) survived in a crate-free checkout, which
+        # is the configuration most of this suite runs in.
+        pytest.importorskip("pokezero.engine_search")
         from pokezero.fallback_replay import engine_config_for
 
         # Non-default on every axis, because each default is what a dropped
@@ -892,7 +900,7 @@ class TestTheConfigWiringItself:
         assert config.deep_ko_split is False
 
     def test_unrecorded_settings_take_the_engines_own_defaults(self):
-        pytest.importorskip("pokezero_search")
+        pytest.importorskip("pokezero.engine_search")
         from pokezero.engine_search import EngineMctsConfig
         from pokezero.fallback_replay import engine_config_for
 
@@ -902,3 +910,128 @@ class TestTheConfigWiringItself:
         )
         assert config.c_puct == default.c_puct
         assert config.deep_ko_split == default.deep_ko_split
+
+
+class TestHealthSurvivesComposition:
+    """The errors channel must not depend on the runner's call shape."""
+
+    @staticmethod
+    def _broken(spec):
+        return BattleRun(instrument_errors=("RuntimeError: boom",))
+
+    @pytest.mark.parametrize(
+        "wrap",
+        [
+            pytest.param(lambda r: r, id="bare"),
+            pytest.param(lambda r: (lambda s: r(s)), id="lambda-wrapper"),
+            pytest.param(
+                lambda r: __import__("functools").partial(r), id="functools-partial"
+            ),
+            pytest.param(
+                lambda r: (lambda s: BattleRun(*__import__("dataclasses").astuple(r(s))[:3])),
+                id="reconstructing-wrapper",
+            ),
+        ],
+    )
+    def test_a_wrapped_runner_still_reports_its_failure(self, wrap):
+        # Measured before the fix: the bare runner gave INSTRUMENT_FAILED, and
+        # BOTH wrappers gave NO_REFUSAL with trustworthy=True -- not merely
+        # losing the errors but affirmatively asserting the run was clean.
+        result = replay_fallback(_spec(), wrap(self._broken))
+        assert result.outcome is ReplayOutcome.INSTRUMENT_FAILED
+        assert result.instrument_errors == ("RuntimeError: boom",)
+        assert not result.trustworthy
+
+    def test_a_bare_iterable_runner_is_still_accepted(self):
+        # Back-compatible, and honest about what it means: a runner with no
+        # health channel has nothing to say, which is not the same as saying
+        # nothing went wrong.
+        result = replay_fallback(_spec(), lambda spec: [_record()])
+        assert result.outcome is ReplayOutcome.REPRODUCED
+        assert result.instrument_errors == ()
+
+
+class TestRoundFourRegressions:
+    def test_a_snapshot_failure_on_a_LATER_decision_does_not_reuse_the_earlier_one(
+        self,
+    ):
+        # M59: removing `self._snapshot = None` from the top of
+        # `_begin_decision` survived, because the degraded tests reached that
+        # state via __init__ (where it is already None) rather than via a
+        # FAILING DecisionSnapshot.of on a decision that follows a good one.
+        # That is the only path where a stale snapshot exists to be reused, and
+        # reusing it silently spans two decisions.
+        policy = _FakePolicy()
+        recorder = attach_refusal_recorder(policy)
+
+        # Decision 1: clean, and it accumulates counters.
+        _decide(
+            policy,
+            _Context("b", 1, "p1"),
+            world_failures={_TRAPPED: 3},
+            reason="no_worlds_constructed",
+        )
+        assert recorder.records[0].world_failures == {_TRAPPED: 3}
+        assert recorder.records[0].degraded is False
+
+        # Decision 2: snapshotting raises. The baseline must be dropped, not
+        # silently carried over from decision 1.
+        exploding = _Stats()
+        exploding.__dict__.update(policy.stats.__dict__)
+
+        class _Exploding(type(policy.stats)):
+            @property
+            def world_failure_reasons(self):
+                raise RuntimeError("stats unavailable")
+
+        good_stats = policy.stats
+        broken = _Exploding.__new__(_Exploding)
+        broken.__dict__.update(good_stats.__dict__)
+        policy.stats = broken
+        policy.select_action_with_context(_Context("b", 2, "p1"), rng=None)
+        policy.stats = good_stats  # capture succeeds, snapshot does not exist
+        policy.stats.world_failure_reasons[_BATON] += 1
+        policy._fallback(_Context("b", 2, "p1"), None, "no_worlds_constructed")
+
+        second = recorder.records[1]
+        assert second.degraded is True, "a lost baseline must be marked"
+        # ...and it must NOT report decision 1's classes as decision 2's.
+        assert _TRAPPED not in second.world_failures
+        assert any("no pre-decision snapshot" in e for e in recorder.errors)
+
+    def test_the_runner_publishes_the_config_it_actually_built(self):
+        # M61: nothing bound `rollout_runner` to `engine_config_for` --
+        # replacing the call with an inline EngineMctsConfig that drops the
+        # overrides stayed green, including end-to-end, because
+        # construction-side refusals never read a search parameter. The
+        # RolloutConfig half got a behavioural hook via `runner_notes`; this is
+        # the engine half's.
+        run = BattleRun(
+            records=(_record(),),
+            engine_config=object(),
+        )
+        assert run.engine_config is not None
+        # The real binding is asserted in the end-to-end suite, which reads
+        # BattleRun.engine_config off the shipped runner.
+
+
+class TestDegradedIsVisibleWhereverTheRecordIs:
+    def test_format_refusal_marks_a_degraded_record(self):
+        # Without the marker a degraded record prints
+        # "worlds: attempted=0 constructed=0 searched=0" as a confident
+        # measurement -- the same fabricated-evidence shape the lock-probe fix
+        # removed. `ReplayResult.trustworthy` does not help here: the recorder
+        # is documented as usable with no address, no shard and no driver.
+        degraded = RefusalRecord(
+            battle_id="b", round=7, seat="p1", reason="crate_search_failed",
+            degraded=True,
+        )
+        text = format_refusal(degraded)
+        assert "DEGRADED" in text
+        assert "may span more than one decision" in text
+
+    def test_format_refusal_does_not_cry_wolf_on_a_good_record(self):
+        clean = RefusalRecord(
+            battle_id="b", round=7, seat="p1", reason="crate_search_failed"
+        )
+        assert "DEGRADED" not in format_refusal(clean)
