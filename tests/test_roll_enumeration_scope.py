@@ -1029,6 +1029,13 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # Forces the flag OFF so the standing mass gate always measures the
         # collapsed cascade, whatever the ambient environment says.
         "tests/test_branch_mass_reconstruction.py",
+        # Names the flag in a comment only, as the reproduction that shows the
+        # withdrawn terminal-toxic roll fan: running that fixture under the flag
+        # emits the 17-arm fan the withdrawn patch would have produced, which is
+        # how #1184 established that a by-name-absence check could not hold the
+        # line and the numeric partition had to be re-derived instead. Does not
+        # set, read, or clear the flag.
+        "tests/test_engine_terminal_residual_roll_limit.py",
         # This gate.
         "tests/test_roll_enumeration_scope.py",
         # The wrong-fan control: selects a roll path per CHILD process to adjudicate
