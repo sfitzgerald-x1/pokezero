@@ -34,6 +34,7 @@ from .determinization import gen3_randbat_belief_start_override_planner
 from .deep_line_audit import PROTOCOL_SIGNATURE_SCHEMA_VERSION, protocol_signature_counts
 from .dex import ShowdownDex, load_showdown_dex_cached
 from .env import PlayerId, TerminalState
+from .fallback_replay import RefusalRecord, attach_refusal_recorder
 from .local_showdown import (
     BRIDGE_PATH,
     LocalShowdownConfig,
@@ -290,6 +291,91 @@ OPPONENT_JOURNAL_SCHEMA_VERSION = "pokezero.opponent-journal.v1"
 # can I replay" rather than "can I replay the addresses I have".
 OPPONENT_JOURNAL_MODES = ("off", "addressed", "full")
 
+# The REFUSAL RECORDER, wired on by default.
+#
+# `fallback_samples` files an ADDRESS -- `{battle_id, round, seat, reason}` -- and
+# nothing else. Reading the state behind that address then requires replaying the
+# battle, and for a bridge shard the battle does not replay: foul-play's search is
+# wall-clock-budgeted over an unseeded `rand::rng()` (see the journal block above).
+# So for the corpus this bridge produces, "replay the address and look" is not a
+# thing anyone can do, and four eras of refusals were theorised about instead.
+#
+# `fallback_replay.attach_refusal_recorder` (#1180) captures the same state LIVE, at
+# the moment of the refusal, where no replay is needed: the world-failure classes
+# that fired ON THAT DECISION with counts, the worlds attempted/constructed/searched,
+# the engine's proposed choices, the request's legal set in the ENGINE'S vocabulary,
+# their disagreement, and the decision RNG seed. That is why this is on by default
+# and not behind an opt-in flag -- an instrument nobody remembers to switch on
+# records nothing, and every shard produced without it is another era of addresses
+# that cannot be read.
+#
+# COST. Two axes, both measured, neither asserted.
+#
+# 1. DECISION TIME. The recorder's work is three bound-method wrappers around
+#    `select_action_with_context`, `_map_choices` and `_fallback`; it sits OUTSIDE
+#    the timed native call and touches no RNG. TWO per-decision costs, not one: the
+#    first two wrappers run on every decision and the third only on a refusal, so
+#    quoting the cheap one alone would understate exactly the run this exists for.
+#    Measured (`scripts/refusal_recorder_cost.py --decisions 20000 --repeats 5`, four
+#    invocations on this checkout, median of five timing runs each):
+#
+#      non-refusing decision (snapshot only)     1.03 - 1.25 us
+#      refusing decision (snapshot + record)    11.16 - 13.77 us
+#
+#    Against the decision boundary this bridge actually runs -- a prior measurement
+#    put the median at 5.02 s on our side, plus foul-play's fixed 1,000 ms search --
+#    that is 2.1e-7 to 2.5e-7 of the boundary for a non-refusing decision and
+#    2.2e-6 to 2.7e-6 for a refusing one. Blended at the measured era-64 cell-D
+#    fallback rate of 1.00% (55 fallbacks in 5,513 decisions): 1.13 - 1.36 us, i.e.
+#    about 2.5e-7 of the boundary.
+#
+# 2. SUMMARY BYTES, measured the way the journal block measures them, because that
+#    is the axis that caught out the last author. `_write_json` rewrites the ENTIRE
+#    summary after every game when `--summary-out` is set, so bytes re-serialize
+#    O(games^2) and the document size, not the write count, is what scales.
+#
+#    Parameters taken from the REAL era-64 cell-D shards (`fp-d-probe-*-p{1,2}.json`,
+#    16 seat shards, 128 games, 5,513 decisions, 55 fallback decisions): 0.430
+#    refusals per game, 2,684 B mean per-game row, 37,270 B median seat shard.
+#    Record sizes taken from 93 REAL records captured by this recorder on a local
+#    d4/s1024/w4 batch, not from a fabricated one:
+#
+#      per refusal record          550 B median serialized (469 min, 777 max)
+#      per game                   +236 B  (+8.8% of a 2,684 B row)
+#      8-game seat shard        +1,892 B on 37,270 B: +5.1%
+#
+#    Smaller than the journal's +15.7%, and for a reason worth stating rather than
+#    celebrating: a refusal record is EXPENSIVE (550 B, ~4x a journal entry) and
+#    refusals are RARE (0.43 per game against a journal's whole-battle prefix). A
+#    cell whose fallback rate is 10x cell D's would land near the journal's figure.
+#
+#    The O(games^2) axis, same per-game rate, cumulative bytes written:
+#
+#      --games 250   off 88.2 MB   refusals-on 95.6 MB   (+7.4 MB, +8.4%)
+#
+#    Not a bottleneck against a 250-game run that costs hours of search wall -- but
+#    "there is nothing to switch off" would be wrong for a high-refusal cell on a
+#    long run, so it is not claimed. `--no-refusal-records` exists for that case.
+#
+# HEALTH IS NEVER SILENT. `RefusalRecorder` deliberately does not raise into the
+# search -- an instrument that turns a handled refusal into a crash has changed the
+# outcome it exists to explain -- so a capture failure lands on `recorder.errors`
+# and an empty record list would otherwise read as "this run had no refusals".
+# `RefusalRecorderHealth` carries `attached`, `attach_error`, `health_reported`,
+# `instrument_errors` and `degraded_records` into the summary, and `trustworthy` is
+# a CONJUNCTION with `health_reported` so that silence reads as unknown rather than
+# as clean -- the same rule `ReplayResult.trustworthy` states.
+#
+# INVISIBLE TO THE ADDRESS READER. `fallback_addresses` accepts a mapping as a
+# cumulative stats scope iff it CONTAINS `fallback_samples` (`_walk_stats_blocks`)
+# and harvests addresses from any mapping so NAMED (`_walk_sample_blocks`). The
+# header is `refusal_recorder`, the rows are `refusals`, and no key inside a
+# serialized `RefusalRecord` is `fallback_samples`, `world_failure_reasons` or
+# `fallback_reasons` -- the record spells its own delta `world_failures`. So the
+# block can add neither a scope, nor an address, nor an occurrence count.
+# `RefusalRecordReaderInvariantTest` pins that against a real `scan_corpus`.
+REFUSAL_RECORDER_SCHEMA_VERSION = "pokezero.refusal-records.v1"
+
 
 @dataclass(frozen=True)
 class ControlledFoulPlayConfig:
@@ -362,6 +448,12 @@ class ControlledFoulPlayConfig:
     # One of OPPONENT_JOURNAL_MODES; see the module-level block for the measurement
     # behind the default.
     opponent_journal: str = "addressed"
+    # Attach the #1180 refusal recorder to the engine policy and write what it
+    # captures into the summary. ON, because the state behind a bridge refusal is
+    # not recoverable any other way -- see the REFUSAL RECORDER block above for the
+    # cost and size measurements behind that default, and `--no-refusal-records`
+    # for the way out on a long run.
+    record_refusals: bool = True
 
     def __post_init__(self) -> None:
         if self.games <= 0:
@@ -605,6 +697,136 @@ def _request_digest(request_line: str | None) -> str:
 
 
 @dataclass(frozen=True)
+class RefusalRecorderHealth:
+    """Whether the refusal capture can be believed -- and whether it ran at all.
+
+    Every field here exists because its absence has a wrong reading:
+
+    ``enabled``
+        The run was configured to record. ``False`` means ``--no-refusal-records``,
+        not "no refusals".
+    ``attached``
+        The recorder actually installed on the policy. It CANNOT install on a raw
+        or root-PUCT policy -- ``RefusalRecorder._validate`` requires ``stats`` plus
+        callable ``select_action_with_context``/``_map_choices``/``_fallback``, and
+        only ``EngineMctsPolicy`` has them -- and those arms file no
+        ``fallback_samples`` either, so there is nothing to record. That is a
+        correct outcome, but it must not look like a clean engine-mcts run.
+    ``attach_error``
+        Why not, verbatim. A boolean alone sends the reader to the source.
+    ``health_reported``
+        Whether this result had an error channel at all. Defaults ``False`` and is
+        a conjunct of :attr:`trustworthy` for the reason
+        :class:`fallback_replay.BattleRun` records at length: an empty error list
+        from a runner with no error channel says nothing, and reading it as healthy
+        is the same defect as reading an empty record list as "no refusals".
+    ``instrument_errors``
+        `RefusalRecorder.errors`. Non-empty means SOME RECORD IS INCOMPLETE. The
+        recorder never raises into the search -- an instrument that turns a handled
+        refusal into a crash has changed the outcome it exists to explain -- so this
+        list is the only place a swallowed capture failure surfaces.
+    ``degraded_records``
+        Records whose pre-decision baseline was lost, so their deltas may span more
+        than one decision. Counted separately from errors because the record is
+        still worth reading, just not as a per-decision measurement.
+    """
+
+    enabled: bool = False
+    attached: bool = False
+    attach_error: str | None = None
+    health_reported: bool = False
+    instrument_errors: tuple[str, ...] = ()
+    degraded_records: int = 0
+    recorded_refusals: int = 0
+
+    @property
+    def trustworthy(self) -> bool:
+        """True only when health was REPORTED, the recorder attached, and it was clean."""
+        return (
+            self.health_reported
+            and self.attached
+            and not self.instrument_errors
+            and self.degraded_records == 0
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": REFUSAL_RECORDER_SCHEMA_VERSION,
+            # Where the rows live. Same contract as the journal header: every
+            # per-game key this feature writes is `records_key` or
+            # `records_key + "_" + <suffix>`, so a consumer scans the row for the
+            # prefix rather than being told each name.
+            "records_key": "refusals",
+            "enabled": self.enabled,
+            "attached": self.attached,
+            "attach_error": self.attach_error,
+            "health_reported": self.health_reported,
+            "instrument_errors": list(self.instrument_errors),
+            "degraded_records": self.degraded_records,
+            "recorded_refusals": self.recorded_refusals,
+            "trustworthy": self.trustworthy,
+        }
+
+
+class _RefusalCapture:
+    """Owns one :func:`attach_refusal_recorder` for the lifetime of a bridge run.
+
+    Attached once around the whole game loop rather than per game, because the
+    bridge builds ONE policy and reuses it for every seed -- attaching per game
+    would install and tear down a wrapper 250 times and, worse, would silently
+    depend on the teardown order that ``_Hook`` exists to make irrelevant. Records
+    are partitioned back out per game by ``battle_id``, which is
+    ``f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"`` and unique within a run.
+
+    Attach failure is CAPTURED, NEVER RAISED. The recorder validates the policy at
+    attach time, and on a raw or root-PUCT arm that validation fails by design.
+    Letting that AttributeError escape would make a diagnostic switched on by
+    default able to abort a strength benchmark -- so it lands on
+    :attr:`attach_error` and the run continues, with the summary saying so.
+    """
+
+    def __init__(self, policy: Any, *, enabled: bool) -> None:
+        self.enabled = bool(enabled)
+        self._recorder: Any = None
+        self._attach_error: str | None = None
+        if not self.enabled:
+            return
+        try:
+            self._recorder = attach_refusal_recorder(policy)
+        except Exception as error:  # noqa: BLE001 -- an instrument must not abort the run
+            self._attach_error = f"{type(error).__name__}: {error}"
+
+    def records_for(self, battle_id: str) -> tuple[RefusalRecord, ...]:
+        if self._recorder is None:
+            return ()
+        return tuple(
+            record for record in self._recorder.records if record.battle_id == battle_id
+        )
+
+    def health(self) -> RefusalRecorderHealth:
+        if self._recorder is None:
+            return RefusalRecorderHealth(
+                enabled=self.enabled, attached=False, attach_error=self._attach_error
+            )
+        records = self._recorder.records
+        return RefusalRecorderHealth(
+            enabled=self.enabled,
+            attached=True,
+            attach_error=None,
+            # The recorder HAS an error channel and we are reading it, which is
+            # exactly what this flag asserts.
+            health_reported=True,
+            instrument_errors=tuple(self._recorder.errors),
+            degraded_records=sum(1 for record in records if record.degraded),
+            recorded_refusals=len(records),
+        )
+
+    def detach(self) -> None:
+        if self._recorder is not None:
+            self._recorder.detach()
+
+
+@dataclass(frozen=True)
 class ControlledFoulPlayGameResult:
     battle_id: str
     seed: int
@@ -693,6 +915,12 @@ class ControlledFoulPlayGameResult:
     opponent_journal: tuple[OpponentJournalEntry, ...] = ()
     opponent_journal_recorded: int = 0
     opponent_journal_failures: int = 0
+    # Every refusal the #1180 recorder captured in THIS battle, with the
+    # per-decision state that produced it. Filed on the game row rather than only in
+    # a run-level list so a record travels with the battle it belongs to; the run
+    # level carries only the health header, which is a property of the instrument
+    # rather than of any one battle.
+    refusal_records: tuple[RefusalRecord, ...] = ()
 
     @property
     def outcome_score(self) -> float:
@@ -775,6 +1003,14 @@ class ControlledFoulPlayGameResult:
             # every later round of THAT battle unreplayable while leaving the others
             # sound. Without this a driver has to treat the whole shard as suspect.
             payload["opponent_moves_record_failures"] = self.opponent_journal_failures
+        if self.refusal_records:
+            # `refusals`, and NOT a name the address reader dispatches on. Every key
+            # inside a serialized `RefusalRecord` is likewise distinct from the
+            # reader's markers -- the per-decision world-failure delta is spelled
+            # `world_failures`, never `world_failure_reasons` -- so this list can add
+            # neither a cumulative scope nor an occurrence count. See the REFUSAL
+            # RECORDER block.
+            payload["refusals"] = [record.to_dict() for record in self.refusal_records]
         if self.root_puct_effective_total_visits:
             payload["root_puct_effective_total_visits"] = self.root_puct_effective_total_visits
         if self.root_puct_opponent_action_skip_categories:
@@ -891,6 +1127,10 @@ class ControlledFoulPlayBenchmarkResult:
     # bridge-level per-decision wall, which is a different quantity (it counts
     # non-searched decisions too).
     policy_stats: Mapping[str, Any] | None = None
+    # Instrument health for the #1180 refusal recorder. None means the caller did
+    # not report any -- which `to_dict` renders as the default header, i.e.
+    # `health_reported: false`, i.e. UNKNOWN. It is never rendered as clean.
+    refusal_recorder: "RefusalRecorderHealth | None" = None
 
     @property
     def completed_games(self) -> int:
@@ -1156,6 +1396,13 @@ class ControlledFoulPlayBenchmarkResult:
                 # later round in that battle cannot be trusted.
                 "record_failures": sum(game.opponent_journal_failures for game in self.games),
             },
+            # The recorder's own header, present in EVERY summary for the same
+            # reason the journal's is: an absent block and an empty one are three
+            # different states (switched off, on with nothing to record, producer
+            # too old), and a reader that cannot tell them apart will call all three
+            # "no refusals". `health_reported: false` is the default and means
+            # UNKNOWN.
+            "refusal_recorder": (self.refusal_recorder or RefusalRecorderHealth()).to_dict(),
             "game_results": [game.to_dict() for game in self.games],
         }
         if self.value_leaf_provenance is not None:
@@ -2043,6 +2290,9 @@ async def _run_controlled_foulplay_games(
     server = _FoulPlayWebsocketServer(username=config.foulplay_username, host=config.websocket_host)
     bridge = _BattleBridge(showdown_root=config.showdown_root, node_binary=config.node_binary)
     game_results: list[ControlledFoulPlayGameResult] = []
+    # ONE recorder for the whole run: the bridge reuses a single policy across every
+    # seed, and records are partitioned back per game by battle_id.
+    refusal_capture = _RefusalCapture(policy, enabled=config.record_refusals)
     try:
         await server.start()
         await bridge.start()
@@ -2082,6 +2332,7 @@ async def _run_controlled_foulplay_games(
                         foulplay_process=foulplay_process,
                         foulplay_logs=foulplay_logs,
                         trajectory_callback=trajectory_callback,
+                        refusal_capture=refusal_capture,
                     )
                 )
             finally:
@@ -2096,11 +2347,20 @@ async def _run_controlled_foulplay_games(
                         foulplay_random_seed_schedule=foulplay_random_seed_schedule[: len(game_results)],
                         value_leaf_provenance=value_leaf_provenance,
                         policy_stats=_engine_policy_stats(policy, config.policy_mode),
+                        # On the PARTIAL result too: `--summary-out` rewrites the whole
+                        # document every game, so a run killed mid-way leaves this
+                        # progress write as the only artifact. Reporting health only at
+                        # the end would make every abandoned run read as unknown.
+                        refusal_recorder=refusal_capture.health(),
                     )
                 )
     finally:
         await bridge.close()
         await server.close()
+        # Detached before returning: the policy outlives this call in the comparison
+        # runner, and `_Hook` restores the bound methods only when the last
+        # subscriber leaves.
+        refusal_capture.detach()
 
     return ControlledFoulPlayBenchmarkResult(
         config=config,
@@ -2110,6 +2370,7 @@ async def _run_controlled_foulplay_games(
         foulplay_random_seed_schedule=foulplay_random_seed_schedule[: len(game_results)],
         value_leaf_provenance=value_leaf_provenance,
         policy_stats=_engine_policy_stats(policy, config.policy_mode),
+        refusal_recorder=refusal_capture.health(),
     )
 
 
@@ -3023,6 +3284,7 @@ async def _run_single_game(
     foulplay_process: asyncio.subprocess.Process,
     foulplay_logs: _ProcessLogBuffer,
     trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
+    refusal_capture: "_RefusalCapture | None" = None,
 ) -> ControlledFoulPlayGameResult:
     battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
     state = _ControlledBattleState(
@@ -3420,6 +3682,11 @@ async def _run_single_game(
         ),
         opponent_journal_recorded=len(state.opponent_journal),
         opponent_journal_failures=state.opponent_journal_failures,
+        # Filtered on the REAL battle_id, so a run-scoped recorder still files each
+        # refusal against the battle it happened in.
+        refusal_records=(
+            refusal_capture.records_for(battle_id) if refusal_capture is not None else ()
+        ),
     )
 
 
@@ -4512,6 +4779,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-refusal-records",
+        action="store_true",
+        help=(
+            "Switch OFF the #1180 refusal recorder, which is on by default. On, every "
+            "fallback decision the engine policy takes is written into --summary-out "
+            "with the per-decision state that produced it: the world-failure classes "
+            "that fired on THAT decision, the worlds spent, the engine's proposed "
+            "choices, the request's legal set in the engine's vocabulary and their "
+            "disagreement. Off, the summary keeps only the address, which for a "
+            "bridge shard cannot be replayed. Measured cost at the era-64 cell-D "
+            "fallback rate: ~1.3 us per decision (2.5e-7 of a 5.02 s decision "
+            "boundary) and +5.1% summary bytes; see the REFUSAL RECORDER block in "
+            "foulplay_bridge.py for both measurements and their parameters."
+        ),
+    )
+    parser.add_argument(
         "--no-search-fallback",
         action="store_true",
         help="Raise on search failure instead of falling back to the raw checkpoint action.",
@@ -4647,6 +4930,7 @@ def _config_from_args(
         capture_driver=getattr(args, "capture_driver", "checkpoint"),
         audit_observation_schema=getattr(args, "observation_schema", None),
         opponent_journal=getattr(args, "opponent_journal", "addressed"),
+        record_refusals=not getattr(args, "no_refusal_records", False),
     )
 
 
