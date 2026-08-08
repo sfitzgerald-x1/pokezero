@@ -376,6 +376,33 @@ mod abort_payload_tests {
              must stay in one place: separated, their ORDER decides whether a panicking \
              world reports anything, and that order is invisible from model.rs"
         );
+        // AND NOT ITS OWN LEDGER. This one line is the difference between the abort arm
+        // working and being 100% dead, and every other assertion in this test is blind
+        // to it:
+        //
+        //     guarded_search_with_ledger(|_unused| {
+        //         let mut lossy_subcases = LossySubcaseLedger::new();
+        //         multiply_batched_encoded_core(.., &mut lossy_subcases)
+        //     })
+        //
+        // compiles, keeps the binding NAME so every `contains`/ordering check above
+        // still holds, and leaves the report rendering correct counts on the clean path
+        // -- while the helper's ledger is never written, so every aborted world attaches
+        // `{}`. That is exactly the pre-PR state, invisible from outside. Found by
+        // review, which also showed it green against the first commit of this branch:
+        // the earlier "throwaway ledger" mutant only ever tripped a spelling check
+        // because it RENAMED the binding, so this class was never actually killed.
+        //
+        // Now that `guarded_search_with_ledger` owns construction, model.rs has no
+        // legitimate reason to build one: measured 0 occurrences here, 1 under the
+        // mutant.
+        assert!(
+            !model_rs.contains("LossySubcaseLedger::new()"),
+            "model.rs constructs its own ledger. The one the search records into must be \
+             the one `guarded_search_with_ledger` attaches, or the abort arm silently \
+             carries an empty payload for every world -- the pre-PR state, with the \
+             clean path's report still correct so nothing looks wrong"
+        );
 
         // ORDERING WITHIN THE SEARCH LOOP, which the helper cannot enforce. Positions
         // are compared rather than exact layout matched, so reformatting between the
@@ -476,15 +503,24 @@ mod abort_payload_tests {
     /// residue -- and a success must pass through with NOTHING attached, because the
     /// clean path carries its counts in the report and attaching there is how the two
     /// channels would begin double-counting.
+    ///
+    /// AND THE MESSAGE MUST SURVIVE THE HELPER BYTE FOR BYTE. `attach_to` has its own
+    /// purity pin one layer down, and the exactly-one-`json_object()` pin covers
+    /// `model.rs` only -- which left `guarded_search_with_ledger` exempt from both, in a
+    /// module that is now the single most natural place for a future author to "add
+    /// context" to a reason key. Restating the error here as
+    /// `format!("{} [lossy_subcases={}]", ..)` passed the entire suite. That is the
+    /// blocking N2b finding re-opened one stack frame up; it does not stop being
+    /// blocking by moving file. Found by review.
     #[test]
     fn the_guard_attaches_on_a_returned_error_and_reports_through_the_ledger_on_success() {
         Python::initialize();
 
+        const REASON: &str = "attribution-unsafe renderer branch rejected before tree/model fold: \
+             sleeptalk_called_unidentified";
         let aborted: PyResult<String> = super::guarded_search_with_ledger(|ledger| {
             ledger.record("sleeptalk_called_unidentified:ambiguous");
-            Err(PyValueError::new_err(
-                "attribution-unsafe renderer branch rejected before tree/model fold: x",
-            ))
+            Err(PyValueError::new_err(REASON))
         });
         let error = aborted.expect_err("the search returned Err");
         let payload = read_payload(&error).expect("an ordinary abort must carry counts");
@@ -492,6 +528,21 @@ mod abort_payload_tests {
             payload.get("sleeptalk_called_unidentified:ambiguous"),
             Some(&1)
         );
+        Python::attach(|py| {
+            assert_eq!(
+                error.value(py).to_string(),
+                REASON,
+                "the helper altered the reason key. Those bytes become the \
+                 `world_failure_reasons` key, are compared across eras, and are \
+                 truncated at 512 chars by `_bounded_reason_detail` -- the counts ride \
+                 on an ATTRIBUTE precisely so the message never has to change"
+            );
+            assert!(
+                error.is_instance_of::<PyValueError>(py),
+                "the helper changed the exception type; a BaseException subclass slips \
+                 past `except Exception` and kills the shard"
+            );
+        });
 
         let clean: PyResult<String> = super::guarded_search_with_ledger(|ledger| {
             ledger.record("sleeptalk_called_unidentified:ambiguous");
