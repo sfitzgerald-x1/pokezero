@@ -83,6 +83,24 @@ jobs:
             reports/artifacts/c131_leechseed_main_holdout_sweep.json
             reports/artifacts/c131_leechseed_fix_dev_sweep.json
             reports/artifacts/c131_leechseed_fix_holdout_sweep.json
+            # C147's EIGHT G33b sweeps -- a pre-merge base/gate pair and a merged one, both
+            # retained. Listed for the same reason as the c131 four
+            # above: they are corpus members of the exact-count pin in
+            # tests/test_boundary_verdict_partition.py, so a PR whose only change is
+            # deleting one of them must trip this workflow rather than skip it.
+            reports/artifacts/c147_g33b_base_dev_sweep.json
+            reports/artifacts/c147_g33b_base_holdout_sweep.json
+            reports/artifacts/c147_g33b_gate_dev_sweep.json
+            reports/artifacts/c147_g33b_gate_holdout_sweep.json
+            reports/artifacts/c147_g33b_merged_base_dev_sweep.json
+            reports/artifacts/c147_g33b_merged_base_holdout_sweep.json
+            reports/artifacts/c147_g33b_merged_gate_dev_sweep.json
+            reports/artifacts/c147_g33b_merged_gate_holdout_sweep.json
+            # The remaining five C147 artifacts -- two row replays, two merged row replays
+            # and the reach census -- are outside the sweep corpus but INSIDE the
+            # never-fired counter corpus (360), whose count is equally exact. One glob
+            # rather than five lines, and it also covers the eight named above.
+            reports/artifacts/c147_g33b_*.json
             src/pokezero/**
             # C145: the Encore-on-transform pins, which are what hold `19100170/71-72`
             # closed. Listed so a PR that ONLY weakens the pin file still trips this
@@ -934,8 +952,16 @@ jobs:
           # against the PREVIOUS branch head and then carried forward across the very commit
           # that deleted these five, instead of being re-run. A cross-check a change makes
           # about itself is worth exactly one thing: running it.
-          if [ "${passed:-0}" -lt 429 ]; then
-            echo "::error::expected >= 429 crate tests, got ${passed:-0}"
+          #
+          # 429 -> 436 with C147's seven G33b pins, all seven named in the loop below.
+          # MEASURED on the MERGED tree by summing this step's own expression over a local
+          # run -- `429 + 7` agrees, but the figure comes from the run, not the arithmetic,
+          # because this branch merged `origin/main` after its first measurement and a floor
+          # carried across a merge is exactly the stale cross-check the paragraph above
+          # describes. Same run: 436 `... ok` lines, 0 failures, 1 ignored, and no NAME
+          # removed against the pre-merge head.
+          if [ "${passed:-0}" -lt 436 ]; then
+            echo "::error::expected >= 436 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
@@ -984,7 +1010,14 @@ jobs:
                      events::tests::a_move_immobilization_marker_is_classified_by_position_and_reason \
                      events::tests::a_marker_is_attributed_to_the_side_whose_action_it_aborted \
                      events::tests::the_attribution_unsafe_label_is_deduplicated_and_sorted \
-                     the_markers_de_collapse_what_combine_duplicate_instructions_had_merged; do
+                     the_markers_de_collapse_what_combine_duplicate_instructions_had_merged \
+                     events::tests::a_truncated_leftovers_slot_is_not_booked_so_the_drain_stays_silent \
+                     events::tests::a_faster_seeder_keeps_its_leftovers_tag \
+                     events::tests::a_spare_pokemon_behind_the_victim_keeps_the_leftovers_tag \
+                     events::tests::a_speed_tie_is_not_gated \
+                     events::tests::a_future_sight_kill_is_not_gated \
+                     events::tests::a_perish_song_kill_is_not_gated \
+                     events::tests::a_liquid_ooze_kill_is_not_gated; do
             grep -qxE "test $pin \.\.\. ok" /tmp/cargo.log || {
               echo "::error::renderer pin $pin did not run"
               exit 1

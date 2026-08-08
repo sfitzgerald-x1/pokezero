@@ -169,7 +169,7 @@ _C141 = {
 #      disarms this pin is indistinguishable from a correct one in the diff.
 # All four c145 members close the four-term identity through the checker below: 79 + 2 + 0 + 0 == 81
 # at the two pre-fix commits, 81 + 0 + 0 + 0 == 81 at the two post-fix ones.
-_EXPECTED_SWEEP_ARTIFACTS = 79
+_EXPECTED_SWEEP_ARTIFACTS = 87
 #
 # 75 -> 79 (C142). MEASURED by step 2 below, and the measurement corrected an expectation:
 # the number was predicted as 78 on the belief that only three of C142's four sweep artifacts
@@ -182,6 +182,32 @@ _EXPECTED_SWEEP_ARTIFACTS = 79
 # `reports/artifacts/c142_recoil_ground_truth.json` is deliberately outside the corpus: it is
 # Showdown recoil ground-truth measurement with no `boundaries_measured`. Verified via the set
 # difference, not assumed.
+#
+# 79 -> 83 (C147, the G33b residual-bucket gate). RE-DERIVED by running `_sweep_reports` itself --
+# not a reimplementation of it -- over BOTH trees, per steps 1-2 above: 79 on a worktree of
+# `origin/main` at `e0a23e4e` and 83 here, with the set difference exactly
+# `reports/artifacts/c147_g33b_{base,gate}_{dev,holdout}_sweep.json` and NOTHING removed.
+#
+# C147 adds three further artifacts that are deliberately OUTSIDE this corpus, and that was
+# verified by the same set difference rather than reasoned about:
+# `c147_g33b_row_replay_{base,gate}.json` are single-row enumerated replays with no top-level
+# `boundaries_measured`, and `c147_g33b_gate_reach.json` is a firing census that nests its sweep
+# scalars under `windows.*.sweeps` for the same reason. Seven files added, four corpus members --
+# which is exactly why the directory count and the corpus count cannot check each other.
+#
+# 83 -> 87 after this branch MERGED `origin/main` at `f1c3b3aa`. #1166 adds an engine patch (72
+# patches now) and changes the renderer, so the pre-merge base/gate pair no longer measures the tree
+# that ships; the merged pair `c147_g33b_merged_{base,gate}_{dev,holdout}_sweep.json` does, and BOTH
+# pairs are retained -- the first is what the registered prediction was made against, the second is
+# what certifies the merged head. RE-DERIVED after the merge by the same two-tree procedure: 79 on a
+# worktree of `f1c3b3aa` and 87 here, set difference exactly the eight sweeps, nothing removed. The
+# merge also re-ran the corpus count from scratch rather than carrying 83 forward, because a figure
+# that was true before a merge and false after is this program's confirmed failure mode.
+#
+# The two merged row replays are outside the corpus for the same reason as the pre-merge two.
+#
+# Step 4 was run at BOTH numbers: at 82/84 before the merge and at 86/88 after it, and this module
+# fails at each, so neither bump disarmed the pin.
 
 
 def _sweep_reports() -> list[tuple[str, dict]]:

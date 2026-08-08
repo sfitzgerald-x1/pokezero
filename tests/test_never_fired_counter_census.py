@@ -94,7 +94,17 @@ _CORPUS_TREES = ("reports", "docs")
 # trap). Bumping this number is only correct after confirming the set DIFFERENCE against
 # the base tree is exactly what the PR adds, with nothing removed -- a member that
 # vanishes is this pin's fail-open, and pure addition masks it.
-_EXPECTED_COUNTER_ARTIFACTS = 347
+# 347 -> 360 (C147, the G33b residual-bucket gate). RE-DERIVED by importing this module
+# into a worktree of `origin/main` at `99c77eb7` and calling `counter_artifacts()` there --
+# 347 -- against 360 here, with the set difference exactly the thirteen
+# `reports/artifacts/c147_g33b_*.json` this branch adds and NOTHING removed. Not arithmetic
+# on the previous figure, and confirmed still live at 359 and at 361.
+#
+# Note the two corpora move independently and cannot cross-check each other: only EIGHT of
+# these thirteen are members of `tests/test_boundary_verdict_partition.py`'s sweep corpus
+# (79 -> 87), because that one selects on a top-level `boundaries_measured` and this one takes
+# every committed JSON under `reports/` and `docs/`.
+_EXPECTED_COUNTER_ARTIFACTS = 360
 
 # ---------------------------------------------------------------------------
 # The taxonomies, derived from source rather than transcribed.
