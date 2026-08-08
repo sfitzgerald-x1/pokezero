@@ -33,6 +33,12 @@ The original neural encoding: `window_size=4` complete copies of the battle stat
 frame carried one field token, six self-team tokens, six opponent tokens, nine action candidates,
 and **24 raw recent-event tokens** — 46 rows per frame, 184 per decision.
 
+The shape was modeled on [Metamon](https://metamon.tech/)'s input design — prior art for
+observation and evaluation ideas here, though PokeZero owns its implementation and trains from
+pure self-play. In practice it proved quite wasteful of input space: most of every decision's
+rows re-stated facts the model had already been shown, and the versions that follow are largely
+the history of reclaiming that space.
+
 **The limitation.** The per-mon tokens in each frame already encode most of what the older frames
 repeat, so the model paid four times for one battle state, with much of the genuinely temporal
 signal riding on the unstructured event rows. Deeper windows did help — h8 held a consistent edge
@@ -122,6 +128,17 @@ What the k1 row was carrying is **named as current state** — the feature pack:
   the currently Traced ability, last-round damage dealt/taken, Choice lock, item swapped.
 - **Field (pack B):** entry-hazard credit and expected value per side, items-removed credit.
 - **Belief:** matchup-conditional switch/stay tendencies beside the marginal ones.
+
+The design reading of the sweep: k1 winning meant *prior-turn information and longer trends
+matter* — but not enough to deserve 64 of 87 rows. So v4 encodes what that history was providing
+while investing almost no input space in it: the recent-turn facts and longer-horizon trends
+arrive as a handful of named columns on tokens the model already attends to, keeping the
+transformer's attention concentrated on high-value fields rather than spread across a mostly-empty
+history region — the bet being that a focused input also learns faster.
+
+The ~3.8× shorter sequence pays a second time at test-time search: forward passes are the budget
+MCTS spends, so a shorter forward should translate directly into more states visited per
+search — deeper and wider trees for the same latency.
 
 There is precedent that a named statistic beats the raw rows it summarizes: the consecutive-stall
 counter already encodes the double-protect decision exactly, where raw history would spend a whole
