@@ -1,0 +1,43 @@
+{
+  "counted_from": "stderr of scripts/engine_transition_differential.py --games 200, one run per window",
+  "gate_build_fingerprint": "b8ff14456823adbe7b72f8e3dd7b65191a8ce84801fa8622b1286a71f40d7e86",
+  "instrumentation": [
+    "eprintln!(\"G33B_PREDICATE_TRUE winner={winner} loser={loser}\");  // inside the gating arm of leftovers_slot_truncated",
+    "if active.item == Items::LEFTOVERS && leftovers_truncated[i] { eprintln!(\"G33B_SLOT_SKIPPED side={i}\"); }  // at the booking site"
+  ],
+  "instrumented_build_fingerprint": "dee00fce7912499daa0929e7fa712d8889d1c9fc0da0f04935069f38380869c1",
+  "what": "C146 reach census for the G33b gate: how many times the built predicate fires inside the two swept windows. Measured with a THROWAWAY instrumented build whose only difference from the gate build is the two eprintln! lines quoted below; that build is NOT part of the patch, and its own sweep artifacts are deliberately not committed because its fingerprint is not reproducible from any committed tree.",
+  "why_a_separate_measurement": "A verdict-level sweep cannot see this gate fire. At every firing site the baseline plan was ALREADY unusable, so any mutation preserving the booking count reproduces the baseline output exactly; the only detectable change at a firing site is the one that makes the count reconcile, which is the gate itself.",
+  "windows": {
+    "dev": {
+      "games": 200,
+      "leftovers_slots_skipped": 52,
+      "predicate_true": 54,
+      "seed_start": 19000000,
+      "sweeps": {
+        "counters_identical_to_the_same_build_base_sweep": true,
+        "diverged": 1,
+        "divergence_classes": {
+          "component_magnitude:heal": 1
+        },
+        "engine_errors": 0,
+        "matched": 15502,
+        "measured": 15503
+      }
+    },
+    "holdout": {
+      "games": 200,
+      "leftovers_slots_skipped": 56,
+      "predicate_true": 58,
+      "seed_start": 19100000,
+      "sweeps": {
+        "counters_identical_to_the_same_build_base_sweep": true,
+        "diverged": 0,
+        "divergence_classes": {},
+        "engine_errors": 0,
+        "matched": 15579,
+        "measured": 15579
+      }
+    }
+  }
+}

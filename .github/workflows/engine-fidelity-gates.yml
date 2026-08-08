@@ -71,6 +71,14 @@ jobs:
             reports/artifacts/c131_leechseed_main_holdout_sweep.json
             reports/artifacts/c131_leechseed_fix_dev_sweep.json
             reports/artifacts/c131_leechseed_fix_holdout_sweep.json
+            # C146's four G33b sweeps. Listed for the same reason as the c131 four
+            # above: they are corpus members of the exact-count pin in
+            # tests/test_boundary_verdict_partition.py, so a PR whose only change is
+            # deleting one of them must trip this workflow rather than skip it.
+            reports/artifacts/c146_g33b_base_dev_sweep.json
+            reports/artifacts/c146_g33b_base_holdout_sweep.json
+            reports/artifacts/c146_g33b_gate_dev_sweep.json
+            reports/artifacts/c146_g33b_gate_holdout_sweep.json
             src/pokezero/**
             # C145: the Encore-on-transform pins, which are what hold `19100170/71-72`
             # closed. Listed so a PR that ONLY weakens the pin file still trips this

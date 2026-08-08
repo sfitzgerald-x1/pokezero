@@ -187,3 +187,39 @@ predicted, and the only positive evidence would be §5 plus the seven pins.
 
 A withdrawn patch with a clean falsifier is the intended outcome of this method when the
 measurement says so, and two have already been withdrawn under it.
+
+---
+
+## 8. Outcomes — appended after the measurement, with §1–§7 untouched
+
+Nothing above this line was edited. Full write-up:
+`reports/c146_g33b_residual_bucket_gate.md`.
+
+| prediction | outcome |
+|---|---|
+| **P1** dev unchanged (15968 / 15503 / 15502 / 1 / 0, `component_magnitude:heal` 1, 14156 / 1347) | **HELD**, every scalar |
+| **P2** validation holdout unchanged (16155 / 15579 / 15579 / 0 / 0, `{}`, 14148 / 1431) | **HELD**, every scalar |
+| **P3** the whole counter block unchanged | **HELD** — the gate's `counters` dict is *byte-identical* to the same-build base sweep's on both windows, 23 keys on dev and 21 on holdout |
+| **P4** zero rows closed on the two windows | **HELD**, and it was the registered expectation |
+| **P5** the built gate reproduces the modelled closure on the replayed row | **HELD** — `shipped_renderer` goes `diverged` / 12 misses → **`matched` / 0 misses** over 416 branches, and `modelled_g33b_gate.soundness.heals_relabelled` falls **350 → 0**, so the built gate covers exactly the set the model covered |
+| **P6** one pin red on `origin/main`, six green on both | **HELD** — full crate suite on a separately-vendored `e0a23e4e` worktree: `135 passed; 1 failed`, the failure being `a_truncated_leftovers_slot_is_not_booked_so_the_drain_stays_silent`, printing `left: ["item: Leftovers"] right: []` |
+| §4 falsifier, all six clauses, both windows | **did not fire** |
+| §6 reach — predicted non-zero, with a zero to be reported as such | **non-zero: 52 slot skips on dev, 56 on holdout.** The gate executes 108 times across the 400 games and changes no verdict |
+
+**One thing §2 got incomplete, recorded because the control is what caught it.** §2 argued the
+committed C142 base artifacts were a same-build baseline because `main` at `e0a23e4e` reproduces
+their engine fingerprint. Every verdict scalar reproduced. But two `counters` keys differ from
+those artifacts — `strict:diverged_on_full_branch_set` (dev) and
+`strict:lossy_render_marker:attract_empty_tail_ambiguous` (holdout) — because both were **added to
+`scripts/engine_transition_differential.py`** after C142's sweeps were taken, and the engine build
+fingerprint does not cover `scripts/`. Compared against the C142 artifacts rather than against the
+fresh same-build, same-harness base, P3 would have read as falsified by a change this branch did not
+make. See the report §5a.
+
+**And one stale figure in §2, left standing rather than edited.** §2 names the gate build
+`a0796bdd…`. That was the wheel built before the seven pins were added to `events.rs`; adding them
+moved the *source* fingerprint, `engine_build_fingerprint.py --check` reported `STALE`, the wheel was
+rebuilt, and every gate measurement reported here was re-run on **`b8ff1445…`**. The §2 value is not
+corrected in place because §1–§7 are frozen; it is corrected here and in the report §0.
+
+**No sweep was run at or above seed 19,200,000.**
