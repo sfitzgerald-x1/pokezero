@@ -344,7 +344,7 @@ rather than assumed:
 | M1 | `_EXPECTED_COUNTER_ARTIFACTS` 347 → 346 | ✅ caught (1 failure) |
 | M2 | 347 → **348** | ✅ caught — the pin fires one lower *and* one higher |
 | M3 | drop `docs/` from the corpus | ✅ caught (2 failures) |
-| M4 | scope the corpus to `reports/artifacts/` — **H15's actual glob** | ✅ caught, **7 failures**, including the divergence-class partition. Direct proof the pin would have caught H15 |
+| M4 | scope the corpus to `reports/artifacts/` — **H15's actual glob** | ✅ caught, **7 failures + 1 error** (the error is the c32 witness pin, which raises rather than asserts once `self_moveset_mismatch` stops being found). Includes the divergence-class partition, so this is direct proof the pin would have caught H15 |
 | M5 | set `_FIRED_DIVERGENCE_CLASSES` to H15's six | ✅ caught |
 | M6 | set `_FIRED_WORLD_UNSUPPORTED` to exclude H13's three named reasons | ✅ caught |
 | M7 | kill the path matcher for `coverage_reducing_skips` (the H14 shape) | ✅ caught |
