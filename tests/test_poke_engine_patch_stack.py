@@ -26,8 +26,9 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins for the 72-patch stack. The two collapse-class patches, the
-# roll-enumeration patch and the immobilizer-marker patch all touch generate_instructions.rs
+# Post-patch content pins for the 73-patch stack. The two collapse-class patches, the
+# roll-enumeration patch, the immobilizer-marker patch and the Sleep Talk double
+# damage-dealt reset guard all touch generate_instructions.rs
 # (the marker patch also touches src/instruction.rs, src/state.rs and tests/test_gen3.rs, none
 # of which is pinned here), so exactly one of the four digests
 # below moved and three did NOT: items.rs, abilities.rs and choice_effects.rs are
@@ -38,7 +39,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # tree on disk -- the build rewrites that tree, so pinning it can pin a stale
 # preimage (which it once did, and shipped a red gate).
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "2f0e007cfc5980fd5f833bbcceaf14ebfbb127ac12cfdea34e4e04f6e9081c56",
+    "src/gen3/generate_instructions.rs": "209b938fe187c13f92fe673cd7852c7e4af5ee32256c568286c388446113bc04",
     "src/gen3/items.rs": "14415306c663e3e7a9a75f5a4882105cbb9bb91013ca96a35be3a30ca395ea93",
     "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
     "src/gen3/choice_effects.rs": "4d2179c6adf99c444be594c195faa3999447d7f366d97f9f26b70b99a544c7c6",
@@ -120,7 +121,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-15:]],
+                [entry.name for entry in applied[-16:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -141,6 +142,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     # since been rewritten by the confusion-ladder and OBLIVIOUS patches, so
                     # it can only be authored against the fully-patched tree.
                     "poke-engine-gen3-attract-marker.patch",
+                    "poke-engine-gen3-sleeptalk-damage-dealt-double-reset.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
@@ -158,6 +160,13 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             self.assertIn("let original_accuracy = choice.accuracy;", generated)
             self.assertIn("heal_amount: 0", generated)
             self.assertIn("blocked_by_protect && incoming_instructions.percentage != 0.0", generated)
+            # The Sleep Talk double damage-dealt reset guard. Pinned on the exact
+            # predicate rather than on a comment line: dropping `!choice
+            # .sleep_talk_move` is the whole revert, and it leaves the file
+            # compiling and the comment above it intact.
+            self.assertIn(
+                "if state.use_damage_dealt && !choice.sleep_talk_move {", generated
+            )
             for relative_path, expected_sha256 in EXPECTED_FINAL_SHA256.items():
                 actual_sha256 = hashlib.sha256((source / relative_path).read_bytes()).hexdigest()
                 self.assertEqual(actual_sha256, expected_sha256, relative_path)
