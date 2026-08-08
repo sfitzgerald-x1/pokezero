@@ -386,8 +386,8 @@
       "explosion"
      ],
      "belief": {
-      "candidate_set_count": 6,
-      "uncertainty": 0.428571,
+      "candidate_set_count": 5,
+      "uncertainty": 0.416667,
       "possible_abilities": [
        "Levitate"
       ],
@@ -417,8 +417,8 @@
       "softboiled"
      ],
      "belief": {
-      "candidate_set_count": 3,
-      "uncertainty": 0.15,
+      "candidate_set_count": 2,
+      "uncertainty": 0.117647,
       "possible_abilities": [
        "Synchronize"
       ],
@@ -785,9 +785,9 @@
   },
   "category_vocab": {
    "built_with_include_turn_merged": true,
-   "tokens": 1216,
+   "tokens": 1217,
    "oov_buckets": 16,
-   "total_rows": 1233,
+   "total_rows": 1234,
    "padding_row": 0
   },
   "attention_mask_at_boundary": {
@@ -843,7 +843,7 @@
     "POKEZERO_BELIEF_SET_SOURCE": "1"
    },
    "format_id": "gen3randombattle",
-   "source_hash": "e648ed6a6fbf7c78",
+   "source_hash": "f9e35e1fddae5064",
    "note": "set source attached to PublicBattleBeliefEngine exactly as in tests/test_corpus_replay.py; POKEZERO_BELIEF_SET_SOURCE is the env-level flip the harness paths use for the same switch"
   },
   "dual_schema_story": {
@@ -897,6 +897,14 @@
     "CATEGORY_TYPE_1": {
      "id": 1172,
      "token": "type:rock"
+    },
+    "CATEGORY_BELIEF_ABILITY_OFFSET": {
+     "id": 9,
+     "token": "belief:possible_ability:clearbody"
+    },
+    "CATEGORY_BELIEF_ITEM_OFFSET": {
+     "id": 76,
+     "token": "belief:possible_item:leftovers"
     }
    },
    "numerics": {
@@ -904,6 +912,10 @@
     "NUMERIC_ACTIVE": 1.0,
     "NUMERIC_LEGAL": 1.0,
     "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_ITEM_COUNT": 1.0,
+    "NUMERIC_REVEALED_ABILITY": 1.0,
+    "NUMERIC_REVEALED_ITEM": 1.0,
     "NUMERIC_LEVEL": 0.8,
     "NUMERIC_BASE_HP": 0.4,
     "NUMERIC_BASE_ATK": 0.5,
@@ -941,12 +953,24 @@
     "CATEGORY_TYPE_1": {
      "id": 1171,
      "token": "type:psychic"
+    },
+    "CATEGORY_BELIEF_ABILITY_OFFSET": {
+     "id": 64,
+     "token": "belief:possible_ability:synchronize"
+    },
+    "CATEGORY_BELIEF_ITEM_OFFSET": {
+     "id": 81,
+     "token": "belief:possible_item:salacberry"
     }
    },
    "numerics": {
     "NUMERIC_HP_FRACTION": 1.0,
     "NUMERIC_LEGAL": 1.0,
     "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_ITEM_COUNT": 1.0,
+    "NUMERIC_REVEALED_ABILITY": 1.0,
+    "NUMERIC_REVEALED_ITEM": 1.0,
     "NUMERIC_LEVEL": 0.72,
     "NUMERIC_BASE_HP": 0.5,
     "NUMERIC_BASE_ATK": 0.5,
@@ -983,12 +1007,24 @@
     "CATEGORY_TYPE_1": {
      "id": 1166,
      "token": "type:grass"
+    },
+    "CATEGORY_BELIEF_ABILITY_OFFSET": {
+     "id": 8,
+     "token": "belief:possible_ability:chlorophyll"
+    },
+    "CATEGORY_BELIEF_ITEM_OFFSET": {
+     "id": 76,
+     "token": "belief:possible_item:leftovers"
     }
    },
    "numerics": {
     "NUMERIC_HP_FRACTION": 0.981949,
     "NUMERIC_LEGAL": 1.0,
     "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_ITEM_COUNT": 1.0,
+    "NUMERIC_REVEALED_ABILITY": 1.0,
+    "NUMERIC_REVEALED_ITEM": 1.0,
     "NUMERIC_LEVEL": 0.95,
     "NUMERIC_BASE_HP": 0.325,
     "NUMERIC_BASE_ATK": 0.275,
@@ -1025,12 +1061,24 @@
     "CATEGORY_TYPE_1": {
      "id": 1169,
      "token": "type:normal"
+    },
+    "CATEGORY_BELIEF_ABILITY_OFFSET": {
+     "id": 56,
+     "token": "belief:possible_ability:soundproof"
+    },
+    "CATEGORY_BELIEF_ITEM_OFFSET": {
+     "id": 76,
+     "token": "belief:possible_item:leftovers"
     }
    },
    "numerics": {
     "NUMERIC_HP_FRACTION": 0.893417,
     "NUMERIC_LEGAL": 1.0,
     "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_ITEM_COUNT": 1.0,
+    "NUMERIC_REVEALED_ABILITY": 1.0,
+    "NUMERIC_REVEALED_ITEM": 1.0,
     "NUMERIC_LEVEL": 0.86,
     "NUMERIC_BASE_HP": 0.52,
     "NUMERIC_BASE_ATK": 0.455,
@@ -1071,10 +1119,16 @@
     "CATEGORY_TYPE_2": {
      "id": 1164,
      "token": "type:flying"
+    },
+    "CATEGORY_BELIEF_ABILITY_OFFSET": {
+     "id": 29,
+     "token": "belief:possible_ability:keeneye"
     }
    },
    "numerics": {
     "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
+    "NUMERIC_REVEALED_ABILITY": 1.0,
     "NUMERIC_LEVEL": 0.87,
     "NUMERIC_BASE_HP": 0.415,
     "NUMERIC_BASE_ATK": 0.4,
@@ -1114,10 +1168,22 @@
     "CATEGORY_TYPE_2": {
      "id": 1164,
      "token": "type:flying"
+    },
+    "CATEGORY_BELIEF_ABILITY_OFFSET": {
+     "id": 24,
+     "token": "belief:possible_ability:hypercutter"
+    },
+    "CATEGORY_BELIEF_ITEM_OFFSET": {
+     "id": 81,
+     "token": "belief:possible_item:salacberry"
     }
    },
    "numerics": {
     "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_ITEM_COUNT": 1.0,
+    "NUMERIC_REVEALED_ABILITY": 1.0,
+    "NUMERIC_REVEALED_ITEM": 1.0,
     "NUMERIC_LEVEL": 0.83,
     "NUMERIC_BASE_HP": 0.325,
     "NUMERIC_BASE_ATK": 0.375,
@@ -1375,8 +1441,8 @@
    "numerics": {
     "NUMERIC_PRESENT": 1.0,
     "NUMERIC_REVEALED_MOVE_COUNT": 1.0,
-    "NUMERIC_CANDIDATE_SET_COUNT": 6.0,
-    "NUMERIC_UNCERTAINTY": 0.428571,
+    "NUMERIC_CANDIDATE_SET_COUNT": 5.0,
+    "NUMERIC_UNCERTAINTY": 0.416667,
     "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
     "NUMERIC_POSSIBLE_ITEM_COUNT": 1.0,
     "NUMERIC_POSSIBLE_MOVE_COUNT": 6.0,
@@ -1459,8 +1525,8 @@
     "NUMERIC_LEGAL": 1.0,
     "NUMERIC_PRESENT": 1.0,
     "NUMERIC_REVEALED_MOVE_COUNT": 2.0,
-    "NUMERIC_CANDIDATE_SET_COUNT": 3.0,
-    "NUMERIC_UNCERTAINTY": 0.15,
+    "NUMERIC_CANDIDATE_SET_COUNT": 2.0,
+    "NUMERIC_UNCERTAINTY": 0.117647,
     "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
     "NUMERIC_POSSIBLE_ITEM_COUNT": 1.0,
     "NUMERIC_POSSIBLE_MOVE_COUNT": 5.0,

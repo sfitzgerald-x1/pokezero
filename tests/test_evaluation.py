@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2_2
 from pokezero.bootstrap import TEACHER_BOOTSTRAP_SCHEMA_VERSION
 from pokezero.bootstrap_cli import build_arg_parser as build_bootstrap_arg_parser
 from pokezero.eval_cli import main as eval_cli_main
@@ -5847,8 +5848,29 @@ if __name__ == "__main__":
             first_checkpoint = temp_path / "promoted" / "first.json"
             second_checkpoint = temp_path / "promoted" / "second.json"
             first_checkpoint.parent.mkdir(parents=True)
-            first_checkpoint.write_text("{}", encoding="utf-8")
-            second_checkpoint.write_text("{}", encoding="utf-8")
+            # A linear checkpoint must carry `observation_schema_version`, or
+            # `checkpoint_policy_spec_observation_schema` cannot classify it and
+            # `opponent_pool_policy_specs` DROPS it (`legacy_mode="drop"`). Both fixtures were
+            # `{}`, so the promoted pool selected NOTHING -- `selected_policy_specs: []` against
+            # a required minimum of 1 -- and the readiness item failed as
+            # `promoted_opponent_pool_too_small`, which reads as a pool-size problem rather than
+            # a fixture that cannot be classified. The registry genuinely held 2 entries -- the
+            # `3` in the evidence line is `opponent_pool_size`, the selection CAP -- the
+            # readiness subparser's own `default=3` at `eval_cli.py:584`, NOT
+            # `DEFAULT_MAX_HISTORICAL_OPPONENTS`, which that module never imports. Two
+            # independent 3s that happen to agree and are not coupled: changing the constant
+            # will not move this default. Reading the cap as a count is the misreading that made
+            # the original diagnosis take three attempts, and naming the wrong source for it was
+            # a fourth.
+            #
+            # Only `first` is load-bearing here: `second` is resolved as the current policy and
+            # excluded from the historical pool either way, so reverting it to `{}` still passes.
+            # Its payload is realism, not coverage.
+            promoted_payload = json.dumps(
+                {"observation_schema_version": OBSERVATION_SCHEMA_VERSION_V2_2}
+            )
+            first_checkpoint.write_text(promoted_payload, encoding="utf-8")
+            second_checkpoint.write_text(promoted_payload, encoding="utf-8")
             write_json(
                 registry_path,
                 promotion_registry_payload(

@@ -123,7 +123,24 @@ _CAT_RANGE_BASES = (
     ("CATEGORY_BELIEF_MOVE_OFFSET", sd.BELIEF_MOVE_BUCKET_COUNT),
     ("CATEGORY_VOLATILE_OFFSET", sd.VOLATILE_BUCKET_COUNT),
 )
-_CAT_EXCLUDE = {"CATEGORY_ID_BUCKETS", "CATEGORY_FIXED_COUNT"} | {n for n, _ in _CAT_RANGE_BASES}
+# The v4 feature-pack names ALIAS the v2.2 turn-merged columns -- CATEGORY_LAST_USED_MOVE is
+# index 39, the same as CATEGORY_TM_FIRST_KIND, and CATEGORY_TRACED_ABILITY is 40, the same as
+# CATEGORY_TM_FIRST_CANT. That aliasing is deliberate (the two packs write those indices on
+# disjoint row types), but the loop below is LAST-WINS over `vars(sd)`, and the v4 names are
+# defined later in showdown.py, so they silently displaced the turn-merged names.
+#
+# This dump is v2.2 with the v4 pack OFF, so the v2.2 names are the correct labels here.
+# Excluding the v4 aliases is what keeps that true. Without it the doc labels 18 genuine
+# `section: transition` tokens with v4 column names and the rendered census reads
+# "v2.2 turn-merged columns (12)" above 10 rows. An earlier revision of this change instead
+# taught the CENSUS about the two v4 names, which made the generator run again but shipped
+# exactly those mislabels -- fixing the symptom one layer downstream of the cause.
+_CAT_V4_ALIASES = {"CATEGORY_LAST_USED_MOVE", "CATEGORY_TRACED_ABILITY"}
+_CAT_EXCLUDE = (
+    {"CATEGORY_ID_BUCKETS", "CATEGORY_FIXED_COUNT"}
+    | {n for n, _ in _CAT_RANGE_BASES}
+    | _CAT_V4_ALIASES
+)
 cat_slot_names: dict[int, str] = {}
 for base_name, count in _CAT_RANGE_BASES:
     base = getattr(sd, base_name)
@@ -189,11 +206,22 @@ state = normalize_for_player(
     belief_engine=engine,
     include_turn_merged=True,
 )
+# Snapshot BEFORE encoding. `gen3_category_vocabulary` is cached, so the vocabulary object is
+# shared for the life of the process and `observed_oov_tokens` is a cumulative set: under
+# `pytest tests/` every OOV token any earlier test provoked is already in it. Asserting the
+# absolute set is empty therefore fails on test ORDER rather than on anything this extraction
+# did -- it made `tests/test_token_format_doc.py` error at setUpClass (4 errors) in the full
+# suite while passing standalone.
+#
+# The property actually wanted is unchanged and is still enforced: THIS encode must introduce
+# no OOV token. Comparing the delta says exactly that and nothing about other tests.
+_oov_before = vocab.observed_oov_tokens
 observation = observation_from_player_state(
     state, category_vocab=vocab, spec=spec, dex=dex, feature_masks=masks
 )
 observation.validate(spec)
-assert vocab.observed_oov_tokens == frozenset(), vocab.observed_oov_tokens
+_oov_introduced = vocab.observed_oov_tokens - _oov_before
+assert _oov_introduced == frozenset(), _oov_introduced
 
 
 # ------------------------------------------------------------------------- token dumping

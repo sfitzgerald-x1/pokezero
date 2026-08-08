@@ -597,7 +597,11 @@ class PriorBeliefProfileTest(unittest.TestCase):
         profile = public_belief_sampling_profile(
             _record(),
             sample_cap=2,
-            set_source=SimpleNamespace(universes={}),
+            # `supports` is part of the set-source interface (randbat.py:489) and is called by
+            # determinization before any universe lookup. The stub predates it, so it raised
+            # AttributeError instead of exercising the empty-universe path this test is about.
+            # Empty universes support nothing, so False is the honest stub.
+            set_source=SimpleNamespace(universes={}, supports=lambda format_id: False),
         )
 
         self.assertEqual(profile.combination_count, 1)
