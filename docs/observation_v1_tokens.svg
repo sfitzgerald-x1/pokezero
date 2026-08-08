@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 430" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <title id="title">PokeZero V1 observation token input</title>
+  <desc id="desc">A v1 decision stacked four complete observation frames. Each frame carried one field token, six self Pokemon, six opponent Pokemon, nine legal actions, and 24 raw recent-event tokens — 46 tokens per frame, 184 per decision, with most content repeated across frames.</desc>
+
+  <rect width="1120" height="430" rx="16" fill="#0b1117"/>
+  <rect x="1" y="1" width="1118" height="428" rx="15" fill="none" stroke="#25303b"/>
+
+  <text x="40" y="43" fill="#edf3f8" font-size="23" font-weight="700">V1 observation input</text>
+  <text x="40" y="69" fill="#9aa8b5" font-size="13">One decision = four stacked snapshots of the whole battle state. Temporal context came from repetition, not from a dedicated history encoding.</text>
+
+  <g font-size="11" font-weight="600">
+    <rect x="853" y="26" width="106 " height="30" rx="15" fill="#18232e" stroke="#31404d"/>
+    <text x="906" y="45" text-anchor="middle" fill="#f0c66a">4 &#215; 46 rows</text>
+    <rect x="968" y="26" width="112" height="30" rx="15" fill="#18232e" stroke="#31404d"/>
+    <text x="1024" y="45" text-anchor="middle" fill="#e08f8f">184 / decision</text>
+  </g>
+
+  <text x="40" y="104" fill="#dce5ed" font-size="14" font-weight="600">Four frames, each a full re-encode (to scale within a frame: 46 tokens)</text>
+
+  <!-- frame template: 1040px / 46 tokens = 22.6/token; field 22.6, self 135.7, opp 135.7, actions 203.5, events 542.5 -->
+  <g>
+    <!-- frame t-3 -->
+    <g transform="translate(40 118)" opacity="0.45">
+      <rect x="0" y="0" width="22.6" height="30" fill="#c6943d"/>
+      <rect x="22.6" y="0" width="135.7" height="30" fill="#23725e"/>
+      <rect x="158.3" y="0" width="135.7" height="30" fill="#8d3654"/>
+      <rect x="294.0" y="0" width="203.5" height="30" fill="#315f93"/>
+      <rect x="497.5" y="0" width="542.5" height="30" fill="#4a4433"/>
+      <text x="768" y="20" fill="#cbc4a6" font-size="10" font-weight="600" text-anchor="middle">raw recent-event tokens &#215;24</text>
+    </g>
+    <text x="1092" y="138" fill="#768493" font-size="10" text-anchor="end" transform="rotate(0)">t&#8722;3</text>
+    <!-- frame t-2 -->
+    <g transform="translate(40 152)" opacity="0.6">
+      <rect x="0" y="0" width="22.6" height="30" fill="#c6943d"/>
+      <rect x="22.6" y="0" width="135.7" height="30" fill="#23725e"/>
+      <rect x="158.3" y="0" width="135.7" height="30" fill="#8d3654"/>
+      <rect x="294.0" y="0" width="203.5" height="30" fill="#315f93"/>
+      <rect x="497.5" y="0" width="542.5" height="30" fill="#4a4433"/>
+    </g>
+    <text x="1092" y="172" fill="#768493" font-size="10" text-anchor="end">t&#8722;2</text>
+    <!-- frame t-1 -->
+    <g transform="translate(40 186)" opacity="0.8">
+      <rect x="0" y="0" width="22.6" height="30" fill="#c6943d"/>
+      <rect x="22.6" y="0" width="135.7" height="30" fill="#23725e"/>
+      <rect x="158.3" y="0" width="135.7" height="30" fill="#8d3654"/>
+      <rect x="294.0" y="0" width="203.5" height="30" fill="#315f93"/>
+      <rect x="497.5" y="0" width="542.5" height="30" fill="#4a4433"/>
+    </g>
+    <text x="1092" y="206" fill="#768493" font-size="10" text-anchor="end">t&#8722;1</text>
+    <!-- frame t (current) -->
+    <g transform="translate(40 220)">
+      <rect x="0" y="0" width="22.6" height="30" fill="#c6943d"/>
+      <rect x="22.6" y="0" width="135.7" height="30" fill="#23725e"/>
+      <rect x="158.3" y="0" width="135.7" height="30" fill="#8d3654"/>
+      <rect x="294.0" y="0" width="203.5" height="30" fill="#315f93"/>
+      <rect x="497.5" y="0" width="542.5" height="30" fill="#4a4433"/>
+      <text x="90.5" y="20" fill="#d7f2e9" font-size="10" font-weight="600" text-anchor="middle">self &#215;6</text>
+      <text x="226.1" y="20" fill="#fad5df" font-size="10" font-weight="600" text-anchor="middle">opp &#215;6</text>
+      <text x="395.7" y="20" fill="#d8e7ff" font-size="10" font-weight="600" text-anchor="middle">actions &#215;9</text>
+      <text x="768" y="20" fill="#cbc4a6" font-size="10" font-weight="600" text-anchor="middle">raw recent-event tokens &#215;24</text>
+    </g>
+    <text x="1092" y="240" fill="#e6edf3" font-size="10" font-weight="700" text-anchor="end">t</text>
+  </g>
+
+  <line x1="51" y1="220" x2="51" y2="264" stroke="#c6943d" stroke-width="0" />
+  <g fill="#768493" font-size="9">
+    <text x="40" y="266">field</text>
+  </g>
+
+  <!-- the problem callouts -->
+  <text x="40" y="308" fill="#dce5ed" font-size="14" font-weight="600">Why it was replaced</text>
+  <g font-size="11.5">
+    <g transform="translate(40 322)">
+      <rect width="510" height="72" rx="9" fill="#1d151a" stroke="#3d2933"/>
+      <text x="18" y="26" fill="#f3c1c1" font-weight="600">Paying four times for one battle state</text>
+      <text x="18" y="48" fill="#9aa8b5">The per-mon tokens in each frame already carry most of what the</text>
+      <text x="18" y="62" fill="#9aa8b5">older frames repeat — 4&#215; the rows for little added signal.</text>
+    </g>
+    <g transform="translate(570 322)">
+      <rect width="510" height="72" rx="9" fill="#1d151a" stroke="#3d2933"/>
+      <text x="18" y="26" fill="#f3c1c1" font-weight="600">Raw event tokens as memory</text>
+      <text x="18" y="48" fill="#9aa8b5">24 unstructured recent-event rows per frame were the only real</text>
+      <text x="18" y="62" fill="#9aa8b5">temporal signal; snapshot windows (h4/h8) were the observed ceiling.</text>
+    </g>
+  </g>
+</svg>
