@@ -425,12 +425,24 @@ def _blocker_bucket(token: str) -> str:
     return kind
 
 
-# Budget for one crate-error `world_failure_reasons` key. Was 160, which the
-# attract sub-case split (#1030) outgrew: the refusal message is
-# `attribution-unsafe renderer branch rejected before <lane>: <slugs>`, whose
-# prefix alone eats ~68 chars, and one fully-live attract slug is 68 more
-# (`attract_empty_tail_ambiguous:paralyzed+miss+noop+volatile+cannot_act`). Two
-# sides refusing with DIFFERENT slug sets is routine and blew straight past 160.
+# Budget for one crate-error `world_failure_reasons` key. The refusal message is
+# `attribution-unsafe renderer branch rejected before <lane>: <slugs>`, whose prefix
+# alone eats ~68 chars, and two sides refusing with DIFFERENT slug sets is routine.
+#
+# THE ORIGINAL RATIONALE NO LONGER HOLDS, and is recorded rather than deleted because
+# the NUMBER it justified is still the right one. It read: "Was 160, which the attract
+# sub-case split (#1030) outgrew ... one fully-live attract slug is 68 more
+# (`attract_empty_tail_ambiguous:paralyzed+miss+noop+volatile+cannot_act`)". That slug
+# is no longer emittable at all — the immobilizer-marker change deleted
+# `attract_empty_tail_ambiguous` and its five sub-case literals, because the engine now
+# marks both move-time immobilizers and there is nothing left to refuse.
+#
+# So the 512 is now bounded by the SLEEP TALK family instead, whose slug composes one
+# token per blocked effect family. That composition, not the retired attract one, is
+# what a future widening has to be measured against — and `events.rs`'s
+# `the_attribution_unsafe_label_is_deduplicated_and_sorted` pins the budget from the
+# crate side, against the worst case the production order list can compose, so a slug
+# that outgrows this constant fails there rather than silently truncating here.
 _REASON_DETAIL_LIMIT = 512
 
 # Addresses retained per fallback CLASS. Three is enough to replay one, confirm it

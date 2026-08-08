@@ -1422,17 +1422,24 @@ poke-engine-gen3-enumerate-damage-rolls.patch
 #
 # THE DEFECT IT CLOSES: that branch was `incoming_instructions.clone()` with an
 # EMPTY delta, so it was byte-identical to the fully-paralyzed branch pushed a
-# few lines below -- "the move did not happen" has no state representation. The
-# renderer therefore could not say WHICH immobilizer fired and refused the whole
-# world (`attract_empty_tail_ambiguous`, ~46% of the remaining search-fallback
-# residue). The attract patch conceded it in its own comment: "both immobilized
-# branches carry the same empty delta".
+# few lines below -- "the move did not happen" has no state representation.
+# `combine_duplicate_instructions` merged the two, so the renderer could not say
+# WHICH immobilizer fired and refused the whole world
+# (`attract_empty_tail_ambiguous`). The attract patch conceded it in its own
+# comment: "both immobilized branches carry the same empty delta".
+#
+# DELIBERATELY UNSIZED. An earlier revision of this entry quoted a
+# share-of-fallback percentage and a slug census from an ad-hoc query with no
+# committed artifact; both are removed rather than restated, because a number in
+# a tracked file gets quoted onward as established. The residue this closes is
+# unmeasured until a campaign run says otherwise. What is measured and committed:
+# nine previously-refusing shapes now render with zero refusals
+# (`tests/test_instruction_event_mapping.py`), and the #1048 attribution oracle
+# moved +106 branches all landing in `agree` (`events.rs`).
 #
 # A pure marker, so it cannot move the leaf distribution: apply and reverse are
-# both no-ops, and the branch keeps exactly its 1/2 mass. The alternative -- a
-# lossy downgrade to `|cant|..|par|` -- was MEASURED and rejected: paralysis does
-# not dominate (era-63, 3,344 attract slug-occurrences: pure `paralyzed` 38.4%,
-# contaminated joints 61.6%) and `src/pokezero/public_action_capture.py` keys
+# both no-ops, and the branch keeps exactly its 1/2 mass. A lossy downgrade to
+# `|cant|..|par|` is not available at any price: `public_action_capture.py` keys
 # public actions as `cant:{reason}`, so `cant:Attract` and `cant:par` are
 # DIFFERENT action ids downstream.
 #

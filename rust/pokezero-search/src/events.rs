@@ -32,8 +32,16 @@
 //! Some real-protocol distinctions are NOT recoverable from the instruction
 //! stream, because the engine itself merges outcomes with identical deltas
 //! (`combine_duplicate_instructions`):
-//! - full-paralysis vs. miss (both: empty delta) — rendered as `|cant|..|par`
-//!   (the usually-larger probability mass), documented ambiguity;
+//! - full-paralysis vs. miss: NO LONGER AMBIGUOUS, and this entry is kept as the
+//!   worked example of how such an entry gets retired. It used to read "both:
+//!   empty delta — rendered as `|cant|..|par` (the usually-larger probability
+//!   mass), documented ambiguity". The merge was the cause, so the fix was in the
+//!   ENGINE, not here: `Instruction::MoveImmobilized` marks the immobilized branch
+//!   (a pure no-op, so no mass moves), the two stop being identical deltas, and
+//!   `|cant|..|par` is now read off the marker instead of guessed. An UNMARKED
+//!   empty tail is therefore provably not an immobilization, which is what makes
+//!   the miss render below correct rather than merely likelier. Attract is marked
+//!   the same way and by the same patch;
 //! - the KO-straddle branch conflates "high roll" and "crit" at the level of
 //!   BRANCH STRUCTURE — one arm carries both masses. Its damage IS now labelled
 //!   `|-crit|` when it exceeds the maximum non-crit roll, since that is decidable;
@@ -1738,9 +1746,26 @@ fn consume_move_prelude(
     // advances the confusion counter on a turn Showdown never reaches) and is left
     // alone here: gating it needs `reaches_confusion_handler` to change, which moves
     // instruction lists on branches this change has no business touching.
-    let remainder_is_only_immobilization_markers = segment[*cursor..]
-        .iter()
-        .all(|ins| matches!(ins, Instruction::MoveImmobilized(_)));
+    // SHORT **AND** MARKER-ONLY. `all()` alone is vacuously true on an EMPTY remainder --
+    // which is the pre-marker case this check has always had to cover -- but it is also
+    // vacuously true in the fail-open direction if the predicate is ever widened, and review
+    // measured that: replacing the `matches!` with `true` leaves the whole suite green while
+    // changing 44 reachable branches, all sleep + confusion at `sleep_turns == 0`. There the
+    // remainder is `[Damage]` (a confusion self-hit on the same zero-mass phantom), and the
+    // widened guard swallows it entirely behind `|cant|..|slp` with `used_move = false` --
+    // the identical silent-swallow shape guarded twice at the callee walk.
+    //
+    // The length bound makes the fail-open unrepresentable rather than merely untaken: at
+    // most ONE instruction may hide here, and it must be a marker. A longer marker-only
+    // remainder would be an engine bug, and failing this check sends it to the marker arm,
+    // which refuses it as non-terminal. Every direction out of here is closed.
+    //
+    // `the_sleep_gate_does_not_swallow_a_confusion_self_hit_phantom` is the pin.
+    let remainder = &segment[*cursor..];
+    let remainder_is_only_immobilization_markers = remainder.len() <= 1
+        && remainder
+            .iter()
+            .all(|ins| matches!(ins, Instruction::MoveImmobilized(_)));
     if pre_status == PokemonStatus::SLEEP
         && !sleep_gate_seen
         && remainder_is_only_immobilization_markers
@@ -2741,18 +2766,65 @@ fn render_move_phase(
             };
             side_condition_value(sim.state, target_side, sc.condition) >= cap
         });
-    // FOUR PREDICATES DELETED HERE, not merely unused: `volatile_empty_tail_ambiguous`,
-    // `deterministic_noop`, `move_could_act` and `empty_tail_can_be_accuracy_miss`
-    // existed ONLY to decide the two empty-tail immobilizer inferences below, and both
-    // inferences are gone now that the engine marks its immobilizers. Their inputs
-    // (`status_fail`, `status_type_immune`, `boost_has_no_effect`, `side_condition_fail`,
-    // `capped_boost_move`, `defender_protected`, `absorb`, `ability_immune`) are all
-    // still live and still read directly by the deterministic no-effect renders and the
-    // miss inference below, which is where an empty tail is now handled with no
-    // reference to the attacker's status at all.
+    // ONE QUESTION, not the four predicates that used to live here. They were
+    // `volatile_empty_tail_ambiguous`, `deterministic_noop`, `move_could_act` and
+    // `empty_tail_can_be_accuracy_miss`, and they existed to decide the two empty-tail
+    // immobilizer INFERENCES below -- both of which are gone now that the engine marks its
+    // immobilizers. An earlier revision deleted them outright; they are back, folded into a
+    // single boolean, for the OPPOSITE purpose: the fail-closed backstop further down needs
+    // to know whether an empty tail has any legitimate explanation at all.
     //
-    // Left as a deletion rather than `let _ =`: a predicate kept alive for no reader is
-    // how the next person concludes the inference is still there.
+    // Read the name literally. `true` means "a move that executed could have left this tail
+    // empty" -- it missed, it was a deterministic no-op, it could not act, or its volatile
+    // was already present. It says NOTHING about which, and nothing downstream asks: the
+    // deterministic no-effect renders and the miss inference below each re-derive their own
+    // conditions from the same live inputs. Anyone tempted to branch on this to pick a
+    // rendering is rebuilding the guess this change deleted.
+    let (attacker_hp, attacker_maxhp) = sim.active_hp(side);
+    let empty_tail_is_otherwise_explainable = !has_any_effect
+        && (
+            // a deterministic no-op
+            (defender_protected && choice.flags.protect)
+                || (is_damaging && effectiveness == 0.0)
+                || (is_damaging && absorb.is_some())
+                || ability_immune.is_some()
+                || status_fail
+                || status_type_immune
+                || boost_has_no_effect
+                || side_condition_fail
+                // an accuracy miss
+                || (choice.target == MoveTarget::Opponent
+                    && !status_fail
+                    && !non_ghost_curse
+                    && ability_immune.is_none()
+                    && effectiveness > 0.0
+                    && choice.accuracy < 100.0)
+                // a move that could never have acted
+                || !(is_damaging
+                    || choice.status.is_some()
+                    || (choice.heal.is_some() && attacker_hp < attacker_maxhp)
+                    || choice.volatile_status.is_some()
+                    || choice.side_condition.is_some()
+                    || choice.boost.is_some())
+                // a volatile whose target already has it (or cannot take it)
+                || choice.volatile_status.as_ref().map_or(false, |volatile| {
+                    if volatile.volatile_status != PokemonVolatileStatus::SUBSTITUTE {
+                        return true;
+                    }
+                    let target = match &volatile.target {
+                        MoveTarget::User => side,
+                        MoveTarget::Opponent => defender,
+                    };
+                    let target_side = sim.state.get_side_immutable(&target);
+                    !target_side
+                        .get_active_immutable()
+                        .volatile_status_can_be_applied(
+                            &volatile.volatile_status,
+                            &target_side.volatile_statuses,
+                            choice.first_move,
+                        )
+                })
+        );
 
     // BOTH EMPTY-TAIL IMMOBILIZER INFERENCES ARE GONE, and their removal is the half
     // of the attract-marker change that actually reclaims worlds.
@@ -2778,15 +2850,78 @@ fn render_move_phase(
     //     handle exactly this shape for an unattracted, unparalyzed attacker -- are
     //     correct for it without any attract- or paralysis-specific special case.
     //
-    // So the ambiguity is not being downgraded or guessed away; it stopped existing.
-    // The module docs' "the residual ambiguity is para-vs-miss only" note is settled the
-    // same way: the para branch is now separable, so a surviving empty tail on a
-    // sub-100%-accuracy move IS the miss.
+    // So the ambiguity is not being downgraded or guessed away; it stopped existing. The
+    // module docs' "Honest limits" entry and the miss inference's own note below were both
+    // edited to match -- an earlier revision of this comment claimed they were "settled"
+    // while leaving both untouched, which is the corrected-here/stale-there shape this
+    // campaign has recorded repeatedly.
     //
-    // DO NOT reintroduce an `attacker_paralyzed`/`attacker_attracted` empty-tail arm
-    // here. Both reads are still available from the live state, and both are now
-    // ANTI-EVIDENCE: reaching this point with either status set means that immobilizer
-    // specifically did not fire.
+    // DO NOT reintroduce an INFERENCE here. Both status reads are still available from
+    // the live state, and both are now ANTI-EVIDENCE: reaching this point with either set
+    // means that immobilizer specifically did not fire. The backstop directly below is the
+    // opposite of an inference -- it refuses rather than naming anything.
+
+    // FAIL-CLOSED BACKSTOP. There is now exactly ONE site in this file that emits an
+    // immobilizer `|cant|` line, and it is driven solely by the engine's marker. Both
+    // things that used to stand behind it -- the refusal, and the previous revision's
+    // deliberate pre-marker degradation path -- are gone, which leaves no floor under a
+    // marker that stops ARRIVING while the variant still applies.
+    //
+    // THAT IS A DIFFERENT FAILURE FROM A DROPPED PATCH, and it is the one nothing else
+    // catches. A dropped patch is caught by `PATCHED_TARGET_TREE_SHA256` (and mutant P1
+    // proves it); a REACHABILITY break -- someone adds a guard to the engine's attract or
+    // paralysis block, or reorders the BeforeMove chain -- leaves the instruction, the
+    // digest and the whole patch stack intact while the branch quietly goes back to an
+    // anonymous empty delta. Without this arm the renderer would then emit a `|move|` line
+    // for a move that never happened, with NO refusal and NO lossy tag: a fabricated
+    // action in a searched world, which is the one outcome this campaign exists to prevent.
+    //
+    // Refusing is the whole behaviour. It names nothing, so it cannot be the guess this
+    // block deleted.
+    //
+    // `empty_tail_is_otherwise_explainable` IS THE SOUNDNESS CONDITION, and leaving it out
+    // was measured to be wrong rather than merely loose. The first version of this arm
+    // refused on "attracted-or-paralyzed AND empty tail AND no marker", and that is the
+    // shape of a legitimate MISS: it refused the 15%-mass Thunder miss branch in this
+    // change's own fixture, which is precisely the refusal blocker 1 required be deleted.
+    // A miss, a deterministic no-op, an unactable move and an already-present volatile all
+    // produce an empty tail from a move that DID execute, so none of them may refuse.
+    //
+    // What is left cannot be explained by an executed move at all: the move could act, is
+    // not a no-op, cannot miss, and its volatile would have applied -- so an empty tail
+    // means the move did not happen, which means an immobilizer fired, which means a marker
+    // was owed and did not arrive. Refusing that is fail-closed with no guess in it.
+    //
+    // COVERAGE LIMIT, stated because the arm looks broader than it is: if the marker stops
+    // arriving, this catches the CLEAN shapes and NOT the contaminated ones -- a vanished
+    // marker on a Thunder-miss-shaped fan still renders `|move|..|[miss]`. No branch-local
+    // check can do better, because those two branches are byte-identical once the marker is
+    // gone; that is the entire defect this change fixes. The broad cover is
+    // `every_attracted_or_paralyzed_fan_carries_its_immobilizer_marker`, which asserts the
+    // marker's PRESENCE across a matrix and is CI-named, so a reachability break in the
+    // engine goes red there rather than being absorbed here.
+    if called_tag.is_none() && !has_any_effect && !empty_tail_is_otherwise_explainable {
+        let (attracted, paralyzed) = {
+            let s = match side {
+                SideReference::SideOne => &sim.state.side_one,
+                SideReference::SideTwo => &sim.state.side_two,
+            };
+            (
+                s.volatile_statuses
+                    .contains(&PokemonVolatileStatus::ATTRACT)
+                    && s.get_active_immutable().ability != Abilities::OBLIVIOUS,
+                s.get_active_immutable().status == PokemonStatus::PARALYZE,
+            )
+        };
+        if attracted || paralyzed {
+            out.mark_attribution_unsafe("immobilizer_marker_missing_on_empty_tail");
+            for instruction in tail {
+                sim.apply(instruction);
+            }
+            return;
+        }
+    }
+
     // Caller-invoked moves (Sleep Talk) render their explicit target even on
     // failure (measured; the [still] blanking does not apply to them).
     //
@@ -2817,10 +2952,20 @@ fn render_move_phase(
 
     // Miss inference: an opponent-target move with accuracy < 100 whose tail
     // shows no effect on the defender, with deterministic causes (immunity,
-    // protect, absorb) ruled out. NOTE: for a paralyzed/frozen attacker the
-    // engine merges the full-para branch with the miss branch — that case
-    // never reaches here (the prelude renders |cant| first), so the residual
-    // ambiguity is para-vs-miss only, documented in the module docs.
+    // protect, absorb) ruled out.
+    //
+    // THE OLD NOTE HERE IS RETIRED, and it was wrong in both halves. It read: "for a
+    // paralyzed/frozen attacker the engine merges the full-para branch with the miss
+    // branch — that case never reaches here (the prelude renders |cant| first), so the
+    // residual ambiguity is para-vs-miss only". The prelude renders `|cant|` for SLEEP and
+    // FREEZE, never for paralysis, so a paralyzed attacker's merged branch reached exactly
+    // here and this inference ran on it. And the merge itself is gone: full paralysis now
+    // marks its own branch, so a branch arriving here with an empty tail is the miss.
+    //
+    // What that leaves is a real inference over a real population rather than a coin flip
+    // between two: reaching here means no immobilizer fired, so an empty defender-side tail
+    // on a sub-100%-accuracy move is a miss unless a deterministic cause explains it, and
+    // the conditions below rule those out one at a time.
     let mut missed = false;
     if choice.target == MoveTarget::Opponent
         && !status_fail
@@ -7256,15 +7401,77 @@ mod tests {
         reversed.mark_attribution_unsafe("segmentation_failed");
         assert_eq!(attribution_unsafe_label(&reversed), label);
 
-        // ...and it fits the Python seam WITH the prefix that side prepends. The lane
-        // string varies; `tree/model fold` is the longest in use.
-        let full =
-            format!("attribution-unsafe renderer branch rejected before tree/model fold: {label}");
+        // ...and the WORST CASE production can compose fits the Python seam.
+        //
+        // DERIVED, not hardcoded, and the difference matters: an earlier revision of this
+        // test asserted the length of the two short literals above, which fits with ~380
+        // chars to spare and therefore could never catch a future slug outgrowing the
+        // budget. Review called that out, and it was the one place "strictly stronger than
+        // the end-to-end test it replaced" was false.
+        //
+        // The bound comes from the same array the production path composes from.
+        // `unrenderable_tail_families` dedupes and sorts against `UNRENDERABLE_FAMILY_ORDER`,
+        // so ONE token per family in that fixed order is the longest slug the sleeptalk
+        // family path can emit, and two sides refusing with different sets is routine -- so
+        // the worst case is that slug twice. Adding a family name now fails HERE rather than
+        // silently truncating at the seam, which is the failure that aliases two different
+        // diagnoses into one `world_failure_reasons` bucket.
+        //
+        // REACHABLE families only, and the exclusion is measured rather than assumed. Two of
+        // the eighteen cannot appear in a Sleep Talk callee tail:
+        //
+        //   * `immobilizer` -- the engine pushes a `MoveImmobilized` only from
+        //     `generate_instructions_from_existing_status_conditions`, which is guarded by
+        //     `!choice.sleep_talk_move`, so a callee's generation cannot produce one; and
+        //     `render_move_phase` consumes or refuses any marker in the enclosing tail before
+        //     this walk starts.
+        //   * `unclassified` -- emitted by NO classifier arm, only by
+        //     `registered_family_or_unclassified` degrading an unregistered token, and every
+        //     token the classifier can emit is registered.
+        //
+        // THE SECOND SIDE IS THE FULL SET MINUS ITS SHORTEST TOKEN, which is not a stylistic
+        // choice -- it is what makes this the true maximum. Dedupe collapses two IDENTICAL
+        // reasons, so the longest two-reason label is the full set plus the longest set that
+        // DIFFERS from it, i.e. the full set with its shortest token removed. An earlier
+        // revision dropped `boost` (5 chars) instead of `item` (4) and came out one char
+        // short of the real bound, which mutation caught: shrinking the mirror constant to
+        // 480 still passed.
+        //
+        // The numbers, because the margin is small and the next person should not re-derive
+        // them: all 18 families two-sided is 535 chars, 23 OVER this budget -- reachable only
+        // if `immobilizer` or `unclassified` ever enters a Sleep Talk tail. The 16 reachable
+        // ones are 480, leaving 32. That is not slack to spend: ONE more family of average
+        // length adds ~28 and lands at ~508, and a second breaks the seam. If that happens,
+        // raise `_REASON_DETAIL_LIMIT` deliberately; do not weaken this test.
+        let reachable_families: Vec<&str> = UNRENDERABLE_FAMILY_ORDER
+            .iter()
+            .copied()
+            .filter(|family| *family != "immobilizer" && *family != "unclassified")
+            .collect();
+        let worst_slug = format!("{SLEEPTALK_LOSSY_TAG}:{}", reachable_families.join("+"));
+        let shortest = reachable_families
+            .iter()
+            .min_by_key(|family| family.len())
+            .expect("the order list is never empty");
+        let mut worst = RenderedEvents::default();
+        worst.mark_attribution_unsafe(&worst_slug);
+        worst.mark_attribution_unsafe(&worst_slug.replace(&format!("+{shortest}"), ""));
+        let full = format!(
+            "attribution-unsafe renderer branch rejected before tree/model fold: {}",
+            attribution_unsafe_label(&worst)
+        );
         assert!(
             full.len() <= PY_REASON_DETAIL_LIMIT,
-            "refusal message is {} chars, over the {PY_REASON_DETAIL_LIMIT}-char seam \
-             budget -- it would be truncated into a `world_failure_reasons` key: {full}",
+            "the worst REACHABLE two-sided slug is {} chars with the prefix, over the \
+             {PY_REASON_DETAIL_LIMIT}-char budget in `engine_search.py` -- it would be \
+             TRUNCATED into a `world_failure_reasons` key, aliasing two diagnoses: {full}",
             full.len()
+        );
+        // ...and the short, realistic label fits, which is what actually ships.
+        assert!(
+            format!("attribution-unsafe renderer branch rejected before tree/model fold: {label}")
+                .len()
+                <= PY_REASON_DETAIL_LIMIT
         );
     }
 

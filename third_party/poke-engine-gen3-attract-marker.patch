@@ -30,8 +30,8 @@
 +    /// this patch. `reject_attribution_unsafe` aborts the WHOLE WORLD, not the
 +    /// branch, so as long as the paralysis sibling of a marked Attract branch is
 +    /// still an anonymous empty delta, the renderer still refuses it and the world
-+    /// still falls back. Attract alone took the refusing branches from two to one
-+    /// and the fallback rate from N to N.
++    /// still falls back. Marking Attract alone took the refusing branches from two
++    /// to one and left the world refused either way.
 +    MoveImmobilized(MoveImmobilizedInstruction),
 +}
 +
@@ -139,27 +139,35 @@
      //
      // Ordering: Showdown gen3 resolves Attract's onBeforeMove at priority 2
      // (data/moves.ts `attract` condition), which runs AFTER confusion (priority 3)
-@@ -3035,6 +3037,41 @@
+@@ -3035,6 +3037,49 @@
      {
          let mut immobilized_instruction = incoming_instructions.clone();
          immobilized_instruction.update_percentage(ATTRACT_IMMOBILIZE_CHANCE);
 +        // MARKER, and the reason this patch exists. Before it, this branch was a
 +        // clone with an EMPTY DELTA -- byte-identical to the fully-paralyzed
 +        // branch pushed a few lines below, because "the move did not happen" has
-+        // no state representation. The renderer therefore could not name which
-+        // immobilizer fired and refused the whole world
-+        // (`attract_empty_tail_ambiguous`, ~46% of the remaining search
-+        // fallback). This patch's predecessor conceded the defect in its own
-+        // comment: "both immobilized branches carry the same empty delta".
++        // no state representation. `combine_duplicate_instructions` therefore
++        // MERGED the two, the renderer could not name which immobilizer fired,
++        // and it refused the whole world (`attract_empty_tail_ambiguous` in
++        // `rust/pokezero-search/src/events.rs`). This patch's predecessor
++        // conceded the defect in its own comment: "both immobilized branches
++        // carry the same empty delta".
 +        //
-+        // A LOSSY DOWNGRADE WAS MEASURED AND REJECTED, so do not replace this
-+        // with one. Paralysis does not dominate: over 3,344 era-63 attract
-+        // slug-occurrences, pure `paralyzed` was 1,284 (38.4%) and contaminated
-+        // joints 2,060 (61.6%), and the `|cant|` reason tag is load-bearing
-+        // downstream -- `src/pokezero/public_action_capture.py` keys public
-+        // actions as `cant:{reason}`, so `cant:Attract` and `cant:par` are
-+        // DIFFERENT action ids. Guessing one for the other is not a rounding
-+        // error, it is a different action.
++        // NO SIZE FIGURE HERE, deliberately. The residue this closes is UNMEASURED
++        // until a campaign run reports it: an earlier revision of this comment
++        // carried a share-of-fallback percentage and a slug census taken from an
++        // ad-hoc query with no committed artifact, which is exactly the kind of
++        // number that gets quoted onward as established. What IS measured lives in
++        // the repo: `tests/test_instruction_event_mapping.py`
++        // (`test_every_attract_empty_tail_ambiguity_is_resolved`) shows nine
++        // previously-refusing shapes now rendering with zero refusals.
++        //
++        // A LOSSY DOWNGRADE TO `|cant|..|par|` IS NOT AVAILABLE, so do not replace
++        // this with one: the `|cant|` reason tag is load-bearing downstream --
++        // `src/pokezero/public_action_capture.py` keys public actions as
++        // `cant:{reason}`, so `cant:Attract` and `cant:par` are DIFFERENT action
++        // ids. Guessing one for the other is not a rounding error, it is a
++        // different action.
 +        //
 +        // Pushed AFTER the clone's percentage update and NOT applied to `state`:
 +        // the marker is a pure no-op (see `State::apply_one_instruction`), and
@@ -181,7 +189,7 @@
          final_instructions.push(immobilized_instruction);
  
          incoming_instructions.update_percentage(1.0 - ATTRACT_IMMOBILIZE_CHANCE);
-@@ -3060,6 +3097,30 @@
+@@ -3060,6 +3105,30 @@
          // Fully-Paralyzed Branch
          let mut fully_paralyzed_instruction = incoming_instructions.clone();
          fully_paralyzed_instruction.update_percentage(0.25);

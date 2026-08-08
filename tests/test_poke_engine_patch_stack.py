@@ -38,7 +38,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # tree on disk -- the build rewrites that tree, so pinning it can pin a stale
 # preimage (which it once did, and shipped a red gate).
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "99188ed7bb4cc7fb1d4aecf3f4608dc03ad818d6c816368dc73de5afc72973fc",
+    "src/gen3/generate_instructions.rs": "2ee520083b699ee5a47b357ea476601d2ac6a5b64ba3bc94d36b65e0a1768226",
     "src/gen3/items.rs": "14415306c663e3e7a9a75f5a4882105cbb9bb91013ca96a35be3a30ca395ea93",
     "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
     "src/gen3/choice_effects.rs": "4d2179c6adf99c444be594c195faa3999447d7f366d97f9f26b70b99a544c7c6",

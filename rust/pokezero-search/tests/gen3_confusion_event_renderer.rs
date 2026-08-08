@@ -996,8 +996,11 @@ fn the_engine_marks_which_immobilizer_aborted_the_attract_branch() {
 
 /// ...and the renderer now NAMES it instead of refusing the world.
 ///
-/// This is the coverage half of the fix. `attract_empty_tail_ambiguous` was measured at
-/// ~46% of the remaining search-fallback residue, and every branch in it was thrown away.
+/// This is the coverage half of the fix: every branch in `attract_empty_tail_ambiguous` was
+/// thrown away, and because `reject_attribution_unsafe` aborts the whole WORLD rather than
+/// the branch, so was the world around it. How much fallback that was is NOT quoted here --
+/// it is unmeasured until a campaign run reports it, and an earlier revision of this line
+/// carried a percentage from an ad-hoc query with no committed artifact.
 ///
 /// Mutants this kills: deleting the renderer arm (no `|cant|` line); deleting the engine
 /// push (the branch has no marker, so `attract_marked_branch` panics); rendering a `|move|`
@@ -1384,6 +1387,130 @@ fn an_asleep_attracted_mon_that_never_passed_the_sleep_gate_renders_slp_not_attr
             }
         }
     }
+}
+
+/// The sleep gate must not SWALLOW what it does not own.
+///
+/// Companion to `an_asleep_..._renders_slp_not_attract`, guarding the same check in the
+/// opposite direction. That check treats a marker-only remainder as "empty" so a marker
+/// cannot outrank `|cant|..|slp`; the failure mode HERE is the check being too generous and
+/// eating a remainder that carries a real effect.
+///
+/// Reachable, and measured: at `sleep_turns == 0` with CONFUSION also live, the engine's
+/// zero-mass phantom branch carries `[ChangeVolatileStatusDuration(CONFUSION, +1),
+/// Damage(self)]` -- a confusion self-hit. The prelude consumes the counter, leaving
+/// `[Damage]`. Widening the guard's `matches!(ins, MoveImmobilized(_))` to `true` leaves the
+/// whole suite green and swallows that damage behind `|cant|..|slp` with `used_move = false`,
+/// across 44 branches. This test is what makes that mutant red.
+///
+/// The self-hit render on a gate-blocked turn is itself questionable -- Showdown's
+/// `slp.onBeforeMove` short-circuits before confusion's handler too -- but that is
+/// PRE-EXISTING, involves no marker, and every affected branch is zero-mass. What this pins
+/// is that the immobilizer-marker change did not make it silently worse.
+#[test]
+fn the_sleep_gate_does_not_swallow_a_confusion_self_hit_phantom() {
+    let mut state = attracted_state(Choices::TACKLE, true);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().sleep_turns = 0;
+
+    let branches = generate(&mut state);
+    let self_hit: Vec<&StateInstructions> = branches
+        .iter()
+        .filter(|b| {
+            b.instruction_list.iter().any(|i| matches!(i,
+                Instruction::Damage(d) if d.side_ref == SideReference::SideTwo))
+        })
+        .collect();
+    assert!(
+        !self_hit.is_empty(),
+        "fixture must produce the confusion self-hit phantom: {branches:?}"
+    );
+    for branch in self_hit {
+        let rendered = rendered(&mut state.clone(), branch);
+        let text = rendered.lines.join("\n");
+        assert!(
+            text.contains("|-activate|p2a: Opponent|confusion"),
+            "the sleep gate swallowed the confusion activation: {text}"
+        );
+        assert!(
+            text.contains("|-damage|p2a: Opponent|"),
+            "the sleep gate swallowed the self-hit damage: {text}"
+        );
+    }
+}
+
+/// THE MARKER STILL ARRIVES. Broad-cover canary for a REACHABILITY break in the engine.
+///
+/// The renderer has exactly one immobilizer `|cant|` site and it is driven solely by the
+/// marker. `PATCHED_TARGET_TREE_SHA256` catches a DROPPED patch (mutant P1 proves it), and
+/// the fail-closed backstop in `render_move_phase` catches a vanished marker on the CLEAN
+/// shapes -- but not on the contaminated ones, because once the marker is gone an
+/// immobilized branch and a miss branch are byte-identical again. That is the defect this
+/// change fixes, so no branch-local check can cover it.
+///
+/// So the cover is PRESENCE, asserted across a matrix rather than inferred: for every
+/// attracted and/or paralyzed state here, the fan must contain a marker for each immobilizer
+/// that applies. Someone adding a guard to the engine's attract or paralysis block, or
+/// reordering the BeforeMove chain, leaves the instruction and every digest intact while the
+/// branch quietly goes back to an anonymous empty delta -- and turns this red.
+#[test]
+fn every_attracted_or_paralyzed_fan_carries_its_immobilizer_marker() {
+    let mut checked = 0usize;
+    for confused in [false, true] {
+        for (attracted, paralyzed) in [(true, false), (false, true), (true, true)] {
+            for mv in [
+                Choices::TACKLE,
+                Choices::THUNDER,
+                Choices::SPLASH,
+                Choices::SUBSTITUTE,
+                Choices::SWORDSDANCE,
+                Choices::TOXIC,
+            ] {
+                let mut state = attracted_state(mv, confused);
+                if !attracted {
+                    state
+                        .side_two
+                        .volatile_statuses
+                        .remove(&PokemonVolatileStatus::ATTRACT);
+                }
+                if paralyzed {
+                    state.side_two.get_active().status = PokemonStatus::PARALYZE;
+                }
+                let branches = generate(&mut state);
+                let present = |reason: ImmobilizeReason| {
+                    branches.iter().any(|b| {
+                        b.instruction_list.iter().any(|i| matches!(i,
+                            Instruction::MoveImmobilized(m)
+                                if m.reason == reason
+                                    && m.side_ref == SideReference::SideTwo))
+                    })
+                };
+                if attracted {
+                    assert!(
+                        present(ImmobilizeReason::Attract),
+                        "no Attract marker reached the fan for {mv:?} \
+                         (confused={confused} paralyzed={paralyzed}): {branches:?}"
+                    );
+                }
+                if paralyzed {
+                    assert!(
+                        present(ImmobilizeReason::Paralysis),
+                        "no paralysis marker reached the fan for {mv:?} \
+                         (confused={confused} paralyzed={paralyzed}): {branches:?}"
+                    );
+                }
+                // ...and NEITHER marker may appear for an immobilizer that does not apply.
+                if !attracted {
+                    assert!(!present(ImmobilizeReason::Attract), "{branches:?}");
+                }
+                if !paralyzed {
+                    assert!(!present(ImmobilizeReason::Paralysis), "{branches:?}");
+                }
+                checked += 1;
+            }
+        }
+    }
+    assert_eq!(checked, 36, "the matrix shrank");
 }
 
 /// THE CLASS IS CLOSED, and this test replaces the two that pinned it being open.

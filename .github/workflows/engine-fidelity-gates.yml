@@ -664,15 +664,15 @@ jobs:
           # a file-count assertion. `#[ignore]` on a pin was equally invisible.
           passed=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo.log \
             | grep -oE '[0-9]+' | paste -sd+ - | bc)
-          # Floor RAISED 366 -> 423 (#1157) -> 428 (immobilizer markers), and it is always
+          # Floor RAISED 366 -> 423 (#1157) -> 430 (immobilizer markers), and it is always
           # set to the EXACT current total. A floor below the total is the same blindness the
           # comment above describes: at 366 it would have absorbed every Protect pin with 55
           # to spare, and at 420 it still absorbed the three UNIT pins -- deleting exactly
           # those three lands on 420 and passes, while they are the sole killers of five
           # mutants. Raise it deliberately when tests are added.
           #
-          # 423 -> 428 is a NET figure and worth spelling out, because a floor is blind to a
-          # swap: the immobilizer-marker change ADDS eleven tests and DELETES six. The four are
+          # 423 -> 430 is a NET figure and worth spelling out, because a floor is blind to a
+          # swap: the immobilizer-marker change ADDS thirteen tests and DELETES six. The four are
           # not regressions -- `attract_empty_tail_ambiguous` and its five sub-case literals
           # no longer exist, so the tests that pinned that refusal being open, and the
           # two-sided keying test built on its slug, had nothing left to assert. Their
@@ -681,12 +681,12 @@ jobs:
           # stronger claim) and the keying test becomes a direct unit test of
           # `attribution_unsafe_label`. All ten new names are pinned below.
           #
-          # 428 was MEASURED from a clean tree, not derived: the first version of this line
+          # 430 was MEASURED from a clean tree, not derived: an earlier revision of this line
           # said 429, counted off a run that still had a scratch probe file in `tests/`. A
           # floor ABOVE the total fails CI on every PR, which is the one arithmetic error in
           # this block that would have been caught immediately -- unlike a floor below it.
-          if [ "${passed:-0}" -lt 428 ]; then
-            echo "::error::expected >= 428 crate tests, got ${passed:-0}"
+          if [ "${passed:-0}" -lt 430 ]; then
+            echo "::error::expected >= 430 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
@@ -704,8 +704,17 @@ jobs:
           # exact silent swallow a pure marker causes at the walk's bare `sim.apply`
           # fall-through. `an_asleep_..._renders_slp_not_attract` is the sole thing standing
           # between the markers and a FABRICATED `|cant|..|Attract` on a turn the sleep gate
-          # blocked. Deleting all ten and letting the total be restored by unrelated tests is
-          # exactly the hole the floor cannot see.
+          # blocked. Deleting all twelve and letting the total be restored by unrelated tests
+          # is exactly the hole the floor cannot see.
+          #
+          # Two of them guard the guards, and both were found green-under-mutation by review:
+          # `the_sleep_gate_does_not_swallow_a_confusion_self_hit_phantom` is the only thing
+          # that fails when the sleep gate's marker-only test is widened to `true` -- a
+          # FAIL-OPEN across 44 reachable branches. And
+          # `every_attracted_or_paralyzed_fan_carries_its_immobilizer_marker` is the only
+          # broad cover for a REACHABILITY break: a guard added to the engine's attract or
+          # paralysis block leaves the instruction, the patch and every digest intact while
+          # the branch silently reverts to an anonymous empty delta.
           for pin in the_rendered_hazard_chip_is_tagged_from_spikes \
                      two_spikes_layers_chip_the_deeper_amount_and_stay_tagged \
                      with_no_spikes_the_drag_emits_no_chip_and_no_spikes_tag \
@@ -726,7 +735,9 @@ jobs:
                      a_paralyzed_attackers_cant_par_is_marked_not_inferred_from_an_empty_tail \
                      events::tests::a_move_immobilization_marker_is_classified_by_position_and_reason \
                      events::tests::a_marker_is_attributed_to_the_side_whose_action_it_aborted \
-                     events::tests::the_attribution_unsafe_label_is_deduplicated_and_sorted; do
+                     events::tests::the_attribution_unsafe_label_is_deduplicated_and_sorted \
+                     the_sleep_gate_does_not_swallow_a_confusion_self_hit_phantom \
+                     every_attracted_or_paralyzed_fan_carries_its_immobilizer_marker; do
             grep -qxE "test $pin \.\.\. ok" /tmp/cargo.log || {
               echo "::error::renderer pin $pin did not run"
               exit 1
