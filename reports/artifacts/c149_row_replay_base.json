@@ -1,0 +1,29 @@
+{
+  "seed": 19000191,
+  "step": 63,
+  "verdict": "diverged",
+  "misses": [
+    "pct=34.61: p2 attributed components differ: observed_only=[('heal', 28)] engine_only=[('heal', 29)]",
+    "pct=2.88: p2 attributed components differ: observed_only=[('heal', 28)] engine_only=[('heal', 29)]",
+    "pct=2.31: p2 attributed components differ: observed_only=[('heal', 28)] engine_only=[('heal', 29)]",
+    "pct=0.19: p2 attributed components differ: observed_only=[('heal', 28)] engine_only=[('heal', 29)]",
+    "pct=44.49: p1 roll-scaled components differ: observed=[('', -109), ('capped_lethal', -28)] engine=[('', -101)]",
+    "pct=5.27: p1 roll-scaled components differ: observed=[('', -109), ('capped_lethal', -28)] engine=[('capped_lethal', -123)]",
+    "pct=2.34: p1 roll-scaled components differ: observed=[('', -109), ('capped_lethal', -28)] engine=[]",
+    "pct=3.71: p1 roll-scaled components differ: observed=[('', -109), ('capped_lethal', -28)] engine=[('', -101)]",
+    "pct=0.44: p1 roll-scaled components differ: observed=[('', -109), ('capped_lethal', -28)] engine=[('capped_lethal', -123)]",
+    "pct=2.97: p1 roll-scaled components differ: observed=[('', -109), ('capped_lethal', -28)] engine=[('', -101)]",
+    "pct=0.35: p1 roll-scaled components differ: observed=[('', -109), ('capped_lethal', -28)] engine=[('capped_lethal', -123)]",
+    "pct=0.16: p1 roll-scaled components differ: observed=[('', -109), ('capped_lethal', -28)] engine=[]"
+  ],
+  "branch_count": 14,
+  "rendered_branches": 14,
+  "mass_sum_percent": 100.0,
+  "p2_heal_magnitude_mass_percent": {
+    "29": 93.9062
+  },
+  "provenance": {
+    "source_sweep": "reports/artifacts/c149_base_dev_sweep.json",
+    "engine_fingerprint": "de29e3dc79c80659859fbe09ca9fc45dc9bc444bc8fb38cbe44bfa569259e840"
+  }
+}

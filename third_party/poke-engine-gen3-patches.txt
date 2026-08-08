@@ -1690,3 +1690,23 @@ poke-engine-gen3-attract-marker.patch
 # the outer Sleep Talk, so a guard written `!sleep_talk_move || !first_move` passes a
 # sleeper-first-only battery while restoring the defect for every slower sleeper).
 poke-engine-gen3-sleeptalk-damage-dealt-double-reset.patch
+
+# pokezero gen3 fidelity fix (G8 -- the roll-dependent Leech Seed drain).
+#
+# A residual that KILLS is capped by the HP that happened to be left, so its
+# magnitude inherits the damage roll. Leech Seed then TRANSFERS that capped
+# amount to the other side, where Showdown renders it as a bare silent heal --
+# and the comparator checks a bare heal EXACTLY. Over the lethal band the drain
+# min(maxhp/8, hp_after_move + leftovers) is INJECTIVE in the roll, so one arm
+# priced at the band threshold prices exactly one of the band's rolls and every
+# other roll has no arm at all. reports/c140_last_dev_row_diagnosis.md section 6a,
+# ledger G8.
+#
+# Scope: the TWO residual_disjoint_bands call sites whose `ceiling` argument is
+# `i16::MAX` -- the non-crit and crit sites where the fan cannot kill on the hit,
+# so every roll in a band dies to the residual. The two `defender_active.hp`
+# sites already emit a hit-KO arm and are NOT touched. Gated additionally on the
+# defender carrying LEECHSEED, which is the only gen3 residual that transfers.
+#
+# Regression pins: rust/pokezero-search/tests/gen3_leechseed_residual_band_split.rs
+poke-engine-gen3-leechseed-residual-band-split.patch

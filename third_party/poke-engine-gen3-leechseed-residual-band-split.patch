@@ -1,0 +1,265 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1928,18 +1928,128 @@
+     /// its OWN threshold.
+     bands: [(i16, i16); MAX_RESIDUAL_THRESHOLDS],
+     len: usize,
+     /// The rolls covered by `bands`, i.e. everything from the lowest applied
+     /// threshold up to (but not including) the ceiling.
+     total_rolls: i16,
++    /// The exclusive top of the residual region this partition was built with,
++    /// carried so a caller can recover each band's HALF-OPEN window. The top
++    /// band's upper bound is this ceiling, not `i16::MAX` -- at a site that
++    /// already emits a hit-KO arm the rolls at or above `defender_active.hp`
++    /// belong to that arm and must not be enumerated again here.
++    ceiling: i16,
+ }
+ 
+ impl ResidualBands {
+     fn iter(&self) -> impl Iterator<Item = &(i16, i16)> {
+         self.bands[..self.len].iter()
++    }
++
++    /// Band `index`'s half-open damage window `[t_i, t_i+1)`.
++    ///
++    /// The upper bound is the next threshold up, or the partition's ceiling for
++    /// the top band -- exactly the interval whose population
++    /// `residual_disjoint_bands` stored as that band's roll count, so a caller
++    /// enumerating the window recovers the same rolls the count was derived
++    /// from. `bands` is ascending after the `reverse()` below, which is what
++    /// makes "the next entry" the next threshold up.
++    fn band_window(&self, index: usize) -> (i16, i16) {
++        let (threshold, _) = self.bands[index];
++        let upper = if index + 1 < self.len {
++            self.bands[index + 1].0
++        } else {
++            self.ceiling
++        };
++        (threshold, upper)
++    }
++}
++
++/// pokezero gen3 fidelity fix (G8, roll-dependent Leech Seed drain).
++///
++/// The 16 gen 3 damage rolls of a fan, in EXACT INTEGER arithmetic:
++/// `floor(max * r / 100)` for `r` in `85..=100`. Character-for-character the
++/// expression `push_enumerated_rolls` uses, which is itself the expression the
++/// already-shipped 32-arm `pending_hp_reading_move` enumeration in this same
++/// function uses -- so this generalises arithmetic the engine already runs in
++/// production rather than inventing a second convention.
++///
++/// Deliberately NOT the f32 accumulator `compare_health_with_damage_multiples`
++/// walks (`max * 0.85` stepped by `max * 0.01`). That one drifts below the true
++/// rung on some fans -- C116 M5 -- and a drifted value is a damage amount
++/// Showdown can never deal, so an arm priced at it can only miss. Using the
++/// integer fan means that WHENEVER the split fires, every roll Showdown could
++/// actually have thrown inside the band has an arm at exactly that value.
++///
++/// The cost of not sharing the comparator's basis is that the two can disagree
++/// about how many rolls a band holds. `push_per_roll_residual_kill_arms` checks
++/// that count and declines to split when it differs, so a drifted band keeps the
++/// single collapsed arm it emits today -- INCLUDING the case where that arm
++/// happens to sit on the roll Showdown threw. The split is therefore a strict
++/// improvement or a no-op on any given band, never a trade.
++///
++/// Rolls that collapse onto the same integer (small `max`) are NOT merged here:
++/// each of the sixteen carries 1/16 of the fan either way, and
++/// `combine_duplicate_instructions` at the end of
++/// `generate_instructions_from_move` folds identical arms back together with
++/// their masses summed. Keeping all sixteen slots is also what makes the count
++/// comparable to the comparator's, which is likewise out of sixteen.
++fn residual_band_roll_fan(max_damage: i16) -> [i16; 16] {
++    let mut fan = [0i16; 16];
++    for (index, slot) in fan.iter_mut().enumerate() {
++        *slot = (max_damage as i32 * (85 + index as i32) / 100) as i16;
++    }
++    fan
++}
++
++/// pokezero gen3 fidelity fix (G8, roll-dependent Leech Seed drain).
++///
++/// Replace ONE residual-kill arm priced at its band's threshold with one arm per
++/// roll inside that band, each at `arm_chance`.
++///
++/// Why only here. A residual that KILLS is capped by the HP that happened to be
++/// left, so its magnitude inherits the damage roll -- and when that residual is
++/// Leech Seed the capped amount is TRANSFERRED, arriving on the other side as a
++/// bare `heal` the comparator checks EXACTLY. Over a lethal band the drain
++/// `min(maxhp/8, hp_after_move + leftovers)` is injective in the roll, so a
++/// single arm at the threshold prices exactly one of the band's rolls and the
++/// rest have no arm at all (reports/c140 section 6a, ledger G8). Splitting the
++/// band restores an arm at every drain the band can produce.
++///
++/// Returns `false` -- having pushed NOTHING -- when the integer fan does not put
++/// exactly `expected_rolls` of its sixteen slots inside `[lower, upper)`, so the
++/// caller can emit the single collapsed arm and keep the band's mass at
++/// `expected_rolls / 16` regardless. The count check runs BEFORE any push for
++/// exactly that reason: a partial emission would leave the fallback arm
++/// double-counting the rolls already pushed.
++///
++/// That disagreement is a REACHABLE path, not a theoretical one. `expected_rolls`
++/// comes from `compare_health_with_damage_multiples`'s f32 accumulator and the
++/// enumeration here is exact integer arithmetic; reproducing both counters over
++/// `max_damage` in `10..=600` and every threshold above the f32 fan's floor,
++/// 288 of 27,318 `(max, threshold)` windows disagree -- 1.054 %, touching 256 of
++/// the 591 `max_damage` values. On each of those the band keeps today's behaviour
++/// exactly.
++fn push_per_roll_residual_kill_arms(
++    fan: &[i16; 16],
++    lower: i16,
++    upper: i16,
++    expected_rolls: i16,
++    arm_chance: f32,
++    incoming_instructions: &StateInstructions,
++    extra_branches: &mut Vec<(StateInstructions, i16)>,
++) -> bool {
++    let in_band = |roll: &i16| *roll >= lower && *roll < upper;
++    if fan.iter().filter(|roll| in_band(roll)).count() as i16 != expected_rolls {
++        return false;
+     }
++    for roll in fan.iter().filter(|roll| in_band(roll)) {
++        let mut arm = incoming_instructions.clone();
++        arm.update_percentage(arm_chance);
++        extra_branches.push((arm, *roll));
++    }
++    true
+ }
+ 
+ /// Partition a fan into disjoint residual bands, one per distinct threshold.
+ ///
+ /// `max_damage` is the comparator's basis and `min_roll` its lowest rung -- the
+ /// guard that keeps `num_less_than >= 1` inside
+@@ -1998,12 +2108,13 @@
+ 
+     let mut result = ResidualBands {
+         survive_representative: 0,
+         bands: [(0, 0); MAX_RESIDUAL_THRESHOLDS],
+         len: 0,
+         total_rolls: 0,
++        ceiling,
+     };
+     // Walk DOWN the ladder so each band can subtract the population already
+     // claimed by everything above it.
+     let mut claimed_above = rolls_at_or_above_ceiling;
+     let mut index = applicable_len;
+     while index > 0 {
+@@ -3883,12 +3994,25 @@
+     // Without it the threshold is read from the defender's pre-move state, the
+     // burn a Fire move is about to apply is invisible, and the split never fires
+     // on the boundary it exists for. reports/c135 sections 2-3, cause A8.
+     let residual_thresholds = residual_lethality_thresholds(state, &attacking_side, choice);
+ 
+     let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
++    // pokezero gen3 fidelity fix (G8, roll-dependent Leech Seed drain). Read
++    // BEFORE `get_active()`: `get_both_sides` hands back `&mut Side`, so the
++    // active borrow below is exclusive and the volatile set is unreadable for
++    // the rest of the function. A `bool` copied out first has no such problem.
++    //
++    // Leech Seed is the ONLY gen 3 residual that transfers the amount it removes
++    // to the other side (Nightmare and Ghost-Curse are damage-only), so it is the
++    // only one whose capped-lethal magnitude is checked EXACTLY, as a bare
++    // `heal`, on a slot the roll-scaling rules do not reach. reports/c140
++    // section 5, ledger G8.
++    let defender_leech_seeded = defender_side
++        .volatile_statuses
++        .contains(&PokemonVolatileStatus::LEECHSEED);
+     let defender_active = defender_side.get_active();
+     let mut does_damage = false;
+     let mut regular_damage = 0;
+     // Case B can now emit TWO extra arms (crit-kills / crit-survives), so the
+     // single-slot Option becomes a short vector. Case A still pushes one.
+     let mut extra_branches: Vec<(StateInstructions, i16)> = Vec::new();
+@@ -4179,20 +4303,43 @@
+                     residual_thresholds.as_slice(),
+                     i16::MAX,
+                     0,
+                 )
+                 .filter(|b| b.total_rolls > 0)
+                 {
+-                    for (residual_threshold, num_residual_kill_rolls) in residual_bands.iter() {
++                    // pokezero gen3 fidelity fix (G8). One of the TWO sites where
++                    // the partition emits a residual-KILL arm; the `i16::MAX`
++                    // ceiling above is the discriminator (this fan cannot kill on
++                    // the hit, so there is no hit-KO arm and every roll in a band
++                    // dies to the residual). The two `defender_active.hp`-ceiling
++                    // sites are left alone deliberately -- see the report.
++                    let per_roll_fan = residual_band_roll_fan(max_damage_dealt);
++                    for index in 0..residual_bands.len {
++                        let (residual_threshold, num_residual_kill_rolls) =
++                            residual_bands.bands[index];
++                        if defender_leech_seeded {
++                            let (lower, upper) = residual_bands.band_window(index);
++                            if push_per_roll_residual_kill_arms(
++                                &per_roll_fan,
++                                lower,
++                                upper,
++                                num_residual_kill_rolls,
++                                (1.0 - crit_rate) / 16.0,
++                                &incoming_instructions,
++                                &mut extra_branches,
++                            ) {
++                                continue;
++                            }
++                        }
+                         // Cloned from the UNREDUCED mass, so this arm is
+                         // (1 - crit_rate) * n/16 as intended.
+                         let mut kill_ins = incoming_instructions.clone();
+                         kill_ins.update_percentage(
+-                            (1.0 - crit_rate) * (*num_residual_kill_rolls as f32 / 16.0),
++                            (1.0 - crit_rate) * (num_residual_kill_rolls as f32 / 16.0),
+                         );
+-                        extra_branches.push((kill_ins, *residual_threshold));
++                        extra_branches.push((kill_ins, residual_threshold));
+                     }
+                     residual_survive_factor = 1.0 - (residual_bands.total_rolls as f32 / 16.0);
+                     regular_damage = residual_bands.survive_representative;
+                 }
+             }
+             let min_crit_damage = (max_crit_damage as f32 * 0.85) as i16;
+@@ -4311,20 +4458,41 @@
+                     min_crit_roll,
+                     residual_thresholds.as_slice(),
+                     i16::MAX,
+                     0,
+                 ) {
+                     let mut crit_survive = crit_rate;
+-                    for (crit_residual_threshold, num_crit_residual_kills) in residual_bands.iter()
+-                    {
+-                        let crit_residual_kill =
+-                            crit_rate * (*num_crit_residual_kills as f32 / 16.0);
++                    // pokezero gen3 fidelity fix (G8). The second `i16::MAX`
++                    // ceiling site -- the crit mirror of the non-crit split
++                    // above. `crit_survive` is decremented from the BAND count
++                    // either way, so the survive arm's mass is identical whether
++                    // the band split or fell back.
++                    let per_roll_crit_fan = residual_band_roll_fan(max_crit_damage);
++                    for index in 0..residual_bands.len {
++                        let (crit_residual_threshold, num_crit_residual_kills) =
++                            residual_bands.bands[index];
++                        let crit_residual_kill =
++                            crit_rate * (num_crit_residual_kills as f32 / 16.0);
+                         crit_survive -= crit_residual_kill;
++                        if defender_leech_seeded {
++                            let (lower, upper) = residual_bands.band_window(index);
++                            if push_per_roll_residual_kill_arms(
++                                &per_roll_crit_fan,
++                                lower,
++                                upper,
++                                num_crit_residual_kills,
++                                crit_rate / 16.0,
++                                &incoming_instructions,
++                                &mut extra_branches,
++                            ) {
++                                continue;
++                            }
++                        }
+                         let mut k = incoming_instructions.clone();
+                         k.update_percentage(crit_residual_kill);
+-                        extra_branches.push((k, *crit_residual_threshold));
++                        extra_branches.push((k, crit_residual_threshold));
+                     }
+                     if crit_survive > 0.0 {
+                         let mut sv = incoming_instructions.clone();
+                         sv.update_percentage(crit_survive);
+                         extra_branches.push((sv, residual_bands.survive_representative));
+                     }

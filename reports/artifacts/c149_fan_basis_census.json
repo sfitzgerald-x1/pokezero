@@ -1,0 +1,76 @@
+{
+  "scope": {
+    "max_damage_range": [
+      10,
+      600
+    ],
+    "thresholds": "every integer strictly above the f32 fan floor, up to max_damage"
+  },
+  "windows_examined": 27318,
+  "count_disagreements": 288,
+  "disagreement_fraction_percent": 1.054,
+  "distinct_max_damage_values_examined": 591,
+  "distinct_max_damage_values_affected": 256,
+  "examples": [
+    {
+      "max_damage": 11,
+      "threshold": 11,
+      "f32_count": 0,
+      "integer_count": 1
+    },
+    {
+      "max_damage": 12,
+      "threshold": 12,
+      "f32_count": 0,
+      "integer_count": 1
+    },
+    {
+      "max_damage": 15,
+      "threshold": 15,
+      "f32_count": 0,
+      "integer_count": 1
+    },
+    {
+      "max_damage": 16,
+      "threshold": 16,
+      "f32_count": 0,
+      "integer_count": 1
+    },
+    {
+      "max_damage": 21,
+      "threshold": 21,
+      "f32_count": 0,
+      "integer_count": 1
+    },
+    {
+      "max_damage": 22,
+      "threshold": 22,
+      "f32_count": 0,
+      "integer_count": 1
+    },
+    {
+      "max_damage": 23,
+      "threshold": 23,
+      "f32_count": 0,
+      "integer_count": 1
+    },
+    {
+      "max_damage": 24,
+      "threshold": 24,
+      "f32_count": 0,
+      "integer_count": 1
+    },
+    {
+      "max_damage": 30,
+      "threshold": 27,
+      "f32_count": 10,
+      "integer_count": 11
+    },
+    {
+      "max_damage": 30,
+      "threshold": 30,
+      "f32_count": 0,
+      "integer_count": 1
+    }
+  ]
+}

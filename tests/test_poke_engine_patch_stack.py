@@ -26,9 +26,10 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins for the 73-patch stack. The two collapse-class patches, the
-# roll-enumeration patch, the immobilizer-marker patch and the Sleep Talk double
-# damage-dealt reset guard all touch generate_instructions.rs
+# Post-patch content pins for the 74-patch stack. The two collapse-class patches, the
+# roll-enumeration patch, the immobilizer-marker patch, the Sleep Talk double
+# damage-dealt reset guard and the Leech Seed residual band split all touch
+# generate_instructions.rs
 # (the marker patch also touches src/instruction.rs, src/state.rs and tests/test_gen3.rs, none
 # of which is pinned here), so exactly one of the four digests
 # below moved and three did NOT: items.rs, abilities.rs and choice_effects.rs are
@@ -38,8 +39,12 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # read off a REPLAY of the stack into a scratch tree, never off the vendored
 # tree on disk -- the build rewrites that tree, so pinning it can pin a stale
 # preimage (which it once did, and shipped a red gate).
+#
+# 73 -> 74 (`poke-engine-gen3-leechseed-residual-band-split.patch`, ledger G8). The
+# three control digests are unchanged across that bump, measured on the replay and
+# not asserted from the diff.
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "209b938fe187c13f92fe673cd7852c7e4af5ee32256c568286c388446113bc04",
+    "src/gen3/generate_instructions.rs": "9fd568c65b125fa109a703ca7699e3caacf2a4f2cce3fb37962efdd2a3f4ce17",
     "src/gen3/items.rs": "14415306c663e3e7a9a75f5a4882105cbb9bb91013ca96a35be3a30ca395ea93",
     "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
     "src/gen3/choice_effects.rs": "4d2179c6adf99c444be594c195faa3999447d7f366d97f9f26b70b99a544c7c6",
@@ -121,7 +126,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-16:]],
+                [entry.name for entry in applied[-17:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -143,6 +148,13 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     # it can only be authored against the fully-patched tree.
                     "poke-engine-gen3-attract-marker.patch",
                     "poke-engine-gen3-sleeptalk-damage-dealt-double-reset.patch",
+                    # GROWN from 16 to 17, not slid: the window has to widen with the
+                    # stack or the oldest entry drops silently out of the pin and a
+                    # reordering of it stops being caught. Ledger G8's Leech Seed
+                    # residual band split; it edits the same partition cascade the two
+                    # collapse-class patches above already rewrote, so it can only be
+                    # authored against the fully-patched tree and only appended.
+                    "poke-engine-gen3-leechseed-residual-band-split.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
@@ -166,6 +178,19 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # compiling and the comment above it intact.
             self.assertIn(
                 "if state.use_damage_dealt && !choice.sleep_talk_move {", generated
+            )
+            # The G8 Leech Seed residual band split. Pinned on the gate predicate and
+            # on the fan helper's exact expression rather than on a comment: deleting
+            # `if defender_leech_seeded {` from either call site is the whole revert
+            # and leaves the file compiling, and swapping the integer fan for the f32
+            # accumulator would silently reprice every split arm.
+            self.assertEqual(
+                generated.count("if defender_leech_seeded {"),
+                2,
+                "both i16::MAX-ceiling residual-kill sites must carry the gate",
+            )
+            self.assertIn(
+                "*slot = (max_damage as i32 * (85 + index as i32) / 100) as i16;", generated
             )
             for relative_path, expected_sha256 in EXPECTED_FINAL_SHA256.items():
                 actual_sha256 = hashlib.sha256((source / relative_path).read_bytes()).hexdigest()
