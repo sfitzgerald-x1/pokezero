@@ -1551,3 +1551,88 @@ poke-engine-gen3-enumerate-damage-rolls.patch
 # opaque wrapper whose only method is a `{:?}` repr, so the new variant crosses
 # the binding with no arm to add (verified: the pyo3 crate compiles unchanged).
 poke-engine-gen3-attract-marker.patch
+# The Sleep Talk DOUBLE damage-dealt reset (closes `none_matched:shape_length`,
+# the largest single divergence shape in the sleep-talk attribution class).
+#
+# Measured on the shipping 73-patch stack, 8,903-branch Sleep-Talk probe
+# population: `none_matched` 8,613 -> 0, partitioning exactly into 8,292 attributed
+# callee + 321 `ambiguous`. The other 290 branches were never in the class in either
+# build, so the 8,903 total does not itself partition. All 321 ambiguous are genuine
+# two-callee collisions against the probe's `State::default()` stat block (no typing,
+# uniform stats), previously MASKED because with the duplicate present nothing
+# matched at all. NO campaign-era fallback rate is claimed.
+#
+# `generate_instructions_from_move` opens by emitting the turn-start
+# `damage_dealt` carry-over reset. The Sleep Talk block then calls
+# `state.reverse_instructions(&incoming_instructions.instruction_list)` before
+# recursing into the callee, which UNDOES that reset and restores the pre-reset
+# carry-over into `state`; the callee's own call re-enters the same opening and
+# pushes the SAME reset onto a list that already contains it. `reset_damage_dealt`
+# reads `state` and only appends -- it never mutates the side -- so it cannot see
+# the queued instruction.
+#
+# Two of the three sub-fields are non-idempotent under double emission and both
+# fire: `ChangeDamageDealtDamage` is a DELTA (`0 - damage`), so applying it twice
+# lands on `-damage` instead of 0, and `ToggleDamageDealtHitSubstitute` is a
+# TOGGLE, so applying it twice restores the flag the reset meant to clear. Only
+# `ChangeDamageDealtMoveCatagory` is an absolute set and is idempotent.
+#
+# Renderer consequence: `consume_move_prelude`
+# (rust/pokezero-search/src/events.rs) eats EVERY leading damage-dealt
+# instruction, so the tail it hands `identify_sleep_talk_called` starts after
+# both, while that function's single regeneration emits ONE reset at the head.
+# The divergence is therefore at INDEX 0 -- which is why the class always
+# measured 0 `shape_branch_is_prefix_of_tail` and 0
+# `shape_tail_is_prefix_of_branch`.
+#
+# Factorial isolation, 11,520 states per arm: the flag AND the carry are jointly
+# necessary. (use_damage_dealt=false, carry) -> 0; (true, no carry) -> 0;
+# (true, carry) -> 245,284 `shape_length` + 109,836 `shape_structure`. INHERITED
+# from the diagnosis run on the 71-patch stack and NOT re-measured on the shipping
+# 73-patch stack -- the absolute counts will have moved with #1166's branch
+# de-collapse, so treat them as the sign of the effect, not as current totals. The
+# jointness itself IS pinned here, by `with_damage_dealt_tracking_off_no_reset_is_emitted`
+# (the flag) and by the carry-bearing fixtures (the value).
+# `state.use_damage_dealt` is set by `set_conditional_mechanics` whenever any of
+# the twelve Pokemon knows Counter / Mirror Coat / Focus Punch, which is common
+# in gen3 randbats and team-dependent.
+#
+# NOT purely a redundant instruction: the corrupted `-damage` is read by the
+# opponent's COUNTER in the same turn (`gen3_fixed_damage_amount` returns
+# `damage_dealt.damage * 2`).
+#
+# COUNTER IS THE ONLY CHANNEL THAT CAN EXIST, and the enumeration is exhaustive:
+# gen3 has exactly THREE readers of `damage_dealt` -- everything else in the file
+# is inside `reset_damage_dealt` or `set_damage_dealt`, which are the writers.
+#   * COUNTER (generate_instructions.rs) gates only on
+#     `move_category == Physical`, which the reset satisfies, and then returns
+#     `damage * 2` UNGATED on sign: -274 against 0. This is the channel.
+#   * MIRROR COAT (same function) gates on `move_category == Special`. The reset
+#     writes Physical, and the category write is an absolute set and therefore the
+#     one sub-field that IS idempotent under double emission -- so Mirror Coat
+#     returns `Some(0)` under both engines. Immune.
+#   * FOCUS PUNCH (choice_effects.rs:266) needs `damage > 0`; -137 and 0 both fail.
+#     Its `!hit_substitute` clause cannot rescue the difference either: a corrupted
+#     `hit_substitute == true` survives only when `set_damage_dealt` did not run --
+#     it overwrites both fields absolutely -- and that is exactly the case where no
+#     damage was dealt, so `damage > 0` is already false. Immune on both fields.
+# Measured, and it agrees: over an exhaustive 4,368-cell sweep the observable
+# projection differs in 70 cells, all 70 with a Counter defender and none with
+# Mirror Coat, spanning 26 callee triples and including 18 full-HP cells.
+#
+# `Side::serialize` does not emit `damage_dealt` and `Side::deserialize` zeroes it,
+# so the naive neutrality metric cannot see the field this fixes. Decomposed over
+# 5,184 probe cells: on (percentage, serialized end state) 5,172 are identical;
+# INCLUDING `damage_dealt`, only 594 are identical and 4,590 differ -- which is the
+# repair. Mass aggregated per observable end state is preserved in ALL 5,184 cells
+# (largest deviation 1e-6 pp, f32 noise); only the branch partition moves, in 12.
+#
+# Reachability is bounded by that same serialization gap: `branch_events` and
+# `env_step` both open with `State::deserialize`, which zeroes the carry (while
+# `set_conditional_mechanics` still sets the FLAG), so neither can reach the guarded
+# block. Only the in-memory tree fold (`model.rs` / `tree.rs`) can, at depth >= 2.
+# Regression pins: rust/pokezero-search/tests/gen3_sleeptalk_damage_dealt_reset.rs
+# (SEVEN tests -- note the second-moving arm: the callee inherits `first_move` from
+# the outer Sleep Talk, so a guard written `!sleep_talk_move || !first_move` passes a
+# sleeper-first-only battery while restoring the defect for every slower sleeper).
+poke-engine-gen3-sleeptalk-damage-dealt-double-reset.patch

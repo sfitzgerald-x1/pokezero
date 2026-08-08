@@ -148,6 +148,22 @@ def compute_fingerprint() -> dict[str, Any]:
         raise FileNotFoundError(f"missing upstream source pin: {BASE_SOURCE}")
     digest.update(BASE_SOURCE.name.encode())
     digest.update(hashlib.sha256(BASE_SOURCE.read_bytes()).digest())
+    # KNOWN OVER-CAPTURE, recorded because it cost a review cycle. This hashes the
+    # WHOLE manifest file, comments included -- not just the ordered patch names --
+    # so a prose-only edit to `poke-engine-gen3-patches.txt` moves the fingerprint
+    # while the patch set, its order and every patch body are byte-identical. That
+    # happened: a round trip was measured, two comment lines were then added to the
+    # manifest, and the reported stamp no longer corresponded to the committed tree
+    # even though both content digests still matched and `git status` was empty.
+    # Reproducible in one step -- append a comment line here and the fingerprint
+    # moves with `patch_names()` unchanged.
+    #
+    # NOT narrowed here, deliberately: this function is the provenance authority for
+    # the two-consumer build and changing what it hashes invalidates every stamp in
+    # flight, which is not a drive-by edit. Filed as a follow-up to hash
+    # `patch_names()` plus each patch file's bytes (already done immediately below)
+    # and drop the whole-file read. Until then the discipline is: make every prose
+    # edit FIRST, measure the fingerprint LAST, on a clean checkout.
     digest.update(PATCH_LIST.read_bytes())
     entries = []
     for path in patch_files():
