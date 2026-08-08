@@ -951,6 +951,15 @@ jobs:
       # below, 112 of 113. An earlier revision of this comment said 429, a total this
       # branch never had at any point; the figure is the one the run printed.
       #
+      # 113 -> 128 with the world-collapse change. The delta is 15 TESTS THAT ALREADY
+      # EXISTED and never ran: 13 collapse/cache-key tests sat below this module's
+      # `unittest.main()`, where `python -m unittest` cannot see them, plus 2 added by its
+      # review. This exact-count pin read 113 straight through that PR precisely BECAUSE
+      # the tests were invisible -- the count guard cannot see a test that does not run,
+      # so "the total held" was not evidence the suite was intact. The 112-of-113 mutation
+      # ratio above was measured on the pre-collapse tree and has NOT been re-run here;
+      # only the total is re-measured (`Ran 128 tests`, OK, on the merged tree).
+      #
       # EXACT count, not a floor, for the reason #1163 gave: a floor was the one fail-open
       # in its mutation battery, and this guard lives in YAML where no local `unittest`
       # run can see it.
@@ -958,8 +967,8 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          if ! grep -qE 'Ran 113 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 113 engine-search tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 128 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 128 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
