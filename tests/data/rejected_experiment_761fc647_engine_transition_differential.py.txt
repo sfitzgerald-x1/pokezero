@@ -46,20 +46,6 @@ Usage::
     PYTHONPATH=src python scripts/engine_transition_differential.py \\
         --showdown-root <showdown> --games 200 --seed-start 900000 \\
         --json report.json
-
-This harness measures the SHIPPING configuration: the collapsed partition cascade,
-the same roll path ``src/pokezero/engine_search.py`` takes in production. That is
-not incidental — a differential running the engine's other roll path would certify
-a code path production never takes, and a regression in the collapsed damage-branch
-or residual-partition surface would become invisible to the 200-game gate. See
-``reports/c137_phase2_enumerate_decision.md`` §2.
-
-``--enumerate-rolls`` opts one run into the enumerate-then-merge reference oracle
-(C116 Phase 2) for a one-off collapsed-vs-enumerated comparison. It is an explicit
-CLI act with no default and no import side effect: importing this module does not
-touch ``POKEZERO_ENUMERATE_ROLLS`` and does not change any other process's engine.
-The value in force is recorded in the report and in every checkpoint record's
-provenance, and ``--merge-from`` refuses to merge shards that disagree about it.
 """
 
 from __future__ import annotations
@@ -70,7 +56,6 @@ import json
 import os
 import re
 import random
-import subprocess
 import sys
 import time
 import types
@@ -80,58 +65,6 @@ from typing import Any, Mapping, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
-
-# ---------------------------------------------------------------------------------------------
-# C116 Phase 2 -- the enumerate-then-merge roll path is a REFERENCE ORACLE, and this
-# module does NOT enable it at import time.
-#
-# The engine ships enumerate-then-merge behind the runtime env flag
-# ``POKEZERO_ENUMERATE_ROLLS``, read once through a Rust ``OnceLock`` on the first
-# call into the engine, OFF by default.
-#
-# An earlier revision of this file wrote ``os.environ.setdefault(..., "1")`` HERE, at
-# module scope. That made every importer an enabler: ``os.environ`` writes go through
-# ``putenv``, so the value is process-global AND inherited by every child. Twenty-one
-# tracked modules load this file (13 by ``import`` statement, 8 through
-# ``importlib.util.spec_from_file_location``), and ``unittest`` imports every selected
-# module before running any test, so ``tests/test_engine_search_no_panic.py`` -- which
-# spawns ``python -m pokezero.engine_search`` -- was demonstrated to run SEARCH under
-# enumeration. The write is gone, and its absence is asserted at RUNTIME by
-# ``tests/test_roll_enumeration_scope.py``, which imports each surface in a child
-# process and requires the engine's fan to come back collapsed.
-#
-# Turning it on is an explicit act, per run: ``--enumerate-rolls`` on this tool, or an
-# explicit environment set by a test that wants the oracle. There is no default, and
-# no code path here that flips it for anyone else.
-#
-# Why a runtime flag rather than a cargo feature: one build then serves both paths, so
-# a collapsed sweep and an enumerated sweep of the same commit differ in exactly one
-# variable and carry the same engine fingerprint. The cost of that choice is that the
-# fingerprint cannot say which path ran, which is why ``enumerate_rolls`` is carried in
-# the report and in every checkpoint record's provenance, guarded on resume, and
-# refused on a mixed ``--merge-from``.
-_ENUMERATE_ROLLS_ENV = "POKEZERO_ENUMERATE_ROLLS"
-
-# The configuration THIS process will measure. Collapsed -- the shipping path -- until
-# ``main`` is told otherwise by ``--enumerate-rolls``. Module import never reads the
-# ambient environment for it either: an inherited ``POKEZERO_ENUMERATE_ROLLS=1`` from
-# some unrelated parent must not silently relabel a sweep.
-ENUMERATE_ROLLS = False
-
-
-def _apply_roll_path(enumerate_rolls: bool) -> None:
-    """Select the engine's roll path for THIS process. Call before any engine call.
-
-    Explicit and idempotent-per-process: the engine latches the flag in a ``OnceLock``
-    on its first ``generate_instructions``, so a later change is a silent no-op. The
-    only caller is ``main`` (and tests exercising it), which runs this before the first
-    game.
-    """
-
-    global ENUMERATE_ROLLS
-    ENUMERATE_ROLLS = bool(enumerate_rolls)
-    os.environ[_ENUMERATE_ROLLS_ENV] = "1" if enumerate_rolls else "0"
-
 
 import poke_engine  # noqa: E402
 import pokezero_search  # noqa: E402
@@ -374,30 +307,8 @@ def engine_choice_for_action(
 # step 72 — Showdown healed 251 from 2 HP, the engine healed 247 from 6 HP, same
 # mechanic, different Surf roll). A bare heal that does NOT reach full is a pure
 # fraction (Recover = maxhp/2) and stays EXACT.
-# ``movepainsplit`` is the same class as ``heal_to_full``. Pain Split sets BOTH
-# mons to ``floor((hp_a + hp_b) / 2)`` (engine: gen3/generate_instructions.rs,
-# ``defender.hp - (attacker.hp + defender.hp) / 2``), so the magnitude is a
-# function of the HP left after whatever damage landed earlier in the SAME turn --
-# it inherits that hit's roll exactly as a capped heal does. Demanding an exact
-# match was a matcher defect, not an engine bug: it produced the whole
-# I3_roll_inherited family (reports/c95, reports/c101).
-#
-# No new tolerance is introduced. The existing window already carries one HP of
-# absolute flooring slack in both directions (``abs(eng) * 0.92 - 1`` to
-# ``abs(eng) * 1.09 + 1``), which is what a floor-divided quantity needs: for
-# eng 4 the band is [2.68, 5.36], so a 5-against-4 disagreement on a magnitude of
-# five is inside it. This only moves a roll-dependent component out of the EXACT
-# bucket it never belonged in.
 _ROLL_SCALED_SOURCES = frozenset(
-    {
-        "",
-        "recoil",
-        "drain",
-        "confusion",
-        "capped_lethal",
-        "move_unknown_callee",
-        "movepainsplit",
-    }
+    {"", "recoil", "drain", "confusion", "capped_lethal", "move_unknown_callee"}
 )
 
 # The mapper cannot recover WHICH move Sleep Talk called from the instruction
@@ -428,35 +339,6 @@ _ROLL_SCALED_SOURCES = frozenset(
 # broader predicate is latent, not exercised — but it is the predicate, and
 # `test_named_residual_is_NOT_reclassified` pins the boundary.
 _SLEEPTALK_LOSSY_MARKER = "sleeptalk_called_unidentified"
-
-# ALLOWLIST, not an exclusion. Markers whose telemetry is incomplete while the
-# public action window is still EXACT, so the branch remains usable for
-# matching. Everything else -- including every mark_attribution_unsafe marker,
-# and the synthetic `empty_instruction_list` placeholder the renderer emits
-# when the engine produced no instructions at all -- still disqualifies.
-#
-# Written as an allowlist deliberately. The first version expressed this as
-# "skip on attribution_unsafe rather than lossy", which is behaviourally
-# identical TODAY (attract_immobilization_source_unknown is the only
-# non-unsafe marker) but silently admits any future mark_lossy call. An
-# exclusion-shaped rule fails open as the renderer grows.
-_TELEMETRY_ONLY_LOSSY_MARKERS = frozenset({
-    _SLEEPTALK_LOSSY_MARKER,
-    "attract_immobilization_source_unknown",
-})
-
-
-def branch_render_is_usable(lossy: Sequence[str]) -> bool:
-    """Whether a branch's render is complete enough to match against.
-
-    ALLOWLIST, extracted so it can be pinned. This shipped as an exclusion
-    (`attribution_unsafe or empty_instruction_list`) while a constant claiming
-    to be the allowlist sat unused beside it, under a comment asserting the
-    allowlist had been chosen deliberately. The comment described code that did
-    not exist, and reverting the exclusion broke no test.
-    """
-
-    return not lossy or set(lossy) <= _TELEMETRY_ONLY_LOSSY_MARKERS
 _UNATTRIBUTED_DAMAGE_SOURCE = "residual"
 _UNKNOWN_CALLEE_SOURCE = "move_unknown_callee"
 # Sources whose rendering the mapper is known not to reproduce line-for-line;
@@ -485,6 +367,7 @@ class DamageComponent:
     delta: int
     event_index: int
     critical: bool | None = None
+    capped_source: str | None = None
 
 
 def damage_component_events(
@@ -528,30 +411,6 @@ def damage_component_events(
             slot = parts[2].split(":", 1)[0].strip()[:2]
             running[slot] = _hp_of(parts[4])
             continue
-        if tag == "faint":
-            # A faint with NO preceding `-damage` on this slot. Destiny Bond and
-            # Perish Song kill by setting HP to zero and announce it with
-            # `|-activate|` / `|-start| perish0` plus `|faint|` — never a
-            # `-damage` line. The engine models the same state change as a
-            # Damage instruction for the victim's whole remaining HP, so the
-            # observation carried NOTHING for that slot while the engine carried
-            # a `capped_lethal`, and the comparison had no counterpart to match.
-            #
-            # Synthesise the component the protocol declines to render. If a
-            # `-damage ... 0 fnt` already fired, `running[slot]` is 0 and this is
-            # a no-op, so ordinary faints are untouched.
-            #
-            # This ADDS information rather than relaxing a comparison: the
-            # synthesised magnitude is exact (the tracked HP) and is still
-            # compared. reports/c96, reports/c103.
-            slot = parts[2].split(":", 1)[0].strip()[:2]
-            remaining = running.get(slot)
-            if slot in out and remaining:
-                out[slot].append(
-                    DamageComponent("capped_lethal", -remaining, event_index, None)
-                )
-                running[slot] = 0
-            continue
         if tag not in ("-damage", "-heal", "-sethp") or len(parts) < 4:
             continue
         slot = parts[2].split(":", 1)[0].strip()[:2]
@@ -580,15 +439,10 @@ def damage_component_events(
             source = "heal"
         if not source and tag == "-sethp":
             # Defensive: every `-sethp` Showdown emits carries `[from] move:
-            # Pain Split`, so an untagged one is an unknown mechanic and must NOT
-            # fall through as "" — that is the DIRECT-damage bucket, and an
-            # unidentified `-sethp` is not a direct hit.
-            #
-            # Note this is NOT "because Pain Split is deterministic". It is not:
-            # `floor((targetHP + userHP) / 2)` is a function of post-damage HP, so
-            # it inherits the preceding hit's roll, which is why the TAGGED source
-            # `movepainsplit` is in `_ROLL_SCALED_SOURCES`. An earlier version of
-            # this comment asserted the opposite and contradicted that entry.
+            # Pain Split`, but an untagged one must NOT fall through as "" —
+            # that is the roll-scaled bucket, and Pain Split is deterministic
+            # (floor((targetHP + userHP) / 2)), so its magnitude must be
+            # compared exactly.
             source = "sethp"
         if tag == "-heal" and max_hp and new_hp >= max_hp:
             # ANY heal that tops the mon out is roll-scaled, whatever its tag:
@@ -598,6 +452,7 @@ def damage_component_events(
             # The tag is preserved so attribution is still compared; only the
             # magnitude is relaxed, and only in the capped direction.
             source = f"{source}_to_full"
+        capped_source = None
         if fainted_here and tag == "-damage":
             # A residual that KILLS is capped by the HP that happened to be
             # left, so its magnitude inherits the roll of whatever damaged the
@@ -605,6 +460,7 @@ def damage_component_events(
             # tick would be 26. Comparing that exactly against a branch with a
             # different roll is a false divergence (seed 1310000 step 193,
             # exonerated by the engine lane in #893). Bucket it as roll-scaled.
+            capped_source = source
             source = "capped_lethal"
         previous = running.get(slot)
         if previous is not None and new_hp != previous:
@@ -622,7 +478,13 @@ def damage_component_events(
                     target_side=slot,
                 )
             out[slot].append(
-                DamageComponent(source, new_hp - previous, event_index, critical)
+                DamageComponent(
+                    source,
+                    new_hp - previous,
+                    event_index,
+                    critical,
+                    capped_source,
+                )
             )
         running[slot] = new_hp
     return out
@@ -778,8 +640,9 @@ def branch_event_legal_rolls(
     *,
     side_one_choice: str,
     side_two_choice: str,
+    pre_state: str | None = None,
 ) -> BranchLegalRollSupport | None:
-    """Return support repriced after a pre-damage switch or stat event.
+    """Return support for the first rendered direct hit in a branch.
 
     ``calculate_damage`` on the boundary pre-state prices the wrong target when
     a switch resolves first, and the wrong stages when Boost/Unboost resolves
@@ -787,9 +650,12 @@ def branch_event_legal_rolls(
     the exact branch prefix immediately before the first defender damage. The
     completed ``post_state`` is deliberately never accepted here: it may include
     the hit itself and later effects (for example Knock Off's item removal),
-    which cannot affect the hit being compared. The returned support is scoped
-    to that hit's protocol target, so an earlier hit in the same branch keeps
-    ordinary pre-state support.
+    which cannot affect the hit being compared. When no repricing event precedes
+    the hit, ``pre_state`` is the valid snapshot. Crucially, the selected move
+    comes from the rendered ``|move|`` line rather than the boundary action: a
+    caller such as Sleep Talk has no damage base, while its named callee does.
+    The returned support is scoped to that hit's protocol target, so another
+    same-side HP event cannot borrow it.
     """
 
     events = branch.get("events")
@@ -797,8 +663,12 @@ def branch_event_legal_rolls(
         raise BranchLegalRollError("branch events are missing or malformed")
 
     acting_side: str | None = None
+    acting_move: str | None = None
     direct_damage_index: int | None = None
     direct_damage_target: str | None = None
+    direct_damage_actor: str | None = None
+    direct_damage_move: str | None = None
+    direct_damage_state_changed = False
     for index, event in enumerate(events):
         if not isinstance(event, str):
             continue
@@ -807,6 +677,8 @@ def branch_event_legal_rolls(
             actor = fields[2] if len(fields) > 2 else ""
             candidate = actor.split(":", maxsplit=1)[0][:2]
             acting_side = candidate if candidate in {"p1", "p2"} else None
+            move = fields[3] if len(fields) > 3 else ""
+            acting_move = normalize_id(move)
             continue
         if not event.startswith("|-damage|") or "[from]" in event:
             continue
@@ -825,22 +697,41 @@ def branch_event_legal_rolls(
                     "state-changing branch has malformed direct-damage ident"
                 )
             continue
-        if state_changed:
+        # A state-changing prefix must reprice the first hit it affects, even
+        # if an earlier hit in the same turn could use the ordinary pre-state.
+        # Otherwise retain the first direct hit as the no-reprice fallback.
+        if direct_damage_index is None or state_changed:
             direct_damage_index = index
             direct_damage_target = target_side
+            direct_damage_actor = acting_side
+            direct_damage_move = acting_move
+            direct_damage_state_changed = state_changed
+        if state_changed:
             break
     if direct_damage_index is None:
         return None
 
-    legal_roll_state = branch.get("legal_roll_state")
+    if direct_damage_actor not in {"p1", "p2"} or not direct_damage_move:
+        raise BranchLegalRollError("direct hit has no rendered move identity")
+    legal_roll_state = (
+        branch.get("legal_roll_state") if direct_damage_state_changed else pre_state
+    )
     if not isinstance(legal_roll_state, str) or not legal_roll_state:
+        if not direct_damage_state_changed:
+            return None
         raise BranchLegalRollError(
             "state-changing branch omitted pre-damage legal_roll_state"
         )
     try:
         state = poke_engine.State.from_string(legal_roll_state)
+        selected_side_one = (
+            direct_damage_move if direct_damage_actor == "p1" else side_one_choice
+        )
+        selected_side_two = (
+            direct_damage_move if direct_damage_actor == "p2" else side_two_choice
+        )
         side_one_rolls, side_two_rolls = poke_engine.calculate_damage(
-            state, side_one_choice, side_two_choice, True
+            state, selected_side_one, selected_side_two, True
         )
     except (KeyboardInterrupt, SystemExit):
         raise
@@ -889,41 +780,85 @@ def branch_component_legal_rolls(
 
 def _split_component_events(
     components: Sequence[DamageComponent],
-    *,
-    capped_bases: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[Counter, list[DamageComponent]]:
-    """Event-preserving counterpart to :func:`_split_components`.
-
-    ``capped_bases`` names base sources that EITHER side reported as capped on
-    this slot. Whether a heal caps depends on the damage roll, so cap
-    membership makes the roll-scaled list's LENGTH roll-dependent -- and the
-    comparison rejects on length before any tolerance applies, so two arms
-    differing only by a legal roll read as structurally different (seed
-    17000013 step 12: Leftovers caps at 290/290 against the observed -84 and
-    does not against the engine's -90). Promoting both sides fixes that.
-
-    PROMOTION IS FOR LENGTH ONLY. A promoted component that is NOT itself
-    capped is still a deterministic quantity and is compared EXACTLY; see
-    roll_components_agree. The first version of this let promotion also grant
-    the 9 % roll window, so a 2 HP discrepancy between two gen3 heals -- the
-    exact rounding class this program exists to find -- started matching.
-    """
+    """Event-preserving counterpart to :func:`_split_components`."""
 
     exact: Counter = Counter()
     rolled: list[DamageComponent] = []
     for component in components:
         if component.source in _IGNORED_SOURCES:
             continue
-        capped = component.source.endswith("_to_full")
-        base = component.source[: -len("_to_full")] if capped else component.source
         if (
             component.source in _ROLL_SCALED_SOURCES
-            or capped
-            or base in capped_bases
+            or component.source.endswith("_to_full")
         ):
             rolled.append(component)
         else:
             exact[(component.source, component.delta)] += 1
+    return exact, rolled
+
+
+def _promote_capped_tail_counterparts(
+    observed: Sequence[DamageComponent],
+    engine: Sequence[DamageComponent],
+    *,
+    support: BranchLegalRollSupport | None,
+    target_side: str,
+) -> tuple[Counter, list[DamageComponent]]:
+    """Keep a direct roll and its terminal residual on one comparison path.
+
+    A representative engine roll can leave a poisoned target at zero while a
+    different legal direct-damage roll leaves it alive after the same poison
+    tick. The renderer records the former as ``capped_lethal``; the protocol
+    records the latter under its ordinary residual source. Preserve that source
+    on :class:`DamageComponent` and promote only its matching observed
+    counterpart after an actually legal selected direct hit. This is deliberately
+    narrower than treating arbitrary exact damage as roll-scaled.
+    """
+
+    exact, rolled = _split_component_events(observed)
+    if support is None or support.target_side != target_side:
+        return exact, rolled
+    if not any(
+        component.source == "" and component.event_index == support.event_index
+        for component in engine
+    ):
+        return exact, rolled
+    direct_positions = [
+        index
+        for index, component in enumerate(observed)
+        if (
+            component.source == ""
+            and component.critical is support.critical
+            and abs(component.delta) in support.damages
+        )
+    ]
+    if not direct_positions:
+        return exact, rolled
+    first_direct = direct_positions[0]
+    used_indexes: set[int] = set()
+    for engine_component in engine:
+        if (
+            engine_component.source != "capped_lethal"
+            or not engine_component.capped_source
+        ):
+            continue
+        for index, observed_component in enumerate(
+            observed[first_direct + 1:], first_direct + 1
+        ):
+            if index in used_indexes:
+                continue
+            if (
+                observed_component.source == engine_component.capped_source
+                and observed_component.delta < 0
+                and exact[(observed_component.source, observed_component.delta)]
+            ):
+                exact[(observed_component.source, observed_component.delta)] -= 1
+                if not exact[(observed_component.source, observed_component.delta)]:
+                    del exact[(observed_component.source, observed_component.delta)]
+                rolled.append(observed_component)
+                used_indexes.add(index)
+                break
     return exact, rolled
 
 
@@ -938,9 +873,8 @@ def roll_components_agree(
     observed: Sequence[tuple[str, int]],
     engine: Sequence[tuple[str, int]],
     legal: set[int] | None,
-    scale: int | None = None,
-    damage_scales: tuple[int, int] | None = None,
-    direct_damage_scales: tuple[int, int] | None = None,
+    *,
+    roll_scale: int | None = None,
 ) -> bool:
     """Compare roll-scaled components: same count, each observed value legal.
 
@@ -952,36 +886,13 @@ def roll_components_agree(
 
     if len(observed) != len(engine):
         return False
-    if scale is None:
-        scale = max(_roll_damage_scale(observed), _roll_damage_scale(engine))
-    # SLOT-WIDE, threaded in. Computing this from `observed`/`engine` was the
-    # bug: roll_component_events_agree calls this with ONE component at a time,
-    # and _roll_damage_scale excludes heals, so for a heal pair the local value
-    # is 0 and the bound collapses to 1 HP -- far tighter than intended, not
-    # looser. The deficit difference is a property of the SLOT's damage, not of
-    # the single component being compared.
-    if damage_scales is None:
-        _obs_damage = _roll_damage_scale(observed)
-        _eng_damage = _roll_damage_scale(engine)
-    else:
-        _obs_damage, _eng_damage = damage_scales
-    _damage_difference = abs(_obs_damage - _eng_damage)
     for (obs_source, obs), (_eng_source, eng) in zip(
         sorted(observed, key=lambda pair: pair[1]),
         sorted(engine, key=lambda pair: pair[1]),
     ):
         if obs == eng:
             continue
-        if not obs_source.endswith("_to_full") and not _eng_source.endswith(
-            "_to_full"
-        ) and obs_source not in _ROLL_SCALED_SOURCES:
-            # PROMOTED BUT NOT CAPPED -- compare exactly. Reaching here at all
-            # means capped_bases promoted this component for LENGTH; it is a
-            # deterministic gen3 quantity (a bare -heal is floor(maxhp/2)) and
-            # nothing about it is roll-scaled. Granting it the roll window is
-            # how 20 vs 18 started matching.
-            return False
-        if obs_source.endswith("_to_full") or _eng_source.endswith("_to_full"):
+        if obs_source.endswith("_to_full"):
             # A heal that tops the mon out restores `maxhp - hp_before`, so the
             # two sims differ by exactly their difference in `hp_before` — which
             # is bounded by the 85-100 % spread of the damage that preceded it in
@@ -994,70 +905,14 @@ def roll_components_agree(
             # Observed damage d satisfies d >= 0.85 * base, so base <= d / 0.85
             # and the spread 0.15 * base <= 0.176 * d. Round to 0.18 with 1 HP
             # of flooring slack.
-            # BOUND BY THE DAMAGE DIFFERENCE, NOT 0.18x THE MAGNITUDE.
-            #
-            # Two arms of one step share a start, so their deficits differ by
-            # exactly the damage they took differently. A cap restores
-            # `maxhp - hp_before`, so the two caps differ by that same amount --
-            # not by a fraction of either arm's total damage.
-            #
-            # 0.18 * scale + 1 was a 48 HP window on a 300-damage slot and
-            # accepted caps of 40 and 85 against IDENTICAL -260 direct rolls,
-            # where the deficit difference is exactly zero. Reviewer measured
-            # the difference bound at 99.99 % recovery against 99.89 % for the
-            # fraction bound -- strictly better AND sound.
-            if abs(abs(obs) - abs(eng)) > _damage_difference + 1:
-                return False
-            # DIRECTION. The arm that took MORE damage has the deeper deficit,
-            # so its cap must be the larger. A symmetric absolute bound accepts
-            # the inversion: obs damage 155 with cap 160 against eng damage 165
-            # with an uncapped 155 passes |160-155| <= |165-155|, but the arm
-            # that took less cannot have the deeper deficit.
-            if _obs_damage > _eng_damage and abs(obs) < abs(eng):
-                return False
-            if _eng_damage > _obs_damage and abs(eng) < abs(obs):
-                return False
-            continue
-        if obs_source == "capped_lethal" and _eng_source == "capped_lethal":
-            # BOTH sides clipped. The one-sided test below is unsound here.
-            #
-            # A residual that kills is clipped to whatever HP remains, so each
-            # arm clips to ITS OWN remainder: the arm that took LESS direct
-            # damage has MORE left and therefore the LARGER cap. reports/c88
-            # found these nets agreeing to the point -- -125 + -40 = -133 + -32
-            # = -165 -- while the old rule asserted the observed cap "can only
-            # ever be SMALLER" and rejected them.
-            #
-            # THE BASIS MUST EXCLUDE capped_lethal ITSELF. Conservation makes
-            # the slot-wide totals identical (165 vs 165, difference 0), so a
-            # slot-wide bound rejects every one of these. It is the DIRECT
-            # damage that differs, and the two caps differ by exactly that much.
-            if direct_damage_scales is None:
-                # No slot context (a direct caller, or a test). Fall back to the
-                # one-sided test rather than rejecting: it is SOUND in the
-                # direction it checks -- an observed cap below the engine's is
-                # legitimate whether one side or both are clipped. Only the
-                # obs > eng direction needed the basis, and rejecting here
-                # regressed test_clipped_residual_below_engine_agrees.
-                if abs(obs) <= abs(eng) + 1:
-                    continue
-                return False
-            obs_direct, eng_direct = direct_damage_scales
-            # AN EQUALITY, NOT A BOUND. Both arms are seeded from the same
-            # pre_hp and a capped_lethal means the slot ends at exactly 0, so
-            # the deltas sum to -pre_hp on BOTH arms by construction. The exact
-            # bucket must already match, so the roll-scaled sums are equal too,
-            # and with one cap the cap gap equals the direct gap EXACTLY.
-            #
-            # Review measured this over the whole window: 1,797 cap-vs-cap
-            # comparisons, 45 accepted with unequal caps, and all 45 satisfy the
-            # equality. The +/-1 slack was never load-bearing, and the two
-            # direction guards it replaced were subsumed -- one of which no test
-            # pinned. This form additionally rejects three physically impossible
-            # pairs the inequality accepted, at an identical divergence row set.
-            if (abs(obs) - abs(eng)) != (eng_direct - obs_direct):
-                return False
-            continue
+            scale = (
+                roll_scale
+                if roll_scale is not None
+                else max(_roll_damage_scale(observed), _roll_damage_scale(engine))
+            )
+            if abs(abs(obs) - abs(eng)) <= 0.18 * scale + 1:
+                continue
+            return False
         if obs_source == "capped_lethal":
             # A residual that KILLED was clipped by the HP that happened to
             # remain, so it can only ever be SMALLER than the uncapped tick the
@@ -1085,326 +940,6 @@ def roll_components_agree(
     return True
 
 
-_MIN_DAMAGE_ROLL = 85
-_ONCE_PER_TURN_HEALS = frozenset({"itemleftovers", "leechseed"})
-_CASCADE_HEALS = frozenset({"itemleftovers", "heal", "movewish", "leechseed"})
-
-
-def _cascade_base(source: str) -> str:
-    return source[: -len("_to_full")] if source.endswith("_to_full") else source
-
-
-def _roll_cascade_equivalent(
-    observed,
-    engine,
-    *,
-    support,
-    target_side: str,
-    pre_legal: set[int] | None,
-    observed_all=None,
-    engine_all=None,
-) -> bool:
-    """Whether a component-COUNT difference is caused by a legal roll difference.
-
-    The engine may pick a legal damage roll the simulator did not. That
-    difference cascades: a Wish or Recover that would have capped the mon at
-    full no longer does, so a Leftovers tick which had nothing to do now has
-    room and emits a line. Same transition, same end HP, different component
-    COUNT -- and the length check rejected it before any roll tolerance applied.
-
-    FIVE constraints, all necessary. Review of #1010 found the first version
-    had only the third, which let an observed Leftovers tick match an engine
-    Wish plus Leech Seed on equal nets -- different mechanics, not one
-    transition at two rolls -- and let the direct component skip the legal-roll
-    set entirely by returning before the per-component loop.
-
-    1. The heal SOURCES must agree as a multiset except for exactly one extra
-       component on the longer side. Without this, any heals summing alike pass.
-    2. The direct component must clear the same ``legal``/``support`` check every
-       other roll-scaled component clears. A proportional band is not roll-set
-       membership.
-    3. The totals must agree, which is what makes the extra component a
-       cap-filling residual rather than an unrelated difference.
-    """
-
-    observed_direct = [c for c in observed if c.source == ""]
-    engine_direct = [c for c in engine if c.source == ""]
-    if len(observed_direct) != 1 or len(engine_direct) != 1:
-        return False
-
-    observed_heals = [c for c in observed if c.source != ""]
-    engine_heals = [c for c in engine if c.source != ""]
-    all_heals = observed_heals + engine_heals
-    if not all_heals:
-        return False
-    if any(_cascade_base(c.source) not in _CASCADE_HEALS or c.delta <= 0 for c in all_heals):
-        return False
-
-    # (1) exactly one extra component, and the shared heals agree by SOURCE.
-    #     Their MAGNITUDES may differ: in a real cascade the capped heal is
-    #     precisely the one that moved, because a `_to_full` heal restores
-    #     `maxhp - hp_before` and so inherits the preceding roll (see the
-    #     `_to_full` branch of roll_components_agree). Requiring equal
-    #     magnitudes here collapsed this predicate back to the NARROW form C66
-    #     measured at 21 rows and declined to ship -- it rejected the split-gap
-    #     majority, e.g. s18000053/136 where gap 6 = heal gap 3 + residual 3.
-    longer, shorter = (
-        (engine_heals, observed_heals)
-        if len(engine_heals) > len(observed_heals)
-        else (observed_heals, engine_heals)
-    )
-    if len(longer) - len(shorter) != 1:
-        return False
-    remaining = Counter(_cascade_base(c.source) for c in shorter)
-    extra_components = []
-    for component in longer:
-        base = _cascade_base(component.source)
-        if remaining.get(base):
-            remaining[base] -= 1
-        else:
-            extra_components.append(component)
-    if len(extra_components) != 1 or any(remaining.values()):
-        return False
-    extra = extra_components[0]
-
-    # (2) the EXTRA must itself be capped, and must be a source the other side
-    #     does not carry. Both sides end at full in a cascade, so the residual
-    #     that filled the gap tops the mon out. This is what rejects a discrete
-    #     mechanic difference -- an engine Leech Seed the observation never saw
-    #     arrives untagged -- and it rejects an extra that merely duplicates a
-    #     shared source to manufacture its own cap flip.
-    if not extra.source.endswith("_to_full"):
-        return False
-    if _cascade_base(extra.source) in {_cascade_base(c.source) for c in shorter}:
-        return False
-
-    # (3) the roll gap must be NONZERO and must bound the extra. Physically the
-    #     capped instance of a heal equals the deficit at that moment and the
-    #     uncapped instance is the nominal that overshot it, so capped <= uncapped;
-    #     with conservation that is exactly `extra <= |roll gap|`. Without it the
-    #     predicate accepted pairs unrealizable from any common start -- and
-    #     worse, MASKED real defects: a fourth review measured 14% of accepts
-    #     unrealizable, including an engine Leech Seed healing 21 where the
-    #     simulator healed 25 from an identical state, which is the gen3
-    #     rounding class this program exists to find. A strict `>` also closes
-    #     the zero-gap case, where identical damage from a common start means an
-    #     identical deficit and no heal can cap on one side only.
-    roll_gap = abs(abs(engine_direct[0].delta) - abs(observed_direct[0].delta))
-    if roll_gap <= 0 or abs(extra.delta) > roll_gap:
-        return False
-
-    # (4) exactly one shared base may flip its cap, it must flip toward the
-    #     SMALLER direct roll, and no base may appear twice. The smaller roll
-    #     leaves more HP, so it is the side whose heal still tops the mon out; a
-    #     flip the other way is impossible from a common start. Inspecting only
-    #     "some base flipped" admitted two shared heals flipping in OPPOSITE
-    #     directions, and a Counter over bases collapsed duplicates so that one
-    #     instance of a repeated source could supply the flip for another.
-    # Once-per-turn residuals may not repeat on a side. Leftovers and Leech
-    # Seed tick exactly once per turn, so two instances on one slot cannot both
-    # be real; that is how a synthetic case slipped a duplicate past the
-    # instance pairing, one copy matching and the other supplying the flip.
-    # Generic `heal` and `movewish` are NOT in this set: two untagged -heal
-    # lines in one step are ordinary, and banning them cost two genuine corpus
-    # cascades in an earlier round (s18500122/85, s18100033/60).
-    for side_heals in (observed_heals, engine_heals):
-        once_per_turn = [
-            _cascade_base(c.source)
-            for c in side_heals
-            if _cascade_base(c.source) in _ONCE_PER_TURN_HEALS
-        ]
-        if len(once_per_turn) != len(set(once_per_turn)):
-            return False
-
-    # Two capped heals on one side are possible ONLY with damage between them.
-    # A heal that tops the mon out leaves nothing for a later heal to restore,
-    # so a second positive `_to_full` requires the mon to have been damaged in
-    # between -- cap, hit, cap is an ordinary line (Recover to full, take the
-    # hit, Leftovers tops out again) and an earlier version of this predicate
-    # wrongly banned it outright. Order is what distinguishes the two, and
-    # event_index carries it.
-    for side_heals, side_direct in (
-        (observed_heals, observed_direct),
-        (engine_heals, engine_direct),
-    ):
-        caps = sorted(
-            (c.event_index for c in side_heals if c.source.endswith("_to_full"))
-        )
-        if len(caps) < 2:
-            continue
-        damage_indices = [c.event_index for c in side_direct]
-        if not all(
-            any(first < hit < second for hit in damage_indices)
-            for first, second in zip(caps, caps[1:])
-        ):
-            return False
-
-    smaller_is_observed = abs(observed_direct[0].delta) < abs(engine_direct[0].delta)
-
-    # The extra residual must sit on the side that took the LARGER direct roll.
-    #
-    # A cascade is one physical story told twice: the same start, one damage
-    # roll differing, and a cap absorbing the difference. The side that took
-    # MORE damage has the deeper deficit, so it is the side with room for an
-    # additional top-up. Nothing previously tied the extra's side to the roll
-    # direction -- `extra` was picked from whichever side had more heals, and
-    # `capped_side` from whichever had the smaller roll, independently.
-    #
-    # When they disagree, conservation forces capped = uncapped - gap - extra,
-    # strictly below the physical floor of uncapped - gap. Review's oracle
-    # found this accepts e.g.
-    #   obs = [movewish 120 @0, direct -210 @1]
-    #   eng = [movewish_to_full 100 @0, direct -200 @1, itemleftovers_to_full 10 @2]
-    # where at event 0 both sims are at the SAME HP, so one cannot top out at
-    # 100 while the other pays 120.
-    extra_is_observed = any(component is extra for component in observed_heals)
-    if extra_is_observed is smaller_is_observed:
-        return False
-
-    # NOTHING MAY DIFFER BEFORE THE ROLL THAT CAUSED THE DIFFERENCE.
-    #
-    # Two arms of one cascade share a start. The only roll-dependent event is
-    # the direct hit, so at every event_index BELOW it both arms are at
-    # identical HP and therefore at identical deficit. A heal cannot cap on one
-    # arm and pay uncapped on the other there, and an extra residual cannot
-    # appear there either -- whatever produced it had not happened yet.
-    #
-    # Round eight found this as the last unsound accept class:
-    #   obs = [movewish_to_full 100 @0,                          direct -102 @2]
-    #   eng = [movewish         104 @0, itemleftovers_to_full 4 @1, direct -110 @2]
-    # accepted, and impossible. In a directed family of 21,216 accepts, 19,296
-    # (91%) were provably unrealizable with this signature; in an unbiased sweep
-    # of 181,203 synthetic pairs it was both of the only two accepts, and an
-    # independent oracle called both unrealizable.
-    #
-    # The prefix floor does not catch it (running is >= 0 that early), and
-    # constraint 4 needs two caps on one side.
-    _first_direct = min(
-        observed_direct[0].event_index, engine_direct[0].event_index
-    )
-    if extra.event_index < _first_direct:
-        return False
-    _obs_by_base = {}
-    for component in observed_heals:
-        _obs_by_base.setdefault(_cascade_base(component.source), []).append(component)
-    for engine_component in engine_heals:
-        if engine_component.event_index >= _first_direct:
-            continue
-        twins = _obs_by_base.get(_cascade_base(engine_component.source)) or []
-        for observed_component in twins:
-            if observed_component.event_index != engine_component.event_index:
-                continue
-            capped_disagrees = observed_component.source.endswith(
-                "_to_full"
-            ) is not engine_component.source.endswith("_to_full")
-            if capped_disagrees or observed_component.delta != engine_component.delta:
-                return False
-
-    # No `_to_full` may be reached at a negative running total.
-    #
-    # A heal that tops the mon out restores maxhp - hp_before, so it is bounded
-    # BELOW by the damage already taken at that point in the turn. A cap of 150
-    # after a -200 is not a small number, it is an impossible one. Constraint 4
-    # only orders caps against damage when a side carries two or more of them;
-    # with a single cap there was no floor at all. This closes the residual the
-    # PR body called out -- and refutes its stated reason for leaving it open,
-    # since event_index is already present, already monotonic (enumerate over
-    # the protocol lines) and already used by constraint 4.
-    # Walk the FULL per-slot component list, not the roll-scaled subset that
-    # reaches this predicate. Review round seven: `observed`/`engine` here are
-    # obs_rolled/eng_rolled, so an untagged Leftovers tick, a sethp, or a
-    # burn/poison/sandstorm tick is INVISIBLE to the running total -- and those
-    # move HP. A +18 Leftovers before a cap makes the true deficit 18 smaller
-    # than the subset suggests, so the subset walk false-rejected an ordinary
-    # realizable cascade; exact-bucket DAMAGE makes it under-trigger, so it was
-    # wrong in both directions. Falling back to the subset keeps direct callers
-    # (and the tests) working, but the real path threads the whole list.
-    for side in (
-        observed_all if observed_all is not None else observed,
-        engine_all if engine_all is not None else engine,
-    ):
-        running = 0
-        for component in sorted(side, key=lambda c: c.event_index):
-            if component.source.endswith("_to_full") and running < 0:
-                if component.delta < -running:
-                    return False
-            running += component.delta
-
-    capped_side, uncapped_side = (
-        (observed_heals, engine_heals)
-        if smaller_is_observed
-        else (engine_heals, observed_heals)
-    )
-    # Pair the two sides' heals as INSTANCES, matching identical (base, delta)
-    # first, so a repeated source cannot have one of its instances supply the
-    # flip for another. Banning repeated bases outright was the previous
-    # attempt and it was wrong: two untagged `-heal` lines on one slot in one
-    # step both normalise to `heal`, which is ordinary. Review measured it
-    # rejecting two genuine two-roll cascades on the corpus -- s18500122/85 and
-    # s18100033/60 -- each reproducible from a single common start.
-    # The extra is already accounted for; pair only the SHARED instances.
-    unmatched_capped = [c for c in capped_side if c is not extra]
-    unmatched_uncapped = [c for c in uncapped_side if c is not extra]
-    for component in list(unmatched_capped):
-        twin = next(
-            (
-                other
-                for other in unmatched_uncapped
-                if other.source == component.source and other.delta == component.delta
-            ),
-            None,
-        )
-        if twin is not None:
-            unmatched_capped.remove(component)
-            unmatched_uncapped.remove(twin)
-    # Exactly one instance may remain on each side, and they must be the same
-    # base differing only in whether it capped.
-    if len(unmatched_capped) != 1 or len(unmatched_uncapped) != 1:
-        return False
-    capped, uncapped = unmatched_capped[0], unmatched_uncapped[0]
-    if _cascade_base(capped.source) != _cascade_base(uncapped.source):
-        return False
-    if not capped.source.endswith("_to_full") or uncapped.source.endswith("_to_full"):
-        return False
-    # the capped instance cannot exceed the nominal it was clipped from
-    if capped.delta > uncapped.delta:
-        return False
-
-    # (4) the direct component faces the ordinary legal-roll check, INCLUDING
-    #     the crit cross-check the equal-length path applies.
-    engine_component = engine_direct[0]
-    if (
-        support is not None
-        and target_side == support.target_side
-        and engine_component.event_index == support.event_index
-        and observed_direct[0].critical is not support.critical
-    ):
-        return False
-    legal = branch_component_legal_rolls(
-        support, target_side=target_side, component=engine_component, pre_legal=pre_legal
-    )
-    scale = max(
-        _roll_damage_scale([(c.source, c.delta) for c in observed]),
-        _roll_damage_scale([(c.source, c.delta) for c in engine]),
-    )
-    if not roll_components_agree(
-        [(observed_direct[0].source, observed_direct[0].delta)],
-        [(engine_component.source, engine_component.delta)],
-        legal,
-        scale=scale,
-    ):
-        return False
-
-    # (5) conservation. With the shape fixed above this IS the general causal
-    #     identity C66 named: the roll gap equals the sum of the increases
-    #     across the healing components, extra included.
-    return (observed_direct[0].delta + sum(c.delta for c in observed_heals)) == (
-        engine_direct[0].delta + sum(c.delta for c in engine_heals)
-    )
-
-
-
-
 def roll_component_events_agree(
     observed: Sequence[DamageComponent],
     engine: Sequence[DamageComponent],
@@ -1412,8 +947,6 @@ def roll_component_events_agree(
     support: BranchLegalRollSupport | None,
     target_side: str,
     pre_legal: set[int] | None,
-    observed_all: Sequence[DamageComponent] | None = None,
-    engine_all: Sequence[DamageComponent] | None = None,
 ) -> bool:
     """Compare ordered roll components with per-event legal support.
 
@@ -1425,30 +958,10 @@ def roll_component_events_agree(
     """
 
     if len(observed) != len(engine):
-        return _roll_cascade_equivalent(
-            observed,
-            engine,
-            support=support,
-            target_side=target_side,
-            pre_legal=pre_legal,
-            observed_all=observed_all,
-            engine_all=engine_all,
-        )
-    # Basis for cap-vs-cap comparisons: DIRECT damage only, excluding the
-    # capped residual being compared. See the capped_lethal branch.
-    _direct_damage = (
-        _roll_damage_scale(
-            [(c.source, c.delta) for c in observed if c.source != "capped_lethal"]
-        ),
-        _roll_damage_scale(
-            [(c.source, c.delta) for c in engine if c.source != "capped_lethal"]
-        ),
-    )
-    _slot_damage = (
-        _roll_damage_scale([(c.source, c.delta) for c in observed]),
-        _roll_damage_scale([(c.source, c.delta) for c in engine]),
-    )
-    for observed_component, engine_component in zip(observed, engine):
+        return False
+    for component_index, (observed_component, engine_component) in enumerate(
+        zip(observed, engine)
+    ):
         selected_direct_event = (
             support is not None
             and target_side == support.target_side
@@ -1470,8 +983,18 @@ def roll_component_events_agree(
             [(observed_component.source, observed_component.delta)],
             [(engine_component.source, engine_component.delta)],
             legal,
-            damage_scales=_slot_damage,
-            direct_damage_scales=_direct_damage,
+            # A capped full heal is priced by damage that happened earlier in
+            # the same ordered tail. Comparing it in a singleton erases that
+            # causal scale and turns a legal random-roll difference into a
+            # false mismatch (Double-Edge -> Rest is the retained shape).
+            roll_scale=max(
+                _roll_damage_scale(
+                    [(item.source, item.delta) for item in observed[:component_index + 1]]
+                ),
+                _roll_damage_scale(
+                    [(item.source, item.delta) for item in engine[:component_index + 1]]
+                ),
+            ),
         ):
             return False
     return True
@@ -1728,61 +1251,6 @@ _MISS_PCT_RE = re.compile(r"pct=(?P<pct>[\d.]+)")
 # an unattributed or roll-scaled component is never "the residual".
 _ADJUDICABLE_RESIDUALS = frozenset({"itemleftovers", "psn", "brn", "sandstorm", "tox"})
 
-# End-of-turn residual phase sources, for the A1 marker. A SEPARATE set from
-# `_ADJUDICABLE_RESIDUALS` above, which serves the majority-override rule and is
-# narrower on purpose. Hazards are deliberately absent and that absence is
-# load-bearing: 19100180/24 is a Spikes mis-attribution, not a residual, and only
-# this scoping keeps it divergent.
-_RESIDUAL_PHASE_SOURCES = frozenset({
-    "itemleftovers", "psn", "tox", "brn", "sandstorm", "hail",
-    "leechseed", "movewish", "abilityraindish", "ingrain", "nightmare", "curse",
-    # gen3 partial trapping ticks 1/16 at end of turn, and the harness spells it
-    # per-move, so every variant is listed. Omitting them would under-strip,
-    # which leaves a row divergent -- the safe direction -- but visible is not
-    # the same as correct.
-    "partiallytrapped", "movewrap", "movebind", "movefirespin", "moveclamp",
-    "movewhirlpool", "movesandtomb",
-})
-
-
-def _is_forced_replacement_ply(step_lines: Sequence[str]) -> bool:
-    """A ply on which nobody moved, somebody switched, no residual phase ran, and
-    the battle did not end.
-
-    THE OLD FIRST LINE SAID "because it is a replacement", AND THAT REASON IS THE
-    OPPOSITE OF WHAT SHOWDOWN DOES. Being a replacement ply is not what makes the
-    residual phase absent. Measured by driving Showdown directly in
-    `gen3customgame`: after a Pokemon faints to a MOVE, gen 3 pauses mid-turn for
-    the replacement, and the ply that follows the replacement runs the FULL
-    residual phase -- weather upkeep, both actives' chips, items, status. The
-    engine defers it identically (its arm ends in `ToggleSide*ForceSwitch`, and the
-    next transition carries the whole phase), so the two agree.
-
-    The predicate is still correct, for a different reason than it claimed: such a
-    ply carries `|upkeep|`, so the first clause excludes it. What this really
-    matches is the OTHER shape -- a replacement with no residual phase at all,
-    which is the switch-then-nothing ply.
-
-    Hoisted to module level so it can be pinned BEHAVIOURALLY. An earlier version
-    lived inline and its pins asserted on `inspect.getsource` TEXT, which meant
-    inverting the `|win|` clause would have passed every one of them -- the exact
-    first-attempt failure the pins existed to prevent.
-
-    The result clauses are load-bearing. `|upkeep|` is ALSO absent whenever the
-    battle ENDS during residuals: Showdown emits the tick, then `|faint|`, then
-    the result, and never reaches upkeep. Keying on `|upkeep|` alone manufactured
-    44 divergences on a 400-game measurement and reopened 19100002/53, the
-    battle-end sandstorm row #1092 had just fixed. `|tie` is checked alongside
-    `|win` because a double KO ends the battle the same way and emits `|tie`.
-    """
-
-    return (
-        not any(line.startswith("|upkeep") for line in step_lines)
-        and not any(line.startswith(("|win", "|tie")) for line in step_lines)
-        and not any(line.startswith("|move|") for line in step_lines)
-        and any(line.startswith("|switch|") for line in step_lines)
-    )
-
 
 def _majority_miss(misses: Sequence[str]) -> str | None:
     """The miss carrying the largest share of the branch probability mass."""
@@ -1879,6 +1347,9 @@ def classify_divergence(step_lines: Sequence[str], misses: Sequence[str]) -> str
     # The engine lane verified these are determinization limits, not engine bugs
     # (feeding the exact repro state back produced correct fan-out including the
     # observed tick). Named so the residue table stops charging them to hazards.
+    if any(line.startswith("|drag|") for line in step_lines):
+        return "limit:world_sample_drag_target"
+
     if "boost deltas" in body:
         return "boost_delta_support"
     if "roll-scaled" in body:
@@ -1927,27 +1398,6 @@ def classify_divergence(step_lines: Sequence[str], misses: Sequence[str]) -> str
     # misleading: it pointed the residue table at D2 for boundaries where
     # nothing faints in the move phase (#893). Prefixed so no reader mistakes
     # evidence for attribution.
-    # LAST RESORT for a component-level explanation: after every component test, and
-    # BEFORE the protocol-evidence fallbacks below.
-    #
-    # This used to short-circuit at the TOP of the function on the mere presence of a
-    # `|drag|` line, so it attached to every row that merely co-occurred with a phaze
-    # -- masking a renderer defect on eleven holdout rows and one dev row where the
-    # engine dragged the CORRECT Pokemon and only the Spikes chip's tag differed
-    # (#1081 fixed it; all twelve closed). The cost was not the label, it was that two
-    # reports concluded those rows were comparison limits -- and `limit:` is the one
-    # disposition that ends inquiry, which C116's M1 rule now forbids without a
-    # written demonstration.
-    #
-    # PLACEMENT IS LOAD-BEARING IN BOTH DIRECTIONS and my first attempt got the second
-    # wrong: below the `evidence:*` fallbacks the class became UNREACHABLE, because
-    # `evidence:spikes_in_step` matches any phaze-into-Spikes row first. A
-    # demoted-to-death class is no better than a short-circuited one. The control in
-    # tests/test_drag_limit_is_a_last_resort.py exists to catch exactly that, and it
-    # did. reports/c117 (unmerged at time of writing; see #1079).
-    if any(line.startswith("|drag|") for line in step_lines):
-        return "limit:world_sample_drag_target"
-
     fainted = any(line.startswith("|faint|") for line in step_lines)
     upkeep = any(line.strip() == "|upkeep" for line in step_lines)
     if fainted and not upkeep:
@@ -1984,8 +1434,6 @@ def evaluate_boundary_strict(
 ) -> tuple[str, list[str], int]:
     """Per-damage-source comparison against the mapper-rendered engine branches."""
 
-    boundary_is_forced_replacement = _is_forced_replacement_ply(step_lines)
-
     side_one_choice = choices["p1"] if slot_sides["p1"] == "side_one" else choices["p2"]
     side_two_choice = choices["p2"] if slot_sides["p2"] == "side_two" else choices["p1"]
     # The mapper renders side_one/side_two; map its p1/p2 labels back to slots.
@@ -2002,55 +1450,10 @@ def evaluate_boundary_strict(
     # HP equal), so both extractions are seeded with it.
     pre_hp = {"p1": pre_features.p1_hp, "p2": pre_features.p2_hp}
     observed_components = damage_component_events(step_lines, pre_hp)
-    observed_split = {
-        slot: _split_component_events(observed_components[slot]) for slot in ("p1", "p2")
-    }
-    obs_exact = {slot: observed_split[slot][0] for slot in ("p1", "p2")}
-    obs_rolled = {slot: observed_split[slot][1] for slot in ("p1", "p2")}
 
     misses: list[tuple[int, str]] = []
     branch_total = 0
     usable_branches = 0
-    # Probability mass this verdict is entitled to speak for. The matcher's
-    # semantics are EXISTENTIAL -- "some enumerated branch reproduces the
-    # observation" -- so a branch dropped by the lossy-render filter makes the
-    # existential UNVERIFIABLE, not false. Adjudicating anyway evaluates the
-    # boundary on a rump branch set and can report a matched boundary as
-    # divergent; measured on the retained row 19200131/129, where the 93.75%
-    # non-crit arm was dropped as `attract_empty_tail_ambiguous:paralyzed+
-    # cannot_act` and the surviving 6.25% CRIT arm supplied the only comparison
-    # (its capped-lethal recoil -32 against the observed non-crit recoil -18).
-    # That boundary matches on its full branch set.
-    #
-    # `enumeration_incomplete` is the DECIDING flag and `dropped_mass` only
-    # describes it. Three distinct paths leave a positive-mass branch
-    # uncompared, and all three must set it, or `diverged_on_full_branch_set`
-    # would assert "100 % of its mass" over an enumeration that was not
-    # complete:
-    #   1. the lossy-render filter        (the measured case)
-    #   2. `BranchLegalRollError`         (per-branch support could not be priced)
-    #   3. `strict:branch_events_error`   (a whole candidate state failed to render)
-    #
-    # (1) and (2) drop a branch whose mass is known, so they accumulate into
-    # `dropped_mass`. (3) loses the branch LIST, so its mass is not merely zero,
-    # it is unknown -- and `states` is the hidden-counter candidate list, so
-    # losing one of several is the ordinary shape of (3), not a corner. The first
-    # version of this guard reported an `unknown` fraction only when
-    # `enumerated_mass == 0`, which is unreachable (a zero mass implies
-    # `usable_branches == 0`, and the all-lossy return fires first), while the
-    # REACHABLE case -- one state lost, another rendered -- printed
-    # "100 of 100 enumerated mass survived (100.00%)". That is a guessed 100 %
-    # over an incomplete enumeration: the same defect the guard exists to
-    # prevent, in the same direction, one layer up. `unrendered_states` is
-    # therefore counted separately and forces the `unknown` report whenever it
-    # is non-zero.
-    #
-    # Neither (2) nor (3) appears in any of the sweep artifacts committed under
-    # `reports/artifacts/`, so both are fail-closed guards on paths this
-    # program has not observed rather than fixes to a live number.
-    enumerated_mass = 0.0
-    dropped_mass = 0.0
-    unrendered_states = 0
     for state in states:
         try:
             rendered = json.loads(
@@ -2062,7 +1465,6 @@ def evaluate_boundary_strict(
             raise
         except BaseException as error:  # noqa: BLE001
             counts[f"strict:branch_events_error:{type(error).__name__}"] += 1
-            unrendered_states += 1
             continue
         branches = rendered.get("branches") or []
         branch_total += len(branches)
@@ -2084,35 +1486,14 @@ def evaluate_boundary_strict(
         for branch in branches:
             if float(branch.get("percentage") or 0.0) <= 0.0:
                 continue
-            enumerated_mass += float(branch.get("percentage") or 0.0)
             lossy = list(branch.get("lossy") or [])
             # A branch whose ONLY defect is the known Sleep Talk callee-identity
             # gap is still usable: its damage is real, only its attribution is
             # generic. Any other lossy marker is a different insufficiency and
             # still disqualifies the branch.
             sleeptalk_union = bool(lossy) and set(lossy) == {_SLEEPTALK_LOSSY_MARKER}
-            # ACTUALLY the allowlist now. This shipped as the exclusion form
-            # while a constant named _TELEMETRY_ONLY_LOSSY_MARKERS sat unused
-            # above it, under a comment claiming the allowlist was chosen
-            # deliberately because an exclusion "fails open as the renderer
-            # grows". The comment described code that did not exist.
-            #
-            # A branch is usable only if EVERY marker it carries is one whose
-            # telemetry is incomplete while the public action window is still
-            # exact. Anything else -- including the synthetic
-            # empty_instruction_list placeholder, which carries events ["|"]
-            # and would match any HP-free boundary against a branch that
-            # verified nothing -- disqualifies it.
-            if not branch_render_is_usable(lossy):
+            if lossy and not sleeptalk_union:
                 counts["strict:lossy_render"] += 1
-                dropped_mass += float(branch.get("percentage") or 0.0)
-                enumeration_incomplete = True
-                # Subcase, so the drop is attributable. The single
-                # undifferentiated `strict:lossy_render` counter is why the
-                # marker behind 19200131/129 had to be recovered by replay
-                # rather than read off the artifact.
-                for marker in sorted(set(lossy)):
-                    counts[f"strict:lossy_render_marker:{marker.split(':')[0]}"] += 1
                 continue
             if sleeptalk_union:
                 counts["strict:sleeptalk_union_branch"] += 1
@@ -2121,10 +1502,10 @@ def evaluate_boundary_strict(
                     branch,
                     side_one_choice=side_one_choice,
                     side_two_choice=side_two_choice,
+                    pre_state=state.to_string(),
                 )
             except BranchLegalRollError as error:
                 counts[f"strict:branch_event_legal_error:{type(error).__name__}"] += 1
-                dropped_mass += float(branch.get("percentage") or 0.0)
                 continue
             usable_branches += 1
             engine_components = damage_component_events(
@@ -2137,65 +1518,32 @@ def evaluate_boundary_strict(
             for slot in ("p1", "p2"):
                 label = engine_label_for_slot[slot]
                 eng_exact, eng_rolled = _split_component_events(engine_components[label])
-                # If EITHER side marks a base source as capped on this slot,
-                # both sides treat it as roll-scaled HERE, so a cap present on
-                # one side and absent on the other cannot change the list's
-                # LENGTH. Magnitude is unaffected: an uncapped promoted
-                # component is still compared exactly.
-                #
-                # Recomputed PER BRANCH and never written back into the shared
-                # obs_exact/obs_rolled. C29 assigned back into them, so a
-                # promotion earned by one branch leaked into every later branch
-                # and state, whose own capped_bases were empty -- and since the
-                # engine side was already per-branch, the two sides then
-                # disagreed about which bucket an identical component was in.
-                capped_bases = {
-                    component.source[: -len("_to_full")]
-                    for component in list(observed_components[slot])
-                    + list(engine_components[label])
-                    if component.source.endswith("_to_full")
-                }
-                obs_exact_branch, obs_rolled_branch = obs_exact[slot], obs_rolled[slot]
-                if capped_bases:
-                    obs_exact_branch, obs_rolled_branch = _split_component_events(
-                        observed_components[slot], capped_bases=capped_bases
-                    )
-                    eng_exact, eng_rolled = _split_component_events(
-                        engine_components[label], capped_bases=capped_bases
-                    )
+                obs_exact, obs_rolled = _promote_capped_tail_counterparts(
+                    observed_components[slot],
+                    engine_components[label],
+                    support=branch_support,
+                    target_side=label,
+                )
                 # Branch-local support is tied to one direct protocol event.
                 # Every other rolled component remains on its ordinary pre-state
                 # range, including same-side recoil, drain, and confusion.
                 if not roll_component_events_agree(
-                    obs_rolled_branch,
+                    obs_rolled,
                     eng_rolled,
                     support=branch_support,
                     target_side=label,
                     pre_legal=pre_legal,
-                    observed_all=observed_components[slot],
-                    engine_all=engine_components[label],
                 ):
                     reason = (
                         f"{slot} roll-scaled components differ: "
-                        f"observed={[(c.source, c.delta) for c in obs_rolled_branch]} "
+                        f"observed={[(c.source, c.delta) for c in obs_rolled]} "
                         f"engine={[(c.source, c.delta) for c in eng_rolled]}"
                     )
                     ok = False
                     break
-                # A1 -- "the residuals already ran". On a forced replacement
-                # Showdown gives the incoming Pokemon no residual tick; the
-                # engine, asked for a full turn, runs one and over-emits.
-                # Scoped to RESIDUAL sources: 19100180/24 is a hazard
-                # mis-attribution and must stay divergent.
-                if boundary_is_forced_replacement:
-                    eng_exact = Counter({
-                        component: count
-                        for component, count in eng_exact.items()
-                        if component[0] not in _RESIDUAL_PHASE_SOURCES
-                    })
-                if eng_exact != obs_exact_branch:
-                    only_obs = obs_exact_branch - eng_exact
-                    only_eng = eng_exact - obs_exact_branch
+                if eng_exact != obs_exact:
+                    only_obs = obs_exact - eng_exact
+                    only_eng = eng_exact - obs_exact
                     reason = (
                         f"{slot} attributed components differ: "
                         f"observed_only={sorted(only_obs.elements())} "
@@ -2222,61 +1570,6 @@ def evaluate_boundary_strict(
         # divergent.
         return "skip_lossy", ["every branch rendered lossy"], branch_total
     ordered = [text for _rank, text in sorted(misses, key=lambda m: -m[0])][:12]
-    # DERIVED, not carried. The previous form assigned a separate boolean at each
-    # of the three sites, which is one unpinnable duplicate per site: deleting the
-    # assignment inside the state-render handler left every test green. Each of
-    # the two accumulators below is now the single source of truth for its own
-    # path, so removing either increment changes an observable number.
-    enumeration_incomplete = dropped_mass > 0.0 or unrendered_states > 0
-    if enumeration_incomplete:
-        # SOME branch was left uncompared and nothing that survived reproduced
-        # the observation. The branch that would have may be one of those, so the
-        # only honest verdict is "unmeasurable on this render", counted in its own
-        # bucket and NEVER folded into `transition:diverged`.
-        #
-        # Deliberately mass-blind: the trigger is `enumeration_incomplete`, not a
-        # fraction. A threshold ("only withhold when the majority was dropped")
-        # would put a tuned constant in front of a semantic question — the
-        # existential is unverifiable at ANY positive dropped mass, and a 1 %
-        # dropped arm is still the arm that might have matched. The surviving
-        # fraction is recorded instead of gated on, so the population stays
-        # visible and is attacked by making the renderer lossless rather than by
-        # choosing a number. `tests/test_rump_branch_adjudication.py` pins this
-        # with a MINORITY drop, which is the case a threshold would let through.
-        surviving = enumerated_mass - dropped_mass
-        counts["skip:rump_branch_set"] += 1
-        if unrendered_states or enumerated_mass <= 0.0:
-            # A candidate state produced no branch list at all, so the
-            # denominator is not `enumerated_mass` -- it is `enumerated_mass`
-            # plus an unknown amount. Any fraction computed here would be an
-            # overstatement, and at one lost state out of two it would read
-            # "100.00%". Report the loss instead of a number.
-            counts["skip:rump_branch_set_surviving_decile:unknown"] += 1
-            note = (
-                f"rump branch set: {unrendered_states} of {len(states)} candidate "
-                f"states failed to render, so the enumerated denominator is "
-                f"incomplete and the surviving fraction is UNKNOWN "
-                f"(dropped {dropped_mass:.4g} of the {enumerated_mass:.4g} that did "
-                f"enumerate); verdict withheld"
-            )
-        else:
-            # Decile of surviving mass, so "how much of its mass did the withheld
-            # verdict have" is answerable from the artifact alone.
-            counts[
-                f"skip:rump_branch_set_surviving_decile:"
-                f"{int(10 * surviving / enumerated_mass)}"
-            ] += 1
-            note = (
-                f"rump branch set: {surviving:.4g} of {enumerated_mass:.4g} enumerated "
-                f"mass survived the branch filters "
-                f"({surviving / enumerated_mass:.2%}); verdict withheld"
-            )
-        return "skip_rump", [note, *ordered], branch_total
-    # Reaching here means every enumerated branch was rendered and compared, so
-    # this divergence rests on 100 % of the enumerated mass. Counted so the
-    # invariant `transition:diverged == strict:diverged_on_full_branch_set` is
-    # checkable from the artifact rather than asserted in prose.
-    counts["strict:diverged_on_full_branch_set"] += 1
     return "diverged", ordered, branch_total
 
 
@@ -2369,25 +1662,10 @@ def run_game(
     approximate_sleep: bool,
     hidden_counter_support: bool,
     matcher: str,
-    withheld_repros: list[dict[str, Any]] | None = None,
 ) -> Counter:
     """Run one game. Divergence repros are appended to ``repros`` (capped by
     ``keep_repro``); the caller owns whether that list is per-game (checkpoint
-    records) or run-global (the final report).
-
-    ``withheld_repros`` is the SECOND, separate population: boundaries whose
-    verdict was withheld because the branch set was a rump (see
-    ``evaluate_boundary_strict``). It is separate precisely so that
-    ``repros_retained == transitions_diverged`` keeps holding — the contract
-    ``scripts/cert_sweep_reread.py`` checks — while the withheld rows still carry
-    the state needed to replay them.
-
-    Retaining that state is not a nicety. Row 19200131/129, the boundary this
-    exit was built for, was diagnosable ONLY because it happened to be retained
-    in ``repros`` as a divergence; on a reserved window, re-running its seed to
-    recover the state IS the forbidden measurement. A withheld row carrying only
-    a counter key would be permanently undiagnosable.
-    """
+    records) or run-global (the final report)."""
 
     counts: Counter = Counter()
     env.reset(seed=seed, format_id="gen3randombattle")
@@ -2511,50 +1789,8 @@ def run_game(
                 )
             continue
 
-        # THE THIRD VERDICT. `boundaries_measured` has ALREADY incremented for this
-        # boundary (`_prepare_boundary`'s last statement), so a boundary that leaves
-        # here is inside the denominator and outside both `transition:*` tallies.
-        # This is one of the two terms that make the boundary verdict partition
-        # five-term rather than two-term, not
-        # two-term -- see `verdict_partition_failures` below.
         if verdict == "skip_lossy":
             counts["skip:strict_all_branches_lossy"] += 1
-            continue
-        if verdict == "skip_rump":
-            # `skip:rump_branch_set` is incremented inside the matcher. The row
-            # goes to its OWN list, not `repros`: that list's completeness
-            # contract is `repros_retained == transitions_diverged` (checked by
-            # scripts/cert_sweep_reread.py), so a second population must sit
-            # beside it rather than inside it. The counter key is kept as well,
-            # because it is the COMPLETE index even when `withheld_repros` has
-            # been truncated by `keep_repro`.
-            counts[f"skip:rump_branch_set_row:{seed}/{steps}"] += 1
-            if withheld_repros is not None and len(withheld_repros) < keep_repro:
-                withheld_repros.append(
-                    {
-                        "kind": "verdict_withheld_rump_branch_set",
-                        "seed": seed,
-                        "step": steps,
-                        "choices": prepared["choices"],
-                        "engine_state": prepared["states"][0].to_string(),
-                        # EVERY hidden-counter candidate, so the replay
-                        # reconstructs the exact branch union the matcher saw.
-                        "engine_states": [st.to_string() for st in prepared["states"]],
-                        "gating": prepared["gating"],
-                        "party_display": prepared["party_display"],
-                        "slot_sides": prepared["slot_sides"],
-                        "turn": prepared["turn"],
-                        "pre_features": _features_payload(prepared["pre_features"]),
-                        "observed": _features_payload(observed),
-                        "observed_boost_deltas": observed_boost_deltas(step_lines),
-                        "active_changed": active_changed,
-                        "branch_count": branch_count,
-                        # The verdict that was NOT issued, kept verbatim: its
-                        # first entry is the surviving-mass line.
-                        "withheld_misses": list(misses[:12]),
-                        "protocol": list(step_lines),
-                    }
-                )
             continue
         counts[f"transition:{verdict}"] += 1
         if verdict == "diverged":
@@ -2572,12 +1808,6 @@ def run_game(
                     # than only the first sweep rung.
                     "engine_states": [st.to_string() for st in prepared["states"]],
                     "gating": prepared["gating"],
-                    # Keep the mapper input and slot orientation with the repro;
-                    # downstream diagnostics must never reconstruct either from
-                    # a presumed p1=side_one identity mapping.
-                    "party_display": prepared["party_display"],
-                    "slot_sides": prepared["slot_sides"],
-                    "turn": prepared["turn"],
                     "pre_features": _features_payload(prepared["pre_features"]),
                     "observed": _features_payload(observed),
                     "observed_boost_deltas": observed_boost_deltas(step_lines),
@@ -2799,7 +2029,7 @@ CHECKPOINT_SCHEMA = "engine-transition-differential/1"
 _FULL_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 
 
-def _checkpoint_provenance() -> dict[str, str | bool | None]:
+def _checkpoint_provenance() -> dict[str, str | None]:
     """Capture the runtime identity on every completed game, including resumes."""
 
     source_commit = public_repo_commit(REPO_ROOT)
@@ -2816,111 +2046,21 @@ def _checkpoint_provenance() -> dict[str, str | bool | None]:
         fingerprint = None
     return {
         "source_commit": source_commit,
-        # Whether ``source_commit`` actually DESCRIBES the tree that ran. It records
-        # ``git rev-parse HEAD`` and nothing else, so a sweep taken with uncommitted
-        # changes stamps a commit whose content it does not have. Four committed
-        # artifacts on this branch were emitted that way and were attributable to no
-        # committed tree; review caught it by reading the patch list at the stamped
-        # commit and finding no enumeration patch there.
-        #
-        # Recorded, not enforced -- and that is enforced in turn. It is listed in
-        # ``_DESCRIPTIVE_PROVENANCE_KEYS``, so ``_resume_provenance_failures`` ignores it:
-        # a 200-game crash-safe sweep must stay resumable across an unrelated edit, and
-        # the first version of this field silently broke that by riding a whole-dict
-        # comparison. Sweeping a dirty tree is the normal way to measure a change before
-        # committing it; what must not happen is a dirty sweep being INDISTINGUISHABLE
-        # from a clean one in the artifact.
-        "source_tree": _source_tree_state(),
         "engine_fingerprint": fingerprint,
         "image_commit": image_commit,
-        # Part of the RESUME IDENTITY, deliberately. One build serves both roll
-        # paths, so source_commit and engine_fingerprint are identical between a
-        # collapsed sweep and an enumerated one -- they cannot tell the two apart.
-        # Without this key a collapsed shard and an enumerated shard would resume
-        # into, and merge into, a single report that describes neither.
-        "enumerate_rolls": ENUMERATE_ROLLS,
-    }
-
-
-def _source_tree_state() -> str:
-    """``"clean"``, ``"dirty"``, or ``"unknown"`` for the checkout that is running.
-
-    Tracked files only (``--untracked-files=no``): an untracked scratch file is not a
-    change to the code under measurement, and counting it would make every real run
-    read dirty and the field worthless.
-    """
-
-    try:
-        status = subprocess.check_output(
-            ("git", "-C", str(REPO_ROOT), "status", "--porcelain", "--untracked-files=no"),
-            text=True,
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
-    return "dirty" if status.strip() else "clean"
-
-
-def _merged_roll_path(records: Sequence[Mapping[str, Any]]) -> bool:
-    """The one roll path every merged record was produced on. Raises if they disagree.
-
-    Absent means collapsed: records written before ``enumerate_rolls`` existed can only
-    have come from a build with no enumerated path in it. That is a fact about the
-    history, not a default -- the key is written unconditionally now.
-    """
-
-    observed: set[bool] = set()
-    for index, record in enumerate(records, start=1):
-        provenance = record.get("provenance")
-        if not isinstance(provenance, Mapping):
-            raise ValueError(f"checkpoint record {index} has no provenance to merge")
-        observed.add(bool(provenance.get("enumerate_rolls", False)))
-    if len(observed) > 1:
-        raise ValueError(
-            "refusing to merge shards from DIFFERENT roll paths: "
-            "some records carry enumerate_rolls=true and some false. One build serves "
-            "both paths, so source_commit and engine_fingerprint are identical between "
-            "them and cannot catch this; the merged report would describe neither "
-            "configuration."
-        )
-    return next(iter(observed)) if observed else False
-
-
-# Provenance keys that are DESCRIPTIVE, not part of resume identity.
-#
-# ``source_tree`` says whether the checkout was clean when a record was written. It is
-# recorded so a dirty sweep cannot pass as a clean one -- but it must not gate a resume.
-# The comparison below is a whole-dict ``!=``, so leaving it in made a 200-game crash-safe
-# sweep unresumable the moment anyone touched a tracked file between the crash and the
-# restart: clean checkpoint, edit a README, resume, exit 1. That is exactly the outcome the
-# field's own comment says it avoids, and review found the contradiction.
-#
-# Excluded rather than dropped: a clean/dirty flip is still visible, because every distinct
-# provenance blob is carried into the report's ``checkpoint_provenance.distinct``.
-_DESCRIPTIVE_PROVENANCE_KEYS = frozenset({"source_tree"})
-
-
-def _resume_identity(provenance: Mapping[str, Any]) -> dict[str, Any]:
-    """The part of a provenance record that a resume must MATCH."""
-
-    return {
-        key: value
-        for key, value in provenance.items()
-        if key not in _DESCRIPTIVE_PROVENANCE_KEYS
     }
 
 
 def _resume_provenance_failures(
-    records: Sequence[Mapping[str, Any]], current: Mapping[str, str | bool | None]
+    records: Sequence[Mapping[str, Any]], current: Mapping[str, str | None]
 ) -> list[str]:
     failures: list[str] = []
-    expected = _resume_identity(current)
     for index, record in enumerate(records, start=1):
         provenance = record.get("provenance")
         if not isinstance(provenance, Mapping):
             failures.append(f"checkpoint record {index} has no resume provenance")
             continue
-        if _resume_identity(provenance) != expected:
+        if dict(provenance) != dict(current):
             failures.append(f"checkpoint record {index} provenance differs from this resume")
     return failures
 
@@ -2932,8 +2072,7 @@ def checkpoint_record(
     repros: Sequence[Mapping[str, Any]],
     seconds: float,
     build_check: str,
-    provenance: Mapping[str, str | bool | None],
-    withheld_repros: Sequence[Mapping[str, Any]] = (),
+    provenance: Mapping[str, str | None],
 ) -> dict[str, Any]:
     return {
         "schema": CHECKPOINT_SCHEMA,
@@ -2945,11 +2084,6 @@ def checkpoint_record(
         "seconds": round(float(seconds), 3),
         "counters": {str(k): int(v) for k, v in counts.items()},
         "repros": list(repros),
-        # Additive and always present, so a record written by this build is
-        # self-describing. Records written BEFORE this key existed are read as
-        # an empty list rather than rejected -- `--resume` and `--merge-from`
-        # over the existing checkpoint archive must keep working.
-        "withheld_repros": list(withheld_repros),
     }
 
 
@@ -2965,7 +2099,6 @@ def checkpoint_report_aggregate(
 
     totals: Counter = Counter()
     repros: list[dict[str, Any]] = []
-    withheld: list[dict[str, Any]] = []
     build_checks: set[str] = set()
     for record in records:
         build_checks.add(str(record.get("build_check", "unknown")))
@@ -2985,16 +2118,6 @@ def checkpoint_report_aggregate(
         for repro in record_repros:
             if len(repros) < keep_repro:
                 repros.append(dict(repro))
-        # ABSENT is legal (pre-C142 records); MALFORMED is not. An older record
-        # simply had no withheld population, so defaulting to empty is exact
-        # rather than lenient.
-        record_withheld = record.get("withheld_repros", [])
-        if not isinstance(record_withheld, list) or not all(
-                isinstance(row, Mapping) for row in record_withheld):
-            raise ValueError("checkpoint record has malformed withheld_repros")
-        for row in record_withheld:
-            if len(withheld) < keep_repro:
-                withheld.append(dict(row))
     # Match build_report's Counter access order so absent-but-observed-as-zero
     # aggregate fields are represented identically in report["counters"].
     measured = totals["boundaries_measured"]
@@ -3022,233 +2145,7 @@ def checkpoint_report_aggregate(
         "boundaries_full_round": full_rounds,
         "boundaries_measured": measured,
         "repros": repros,
-        "withheld_repros": withheld,
     }
-
-
-# ---------------------------------------------------------------------------------------------
-# THE BOUNDARY VERDICT PARTITION, and the false two-term identity it replaces.
-#
-# `boundaries_measured` increments as the LAST statement of `_prepare_boundary`, after
-# every skip path there has already returned `None`. So it counts boundaries that
-# reached the matcher. Exactly FOUR things can then happen to such a boundary in
-# `run_game`, and each one is counted exactly once:
-#
-#   1. the matcher raises (pyo3 panics included)  -> `engine_error`
-#   2. no branch survived the strict render       -> `skip:strict_all_branches_lossy`
-#   3. the boundary matched                       -> `transition:matched`
-#   4. the boundary diverged                      -> `transition:diverged`
-#
-# so the identity is FOUR-TERM:
-#
-#     transition:matched + transition:diverged + engine_error
-#         + skip:strict_all_branches_lossy  ==  boundaries_measured
-#
-# WHY IT IS EXHAUSTIVE, exactly. `boundaries_measured` has ONE increment site in the
-# whole repo (`_prepare_boundary`, `counts["boundaries_measured"] += 1`), and the verdict
-# domain is closed and every non-`transition:*` verdict has an explicit `continue`
-# before `counts[f"transition:{verdict}"]`, so that DYNAMIC key cannot mint an
-# uncounted term. C144 stated the closure as "three values -- `evaluate_boundary_strict`
-# and `evaluate_boundary` return only \"matched\", \"diverged\" and \"skip_lossy\"".
-# C142 makes it FOUR: `evaluate_boundary_strict` also returns "skip_rump". The
-# exhaustiveness argument is unchanged in form -- `skip_rump` has its own `continue` and
-# its own counted term -- but the enumeration had to be updated with it, which is the
-# drift C144's seam comment predicted. `_prepare_boundary` has a second
-# caller (`scripts/attest_materialized_damage_stats.py`), which is harmless only because
-# it passes a THROWAWAY `Counter()` and never publishes a report; give it the live counter
-# and the identity breaks there, silently, with no verdict ever recorded.
-#
-# ------------------------------------------------------------------------------------
-# THE SEAM: a FIFTH path exists, and the identity survives it only by an accident of
-# error handling. Say which accident, because it is load-bearing and reversible.
-#
-# Between the increment and the verdict there is a stretch of code that is NOT inside the
-# matcher's `try`: `env.step(actions)`, `_fold(cumulative)`, the `active_changed`
-# comprehension, the deliberate re-raise of `KeyboardInterrupt`/`SystemExit` from the
-# matcher's handler, and `classify_divergence` on the diverged path. An exception from any
-# of those escapes `run_game` with `boundaries_measured` already incremented and no
-# verdict counted -- a genuine fifth outcome.
-#
-# It is not a partition violation TODAY for one reason and one reason only: `counts` is a
-# LOCAL `Counter` created at the top of `run_game`, and the sweep loop calls `run_game`
-# with NO try/except around it. So a game that raises anywhere in that stretch propagates
-# out and its counts are discarded WHOLESALE -- the increment never reaches a checkpoint
-# record or a report. The partition holds because the evidence is thrown away, not because
-# the path cannot be taken.
-#
-# THE CHANGE THAT BREAKS IT, named so it is recognisable in review: "salvage the partial
-# counts so a long sweep does not lose a game" -- i.e. wrapping the `run_game` call in
-# try/except and recording `counts` anyway, or hoisting `counts` out of `run_game` so the
-# caller owns it. Either makes the identity FIVE-term instantly, and the new term has no
-# name because nothing counts it. If you make that change, count the escape explicitly
-# (e.g. `boundary_abandoned_after_measure`) and add it to VERDICT_PARTITION_SCALARS or
-# VERDICT_PARTITION_COUNTERS, rather than discovering the drift from a report that no
-# longer reconciles.
-# ------------------------------------------------------------------------------------
-#
-# The two-term form `matched + diverged == boundaries_measured` was asserted as a
-# property of this instrument across reports/ and docs/ and is FALSE. It held on most
-# windows only because both extra terms were 0 there, and it is measurably broken on
-# committed artifacts: `reports/c26_structural_probe_report.json` and
-# `reports/c27_structural_probe_report.json` (lossy 2 each) and C141's final-holdout
-# sweep (lossy 4). See `reports/c144_boundary_identity_correction.md`.
-#
-# Counters that must NOT be folded in, because they are not boundary verdicts:
-# `strict:lossy_render`, `strict:sleeptalk_union_branch`, `strict:no_damage_rolls`,
-# `strict:branch_events_error:*` and `strict:branch_event_legal_error:*` are
-# PER-BRANCH or PER-STATE tallies within one boundary -- C141's holdout has
-# `strict:lossy_render` 14 against only 4 boundaries that lost every branch.
-# `gating:*` partitions the measured set a second, independent way, and
-# `divergence_class:*` partitions `transition:diverged` alone.
-#
-# The remaining `skip:*` counters -- every one not in
-# `VERDICT_PARTITION_SKIP_COUNTERS` -- fire BEFORE `boundaries_measured` increments and
-# belong to the coverage reconciliation instead
-# (`tests/test_single_seat_coverage_bound.py`).
-#
-# C144 wrote that as "every `skip:*` counter OTHER than `skip:strict_all_branches_lossy`
-# fires before `boundaries_measured` increments". C142's `skip:rump_branch_set` falsifies
-# it as stated: it is a `skip:*` counter, it is not the lossy one, and it fires after.
-#
-# The membership test is THREE conditions, and firing late is only the first of them:
-#
-#   1. the counter increments only AFTER `boundaries_measured` has incremented for that
-#      boundary -- otherwise the boundary is not in the denominator at all;
-#   2. the increment is the boundary's TERMINAL VERDICT: at most one per boundary, and
-#      mutually exclusive with `transition:matched` / `transition:diverged`. In the code
-#      that is literally the `continue` in `run_game` that skips
-#      `counts[f"transition:{verdict}"] += 1`; and
-#   3. it is the UNKEYED verdict counter. A per-boundary attribution sub-key -- this
-#      exit's own `skip:rump_branch_set_row:{seed}/{step}` and
-#      `skip:rump_branch_set_surviving_decile:{N}` -- is an ATTRIBUTE of a verdict already
-#      counted, not a second verdict, and summing it double-counts its boundary.
-#
-# Condition 3 is not decoration: without it the definition over-admits this exit's own
-# siblings, which satisfy 1 and 2 exactly (each fires once per withheld boundary, after
-# the measure, and never alongside a `transition:*`). Four withheld boundaries carrying
-# both families sum to 108 against `boundaries_measured` 100 under a 1+2-only reading.
-# The SHIPPED tuple is an explicit two-name list and closes correctly, so this is a
-# defect in the stated rule rather than in the code -- but the rule is cited as settled
-# in `reports/c144_boundary_identity_correction.md`, and it has already needed one
-# retraction, so it is stated correctly here rather than left to be re-derived.
-#
-# Condition 1 alone is NOT sufficient, and the counterexamples are in the paragraph
-# above. `gating:*` increments on the line immediately after `boundaries_measured`, and
-# every `strict:*` counter in this function fires later still -- `evaluate_boundary_strict`
-# is called after `_prepare_boundary` has returned. None of them is a partition term,
-# because each fails condition 2: `strict:lossy_render` can increment many times for one
-# boundary and leaves the boundary free to receive an ordinary verdict. C141's holdout
-# is the measurement -- `strict:lossy_render` 3, every boundary `matched`, identity
-# closes -- and `tests/test_boundary_verdict_partition.py` pins exactly that shape.
-#
-# So: NOT the counter's prefix, and NOT timing alone. Terminal-verdict-ness is the
-# discriminator; late firing is the precondition that makes it visible in this identity.
-# ---------------------------------------------------------------------------------------------
-
-# The four verdict terms as a report PUBLISHES them: three top-level scalars and one
-# counter. The lossy term has no top-level scalar, which is a large part of why the
-# published identity was read as two-term for so long -- the other three are right
-# there in the summary block and the fourth has to be dug out of `counters`.
-VERDICT_PARTITION_SCALARS = ("transitions_matched", "transitions_diverged", "engine_errors")
-# The post-measurement SKIP verdicts, which have no top-level scalar and must be dug
-# out of `counters`. C144 shipped this as a single name; C142 added the second, doing
-# exactly what C144's own instruction above said to do rather than letting the
-# identity drift.
-#
-# Both satisfy BOTH membership conditions stated above: each fires only after
-# `boundaries_measured` has incremented, AND each is a terminal verdict -- at most one
-# increment per boundary, `continue`ing past `counts[f"transition:{verdict}"]`. Timing
-# alone would also admit `gating:*` and every `strict:*` counter, none of which is a
-# verdict; the prefix would admit the pre-measurement `skip:*` counters, which are not in
-# the denominator. Neither shortcut is the rule.
-VERDICT_PARTITION_SKIP_COUNTERS = (
-    "skip:strict_all_branches_lossy",
-    "skip:rump_branch_set",
-)
-# Retained as the name C144's consumers import. It is the FIRST of the skip terms, no
-# longer the only one; code that needs the whole partition must use the tuple.
-VERDICT_PARTITION_LOSSY_COUNTER = VERDICT_PARTITION_SKIP_COUNTERS[0]
-# The same partition in the internal counter vocabulary `run_game` increments, in
-# report-field order. `checkpoint_report_binding_failures` is what binds the two
-# vocabularies together; this function does not re-check that binding.
-VERDICT_PARTITION_COUNTERS = (
-    "transition:matched",
-    "transition:diverged",
-    "engine_error",
-    *VERDICT_PARTITION_SKIP_COUNTERS,
-)
-
-
-def verdict_partition_failures(report: Mapping[str, Any], *, label: str = "report") -> list[str]:
-    """Return every way the boundary verdict partition fails to close.
-
-    Empty means it closes. Callers OR this into their own gate; it never lowers an
-    exit code.
-
-    Reads ``transitions_matched``, ``transitions_diverged``, ``engine_errors`` and
-    ``boundaries_measured`` from the report's top level and
-    every name in ``VERDICT_PARTITION_SKIP_COUNTERS`` from its counter dump. The skip
-    counters are the only terms allowed to default -- to 0, because a Counter dump omits
-    unseen keys and the non-strict matcher never emits them at all. Everything else is
-    REFUSED when absent or non-integer rather than defaulted, because defaulting
-    ``boundaries_measured`` to 0 would let the identity close on an unreadable
-    report, which is the instrument-that-cannot-move failure this repo keeps
-    rediscovering.
-    """
-
-    if not isinstance(report, Mapping):
-        return [f"{label}: report is not an object, so the verdict partition cannot be checked"]
-    out: list[str] = []
-    measured = report.get("boundaries_measured")
-    if type(measured) is not int or measured < 0:
-        out.append(
-            f"{label}: boundaries_measured is {measured!r}, not a non-negative int, so the "
-            "verdict partition cannot be checked"
-        )
-    terms: dict[str, int] = {}
-    for name in VERDICT_PARTITION_SCALARS:
-        value = report.get(name)
-        if type(value) is not int or value < 0:
-            out.append(f"{label}: {name} is {value!r}, not a non-negative int")
-            continue
-        terms[name] = value
-    counters = report.get("counters")
-    if not isinstance(counters, Mapping):
-        out.append(f"{label}: counters is not an object, so the skip verdicts cannot be read")
-    else:
-        for name in VERDICT_PARTITION_SKIP_COUNTERS:
-            value = counters.get(name, 0)
-            if type(value) is not int or value < 0:
-                out.append(f"{label}: counter {name!r} is {value!r}, not a non-negative int")
-            else:
-                terms[name] = value
-    if out:
-        return out
-    accounted = sum(terms.values())
-    if accounted != measured:
-        breakdown = " + ".join(f"{name}={value}" for name, value in terms.items())
-        gap = abs(measured - accounted)
-        # Direction is diagnostic, so name BOTH causes rather than guessing. A tally
-        # exceeding the denominator is what a two-term writer produces (the missing
-        # verdict never entered `boundaries_measured`); a denominator exceeding the
-        # tally is what a new uncounted post-measurement exit produces.
-        cause = (
-            f"{gap} more verdicts than measured boundaries — either a boundary was "
-            "counted under two verdicts, or boundaries_measured was derived from a "
-            "partition that omits a term"
-            if accounted > measured
-            else f"{gap} measured boundaries carry no verdict — either a verdict "
-            "counter is missing from this tally, or run_game grew a post-measurement "
-            "exit that nothing counts"
-        )
-        out.append(
-            f"{label}: the boundary verdict partition does not close — {breakdown} = "
-            f"{accounted} against boundaries_measured {measured}; {cause}. The identity "
-            "is five-term (matched + diverged + engine_errors + "
-            "skip:strict_all_branches_lossy + skip:rump_branch_set); a two-term reading "
-            "of it is the C144 defect."
-        )
-    return out
 
 
 def checkpoint_report_binding_failures(
@@ -3285,20 +2182,6 @@ def checkpoint_report_binding_failures(
         failures.append("report repro_retention.transitions_diverged does not match the checkpoint aggregate")
     if retention.get("repros_retained") != len(aggregate["repros"]):
         failures.append("report repro_retention.repros_retained does not match the checkpoint aggregate")
-    # Checked, because a stale report that dropped the withheld population would
-    # otherwise pass certification and those rows are the only replayable record
-    # of boundaries the harness declined to judge.
-    #
-    # Checked with a DEFAULT, because every certification report written before
-    # C142 has no such key and an empty aggregate: absent-and-empty is
-    # consistent, not a mismatch. Demanding the key outright failed the whole
-    # existing archive, which is a compatibility break dressed as a gate. The
-    # fail-closed property survives: a report that drops a NON-empty withheld
-    # population still mismatches, because the aggregate is non-empty.
-    if report.get("withheld_repros", []) != aggregate["withheld_repros"]:
-        failures.append("report withheld_repros does not match the checkpoint aggregate")
-    if retention.get("withheld_retained", 0) != len(aggregate["withheld_repros"]):
-        failures.append("report repro_retention.withheld_retained does not match the checkpoint aggregate")
     return failures
 
 
@@ -3398,7 +2281,6 @@ def build_report(
     keep_repro: int,
     repros_per_game: int | None = None,
     sources: Sequence[str] = (),
-    enumerate_rolls: bool | None = None,
 ) -> dict[str, Any]:
     """Aggregate per-game records into the report schema (live and merge paths).
 
@@ -3416,7 +2298,6 @@ def build_report(
     aggregate = checkpoint_report_aggregate(records, keep_repro=keep_repro)
     totals: Counter = Counter(aggregate["counters"])
     repros: list[dict[str, Any]] = list(aggregate["repros"])
-    withheld: list[dict[str, Any]] = list(aggregate["withheld_repros"])
     seeds: list[int] = []
     total_seconds = 0.0
     provenance_rows: list[Mapping[str, Any]] = []
@@ -3434,16 +2315,6 @@ def build_report(
     report: dict[str, Any] = {
         "build_check": aggregate["build_check"],
         "acceptance_eligible": aggregate["acceptance_eligible"],
-        # Which roll path produced these numbers. The engine fingerprint cannot
-        # say: one build serves both. A sweep artifact that does not name its own
-        # configuration is not evidence for either configuration.
-        #
-        # Derived from the RECORDS when the caller supplies it (the --merge-from
-        # path), never from this process's own configuration: a merge runs no games,
-        # so ``ENUMERATE_ROLLS`` there describes the merging process and not the
-        # shards. Stamping it would have let a collapsed merge of enumerated shards
-        # label itself collapsed.
-        "enumerate_rolls": ENUMERATE_ROLLS if enumerate_rolls is None else enumerate_rolls,
         "games": games,
         "seeds": {"min": min(seeds), "max": max(seeds), "distinct": len(set(seeds))} if seeds else None,
         "approximate_sleep_turns": approximate_sleep,
@@ -3456,13 +2327,6 @@ def build_report(
             "repros_retained": len(repros),
             "transitions_diverged": totals["transition:diverged"],
             "repros_complete": len(repros) >= totals["transition:diverged"],
-            # The withheld population is declared with the same three facts and
-            # kept STRICTLY SEPARATE, so `repros_retained == transitions_diverged`
-            # continues to mean exactly what cert_sweep_reread.py reads it to
-            # mean.
-            "withheld_retained": len(withheld),
-            "verdicts_withheld": totals["skip:rump_branch_set"],
-            "withheld_complete": len(withheld) >= totals["skip:rump_branch_set"],
         },
         "gating_exact": totals["gating:exact"],
         "gating_support_based": totals["gating:support"],
@@ -3482,7 +2346,6 @@ def build_report(
         "divergence_classes": aggregate["divergence_classes"],
         "counters": dict(sorted(totals.items())),
         "repros": repros,
-        "withheld_repros": withheld,
         "checkpoint_provenance": {
             "records_with_provenance": len(provenance_rows),
             "complete": len(provenance_rows) == games,
@@ -3499,110 +2362,11 @@ def build_report(
     return report
 
 
-# The FINAL HOLDOUT. Seeds at or above this are reserved for exactly ONE
-# measurement, ever, and must stay untouched until the program's terminal claim is
-# ready. The reservation used to live only in a plan document and in whoever was
-# driving the script.
-#
-# It stopped living there on 2026-08-05, when a convenience shell loop over three
-# `--seed-start` values -- `for start in 19100000 19000000 19200000` -- executed 60
-# games of the reserved range while probing an unrelated question. Nothing about
-# that probe needed the final holdout; it was a third sample window added without
-# registering what it was. A window whose entire value is that it has never been
-# executed should not be reachable by a typo or a loop, so the tool enforces it now
-# rather than the operator's memory.
-FINAL_HOLDOUT_SEED_FLOOR = 19_200_000
-
-FINAL_HOLDOUT_OPT_IN = "--final-holdout-i-mean-it"
-
-
-def _reject_unguarded_final_holdout(seed_start: int, games: int, opted_in: bool) -> str | None:
-    """Return an error message if this run would touch the reserved final holdout.
-
-    Checks the whole span, not just the start: `--seed-start 19199990 --games 200`
-    runs into the reserved range even though its start is below the floor.
-    """
-
-    last_seed = seed_start + max(games, 1) - 1
-    if last_seed < FINAL_HOLDOUT_SEED_FLOOR or opted_in:
-        return None
-    overlap_from = max(seed_start, FINAL_HOLDOUT_SEED_FLOOR)
-    # The registered final-holdout block is 19,200,000-19,200,199. The floor is an
-    # unbounded half-line above it on purpose -- a typo of 19,300,000 should not
-    # sail through -- but that also catches already-consumed historical bands such
-    # as c73's 19,500,000. So the "exactly one measurement" sentence is scoped to
-    # the registered block rather than asserted about every seed above the floor,
-    # where it would simply be false.
-    registered_block = overlap_from <= FINAL_HOLDOUT_SEED_FLOOR + 199
-    rationale = (
-        "This is the registered final-holdout block, reserved for exactly ONE "
-        "measurement, ever."
-        if registered_block
-        else "This is above the final-holdout floor and is reserved by default."
-    )
-    return (
-        f"refusing to run on reserved seeds: {overlap_from}..{last_seed} are at or "
-        f"above {FINAL_HOLDOUT_SEED_FLOOR}. {rationale} If this really is that "
-        f"measurement, pass {FINAL_HOLDOUT_OPT_IN}."
-    )
-
-
-def _reject_reserved_seeds_in_records(
-    records: Sequence[Mapping[str, Any]], opted_in: bool
-) -> str | None:
-    """Refuse to AGGREGATE records whose seeds are in the reserved final holdout.
-
-    The argparse-time check bounds only what this invocation would EXECUTE. In
-    `--merge-from` mode `--seed-start`/`--games` are untouched defaults, so a
-    checkpoint carrying reserved seeds merges into an `acceptance_eligible: true`
-    report with no warning at all. That is not an execution hole, but it is exactly
-    the artifact the CLI pin says must never exist: a report that makes reserved
-    seeds look measured. It matters more than usual here because the incident that
-    prompted this guard may well have left such a checkpoint behind.
-    """
-
-    if opted_in:
-        return None
-    # Coerce through float, because `.isdigit()` FAILED OPEN. A review found that a
-    # record carrying `"seed": 19200008.0` or `" 19200009"` produced
-    # `str(...).isdigit() == False`, skipped the seed, and wrote an
-    # `acceptance_eligible` report over the reserved range with exit 0. Floats do
-    # reach here: the dedupe above already does `int(record.get("seed", -1))`.
-    # A guard on a reserved range must fail CLOSED or it is decoration.
-    reserved = set()
-    for record in records:
-        try:
-            seed = int(float(record["seed"]))
-        except (KeyError, TypeError, ValueError):
-            continue
-        if seed >= FINAL_HOLDOUT_SEED_FLOOR:
-            reserved.add(seed)
-    reserved = sorted(reserved)
-    if not reserved:
-        return None
-    shown = ", ".join(str(x) for x in reserved[:5])
-    more = f" (+{len(reserved) - 5} more)" if len(reserved) > 5 else ""
-    return (
-        f"refusing to aggregate records from the reserved final holdout: "
-        f"{len(reserved)} seed(s) at or above {FINAL_HOLDOUT_SEED_FLOOR} -- "
-        f"{shown}{more}. Pass {FINAL_HOLDOUT_OPT_IN} only if this is the single "
-        f"terminal measurement."
-    )
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--showdown-root", default=DEFAULT_SHOWDOWN_ROOT)
     parser.add_argument("--games", type=int, default=100)
     parser.add_argument("--seed-start", type=int, default=900000)
-    parser.add_argument(
-        FINAL_HOLDOUT_OPT_IN,
-        action="store_true",
-        help=(
-            "Permit a run at or above the reserved final-holdout seed floor. "
-            "Only for the single terminal measurement."
-        ),
-    )
     parser.add_argument("--max-steps", type=int, default=300)
     parser.add_argument("--keep-repro", type=int, default=25)
     parser.add_argument("--json", type=str, default=None)
@@ -3668,38 +2432,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=8,
         help="per-game cap on repros written to the checkpoint (keeps shard files small)",
     )
-    parser.add_argument(
-        "--enumerate-rolls",
-        action="store_true",
-        help="C116 Phase 2 REFERENCE ORACLE, off by default. Run this sweep on the "
-             "engine's enumerate-then-merge roll path instead of the collapsed "
-             "partition cascade. The collapsed cascade is what production search runs, "
-             "so the DEFAULT is the configuration that ships and this flag is for "
-             "one-off comparison runs only; a sweep taken with it is not evidence about "
-             "the shipping path. Recorded in the report and in every checkpoint "
-             "record's provenance, guarded on --resume, and refused on a mixed "
-             "--merge-from.",
-    )
     args = parser.parse_args(argv)
-
-    # Select the roll path BEFORE anything calls the engine -- the flag is latched in a
-    # Rust OnceLock on the first generate_instructions. Unconditional, both ways: an
-    # inherited POKEZERO_ENUMERATE_ROLLS=1 must not silently relabel a default sweep,
-    # and a run's configuration has to be reproducible from its argv alone.
-    _apply_roll_path(args.enumerate_rolls)
-    # Derive the attribute from the flag rather than hand-writing it. A review
-    # renamed the flag and found all seven pins stayed green while the opt-in
-    # silently became unreachable -- `getattr(..., False)` turned a typo into
-    # "not opted in". No default, so a mismatch is an AttributeError.
-    _opt_in_attr = FINAL_HOLDOUT_OPT_IN.removeprefix("--").replace("-", "_")
-    _final_holdout_error = _reject_unguarded_final_holdout(
-        args.seed_start,
-        args.games,
-        getattr(args, _opt_in_attr),
-    )
-    if _final_holdout_error is not None:
-        print(f"error: {_final_holdout_error}", file=sys.stderr)
-        return 2
 
     # The engine must have been built from the CHECKED-OUT patch set. A stale
     # wheel measured 4.43 % divergence where a HEAD build measured 1.11 % on
@@ -3733,22 +2466,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "(shards should use disjoint seed ranges)",
                 file=sys.stderr,
             )
-        _reserved_error = _reject_reserved_seeds_in_records(
-            deduped, getattr(args, _opt_in_attr)
-        )
-        if _reserved_error is not None:
-            print(f"error: {_reserved_error}", file=sys.stderr)
-            return 2
-        # --resume already refuses a shard whose provenance differs from this run's.
-        # Merge did not, and merge is where it matters more: source_commit and
-        # engine_fingerprint are IDENTICAL between the two roll paths by design, so
-        # nothing else in the record can tell a collapsed shard from an enumerated
-        # one. Merging them silently produced one report describing neither.
-        try:
-            merged_enumerate_rolls = _merged_roll_path(deduped)
-        except ValueError as error:
-            print(f"error: {error}", file=sys.stderr)
-            return 2
         report = build_report(
             deduped,
             elapsed=None,
@@ -3756,7 +2473,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             matcher=None,
             keep_repro=args.keep_repro,
             sources=[str(p) for p in args.merge_from],
-            enumerate_rolls=merged_enumerate_rolls,
         )
         if not report.get("acceptance_eligible"):
             print(
@@ -3765,23 +2481,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "acceptance-eligible.",
                 file=sys.stderr,
             )
-        print(json.dumps(
-            {k: v for k, v in report.items() if k not in ("repros", "withheld_repros")},
-            indent=2,
-        ))
+        print(json.dumps({k: v for k, v in report.items() if k != "repros"}, indent=2))
         if args.json:
             Path(args.json).write_text(json.dumps(report, indent=2))
             print(f"-> {args.json}")
-        # SELF-CHECK on the instrument, after the artifact is written so no compute is
-        # lost. If the verdict partition does not close, the counters in the file just
-        # written do not account for every boundary the merge measured, and no number in
-        # it is safe to quote. C144.
-        partition = verdict_partition_failures(report, label="merged report")
-        for reason in partition:
-            print(f"COUNTER INTEGRITY: {reason}", file=sys.stderr)
-        return 1 if (
-            report["transitions_diverged"] or report["engine_errors"] or partition
-        ) else 0
+        return 1 if (report["transitions_diverged"] or report["engine_errors"]) else 0
 
     if args.resume and not args.checkpoint:
         parser.error("--resume requires --checkpoint")
@@ -3790,12 +2494,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     done_seeds: set[int] = set()
     if args.checkpoint and args.resume:
         done_records = load_checkpoint(args.checkpoint, repair_torn_tail=True)
-        _reserved_error = _reject_reserved_seeds_in_records(
-            done_records, getattr(args, _opt_in_attr)
-        )
-        if _reserved_error is not None:
-            print(f"error: {_reserved_error}", file=sys.stderr)
-            return 2
         resume_failures = _resume_provenance_failures(done_records, provenance)
         if resume_failures:
             raise SystemExit(
@@ -3832,7 +2530,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         for index, seed in enumerate(todo, start=1):
             game_started = time.perf_counter()
             game_repros: list[dict[str, Any]] = []
-            game_withheld: list[dict[str, Any]] = []
             counts = run_game(
                 env=env,
                 flags_policy=flags_policy,
@@ -3844,7 +2541,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 approximate_sleep=args.approximate_sleep,
                 hidden_counter_support=not args.no_hidden_counter_support,
                 matcher=args.matcher,
-                withheld_repros=game_withheld,
             )
             record = checkpoint_record(
                 seed=seed,
@@ -3853,7 +2549,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 seconds=time.perf_counter() - game_started,
                 build_check=build_check,
                 provenance=provenance,
-                withheld_repros=game_withheld,
             )
             records.append(record)
             if handle is not None:
@@ -3887,21 +2582,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         keep_repro=args.keep_repro,
         repros_per_game=args.repros_per_game,
     )
-    print(json.dumps(
-        {k: v for k, v in report.items() if k not in ("repros", "withheld_repros")},
-        indent=2,
-    ))
+    print(json.dumps({k: v for k, v in report.items() if k != "repros"}, indent=2))
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=2))
         print(f"-> {args.json}")
-    # SELF-CHECK on the instrument, after the artifact is written so a long sweep loses
-    # nothing. See the merge path above and C144.
-    partition = verdict_partition_failures(report, label="report")
-    for reason in partition:
-        print(f"COUNTER INTEGRITY: {reason}", file=sys.stderr)
-    return 1 if (
-        report["transitions_diverged"] or report["engine_errors"] or partition
-    ) else 0
+    return 1 if (report["transitions_diverged"] or report["engine_errors"]) else 0
 
 
 if __name__ == "__main__":

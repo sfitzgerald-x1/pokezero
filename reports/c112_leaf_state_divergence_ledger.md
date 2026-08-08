@@ -757,3 +757,37 @@ Four of the `state` families as they stood in v2's framing are columns that did 
   attributed. **FILED** for the fallback-burndown half: see the note appended to
   `reports/c111_residue_row_causes.md`. The rust-fidelity half is still owed — this sentence
   said "those ledgers", plural, and only one has been written to.
+- **`scripts/engine_transition_differential.py` is a FIFTH differential and is NOT adopted.** It
+  still derives `recharging` from the RECORDED CHOSEN CANDIDATE -- the rule the four gates dropped
+  in #1156 for being circular, since it seeds the world from the very thing the harness is
+  checking. It also does not adopt `scripts/differential_denominator.py`. It DOES publish a
+  measured count -- an earlier revision of this note said it did not, which was wrong. The problem
+  is that nothing GATES on it. Both of its two SUCCESS-path exits are, token for token with the
+  source's line wrap collapsed,
+  `return 1 if (report["transitions_diverged"] or report["engine_errors"] or partition) else 0`.
+  (There are also `return 2` refusal exits for bad invocation, which are not the path in question.)
+  The third term is real but does not help: `partition` is `verdict_partition_failures`, which
+  checks that the verdict counts SUM to `boundaries_measured` — plus that the fields are present
+  and well-formed, but no coverage floor. A run that skipped every boundary sums correctly, so the
+  partition closes, and with no divergence and no engine error the run exits 0 having measured
+  nothing. (Cited by expression, not line: a first version of this note gave five
+  line numbers, every one off by exactly 5, because they were measured against a 14-line draft of
+  a comment that shipped at 19. A later revision then paraphrased this expression instead of
+  quoting it, dropping the `partition` term and the `report[...]` lookups — same defect, one level
+  down.) Publishing without gating is the exact shape the denominator rule exists to close.
+
+  Left as-is on purpose: it sits outside the four differentials the denominator (#1154) and
+  recharge (#1156) work scoped, and changing it unscoped is how a "while I'm here" edit lands
+  without the mutation testing the other four received.
+
+  **Adopting it means:** `fidelity_gate_events.production_recharging_slots` for the derivation,
+  `differential_denominator.check_denominator/gate` for the denominator, and a red run for each
+  per the house rule in `docs/engine_fidelity_program_20260801.md`.
+
+  Recorded HERE rather than as a comment in that file, which is where a previous revision put it.
+  That file is under a certification pin: `tests/test_c26_damage_composition_readout.py` hashes it
+  and requires the hash to match `reports/certification_contract_lifecycle.json`'s registered
+  identity, or for the lifecycle to declare a successor-pending divergence recording the new bytes.
+  A comment-only edit changed its sha256 and broke that guard -- exactly what the pin exists to
+  catch. So adopting the denominator rule there is a real change plus a lifecycle re-registration,
+  on top of the three steps above, and not a drive-by.

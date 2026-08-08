@@ -17,6 +17,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 READOUT = REPO_ROOT / "reports" / "c26_damage_composition_tail_readout.json"
 PREDICTION = REPO_ROOT / "reports" / "c26_damage_composition_tail_prediction.md"
 VERIFIER = REPO_ROOT / "scripts" / "c26_damage_composition_verifier.py"
+# Byte-exact copy of scripts/engine_transition_differential.py at 761fc647, the rejected
+# experiment. That commit is on NO remote (GitHub: 422; fetch: "upload-pack: not our ref"),
+# so these bytes are vendored rather than read from git history. Deleting or editing this
+# file destroys the readout's rejected-experiment provenance -- see the PROVENANCE.md beside it.
+VENDORED_EXPERIMENT_MATCHER = (
+    REPO_ROOT / "tests" / "data" / "rejected_experiment_761fc647_engine_transition_differential.py.txt"
+)
 PINNED_MAIN = "d7a9c1a932366ef4b751dd5894ddfb61b91e58cd"
 ENGINE_FINGERPRINT = "992186c85b4809f768830fa544209d5c31fee1bbc06be1587fe68698d074ba6e"
 BASELINE_MATCHER_SHA256 = "12fe80c5b77235d87b19d78edb47e6f8e2db3502670b27047ad457c1e2163e8d"
@@ -146,17 +153,60 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
         self.assertTrue(all("No engine defect is claimed." in row["adjudication"] for row in regressions.values()))
 
     def test_matcher_sources_match_their_pinned_sha256(self) -> None:
-        for commit, expected in (
-            (PINNED_MAIN, BASELINE_MATCHER_SHA256),
-            (self.readout["rejected_experiment"]["commit"], EXPERIMENT_MATCHER_SHA256),
-        ):
-            source = subprocess.run(
-                ["git", "show", f"{commit}:scripts/engine_transition_differential.py"],
-                cwd=REPO_ROOT,
-                capture_output=True,
-                check=True,
-            ).stdout
-            self.assertEqual(hashlib.sha256(source).hexdigest(), expected)
+        """Anti-fabrication: the sources the readout cites really hash to what it reports.
+
+        Lines 61 and 99 bind the readout's `matcher_source_sha256` fields to constants; only
+        this test goes to the actual bytes and proves the CLAIMED SOURCE hashes to the CLAIMED
+        DIGEST. That is what stops a readout citing a matcher whose code never hashed to what
+        it reports.
+
+        The two legs resolve their bytes differently, on purpose:
+
+        PINNED_MAIN (d7a9c1a9) is reachable from main, so it is read from git — which also
+        proves the commit itself still contains those bytes.
+
+        The rejected experiment's commit (761fc647) is on NO remote: GitHub returns 422 and
+        `git fetch` says "upload-pack: not our ref". It was squash-merged and the original
+        commit was never pushed, so `git show` could only ever work in the one clone that still
+        happened to hold the dangling object, and failed in every fresh clone and in CI. The
+        bytes were recovered from that clone before it was collected and are now vendored at
+        VENDORED_EXPERIMENT_MATCHER, so this leg is clone-independent. See
+        tests/data/rejected_experiment_761fc647_PROVENANCE.md.
+
+        Do not "fix" this by asserting the commit is unreachable: that inverts the incentive,
+        going red exactly when someone preserves the evidence.
+        """
+        # Vendoring cost this test its unforgeable anchor: it used to feed the readout's
+        # commit field straight to `git show`, so a wrong commit could not resolve. Now
+        # nothing else in the repo reads that field, and the whole chain -- vendored bytes,
+        # constant, readout -- is in-tree and editable in one PR. Bind the commit to the
+        # sha in the vendored filename, so silently re-pointing the readout at some other
+        # commit while keeping these bytes trips here.
+        self.assertEqual(
+            self.readout["rejected_experiment"]["commit"],
+            "761fc647a1c1a9ee57f09d44d2675d66c6d649b3",
+            "the readout's rejected-experiment commit no longer matches the commit the "
+            f"vendored matcher was taken from ({VENDORED_EXPERIMENT_MATCHER.name})",
+        )
+
+        baseline = subprocess.run(
+            ["git", "show", f"{PINNED_MAIN}:scripts/engine_transition_differential.py"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=True,
+        ).stdout
+        self.assertEqual(hashlib.sha256(baseline).hexdigest(), BASELINE_MATCHER_SHA256)
+
+        self.assertTrue(
+            VENDORED_EXPERIMENT_MATCHER.is_file(),
+            f"{VENDORED_EXPERIMENT_MATCHER} is missing: it is the ONLY surviving copy of the "
+            "matcher the readout's rejected-experiment provenance is pinned to, and commit "
+            f"{self.readout['rejected_experiment']['commit']} exists on no remote",
+        )
+        self.assertEqual(
+            hashlib.sha256(VENDORED_EXPERIMENT_MATCHER.read_bytes()).hexdigest(),
+            EXPERIMENT_MATCHER_SHA256,
+        )
 
     def test_historical_rows_are_uniformly_refused_and_bounded_runs_fail_closed(self) -> None:
         rows = {row["identity"]: row for row in self.readout["historical_control_rows"]}
