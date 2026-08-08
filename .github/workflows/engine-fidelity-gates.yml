@@ -374,9 +374,9 @@ jobs:
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml \
             --no-default-features --features gen3 --test test_gen3 2>&1 \
             | tee /tmp/gen3suite.log
-          if ! grep -qE '^test result: ok\. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
+          if ! grep -qE '^test result: ok\. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
               /tmp/gen3suite.log; then
-            echo "::error::expected 28 gen3 engine tests to pass; the suite shrank, grew, or failed"
+            echo "::error::expected 32 gen3 engine tests to pass; the suite shrank, grew, or failed"
             exit 1
           fi
           # And NAME the pins. A total can be restored by unrelated tests, which
@@ -396,9 +396,61 @@ jobs:
             test_a_sleep_usable_attempt_banks_a_turn \
             test_using_rest_again_discards_the_previous_stints_refund \
             test_a_non_rest_sleeper_with_a_stale_bank_is_not_credited \
-            test_early_bird_staying_asleep_discards_the_refund; do
+            test_early_bird_staying_asleep_discards_the_refund \
+            immobilization_marker_apply_then_reverse_is_bit_identical \
+            immobilization_marker_apply_alone_does_not_change_the_state \
+            immobilization_markers_are_distinguishable_from_each_other_and_from_nothing \
+            both_gen3_immobilizers_mark_their_branch_with_their_own_reason; do
             grep -qxE "test $pin \.\.\. ok" /tmp/gen3suite.log || {
               echo "::error::gen3 pin did not run: $pin"
+              exit 1
+            }
+          done
+
+      # The engine's --lib target: the `#[cfg(test)] mod`s inside
+      # third_party/poke-engine-src/src/. `--test test_gen3` above selects ONE
+      # integration target and compiles nothing under src/, so the FIVE unit tests
+      # there ran in no workflow at all -- `state.rs`'s
+      # `rest_sleep_pending_refund_tests` (four, added by #1105 alongside the step
+      # above) and `instruction.rs`'s `test_instruction_size`. That is the same defect
+      # the step above is named for, one cargo TARGET down instead of one crate down.
+      #
+      # Found by review of #1166. The three immobilizer-marker tests were MOVED out of
+      # `src/state.rs` into `tests/test_gen3.rs` so the step above would run them,
+      # which fixes those three and leaves the hole. This closes the hole.
+      # `test_instruction_size` is the one that matters most for that patch: it is the
+      # only assertion anywhere on `size_of::<Instruction>()`, and a new variant is
+      # exactly what moves it.
+      #
+      # PROVEN RED BY CONSTRUCTION, not by reading this file. The body below was
+      # extracted verbatim from this YAML and run against a live patched tree:
+      #   * unmutated -> exit 0 at 5/5.
+      #   * `rest_sleep_pending_refund_tests` deleted -> exit 1 (count 1). Caught ONLY
+      #     here: `--test test_gen3` stays 32/32 green and the crate suite stays green
+      #     above its floor, so before this step those four pins were deletable with
+      #     every gate green.
+      #   * one pin renamed, count still 5 -> exit 1 on the named-pin arm.
+      - name: Engine lib suite
+        run: |
+          set -o pipefail
+          cargo test --manifest-path third_party/poke-engine-src/Cargo.toml \
+            --no-default-features --features gen3 --lib 2>&1 \
+            | tee /tmp/gen3lib.log
+          if ! grep -qE '^test result: ok\. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
+              /tmp/gen3lib.log; then
+            echo "::error::expected 5 engine lib tests to pass; the suite shrank, grew, or failed"
+            exit 1
+          fi
+          # And NAME them, for the reason the step above gives: a total can be
+          # restored by unrelated tests. Both arms measured red by construction.
+          for pin in \
+            instruction::test::test_instruction_size \
+            state::rest_sleep_pending_refund_tests::apply_then_reverse_is_bit_identical \
+            state::rest_sleep_pending_refund_tests::refund_round_trips_without_a_pre_transform \
+            state::rest_sleep_pending_refund_tests::zero_refund_is_omitted_from_serialization \
+            state::rest_sleep_pending_refund_tests::a_pre_field_serialization_still_parses; do
+            grep -qxE "test $pin \.\.\. ok" /tmp/gen3lib.log || {
+              echo "::error::engine lib pin did not run: $pin"
               exit 1
             }
           done
@@ -737,17 +789,60 @@ jobs:
           # a file-count assertion. `#[ignore]` on a pin was equally invisible.
           passed=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo.log \
             | grep -oE '[0-9]+' | paste -sd+ - | bc)
-          # Floor RAISED 366 -> 423 with #1157, which is the EXACT current total. A floor
-          # set below the total is the same blindness the comment above describes: at 366 it
-          # would have absorbed every Protect pin with 55 to spare, and at 420 it still
-          # absorbed the three UNIT pins -- deleting exactly those three lands on 420 and
-          # passes, while they are the sole killers of five mutants. Set it to the total and
-          # raise it deliberately when tests are added.
-          # 423 -> 430 with C146, again the EXACT current total: the seven G33b pins
-          # named below. MEASURED by summing this step's own expression over a local
-          # run of the same command, not by adding 7 to the previous figure.
-          if [ "${passed:-0}" -lt 430 ]; then
-            echo "::error::expected >= 430 crate tests, got ${passed:-0}"
+          # Floor RAISED 366 -> 423 (#1157) -> 428 (immobilizer markers), and it is always
+          # set to the EXACT current total. A floor below the total is the same blindness the
+          # comment above describes: at 366 it would have absorbed every Protect pin with 55
+          # to spare, and at 420 it still absorbed the three UNIT pins -- deleting exactly
+          # those three lands on 420 and passes, while they are the sole killers of five
+          # mutants. Raise it deliberately when tests are added.
+          #
+          # 423 -> 429 is a NET figure and worth spelling out, because a floor is blind to a
+          # SWAP as well as to a deletion. Derived by differencing the two test-NAME sets --
+          # a clean `origin/main` e0a23e4e worktree with its own 71-patch vendor, against this
+          # tree -- and not by arithmetic on the totals:
+          #
+          #   base 423 result lines / 423 distinct names; head 429 / 429; NO duplicate name in
+          #   either build, so the set difference is exact rather than approximate
+          #   ADDED    11
+          #   REMOVED   5  a_two_sided_refusal_keys_canonically_and_fits_the_python_seam
+          #                attracted_and_paralyzed_empty_tails_fail_closed_with_or_without_confusion
+          #                every_attract_subcase_literal_is_pinned
+          #                the_attract_refusal_names_its_subcase
+          #                the_attract_subcase_reports_every_live_predicate_not_just_the_first
+          #   NET      +6, and 423 + 6 == 429 == the floor enforced below
+          #
+          # Nothing was lost. TWO of the five were RELOCATED, and both replacements are in the
+          # ADDED set and pass:
+          #   * `attracted_and_paralyzed_empty_tails_fail_closed_with_or_without_confusion` ->
+          #     its INVERSE, `no_branch_of_an_attracted_or_paralyzed_fan_refuses_any_more`,
+          #     which is the stronger claim: zero refusals across the whole matrix the old test
+          #     covered, rather than one expected refusal per case.
+          #   * `a_two_sided_refusal_keys_canonically_and_fits_the_python_seam` -> a direct unit
+          #     test of the keying function itself,
+          #     `events::tests::the_attribution_unsafe_label_is_deduplicated_and_sorted`.
+          # THREE are OBSOLETE rather than relocated: they pinned the
+          # `attract_empty_tail_ambiguous` refusal being OPEN, and its five sub-case literals,
+          # and neither exists on the render path any more -- there is no refusal left to name.
+          # Verified rather than assumed: grepping `events.rs` for a live emitter of that family
+          # returns exactly two hits and BOTH are `#[should_panic]` fixtures inside
+          # `#[cfg(test)]`, which pass the slug in deliberately to prove the paired-tag assert
+          # fires. Nothing on the production path can emit it.
+          #
+          # All ELEVEN added names are pinned in the loop below -- 22 pins total, every one of
+          # them resolving in the same run these figures came from. Counted, not recalled: an
+          # earlier revision of this block said "ten".
+          #
+          # THE COUNTS HERE HAVE BEEN WRONG TWICE, and both times a single command would have
+          # said so. First, 428 was written 429, counted off a run that still had a scratch
+          # probe file in `tests/` -- a floor ABOVE the total fails every PR, so that one
+          # announces itself. Then this block asserted "+6 with NOTHING REMOVED" alongside
+          # "DELETES six" and "the four are not regressions": three different figures against a
+          # measured five. The "nothing removed" came from a real difference that was run
+          # against the PREVIOUS branch head and then carried forward across the very commit
+          # that deleted these five, instead of being re-run. A cross-check a change makes
+          # about itself is worth exactly one thing: running it.
+          if [ "${passed:-0}" -lt 429 ]; then
+            echo "::error::expected >= 429 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
@@ -757,6 +852,24 @@ jobs:
           # refused so nothing is reclaimed. Review demonstrated BOTH with the suite green
           # before these fixtures existed -- deleting the entire walk arm passed 418/418.
           # Named here because the count gate cannot see four tests vanish out of 421.
+          #
+          # The immobilizer-marker pins (this change). Same argument, and review demonstrated
+          # it concretely: `an_attracted_sleeptalk_user_never_reaches_the_unnamed_callee_walk`
+          # is the SOLE killer of two mutants -- moving the marker arm below the Sleep Talk
+          # block, and doing that with the walk's explicit arm also deleted, which is the
+          # exact silent swallow a pure marker causes at the walk's bare `sim.apply`
+          # fall-through. `an_asleep_..._renders_slp_not_attract` is the sole thing standing
+          # between the markers and a FABRICATED `|cant|..|Attract` on a turn the sleep gate
+          # blocked. Deleting all ten and letting the total be restored by unrelated tests is
+          # exactly the hole the floor cannot see.
+          #
+          # `the_markers_de_collapse_what_combine_duplicate_instructions_had_merged` (added in
+          # review) is the ONLY test anywhere that records the branch-set change the markers
+          # actually make -- `grep` for `62.5`, `73.75` or a branch-count assertion on an
+          # attracted/paralyzed fan finds nothing else in either suite. It is not a sole
+          # killer and is not claimed as one: two mutations were measured against it, the
+          # paralysis/Attract ordering swap and full-paralysis 1/4 -> 1/2, and two other
+          # tests redden under those too.
           for pin in the_rendered_hazard_chip_is_tagged_from_spikes \
                      two_spikes_layers_chip_the_deeper_amount_and_stay_tagged \
                      with_no_spikes_the_drag_emits_no_chip_and_no_spikes_tag \
@@ -768,6 +881,17 @@ jobs:
                      events::none_matched_shape_tests::the_protect_marker_renders_only_when_the_state_proves_it \
                      events::none_matched_shape_tests::the_protect_marker_is_defender_side_and_zero_amount_only \
                      events::none_matched_shape_tests::the_absorb_guard_covers_exactly_the_zero_heal_producers \
+                     the_engine_marks_which_immobilizer_aborted_the_attract_branch \
+                     the_marked_attract_branch_renders_its_cant_line_instead_of_refusing \
+                     an_attracted_sleeptalk_user_never_reaches_the_unnamed_callee_walk \
+                     an_asleep_attracted_mon_that_never_passed_the_sleep_gate_renders_slp_not_attract \
+                     no_branch_of_an_attracted_or_paralyzed_fan_refuses_any_more \
+                     attract_and_paralysis_each_render_their_own_cant_tag \
+                     a_paralyzed_attackers_cant_par_is_marked_not_inferred_from_an_empty_tail \
+                     events::tests::a_move_immobilization_marker_is_classified_by_position_and_reason \
+                     events::tests::a_marker_is_attributed_to_the_side_whose_action_it_aborted \
+                     events::tests::the_attribution_unsafe_label_is_deduplicated_and_sorted \
+                     the_markers_de_collapse_what_combine_duplicate_instructions_had_merged \
                      events::tests::a_truncated_leftovers_slot_is_not_booked_so_the_drain_stays_silent \
                      events::tests::a_faster_seeder_keeps_its_leftovers_tag \
                      events::tests::a_spare_pokemon_behind_the_victim_keeps_the_leftovers_tag \

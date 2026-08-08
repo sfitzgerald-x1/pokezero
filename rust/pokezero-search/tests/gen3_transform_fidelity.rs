@@ -128,13 +128,49 @@ fn transform_and_apply(state: &mut State) -> Vec<Instruction> {
         .side_two
         .get_active()
         .replace_move(PokemonMoveIndex::M2, Choices::SPLASH);
-    let list = only_branch(generate(
+    let branches = generate(
         state,
         &MoveChoice::Move(PokemonMoveIndex::M0),
         &MoveChoice::Move(PokemonMoveIndex::M2),
-    ));
+    );
+    // NOT `only_branch`, and the reason is the attract/paralysis marker patch rather than
+    // anything about Transform. `transform_does_not_copy_hp_or_status` paralyses side two
+    // so that "status is not copied" is observable, and side two's click is Splash -- an
+    // empty delta. Before the immobilizer markers, the fully-paralyzed branch and the
+    // Splash-executed branch had IDENTICAL instruction lists, so
+    // `combine_duplicate_instructions` merged them and this really was one branch. That
+    // merge is the defect the markers fix: it is exactly why the renderer could not tell
+    // "no move happened" from "a move happened and changed nothing".
+    //
+    // Every assertion downstream is about SIDE ONE's transformed Pokemon, and side one's
+    // instructions are identical across the split, so dropping the immobilized branch is
+    // information-preserving here. `only_branch` stays as it is for the tests that really
+    // are deterministic.
+    let list = single_acting_branch(branches);
     state.apply_instructions(&list);
     list
+}
+
+/// The branch on which the second mover actually ACTED: the one carrying no
+/// `MoveImmobilized` marker. Panics unless exactly one such branch exists, so it cannot
+/// silently absorb a NEW split the way a bare `[0]` would.
+fn single_acting_branch(instructions: Vec<StateInstructions>) -> Vec<Instruction> {
+    let mut acting: Vec<Vec<Instruction>> = instructions
+        .into_iter()
+        .filter(|branch| {
+            !branch
+                .instruction_list
+                .iter()
+                .any(|i| matches!(i, Instruction::MoveImmobilized(_)))
+        })
+        .map(|branch| branch.instruction_list)
+        .collect();
+    assert_eq!(
+        acting.len(),
+        1,
+        "expected exactly one non-immobilized branch, got {acting:?}"
+    );
+    acting.pop().unwrap()
 }
 
 // ---------------------------------------------------------------------------
