@@ -1,0 +1,34 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -3135,7 +3135,30 @@
+     mut final_instructions: &mut Vec<StateInstructions>,
+     branch_on_damage: bool,
+ ) {
+-    if state.use_damage_dealt {
++    // pokezero gen3 fidelity fix (Sleep Talk double damage-dealt reset): the
++    // turn-start carry-over reset belongs to the ACTION, and Sleep Talk's callee
++    // is not a second action -- it is the same action continuing one level down.
++    //
++    // Without `!choice.sleep_talk_move` the reset is emitted TWICE for every
++    // Sleep-Talk turn that carries a non-default `damage_dealt`. The Sleep Talk
++    // block below calls `state.reverse_instructions(&incoming_instructions
++    // .instruction_list)` before recursing, which UNDOES the reset this call
++    // pushed and restores the pre-reset carry-over into `state`. The recursive
++    // call then re-enters here, reads that restored carry-over, and pushes the
++    // same reset onto a list that already contains it.
++    //
++    // `reset_damage_dealt` reads `state` and only APPENDS -- it does not mutate
++    // the side -- so it cannot see that the instruction is already queued.
++    // Two of the three sub-fields are non-idempotent under double emission:
++    // `ChangeDamageDealtDamage` is a DELTA (`0 - damage`), so applying it twice
++    // lands on `-damage` rather than 0, and `ToggleDamageDealtHitSubstitute` is
++    // a TOGGLE, so applying it twice restores the flag it was meant to clear.
++    // Only `ChangeDamageDealtMoveCatagory` is an absolute set and idempotent.
++    //
++    // `state.use_damage_dealt` is set by `set_conditional_mechanics` whenever any
++    // of the twelve Pokemon knows Counter / Mirror Coat / Focus Punch, which is
++    // common in gen3 randbats -- so this is not a rare corner.
++    if state.use_damage_dealt && !choice.sleep_talk_move {
+         reset_damage_dealt(
+             state.get_side(&attacking_side),
+             &attacking_side,
