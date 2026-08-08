@@ -82,23 +82,44 @@ _LITERAL = r"(?<![A-Za-z])'[^']*'(?![A-Za-z])"
 
 # (compiled pattern, replacement) for positions whose operand is a BYSTANDER: it
 # names who was present, not what failed.
+# The three Gen 3 trapping abilities. If one of THESE names the foe, the refusal
+# means something categorically different: the foe really does carry a trapping
+# mechanism and `engine_world.py:762-768` declined the exemption anyway -- a
+# disagreement between those lines and Showdown, reachable for `magnetpull` vs a
+# non-Steel self and `arenatrap` vs a Flying/Levitate self. Every other ability
+# means no trapping mechanism was sampled at all, which is a belief-sampling desync
+# in a different subsystem. Merging them would bury the rare class inside the common
+# one -- exactly what per-class address keying exists to prevent.
+_TRAPPING_ABILITIES = ("shadowtag", "arenatrap", "magnetpull")
+
 _BYSTANDER_POSITIONS: tuple[tuple[re.Pattern[str], str], ...] = (
-    # The foe's ability in a `self_request_state_unsupported` trapped refusal. The
-    # failure is "request says trapped, sampled world does not trap"; which ability
-    # happened to be on the field is incidental. This shattered one class of 624
-    # across six rows in era 64 and mis-ranked it in every prior era.
-    (re.compile(rf"(foe ability ){_LITERAL}"), r"\1'?'"),
+    # The foe's ability in a `self_request_state_unsupported` trapped refusal, EXCEPT
+    # a real trapper (above). The failure is "request says trapped, sampled world does
+    # not trap"; which non-trapping ability happened to be on the field is incidental.
+    # This shattered one class of 624 across six rows in era 64.
+    (
+        re.compile(
+            rf"(foe ability )(?!'(?:{'|'.join(_TRAPPING_ABILITIES)})'){_LITERAL}"
+        ),
+        r"\1'?'",
+    ),
 )
 
 # Seat/slot appears in two spellings across producers -- `{slot}:` unquoted
-# (`engine_world.py:2200`) and `side {slot!r}` quoted (`encore_move_unknown`). Left
-# alone, one family splits by seat and the other does not, so the canonical key
-# space is partitioned by an f-string accident and cannot be compared across
-# families. Seat is already a first-class field on FallbackAddress, so it is
-# normalised out of the key in BOTH spellings.
+# (`engine_world.py:2200`) and `side {slot!r}` quoted (`encore_move_unknown`). One
+# family therefore split by seat and the other did not, partitioning the key space
+# by an f-string accident.
+#
+# The spellings are unified onto the quoted form; the SIDE IS NOT ERASED. An earlier
+# revision erased it, justified by "seat is already a field on FallbackAddress" --
+# that premise is false. `FallbackAddress.seat` is `context.player_id`, the ACTING
+# seat, whereas the slot in the key is the side of the world that failed to build,
+# and `engine_world.py:484` builds both sides on every decision. So a p1 decision
+# routinely carries a `side 'p2'` failure. "My own side is unexpressible" and "the
+# opponent's inferred side is unexpressible" are different bugs -- the second is a
+# belief-sampling problem -- and `hc-d4.json` records 16 of each in one block.
 _SEAT_POSITIONS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"(side )'p[12]'"), r"\1'?'"),
-    (re.compile(r"(^|[:,] )p[12]:"), r"\1p?:"),
+    (re.compile(r"(^|[:,] )(p[12]):"), r"\1side '\2':"),
 )
 
 
@@ -111,8 +132,8 @@ def canonical_key(key: str) -> str:
 
     >>> canonical_key("x: flags ['trapped'] (foe ability 'swarm')")
     "x: flags ['trapped'] (foe ability '?')"
-    >>> canonical_key("volatile_unsupported: side 'p1': ['perish0']")
-    "volatile_unsupported: side '?': ['perish0']"
+    >>> canonical_key("self_moveset_mismatch: p1: move 'toxic' is absent")
+    "self_moveset_mismatch: side 'p1': move 'toxic' is absent"
     """
     for pattern, replacement in _BYSTANDER_POSITIONS + _SEAT_POSITIONS:
         key = pattern.sub(replacement, key)
@@ -123,8 +144,9 @@ def canonical_key(key: str) -> str:
 class FallbackAddress:
     """One replayable fallback decision.
 
-    ``battle_id`` carries the seed and ``round``/``seat`` locate the decision
-    within it, so the triple is sufficient to reconstruct the refusal.
+    ``seat`` is the ACTING seat (``context.player_id``), which is not necessarily
+    the side that failed to construct -- see :data:`_SEAT_POSITIONS`. Use
+    :attr:`locator` for replay coordinates.
     """
 
     battle_id: str
@@ -262,13 +284,83 @@ class CorpusScan:
         return self.addresses_dropped == 0
 
 
+def _walk_stats_blocks(node: Any) -> Iterator[Mapping[str, Any]]:
+    """Yield every stats mapping that carries corpus context, wherever it sits.
+
+    Addresses are found by a recursive walk, so completeness and occurrence totals
+    must be found the same way or they silently disappear on layouts the walk
+    handles. Three writers exist and only one nests under ``engine_mcts``:
+    ``scripts/foulplay_paired_eval.py`` puts stats under ``per_seat[seat]`` with no
+    top-level wrapper, and ``scripts/mcts_acceptance_h2h.py`` puts ``policy_stats``
+    at the document root. A hardcoded ``engine_mcts.policy_stats`` lookup reported
+    those as complete-with-no-counts while reading their addresses fine.
+    """
+    if isinstance(node, Mapping):
+        if any(
+            marker in node
+            for marker in (
+                "fallback_sample_addresses_dropped",
+                "world_failure_reasons",
+                "fallback_reasons",
+            )
+        ):
+            yield node
+        for value in node.values():
+            yield from _walk_stats_blocks(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _walk_stats_blocks(item)
+
+
 def _scan_document(document: Any, scan: CorpusScan, *, source: str) -> None:
     scan.addresses.extend(iter_shard_addresses(document, source=source))
-    stats = (document.get("engine_mcts") or {}).get("policy_stats") or {}
-    if not isinstance(stats, Mapping):
-        return
+    # De-duplicated PER FIELD by content, not per block and not by identity.
+    #
+    # Per block is wrong: `fallback_reasons` appears BOTH at `engine_mcts` and at
+    # `engine_mcts.policy_stats` in a real shard, and those two blocks differ in
+    # their other fields, so a whole-block fingerprint treats them as distinct and
+    # doubles every decision count. This is the same 2x duplication trap the address
+    # walk already guards.
+    #
+    # By identity is also wrong: a mirrored block serialises byte-identically and
+    # parses back as two separate objects, so identity dedup does nothing on
+    # anything read from disk -- which is every real shard.
+    #
+    # The trade-off is explicit: two genuinely independent occurrences of one field
+    # with byte-identical content collapse into one. That requires identical totals
+    # across every class in that field, and under-counting a true duplicate is safer
+    # than silently doubling every corpus total.
+    seen: set[tuple[str, str]] = set()
+    for stats in _walk_stats_blocks(document):
+        _scan_stats_block(stats, scan, seen=seen)
+
+
+def _fingerprint(value: Any) -> str | None:
+    try:
+        return json.dumps(value, sort_keys=True)
+    except (TypeError, ValueError):
+        return None
+
+
+def _scan_stats_block(
+    stats: Mapping[str, Any], scan: CorpusScan, *, seen: set[tuple[str, str]]
+) -> None:
+    def first_sighting(name: str, value: Any) -> bool:
+        fingerprint = _fingerprint(value)
+        if fingerprint is None:
+            return True
+        token = (name, fingerprint)
+        if token in seen:
+            return False
+        seen.add(token)
+        return True
+
     dropped = stats.get("fallback_sample_addresses_dropped")
-    if isinstance(dropped, int) and not isinstance(dropped, bool):
+    if (
+        isinstance(dropped, int)
+        and not isinstance(dropped, bool)
+        and first_sighting("dropped", dropped)
+    ):
         scan.addresses_dropped += dropped
     for field_name, prefix, target in (
         ("world_failure_reasons", "", scan.world_counts),
@@ -276,6 +368,8 @@ def _scan_document(document: Any, scan: CorpusScan, *, source: str) -> None:
     ):
         counts = stats.get(field_name)
         if not isinstance(counts, Mapping):
+            continue
+        if not first_sighting(field_name, counts):
             continue
         for key, value in counts.items():
             if isinstance(value, int) and not isinstance(value, bool):
@@ -383,15 +477,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     # fallback_reasons counts DECISIONS; one class can abort many worlds inside a
     # single decision, so a combined ordering would compare two different quantities
     # -- the same error as ranking by capped address counts.
+    # In --raw-keys mode the display keys are raw while the occurrence tables are
+    # keyed canonical, so look the count up through canonical_key rather than
+    # mislabelling every class "not in these shards".
+    lookup = canonical_key if args.raw_keys else (lambda key: key)
     for unit, table in (("decisions", scan.decision_counts), ("worlds", scan.world_counts)):
-        in_unit = [key for key in counts if key in table]
+        in_unit = [key for key in counts if lookup(key) in table]
         if not in_unit:
             continue
         print(f"\n{unit:>12}  {'addrs':>5}  class (ordered by true {unit})")
-        for key in sorted(in_unit, key=lambda k: (-table[k], -counts[k], k)):
-            print(f"{table[key]:12d}  {counts[key]:5d}  {key}")
+        for key in sorted(in_unit, key=lambda k: (-table[lookup(k)], -counts[k], k)):
+            print(f"{table[lookup(key)]:12d}  {counts[key]:5d}  {key}")
 
-    unranked = [key for key in counts if scan.count_for(key)[0] is None]
+    unranked = [key for key in counts if scan.count_for(lookup(key))[0] is None]
     if unranked:
         print(f"\n{'no count':>12}  {'addrs':>5}  class (occurrence total not in these shards)")
         for key in sorted(unranked, key=lambda k: (-counts[k], k)):

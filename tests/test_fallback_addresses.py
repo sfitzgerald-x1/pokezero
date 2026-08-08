@@ -15,6 +15,7 @@ from pokezero.fallback_addresses import (
     main,
     scan_corpus,
 )
+from pokezero.fallback_addresses import CorpusScan, _scan_document
 
 # The six keys era 64 actually emitted for what is ONE class: the request says
 # `trapped`, the sampled world does not trap. The foe's ability is a bystander --
@@ -114,14 +115,32 @@ class TestCanonicalKey:
     def test_distinct_families_do_not_collapse_together(self):
         assert canonical_key(_TRAPPED_KEYS[0]) != canonical_key(_SLEEP_TALK_KEY)
 
-    def test_seat_is_normalised_in_both_spellings(self):
-        # `{slot}:` unquoted and `side {slot!r}` quoted must agree, or the canonical
-        # key space is partitioned by an f-string accident.
+    def test_seat_spellings_are_unified_without_erasing_the_side(self):
+        # The two producer spellings must agree in FORM, but the side must survive:
+        # the slot in the key is the side that FAILED TO BUILD, which is independent
+        # of the acting seat (`engine_world.py:484` builds both sides every decision).
+        # hc-d4.json records 16 `side 'p1'` and 16 `side 'p2'` in one stats block.
         quoted = ("encore_move_unknown: side '%s' is encored but the locked move "
                   "cannot be determined")
         unquoted = "self_moveset_mismatch: %s: request-known move 'toxic' is absent"
-        assert canonical_key(quoted % "p1") == canonical_key(quoted % "p2")
-        assert canonical_key(unquoted % "p1") == canonical_key(unquoted % "p2")
+        assert canonical_key(quoted % "p1") != canonical_key(quoted % "p2")
+        assert canonical_key(unquoted % "p1") != canonical_key(unquoted % "p2")
+        # ...and the unquoted spelling is rewritten onto the quoted one.
+        assert canonical_key(unquoted % "p1").startswith(
+            "self_moveset_mismatch: side 'p1':"
+        )
+
+    def test_real_trapping_abilities_are_not_bystanders(self):
+        # shadowtag/arenatrap/magnetpull mean the foe DOES trap and the exemption
+        # test declined it -- a different bug from "no trapper was sampled at all".
+        trapped = ("self_request_state_unsupported: self active request flags "
+                   "['trapped'] constrain legality beyond this construction "
+                   "(sampled world does not trap: foe ability '%s')")
+        for trapper in ("shadowtag", "arenatrap", "magnetpull"):
+            assert canonical_key(trapped % trapper) != canonical_key(trapped % "swarm")
+            assert trapper in canonical_key(trapped % trapper)
+        # non-trappers still collapse
+        assert canonical_key(trapped % "swarm") == canonical_key(trapped % "chlorophyll")
 
     def test_apostrophe_inside_an_interpolated_error_is_left_alone(self):
         # `crate_search: {reason}` interpolates arbitrary native error text. A naive
@@ -399,3 +418,80 @@ class TestPathHandling:
         out = tmp_path / "deep" / "nested" / "corpus.json"
         assert main([str(tmp_path), "--json-out", str(out)]) == 0
         assert len(json.loads(out.read_text())) == 1
+
+
+class TestStatsBlockDiscovery:
+    """Completeness and occurrence totals must be found wherever addresses are."""
+
+    _SAMPLES = {"materialization_blocker: baton-pass:substitute": [
+        {"battle_id": "b", "round": 1, "seat": "p1", "reason": "no_worlds_constructed"}
+    ]}
+    _STATS = {
+        "fallback_samples": _SAMPLES,
+        "fallback_sample_addresses_dropped": 1001,
+        "world_failure_reasons": {"materialization_blocker: baton-pass:substitute": 1472},
+        "fallback_reasons": {"no_worlds_constructed": 7},
+    }
+
+    @pytest.mark.parametrize(
+        ("layout", "document"),
+        [
+            # foulplay_bridge: nested under engine_mcts
+            ("bridge", {"engine_mcts": {"policy_stats": _STATS}}),
+            # scripts/foulplay_paired_eval.py: per_seat, no top-level wrapper
+            ("paired_eval", {"per_seat": {"p1": {"policy_stats": _STATS}}}),
+            # scripts/mcts_acceptance_h2h.py: policy_stats at document root
+            ("acceptance_h2h", {"policy_stats": _STATS}),
+        ],
+    )
+    def test_every_shard_layout_yields_completeness_and_counts(
+        self, tmp_path, layout, document
+    ):
+        (tmp_path / f"{layout}.json").write_text(json.dumps(document))
+        scan = scan_corpus([tmp_path])
+        assert len(scan.addresses) == 1, layout
+        assert scan.addresses_dropped == 1001, layout
+        assert scan.complete is False, layout
+        assert scan.world_counts[
+            "materialization_blocker: baton-pass:substitute"
+        ] == 1472, layout
+        assert scan.decision_counts["fallback:no_worlds_constructed"] == 7, layout
+
+    def test_a_mirrored_stats_dict_is_not_counted_twice(self, tmp_path):
+        stats = dict(self._STATS)
+        (tmp_path / "a.json").write_text(
+            json.dumps({"per_seat": {"p1": {"policy_stats": stats, "extra": stats}}})
+        )
+        assert scan_corpus([tmp_path]).addresses_dropped == 1001
+
+    def test_the_same_field_at_two_depths_is_counted_once(self):
+        # A real shard carries `fallback_reasons` at BOTH `engine_mcts` and
+        # `engine_mcts.policy_stats`. Counting both doubles every decision total --
+        # measured 1835 -> 3670 on the four-era corpus before this guard.
+        stats = {
+            "fallback_samples": {"fallback:crate_search_failed": [
+                {"battle_id": "b", "round": 1, "seat": "p1", "reason": "crate_search_failed"}
+            ]},
+            "fallback_reasons": {"crate_search_failed": 1835},
+        }
+        document = {
+            "engine_mcts": {
+                "fallback_reasons": {"crate_search_failed": 1835},
+                "policy_stats": stats,
+            }
+        }
+        scan = CorpusScan()
+        _scan_document(document, scan, source="a.json")
+        assert scan.decision_counts["fallback:crate_search_failed"] == 1835
+
+    def test_distinct_totals_at_two_depths_are_both_counted(self):
+        # Dedup is by CONTENT, so genuinely different numbers must still sum.
+        document = {
+            "per_seat": {
+                "p1": {"policy_stats": {"fallback_reasons": {"crate_search_failed": 10}}},
+                "p2": {"policy_stats": {"fallback_reasons": {"crate_search_failed": 25}}},
+            }
+        }
+        scan = CorpusScan()
+        _scan_document(document, scan, source="a.json")
+        assert scan.decision_counts["fallback:crate_search_failed"] == 35
