@@ -104,7 +104,18 @@ _CORPUS_TREES = ("reports", "docs")
 # these thirteen are members of `tests/test_boundary_verdict_partition.py`'s sweep corpus
 # (79 -> 87), because that one selects on a top-level `boundaries_measured` and this one takes
 # every committed JSON under `reports/` and `docs/`.
-_EXPECTED_COUNTER_ARTIFACTS = 360
+# 360 -> 366 (C148, the Sleep Talk double `damage_dealt` reset guard). RE-DERIVED by importing
+# this module into a worktree of `origin/main` at `32829210` and calling `counter_artifacts()`
+# (re-derived after this branch merged that commit; #1169 adds no JSON under `reports/` or
+# `docs/`, so the base is still 360 -- re-run, not assumed)
+# there -- 360 -- against 366 here, with the set difference exactly the six
+# `reports/artifacts/c148_sleeptalk_double_reset_*.json` this branch adds and NOTHING removed.
+# Not arithmetic on the previous figure, and confirmed still live at 365 and at 367.
+#
+# Only FOUR of the six are members of `tests/test_boundary_verdict_partition.py`'s sweep corpus
+# (87 -> 91): the two `*_census_*.json` are in-memory branch censuses with no boundaries, so they
+# carry no top-level `boundaries_measured`. The two corpora move independently, as recorded above.
+_EXPECTED_COUNTER_ARTIFACTS = 366
 
 # ---------------------------------------------------------------------------
 # The taxonomies, derived from source rather than transcribed.
