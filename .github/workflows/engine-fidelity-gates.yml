@@ -734,8 +734,8 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          if ! grep -qE 'Ran 111 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 111 engine-search tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 112 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 112 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
@@ -755,7 +755,8 @@ jobs:
                      test_an_aborted_world_reports_each_observation_exactly_once \
                      test_a_failure_carrying_no_payload_is_a_silent_no_op \
                      test_the_crate_and_python_agree_on_the_abort_payload_attribute \
-                     test_the_subcase_key_is_present_in_the_report_even_when_empty; do
+                     test_the_subcase_key_is_present_in_the_report_even_when_empty \
+                     test_countable_entries_survive_alongside_uncountable_ones; do
             grep -qE "^$pin \(.*\)( |\$)" /tmp/enginesearch.log || {
               echo "::error::engine-search abort pin $pin did not run"
               exit 1
@@ -793,13 +794,13 @@ jobs:
           # absorbed the three UNIT pins -- deleting exactly those three lands on 420 and
           # passes, while they are the sole killers of five mutants. Set it to the total and
           # raise it deliberately when tests are added.
-          # RAISED 423 -> 430 with the abort-path sub-case carry: seven pins in
+          # RAISED 423 -> 431 with the abort-path sub-case carry: eight pins in
           # src/abort_telemetry.rs. Measured on this branch, not assumed --
-          # `RUSTFLAGS="-C debug-assertions=yes" cargo test --release` reports 430 passed
+          # `RUSTFLAGS="-C debug-assertions=yes" cargo test --release` reports 431 passed
           # and 1 pre-existing ignore. Another branch is concurrently taking main to 428;
           # whichever lands second must re-measure rather than add its delta to this.
-          if [ "${passed:-0}" -lt 430 ]; then
-            echo "::error::expected >= 430 crate tests, got ${passed:-0}"
+          if [ "${passed:-0}" -lt 431 ]; then
+            echo "::error::expected >= 431 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
@@ -812,12 +813,16 @@ jobs:
           #
           # And the abort-path carry pins (`abort_telemetry::*`). Named for a reason the
           # others do not have: `model.rs` is behind the `model` cargo feature, so it needs
-          # libtorch and `cargo test` NEVER COMPILES IT. The wiring between the search loop
-          # and the ledger therefore has exactly one guard --
-          # `the_search_path_records_into_the_ledger_and_attaches_it_on_abort`, a
-          # source-text assertion over `include_str!("model.rs")`. Delete that one test and
-          # the entire abort arm can be removed from the search path with every other
-          # crate and Python test still green. That is the 418/418 shape, so it is named.
+          # libtorch and `cargo test` NEVER COMPILES IT. Two of these carry the whole
+          # wiring between the search loop and the ledger.
+          # `the_search_path_records_into_the_ledger_and_attaches_it_on_abort` is a
+          # source-text assertion over `include_str!("model.rs")` -- delete it and the
+          # abort arm can be removed from the search path with everything else green (the
+          # 418/418 shape). `a_contained_poke_engine_panic_still_reports_what_the_world_
+          # observed` is the ORDERING guard: review demonstrated a regression that put the
+          # attach inside the panic guard, compiled, and passed a source-text ordering pin
+          # written specifically to catch it, so the ordering now lives in
+          # `guarded_search_with_ledger` and this test is what holds it.
           for pin in the_rendered_hazard_chip_is_tagged_from_spikes \
                      two_spikes_layers_chip_the_deeper_amount_and_stay_tagged \
                      with_no_spikes_the_drag_emits_no_chip_and_no_spikes_tag \
@@ -835,7 +840,8 @@ jobs:
                      abort_telemetry::abort_payload_tests::a_world_that_accumulates_and_aborts_reports_each_observation_exactly_once \
                      abort_telemetry::abort_payload_tests::the_report_object_is_sorted_compact_json \
                      abort_telemetry::abort_payload_tests::the_search_path_records_into_the_ledger_and_attaches_it_on_abort \
-                     abort_telemetry::abort_payload_tests::a_contained_poke_engine_panic_still_reports_what_the_world_observed; do
+                     abort_telemetry::abort_payload_tests::a_contained_poke_engine_panic_still_reports_what_the_world_observed \
+                     abort_telemetry::abort_payload_tests::the_guard_attaches_on_a_returned_error_and_reports_through_the_ledger_on_success; do
             grep -qxE "test $pin \.\.\. ok" /tmp/cargo.log || {
               echo "::error::renderer pin $pin did not run"
               exit 1

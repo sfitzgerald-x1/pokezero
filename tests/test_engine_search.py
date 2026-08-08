@@ -1105,12 +1105,26 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
         A crash inside the handler whose entire job is to keep the other worlds alive
         would be a strictly worse defect than the one being fixed, so the shapes that
         cannot be counted must be ignored rather than raised.
+
+        `uncountable values` is the shape an `isinstance(payload, Mapping)` check alone
+        does NOT cover: the mapping is well-formed and the VALUES are not counts. Review
+        measured all three raising out of `_absorb_lossy_subcases`'s `int(count)`, out of
+        the `except Exception` in `run_world`, and -- there being no outer try around
+        `_search_model` -- out of `decide()` entirely. `True` is in the list because
+        `bool` is an `int` subclass and would otherwise be silently counted as 1.
         """
         for label, error in (
             ("no attribute", ValueError("stale wheel: no payload")),
             ("not a mapping", self._aborting_error("junk payload", "not a mapping")),
             ("payload is None", self._aborting_error("no counts", None)),
             ("non-native failure", RuntimeError("something else entirely")),
+            (
+                "uncountable values",
+                self._aborting_error(
+                    "attribution-unsafe renderer branch rejected before tree/model fold: x",
+                    {"a": "many", "b": None, "c": {"nested": 1}, "d": True},
+                ),
+            ),
         ):
             with self.subTest(shape=label):
                 policy = self._policy(early_stop=False)
@@ -1119,6 +1133,33 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
                 # The world was still counted as a failure -- silence about the
                 # sub-cases is not silence about the abort.
                 self.assertEqual(sum(policy.stats.world_failure_reasons.values()), 1)
+
+    def test_countable_entries_survive_alongside_uncountable_ones(self) -> None:
+        """Dropping the junk must not drop the data next to it.
+
+        The obvious over-correction for the shape above is to reject the whole payload
+        when any value is uncountable, which would let one bad entry erase a world's
+        entire observation -- the same class of silent loss this change exists to fix,
+        at a smaller scale.
+        """
+        policy = self._policy(early_stop=False)
+        self._abort(
+            policy,
+            self._aborting_error(
+                "attribution-unsafe renderer branch rejected before tree/model fold: x",
+                {
+                    "sleeptalk_called_unidentified:protect_marker_rendered": 4,
+                    "junk": "many",
+                },
+            ),
+        )
+        self.assertEqual(
+            policy.stats.lossy_subcase_renders[
+                "sleeptalk_called_unidentified:protect_marker_rendered"
+            ],
+            4,
+        )
+        self.assertEqual(sum(policy.stats.lossy_subcase_renders.values()), 4)
 
     # --- telemetry counting (model path) ------------------------------------------
     #
@@ -2418,22 +2459,32 @@ class FallbackAddressTests(unittest.TestCase):
             "the crate attaches its abort payload under a different attribute name than "
             "engine_search reads, so every aborted world's counts are dropped silently",
         )
-        # And the payload must never be smuggled into the message: that string is the
-        # world_failure_reasons key, whose bytes are compared across eras and which
-        # _bounded_reason_detail truncates at 512 chars.
+        # Both ends of the wire, so a half-applied removal cannot go green. The crate's
+        # own suite pins the Rust side in far more detail
+        # (`the_search_path_records_into_the_ledger_and_attaches_it_on_abort`); this is
+        # the arm that fires when someone edits only Python, or only Rust, and runs only
+        # the other language's tests.
         model_rs = (repo / "rust" / "pokezero-search" / "src" / "model.rs").read_text()
         engine_py = (repo / "src" / "pokezero" / "engine_search.py").read_text()
         self.assertIn(
-            "lossy_subcases.attach_to(error)", model_rs,
-            "the crate no longer attaches the ledger to an aborting error",
+            "abort_telemetry::guarded_search_with_ledger(", model_rs,
+            "the crate no longer runs its search through the guard that attaches the "
+            "ledger to an aborting error, so aborted worlds report nothing",
         )
         self.assertIn(
             "_absorb_aborted_lossy_subcases(error)", engine_py,
             "engine_search no longer reads the abort payload at the failure seam",
         )
-        self.assertNotIn(
-            "json_object()}", model_rs,
-            "the counts must never be interpolated into an error message",
+        # And the counts must never be smuggled into the message: that string is the
+        # world_failure_reasons key, whose bytes are compared across eras and which
+        # _bounded_reason_detail truncates at 512 chars. Pinned as "exactly one call
+        # site" rather than one forbidden spelling -- `!contains("json_object()}")`
+        # caught a single format-string shape and sailed past
+        # `format!("{} [lossy={}]", raw, ..json_object())`.
+        self.assertEqual(
+            model_rs.count("json_object()"), 1,
+            "`json_object()` must have exactly one call site in model.rs (the search "
+            "report); a second one is how the counts reach the reason key",
         )
 
     def test_the_subcase_key_is_present_in_the_report_even_when_empty(self) -> None:

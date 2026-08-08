@@ -1611,16 +1611,33 @@ class EngineMctsPolicy:
         purpose: that is two invocations of real render work, the same convention
         `lossy_renders` and `total_iterations` already follow.
 
-        Shape-checked because the attribute is read off an arbitrary caught exception.
-        Older wheels (and every non-native failure that reaches this handler) carry no
-        such attribute at all, which must be a silent no-op rather than a crash inside the
-        handler whose entire job is to keep the other worlds alive.
+        SANITIZED HERE, not in the shared seam, because THIS is the untrusted boundary.
+        The report path's counts come from a `format!` in the crate and a malformed one
+        there is a bug worth surfacing; these come off an arbitrary caught exception, and
+        an `isinstance(payload, Mapping)` check alone is NOT enough -- measured,
+        `{"a": "many"}` raises ValueError and `{"a": None}` / `{"a": {"b": 1}}` raise
+        TypeError out of `_absorb_lossy_subcases`'s unguarded `int(count)`, out of the
+        `except Exception` in `run_world`, and (there is no outer try around
+        `_search_model`) straight out of `decide()`. Unreachable from the wheel that
+        ships, but it is exactly the "arbitrary exception" case the namespaced attribute
+        name exists to bound, and a crash in the handler whose entire job is to keep the
+        other worlds alive is a strictly worse defect than the one being fixed. Older
+        wheels, and every non-native failure reaching this handler, carry no such
+        attribute at all and no-op the same way.
+
+        `bool` is excluded deliberately: it is an `int` subclass, so `True` would
+        otherwise count as 1 and put a non-count into a measurement channel.
         """
 
         payload = getattr(error, _ABORT_LOSSY_SUBCASES_ATTR, None)
         if not isinstance(payload, Mapping):
             return
-        self._absorb_lossy_subcases({"lossy_subcases": payload})
+        counts = {
+            str(subcase): count
+            for subcase, count in payload.items()
+            if isinstance(count, int) and not isinstance(count, bool)
+        }
+        self._absorb_lossy_subcases({"lossy_subcases": counts})
 
     def _search_model(
         self,

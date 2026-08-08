@@ -91,6 +91,14 @@ impl LossySubcaseLedger {
     /// Byte-pinned by a test: this replaced an inline `format!` in `model.rs`, and
     /// the field is parsed by `engine_search.py` and aggregated across eras, so a
     /// change in shape here is a change in a measurement contract.
+    ///
+    /// KEYS ARE NOT JSON-ESCAPED, carried over verbatim from the `format!` this
+    /// replaced. Safe today only because `assert_subcase_vocabulary` bounds the slug
+    /// alphabet upstream to registered tokens joined by `:` and `+` -- nothing that
+    /// needs escaping can reach here. Note the ASYMMETRY between the two exits, so a
+    /// future vocabulary change does not surprise anyone: [`Self::attach_to`] builds a
+    /// real `PyDict` and is unaffected, so a key that broke this would corrupt the
+    /// CLEAN path's report JSON while the ABORT path kept working.
     pub fn json_object(&self) -> String {
         format!(
             "{{{}}}",
@@ -106,8 +114,16 @@ impl LossySubcaseLedger {
     ///
     /// ALWAYS attaches, even when empty. Key-absent and value-zero are
     /// deliberately distinguishable on the Python side -- a missing key reads as
-    /// a genuine zero -- so the attribute's PRESENCE must be a property of the
-    /// abort path, not of whether anything happened to be counted.
+    /// a genuine zero -- so wherever this is CALLED, the attribute's presence is a
+    /// property of the call and not of whether anything happened to be counted.
+    ///
+    /// SCOPE, corrected by review: this says nothing about exits that never reach a
+    /// call. `model.rs` has six argument-validation and root-parse `return Err`s
+    /// ahead of the ledger's construction, and those attach nothing. None of them
+    /// can have observed a sub-case (no branch has been rendered yet), and Python
+    /// treats a missing attribute exactly like an empty payload, so the counter is
+    /// unaffected -- but the invariant is "a search ran and aborted", not "any error
+    /// left the pyfunction".
     ///
     /// Infallible by construction. A `PyErr` raised out of `setattr` is
     /// swallowed and the original error returned unchanged, and no `unwrap` or
@@ -130,6 +146,35 @@ impl LossySubcaseLedger {
             error
         })
     }
+}
+
+/// Run a native search under the panic guard with a ledger, attaching the counts to
+/// EVERY failure it can produce.
+///
+/// THIS EXISTS TO MAKE ONE BUG UNREPRESENTABLE, and the bug is subtle enough that it
+/// survived a source-text pin written specifically to catch it. The attach must happen
+/// OUTSIDE [`crate::panic_guard::catch_native_panic`]: inside it, a contained
+/// poke-engine panic unwinds the search frame and the guard substitutes an error of its
+/// own AFTER the attach ran, so every panicking world silently reports nothing --
+/// measured at 3 panics / ~80 shards in the 2026-07-31 probe.
+///
+/// The original wiring spelled that ordering out in `model.rs`, which `cargo test`
+/// never compiles (the `model` cargo feature needs libtorch), so the only available
+/// guard was an assertion over `include_str!("model.rs")`. Review demonstrated the
+/// regression compiling and passing that pin: binding the inner call and mapping it
+/// there keeps the attach textually after `py.detach(` -- which is all a position
+/// comparison can see -- while moving it inside the guard. Owning both halves here
+/// replaces a pin that can be evaded with an ordering the type system enforces, in a
+/// module that IS compiled and IS unit-tested (see
+/// `a_contained_poke_engine_panic_still_reports_what_the_world_observed`).
+pub fn guarded_search_with_ledger<T>(
+    f: impl FnOnce(&mut LossySubcaseLedger) -> PyResult<T>,
+) -> PyResult<T> {
+    let mut ledger = LossySubcaseLedger::new();
+    // The ledger is owned by THIS frame, not the guarded one, so an unwind cannot
+    // destroy it. Order is load-bearing: contain first, attach second.
+    let result = crate::panic_guard::catch_native_panic(|| f(&mut ledger));
+    result.map_err(|error| ledger.attach_to(error))
 }
 
 #[cfg(test)]
@@ -301,52 +346,109 @@ mod abort_payload_tests {
             "model.rs no longer renders the ledger into the search report, so the \
              CLEAN path lost its counts"
         );
+        // THE CONTAIN-THEN-ATTACH ORDERING IS NOT PINNED HERE, ON PURPOSE. It used to
+        // be, as `find("let result = py.detach(") < rfind("attach_to(error)")`, and that
+        // assertion is EVADABLE: binding the inner call and mapping it there
+        //
+        //     catch_native_panic(|| {
+        //         let inner = multiply_batched_encoded_core(.., &mut lossy_subcases);
+        //         inner.map_err(|e| lossy_subcases.attach_to(e))
+        //     })
+        //
+        // compiles, keeps the attach textually after `py.detach(` -- all a position
+        // comparison can see -- and moves it INSIDE the guard, so every contained engine
+        // panic drops its counts. Rather than chase that with a cleverer regex, the
+        // ordering moved into `guarded_search_with_ledger`, where the type system holds
+        // it and `a_contained_poke_engine_panic_still_reports_what_the_world_observed`
+        // exercises it in a module `cargo test` actually compiles. What is left here is
+        // the wiring: that model.rs goes through that helper at all.
         assert!(
-            model_rs.contains("lossy_subcases.attach_to(error)"),
-            "model.rs no longer attaches the ledger to an aborting error, so every \
-             aborted world silently discards what it observed -- the defect this \
-             module was added to fix"
+            model_rs.contains("abort_telemetry::guarded_search_with_ledger("),
+            "model.rs no longer runs the search through `guarded_search_with_ledger`, \
+             so nothing attaches the ledger to an aborting error and every aborted \
+             world silently discards what it observed -- the defect this module was \
+             added to fix. Reintroducing a hand-rolled `catch_native_panic` + `map_err` \
+             here also reintroduces the ordering hazard the helper exists to remove."
         );
-        // And the counts must not be smuggled into the message, which is the
-        // `world_failure_reasons` key.
         assert!(
-            !model_rs.contains("json_object()}"),
-            "sub-case counts must never be interpolated into an error message: that \
-             string is the world_failure_reasons key and its bytes are a contract"
+            !model_rs.contains("panic_guard::catch_native_panic"),
+            "model.rs calls the panic guard directly again. The guard and the attach \
+             must stay in one place: separated, their ORDER decides whether a panicking \
+             world reports anything, and that order is invisible from model.rs"
         );
-        // ORDERING, which is what makes the panic path work: the ledger must be
-        // constructed OUTSIDE `py.detach` and therefore outside
-        // `catch_native_panic`, or a contained poke-engine panic unwinds the frame
-        // that owns it and the counts die with the world. Compared by position so
-        // reformatting between the two lines cannot break the pin.
-        let ledger_at = model_rs
-            .find("LossySubcaseLedger::new()")
-            .expect("model.rs must construct the ledger");
-        let detach_at = model_rs
-            .find("let result = py.detach(")
-            .expect("model.rs must bind the detach result so the Err arm can be mapped");
+
+        // ORDERING WITHIN THE SEARCH LOOP, which the helper cannot enforce. Positions
+        // are compared rather than exact layout matched, so reformatting between the
+        // anchors cannot break the pin.
+        //
+        // `record` BEFORE the attribution-unsafe gate. Swapping the record loop
+        // with the `reject_attribution_unsafe` block restores the ORIGINAL DEFECT for
+        // the aborting branch -- the primary target class -- with everything else here
+        // still green, because the branch returns before it can record.
+        let record_at = model_rs
+            .find("lossy_subcases.record(")
+            .expect("model.rs must record sub-cases into the ledger");
+        let gate_at = model_rs
+            .find("seam.reject_attribution_unsafe(")
+            .expect("model.rs must still gate attribution-unsafe branches");
         assert!(
-            ledger_at < detach_at,
-            "the ledger is constructed inside the detached/panic-guarded region, so an \
-             unwind destroys it and a panicking world reports nothing"
+            record_at < gate_at,
+            "sub-cases are recorded AFTER the attribution-unsafe gate, so the branch \
+             that aborts the world records nothing -- exactly the defect this module \
+             was added to fix, restored"
+        );
+
+        // THE COUNTS MUST NEVER REACH THE ERROR MESSAGE, pinned as a PROPERTY rather
+        // than as one forbidden spelling. `!contains("json_object()}")` caught exactly
+        // the `format!("..{}..", ..json_object())` shape and sailed past
+        // `format!("{} [lossy={}]", raw, ..json_object())`, which corrupts the
+        // `world_failure_reasons` key space -- the one contract this change calls
+        // inviolable. So: exactly one call site, and it is the report block.
+        let occurrences = model_rs.matches("json_object()").count();
+        assert_eq!(
+            occurrences, 1,
+            "`json_object()` must have exactly ONE call site in model.rs (the search \
+             report). A second one is how sub-case counts reach a string that is not \
+             the report -- and the reason key's bytes are a cross-era measurement \
+             contract that `_bounded_reason_detail` truncates at 512 chars."
+        );
+        let json_at = model_rs
+            .find("json_object()")
+            .expect("checked non-empty above");
+        // Anchored on the report FORMAT STRING that declares the field, not on
+        // `let extra = format!(` -- model.rs has two of those and `find` would take the
+        // wrong one. This is the same literal `test_the_crate_and_python_agree_on_the_
+        // lossy_subcases_key` pins from the Python side.
+        let field_at = model_rs
+            .find(r#"\"lossy_subcases\":{}"#)
+            .expect("model.rs must still declare the lossy_subcases report field");
+        let report_end = model_rs[field_at..]
+            .find("\n    );")
+            .map(|offset| field_at + offset)
+            .expect("the report format! must terminate");
+        assert!(
+            field_at < json_at && json_at < report_end,
+            "the sole `json_object()` call is outside the argument list of the search \
+             report that declares `lossy_subcases`, so the counts are being rendered \
+             into some OTHER string"
         );
     }
 
     /// A CONTAINED PANIC must carry the counts too, not just a returned `Err`.
     ///
-    /// `catch_native_panic` unwinds the search frame and substitutes an error of its
-    /// own, so the ledger cannot live in that frame. This drives the real
-    /// composition: accumulate, panic, contain, attach. Measured 3 panics over ~80
-    /// shards in the 2026-07-31 probe, so this arm is not hypothetical.
+    /// THE ORDERING TEST, and the reason `guarded_search_with_ledger` exists. It drives
+    /// the HELPER, not a hand-composed `catch_native_panic` + `attach_to`, so that
+    /// swapping contain and attach fails HERE -- in a module `cargo test` compiles --
+    /// rather than in `model.rs`, which it does not. Measured 3 panics over ~80 shards
+    /// in the 2026-07-31 probe, so this arm is not hypothetical.
     #[test]
     fn a_contained_poke_engine_panic_still_reports_what_the_world_observed() {
         Python::initialize();
-        let mut ledger = LossySubcaseLedger::new();
-        let result: PyResult<String> = crate::panic_guard::catch_native_panic(|| {
+        let result: PyResult<String> = super::guarded_search_with_ledger(|ledger| {
             ledger.record("sleeptalk_called_unidentified:protect_marker_rendered");
             panic!("Invalid rest_turns value: 32")
         });
-        let error = ledger.attach_to(result.expect_err("the panic must surface as Err"));
+        let error = result.expect_err("the panic must surface as Err");
 
         let payload = read_payload(&error).expect("a panicking world must still report");
         assert_eq!(
@@ -361,6 +463,44 @@ mod abort_payload_tests {
                 message.contains("Invalid rest_turns value: 32"),
                 "{message}"
             );
+            assert!(
+                message.contains("world was aborted"),
+                "panic containment must still be in force: {message}"
+            );
         });
+    }
+
+    /// The helper's other two exits, so the panic arm is not its only driver.
+    ///
+    /// A returned `Err` must be attached -- that is the ordinary abort, ~92% of the
+    /// residue -- and a success must pass through with NOTHING attached, because the
+    /// clean path carries its counts in the report and attaching there is how the two
+    /// channels would begin double-counting.
+    #[test]
+    fn the_guard_attaches_on_a_returned_error_and_reports_through_the_ledger_on_success() {
+        Python::initialize();
+
+        let aborted: PyResult<String> = super::guarded_search_with_ledger(|ledger| {
+            ledger.record("sleeptalk_called_unidentified:ambiguous");
+            Err(PyValueError::new_err(
+                "attribution-unsafe renderer branch rejected before tree/model fold: x",
+            ))
+        });
+        let error = aborted.expect_err("the search returned Err");
+        let payload = read_payload(&error).expect("an ordinary abort must carry counts");
+        assert_eq!(
+            payload.get("sleeptalk_called_unidentified:ambiguous"),
+            Some(&1)
+        );
+
+        let clean: PyResult<String> = super::guarded_search_with_ledger(|ledger| {
+            ledger.record("sleeptalk_called_unidentified:ambiguous");
+            Ok(ledger.json_object())
+        });
+        assert_eq!(
+            clean.expect("the search succeeded"),
+            "{\"sleeptalk_called_unidentified:ambiguous\":1}",
+            "the clean path must still report through the ledger it accumulated into"
+        );
     }
 }

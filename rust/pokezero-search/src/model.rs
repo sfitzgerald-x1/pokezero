@@ -1687,27 +1687,38 @@ impl NativeLeafModel {
             crate::events::EventContext::from_json(ctx_json).map_err(PyValueError::new_err)?;
         let fold = root_fold.inner().clone();
         drop(root_fold);
-        // Owned OUT HERE, outside both `detach` and the panic guard, so it survives
-        // every way the search can fail: a `return Err` from an attribution-unsafe
-        // branch, any `?` inside the round loop, and a poke-engine panic that
-        // `catch_native_panic` converts into a fresh error of its own. Aborts are the
-        // majority of the residue and each one used to discard everything the world
-        // had observed. See `crate::abort_telemetry`.
-        let mut lossy_subcases = crate::abort_telemetry::LossySubcaseLedger::new();
-        let result = py.detach(|| {
+        py.detach(|| {
             let spec = self.evaluator.spec();
-            // Contain poke-engine's own panics. A panic here crosses the FFI
-            // boundary as `PanicException`, which derives from BaseException and
-            // so is NOT caught by the caller's `except Exception`
-            // (engine_search.py, "count, keep the other worlds"). The result is
-            // that one malformed state kills the whole shard process instead of
-            // one world, and the driver then refuses to write a partial shard.
-            // Measured in the 2026-07-31 probe: `Invalid rest_turns value: 32`
-            // took out shards deterministically by seed (3 panics / 4 refused
-            // shards over ~80), so a retry
-            // reproduces it. Same remedy `parse_state` already applies to
-            // deserialization (lib.rs).
-            crate::panic_guard::catch_native_panic(|| {
+            // Contain poke-engine's own panics, AND carry the sub-case counts out of
+            // every failure the search can produce. Both halves live in
+            // `abort_telemetry::guarded_search_with_ledger` because their ORDER is the
+            // whole correctness argument and it is not visible here.
+            //
+            // Panic containment: a panic crosses the FFI boundary as `PanicException`,
+            // which derives from BaseException and so is NOT caught by the caller's
+            // `except Exception` (engine_search.py, "count, keep the other worlds").
+            // The result is that one malformed state kills the whole shard process
+            // instead of one world, and the driver then refuses to write a partial
+            // shard. Measured in the 2026-07-31 probe: `Invalid rest_turns value: 32`
+            // took out shards deterministically by seed (3 panics / 4 refused shards
+            // over ~80), so a retry reproduces it. Same remedy `parse_state` already
+            // applies to deserialization (lib.rs).
+            //
+            // Count carrying: the ledger accumulates branch by branch and the search
+            // returns Err before the report string exists on any abort -- an
+            // attribution-unsafe branch, any `?` in the round loop, or a contained
+            // panic. Aborts are the majority of the residue, so those counts used to be
+            // discarded wholesale. They are attached to the aborting exception as an
+            // ATTRIBUTE, never as text in its message: that message becomes the
+            // `world_failure_reasons` key and its bytes are compared across eras.
+            //
+            // SCOPE: the six argument-validation and root-parse exits ABOVE return
+            // before this line and attach nothing. Not a telemetry gap -- none of them
+            // can have observed a sub-case, because no branch has been rendered yet --
+            // but the attribute's presence marks "a search ran and aborted", not "any
+            // error left this function". Python treats a missing attribute and an empty
+            // payload identically, so the counter is the same either way.
+            crate::abort_telemetry::guarded_search_with_ledger(|lossy_subcases| {
                 multiply_batched_encoded_core(
                     state_str,
                     iterations,
@@ -1725,14 +1736,9 @@ impl NativeLeafModel {
                     seed,
                     early_stop_min_sims,
                     early_stop_side_one,
-                    &mut lossy_subcases,
+                    lossy_subcases,
                 )
             })
-        });
-        // The clean path already carries these in the report; the abort path had no
-        // carrier at all until now. Attached as an EXCEPTION ATTRIBUTE, never as text
-        // in the message: that message becomes the `world_failure_reasons` key and its
-        // bytes are compared across eras.
-        result.map_err(|error| lossy_subcases.attach_to(error))
+        })
     }
 }
