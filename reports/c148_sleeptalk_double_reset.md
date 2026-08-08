@@ -79,8 +79,13 @@ hardcodes `damage_dealt: DamageDealt::default()`. **Carry presented: zero.**
 **Route 2 — `:2304`, `poke_engine.generate_instructions(state, …)` on the LIVE Python `State`.**
 This is the route the previous revision missed, and it is the interesting one: the argument is
 `state`, **not** `state.to_string()`. Those states come from `build_poke_engine_state`
-(`src/pokezero/poke_engine_adapter.py:298`), which builds through the pyo3 constructors and never
-calls `from_string` — so **`State::deserialize` is never involved**. And it *does* reach the guarded
+(`src/pokezero/poke_engine_adapter.py:298`), which builds the returned state **through the pyo3
+constructors, which never call `from_string`** — so **`State::deserialize` is never involved in
+producing it**. Stated that way deliberately: a flat "`build_poke_engine_state` never calls
+`from_string`" would be false transitively. The adapter's *capability probes* do round-trip —
+`from_string` appears at `poke_engine_adapter.py:413`, `:463`, `:584`, `:611` and `:697` — but every
+one of those builds a **throwaway** state locally, round-trips it to check a serialization fixed
+point, and returns a `bool`. None of them touches the state that is returned. And it *does* reach the guarded
 function: `poke-engine-py/src/lib.rs:1067` → `:1092` `generate_instructions_from_move_pair`, the
 caller of `generate_instructions_from_move`. The carry is zeroed anyway, by a **different
 mechanism**: the `PySide → Side` conversion hardcodes `damage_dealt: Default::default()` at
@@ -104,6 +109,17 @@ in the fold.
 
 **So the sweep corpus cannot observe this fix on any of its three entry points**, and §5 is a null
 by construction.
+
+**And the conclusion does not actually depend on that route list at all** — a stronger close, added
+after review pointed at it, and worth stating because the enumeration above is exactly the kind of
+thing that goes stale when a caller is added. `reset_damage_dealt` has **exactly one call site in
+gen3**: `generate_instructions.rs:3259`, *inside* the guarded `if` at `:3258`
+(`grep -rn 'reset_damage_dealt(' third_party/poke-engine-src/src/gen3/` returns that one line and
+the definition). So there is no route — enumerated or not, present or future — that can double the
+reset while the guard holds, and a new caller of `generate_instructions_from_move` cannot
+reintroduce the defect without also appearing at that site. The route enumeration is still worth
+having, because it is what makes §5's null *predictable* rather than merely observed; it is no
+longer what the correctness argument rests on.
 
 `pokezero_search.env_step` (`envstep.rs`) is a fourth consumer, outside the differential. It is
 zeroed by route 1's mechanism and additionally returns `post_state: state.serialize()`, so the carry
@@ -272,9 +288,11 @@ No engine behaviour, no patch body, no test. The only fingerprint-covered edit i
 `git diff` on that file shows **only** comment lines — no patch name, no ordering, no patch body.
 
 Re-derived on this branch rather than carried, because #1170's own history is a record of figures
-going stale within the hour:
+going stale within the hour. **Every figure in the table immediately below was measured at
+`cf3c03d3` and is SUPERSEDED by the merged-tree table further down — read that one.** It is kept
+because the drift between the two is the point:
 
-| | value | how |
+| (at `cf3c03d3` — superseded below) | value | how |
 |---|---|---|
 | patch stack | **73** | `engine_build_fingerprint.py --print` |
 | crate suite | **443** passed / **443** distinct names / **0** failed | `RUSTFLAGS="-C debug-assertions=yes" cargo test --release`, summed with the gate step's own expression |
@@ -282,9 +300,10 @@ going stale within the hour:
 | `_EXPECTED_SWEEP_ARTIFACTS` | 87 → **91** | `_sweep_reports()` in both trees; set difference exactly the four sweeps, nothing removed; live at 90 and 92 |
 | `_EXPECTED_COUNTER_ARTIFACTS` | 360 → **366** | `counter_artifacts()` in both trees; set difference exactly the six; live at 365 and 367 |
 
-The floor stays **443** and the pin loop stays **36**: this branch adds a cargo *example*, which
-`cargo test` compiles but does not run and which contributes no test name. Both figures come from a
-run on this tree, not from `main`'s comment.
+At `cf3c03d3` the floor was **443** and the pin loop **36** — **both superseded below; on the
+merged tree they are 451 and 44.** This branch moves neither: it adds a cargo *example*, which
+`cargo test` compiles but does not run and which contributes no test name. Both figures came from a
+run on that tree, not from `main`'s comment.
 
 **Then `main` moved to `32829210` (#1169) and this branch merged it, so the figures above are
 superseded — recorded rather than overwritten, because the drift is the lesson.** #1169 adds
