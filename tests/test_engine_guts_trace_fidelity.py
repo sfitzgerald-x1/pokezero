@@ -130,9 +130,30 @@ class GutsFacadeWakeTurnTests(unittest.TestCase):
         """
         branches = self._machamp_vs_smeargle(
             move="facade", status="sleep", sleep_turns=1)
-        damages = self._damages(branches)
+        # Crit branches are excluded, because a crit legitimately looks boosted.
+        #
+        # #1152 (`poke-engine-gen3-crit-straddle-residual-split.patch`) sub-split the critical-hit
+        # band, so this state now yields three damage branches instead of one. The original
+        # `assertNotIn(226, damages)` read the higher crit band as the Guts/doubling bug it was
+        # written to catch. Measured: the wake branches are 23.438 / 0.586 / 0.977 percent, and
+        # the latter two are 0.0625 of that mass -- exactly the gen3 crit rate. A raw damage
+        # value was the wrong proxy for "boosted", because a crit produces a boosted-looking
+        # number legitimately.
+        #
+        # The property is unchanged: on the NON-crit wake branch, Facade on the wake turn is
+        # floor(120 * 0.925) = 111 -- no 2x, no Guts 1.5x.
+        wake = [b for b in branches if self._damages([b])]
+        wake_mass = sum(float(b.percentage) for b in wake)
+        crit = [b for b in wake if float(b.percentage) / wake_mass < 0.05]
+        self.assertAlmostEqual(
+            sum(float(b.percentage) for b in crit) / wake_mass,
+            1.0 / 16.0,
+            places=3,
+            msg="the excluded branches are not the 1/16 crit band; re-derive this pin",
+        )
+        damages = self._damages([b for b in wake if b not in crit])
         self.assertIn(111, damages)
-        for boosted in (226, 258):  # HP-capped kill values of any boosted calc
+        for boosted in (226, 258):  # HP-capped kill values of any boosted NON-CRIT calc
             self.assertNotIn(boosted, damages)
 
 
