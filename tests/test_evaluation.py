@@ -5854,7 +5854,14 @@ if __name__ == "__main__":
             # `{}`, so the promoted pool selected NOTHING -- `selected_policy_specs: []` against
             # a required minimum of 1 -- and the readiness item failed as
             # `promoted_opponent_pool_too_small`, which reads as a pool-size problem rather than
-            # a fixture that cannot be classified. The pool genuinely held 3 entries.
+            # a fixture that cannot be classified. The registry genuinely held 2 entries -- the
+            # `3` in the evidence line is `opponent_pool_size`, the selection CAP
+            # (DEFAULT_MAX_HISTORICAL_OPPONENTS), not a population. Reading it as a count is the
+            # same misreading that made the original diagnosis take three attempts.
+            #
+            # Only `first` is load-bearing here: `second` is resolved as the current policy and
+            # excluded from the historical pool either way, so reverting it to `{}` still passes.
+            # Its payload is realism, not coverage.
             promoted_payload = json.dumps(
                 {"observation_schema_version": OBSERVATION_SCHEMA_VERSION_V2_2}
             )
