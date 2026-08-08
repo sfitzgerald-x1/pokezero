@@ -34,8 +34,37 @@ from being gone for good.
 
 `test_matcher_sources_match_their_pinned_sha256` used to recover these bytes with
 `git show 761fc647...:scripts/engine_transition_differential.py`. That can only ever work in the
-single clone that happens to still hold the object; it fails in every fresh clone and in CI. The
-test now hashes **this file** instead, so the check is clone-independent and passes anywhere.
+single clone that happens to still hold the object; it failed in every fresh clone. The test now
+hashes **this file** instead, so the check is clone-independent and passes anywhere.
+
+Not "and in CI": this suite runs in **no workflow at all**. `tests/test_c26_damage_composition_
+readout.py` appears in no `FILTERS` entry and in no step of any workflow, so it has never been
+executed by CI and was never red there. That is a separate hole, and it is why
+`test_production_matcher_is_not_the_rejected_experiment` sat red on main from #1167 until #1174
+with nothing noticing. Closing it is **not** done here, because it is bigger than it looks:
+`mass-gate` checks out at the default shallow depth, so the `PINNED_MAIN` leg of this very test
+(and `test_c27_repro_provenance_is_current_main_baseline`) would fail there until that job also
+sets `fetch-depth: 0`. Changing the checkout of the sole required status check is not something to
+slip into a PR about a certification pin -- the note appended to
+`reports/c112_leaf_state_divergence_ledger.md` in this same PR is specifically about why unscoped
+"while I'm here" edits are how defects land. Filed as a follow-up: add
+`tests/test_c26_damage_composition_readout.py`, `reports/c26_damage_composition_tail_readout.json`,
+`reports/certification_contract_lifecycle.json` and this directory to `FILTERS`, set
+`fetch-depth: 0` on `mass-gate`, and add a step pinning `Ran 10 tests` and `OK (skipped=1)` --
+the skip count matters, because exactly one test here skips without `C26_RETAINED_SHARDS` and a
+bare `OK` grep would accept a run that skipped everything.
+
+## Do NOT push the preserving tag
+
+An annotated tag `preserve/rejected-experiment-761fc647` anchors the commit in one local clone. It
+is deliberately **not** pushed, and vendoring these bytes is what makes not pushing it safe.
+
+Pushing that tag would publish the whole tree at `761fc647` to a **public** repo. That snapshot
+predates the 2026-08-03 scrub: it still carries **92 maintainer home-directory occurrences** across
+20+ files (`docs/audit_artifacts/**`, `scripts/*.py`, `docs/*.md`). The current tree has zero.
+Restoring reachability that way would undo the scrub. This single file is clean -- zero such
+occurrences -- which is exactly why the right move was to vendor one verified file rather than
+republish a commit.
 
 ## Do not "clean this up"
 

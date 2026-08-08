@@ -176,6 +176,19 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
         Do not "fix" this by asserting the commit is unreachable: that inverts the incentive,
         going red exactly when someone preserves the evidence.
         """
+        # Vendoring cost this test its unforgeable anchor: it used to feed the readout's
+        # commit field straight to `git show`, so a wrong commit could not resolve. Now
+        # nothing else in the repo reads that field, and the whole chain -- vendored bytes,
+        # constant, readout -- is in-tree and editable in one PR. Bind the commit to the
+        # sha in the vendored filename, so silently re-pointing the readout at some other
+        # commit while keeping these bytes trips here.
+        self.assertEqual(
+            self.readout["rejected_experiment"]["commit"],
+            "761fc647a1c1a9ee57f09d44d2675d66c6d649b3",
+            "the readout's rejected-experiment commit no longer matches the commit the "
+            f"vendored matcher was taken from ({VENDORED_EXPERIMENT_MATCHER.name})",
+        )
+
         baseline = subprocess.run(
             ["git", "show", f"{PINNED_MAIN}:scripts/engine_transition_differential.py"],
             cwd=REPO_ROOT,

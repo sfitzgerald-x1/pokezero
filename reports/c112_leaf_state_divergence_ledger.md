@@ -762,13 +762,15 @@ Four of the `state` families as they stood in v2's framing are columns that did 
   in #1156 for being circular, since it seeds the world from the very thing the harness is
   checking. It also does not adopt `scripts/differential_denominator.py`. It DOES publish a
   measured count -- an earlier revision of this note said it did not, which was wrong. The problem
-  is that nothing GATES on it. Both of its exits are, token for token with the source's line wrap
-  collapsed,
+  is that nothing GATES on it. Both of its two SUCCESS-path exits are, token for token with the
+  source's line wrap collapsed,
   `return 1 if (report["transitions_diverged"] or report["engine_errors"] or partition) else 0`.
-  The third term is real but does not help: `partition` is `verdict_partition_failures`, which only
-  checks that the verdict counts SUM to `boundaries_measured`. A run that skipped every boundary
-  sums correctly, so the partition closes, and with no divergence and no engine error the run exits
-  0 having measured nothing. (Cited by expression, not line: a first version of this note gave five
+  (There are also `return 2` refusal exits for bad invocation, which are not the path in question.)
+  The third term is real but does not help: `partition` is `verdict_partition_failures`, which
+  checks that the verdict counts SUM to `boundaries_measured` — plus that the fields are present
+  and well-formed, but no coverage floor. A run that skipped every boundary sums correctly, so the
+  partition closes, and with no divergence and no engine error the run exits 0 having measured
+  nothing. (Cited by expression, not line: a first version of this note gave five
   line numbers, every one off by exactly 5, because they were measured against a 14-line draft of
   a comment that shipped at 19. A later revision then paraphrased this expression instead of
   quoting it, dropping the `partition` term and the `report[...]` lookups — same defect, one level
