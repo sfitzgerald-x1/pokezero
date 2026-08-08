@@ -8,6 +8,7 @@
 //! TorchScript/ONNX per docs/test_time_search_plan_v3.md) plugs in later.
 //! Search quality is explicitly NOT the goal of this skeleton.
 
+pub mod abort_telemetry;
 pub mod encoder;
 pub mod envstep;
 pub mod events;

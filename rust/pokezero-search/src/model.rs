@@ -748,6 +748,16 @@ impl Drop for PhaseTimer<'_> {
     }
 }
 
+/// `lossy_subcases` is an OUT-PARAM, owned by the caller, and that is the whole
+/// point of it. Renders that are counted rather than refused accumulate branch by
+/// branch, but every error exit below (`return Err`, every `?`, and a contained
+/// poke-engine panic, which unwinds past this frame entirely) leaves without
+/// building the report string that used to be their only carrier. So an accumulator
+/// owned by THIS function described only the clean-completion subset -- categorically,
+/// whatever share of worlds abort, which is NOT measured; see the module header of
+/// `crate::abort_telemetry`. The caller keeps it alive across the
+/// error boundary and attaches it to the aborting exception
+/// (`crate::abort_telemetry`).
 fn multiply_batched_encoded_core<E: BatchLeafEval>(
     state_str: &str,
     iterations: usize,
@@ -765,6 +775,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     seed: u64,
     early_stop_min_sims: usize,
     early_stop_side_one: bool,
+    lossy_subcases: &mut crate::abort_telemetry::LossySubcaseLedger,
 ) -> PyResult<String> {
     let mut state = parse_state(state_str)?;
     if state.battle_is_over() != 0.0 {
@@ -786,13 +797,6 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let mut early_stop_runner_up_visits = 0u32;
     let mut model_evals = 0usize;
     let mut lossy_renders = 0usize;
-    // Renders that were COUNTED rather than refused, per sub-case. Without this the
-    // usable-ambiguity class is invisible in aggregate: before the split it showed up as
-    // `world_failure_reasons["...:ambiguous"]` because it refused, and after the split it
-    // would show up nowhere at all. An invisible class is how this campaign spent two eras
-    // unable to say what had changed.
-    let mut lossy_subcase_counts: std::collections::BTreeMap<String, usize> =
-        std::collections::BTreeMap::new();
     let mut attribution_unsafe_renders = 0usize;
     let mut fold_by_branch: std::collections::HashMap<(usize, usize), BranchFold> =
         std::collections::HashMap::new();
@@ -981,8 +985,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     if !rendered.lossy.is_empty() {
                         lossy_renders += 1;
                     }
+                    // Recorded BEFORE the attribution-unsafe gate below, and the ledger
+                    // outlives this frame, so a branch that aborts the world still
+                    // reports the sub-cases the world observed on its way there.
                     for subcase in &rendered.lossy_subcases {
-                        *lossy_subcase_counts.entry(subcase.clone()).or_insert(0) += 1;
+                        lossy_subcases.record(subcase);
                     }
                     if let Err(error) = seam.reject_attribution_unsafe(&rendered) {
                         attribution_unsafe_renders += 1;
@@ -1263,15 +1270,10 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         model_evals,
         lossy_renders,
         // A JSON object of sub-case -> count, so the class is countable in the shard
-        // report instead of only in a per-branch payload nobody aggregates.
-        format!(
-            "{{{}}}",
-            lossy_subcase_counts
-                .iter()
-                .map(|(name, count)| format!("\"{name}\":{count}"))
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
+        // report instead of only in a per-branch payload nobody aggregates. The SAME
+        // ledger the abort path attaches to its error, so the two exits cannot
+        // disagree and cannot both report the same observation.
+        lossy_subcases.json_object(),
         attribution_unsafe_renders,
         fold_by_branch.len(),
         model_priors,
@@ -1688,18 +1690,38 @@ impl NativeLeafModel {
         drop(root_fold);
         py.detach(|| {
             let spec = self.evaluator.spec();
-            // Contain poke-engine's own panics. A panic here crosses the FFI
-            // boundary as `PanicException`, which derives from BaseException and
-            // so is NOT caught by the caller's `except Exception`
-            // (engine_search.py, "count, keep the other worlds"). The result is
-            // that one malformed state kills the whole shard process instead of
-            // one world, and the driver then refuses to write a partial shard.
-            // Measured in the 2026-07-31 probe: `Invalid rest_turns value: 32`
-            // took out shards deterministically by seed (3 panics / 4 refused
-            // shards over ~80), so a retry
-            // reproduces it. Same remedy `parse_state` already applies to
-            // deserialization (lib.rs).
-            crate::panic_guard::catch_native_panic(|| {
+            // Contain poke-engine's own panics, AND carry the sub-case counts out of
+            // every failure the search can produce. Both halves live in
+            // `abort_telemetry::guarded_search_with_ledger` because their ORDER is the
+            // whole correctness argument and it is not visible here.
+            //
+            // Panic containment: a panic crosses the FFI boundary as `PanicException`,
+            // which derives from BaseException and so is NOT caught by the caller's
+            // `except Exception` (engine_search.py, "count, keep the other worlds").
+            // The result is that one malformed state kills the whole shard process
+            // instead of one world, and the driver then refuses to write a partial
+            // shard. Measured in the 2026-07-31 probe: `Invalid rest_turns value: 32`
+            // took out shards deterministically by seed (3 panics / 4 refused shards
+            // over ~80), so a retry reproduces it. Same remedy `parse_state` already
+            // applies to deserialization (lib.rs).
+            //
+            // Count carrying: the ledger accumulates branch by branch and the search
+            // returns Err before the report string exists on any abort -- an
+            // attribution-unsafe branch, any `?` in the round loop, or a contained
+            // panic. Every one of those counts used to be discarded wholesale -- for
+            // however large a share of worlds abort, which is not measured
+            // (`crate::abort_telemetry` module header). They are attached to the
+            // aborting exception as an
+            // ATTRIBUTE, never as text in its message: that message becomes the
+            // `world_failure_reasons` key and its bytes are compared across eras.
+            //
+            // SCOPE: the six argument-validation and root-parse exits ABOVE return
+            // before this line and attach nothing. Not a telemetry gap -- none of them
+            // can have observed a sub-case, because no branch has been rendered yet --
+            // but the attribute's presence marks "a search ran and aborted", not "any
+            // error left this function". Python treats a missing attribute and an empty
+            // payload identically, so the counter is the same either way.
+            crate::abort_telemetry::guarded_search_with_ledger(|lossy_subcases| {
                 multiply_batched_encoded_core(
                     state_str,
                     iterations,
@@ -1717,6 +1739,7 @@ impl NativeLeafModel {
                     seed,
                     early_stop_min_sims,
                     early_stop_side_one,
+                    lossy_subcases,
                 )
             })
         })
