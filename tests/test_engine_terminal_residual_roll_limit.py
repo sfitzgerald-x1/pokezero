@@ -7,6 +7,7 @@ it as a simulator-fidelity result. See docs/terminal_residual_roll_branching_lim
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 try:
     import poke_engine
@@ -68,11 +69,37 @@ class TerminalResidualRollComparisonLimitTests(unittest.TestCase):
 
         self.assertEqual(str(state), before, "branch generation must restore the input state")
         self.assertAlmostEqual(sum(float(branch.percentage) for branch in branches), 100.0)
-        self.assertEqual(len(branches), 2, "no production residual roll splitter is installed")
-        self.assertTrue(
-            any(
-                _damage_to(branch, "SideTwo")[:1] == [113]
-                and _heals_to(branch, "SideOne") == [19]
-                for branch in branches
-            )
+
+        # WHAT THIS PIN IS FOR, asserted directly instead of by proxy.
+        #
+        # It used to assert `len(branches) == 2` with the message "no production residual roll
+        # splitter is installed", and a specific 113/19 damage-heal pair. Both were proxies for
+        # "the withdrawn terminal-toxic experiment is not in the patch stack", and both went
+        # stale when OTHER, deliberate splitters shipped -- `crit-kill-split` (C27, #1007) added
+        # a 1/16 crit branch and `residual-lethality-partition` (#1069) split the non-crit mass,
+        # so this state now yields three branches at 58.594 / 35.156 / 6.250 percent and the
+        # single 113 representative became 109 and 116.
+        #
+        # None of that is the withdrawn experiment coming back, and refreshing the numbers would
+        # turn an ablation pin into a change-detector that any future legitimate splitter breaks
+        # again. The withdrawn thing has a name, so assert its absence by name.
+        patch_dir = Path(__file__).resolve().parents[1] / "third_party"
+        withdrawn = patch_dir / "poke-engine-gen3-terminal-toxic-roll-split.patch"
+        self.assertFalse(
+            withdrawn.exists(),
+            f"{withdrawn.name} is back in the patch stack. It treated a pre-move Toxic "
+            "arithmetic threshold as the decision boundary, which cannot model gen3's "
+            "end-of-turn queue -- see docs/terminal_residual_roll_branching_limit.md. If it was "
+            "reinstated deliberately, that document and this pin both need rewriting.",
+        )
+
+        # And the durable half of the old proxy: the engine still uses a COMPACT representative
+        # for residual-lethal non-direct damage. Every branch's residual heal is the single
+        # representative value, not a fan -- that is the comparison limit the doc records, and it
+        # is what the withdrawn patch would have changed.
+        heals = {tuple(_heals_to(branch, "SideOne")) for branch in branches}
+        self.assertEqual(
+            heals,
+            {(19,), ()},
+            "residual heals are no longer a single compact representative per branch",
         )
