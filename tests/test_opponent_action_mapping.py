@@ -85,10 +85,13 @@ def _committed_sample_request_order(world, slot: str) -> list[str]:
     corpus and only this corpus. Showdown's request order accumulates one
     slot-0 swap per switch-in, so active-first is exact while the seat has
     switched at most once and transposed from the second switch onward
-    (`scripts/measure_opponent_request_order.py::wrong_one_swap`, ~91% wrong on
-    live rows). The committed sample contains at most ONE opponent switch --
-    which is precisely why `test_multi_switch_request_order_needs_the_ctx_channel`
-    has to CONSTRUCT a three-switch history rather than read one.
+    (`scripts/measure_opponent_request_order.py::wrong_one_swap`, one of that
+    file's three deliberately-wrong controls; its docstring records ~91% wrong
+    and the file header records the three controls together at 81-96%, with no
+    per-control artifact committed). The committed sample contains at most ONE
+    opponent switch -- which is precisely why
+    `test_multi_switch_request_order_needs_the_ctx_channel` has to CONSTRUCT a
+    three-switch history rather than read one.
     """
     party = list(world.party_species[slot])
     active = getattr(world.spec, world.slot_sides[slot]).active_index
@@ -261,22 +264,31 @@ class OpponentActionMappingTest(unittest.TestCase):
             state = build_poke_engine_state(world.spec)
         except EngineWorldUnsupported:
             return None
-        # Seat-relative: the ctx order describes the OPPONENT of the context
-        # that reads it, and only `row_a`'s context reads it here (`rooted_b`
-        # is asked for its OWN map, which comes from `md["self_team"]`).
-        ctx = json.dumps({
-            "p1": list(world.party_species["p1"]),
-            "p2": list(world.party_species["p2"]),
-            "turn": int(row_a.public_materialization.get("turn") or 0),
-            "opponent_request_order": _committed_sample_request_order(
-                world, "p2" if row_a.player_id == "p1" else "p1"
-            ),
-        })
+        # `opponent_request_order` is SEAT-RELATIVE: it describes the opponent
+        # of whichever context reads it. One shared ctx would hand row_a's
+        # opponent order to row_b's encoder, which is inert only for as long as
+        # row_b is asked exclusively for its OWN map -- exactly the kind of
+        # latent mis-seating this change exists to remove. Build one ctx per
+        # seat instead.
+        def ctx_for(row):
+            return json.dumps({
+                "p1": list(world.party_species["p1"]),
+                "p2": list(world.party_species["p2"]),
+                "turn": int(row_a.public_materialization.get("turn") or 0),
+                "opponent_request_order": _committed_sample_request_order(
+                    world, "p2" if row.player_id == "p1" else "p1"
+                ),
+            })
+
         state_str = state.to_string()
         return (
             state_str,
-            pokezero_search.LeafEncoder(tables_json, _row_inputs(row_a), ctx, state_str),
-            pokezero_search.LeafEncoder(tables_json, _row_inputs(row_b), ctx, state_str),
+            pokezero_search.LeafEncoder(
+                tables_json, _row_inputs(row_a), ctx_for(row_a), state_str
+            ),
+            pokezero_search.LeafEncoder(
+                tables_json, _row_inputs(row_b), ctx_for(row_b), state_str
+            ),
         )
 
     def test_seat_mirror_opponent_map_equals_that_seats_own_map(self) -> None:
@@ -345,7 +357,7 @@ class OpponentActionMappingTest(unittest.TestCase):
         )
         return list(world.party_species["p2"])
 
-    def _switch_slots(self, row, state_str, ctx_extra):
+    def _switch_slots(self, row, state_str, ctx_extra, lines=None):
         from pokezero.dex import load_showdown_dex_cached
         from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
         from pokezero.env import BattleStartOverride
@@ -367,11 +379,11 @@ class OpponentActionMappingTest(unittest.TestCase):
         encoder = pokezero_search.LeafEncoder(
             _tables_json(), _row_inputs(row), ctx, state_str
         )
-        return {
-            d.split(" ", 1)[1]: i
-            for d, i in encoder.opponent_action_map(state_str)
-            if d.startswith("switch")
-        }
+        full = encoder.opponent_action_map(state_str, lines)
+        return (
+            {d.split(" ", 1)[1]: i for d, i in full if d.startswith("switch")},
+            [i for _, i in full],
+        )
 
     def test_multi_switch_request_order_needs_the_ctx_channel(self) -> None:
         """The pin the committed corpus CANNOT provide, and B2's real gate.
@@ -424,11 +436,19 @@ class OpponentActionMappingTest(unittest.TestCase):
         # (`scripts/measure_opponent_request_order.py::wrong_one_swap`).
         one_swap = order_after([expected[0]])
 
-        refused = self._switch_slots(row, state_str, {})
-        approximated = self._switch_slots(
+        refused, refused_all = self._switch_slots(row, state_str, {})
+        # The BRANCH seam of the same refusal. With lines supplied the encoder
+        # takes its evolve path, which must decline to evolve an order it does
+        # not have rather than evolving some substitute; without this case that
+        # branch has no coverage in either language.
+        _, refused_branch_all = self._switch_slots(
+            row, state_str, {}, [f"|switch|{self._opponent_prefix()}a: "
+                                 f"{party[1]}|{party[1]}, L100|100/100"]
+        )
+        approximated, _ = self._switch_slots(
             row, state_str, {"opponent_request_order": one_swap}
         )
-        corrected = self._switch_slots(
+        corrected, corrected_all = self._switch_slots(
             row, state_str, {"opponent_request_order": expected}
         )
         self.assertEqual(
@@ -436,6 +456,27 @@ class OpponentActionMappingTest(unittest.TestCase):
             "withholding the request order must refuse every switch arm -- a "
             "substituted order is a confident wrong prior, which is neither "
             "counted nor visible, unlike the refusal it replaces",
+        )
+        # WHOLE map, not just the switch arms. A substituted order taken from
+        # the other seat resolves no switch arm anyway -- cross-team species
+        # match no candidate -- so a switch-only assertion scores that
+        # substitution as a pass. The MOVE arms are what separate "refused"
+        # from "substituted something that happens to resolve nothing":
+        # `action_surface` builds move candidates without the display order, so
+        # they map under every substitution and only a real refusal blanks them.
+        for label, observed in (
+            ("root", refused_all),
+            ("branch", refused_branch_all),
+        ):
+            self.assertEqual(
+                set(observed), {None},
+                f"withholding the request order must refuse the whole {label} "
+                f"map including its move arms, got {observed}",
+            )
+        self.assertNotEqual(
+            set(corrected_all), {None},
+            "control: with the order supplied the map must NOT be all-None, or "
+            "the refusal assertions above hold in a world where nothing maps",
         )
         self.assertNotEqual(
             approximated, truth,

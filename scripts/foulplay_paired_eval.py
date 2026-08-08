@@ -329,8 +329,9 @@ def main(argv=None) -> int:
     #     real checkpoint.
     #
     # CLOSED since: when no order could be supplied the crate substituted a
-    # one-swap approximation (the ~91%-wrong control above), so the ~0.7%
-    # Python fails closed on was fail-OPEN in the crate. The crate now refuses
+    # one-swap approximation -- `wrong_one_swap`, one of the three controls
+    # cited above at 81-96%, recorded at ~91% in its own docstring -- so the
+    # ~0.7% Python fails closed on was fail-OPEN in the crate. The crate now refuses
     # instead -- all-`None` action map, node stays uniform, refusal counted in
     # `prior_fallbacks` -- so a withheld order costs a counted fallback rather
     # than a confident wrong prior.
