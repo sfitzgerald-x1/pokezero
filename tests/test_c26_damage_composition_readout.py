@@ -145,56 +145,18 @@ class C26DamageCompositionReadoutTest(unittest.TestCase):
         self.assertEqual(regressions["2700145/92"]["experiment_class"], "component_missing_in_engine:psn")
         self.assertTrue(all("No engine defect is claimed." in row["adjudication"] for row in regressions.values()))
 
-    def test_the_baseline_commit_really_contains_the_matcher_it_claims(self) -> None:
-        """Anti-fabrication: the readout's claimed commit must actually hold the claimed bytes.
-
-        Lines above bind the readout's `matcher_source_sha256` fields to constants; only this
-        goes to git and proves the COMMIT contained that source. That is what stops a readout
-        citing a commit whose code never hashed to what it reports.
-
-        Baseline leg only -- see the experiment leg below, which is unverifiable forever.
-        """
-        source = subprocess.run(
-            ["git", "show", f"{PINNED_MAIN}:scripts/engine_transition_differential.py"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            check=True,
-        ).stdout
-        self.assertEqual(hashlib.sha256(source).hexdigest(), BASELINE_MATCHER_SHA256)
-
-    def test_the_experiment_commit_is_gone_and_its_provenance_is_unverifiable(self) -> None:
-        """The rejected experiment's commit was squash-merged and garbage-collected.
-
-        This assertion used to be the second half of the baseline test: `git show <commit>:path`
-        and compare to EXPERIMENT_MATCHER_SHA256. It has been PERMANENTLY RED, and not because
-        anything regressed -- the object does not exist in any clone, is not reachable from any
-        ref, and GitHub returns 422 for it. Nobody can make it pass, and the bytes cannot be
-        recovered to vendor them, because the only copy was in that commit.
-
-        Turning an unachievable assertion into a true one, rather than deleting the guard or
-        leaving a red nobody can fix: assert the commit really IS unreachable. If it ever
-        becomes reachable again -- someone restores the branch, or re-pins the readout to a
-        commit that survives -- this goes red and the provenance SHOULD be re-verified against
-        EXPERIMENT_MATCHER_SHA256, which is still asserted against the readout above.
-
-        What this does NOT weaken: `test_production_matcher_is_not_the_rejected_experiment`
-        hashes the LIVE file against the certification registration and needs no git history.
-        That is the guard with teeth -- it caught a stray comment edit in #1167 -- and it is
-        untouched.
-        """
-        commit = self.readout["rejected_experiment"]["commit"]
-        self.assertRegex(commit, r"^[0-9a-f]{40}$")
-        probe = subprocess.run(
-            ["git", "cat-file", "-e", f"{commit}^{{commit}}"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-        )
-        self.assertNotEqual(
-            probe.returncode,
-            0,
-            f"{commit} is reachable again -- re-verify its matcher against "
-            "EXPERIMENT_MATCHER_SHA256 and restore the direct check",
-        )
+    def test_matcher_sources_match_their_pinned_sha256(self) -> None:
+        for commit, expected in (
+            (PINNED_MAIN, BASELINE_MATCHER_SHA256),
+            (self.readout["rejected_experiment"]["commit"], EXPERIMENT_MATCHER_SHA256),
+        ):
+            source = subprocess.run(
+                ["git", "show", f"{commit}:scripts/engine_transition_differential.py"],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                check=True,
+            ).stdout
+            self.assertEqual(hashlib.sha256(source).hexdigest(), expected)
 
     def test_historical_rows_are_uniformly_refused_and_bounded_runs_fail_closed(self) -> None:
         rows = {row["identity"]: row for row in self.readout["historical_control_rows"]}
