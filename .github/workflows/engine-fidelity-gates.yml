@@ -49,6 +49,15 @@ jobs:
             # Without these the classifier half of B1 -- which edits the differential --
             # triggers no workflow at all. Found by review of #1081.
             scripts/engine_transition_differential.py
+            # The harness digest. It is IMPORTED by the differential, so breaking it
+            # breaks every mass-gate step that loads the differential; and it is a
+            # member of its own closure, so editing it moves the harness identity
+            # stamped into every sweep. Its own pin file is listed for the reason every
+            # other pin file here is -- a PR whose only change weakens it must still
+            # trip this workflow -- and it additionally has an unconditional job of its
+            # own below, `harness-provenance`.
+            scripts/harness_digest.py
+            tests/test_harness_digest_provenance.py
             # The final-holdout guard's pins. Listed so a PR that ONLY weakens the
             # pin file still trips this workflow -- otherwise the guard could be
             # disarmed by a test-only edit that never triggers its own gate.
@@ -1381,6 +1390,81 @@ jobs:
             exit 1
           fi
 
+  # The harness digest: the Python half of the measuring instrument, and the drift
+  # that half has already produced.
+  #
+  # WHAT IT PINS: `tests/test_harness_digest_provenance.py`. The engine fingerprint
+  # covers the patch set and the search crate and NOTHING under `scripts/` or
+  # `src/pokezero/`, so a sweep's provenance names the engine and not the harness
+  # that rendered both sides and decided what "matched" means. Over the committed
+  # corpus that is not theoretical: 29 distinct engine fingerprints, SIX of them
+  # spanning more than one `source_commit`, and one confirmed live -- dev
+  # `strict:diverged_on_full_branch_set` = 1 on a fresh base build but absent from
+  # the C142 artifact at the same fingerprint `5fa147ff`, because the counter landed
+  # in the differential after C142's sweeps. `source_commit` made that DETECTABLE and
+  # nothing asserted it.
+  #
+  # SAME SHAPE AS `seed-registry` ABOVE, and for the same two reasons:
+  #
+  #   1. DELIBERATELY NOT BEHIND THE `changes` FILTER. Its inputs include every
+  #      committed JSON under `reports/` and `docs/`, and putting those behind the
+  #      filter would fire the 60-minute engine build on every artifact edit; leaving
+  #      them out would let a PR that only adds an artifact skip the pin entirely.
+  #      Running unconditionally costs a checkout and ~2 s.
+  #   2. It imports nothing but the standard library plus two stdlib-only repo
+  #      modules loaded BY FILE LOCATION (`scripts/harness_digest.py`,
+  #      `scripts/engine_build_fingerprint.py`). No `poke_engine`, no Showdown
+  #      checkout. The differential is read with `ast`, never imported -- a plain
+  #      `import engine_transition_differential` raises ModuleNotFoundError on this
+  #      bare checkout while passing on any dev machine. See that module's header.
+  #
+  # Its result is consumed by `gate-status` below, which is the only required
+  # context. Running unconditionally is what makes the job unskippable; being in
+  # `gate-status`'s `needs` is what makes it MATTER. This repo has found four inert
+  # pins, the last a CI job whose result nothing consumed -- see the note on
+  # `gate-status`. Both halves are present here by construction.
+  harness-provenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Harness digest and provenance drift
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_harness_digest_provenance -v 2>&1 \
+            | tee /tmp/harness.log
+          # EXACT, not a floor -- a floor was the one fail-open in #1163's mutation
+          # battery. This guard lives in YAML and no local `unittest` or `pytest` run
+          # can see it: a module that grows without its count following is how an
+          # approved PR reached CI red here before.
+          if ! grep -qE 'Ran 24 tests' /tmp/harness.log; then
+            echo "::error::expected 24 harness-digest pins; the suite shrank or grew"
+            exit 1
+          fi
+          # A clean OK with no skips. The anti-vacuity pins -- the selector's blob
+          # count, the non-empty `build_inputs()`, and the named world/matcher/adapter
+          # members of the closure -- are the only reason the coverage claims mean
+          # anything; skip them and every statement about what the digest covers goes
+          # vacuous.
+          if ! grep -qE '^OK$' /tmp/harness.log; then
+            echo "::error::harness-digest pins did not report a clean OK (skip or failure)"
+            exit 1
+          fi
+
+      - name: The digest is computable on a bare checkout
+        run: |
+          set -euo pipefail
+          # The unittest run above loads the module by file location. This proves the
+          # shipped CLI path works too, with no repo modules on sys.path and no engine
+          # installed -- which is the state a fresh operator is in when they go to
+          # record what harness produced a sweep.
+          python scripts/harness_digest.py --print
+
   # THE REQUIRED CHECK. Runs on every pull request, whatever it touches, so it can
   # always report. It is the only job in this workflow that should ever be marked
   # required in branch protection -- requiring `mass-gate` directly would block any
@@ -1401,7 +1485,7 @@ jobs:
   # the job executes, the guard fires, and nothing depends on the result. Any job
   # added to this workflow must be added here too, or it is advisory.
   gate-status:
-    needs: [changes, mass-gate, seed-registry]
+    needs: [changes, mass-gate, seed-registry, harness-provenance]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1412,12 +1496,14 @@ jobs:
           RESULT: ${{ needs.mass-gate.result }}
           FILTER: ${{ needs.changes.result }}
           REGISTRY: ${{ needs.seed-registry.result }}
+          HARNESS: ${{ needs.harness-provenance.result }}
         run: |
           set -euo pipefail
           echo "changes result: ${FILTER}"
           echo "fidelity paths touched: ${TOUCHED}"
           echo "mass-gate result: ${RESULT}"
           echo "seed-registry result: ${REGISTRY}"
+          echo "harness-provenance result: ${HARNESS}"
 
           # The seed registry, checked FIRST and with no case analysis, because there
           # is none to do: `seed-registry` carries no `if:`, depends on no other job,
@@ -1429,6 +1515,17 @@ jobs:
           # list is what goes stale.
           if [ "${REGISTRY}" != "success" ]; then
             echo "::error::the seed-registry pins did not pass (${REGISTRY}); the fidelity seed registry in docs/engine_divergence_ledger_20260728.md no longer agrees with the committed artifacts"
+            exit 1
+          fi
+
+          # The harness digest, checked with the same shape and for the same reason:
+          # `harness-provenance` carries no `if:`, depends on no other job, and needs
+          # no wheel, so `skipped` is not reachable for it. Demand the positive rather
+          # than exclude a list of negatives -- the excluded list is what goes stale --
+          # so `failure`, `cancelled`, and the empty string a job that never ran leaves
+          # behind are all red.
+          if [ "${HARNESS}" != "success" ]; then
+            echo "::error::the harness-digest pins did not pass (${HARNESS}); the Python half of the measuring instrument is unidentified, or an engine fingerprint now spans a different set of source commits than the six historical groups"
             exit 1
           fi
 

@@ -279,12 +279,23 @@ class RollPathProvenanceTests(unittest.TestCase):
 
     def test_every_other_provenance_field_still_gates_a_resume(self) -> None:
         """The negative control: excluding one key must not have excluded the rest."""
-        base = dict(self.provenance, source_tree="clean", enumerate_rolls=False)
+        base = dict(
+            self.provenance,
+            source_tree="clean",
+            enumerate_rolls=False,
+            harness_digest="9" * 64,
+        )
         for field, other in (
             ("source_commit", "f" * 40),
             ("engine_fingerprint", "e" * 64),
             ("image_commit", "d" * 40),
             ("enumerate_rolls", True),
+            # The Python half of the instrument. NOT descriptive, unlike
+            # `source_tree` above: it moves only when one of the differential's 16
+            # first-party import-closure files moves, so it cannot make an unrelated
+            # edit unresumable, and a matcher change mid-sweep is exactly what a
+            # resume must refuse rather than merge. See scripts/harness_digest.py.
+            ("harness_digest", "8" * 64),
         ):
             with self.subTest(field=field):
                 mixed = dict(base)
