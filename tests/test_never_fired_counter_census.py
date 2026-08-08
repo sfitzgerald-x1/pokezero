@@ -130,7 +130,20 @@ _CORPUS_TREES = ("reports", "docs")
 # (91 -> 95): the three `c149_row_replay_*.json` are single-row replays and
 # `c149_fan_basis_census.json` is a pure-arithmetic census, so none carries a top-level
 # `boundaries_measured`. The two corpora move independently, as recorded above.
-_EXPECTED_COUNTER_ARTIFACTS = 374
+#
+# 374 -> 375 (C150, the G8 band-split trade census that replaces the unartifacted
+# 124,188-fixture figures in the ledger's G8 cell). RE-DERIVED by executing this module's
+# `counter_artifacts()` against a worktree of `origin/main` at `553cf2c3` -- 374 -- against 375
+# here, with the set difference exactly the ONE file
+# `reports/artifacts/c150_band_split_trade_census.json` and NOTHING removed. Not arithmetic on
+# the previous figure, and confirmed still live at 374 and at 376.
+#
+# ZERO of the one is a member of `tests/test_boundary_verdict_partition.py`'s sweep corpus, which
+# stays at 95: the census is pure arithmetic and carries no top-level `boundaries_measured`. That
+# was MEASURED, not assumed -- `_sweep_reports()` itself was run over both trees and returned the
+# identical 95-member set, with an empty symmetric difference. The two corpora move independently,
+# as recorded above, and this is the case where one moves and the other does not.
+_EXPECTED_COUNTER_ARTIFACTS = 375
 
 # ---------------------------------------------------------------------------
 # The taxonomies, derived from source rather than transcribed.

@@ -390,6 +390,38 @@ verified by re-deriving delimiter counts per row. The §3 row count is unaffecte
 a 17th test would force a `Ran 16 tests` guard bump for an unrelated reason. Filed as a follow-up
 instead.
 
+> ✅ **RE-VERIFIED AND NOW PINNED, 2026-08-08 (C150).** The uniformity claim above is **true**,
+> and it is true at the commit that makes it. Re-derived with the GFM-correct delimiter rule —
+> a pipe preceded by *any* backslash is not a cell delimiter, which is cmark-gfm's actual cell
+> scanner and not an inference — over the ledger's own bytes: `f876803e` **0** over-delimited
+> rows, `a587e614^` **2** (`G37` at 20 pipes and `G37b` at 9 against a 6-pipe / 5-column
+> header, exactly the two rows this paragraph reports fixing), `a587e614` **0**, `553cf2c3`
+> **0**. Rendering the pre-fix rows through `cmarkgfm` confirms the consequence this paragraph
+> describes was real: both came back with an **empty `Reachability evidence` cell**.
+>
+> The **"Not pinned"** disposition is what C150 reverses. The judgement about *this* module was
+> right and is kept — the counter census stays at 16 tests and its `Ran 16 tests` guard is
+> untouched. The follow-up is taken as its own module, `tests/test_ledger_table_uniformity.py`,
+> with its own CI step and its own exact test-count guard, so the next `G37` is caught by a
+> check rather than by a reader. A filed follow-up is not a control.
+>
+> ⚠ **And a correction to C150's own first attempt, recorded because it is the same defect
+> class.** C150 initially replaced the sentence above with a claim that it was FALSE — that
+> `G21b` and `R9` had been dropping their reachability cells since #1151. That was wrong. It
+> came from a delimiter rule *inferred* from CommonMark's backslash-escape section (a parity
+> rule: odd runs of backslashes escape, even runs do not) instead of measured against a
+> renderer. Under GFM `\\|` is still an escaped pipe. Checked on three instruments — local
+> `cmarkgfm`, GitHub's `/markdown` API at `mode=gfm`, and the same API at `mode=markdown` —
+> for runs of 1, 2, 3 and 4 backslashes, with a bare-pipe positive control confirming each
+> instrument does detect real drops: `G21b`'s base bytes render **5 cells** with
+> `Reachability evidence` = *"REACHABLE — every battle, every move above 10 PP … 24 for
+> `shadowball`, 16 for `earthquake`"* and `Observed` = `no`; `R9` renders 3 intact cells; the
+> whole file at `553cf2c3` renders 9 tables with no ragged row. **Item 14 was met.** The two
+> rows were still edited, but for what the change actually is: `\\|` renders a stray backslash
+> inside the code span (`a \| b` where `a | b` was meant), so it is a typographic fix and
+> nothing more. Recorded here rather than dropped because a document about claims asserted
+> more broadly than their instrument should carry the one this very correction nearly added.
+
 **Scope note.** This is one test module and one CI step, and it covers only Class A. Class B (the
 27 pool-census negatives) would need the vendored Showdown checkout at a pinned commit inside CI,
 which is a materially larger change and is not attempted; §8's prose rules remain the only control
