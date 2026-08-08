@@ -605,6 +605,9 @@ class ReplayResult:
     #: Set whenever the spec's fidelity is not `exact`. Its presence is what
     #: stops a diverged run being reported as a reproduction.
     fidelity_caveat: str | None = None
+    #: Whether the runner was able to report instrument health at all. False
+    #: means unknown, not healthy -- see :attr:`BattleRun.health_reported`.
+    health_reported: bool = False
     #: Instrument failures during the replay. NON-EMPTY MEANS THE VERDICT IS NOT
     #: TRUSTWORTHY. The recorder deliberately does not raise into the search --
     #: an instrument must not change the run -- but swallowing without surfacing
@@ -618,8 +621,17 @@ class ReplayResult:
 
     @property
     def trustworthy(self) -> bool:
-        return not self.instrument_errors and not any(
-            record.degraded for record in self.all_records
+        """True only when health was REPORTED and was good.
+
+        The `health_reported` conjunct is the whole point: an empty error list
+        from a runner with no error channel says nothing, and reading it as
+        "healthy" is the same defect as reading an empty record list as
+        NO_REFUSAL.
+        """
+        return (
+            self.health_reported
+            and not self.instrument_errors
+            and not any(record.degraded for record in self.all_records)
         )
 
     @property
@@ -633,6 +645,7 @@ class ReplayResult:
             "record": self.record.to_dict() if self.record else None,
             "all_records": [record.to_dict() for record in self.all_records],
             "fidelity_caveat": self.fidelity_caveat,
+            "health_reported": self.health_reported,
             "instrument_errors": list(self.instrument_errors),
             "runner_notes": list(self.runner_notes),
             "trustworthy": self.trustworthy,
@@ -665,6 +678,17 @@ class BattleRun:
     """
 
     records: tuple[RefusalRecord, ...] = ()
+    #: Whether this runner is CAPABLE of reporting instrument health, i.e. is it
+    #: wired to a recorder at all. Default False, and the coercion of a bare
+    #: iterable leaves it False.
+    #:
+    #: Without it, `trustworthy` said True whenever `instrument_errors` was
+    #: empty -- which is exactly the silence-reads-as-OK shape that produced the
+    #: composition bug above, one level up. A runner that never had an errors
+    #: channel is not evidence that nothing went wrong; it is the absence of
+    #: evidence, and :data:`BattleRunner`'s docstring already promised to treat
+    #: it that way.
+    health_reported: bool = False
     #: Instrument failures. Non-empty blocks the absence verdicts.
     instrument_errors: tuple[str, ...] = ()
     #: Things the runner had to assume. These qualify, they do not invalidate.
@@ -733,6 +757,7 @@ def replay_fallback(spec: ReplaySpec, run_battle: BattleRunner) -> ReplayResult:
     """
     run = _as_battle_run(run_battle(spec))
     records, errors, notes = run.records, run.instrument_errors, run.runner_notes
+    health_reported = run.health_reported
     outcome, record = _classify(spec, records, errors)
     caveat = None
     if spec.fidelity != FIDELITY_EXACT:
@@ -751,6 +776,7 @@ def replay_fallback(spec: ReplaySpec, run_battle: BattleRunner) -> ReplayResult:
         fidelity_caveat=caveat,
         instrument_errors=errors,
         runner_notes=notes,
+        health_reported=health_reported,
     )
 
 
@@ -809,6 +835,11 @@ def format_result(result: ReplayResult) -> str:
         f"  harness={spec.harness} seed={spec.seed} source={spec.source}",
         f"  OUTCOME: {result.outcome.value}",
     ]
+    if not result.health_reported:
+        lines.append(
+            "  HEALTH NOT REPORTED: this runner has no instrument-error channel, "
+            "so the absence of errors is unknown, not clean"
+        )
     if result.instrument_errors:
         lines.append(
             f"  INSTRUMENT_ERROR ({len(result.instrument_errors)}): this verdict "
@@ -1041,6 +1072,7 @@ def rollout_runner(
                 # and an attribute on `run` is lost the moment anyone wraps it.
                 return BattleRun(
                     records=recorder.records,
+                    health_reported=True,
                     instrument_errors=tuple(recorder.errors),
                     runner_notes=tuple(notes),
                     engine_config=config,

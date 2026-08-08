@@ -762,7 +762,9 @@ class TestASwallowedFailureIsNotAFinding:
         assert "not trustworthy" in format_result(result)
 
     def test_a_clean_run_still_reports_no_refusal(self):
-        result = replay_fallback(_spec(), lambda spec: [])
+        result = replay_fallback(
+            _spec(), lambda spec: BattleRun(health_reported=True)
+        )
         assert result.outcome is ReplayOutcome.NO_REFUSAL
         assert result.trustworthy
 
@@ -782,6 +784,7 @@ class TestASwallowedFailureIsNotAFinding:
         def runner(spec):
             return BattleRun(
                 records=(_record(),),
+                health_reported=True,
                 runner_notes=("max_decision_rounds not recorded",),
             )
 
@@ -949,6 +952,43 @@ class TestHealthSurvivesComposition:
         result = replay_fallback(_spec(), lambda spec: [_record()])
         assert result.outcome is ReplayOutcome.REPRODUCED
         assert result.instrument_errors == ()
+        assert not result.health_reported
+        assert not result.trustworthy
+
+    @pytest.mark.parametrize(
+        "wrap",
+        [
+            pytest.param(lambda r: (lambda s: r(s).records), id="unwraps-to-records"),
+            pytest.param(lambda r: (lambda s: list(r(s).records)), id="list"),
+            pytest.param(lambda r: (lambda s: [x for x in r(s).records]), id="listcomp"),
+            pytest.param(lambda r: (lambda s: iter(r(s).records)), id="generator"),
+        ],
+    )
+    def test_a_runner_that_discards_its_health_is_not_called_trustworthy(self, wrap):
+        # Four call shapes that survive `BattleRun` but drop the health with it.
+        # Before `health_reported`, every one of them produced
+        # `trustworthy=True` off an empty error tuple -- silence reading as OK,
+        # the exact pattern this module keeps being bitten by. The verdict
+        # itself is still whatever the records say; only the health claim is
+        # withheld.
+        def healthy(spec):
+            return BattleRun(records=(_record(),), health_reported=True)
+
+        result = replay_fallback(_spec(), wrap(healthy))
+        assert result.outcome is ReplayOutcome.REPRODUCED
+        assert not result.health_reported
+        assert not result.trustworthy
+        assert "HEALTH NOT REPORTED" in format_result(result)
+
+    def test_the_shipped_runner_reports_its_health(self):
+        # ...and the flag is not merely always-False: the real runner sets it.
+        def healthy(spec):
+            return BattleRun(records=(_record(),), health_reported=True)
+
+        result = replay_fallback(_spec(), healthy)
+        assert result.health_reported
+        assert result.trustworthy
+        assert "HEALTH NOT REPORTED" not in format_result(result)
 
 
 class TestRoundFourRegressions:
