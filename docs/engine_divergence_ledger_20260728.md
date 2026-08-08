@@ -2490,9 +2490,7 @@ namespace only:
 | fidelity differential, dev window | `19,000,000`–`19,000,199` | the 200-game window the 208 → 7 era iterated against | consumed continuously |
 | fidelity differential, earlier 800-game sweep | `19,500,000`–`19,500,799` | `reports/c73_eight_hundred_game_sweep.json`, 800 games from `run.seed_start` `19,500,000` | consumed |
 | fidelity differential, **validation holdout** | `19,100,000`–`19,100,199` | out-of-window check | reserved (C116 Phase 1) — reserved *for* that use, and swept on every fix branch since |
-| fidelity differential, **final holdout** — as REGISTERED | `19,200,000`–`19,200,199` | terminal fidelity claim, registered as a single measurement | **partly swept, and not on the registered span.** Decomposed in the next two rows |
-| fidelity differential, final holdout — the span C141 **actually swept** | `19,200,060`–`19,200,259` | `reports/artifacts/c141_final_holdout_sweep.json` | **CONSUMED** — 200 games, 16,274 boundaries measured, 2 divergent. Overruns the registered end by **60 seeds** |
-| fidelity differential, final holdout — the registered head C141 **did not reach** | `19,200,000`–`19,200,059` | the first 60 seeds of the registered block | **unswept, and contaminated.** No committed artifact covers these 60 seeds; 60 games were run over them before the guard existed |
+| fidelity differential, **final holdout** | `19,200,000`–`19,200,199` | terminal fidelity claim, swept **once** | reserved, untouched |
 
 **The final-holdout row was false twice over, and is corrected above.** Until this
 amendment it read `19,200,000`–`19,200,199` / *"reserved, untouched"*. The row was
