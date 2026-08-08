@@ -455,11 +455,23 @@ class CollectCacheMaskMetadataTest(unittest.TestCase):
                     "feature_pack_last_move": True,
                     # Added by #1027 (belief-system narrowing), which turned damage-evidence
                     # conclusions into candidate-set constraints and retired their v4 columns.
-                    # Both default OFF. This dict is an exhaustive equality check on the emitted
-                    # mask set, so a new mask breaks it by design -- the point is that a mask
-                    # cannot be added to the recorded metadata without someone acknowledging it
-                    # here. Acknowledged: these are real switches on `FeatureMasks`
-                    # (`local_showdown.py:1801`), not stray keys.
+                    # Both default OFF, deliberately: narrowing moves NUMERIC_CANDIDATE_SET_COUNT
+                    # and NUMERIC_UNCERTAINTY, frozen positions present in every schema, so ON
+                    # would perturb encodes every existing checkpoint trained against.
+                    #
+                    # This dict is an EXHAUSTIVE equality check, and stays one. A subset check
+                    # would be blind to a mask DISAPPEARING, which is the direction that matters
+                    # for a cache outliving a schema change. `test_feature_mask_consistency.py`
+                    # asserts the same payload shape the same way and #1027 did update it -- this
+                    # test is the one it missed, so loosening here would make the two disagree
+                    # about their own contract.
+                    #
+                    # Acknowledged as real: both are fields on `ObservationFeatureMasks`, read by
+                    # `investment_belief_narrowing_active()` and `item_belief_narrowing_active()`
+                    # in local_showdown. Named rather than line-cited because line numbers rot --
+                    # and the two are NOT interchangeable: the investment one also requires the
+                    # tier2 channel, while the item one gates only on `belief_set_source_enabled()`
+                    # so it is not inert on a k0 arm.
                     "investment_belief_narrowing": False,
                     "item_belief_narrowing": False,
                 },
