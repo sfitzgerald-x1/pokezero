@@ -189,11 +189,22 @@ state = normalize_for_player(
     belief_engine=engine,
     include_turn_merged=True,
 )
+# Snapshot BEFORE encoding. `gen3_category_vocabulary` is cached, so the vocabulary object is
+# shared for the life of the process and `observed_oov_tokens` is a cumulative set: under
+# `pytest tests/` every OOV token any earlier test provoked is already in it. Asserting the
+# absolute set is empty therefore fails on test ORDER rather than on anything this extraction
+# did -- it made `tests/test_token_format_doc.py` error at setUpClass (4 errors) in the full
+# suite while passing standalone.
+#
+# The property actually wanted is unchanged and is still enforced: THIS encode must introduce
+# no OOV token. Comparing the delta says exactly that and nothing about other tests.
+_oov_before = vocab.observed_oov_tokens
 observation = observation_from_player_state(
     state, category_vocab=vocab, spec=spec, dex=dex, feature_masks=masks
 )
 observation.validate(spec)
-assert vocab.observed_oov_tokens == frozenset(), vocab.observed_oov_tokens
+_oov_introduced = vocab.observed_oov_tokens - _oov_before
+assert _oov_introduced == frozenset(), _oov_introduced
 
 
 # ------------------------------------------------------------------------- token dumping
