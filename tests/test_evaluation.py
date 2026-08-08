@@ -5855,9 +5855,13 @@ if __name__ == "__main__":
             # a required minimum of 1 -- and the readiness item failed as
             # `promoted_opponent_pool_too_small`, which reads as a pool-size problem rather than
             # a fixture that cannot be classified. The registry genuinely held 2 entries -- the
-            # `3` in the evidence line is `opponent_pool_size`, the selection CAP
-            # (DEFAULT_MAX_HISTORICAL_OPPONENTS), not a population. Reading it as a count is the
-            # same misreading that made the original diagnosis take three attempts.
+            # `3` in the evidence line is `opponent_pool_size`, the selection CAP -- the
+            # readiness subparser's own `default=3` at `eval_cli.py:584`, NOT
+            # `DEFAULT_MAX_HISTORICAL_OPPONENTS`, which that module never imports. Two
+            # independent 3s that happen to agree and are not coupled: changing the constant
+            # will not move this default. Reading the cap as a count is the misreading that made
+            # the original diagnosis take three attempts, and naming the wrong source for it was
+            # a fourth.
             #
             # Only `first` is load-bearing here: `second` is resolved as the current policy and
             # excluded from the historical pool either way, so reverting it to `{}` still passes.
