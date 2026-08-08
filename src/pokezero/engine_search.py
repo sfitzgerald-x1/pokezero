@@ -1586,17 +1586,38 @@ class EngineMctsPolicy:
     def _absorb_aborted_lossy_subcases(self, error: BaseException) -> None:
         """Count the sub-cases an ABORTED world observed before it died.
 
-        THE MAJORITY CASE, and it used to be the discarded one. A native world that hits
-        an attribution-unsafe branch (or any other mid-search error, or a contained
-        poke-engine panic) returns before its report string is built, so the seam above --
-        which reads that report -- was never reached and every non-refusing diagnostic
-        the world had accumulated was thrown away. Aborts are ~92% of the fallback
-        residue, so `lossy_subcase_renders` described only the clean-completion subset:
-        precisely the subset that does not need diagnosing. #1158 paid for this directly
-        --- its Protect-marker counter reads zero both when the fix never fires and when
-        the fix fires but the world dies at its NEXT unsafe branch, so it answers a
-        narrower question than it was built for (see `events.rs`,
-        `protect_marker_rendered`).
+        THE DISCARDED CASE. A native world that hits an attribution-unsafe branch (or any
+        other mid-search error, or a contained poke-engine panic) returns before its
+        report string is built, so the seam above -- which reads that report -- was never
+        reached and every non-refusing diagnostic the world had accumulated was thrown
+        away. So `lossy_subcase_renders` described only the clean-completion subset:
+        precisely the subset that does not need diagnosing.
+
+        WHAT SHARE OF WORLDS ABORT IS NOT MEASURED, and is deliberately not stated.
+        Earlier revisions of this docstring, of `abort_telemetry.rs`, of `model.rs`, of
+        `tests/test_engine_search.py` and of the gate workflow all said aborts are "~92%
+        of the fallback residue" / "THE MAJORITY CASE". WITHDRAWN: the figure has no
+        source. It appears nowhere on `main`, in no committed artifact and in no prior
+        report -- all six occurrences arrived with this change -- and it is not derivable
+        here either, because the native entry point this seam wraps
+        (`search_batched_multi_encoded`) is behind the crate's `model` cargo feature,
+        which no CI job and no sweep builds, so nothing available to this repository
+        reaches the abort path at all. The committed evidence points the other way: over
+        `docs/audit_artifacts/**/*.json` and `reports/**/*.json` (359 files, 22 with a
+        non-empty `world_failure_reasons`), all 6,144 recorded failures are
+        world-CONSTRUCTION failures -- 5,328 `self_moveset_mismatch`, 416
+        `transform_unexpressible`, 160 `materialization_blocker`, 160
+        `self_request_state_unsupported`, 64 `volatile_unsupported`, 16
+        `encore_move_unknown` -- and exactly ZERO carry the `crate_search:` prefix this
+        seam writes. The defect is categorical and needs no magnitude: an abort discarded
+        EVERY count it had accumulated. Do not reintroduce a percentage without an
+        artifact.
+
+        #1158 paid for this directly: its Protect-marker counter read zero both when the
+        fix never fired and when the fix fired but the world died at its NEXT unsafe
+        branch, so it answered a narrower question than it was built for. That confound is
+        what this method removes on a `model`-feature build; see `events.rs`,
+        `protect_marker_rendered`.
 
         The counts ride on the exception as an ATTRIBUTE, never as text in its message:
         that message becomes the `world_failure_reasons` key, whose bytes are a
@@ -1728,10 +1749,19 @@ class EngineMctsPolicy:
                 # retain the same observability counter at the fallback seam.
                 if "attribution-unsafe renderer branch rejected before" in reason:
                     self.stats.attribution_unsafe_renders += 1
-                # ... and everything ELSE the world observed before it aborted, which
-                # this seam used to discard for ~92% of the residue.
-                self._absorb_aborted_lossy_subcases(error)
+                # RECORD THE FAILURE REASON FIRST. `_absorb_aborted_lossy_subcases` is
+                # written to swallow everything a malformed payload can throw, and its
+                # own docstring says an escape would propagate out of `decide()` -- but
+                # "written to" is not "proven to", and the ordering costs nothing. With
+                # the absorb first, any escape loses this world's `world_failure_reasons`
+                # entry, and those keys are a measurement contract compared across eras:
+                # the fallback would be undercounted rather than merely undiagnosed, so
+                # the failure mode would be a wrong number instead of a missing one.
+                # Reason first, diagnostics second, is strictly fail-safer.
                 self.stats.world_failure_reasons[f"crate_search: {reason}"] += 1
+                # ... and everything ELSE the world observed before it aborted, which
+                # this seam used to discard wholesale.
+                self._absorb_aborted_lossy_subcases(error)
                 return None
             # Invocation-level counters reflect actual compute. A stopped
             # world that is conservatively replayed at full budget counts both

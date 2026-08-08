@@ -889,14 +889,18 @@ jobs:
       # three steps above each document one PR after the other.
       #
       # It holds the abort-path pins added with the sub-case carry: that an ABORTED world
-      # still reports what it observed (the majority case, ~92% of the fallback residue,
-      # which this seam silently discarded), that it is not double-counted, that a payload
-      # of the wrong shape is a no-op rather than a crash inside the handler whose job is
-      # to keep the other worlds alive, and the two CROSS-LANGUAGE pins. Those last two
+      # still reports what it observed (which this seam silently discarded), that it is not
+      # double-counted, that a payload of the wrong shape is a no-op rather than a crash
+      # inside the handler whose job is to keep the other worlds alive, and the two
+      # CROSS-LANGUAGE pins. Those last two
       # matter most here: the Rust unit tests read the attribute name through the crate's
       # own constant, so they are insensitive to a rename by construction, and the Python
-      # pin is the ONLY thing that fails when the two sides drift. Measured: renaming
-      # `ABORT_PAYLOAD_ATTR` in Rust alone leaves all 429 crate tests green.
+      # pin is the ONLY thing that fails when the two sides drift. RE-MEASURED on the
+      # merged tree: changing `ABORT_PAYLOAD_ATTR`'s value in Rust alone leaves all 444
+      # crate tests green (0 failed), and reddens exactly one thing anywhere --
+      # `test_the_crate_and_python_agree_on_the_abort_payload_attribute` in the step
+      # below, 111 of 112. An earlier revision of this comment said 429, a total this
+      # branch never had at any point; the figure is the one the run printed.
       #
       # EXACT count, not a floor, for the reason #1163 gave: a floor was the one fail-open
       # in its mutation battery, and this guard lives in YAML where no local `unittest`
@@ -905,8 +909,8 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          if ! grep -qE 'Ran 112 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 112 engine-search tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 113 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 113 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
@@ -914,7 +918,10 @@ jobs:
             exit 1
           fi
           # Name the abort-path pins. A total is restorable by unrelated tests, and these
-          # five are the only guards that an aborted world reports anything at all.
+          # SEVEN are the only guards that an aborted world reports anything at all.
+          # Counted, not recalled: an earlier revision of this comment said "five" while
+          # listing six, which is the same off-by-one the crate block below records
+          # having made twice.
           #
           # Matched as "declared and RAN", not "... ok". These tests have docstrings, so
           # unittest -v prints the verdict on the FOLLOWING line, and the policy's own
@@ -927,7 +934,8 @@ jobs:
                      test_a_failure_carrying_no_payload_is_a_silent_no_op \
                      test_the_crate_and_python_agree_on_the_abort_payload_attribute \
                      test_the_subcase_key_is_present_in_the_report_even_when_empty \
-                     test_countable_entries_survive_alongside_uncountable_ones; do
+                     test_countable_entries_survive_alongside_uncountable_ones \
+                     test_the_failure_reason_is_recorded_before_the_diagnostics_are_absorbed; do
             grep -qE "^$pin \(.*\)( |\$)" /tmp/enginesearch.log || {
               echo "::error::engine-search abort pin $pin did not run"
               exit 1

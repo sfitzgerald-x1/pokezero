@@ -2373,28 +2373,61 @@ fn render_move_phase(
                             //   many branches carrying the same Protect-blocked tail, so the
                             //   two are NOT commensurable and must not be differenced.
                             //
-                            // * It only survives for worlds whose search COMPLETED.
-                            //   `model.rs` accumulates these counts and then, on any
-                            //   attribution-unsafe branch, `return Err(error)` before the
-                            //   report is built -- the Python seam catches that and salvages
-                            //   only `attribution_unsafe_renders`. So a world that renders
-                            //   the marker and later dies at a DIFFERENT unsafe branch
-                            //   contributes ZERO here, exactly like a world where the marker
-                            //   never fired.
+                            // * IT USED TO SURVIVE ONLY FOR WORLDS WHOSE SEARCH COMPLETED,
+                            //   AND THAT IS NOW LARGELY RETIRED. `model.rs` accumulates
+                            //   these counts and then, on any attribution-unsafe branch,
+                            //   `return Err(error)` before the report is built. The Python
+                            //   seam used to catch that and salvage only
+                            //   `attribution_unsafe_renders`, so a world that rendered the
+                            //   marker and later died at a DIFFERENT unsafe branch
+                            //   contributed ZERO here, exactly like a world where the marker
+                            //   never fired -- which is what made zero unreadable.
                             //
-                            // What it therefore DOES establish is the thing era 63 has to
-                            // know and otherwise cannot: a NONZERO value is direct positive
-                            // evidence that Protect-blocked worlds are being RECLAIMED and
-                            // searched, not merely re-refused one branch later. Zero is
-                            // ambiguous; nonzero is not. That asymmetry is the whole value,
-                            // and it is worth having precisely because the fallback RATE
-                            // cannot supply it: the rate between eras 62 and 63 moves for
-                            // nine commits' worth of reasons, so a fall in it is not
-                            // evidence about #1157. The ASYMMETRY here is. Note the scope --
-                            // only the zero/nonzero bit is robust. The MAGNITUDE is a raw
-                            // volume and moves with search_sims, batch size, decisions and
-                            // games per shard, and the early-stop replay factor, so it must
-                            // not be read as a rate or differenced across eras.
+                            //   The abort-path sub-case carry closes that. The counts live in
+                            //   a `LossySubcaseLedger` owned by the caller
+                            //   (`crate::abort_telemetry`), which attaches it to the aborting
+                            //   exception as a Python attribute, and
+                            //   `EngineMctsPolicy._absorb_aborted_lossy_subcases` folds it
+                            //   into the SAME `lossy_subcase_renders` map the clean path
+                            //   feeds. An attribution-unsafe abort, any other mid-search
+                            //   error, and a contained poke-engine panic all now carry this
+                            //   slug out.
+                            //
+                            //   TWO GAPS REMAIN, so this is "largely" and not "entirely".
+                            //   `model.rs` has six argument-validation and root-parse
+                            //   `return Err`s AHEAD of the ledger's construction and those
+                            //   still attach nothing -- but none of them can have rendered a
+                            //   branch yet, so there is nothing of this kind to lose. The
+                            //   real one: the wiring is behind the crate's `model` cargo
+                            //   feature, which no CI job and no sweep builds, so the carry is
+                            //   exercised by unit tests rather than by any measurement run
+                            //   this repository currently makes.
+                            //
+                            // WHAT THE NUMBER MEANS NOW. A nonzero value is still direct
+                            // positive evidence that Protect-blocked worlds are being
+                            // RECLAIMED and searched rather than re-refused one branch later.
+                            // The change is on the other side: on a `model`-feature build,
+                            // zero is no longer the ambiguous reading it was, because a world
+                            // that rendered the marker and then aborted now reports it
+                            // instead of vanishing. So the old "zero is ambiguous; nonzero is
+                            // not" asymmetry is retired ON THAT PATH and MUST NOT be re-cited
+                            // as a live limitation -- the abort-vs-never-fired confound is
+                            // what #1158 could not distinguish and what this carry exists to
+                            // remove. Zero is still not a proof of absence for ordinary
+                            // reasons (the shard may simply never have reached the arm), and
+                            // on a build WITHOUT the `model` feature the old caveat stands
+                            // unchanged.
+                            //
+                            // The fallback RATE still cannot supply any of this: it moves
+                            // between eras 62 and 63 for nine commits' worth of reasons, so a
+                            // fall in it is not evidence about #1157. Note the scope -- the
+                            // MAGNITUDE is a raw volume and moves with search_sims, batch
+                            // size, decisions and games per shard, and the early-stop replay
+                            // factor, so it must not be read as a rate or differenced across
+                            // eras. That is unaffected by the carry, and the carry ADDS to it:
+                            // aborted worlds now contribute too, so a magnitude measured
+                            // before this change and one measured after are not commensurable
+                            // either.
                             //
                             // `mark_lossy_subcase`, NOT a new lossy tag. It pushes the SAME
                             // `SLEEPTALK_LOSSY_TAG` that the accepting path above already

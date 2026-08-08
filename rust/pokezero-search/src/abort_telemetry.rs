@@ -6,9 +6,29 @@
 //! contained poke-engine panic) it returns `Err` BEFORE the report string is
 //! built. `engine_search.py` catches that error, salvages exactly one number
 //! (`attribution_unsafe_renders`), and everything else the world observed before
-//! it died is discarded. Aborts are the MAJORITY of the fallback residue, so the
-//! sub-case counters only ever described the clean-completion subset -- precisely
-//! the subset that does not need diagnosing.
+//! it died is discarded. So the sub-case counters only ever described the
+//! clean-completion subset -- precisely the subset that does not need diagnosing.
+//!
+//! ON THE SIZE OF THAT SUBSET: NOT MEASURED, deliberately left unquantified.
+//! Earlier revisions of this module, of `model.rs`, of `engine_search.py`, of
+//! `tests/test_engine_search.py` and of the gate workflow all asserted that aborts
+//! are "~92% of the fallback residue" or "the MAJORITY" of it. That figure was
+//! sourced to nothing: it appears nowhere on `main`, in no committed artifact, and
+//! in no prior report -- all six occurrences were introduced by this change. It
+//! could not have been derived here either. This seam lives behind
+//! `search_batched_multi_encoded`, which is `#[cfg(feature = "model")]`, and no CI
+//! job or sweep builds that feature, so no run available to this repository can
+//! reach the abort path at all. What the committed evidence does show points the
+//! other way. Over `docs/audit_artifacts/**/*.json` and `reports/**/*.json` --
+//! 359 files, 22 of them with a non-empty `world_failure_reasons` -- all 6,144
+//! recorded failures are world-CONSTRUCTION failures (5,328
+//! `self_moveset_mismatch`, 416 `transform_unexpressible`, 160
+//! `materialization_blocker`, 160 `self_request_state_unsupported`, 64
+//! `volatile_unsupported`, 16 `encore_move_unknown`) and exactly ZERO carry the
+//! `crate_search:` prefix this seam produces. The defect below does not need a
+//! magnitude to be real -- an abort discards every accumulated count,
+//! categorically -- so it is stated without one. Do not reintroduce a percentage
+//! without an artifact.
 //!
 //! It already cost a concrete result: #1158 added a production counter for the
 //! Protect renderer marker in order to distinguish "the fix fires but worlds die
@@ -499,8 +519,8 @@ mod abort_payload_tests {
 
     /// The helper's other two exits, so the panic arm is not its only driver.
     ///
-    /// A returned `Err` must be attached -- that is the ordinary abort, ~92% of the
-    /// residue -- and a success must pass through with NOTHING attached, because the
+    /// A returned `Err` must be attached -- that is the ordinary abort, as opposed to
+    /// the panic arm -- and a success must pass through with NOTHING attached, because the
     /// clean path carries its counts in the report and attaching there is how the two
     /// channels would begin double-counting.
     ///

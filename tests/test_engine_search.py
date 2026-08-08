@@ -985,11 +985,13 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
 
     # --- diagnostics from ABORTED worlds ------------------------------------------
     #
-    # Aborts are ~92% of the fallback residue, and every one of them used to discard
-    # every diagnostic the world had accumulated: `model.rs` returns Err before the
-    # report string exists, and this seam salvaged exactly one number
-    # (`attribution_unsafe_renders`). So `lossy_subcase_renders` described only the
-    # clean-completion subset -- the subset that does not need diagnosing. #1158 paid
+    # Every abort used to discard every diagnostic the world had accumulated:
+    # `model.rs` returns Err before the report string exists, and this seam salvaged
+    # exactly one number (`attribution_unsafe_renders`). So `lossy_subcase_renders`
+    # described only the clean-completion subset -- the subset that does not need
+    # diagnosing. (What SHARE of worlds abort is not measured; an earlier revision of
+    # this comment said "~92% of the fallback residue" and that figure was withdrawn as
+    # unsourceable. See the `abort_telemetry` module header.) #1158 paid
     # for it: its Protect-marker counter reads zero both when the fix never fires and
     # when the fix fires but the world dies at its NEXT unsafe branch.
 
@@ -1160,6 +1162,43 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
             4,
         )
         self.assertEqual(sum(policy.stats.lossy_subcase_renders.values()), 4)
+
+    def test_the_failure_reason_is_recorded_before_the_diagnostics_are_absorbed(
+        self,
+    ) -> None:
+        """ORDERING, and the reason it is an ordering and not a preference.
+
+        `_absorb_aborted_lossy_subcases` is written to swallow everything a malformed
+        payload can throw, and the tests above exercise the shapes that were measured to
+        throw. But "written to" is not "proven to": the payload comes off an arbitrary
+        caught exception, so the set of shapes is open, and the method's own docstring
+        records that an escape propagates straight out of `decide()`.
+
+        If the absorb runs FIRST, an escape takes the world's `world_failure_reasons`
+        entry with it. Those keys are a measurement contract compared across eras, so the
+        fallback would be UNDERCOUNTED -- a wrong number -- rather than merely
+        undiagnosed. Recording the reason first makes the worst case a missing diagnostic.
+
+        Driven by an absorb that is FORCED to raise, because a test over a payload shape
+        that happens to be handled would pass under either ordering and pin nothing.
+        """
+
+        policy = self._policy(early_stop=False)
+        message = "attribution-unsafe renderer branch rejected before tree/model fold: x"
+
+        def _explode(_error: BaseException) -> None:
+            raise RuntimeError("absorb blew up on an unforeseen payload shape")
+
+        policy._absorb_aborted_lossy_subcases = _explode  # type: ignore[method-assign]
+
+        with self.assertRaises(RuntimeError):
+            self._abort(policy, self._aborting_error(message, {"whatever": 1}))
+
+        # The reason survived the escape. Under the other ordering this is empty.
+        self.assertEqual(
+            list(policy.stats.world_failure_reasons), [f"crate_search: {message}"]
+        )
+        self.assertEqual(policy.stats.attribution_unsafe_renders, 1)
 
     # --- telemetry counting (model path) ------------------------------------------
     #
@@ -2443,8 +2482,8 @@ class FallbackAddressTests(unittest.TestCase):
     def test_the_crate_and_python_agree_on_the_abort_payload_attribute(self) -> None:
         """The ABORT arm's spelling, pinned exactly like the report key's above.
 
-        The report key covers only worlds whose search COMPLETED. Aborts are ~92% of the
-        residue and carry their counts on an exception ATTRIBUTE instead; that name is a
+        The report key covers only worlds whose search COMPLETED. Aborts carry their
+        counts on an exception ATTRIBUTE instead; that name is a
         second, independent cross-language contract with the identical failure mode -- a
         rename on either side leaves the abort arm reading zero forever, no test fails,
         and the class goes back to describing the clean subset only.

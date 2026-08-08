@@ -752,9 +752,10 @@ impl Drop for PhaseTimer<'_> {
 /// point of it. Renders that are counted rather than refused accumulate branch by
 /// branch, but every error exit below (`return Err`, every `?`, and a contained
 /// poke-engine panic, which unwinds past this frame entirely) leaves without
-/// building the report string that used to be their only carrier. Aborts are the
-/// MAJORITY of the fallback residue, so an accumulator owned by THIS function
-/// described only the clean-completion subset. The caller keeps it alive across the
+/// building the report string that used to be their only carrier. So an accumulator
+/// owned by THIS function described only the clean-completion subset -- categorically,
+/// whatever share of worlds abort, which is NOT measured; see the module header of
+/// `crate::abort_telemetry`. The caller keeps it alive across the
 /// error boundary and attaches it to the aborting exception
 /// (`crate::abort_telemetry`).
 fn multiply_batched_encoded_core<E: BatchLeafEval>(
@@ -1707,8 +1708,10 @@ impl NativeLeafModel {
             // Count carrying: the ledger accumulates branch by branch and the search
             // returns Err before the report string exists on any abort -- an
             // attribution-unsafe branch, any `?` in the round loop, or a contained
-            // panic. Aborts are the majority of the residue, so those counts used to be
-            // discarded wholesale. They are attached to the aborting exception as an
+            // panic. Every one of those counts used to be discarded wholesale -- for
+            // however large a share of worlds abort, which is not measured
+            // (`crate::abort_telemetry` module header). They are attached to the
+            // aborting exception as an
             // ATTRIBUTE, never as text in its message: that message becomes the
             // `world_failure_reasons` key and its bytes are compared across eras.
             //
