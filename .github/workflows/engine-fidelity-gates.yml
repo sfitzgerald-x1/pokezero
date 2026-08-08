@@ -1241,6 +1241,60 @@ jobs:
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check
 
+  # The seed registry, re-derived from the committed artifacts.
+  #
+  # DELIBERATELY NOT BEHIND THE `changes` FILTER, and deliberately not a step inside
+  # `mass-gate`. Two reasons, both concrete:
+  #
+  #   1. Its only real input is `docs/engine_divergence_ledger_20260728.md` plus every
+  #      committed JSON under `reports/` and `docs/`. Putting the ledger in the FILTERS
+  #      list would fire the 60-minute engine build on every prose edit to a 5,000-line
+  #      document, which is the surest way to get the filter narrowed again later.
+  #      Leaving it out would let a PR that edits only the ledger -- which is exactly
+  #      how the false final-holdout row got in -- skip the pin entirely.
+  #   2. It imports nothing but the standard library, on purpose: no `poke_engine`, no
+  #      Showdown checkout, no numpy. So it costs a checkout and 0.3 s, and it can run
+  #      unconditionally without the "skips when the wheel is absent" failure this
+  #      workflow's header forbids.
+  #
+  # What it pins: `tests/test_seed_registry_coverage.py`. Every fidelity seed
+  # (`19,000,000`+) in the committed record lies inside a band the ledger's seed
+  # registry records, and every band the registry records has a committed witness. At
+  # `553cf2c3` the registry said the final-holdout block was "reserved, untouched"
+  # while `reports/artifacts/c141_final_holdout_sweep.json` had swept 200 games of it,
+  # and said the swept span was `19,200,000`-`19,200,199` when it was
+  # `19,200,060`-`19,200,259`. Nothing parsed the table, so both stood.
+  seed-registry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Seed registry coverage
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_seed_registry_coverage -v 2>&1 \
+            | tee /tmp/seedregistry.log
+          # EXACT, not a floor, for the reason #1163 established: a floor was the one
+          # fail-open in its mutation battery. Note this guard lives in YAML and no
+          # local `unittest` or `pytest` run can see it -- a module that grows without
+          # its count following is how an approved PR reached CI red here before.
+          if ! grep -qE 'Ran 27 tests' /tmp/seedregistry.log; then
+            echo "::error::expected 27 seed-registry pins; the suite shrank or grew"
+            exit 1
+          fi
+          # A clean OK with no skips. `TheSelectorItselfIsExercisedTests` and the two
+          # corpus anti-vacuity pins are the only reason the coverage assertions mean
+          # anything: skip them and every "no seed escapes its band" claim goes vacuous.
+          if ! grep -qE '^OK$' /tmp/seedregistry.log; then
+            echo "::error::seed-registry pins did not report a clean OK (skip or failure)"
+            exit 1
+          fi
+
   # THE REQUIRED CHECK. Runs on every pull request, whatever it touches, so it can
   # always report. It is the only job in this workflow that should ever be marked
   # required in branch protection -- requiring `mass-gate` directly would block any
