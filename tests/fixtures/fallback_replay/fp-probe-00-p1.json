@@ -1,0 +1,58 @@
+{
+  "belief_set_source": false,
+  "capture_driver": "checkpoint",
+  "checkpoint": "checkpoints/trimmed.pt",
+  "checkpoint_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "engine_mcts": {
+    "batch": 64,
+    "decisions": 417,
+    "depth": 4,
+    "fallback_decisions": 1,
+    "opponent_priors": false,
+    "policy_stats": {
+      "fallback_sample_addresses_dropped": 0,
+      "fallback_samples": {
+        "crate_search: attribution-unsafe renderer branch rejected before tree/model fold: sleeptalk_called_unidentified:ambiguous_unrenderable:heal_zero_marker": [
+          {
+            "battle_id": "battle-gen3randombattle-controlled-8220001",
+            "reason": "crate_search_failed",
+            "round": 103,
+            "seat": "p1"
+          }
+        ]
+      }
+    },
+    "sims": 1024,
+    "worlds": 8
+  },
+  "format_id": "gen3randombattle",
+  "foulplay_player": "p2",
+  "foulplay_random_seed": 8220000,
+  "foulplay_random_seed_schedule": {
+    "count": 8,
+    "first_seed": 8220000,
+    "last_seed": 8220007,
+    "mode": "per_game_incrementing",
+    "seeds": [
+      8220000,
+      8220001,
+      8220002,
+      8220003,
+      8220004,
+      8220005,
+      8220006,
+      8220007
+    ]
+  },
+  "games": 8,
+  "max_decision_rounds": 250,
+  "opponent_policy_id": "foul-play",
+  "pokezero_player": "p1",
+  "policy_id": "foundation-midscale-iter-3219+engine-mcts-d4-s1024",
+  "policy_mode": "engine-mcts",
+  "root_puct": {
+    "foulplay_search_time_ms": 1000
+  },
+  "schema_version": "pokezero.controlled-foulplay-benchmark.v1",
+  "seed_start": 8220000
+}
