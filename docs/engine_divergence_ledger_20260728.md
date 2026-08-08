@@ -2493,59 +2493,128 @@ namespace only:
 | fidelity differential, **final holdout** — as REGISTERED | `19,200,000`–`19,200,199` | terminal fidelity claim, registered as a single measurement | **partly swept, and not on the registered span.** Decomposed in the next two rows |
 | fidelity differential, final holdout — the span C141 **actually swept** | `19,200,060`–`19,200,259` | `reports/artifacts/c141_final_holdout_sweep.json` | **CONSUMED** — 200 games, 16,274 boundaries measured, 2 divergent. Overruns the registered end by **60 seeds** |
 | fidelity differential, final holdout — the registered head C141 **did not reach** | `19,200,000`–`19,200,059` | the first 60 seeds of the registered block | **unswept, and contaminated.** No committed artifact covers these 60 seeds; 60 games were run over them before the guard existed |
-| fidelity differential, final holdout — C151 **PROPOSED replacement window** | `19,400,000`–`19,400,199` | a re-registration of the terminal one-shot measurement on virgin seeds, because the `19,200,000` block has none left | **PROPOSED, NOT RATIFIED. Unswept, and no sweep is authorised by this row.** `reports/c151_final_holdout_rereg_prediction.md` is UNREGISTERED and unfrozen. Nothing may run here until the owner ratifies it in writing |
+| fidelity differential, final holdout — C151 **RATIFIED replacement window** | `19,300,000`–`19,300,199` | the terminal one-shot measurement, re-registered on virgin seeds because the `19,200,000` block is burned | **RATIFIED (owner scott, 2026-08-08) and NOT YET SWEPT.** One sweep, ever, and only once the precondition holds: ledger terminal and engine fingerprint declared frozen for the claim. `reports/c151_final_holdout_rereg_prediction.md` is frozen as to window, protocol and preconditions; the trigger has not fired |
 
-**The row above proposes; it does not authorise, and it is not a blessing.** C151 adds it,
-and adds nothing else to this table. The three rows that decompose the `19,200,000` block
-are #1189's and are untouched — they were deliberately silent on whether a future sweep is
-permitted, and that silence is preserved rather than resolved here.
+**C151 — the owner ratified a replacement window, burned the old block, and deferred the
+sweep.** Ratified **2026-08-08** by **scott**, in these words:
 
-What the proposed row records, and the whole of it:
+> *"Ratified: final holdout re-registered as 19,300,000–19,300,199, one sweep ever, to run
+> only after the ledger is terminal and the engine fingerprint is frozen; old block burned
+> in the guard; c141 demoted to dev evidence; nonzero-result protocol pre-registered per
+> plan."*
 
-* **The `19,200,000` block has no virgin seeds left.** `19,200,000`–`19,200,059` is
-  contaminated by the pre-guard 60-game loop, `19,200,060`–`19,200,199` was consumed by
-  C141, and C141 additionally overran to `19,200,259`. So a fresh terminal window cannot be
-  a *replacement span inside* the registered block; it is a **re-registration of the
-  final-holdout namespace on a new block**, which is materially more than "sweep a new set
-  of seeds" was asked to bless. That is why this row is proposed rather than ratified.
-* **`19,400,000`–`19,400,199` is virgin**, and the scope of that word is the scan that
-  produced it: the shape-agnostic extractor `_seed_intervals` from
-  `tests/test_seed_registry_coverage.py`, run over **every** `*.json` blob under `reports/`
-  or `docs/` reachable from **every ref and the reflog** (`git rev-list --objects --all
-  --reflog`) — 900 distinct blobs, 145 of which reach fidelity seed space — plus a raw
-  regex pass for seed-shaped tokens in `19,200,260`–`19,999,999` over **all 8,499 blobs** in
-  the same ref set, any path and any file type. The union of every fidelity seed ever
-  touched in any ref is exactly the four bands already in this table. One blob does not
-  parse — a conflict-marker intermediate of
-  `reports/c102_consumed_choice_double_mutation.json`, reachable only from the reflog — and
-  it was read by hand: the only seeds in it are `19000038` and `19000113`, both in the dev
-  band.
-* **Why this block and not `19,300,000`.** `scripts/engine_transition_differential.py:3531`
-  already spends the number `19,300,000` in prose, as the canonical typo the unbounded
-  guard floor exists to catch. Registering it as a real window would make that comment read
-  backwards and would require editing the guard file. `19,400,000` follows the same
-  one-purpose-per-`19,X00,000`-block convention this table already uses, sits inside
-  `#1122`'s guarded half-line so it is unreachable without `--final-holdout-i-mean-it`, and
-  keeps 199,741 seeds of clearance from C141's true end and 99,801 from `c73`'s start — so a
-  C141-scale 60-seed overrun in either direction cannot reach a consumed band.
-* **It is deliberately absent from `REGISTERED_BANDS`** in
-  `tests/test_seed_registry_coverage.py`. That tuple's own rule is that a band joins it only
-  after the sweep that fills it is committed; adding an unwitnessed band would fail
-  `test_every_registered_band_has_a_committed_witness`. `TheProposedC151WindowIsNotRatifiedTests`
-  in that module pins the proposal's *unratified* state instead, and pins the window's
-  virginity against the live corpus, so the row cannot quietly become a ratification and
-  cannot quietly stop being true.
-* **What executing would cost is stated in the prediction document, not here**, under
-  "What executing would cost and forfeit". In short: it re-registers a one-shot namespace,
-  it is irreversible, and it must be the last time.
-* **C141's artifact stays exactly where it is.**
-  `reports/artifacts/c141_final_holdout_sweep.json`, its replay, and
-  `reports/c141_final_holdout_prediction.md` are a **superseded, unratified measurement** —
-  superseded because it measured engine fingerprint `44ee1430708cbb55` / 71 patches and
-  `main` now ships `8e912b45544034e6` / 74. They are **not to be deleted**, and the two
-  bands they witness stay in this table and in `REGISTERED_BANDS`: deleting them would break
-  `test_every_registered_band_has_a_committed_witness` and would erase the record of what
-  the seeds were spent on, which is the only thing that makes them legibly spent.
+C151 adds **one** row to this table, the one above. The three rows that decompose the
+`19,200,000` block are #1189's and are untouched — they were deliberately silent on whether
+a future sweep is permitted, and the disposition is recorded here rather than by rewriting
+them.
+
+**The `19,200,000`–`19,200,259` block is BURNED, and no part of it is salvageable.** Three
+independent reasons, and the guard now refuses the whole span:
+
+* `19,200,000`–`19,200,059` is **contaminated** — executed by the pre-guard convenience
+  loop, disclosed at the time, JSON deleted unread.
+* `19,200,060`–`19,200,199` was swept by C141 on a window the executing agent
+  **chose it itself** rather than deferring to the owner. Its own pre-registration says *"chosen by me
+  rather than deferred"*, and the disclosure below explicitly left the disposition to the
+  owner and recorded *"I have **not** chosen"*. An adversarial audit ruled the self-blessing
+  defeats the terminal claim.
+* `19,200,200`–`19,200,259` was consumed by that same run, which **overran** its
+  registration by 60 seeds.
+
+Enforced, not merely stated: `_reject_burned_final_holdout` in
+`scripts/engine_transition_differential.py` refuses that span **unconditionally**, at
+execution and at `--merge-from` aggregation.
+`--final-holdout-i-mean-it` **does not open it** — a flag that can reopen a burned block is
+a flag that will reopen it. Pinned by
+`TheBurnedBlockAndTheOwnerRatificationTests` in `tests/test_final_holdout_guard.py`,
+including end-to-end through `main()` with the opt-in passed.
+
+**The vanished disclosure is RECOVERED, and it is now committed.** The ledger previously
+recorded that `reports/rust-fidelity/final_holdout_contamination_disclosure.md` — the sole
+justification for C141 narrowing its window — existed in **no tree in this repository's
+history**, and correctly guessed the cause: a dropped `agents/` prefix, since `5a44c04e`'s
+commit message gives the path as `agents/reports/rust-fidelity/…` and marks it *"outside
+this repo"*. It was found there, on disk, unmodified since it was written, and is committed
+verbatim at the path the frozen C141 citation names, so that citation now resolves.
+Provenance, so a reader can check rather than trust:
+
+| item | value |
+|---|---|
+| recovered from | `agents/reports/rust-fidelity/final_holdout_contamination_disclosure.md`, outside this repository |
+| sha256 | `a749c698ec7ac38d6a9709627836761ad548ad11cc8b1748c1eea83f19ff650e` |
+| birth and mtime | both `2026-08-05 20:03:30`, i.e. never modified after writing |
+| corroboration | `5a44c04e` (#1122) landed `2026-08-05 22:20:36`, **2h17m later**, cites the path, and reproduces the loop `for start in 19100000 19000000 19200000` verbatim from it |
+| corroboration | the disclosure files the guard as *"owed work"*; #1122 is that work |
+| corroboration | the A12 probe it describes is `agents/reports/rust-fidelity/a12_candidate_residuals_skipped_on_move_faint.md`, written `2026-08-06` |
+
+**What the recovered document changes, and what it does not.** It converts the 60-seed
+contamination from testimony into a dated, self-reported record with a corroborating commit
+two hours later — so that span no longer *"rests on testimony alone"*, and the earlier note
+in this section saying the path exists nowhere is superseded by this one rather than
+deleted. What it does **not** do is make the seeds re-measurable: the disclosure itself says
+*"'I didn't look at the number' is mitigation, not absolution"*. It also **strengthens** the
+audit's finding, because it lists three dispositions — shift the window, declare and
+proceed, or *"retire the range, reserve a fresh window entirely (`19,300,000+`)"* — and
+states *"I have **not** chosen. Until the owner decides…"*. C141 then took the first option
+without the owner deciding. The owner has now taken the third, at the seed block the
+disclosure itself named.
+
+**C141 is DEMOTED, not deleted.** `reports/artifacts/c141_final_holdout_sweep.json`, its
+replay, and `reports/c141_final_holdout_prediction.md` are now **dev-window evidence**: 200
+then-fresh seeds, a 71-patch engine at `44ee1430708cbb55`, a self-chosen window. They are
+ordinary development evidence and **terminal for nothing**. They must never be re-cited as
+"the holdout result". They stay committed for three reasons: they are the only witness for
+two of the four bands in `REGISTERED_BANDS`, so deleting them turns
+`test_every_registered_band_has_a_committed_witness` red; they are the record of what those
+seeds were spent on, and a spent band with no artifact reads as a virgin band; and a
+superseded measurement that is retained and relabelled is the difference between a program
+that corrects itself and one that edits its history.
+
+**Why `19,300,000`, and the collision that had to be resolved.** The owner's reasoning is
+that `19,2xx` is now a graveyard namespace and adjacency invites off-by-N archaeology
+forever, so the replacement should be visibly distinct from everything touched.
+`scripts/engine_transition_differential.py` previously spent the literal `19,300,000` in
+prose, as the canonical typo the unbounded floor exists to catch; an illustration that names
+the real target reads backwards, so C151 moved the exemplar to **`19,700,000`**, which is
+absent from every blob in the object database, reachable and unreachable alike.
+
+**`19,300,000`–`19,300,199` is virgin, and the scope of that word is the scan that produced
+it.** Three passes, all over **every ref and the reflog**, not over `main`:
+
+1. the shape-agnostic `_seed_intervals` extractor from
+   `tests/test_seed_registry_coverage.py` over every `*.json` blob under `reports/` or
+   `docs/` reachable from `git rev-list --objects --all --reflog` — **900** blobs, **145**
+   reaching fidelity seed space. The union of every fidelity seed ever touched is exactly
+   the four bands already in this table, and it does not intersect the window;
+2. a boundary-correct whole-number token pass over **all 8,507 reachable blobs**, any path
+   and any file type;
+3. the same pass over **every object in the database** — `git cat-file
+   --batch-all-objects`, **23,719** objects of which **8,742** are blobs, **235** of them
+   unreachable. The only blobs carrying a value inside the window are C151's own and the old
+   revisions of the guard comment that C151 moves.
+
+One blob does not parse — a conflict-marker intermediate of
+`reports/c102_consumed_choice_double_mutation.json`, reachable only from the reflog. An
+unparseable blob makes a "nothing here" claim *easier*, so it was read by hand: the only
+seeds in it are `19000038` and `19000113`, both in the dev band.
+
+**Ratified is not swept, and the row above must not be read as permission to run today.**
+The sweep's trigger is a precondition on the program state, not a date: **the ledger must be
+terminal and the engine fingerprint declared frozen for the claim.** C116 already places
+item 13 last. The reasoning is C141's own failure mode generalised — it measured
+`44ee1430708cbb55` / 71 patches while patches were still landing weekly, on a program whose
+job is landing patches, and `main` now ships `8e912b45544034e6` / 74. A sweep taken today
+buys an unbiased measurement of a fingerprint that is superseded within days. Registration
+must predate any result by construction; execution must not.
+
+**The band is deliberately absent from `REGISTERED_BANDS`** in
+`tests/test_seed_registry_coverage.py`. That tuple's rule is that a band joins it only once
+the sweep that fills it is committed, and **ratification is not a witness**.
+`TheRatifiedC151WindowIsNotYetSweptTests` pins the unswept state and re-derives the window's
+virginity from the live corpus, so the row cannot quietly become a measurement and cannot
+quietly stop being true. `OWNER_RATIFIED` in the guard carries the window and the owner's
+name, so a future change to either is a diff requiring review — the point being to convert
+the blessing from a sentence an agent can walk past into a mechanical check.
 
 **The final-holdout row was false twice over, and is corrected above.** Until this
 amendment it read `19,200,000`–`19,200,199` / *"reserved, untouched"*. The row was

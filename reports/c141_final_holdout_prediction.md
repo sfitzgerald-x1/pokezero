@@ -366,3 +366,48 @@ enforced by `tests/test_seed_registry_coverage.py`.
 
 **Neither row may be fixed against this window.** Both were diagnosed on generated
 boundaries and retained-state replays, which is not a re-measurement.
+
+---
+
+# DEMOTED 2026-08-08 (C151) — this is DEV-WINDOW EVIDENCE, terminal for nothing
+
+Appended, not edited. Lines 1–80 above remain byte-identical to `3687d205`, which is the
+only property that makes the pre-registration auditable, and the outcome sections below
+them are the record of what was measured. Nothing in either is withdrawn. What changes is
+the **status of the result**, and it is recorded here so this document can never be
+re-cited as "the holdout result".
+
+**This sweep is now ordinary development evidence:** 200 then-fresh seeds, a 71-patch
+engine at `44ee1430708cbb55`, and a window the executing agent chose itself. It is
+**terminal for nothing** — it does not close C116 Phase 4 item 13, and no claim about the
+shipping engine may rest on it.
+
+Three reasons, each checkable:
+
+1. **The window was self-blessed.** The pre-registration says so at `:16` — *"chosen by me
+   rather than deferred"*. The disclosure it cites, now recovered and committed at
+   `reports/rust-fidelity/final_holdout_contamination_disclosure.md`, lists three
+   dispositions for the contaminated 60 and records *"I have **not** chosen. Until the
+   owner decides, I am treating all of `19,200,000+` as still reserved and will not touch
+   it again."* This sweep took the first of those dispositions without the owner deciding.
+   An adversarial audit ruled that this defeats completion.
+2. **The engine it measured no longer ships.** `44ee1430708cbb55` / 71 patches, verified at
+   `3687d205`, `16857e06` and `aa2f2d40`. `main` `2acd40ff` is `8e912b45544034e6` / 74:
+   the Attract marker, the Sleep Talk double-reset guard and the Leech Seed band split
+   landed afterwards, and the search crate's sources moved with them.
+3. **The seeds are burned.** `19,200,000`–`19,200,259` is refused unconditionally by
+   `_reject_burned_final_holdout`; `--final-holdout-i-mean-it` does not open it. So this
+   result cannot be refreshed on its own window, by anyone, ever.
+
+**Retained deliberately, and not to be deleted.** This document and
+`reports/artifacts/c141_final_holdout_{sweep,replay}.json` are the only committed witness
+for two of the four bands in `REGISTERED_BANDS`, so deleting them turns
+`test_every_registered_band_has_a_committed_witness` red; they are the record of what those
+seeds were spent on, and a spent band with no artifact reads as a virgin band. Everything
+this sweep found remains true as a measurement of `44ee1430708cbb55` on those 200 seeds —
+in particular the G8 row `19200244/115`, which is still open and is still the second
+confirmed instance of that gap.
+
+The terminal measurement is re-registered at **`19,300,000`–`19,300,199`**, ratified by the
+owner (scott, 2026-08-08), unswept, and pre-registered in
+`reports/c151_final_holdout_rereg_prediction.md`.
