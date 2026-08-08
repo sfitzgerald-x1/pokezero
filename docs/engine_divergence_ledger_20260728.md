@@ -2496,14 +2496,22 @@ namespace only:
 
 **The final-holdout row was false twice over, and is corrected above.** Until this
 amendment it read `19,200,000`–`19,200,199` / *"reserved, untouched"*. The row was
-written at `785e28e9` (#1071, 2026-08-04), when both halves were true; C141's sweep
-landed at `aa2f2d40` (2026-08-07) and falsified both, and nothing here moved:
+written at `785e28e9` (#1071, 2026-08-04 11:03); C141's sweep landed at `aa2f2d40`
+(2026-08-07 03:00) and falsified it, and nothing here moved:
 
-* *"Untouched"* was false from `aa2f2d40` onward.
-  `reports/artifacts/c141_final_holdout_sweep.json` is committed and records
-  `seeds.min` `19,200,060`, `seeds.max` `19,200,259`, 200 distinct seeds,
+* *"Untouched"* was false **at the latest** from `aa2f2d40`, and the record does not
+  fix an earlier bound. `reports/artifacts/c141_final_holdout_sweep.json` is committed
+  and records `seeds.min` `19,200,060`, `seeds.max` `19,200,259`, 200 distinct seeds,
   **16,274 boundaries measured**, 16,268 matched, 2 divergent,
   `acceptance_eligible: true`. Read the artifact, not this sentence.
+  **It may have been false from the moment it was written.** The pre-guard 60-game run
+  on `19,200,000`–`19,200,059` is datable in this repository only as *"before the
+  `#1122` guard existed"*, and `#1122` is `5a44c04e`, **2026-08-05 22:20 — a day after
+  the row**. Nothing narrows it further: there is no C-entry for the run, no committed
+  sibling artifact (`distinct == 60` matches only `c26`, `c27` and `c6`, all far below
+  the fidelity floor), and no `git log -S` hit. So "the row was true when written" is
+  *not* something this record supports, and an earlier draft of this note asserted it
+  anyway. What is established is the ordering of the two commits above.
 * The recorded span stopped describing anything that happened. C141 chose its window
   to skip the contaminated head, so the sweep starts 60 seeds *inside* the
   registration and ends 60 seeds *past* it: `19,200,000`–`19,200,059` was never
@@ -2518,12 +2526,18 @@ convenience shell loop over three `--seed-start` values executed 60 games of
 `19,200,000`–`19,200,059` before the `#1122` guard existed, that the JSON was
 **deleted unread**, and cites
 `reports/rust-fidelity/final_holdout_contamination_disclosure.md` as an external
-record. That path exists in **no blob in this repository's history** — checked with
-`git rev-list --objects --all`, 21,990 object paths across all refs, zero matches
-for `contamination` or `rust-fidelity`. This is a statement about auditability, not
-about intent: from inside this repository the contamination is attested only by the
-prose above and by `tests/test_final_holdout_guard.py`, whose module docstring
-records the same incident and whose pins now prevent a repeat. Nothing here says
+record. That path exists in **no tree in this repository's history** — checked with
+`git rev-list --objects --all --reflog`, whose 22,000-odd lines name **1,487 distinct
+paths** across every ref and reflog, zero of them matching `contamination` or
+`rust-fidelity`. (The line count is not the path count; most lines are commits and
+trees, and most named blobs repeat. The negative holds on either denominator.)
+**The path is very likely a dropped prefix rather than a missing file**: `5a44c04e`'s
+own commit message gives it as `agents/reports/rust-fidelity/…` and marks it *"outside
+this repo"*, so the prediction file's in-repo-looking spelling points at an external
+tree. That resolves the *intent* and changes nothing about the *auditability*: from
+inside this repository the contamination is attested only by the prose above and by
+`tests/test_final_holdout_guard.py`, whose module docstring records the same incident
+and whose pins now prevent a repeat. Nothing here says
 whether those 60 seeds, or the unswept head generally, may be swept again — that is
 an open owner decision and this table does not pre-empt it in either direction.
 
@@ -2539,10 +2553,14 @@ directory **up** in `reports/`, and records `run.seed_start` + `run.games` with 
 
 | shape | example |
 | --- | --- |
-| `seeds.min` / `seeds.max` | every `reports/artifacts/*_sweep.json` |
+| `seeds.min` / `seeds.max` | 80 files under `reports/artifacts/`, 15 directly under `reports/` (16 counting any nested `min`/`max`), 0 under `docs/` |
 | `run.seed_start` + `run.games` | `reports/c72_fresh_local_sweep.json`, `reports/c73_eight_hundred_game_sweep.json` |
-| `sample.seed_start` + `sample.seed_end` | `reports/c82_head_era_fresh_sweep.json`, `c83`, `c86` |
+| `sample.seed_start`, closed by `sample.seed_end` **or** by `sample.games` | `reports/c82_head_era_fresh_sweep.json` carries `seed_end`; `c83` and `c86` carry only `games` |
 | `windows.{dev,holdout}.seed_start` + `games` | `reports/artifacts/c147_g33b_gate_reach.json` |
+
+Note the third row: a span whose end must be *computed* from a game count is still a
+span, and three of these files never state their last seed at all. A scanner that
+reads only explicit endpoints under-reports consumed space.
 
 Scan `reports/` **and** `docs/`, recursively, and do not key on a shape. The
 enforced version is `tests/test_seed_registry_coverage.py`, which walks every
@@ -2552,6 +2570,15 @@ band recorded above, and every band recorded above has a committed witness. It
 deliberately asserts nothing about the *status words* in this table — the validation
 holdout row is the counterexample that kills the obvious rule, being both "reserved"
 and swept on every fix branch.
+
+**What that pin does NOT cover, so nobody reads it as covering it.** It enforces
+*containment* — that no committed seed escapes a registered band — and nothing about
+*multiplicity*. A second sweep of `19,200,060`–`19,200,259` would sit inside a
+registered band and pass every assertion in the module. The "exactly one measurement"
+invariant below is `#1122`'s job, enforced at run time by
+`_reject_unguarded_final_holdout` in `scripts/engine_transition_differential.py` and
+pinned by `tests/test_final_holdout_guard.py`; this pin is the record-keeping half,
+not the enforcement half.
 
 **The invariant, restated against the ACTIVE registration.** If a future reader
 finds seeds in a registered acceptance band that Appendix Z12 does not account for

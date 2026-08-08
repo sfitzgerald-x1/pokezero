@@ -1264,6 +1264,18 @@ jobs:
   # while `reports/artifacts/c141_final_holdout_sweep.json` had swept 200 games of it,
   # and said the swept span was `19,200,000`-`19,200,199` when it was
   # `19,200,060`-`19,200,259`. Nothing parsed the table, so both stood.
+  #
+  # Its result is consumed by `gate-status` below, which is the only required context.
+  # Running unconditionally is what makes the job unskippable; being in `gate-status`'s
+  # `needs` is what makes it matter. The first revision had the first without the
+  # second and was therefore advisory -- see the note on `gate-status`.
+  #
+  # `tests/test_seed_registry_coverage.py` is intentionally absent from the FILTERS
+  # list above, and that is not the omission it looks like. Everything in that list is
+  # there so a PR weakening a pin still trips `mass-gate`; this pin does not run in
+  # `mass-gate` at all, and its own job has no filter, so a PR that weakens it runs it
+  # by construction. Adding it to FILTERS would only start the engine build for a
+  # module that does not use the engine.
   seed-registry:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1283,8 +1295,11 @@ jobs:
           # fail-open in its mutation battery. Note this guard lives in YAML and no
           # local `unittest` or `pytest` run can see it -- a module that grows without
           # its count following is how an approved PR reached CI red here before.
-          if ! grep -qE 'Ran 27 tests' /tmp/seedregistry.log; then
-            echo "::error::expected 27 seed-registry pins; the suite shrank or grew"
+          # 27 -> 30 on review: the three pins that hold `_load_or_die` to raising
+          # rather than swallowing a decode error, which is the fail-open the sibling
+          # census removed and this module briefly reintroduced.
+          if ! grep -qE 'Ran 30 tests' /tmp/seedregistry.log; then
+            echo "::error::expected 30 seed-registry pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. `TheSelectorItselfIsExercisedTests` and the two
@@ -1304,8 +1319,18 @@ jobs:
   # Passes only on success or on a deliberate skip. `if: always()` is load-bearing:
   # without it this job inherits the skip and stops reporting, restoring exactly the
   # hole it exists to close.
+  #
+  # `seed-registry` IS IN `needs`, and that is not decoration. Branch protection
+  # requires exactly one context -- this one -- so a job absent from this list runs,
+  # goes red, and changes nothing: branch protection is satisfied by a green
+  # `gate-status` that never looked at it. The first revision of the seed-registry job
+  # had precisely that shape, and it was observed live: `seed-registry pass 8s` beside
+  # `gate-status pass 3s`, the reporter returning before the job it was meant to
+  # report on could have mattered. That is the four-inert-pins hazard one level up --
+  # the job executes, the guard fires, and nothing depends on the result. Any job
+  # added to this workflow must be added here too, or it is advisory.
   gate-status:
-    needs: [changes, mass-gate]
+    needs: [changes, mass-gate, seed-registry]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1315,11 +1340,26 @@ jobs:
           TOUCHED: ${{ needs.changes.outputs.fidelity }}
           RESULT: ${{ needs.mass-gate.result }}
           FILTER: ${{ needs.changes.result }}
+          REGISTRY: ${{ needs.seed-registry.result }}
         run: |
           set -euo pipefail
           echo "changes result: ${FILTER}"
           echo "fidelity paths touched: ${TOUCHED}"
           echo "mass-gate result: ${RESULT}"
+          echo "seed-registry result: ${REGISTRY}"
+
+          # The seed registry, checked FIRST and with no case analysis, because there
+          # is none to do: `seed-registry` carries no `if:`, depends on no other job,
+          # and needs no wheel, so `skipped` is not reachable for it the way it is for
+          # `mass-gate`. Anything that is not `success` -- failure, cancelled, or the
+          # empty string a job that never ran leaves behind -- is a red gate. Demanding
+          # the positive rather than excluding a list of negatives is the same shape
+          # the TOUCHED check below settled on, and for the same reason: the excluded
+          # list is what goes stale.
+          if [ "${REGISTRY}" != "success" ]; then
+            echo "::error::the seed-registry pins did not pass (${REGISTRY}); the fidelity seed registry in docs/engine_divergence_ledger_20260728.md no longer agrees with the committed artifacts"
+            exit 1
+          fi
 
           # The filter job must have SUCCEEDED before its output means anything.
           # Without this, a failed or cancelled `changes` job leaves TOUCHED as the

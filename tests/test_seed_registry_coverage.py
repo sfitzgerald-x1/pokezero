@@ -31,12 +31,19 @@ miss against the real tree, so the lesson cannot be re-learned by hand a third t
 FOUR span shapes are actually in the corpus, measured, not assumed:
 
   1. `{"seeds": {"min": ..., "max": ...}}`            -- 80 files under `reports/artifacts/`,
-                                                          plus 17 under `reports/`
+                                                          15 directly under `reports/` (16 if
+                                                          any nested `min`/`max` pair counts),
+                                                          0 under `docs/`
   2. `{"run":     {"seed_start": ..., "games": ...}}` -- `c72`, `c73`
-  3. `{"sample":  {"seed_start": ..., "games": ..., "seed_end": ...}}`
-                                                      -- `c82`, `c83`, `c86`
+  3. `{"sample":  {"seed_start": ..., ...}}`, closed by `seed_end` OR by `games`
+                                                      -- `c82` carries `seed_end`;
+                                                         `c83` and `c86` carry only `games`
   4. `{"windows": {"dev": {"seed_start": ..., "games": ...}, "holdout": {...}}}`
                                                       -- `c147_g33b_gate_reach`
+
+Shape 3 is why the extractor computes an end from a game count rather than requiring
+one: three of these files never state their last seed. `c73` is the same case and is
+the one that mattered -- its `19,500,799` appears in no JSON anywhere.
 
 So `_seed_intervals` does not enumerate shapes at all. It walks every dict in the
 document and takes:
@@ -62,12 +69,24 @@ That is exactly the trap the previous ledger-checker attempt fell into: it encod
 rule its author inferred rather than measured. The rule pinned here is measured, and
 it is about seeds only: **every fidelity seed in the committed record lies inside a
 registered band, and every registered band has a committed witness.**
+
+It also says nothing about MULTIPLICITY. This is containment, not counting: a second
+sweep of `19,200,060`-`19,200,259` would sit inside a registered band and pass every
+assertion in this file. The "the final holdout appears in exactly ONE measurement"
+invariant belongs to `#1122` -- `_reject_unguarded_final_holdout` in
+`scripts/engine_transition_differential.py`, pinned by
+`tests/test_final_holdout_guard.py` -- which refuses the whole of `19,200,000`+
+without an explicit opt-in. That is the enforcement half; this is the record-keeping
+half. Do not read a green run here as evidence that a band has been measured once.
+
+AND NOTHING HERE IS SKIPPED. Every JSON in the corpus must parse; see `_load_or_die`.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -187,15 +206,43 @@ def _json_files(root: Path, trees: tuple[str, ...] = _CORPUS_TREES) -> list[Path
     return sorted(files)
 
 
+def _load_or_die(paths: list[Path], root: Path, corpus: str) -> list[tuple[Path, object]]:
+    """Parse every path, or raise naming all of them. **Nothing is skipped.**
+
+    An earlier revision of this module swallowed `JSONDecodeError`/`UnicodeDecodeError`
+    and continued. `tests/test_never_fired_counter_census.py` removed exactly that
+    handler for exactly this reason, and reintroducing it here was a real regression
+    rather than a stylistic one: every assertion in this module is of the form "no
+    committed seed escapes its band", so a file that stops parsing makes the claim
+    EASIER and the suite greener. The corpus floor does not save it -- 93 files reach
+    fidelity space against `_MIN_FIDELITY_ARTIFACTS`, so up to 13 could go unreadable
+    with the count pin still satisfied.
+
+    A file that cannot be read is a red gate, not one fewer haystack.
+    """
+
+    loaded: list[tuple[Path, object]] = []
+    unreadable: list[str] = []
+    for path in paths:
+        try:
+            loaded.append((path, json.loads(path.read_text(encoding="utf-8"))))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            unreadable.append(f"{path.relative_to(root).as_posix()}: {type(exc).__name__}: {exc}")
+    if unreadable:
+        raise AssertionError(
+            f"committed JSON in the {corpus} could not be read, so the evidence base "
+            "for every seed-coverage assertion in this module is incomplete and every "
+            "one of them got easier. Fix or remove the file; do not let it drop out "
+            "silently: " + "; ".join(unreadable)
+        )
+    return loaded
+
+
 def fidelity_intervals(root: Path = REPO) -> dict[str, list[tuple[int, int]]]:
     """`repo-relative path -> intervals reaching into fidelity seed space`."""
 
     out: dict[str, list[tuple[int, int]]] = {}
-    for path in _json_files(root):
-        try:
-            document = json.loads(path.read_text())
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            continue
+    for path, document in _load_or_die(_json_files(root), root, "reports/ and docs/ corpus"):
         reaching = sorted(
             {
                 (low, high)
@@ -246,11 +293,10 @@ def naive_artifacts_seeds_min(root: Path = REPO) -> dict[str, tuple[int, int]]:
 
     out: dict[str, tuple[int, int]] = {}
     base = root / "reports" / "artifacts"
-    for path in sorted(base.glob("*.json")):
-        try:
-            document = json.loads(path.read_text())
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            continue
+    # Same no-swallow rule as `fidelity_intervals`, and needed for the same reason:
+    # this selector's ceiling of exactly `19,200,259` is asserted below, and a member
+    # dropping out silently could only lower it.
+    for path, document in _load_or_die(sorted(base.glob("*.json")), root, "naive selector's corpus"):
         if not isinstance(document, dict):
             continue
         seeds = document.get("seeds")
@@ -479,6 +525,46 @@ class TheSelectorItselfIsExercisedTests(unittest.TestCase):
         found = witnesses({"synthetic.json": [(19_000_000, 19_000_199)]}, bands)
         self.assertEqual(found[(19_900_000, 19_900_099)], set())
         self.assertEqual(found[(19_000_000, 19_000_199)], {"synthetic.json"})
+
+    def test_an_unparseable_artifact_is_a_red_gate_not_one_fewer_haystack(self) -> None:
+        # The regression this module shipped once: swallowing a decode error made every
+        # "no seed escapes its band" claim easier while keeping the suite green, and the
+        # `_MIN_FIDELITY_ARTIFACTS` floor has 13 files of slack, so it cannot notice.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "reports" / "artifacts").mkdir(parents=True)
+            (root / "reports" / "good.json").write_text(
+                json.dumps({"seeds": {"min": 19_000_000, "max": 19_000_199}}), encoding="utf-8"
+            )
+            (root / "reports" / "truncated.json").write_text('{"seeds": {"min": 1', encoding="utf-8")
+            with self.assertRaises(AssertionError) as caught:
+                fidelity_intervals(root)
+        self.assertIn("truncated.json", str(caught.exception))
+        self.assertIn("JSONDecodeError", str(caught.exception))
+
+    def test_the_naive_selector_refuses_an_unparseable_artifact_too(self) -> None:
+        # Its ceiling of exactly 19,200,259 is asserted as an equality above. A member
+        # dropping out silently could only move that number, so it gets the same rule.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "reports" / "artifacts").mkdir(parents=True)
+            (root / "reports" / "artifacts" / "bad.json").write_bytes(b"\xff\xfe not json")
+            with self.assertRaises(AssertionError) as caught:
+                naive_artifacts_seeds_min(root)
+        self.assertIn("bad.json", str(caught.exception))
+
+    def test_a_readable_synthetic_tree_still_parses(self) -> None:
+        # Anti-vacuity for the two pins above: they would also pass if `_load_or_die`
+        # raised unconditionally, which would make the whole module a false alarm.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "reports").mkdir(parents=True)
+            (root / "reports" / "good.json").write_text(
+                json.dumps({"run": {"seed_start": 19_500_000, "games": 800}}), encoding="utf-8"
+            )
+            self.assertEqual(
+                fidelity_intervals(root), {"reports/good.json": [(19_500_000, 19_500_799)]}
+            )
 
     def test_seeds_below_the_fidelity_floor_are_out_of_scope(self) -> None:
         # `1,500,000` and `17,000,000` are governed by PUBLIC_CONSUMED_SEED_RANGES.
