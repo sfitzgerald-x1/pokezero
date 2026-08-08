@@ -90,32 +90,48 @@ class TerminalResidualRollComparisonLimitTests(unittest.TestCase):
         #   max non-crit roll 123; residual tick 66; defender HP 182, so the residual-KO
         #   threshold is 182 - 66 = 116. Of the sixteen rolls floor(123 * r / 100), r in 85..=100,
         #   six reach 116 and ten fall below.
-        #     surviving arm  109 (mean of the ten below) + 66 tick, attacker Leftovers 19 ticks
+        #     surviving arm  109 (FLOORED mean of the ten below; the mean is 109.6) + 66 tick, attacker Leftovers 19 ticks
         #                    because the battle has not ended        (1 - 1/16) * 10/16 = 58.5938%
         #     residual-KO    116 + 66 == 182 exactly; NO Leftovers heal, because side two has no
         #                    other live Pokemon so stop_residuals_if_battle_ended fires before
         #                    order 10 reaches side one              (1 - 1/16) *  6/16 = 35.1562%
-        #     crit arm       max_crit 246 >= 182 kills on the hit, so it keeps the full base crit
-        #                    rate, unscaled by the non-crit split               1/16 =  6.2500%
+        #     crit arm       MIN crit roll floor(246 * 85/100) = 209 >= 182, so EVERY crit roll
+        #                    kills on the hit: the crit range does not straddle the threshold,
+        #                    so the arm is not split and keeps the full base rate  1/16 = 6.25%
+        #                    (An earlier revision said "max_crit 246 >= 182", inherited from
+        #                    the native twin. That is the STRADDLE condition -- the case C27
+        #                    added because it needs splitting -- so it argued for the
+        #                    opposite of the conclusion it was supporting.)
         #
         # A fan fails this. So does a partition-arithmetic change. So does the crit arm being
         # rescaled by the non-crit split.
-        observed = {
-            (
-                tuple(_damage_to(branch, "SideTwo")),
-                tuple(_heals_to(branch, "SideOne")),
-                round(float(branch.percentage), 4),
-            )
-            for branch in branches
+        #
+        # WHAT THIS DOES NOT CLEAR, ported from the native twin so the Python side cannot be
+        # over-read the same way. The bar is met FOR THIS FIXTURE; it is NOT met in general.
+        # This defender's entire residual queue is one Toxic tick with nothing healing or
+        # curing ahead of it, so the withdrawn patch's unsound `damage + toxic >= hp`
+        # pre-move boundary and the sound "run the real end-of-turn queue" boundary AGREE
+        # here -- a reinstated splitter carrying only the bad boundary would reproduce this
+        # partition and pass. `pending_residual_damage` does not mirror Burn, partial trap,
+        # Future Sight, Wish, Rain Dish, Leftovers or threshold berries, and heals run before
+        # damage in the phase. Do not read this test as clearing that; see
+        # docs/terminal_residual_roll_branching_limit.md.
+        # Tolerance, not round(): 58.59375 and 35.15625 are both exactly representable and land
+        # on a rounding TIE, so banker's rounding sends one up (.5938) and the other down
+        # (.1562). Deterministic, but the asymmetry reads as a typo and invites a "fix" that
+        # breaks it. The native twin compares with abs() < 0.001; matched here.
+        shapes = {
+            (tuple(_damage_to(b, "SideTwo")), tuple(_heals_to(b, "SideOne"))): float(b.percentage)
+            for b in branches
         }
-        self.assertEqual(
-            observed,
-            {
-                ((109, 66), (19,), 58.5938),
-                ((116, 66), (), 35.1562),
-                ((182,), (), 6.25),
-            },
-        )
+        expected = {
+            ((109, 66), (19,)): 58.59375,
+            ((116, 66), ()): 35.15625,
+            ((182,), ()): 6.25,
+        }
+        self.assertEqual(set(shapes), set(expected))
+        for shape, want in expected.items():
+            self.assertAlmostEqual(shapes[shape], want, delta=0.001, msg=f"mass moved for {shape}")
 
         # Secondary breadcrumb only -- explicitly NOT what holds the line, per the precedent in
         # tests/test_roll_enumeration_scope.py where a file scan was defeated in review and
