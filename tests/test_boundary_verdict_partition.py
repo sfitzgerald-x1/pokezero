@@ -169,7 +169,22 @@ _C141 = {
 #      disarms this pin is indistinguishable from a correct one in the diff.
 # All four c145 members close the four-term identity through the checker below: 79 + 2 + 0 + 0 == 81
 # at the two pre-fix commits, 81 + 0 + 0 + 0 == 81 at the two post-fix ones.
-_EXPECTED_SWEEP_ARTIFACTS = 91
+#
+# 91 -> 95 (C149, ledger G8's Leech Seed residual band split). RE-DERIVED by running
+# `_sweep_reports()` itself -- not a reimplementation of it -- over BOTH trees, per steps 1-2
+# above: 91 on a worktree of `origin/main` at `8d63dcce` and 95 here, with the set difference
+# exactly `reports/artifacts/c149_{base,split}_{dev,holdout}_sweep.json` and NOTHING removed.
+# Measured AFTER merging that commit, because `origin/main` modified
+# `docs/token-format/turn16-token-dump.json` and a corpus membership can move under a content
+# change alone; it did not, but that was checked rather than assumed.
+#
+# C149 adds four further artifacts deliberately OUTSIDE this corpus, verified by the same set
+# difference: `c149_row_replay_{base,split,oracle}.json` are single-row replays and
+# `c149_fan_basis_census.json` is a pure-arithmetic census, so none carries a top-level
+# `boundaries_measured`. Eight files added, four corpus members -- which is again why the
+# directory count and the corpus count cannot check each other.
+# Confirmed still live at 94 and at 96.
+_EXPECTED_SWEEP_ARTIFACTS = 95
 #
 # 75 -> 79 (C142). MEASURED by step 2 below, and the measurement corrected an expectation:
 # the number was predicted as 78 on the belief that only three of C142's four sweep artifacts

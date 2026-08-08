@@ -262,6 +262,36 @@ either site.
 | crate suite floor | 451 → **459** | see below |
 | `--test test_gen3` | **32**, unchanged | run |
 | `Engine lib suite` | **5**, unchanged | run |
+| `_EXPECTED_SWEEP_ARTIFACTS` | 91 → **95** | `_sweep_reports()` in both trees |
+| `_EXPECTED_COUNTER_ARTIFACTS` | 366 → **374** | `counter_artifacts()` in both trees |
+
+**The two artifact-corpus pins move independently and were re-derived from their own selectors, not
+from each other and not by arithmetic.** Each was obtained by executing the selector *function
+itself* against a worktree of `origin/main` at `8d63dcce` and against this tree:
+
+* `_EXPECTED_SWEEP_ARTIFACTS` 91 → 95, set difference exactly
+  `c149_{base,split}_{dev,holdout}_sweep.json`, **nothing removed**.
+* `_EXPECTED_COUNTER_ARTIFACTS` 366 → 374, set difference exactly the **eight**
+  `reports/artifacts/c149_*.json`, **nothing removed**.
+
+Eight files added, four sweep-corpus members: the three `c149_row_replay_*.json` are single-row
+replays and `c149_fan_basis_census.json` is a pure-arithmetic census, so none carries a top-level
+`boundaries_measured`. That is why the two counts differ by more than the sweeps, and it is why the
+two corpora cannot check each other.
+
+Both measured **after** merging `origin/main`, deliberately: that merge modifies
+`docs/token-format/turn16-token-dump.json`, and the counter corpus selects on counter-shaped leaves
+rather than on filenames, so a content change alone can move a member in or out. It did not — but a
+base taken before the merge could not have said so. Both confirmed live: **95 passes while 94 and 96
+fail; 374 passes while 373 and 375 fail.** Neither module's test count moved (26 and 16), so the
+workflow's `Ran 26 tests` and `Ran 16 tests` guards still match.
+
+**Everything above was re-run after the merge**, not carried across it: fingerprint `--check` still
+reports 74 patches / `8e912b45544034e6`, the crate suite still sums to 459 with all eight pins
+resolving, both engine suites are still 32 and 5, the patch-stack module is still `Ran 4 tests OK`,
+and the row still replays `matched` at 38 branches with mass 100.000000 %. `origin/main` touched no
+fingerprint-covered path, so the two sweeps were not re-run; the fingerprint is the evidence for
+that and it is unchanged.
 
 The new digest was independently confirmed a second way: applying the committed patch file to the
 73-patch preimage reproduces `9fd568c65b125fa1…` exactly, which is the same value the clean-room
