@@ -2488,9 +2488,70 @@ namespace only:
 | acceptance, C26 registered | `16,000,000`–`16,701,249`, plus probe band `17,000,000`–`17,000,999` | | burned, never swept |
 | acceptance, **C32 — the ACTIVE registration** | `18,000,000`–`18,701,249` | the next acceptance attempt | **reserved, unconsumed** |
 | fidelity differential, dev window | `19,000,000`–`19,000,199` | the 200-game window the 208 → 7 era iterated against | consumed continuously |
-| fidelity differential, earlier 800-game sweep | `19,500,000`+ | `reports/c73` | consumed |
-| fidelity differential, **validation holdout** | `19,100,000`–`19,100,199` | out-of-window check | reserved (C116 Phase 1) |
-| fidelity differential, **final holdout** | `19,200,000`–`19,200,199` | terminal fidelity claim, swept **once** | reserved, untouched |
+| fidelity differential, earlier 800-game sweep | `19,500,000`–`19,500,799` | `reports/c73_eight_hundred_game_sweep.json`, 800 games from `run.seed_start` `19,500,000` | consumed |
+| fidelity differential, **validation holdout** | `19,100,000`–`19,100,199` | out-of-window check | reserved (C116 Phase 1) — reserved *for* that use, and swept on every fix branch since |
+| fidelity differential, **final holdout** — as REGISTERED | `19,200,000`–`19,200,199` | terminal fidelity claim, registered as a single measurement | **partly swept, and not on the registered span.** Decomposed in the next two rows |
+| fidelity differential, final holdout — the span C141 **actually swept** | `19,200,060`–`19,200,259` | `reports/artifacts/c141_final_holdout_sweep.json` | **CONSUMED** — 200 games, 16,274 boundaries measured, 2 divergent. Overruns the registered end by **60 seeds** |
+| fidelity differential, final holdout — the registered head C141 **did not reach** | `19,200,000`–`19,200,059` | the first 60 seeds of the registered block | **unswept, and contaminated.** No committed artifact covers these 60 seeds; 60 games were run over them before the guard existed |
+
+**The final-holdout row was false twice over, and is corrected above.** Until this
+amendment it read `19,200,000`–`19,200,199` / *"reserved, untouched"*. The row was
+written at `785e28e9` (#1071, 2026-08-04), when both halves were true; C141's sweep
+landed at `aa2f2d40` (2026-08-07) and falsified both, and nothing here moved:
+
+* *"Untouched"* was false from `aa2f2d40` onward.
+  `reports/artifacts/c141_final_holdout_sweep.json` is committed and records
+  `seeds.min` `19,200,060`, `seeds.max` `19,200,259`, 200 distinct seeds,
+  **16,274 boundaries measured**, 16,268 matched, 2 divergent,
+  `acceptance_eligible: true`. Read the artifact, not this sentence.
+* The recorded span stopped describing anything that happened. C141 chose its window
+  to skip the contaminated head, so the sweep starts 60 seeds *inside* the
+  registration and ends 60 seeds *past* it: `19,200,000`–`19,200,059` was never
+  swept, and `19,200,200`–`19,200,259` was swept without ever having appeared in
+  this registry. The choice was pre-registered — `reports/c141_final_holdout_prediction.md`
+  names `19,200,060`–`19,200,259` before the run — so this is a bookkeeping failure
+  in the table, not an undisclosed sweep.
+
+**On the contaminated 60, what the record can and cannot support.**
+`reports/c141_final_holdout_prediction.md` (lines 13–17) discloses that a
+convenience shell loop over three `--seed-start` values executed 60 games of
+`19,200,000`–`19,200,059` before the `#1122` guard existed, that the JSON was
+**deleted unread**, and cites
+`reports/rust-fidelity/final_holdout_contamination_disclosure.md` as an external
+record. That path exists in **no blob in this repository's history** — checked with
+`git rev-list --objects --all`, 21,990 object paths across all refs, zero matches
+for `contamination` or `rust-fidelity`. This is a statement about auditability, not
+about intent: from inside this repository the contamination is attested only by the
+prose above and by `tests/test_final_holdout_guard.py`, whose module docstring
+records the same incident and whose pins now prevent a repeat. Nothing here says
+whether those 60 seeds, or the unswept head generally, may be swept again — that is
+an open owner decision and this table does not pre-empt it in either direction.
+
+**Scanning for consumed seed space: there are FOUR artifact shapes, not one.** A
+selector keyed on `seeds.min` under `reports/artifacts/` answers for 80 of the 93
+committed artifacts that reach fidelity seed space, and it is wrong. Its highest
+seed is exactly `19,200,259`, which is how the claim *"everything at or above
+`19,200,260` is virgin"* got asserted here today — and refuted by
+`reports/c73_eight_hundred_game_sweep.json`, which is consumed, is named by
+`tests/test_final_holdout_guard.py`, sweeps `19,500,000`–`19,500,799`, lives one
+directory **up** in `reports/`, and records `run.seed_start` + `run.games` with no
+`seeds` object at all. The four shapes actually in the corpus:
+
+| shape | example |
+| --- | --- |
+| `seeds.min` / `seeds.max` | every `reports/artifacts/*_sweep.json` |
+| `run.seed_start` + `run.games` | `reports/c72_fresh_local_sweep.json`, `reports/c73_eight_hundred_game_sweep.json` |
+| `sample.seed_start` + `sample.seed_end` | `reports/c82_head_era_fresh_sweep.json`, `c83`, `c86` |
+| `windows.{dev,holdout}.seed_start` + `games` | `reports/artifacts/c147_g33b_gate_reach.json` |
+
+Scan `reports/` **and** `docs/`, recursively, and do not key on a shape. The
+enforced version is `tests/test_seed_registry_coverage.py`, which walks every
+committed JSON under both trees, extracts seed intervals structurally rather than by
+shape, and asserts in both directions: no committed fidelity seed lies outside a
+band recorded above, and every band recorded above has a committed witness. It
+deliberately asserts nothing about the *status words* in this table — the validation
+holdout row is the counterexample that kills the obvious rule, being both "reserved"
+and swept on every fix branch.
 
 **The invariant, restated against the ACTIVE registration.** If a future reader
 finds seeds in a registered acceptance band that Appendix Z12 does not account for
@@ -2523,11 +2584,16 @@ era-true where they sit and rewriting history in place is worse than a pointer;
 this note is the pointer.
 
 **The new invariant this creates**, which is the one C116 Phase 1 depends on: the
-final holdout block `19,200,000+` must appear in **exactly one** measurement in the
-whole record. If it appears twice, it stopped being a holdout and the terminal
-fidelity claim built on it is void. Iterating against a window and then reporting
-that window is the failure mode the entire 208 → 7 era is exposed to (C116 M6);
-these two reserved blocks exist to bound it.
+final holdout block — the *registered* one, `19,200,000`–`19,200,199`, not
+"`19,200,000`+", which as written also captures `c73`'s consumed
+`19,500,000`–`19,500,799` — must appear in **exactly one** measurement in the whole
+record. If it appears twice, it stopped being a holdout and the terminal fidelity
+claim built on it is void. Iterating against a window and then reporting that window
+is the failure mode the entire 208 → 7 era is exposed to (C116 M6); these two
+reserved blocks exist to bound it. What the record now shows against that invariant
+is set out in the seed-registry table above: one gated 200-game sweep on
+`19,200,060`–`19,200,259`, and one pre-guard 60-game run on
+`19,200,000`–`19,200,059` whose output was deleted unread.
 
 **What would have changed the decision.** Nothing about the measurement — the
 apparatus was gated, `acceptance_eligible: true`, 97.80 % coverage, 0 harness
