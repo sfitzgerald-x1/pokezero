@@ -28,21 +28,30 @@ play itself, here applied to an imperfect-information, simultaneous-move game.
   scenarios, and a calibrated value leaf. In paired evaluation it beats the same checkpoint
   without search. See [`docs/test_time_search_plan_v2.md`](docs/test_time_search_plan_v2.md).
 
-## What the model sees (v3)
+## What the model sees (v4)
 
-![V3 observation token input](docs/observation_v3_tokens.svg)
+![V4 observation token input](docs/observation_v4_tokens.svg)
 
-V3 is the next training schema; its Python and Rust layouts are mirrored while fresh audit
-artifacts are completed before the default cutover. One decision is **87 tokens**: a global
-field token (weather, hazards,
-clauses, Wish, turn count, request kind), six self-team tokens (full knowledge: exact stats, PP,
-status, boosts, public volatile clocks), six opponent tokens (public reveals plus belief candidates,
-expected stats, and PP evidence), nine action-candidate tokens (the 4 moves and 5 switches the
-policy chooses among), one opponent-tendency token, and **64 turn-merged history tokens**. History
-lives in these tokens rather than stacked past frames. Every token carries **51 categorical ids**
-(direct closed-vocabulary lookups into 841 embedding rows — no feature hashing) and **155 numeric
+V4 is the newest observation schema — the one fresh training targets. (The library default for
+un-stamped encodes remains v2.2; every checkpoint resolves its own schema from its stamped config,
+so older lineages keep scoring byte-identically.) One decision is **23 tokens** — and deliberately
+nothing more:
+a global field token (weather, hazards, clauses, Wish, turn count, request kind, hazard
+credit/payoff), six self-team tokens (full knowledge: exact stats, PP, status, boosts, public
+volatile clocks), six opponent tokens (public reveals plus belief candidates, expected stats, and
+PP evidence), nine action-candidate tokens (the 4 moves and 5 switches the policy chooses among),
+and one opponent-tendency token. There is **no history region**: a five-arm history-budget sweep
+showed a single history row beating both more history and none, so v4 removes the region and
+instead **names what that row was carrying as current state** — forced recharge, last executed
+move, Truant phase, Traced ability, last-round damage, hazard credit — while the pinned Tier-2
+conclusions moved into the belief candidate sets. Every token carries **41 categorical ids**
+(direct closed-vocabulary lookups into 899 embedding rows — no feature hashing) and **132 numeric
 features**, grouped by semantic role. The exact layout is documented in
-[`docs/observation_v3_spec.md`](docs/observation_v3_spec.md).
+[`docs/observation_v4_spec.md`](docs/observation_v4_spec.md).
+
+How the input reached this shape — v1's stacked snapshots through v4's pure-Markov bet, with the
+limitation each version hit and the measurement that motivated the next — is traced with
+per-version visuals in [`docs/observation_history.md`](docs/observation_history.md).
 
 ## Quickstart
 
