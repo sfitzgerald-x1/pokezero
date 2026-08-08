@@ -460,6 +460,7 @@ def _foulplay_fields(
             [],
         )
 
+    caveats: list[str] = []
     engine = _mapping(document.get("engine_mcts"))
     root_puct = _mapping(document.get("root_puct"))
     opponent_seed, schedule_problem = _opponent_seed_from_schedule(document, seed)
@@ -501,11 +502,28 @@ def _foulplay_fields(
         # foulplay_bridge.py:3541 -- verbatim, including the str seed argument.
         "decision_rng_seed": f"{seed}:{address.seat}:{address.round}",
     }
-    caveats: list[str] = []
-    missing = ["foulplay_random_seed_schedule.seeds"] if schedule_problem else []
-    # `--device` is a bridge CLI flag that never reaches the summary payload.
-    missing.append("device")
-    return fields, missing, None, caveats
+    # The absent schedule goes to `caveats`, NOT to `missing`, and that is a
+    # contract fix rather than a tidy-up. `missing` is documented as naming spec
+    # FIELDS -- `ReplaySpec.missing`'s own docstring tells a driver to decide what
+    # to do about each -- and `foulplay_random_seed_schedule.seeds` is not one, so
+    # a consumer following that contract got
+    # `AttributeError: 'ReplaySpec' object has no attribute
+    # 'foulplay_random_seed_schedule.seeds'`. Measured on a sidecar with the
+    # schedule removed. `caveats` is the channel built for exactly this: a fact
+    # about the shard that no spec field can carry.
+    #
+    # It also makes the foul-play `*caveats` splat in `_fidelity` reachable. It
+    # was dead code; deleting it instead would have recreated the round-4 defect
+    # (a caveat produced and silently dropped) the first time this reader gained
+    # a second caveat.
+    if schedule_problem:
+        caveats.append(
+            "the opponent's per-game seed could not be resolved: this shard "
+            "records no foulplay_random_seed_schedule.seeds"
+        )
+    # `device` needs no entry: it is a spec field, so the derived computation in
+    # `resolve_address` already names it. The explicit append was redundant.
+    return fields, [], None, caveats
 
 
 def _leaf_eval(document: Mapping[str, Any], compiled_in: str) -> str | None:

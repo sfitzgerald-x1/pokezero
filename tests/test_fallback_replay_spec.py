@@ -900,3 +900,40 @@ class TestRoundFourRegressions:
         assert isinstance(spec, ReplaySpec)
         assert spec.engine_worlds == worlds
         assert "engine_worlds" not in spec.missing
+
+
+class TestFinalRoundPins:
+    def test_the_underspecified_branch_keeps_its_caveats(self):
+        # M67: the `*caveats` on the FIDELITY_UNDERSPECIFIED return was the last
+        # unpinned one -- dropping it stayed green, because no existing input
+        # produced an underspecified verdict AND a band caveat at the same time.
+        # This one does: no `games` (band uncheckable) and no `sims` (a required
+        # field unpinned).
+        document = _hc_grid_shard(seed=600000)
+        del document["games"]
+        del document["sims"]
+        spec = resolve_address(
+            _address("hcgrid-hc-d4-600000", round_index=12), document
+        )
+        assert isinstance(spec, ReplaySpec)
+        notes = " ".join(spec.fidelity_notes)
+        assert spec.fidelity == FIDELITY_UNDERSPECIFIED
+        assert "engine_sims" in notes          # the underspecified reason
+        assert "could not be checked" in notes  # AND the caveat, not instead of
+
+    def test_missing_never_names_something_that_is_not_a_spec_field(self):
+        # `ReplaySpec.missing` is documented as naming spec FIELDS, and a driver
+        # is told to decide what to do about each. A reader-supplied entry broke
+        # that: a foul-play sidecar with no schedule put
+        # "foulplay_random_seed_schedule.seeds" into `missing`, and any consumer
+        # following the contract got AttributeError. That gap is a caveat now,
+        # which is also what makes the foul-play `*caveats` splat reachable
+        # instead of dead.
+        document = _foulplay_sidecar()
+        del document["foulplay_random_seed_schedule"]
+        spec = resolve_address(_address(), document)
+        assert isinstance(spec, ReplaySpec)
+        assert set(spec.missing) <= set(_PINNABLE_FIELDS)
+        for name in spec.missing:
+            assert getattr(spec, name) is None  # would raise before the fix
+        assert any("per-game seed" in note for note in spec.fidelity_notes)
