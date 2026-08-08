@@ -591,3 +591,26 @@ class TestRawKeysMode:
         out = capsys.readouterr().out
         assert "5216" in out
         assert "not in these shards" not in out
+
+
+class TestMarkerIsPresenceNotTruthiness:
+    def test_empty_fallback_samples_still_owns_its_counts(self):
+        # world_failure_reasons is incremented per failed world regardless of
+        # whether the decision falls back, so a healthy run has `fallback_samples:
+        # {}` alongside real counts. Selecting on truthiness drops all of them.
+        document = {
+            "engine_mcts": {
+                "policy_stats": {
+                    "fallback_samples": {},
+                    "world_failure_reasons": {"K": 16},
+                    "fallback_reasons": {"R": 3},
+                    "fallback_sample_addresses_dropped": 7,
+                }
+            }
+        }
+        scan = CorpusScan()
+        _scan_document(document, scan, source="a.json")
+        assert scan.addresses == []
+        assert scan.world_counts["K"] == 16
+        assert scan.decision_counts["fallback:R"] == 3
+        assert scan.addresses_dropped == 7

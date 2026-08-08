@@ -316,7 +316,19 @@ def _walk_stats_blocks(node: Any) -> Iterator[Mapping[str, Any]]:
       exactly to the cumulative, so accepting them doubles every count.
 
     Presence, not truthiness: a scope that recorded no addresses still owns its
-    ``fallback_sample_addresses_dropped`` and its totals.
+    ``fallback_sample_addresses_dropped`` and its totals. This is the common case,
+    not an edge case -- ``world_failure_reasons`` is incremented per failed world in
+    the construction loop (``engine_search.py:1096``) whether or not the decision
+    ultimately falls back, while ``fallback_samples`` is written only in
+    ``_fallback``. A healthy run with world failures and zero fallback decisions
+    therefore has ``fallback_samples: {}`` and non-empty counts.
+
+    Known boundary: ``scripts/k0_grid_h2h.py:236-246`` writes cumulative counts
+    lifted straight off the stats object and never calls ``to_dict()``, so its
+    shards carry no marker and their counts are skipped. Harmless, because the same
+    omission means those shards carry no addresses either -- there is nothing for
+    the counts to rank, and the reader reports `no fallback addresses found` with a
+    non-zero exit. The producer gap is tracked separately.
     """
     if isinstance(node, Mapping):
         if "fallback_samples" in node:
