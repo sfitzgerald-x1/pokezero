@@ -341,6 +341,16 @@ eighteen were then run locally and the battery is green, with two modules failin
 `tests.test_spread_gate_provenance`, both shape-only steps that skip in CI, both untouched by this
 branch, and both verified failing identically at the base commit `1c94f071`.
 
+**A second red run, and it was not this branch.** After the fix above, `origin/main` moved to
+`c2227d3a` (#1184) while the PR was open. That commit adds a prose reference to
+`POKEZERO_ENUMERATE_ROLLS` in `tests/test_engine_terminal_residual_roll_limit.py` **without** the
+matching ledger entry, so `origin/main` fails this same gate on its own — verified by running the
+module in a clean worktree of `c2227d3a` before touching anything, rather than inferred from the
+merge. CI tests the PR *merge* commit, so the break lands on whichever branch merges main next;
+the entry is added here with that attribution rather than left for a separate PR. Both of main's
+new commits touch only `tests/`, no fingerprint-covered path, so `--check` still reports 74 patches
+/ `8e912b45544034e6` and neither sweep was re-run.
+
 Not measured, and stated as such:
 
 * **The two `defender_active.hp`-ceiling call sites.** Same arithmetic, deliberately untouched. No

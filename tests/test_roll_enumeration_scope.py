@@ -1096,6 +1096,16 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # exact in both directions, so an unnecessary entry fails it just as a missing
         # one does.
         "reports/c149_g8_leechseed_band_split.md",
+        # NOT this branch's file and NOT this branch's mention. #1184 (`c2227d3a`) added a
+        # prose reference to the flag here -- recording that the withdrawn terminal-residual
+        # experiment's 17-arm fan is reproducible by running that fixture under the flag,
+        # which is the evidence its numeric pin rests on -- without adding the matching
+        # entry to this ledger. `origin/main` at `c2227d3a` therefore fails this gate on its
+        # own, verified by running this module in a clean worktree of that commit before
+        # touching anything. Added here rather than left for a separate PR because CI tests
+        # the PR merge commit, so the break lands on whichever branch merges main next.
+        # PROSE ONLY, in a comment: the file neither reads nor sets the flag.
+        "tests/test_engine_terminal_residual_roll_limit.py",
     }
 
     def test_the_set_of_files_mentioning_the_flag_is_recorded(self) -> None:
