@@ -7,8 +7,10 @@ with different numbering each time. A document rebuilt on demand is exactly the 
 program keeps finding drifted, so this one is committed, numbered permanently, and machine-checked
 against the tree by `tests/test_terminal_disposition_register.py`.
 
-**Reconciled against** `origin/main` at `b3eef7b6` (#1203), merged into this branch — merged, never
-rebased. The branch was cut at `6ef682bf` (#1204) and every figure was re-derived after the merge. Every figure below is re-derived from
+**Reconciled against** `origin/main` at `578287e7` (#1207), merged into this branch — merged, never
+rebased. The branch was cut at `6ef682bf` (#1204); `main` advanced twice while this document was in
+review and every figure was re-derived after each merge. One of those advances moved the engine
+fingerprint again, which is T1's subject rather than an inconvenience. Every figure below is re-derived from
 tracked bytes or from a committed artifact — none is carried from the list it replaces, and **six**
 statements did not survive that derivation, itemised in §5.
 
@@ -125,20 +127,31 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`9517aab98d56a9ba…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`236d1cac8a784898…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
-legitimate: `rust/pokezero-search/src/leaf.rs` gained 31 lines in `21f484d4` (#1197), one of the 11
-crate sources the fingerprint covers. Re-derived once by restricting `git log 7fcd9e19..HEAD` to
-**all** of the fingerprint's inputs — the 74 gen3 patches, `poke-engine-gen3-patches.txt`,
+legitimate, and it has now happened **twice**. Restricting `git log 7fcd9e19..HEAD` to **all** of
+the fingerprint's inputs — the 74 gen3 patches, `poke-engine-gen3-patches.txt`,
 `poke-engine-base-source.json`, the 11 crate sources, and the `Cargo.toml` / `Cargo.lock` /
-`build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — which
-returns exactly that one commit. ⚠ **A first revision named only the first three of those five
-input classes**, a scope narrower than the claim it supported, which is the rule this register
-enforces on everyone else; no commit in range touches the omitted two, so the conclusion is
-unchanged and the statement was not. That derivation is recorded, not pinned, because it is a
-statement about history rather than about this tree.
+`build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
+exactly two commits:
+
+| commit | input | fingerprint after |
+|---|---|---|
+| `21f484d4` (#1197) | `rust/pokezero-search/src/leaf.rs`, +31 lines | `9517aab98d56a9ba…` |
+| `578287e7` (#1207) | `rust/pokezero-search/src/priors.rs`, +91 −4 | `236d1cac8a784898…` |
+
+⚠ **And the second landed while this register was in review**, three days after C153's build. That
+is not an aside: it is T1's argument, live. C151 §3 deferred the terminal sweep precisely because
+*"a sweep taken today buys an unbiased measurement of a fingerprint that is superseded within
+days"*, and the fingerprint has moved twice in the window between the last committed sweep and this
+document reaching approval. **The re-sweep T1 asks for is only worth taking after the freeze is
+declared, not before** — otherwise it buys a third superseded build. ⚠ **A first revision of this
+paragraph named only three of the five input classes**, a scope narrower than the claim it
+supported, which is the rule this register enforces on everyone else. That derivation is recorded,
+not pinned, because it is a statement about history rather than about this tree — but the
+fingerprint VALUE is pinned, and it is what caught the second move.
 
 **And the gate has no surface.** The window's ratification is a pinned constant, `OWNER_RATIFIED`.
 The freeze has no equivalent: **zero** module-level constants in
@@ -456,9 +469,10 @@ defect did not exist on either of their trees.** A typed `25` would have shipped
 Where CI gates on the merge, **local green and CI green are different measurements**; §6 declares
 that coupling and the assertion carries the fix in its own failure message.
 
-**Every measurement behind T2–T6 predates the head build**, and none is at
-`9517aab98d56a9ba`. Read the table in T1 before quoting that as a re-sweep scope: T3, T4 and T5
-rest on an engine build; **T2 and T6 build no engine at all** and carry no `engine_fingerprint`.
+**Every measurement behind T2–T6 predates the head build**, and none is at `236d1cac8a784898` —
+nor at `9517aab98d56a9ba`, the build this document was reconciled against two merges ago. Read the
+table in T1 before quoting that as a re-sweep scope: T3, T4 and T5 rest on an engine build; **T2 and
+T6 build no engine at all** and carry no `engine_fingerprint`.
 
 ---
 
@@ -619,9 +633,9 @@ without a built engine in this environment and are unchanged by this branch. Ful
 flag that is required rather than stylistic:
 `pytest tests/ -q -p no:randomly --continue-on-collection-errors` — **165 failed at base, 165 failed
 at head**, 4,420 → 4,462 passed (**+42**, exactly this module), 33 errors both sides, and the
-`FAILED` id lists are **identical in both directions**. Re-measured against the **new** merge-base
-after `origin/main` was merged in: at the old base `6ef682bf` the pair read 164 / 4,416, and #1203
-brought one more engine-dependent module. The absolute figure is a property of the machine; the
+`FAILED` id lists are **identical in both directions**. Re-measured against the merge-base after
+each of the two `origin/main` merges rather than carried: at `6ef682bf` the pair read 164 / 4,416,
+and #1203 brought one more engine-dependent module. The absolute figure is a property of the machine; the
 delta is that this branch adds zero failures.
 
 ---
@@ -661,7 +675,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.head_fingerprint` | 9517aab98d56a9ba |
+| `t1.head_fingerprint` | 236d1cac8a784898 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
