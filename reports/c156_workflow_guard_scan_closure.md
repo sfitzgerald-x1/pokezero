@@ -94,7 +94,7 @@ a single structural cause, not four coincidences — which is what it turned out
 
 **`.github/workflows/engine-fidelity-gates.yml`** — the C154 step's guard `Ran 34` → `Ran 38`
 (bounded replace on that step only; an unbounded one is what caused #1204's round-two defect), the
-battery comment 23 → 34 (derived, see change 7 above), and a comment recording the blindness
+battery comment 23 → 35 (derived, see change 7 above), and a comment recording the blindness
 this closes.
 
 **`tests/test_terminal_disposition_register.py`** — the coverage triple now takes **both halves**
@@ -140,6 +140,7 @@ Every row is an observed run, not a prediction. `n/a` means the mutation has no 
 | 32 | a guard's `if`-block deleted and restated as a comment outside the `run:` body | **GREEN — blind** | RED |
 | 33 | the battery total in the workflow comment left at its old value | GREEN — unpinned | RED |
 | 34 | a guard weakened to the **floor** shape `Ran [0-9]+ tests` | **GREEN — blind** | RED |
+| 35 | a workflow line number re-typed into this module's prose at its correct value — **seven shapes**, §3.1 | GREEN — uncovered | RED |
 | 23 | a test added to this module with its own workflow guard left stale | RED | RED |
 | 22 | final-holdout guard `Ran 25` → `Ran 24` | RED | RED |
 | — | entry 28's step placed directly above a **guarded** one | RED, wrong reason † | RED |
@@ -151,7 +152,7 @@ Every row is an observed run, not a prediction. `n/a` means the mutation has no 
 | NC1 | **control** — 40 comment lines between an invocation and its guard | GREEN | GREEN |
 | NC1b | **control** — NC1's padding **plus** that same guard falsified to 99 | **GREEN — blind** | RED |
 
-**Battery: 34 applied, 34 caught, plus 2 controls.** The module's enumerated list, its docstring
+**Battery: 35 applied, 35 caught, plus 2 controls.** The module's enumerated list, its docstring
 header, the workflow comment and this report all state that number, and
 `test_the_stated_battery_size_is_the_enumerated_lists_length` derives it from the list — entry 33 is
 that pin. The two register-prose rows belong to `tests/test_terminal_disposition_register.py` and
@@ -182,6 +183,56 @@ trees. At `dbb40c5c` it is green by going blind; here it is green by resolving t
 verdict, opposite reason. NC1b separates them by falsifying the padded step's guard as well: still
 green at `dbb40c5c`, red here. A control unpaired with a red is indistinguishable from an inert pin,
 which is `reports/c154` §6's own finding applied to this pass.
+
+### 3.1 Entry 35 — the guard that shipped covering nothing
+
+⚠ **Review's finding C went through three fixes and the middle two were worse than the defect.**
+Recorded in full because the pattern is this PR's own subject and this is its third recurrence in
+one lineage (C154's bullet → #1205 → here).
+
+1. **The defect.** Four citations of the invocation-carrying comment, typed as `:1202`, went stale
+   **inside the commit that moved it** — C156's own eleven-line workflow comment.
+2. **Fix 1 pinned the typed citation** to the computed line. It reddened on any edit above it and
+   turned the negative control NC1 red. Rejected on that measurement; review reproduced the
+   reddening and withdrew its own suggestion.
+3. ⚠ **Fix 2 forbade a PHRASE — and covered nothing, and shipped.** The phrase
+   `invocation-carrying comment at :NNNN` is a spelling *this pass invented*.
+   `grep -rn 'invocation-carrying comment at' tests/ reports/` returns **exactly one line: the regex
+   literal itself.** None of the four real citations was written that way. Review restored two of
+   them verbatim and the module reported **`Ran 38 tests … OK`**. A guard verified only against a
+   string its author chose is not verified — it is the fail-open this PR exists to remove, shipped
+   inside the docstring advertising it as the closure.
+4. **Fix 3 is scoped by VALUE.** Every workflow line this module could cite — the comment, each
+   executable invocation, each guard — is computed, and the module's own text may not contain any of
+   them as `:NNNN`. A phrase is evaded by rewording; a value cannot be, because the value *is* what
+   a citation is.
+
+**Proved against the real strings, not a chosen one.** Each row restores a spelling that actually
+existed at `b167c3d1`, typed at the value correct on this tree (written `:NNNN` here because the guard
+forbids the report from carrying that value, which is itself the guard working):
+
+| shape | text restored | verdict |
+|---|---|---|
+| H1 | `…carries the invocation string inside one at :NNNN and` (was module `:1272`) | **RED** |
+| H2 | `#: NOT sites; :NNNN is one and counting it into the` (was module `:1083`) | **RED** |
+| H3 | `a comment at :NNNN and \`Ran N tests\` inside seven more` (was module `:1076`) | **RED** |
+| H4 | ``comment at `:NNNN` and`` in the report (was report `:63`) | **RED** |
+| H5 | the denominator-step residual review named, re-typed at its correct value | **RED** |
+| H6 | a `Ran N tests` **guard** line re-typed at its correct value | **RED** |
+| H7 | the contact-ability **invocation** line re-typed at its correct value | **RED** |
+| **NC1** | 40 comment lines inserted between an invocation and its guard | **GREEN** |
+
+NC1 green is the criterion fix 1 failed, so fix 3 satisfies both constraints at once: it fires on
+every real citation shape and it does not fire on unrelated line motion.
+
+⚠ **What it does NOT catch, stated because a negative claim is only as wide as its check.** It
+catches a citation typed at its **correct** value — which is exactly when this defect is born, since
+C156 typed `:1202` while the comment *was* at 1202 — and it is blind to one that has **already**
+drifted, because a stale number equals no computed value. That is not hypothetical: `:469` for the
+contact-ability step had been wrong since #1204 (the invocation is at `:482`, at `dbb40c5c` and at this head) and nothing found it;
+review found it by hand while reading this pass. Both live citations in the module are de-numbered
+rather than left for the next reader. The report's §1 table keeps its line numbers on purpose,
+because it scopes them to `dbb40c5c` and a citation scoped to a commit cannot go stale.
 
 ---
 

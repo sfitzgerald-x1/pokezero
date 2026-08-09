@@ -129,7 +129,7 @@ WHAT THIS MODULE DOES NOT AND CANNOT COVER, stated rather than left to be discov
 THE MUTATION BATTERY, ENUMERATED. A battery whose members are not written down costs
 exactly what C153's cost: it claimed "12 applied, 12 caught" and a reviewer found the 13th
 survived. Each below was applied to a copy of the artifact (or to the generator, the
-ledger, the patch, the corpus or the workflow) and had to turn this module RED. All 34 do.
+ledger, the patch, the corpus or the workflow) and had to turn this module RED. All 35 do.
 
    1. a verdict word changed from `UNREACHABLE_TRACED` to `NOT_OBSERVED_AT_SCOPE`
    2. a row deleted from the artifact's verdict map
@@ -174,7 +174,7 @@ replace also rewrote the final-holdout step's guard, which gates `OWNER_RATIFIED
   22. the final-holdout step's `Ran N tests` guard set to any value other than 25
   23. this module's own guard left stale after adding a test
 
-**24-34 ARE C156'S, AND 24-27 ARE THE FOUR THIS BATTERY COULD NOT HAVE CAUGHT BEFORE IT.**
+**24-35 ARE C156'S, AND 24-27 ARE THE FOUR THIS BATTERY COULD NOT HAVE CAUGHT BEFORE IT.**
 Round two closed the instance and shipped the class one surface over for the third time:
 the scan that re-derives every guard reached only 22 of the 26 executable steps, and the
 four it missed were missing from its OUTPUT, not marked as missed. Each of 24-27 was run
@@ -203,13 +203,24 @@ nobody had made fail.
       resolved-at-base site, for the same reason
   32. a guard's `if`-block deleted and the count restated as a comment ABOVE the next step,
       i.e. outside the `run:` body it grades. Green before, because a dropped site is
-      silence; red now, because the site is represented
+      silence; red now, because the site is represented. ⚠ Applied at the Classifier pins
+      step (drag-limit), which was RESOLVED at base -- same siting requirement as 30 and 31,
+      and review noted this entry had not stated it
   33. the battery total in the workflow comment left at its old value while this list grew
   34. a guard weakened from an exact count to the FLOOR shape `Ran [0-9]+ tests`, which is
       what `fleet-worker.yml:45` uses today. A floor cannot detect a suite that shrank, and
       #1163 recorded a floor as the one fail-open in its own battery. Green at base -- the
       site simply left the scan -- and red here, because a guard the pattern cannot read is
       an unresolved site rather than an absent one
+  35. ⚠ a WORKFLOW LINE NUMBER re-typed into this module's prose at its correct current
+      value, in each of the FOUR spellings the four historical citations actually used, plus
+      the denominator-step residual review named, a guard line and an invocation line.
+      Seven shapes,
+      seven reds, and NC1 still green. This entry exists because the guard it exercises
+      SHIPPED COVERING NOTHING: its predecessor forbade a phrase this pass invented, which
+      appears nowhere in the repository but inside its own regex, so all four real citations
+      passed it. A guard verified only against a string its author chose is not verified.
+      `reports/c156` §3.1 carries the seven shapes and their verdicts
 
 ⚠ **AND TWO NEGATIVE CONTROLS, because the first one alone proves nothing.** Forty comment
 lines inserted between an invocation and its guard -- the edit that created all four blind
@@ -1051,7 +1062,8 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
 
       * a step naming a MODULE -- expected count is the module's `test*` methods;
       * a step naming individual `Module.Class.test_method` paths -- expected count is the
-        number of paths named. The abilities step at :469 is that shape, and a first
+        number of paths named. The contact-ability wake-ordering step is that shape, and a
+        first
         version of this pin reported it as a mismatch because it looked for a file.
 
     Modules using `subTest` are still counted by method: `unittest` prints one `Ran N` per
@@ -1088,13 +1100,12 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
     ⚠ **THE LINE NUMBER OF THAT COMMENT IS NOT WRITTEN DOWN ANYWHERE, and the reason is
     C156's own defect.** Its first revision cited it as `:1202` in three places in this
     module and once in `reports/c156`, and C156's own eleven-line workflow comment moved it
-    to `:1213` IN THE SAME COMMIT -- four citations stale inside the change that staled
-    them, in a pass whose subject is stale typed numbers. Review found it. The fix is the
-    class, not the instance: `test_the_scan_sees_every_invocation_a_flat_scan_sees` computes
-    the line and FORBIDS it being re-typed in prose, because pinning a typed citation
-    instead would redden this module on every unrelated edit above it -- measured, it
-    reddened the negative control. (`#1202` elsewhere in this module is the PULL REQUEST,
-    not a line, and is not affected.)
+    to a different line IN THE SAME COMMIT -- four citations stale inside the change that
+    staled them, in a pass whose subject is stale typed numbers. Review found it, and then
+    found the FIRST TWO FIXES for it defective in turn; the record is in
+    `test_the_scan_sees_every_invocation_a_flat_scan_sees`, which is where the working one
+    lives. (`#1202` elsewhere in this module is the PULL REQUEST, not a line, and is not
+    affected.)
     """
 
     WORKFLOW = ".github/workflows/engine-fidelity-gates.yml"
@@ -1168,7 +1179,7 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
             for position, index in enumerate(invocations):
                 stop = invocations[position + 1] if position + 1 < len(invocations) else len(lines)
                 # The whole shell command, followed across backslash continuations, so a
-                # step invoking TWO modules on one command -- the denominator rule at :620
+                # step invoking TWO modules on one command -- the Denominator rule step
                 # is one site with two modules -- yields both targets and neither the next
                 # command's. A fixed line window did both jobs wrong at once.
                 command, cursor = [lines[index]], index
@@ -1299,11 +1310,46 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
         comments because the file carries the invocation string inside one of them and
         counting it into the denominator has already shipped once.
 
-        ⚠ AND THE LINE NUMBER OF THAT COMMENT IS PINNED HERE RATHER THAN TYPED, which is
-        review's finding C. C156's first revision cited it as `:1202` three times in this
-        module and once in `reports/c156`, and C156's own workflow comment moved it to
-        `:1213` in the same commit. A prose citation nothing derives is exactly what this
-        module exists to remove, and it went stale inside the change that staled it.
+        ⚠ AND NO WORKFLOW LINE NUMBER IS TYPED IN THIS MODULE -- review's finding C, and
+        then review's finding on each of the two fixes for it. All three are recorded,
+        because the later ones are worse than the first.
+
+          * **The defect.** C156's first revision cited the comment as `:1202` three times
+            here and once in `reports/c156`, and C156's own workflow comment moved it in
+            the same commit. Four citations stale inside the change that staled them.
+          * **Fix 1 reddened on NOISE.** It pinned the typed citation to the computed line,
+            so any edit above it turned this module red for a reason having nothing to do
+            with guards; the negative control NC1 went red under it. Rejected on that
+            measurement, and review reproduced it and withdrew the suggestion.
+          * ⚠ **Fix 2 COVERED NOTHING, AND SHIPPED.** It forbade the phrase
+            "invocation-carrying comment at `:NNNN`" -- a spelling THIS PASS INVENTED, which
+            `grep -rn` finds nowhere in the repository except inside its own regex. None of
+            the four real citations was written that way. Restoring two of them VERBATIM
+            left this module green. Dead COVERAGE, inside the docstring advertising it as
+            the closure, and the third recurrence in this lineage: C154's bullet, then
+            #1205, then here.
+
+        So the guard is scoped BY VALUE, not by phrase. Every workflow line this module
+        could sensibly cite -- the comment, each executable invocation, each guard -- is
+        computed, and this module's own text may not contain any of them as a `:NNNN`
+        citation. A phrase is evaded by rewording; a value cannot be, because the value is
+        what a citation IS. Verified to fire on all four historical strings and to stay
+        green under NC1, which is the criterion fix 1 failed.
+
+        SCOPE, stated because a negative claim is only as wide as the check.
+
+          * Files: `tests/test_unreachable_readjudication.py`, and for the comment line
+            only, `reports/c156`. The report's §1 table cites the four sites by line ON
+            PURPOSE and says it measured them at `dbb40c5c`; a citation scoped to a commit
+            cannot go stale and is not in scope here.
+          * ⚠ **It catches a citation typed at its CORRECT value, and cannot catch one that
+            is already wrong.** Authoring time is exactly when this defect is born -- C156
+            typed `:1202` while the comment WAS at 1202 -- so the guard fires as the mistake
+            is made, before the edit that stales it. But a citation that has ALREADY drifted
+            equals no computed value and is invisible here. Not hypothetical: `:469` for the
+            contact-ability step had been wrong since #1204 (the invocation is at 482) and
+            nothing found it -- review found it by hand. Both live citations in this module
+            are de-numbered rather than left for the next reader.
         """
 
         lines = self._lines()
@@ -1322,28 +1368,49 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
             "coverage silently, which is #1205 with a different cause.",
         )
 
-        # ⚠ THE CLASS FIX, NOT THE INSTANCE. A first attempt at review's finding C kept the
-        # prose citation and pinned it to `comments[0]`. That is worse than it looks: the
-        # number is still typed, and ANY edit anywhere above it in the workflow reddens
-        # this module for a reason that has nothing to do with guards -- the negative
-        # control NC1, which inserts comment lines, went red under it. A pin whose reds are
-        # mostly noise is a pin that gets deleted, which is how the blind spot it replaces
-        # got there. So the number is REMOVED from prose and this is the only place it is
-        # computed; what is pinned is that nobody re-types it.
-        for name in (
-            "tests/test_unreachable_readjudication.py",
-            "reports/c156_workflow_guard_scan_closure.md",
-        ):
-            with open(os.path.join(REPO, name), encoding="utf-8") as handle:
-                text = handle.read()
-            self.assertEqual(
-                re.findall(r"invocation-carrying comment at `?:\d+`?", text), [],
-                f"{name} has re-typed a LINE NUMBER for the invocation-carrying comment "
-                f"(the scan computes :{comments[0]} on this tree). C156's first revision "
-                "shipped four citations of `:1202` that its own workflow edit had already "
-                "moved to `:1213` -- stale inside the commit that staled them. Describe "
-                "the comment; do not number it.",
-            )
+        # ⚠ SCOPED BY VALUE, NOT BY PHRASE -- see the docstring. The phrase-scoped version
+        # of this guard matched a spelling this pass invented and nothing else, so all four
+        # real citations walked through it and it shipped. A value cannot be evaded by
+        # rewording, because the value is what a citation IS.
+        sites = self._sites()
+        forbidden = {
+            "the invocation-carrying comment": [comments[0]],
+            "an executable invocation": [line for line, _, _, _ in sites],
+            "a `Ran N tests` guard": [g for _, _, g, _ in sites if g is not None],
+        }
+        with open(os.path.join(REPO, "tests/test_unreachable_readjudication.py"),
+                  encoding="utf-8") as handle:
+            mine = handle.read()
+        for what, numbers in forbidden.items():
+            for number in numbers:
+                with self.subTest(cites=what, line=number):
+                    # The citing LINES are reported rather than `assertNotIn`'s haystack,
+                    # which would print this whole module: a failure nobody can read is a
+                    # failure nobody acts on.
+                    hits = [
+                        n for n, text in enumerate(mine.splitlines(), 1)
+                        if ":%d" % number in text
+                    ]
+                    self.assertEqual(
+                        hits, [],
+                        "tests/test_unreachable_readjudication.py cites a WORKFLOW LINE BY "
+                        f"NUMBER ({what}, currently line {number}) at its own lines {hits}."
+                        " That citation is right today and goes stale on the next edit "
+                        "above it, silently -- which is how C156's four stale citations "
+                        "were born. Describe the step; do not number it.",
+                    )
+        # `reports/c156` may cite the four SITES by line, because its §1 scopes them to
+        # `dbb40c5c` and a citation scoped to a commit cannot go stale. The comment line is
+        # not one of those and is where the report's own stale citation was.
+        with open(os.path.join(REPO, "reports/c156_workflow_guard_scan_closure.md"),
+                  encoding="utf-8") as handle:
+            report = handle.read()
+        self.assertEqual(
+            [n for n, text in enumerate(report.splitlines(), 1)
+             if ":%d" % comments[0] in text], [],
+            "reports/c156 cites the invocation-carrying comment BY LINE NUMBER "
+            f"(currently {comments[0]}). Describe it; the line is derived here.",
+        )
 
     def test_every_scanned_module_matches_the_ast_derivations_assumptions(self) -> None:
         """`derived == printed` rests on THREE things `_methods` does not itself check.
