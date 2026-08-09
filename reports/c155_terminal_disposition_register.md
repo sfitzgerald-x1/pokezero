@@ -99,10 +99,12 @@ first revision of this register absorbed that into §1's "terminal is not the ab
 reading and dropped the number, which is exactly the kind of drop §5 exists to record. Derived: of
 §3's **82** rows, **9** carry a C152, C153 or C154 marker — G8, G33b, G33c, G50, H8, H12, H15, H19,
 H22 — and **73 have not been re-examined since C138**. Two of the nine (G33c, H22) are new filings
-rather than re-examinations. C154's **13** corrections all landed in §4, not §3. The **ids** are
-pinned and not merely the count, because the mutation meant to prove that check live *survived* the
-first time: every touched row carries between one and six markers, so removing one left the row in
-the set. A count that cannot see a row leave is not a check. So an owner reading "eleven OPEN items" should read it beside
+rather than re-examinations. C154's **13** corrections all landed in §4, not §3. Both the **ids** and
+the count are published: the count is what an owner scopes from, and the ids are what a swap moves
+when the count does not — one row leaving the set as another joins holds the count at 9, and battery
+mutation B52 is that case. The marker is coarse by design (any `C152`/`C153`/`C154` mention in the
+cell), so it can only over-count; the id list is what bounds it, and the number agrees with C152's
+own tally of five dispositions plus the row it filed. So an owner reading "eleven OPEN items" should read it beside
 "73 §3 rows last looked at in C138"; the fourteen are what the last three passes *found*, not a
 survey of the ledger.
 
@@ -419,12 +421,22 @@ said "the one place this document quotes that zero, T2" and the check behind it 
 literal `31,082`.** The document quotes a two-window zero in **five** paragraphs and four of them
 carried neither bar — this register breaking its own §4 rule, behind a check advertising coverage
 it did not have, which is the #1205 shape in a document written after #1205. The rule and the
-check are now the same width: **every** paragraph asserting a zero over the two permitted windows
-carries both bar values. A detector that normalises markdown emphasis before matching — because one
-of the five is written `**0** in the two head windows`, which a literal scan walks past — finds
-**6** paragraphs, the five item-level assertions plus this one, and the count is pinned. The
-detector is exercised on a constructed bare-zero paragraph and on a non-zero one, so it cannot pass
-by finding nothing.
+check are now the same width **over the phrasings this document uses**: every paragraph asserting a
+zero over the two permitted windows carries both bar values. A detector that normalises markdown
+emphasis before matching — because one of the five is written `**0** in the two head windows`, which
+a literal scan walks past — finds **6** paragraphs, the five item-level assertions plus this one,
+and the count is pinned. It is exercised on a constructed bare-zero paragraph and on a non-zero one,
+so it cannot pass by finding nothing.
+
+⚠ **Scope of that check, per this register's own §0 rule 4, because "the same width" would otherwise
+be a stronger claim than the instrument supports.** The detector is a **phrasing set**, not a
+semantic one. It fires on every form present today and would miss a zero written as *"Neither
+permitted window carries a divergent row"*, *"No divergent rows survive in either window"*, *"Both
+windows matched on every measured boundary"*, *"Dev and holdout are clean at head"* or *"The two
+permitted windows carry none"* — all checked, all currently absent, none guaranteed absent tomorrow.
+So the check is exact over the document as written and is **not** a guarantee against a future
+rephrasing. Widening it to a semantic test is filed unbuilt; the honest form of the claim is this
+paragraph rather than the words "the same width".
 
 **The per-divergence power limit.** C153's combined arm classified **949** divergences over 803,264
 boundaries. The rule of three puts the 95 % upper bound on a per-divergence class at **0.316 %** —
@@ -504,45 +516,67 @@ distinction this section exists to draw.
 artifact must therefore update this register in the same change. That is deliberate and it is the
 whole point: the document that goes stale is the one nothing forces an author through.
 
-**The `Ran N tests` guard.** The step carries an exact `Ran 41 tests`, re-derived from the module's
+**The `Ran N tests` guard.** The step carries an exact `Ran 42 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covers only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure: at base the scan resolves **20** guards out of **25**
-unittest invocation sites, at this head **21 of 26**, **this step is among the 21**, and
-`EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 41 from the module's AST and matches the
-guard. The **five** sites it does not resolve are #1205's subject and are untouched here. ⚠ **One trap hit
-in passing and recorded:** the scan matches on the invocation string itself, so a first revision of
-the step's own comment — which quoted that string while explaining the scan — made the file appear
-to gain an invocation and the step appear twice. The comment no longer spells it. That is C154's
-self-match trap, a fourth time, in the paragraph describing the scan.
+rather than inherited from #1205's figure. The workflow holds **26** lines containing the unittest
+invocation, of which **one is a comment**, so there are **25 executable** invocation sites at this
+head; the scan resolves **21** of them and leaves **four** unresolved (`:616`, `:655`, `:969`,
+`:1548`). At base: 25 lines, one comment, **24 executable**, **20 resolved**, the same four
+unresolved — which is #1205's own figure, and this register and #1205 must agree. **This step is
+among the 21**, and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 42 from the module's
+AST and matches the guard. All three numbers are now **re-derived by the pin** rather than typed;
+before this round they were typed, and they regressed.
 
-**Mutation evidence.** **48 mutations applied, 48 caught**, enumerated in the module's docstring and
-partitioned by *what is mutated*: **A1–A34** edit this document, **B35–B48** edit **only the tree
+⚠ **The same self-match trap, twice, and the second time it shipped.** The scan matches on the
+invocation string, so the step's own comment — which quoted that string while explaining the scan —
+counted as a site. Round one caught that for its visible effect, the step appearing twice, fixed the
+comment, and then round two **re-introduced it as an arithmetic error**: the comment line was
+counted into the denominator, giving "20 of 25 / 21 of 26 / five sites" against the true 20 of 24 /
+21 of 25 / four. Round one's own figures had been right. The correction was reported as
+"re-measured on this tree", which made it worse than a typo. It was caught by review, and the
+guard-scan triple is now the last of this document's self-claims to become machine-derived.
+
+**Mutation evidence.** **52 mutations applied, 52 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
+partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B52** edit **only the tree
 and never this document**. That second number is the one that matters, because a pin reading a
 document against a hard-coded copy of itself passes every document-side mutation — and ⚠ **a first
 revision put it at ten and two of those ten edited the register**, which is the property being
-claimed, mis-stated. Fourteen is the measured figure: a patch line shift, the tie-refusal arm deleted,
+claimed, mis-stated. Fifteen is the measured figure: a patch line shift, the tie-refusal arm deleted,
 a damage push made to consult the truncation flag (G33c *fixed*), a sub-keyed single-seat counter
 added to a committed sweep, a freeze constant added to the differential, a real Showdown checkout
 added to the workflow, the head fingerprint written into an artifact, an `hp`-ceiling context line
 added to a split hunk, a §7 item marked RESOLVED, a §4 verdict flipped, the §4 population sentence
 reworded, and every C152 marker stripped from a ledger row.
 
-⚠ **One of the forty-eight survived its first form, and that is recorded rather than tidied away.**
-B46's first version rewrote a *single* `(C152)` marker on a §3 row and stayed green, because each
-touched row carries between one and six markers and the derivation published only a **count**. The
-count was right; the check behind it could not see a row leave the re-examined set. The derivation
-now publishes the **id list**, and B46 strips every marker from one row. A count that cannot see its
-subject change is the same defect as an absence scan that cannot see its subject appear.
+⚠ **The previous revision's account of a surviving mutation was wrong in both halves, and review
+measured both.** It said a mutation had survived — one `(C152)` marker of six rewritten on a §3 row —
+diagnosed the cause as *"the derivation published only a count"*, and cited that as what earned the
+id list. Neither holds. The marker predicate is `any(tag in line)`, **insensitive to how many markers
+a row carries by construction**, so a list of row *ids* is exactly as blind to that edit as a count
+of rows: the id list could not have been the fix. And the mutation as shipped — every marker stripped
+from a **one**-marker row — moves the count too, so a count alone would have caught it. The battery
+total held only because a survivor had been silently replaced by a different mutation.
 
-**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 41
+**Both halves are now correct.** That edit is recorded as **negative control C1: it must stay green,
+because it does not change the fact being derived** — a row with five remaining markers is still a
+row C152 re-examined, and a red there would be a false positive. Making the derivation
+marker-sensitive was the alternative and was rejected: it would redden whenever anyone rewords a
+ledger cell and drops one of several redundant mentions, which is brittleness rather than
+sensitivity. The control is recorded **with the red mutations that prove the same assertion live**
+(B49 and B52), because a negative control unpaired with one is indistinguishable from an inert pin.
+And the id list is justified by the mutation that actually needs it: **B52**, a swap that strips H8's
+marker and adds one to G1, holding the count at **9** while the membership changes — red on the ids,
+green on the count, and the only mutation in the battery a count cannot catch.
+
+**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 42
 tests, OK**. The gated family together: ledger uniformity **19**, never-fired **22**, wide-seed
 **36**, C154 re-adjudication **34**, seed registry **41**, single-seat coverage **3** — all OK.
 `tests/test_final_holdout_guard.py` and `tests/test_boundary_verdict_partition.py` cannot import
 without a built engine in this environment and are unchanged by this branch. Full suite, with the
 flag that is required rather than stylistic:
 `pytest tests/ -q -p no:randomly --continue-on-collection-errors` — **164 failed at base, 164 failed
-at head**, 4,416 → 4,457 passed (**+41**, exactly this module), 32 errors both sides, and the
+at head**, 4,416 → 4,458 passed (**+42**, exactly this module), 32 errors both sides, and the
 `FAILED` id lists are **identical in both directions**. The absolute figure is a property of the
 machine; the delta is that this branch adds zero failures.
 

@@ -66,7 +66,8 @@ are pinned against the two census modules' own constants, read by AST rather tha
 update the register in the same change. That is deliberate: the document that goes stale is
 the one nothing forces an author through.
 
-MUTATION BATTERY: 48 applied, 48 caught, partitioned by WHAT IS MUTATED. Enumerated because
+MUTATION BATTERY: 52 applied, 52 caught, plus 1 NEGATIVE CONTROL verified green.
+Partitioned by WHAT IS MUTATED. Enumerated because
 an unrecorded battery is what `tests/test_wide_seed_negative_census.py` records costing it a
 surviving mutation, and because "the tests pass" is the same kind of claim this module
 replaces. Each was applied to a clean tree, this module run, and the tree restored.
@@ -79,7 +80,7 @@ distinguishes this pin from a diary, so the split is now by target and the numbe
 where it can be checked. Three of the old block A (a patch line shift and two `events.rs`
 edits) were likewise tree-side and have moved the other way.
 
-BLOCK A -- A1-A34, applied to the REGISTER's own bytes.
+BLOCK A -- A1-A37, applied to the REGISTER's own bytes.
 
   A1.  `T7` deleted from the item table.
   A2.  `T15` appended with a well-formed row. An item cannot join silently.
@@ -130,49 +131,83 @@ BLOCK A -- A1-A34, applied to the REGISTER's own bytes.
        the widened detector finds.
   A32. The register's stated `Ran N tests` decremented while the module is unchanged.
   A33. The register's stated mutation total incremented while this list is unchanged.
-  A34. "Twelve is the measured figure" changed to "Eleven". A32-A34 and B44-B45 all exercise
+  A34. The register's tree-only word ("Fifteen is the measured figure") decremented.
+  A35. The stated count of EXECUTABLE workflow invocation sites incremented.
+  A36. The stated count of guards the #1204 scan RESOLVES incremented.
+  A37. The stated count of UNRESOLVED sites, "four", changed to "five" -- which is exactly
+       the regression review found: counting the one comment line that carries the
+       invocation string as a guard site. A32-A37 and B50-B51 exercise
        `TheDocumentsClaimsAboutItselfAreReDerivedTests`, which exists because review blocked
-       the first revision on four claims the document made about ITSELF.
+       two successive revisions on claims the document made about ITSELF.
 
-BLOCK B -- B35-B48, FOURTEEN mutations applied ONLY to the tree and never to the document.
+BLOCK B -- B38-B52, FIFTEEN mutations applied ONLY to the tree and never to the document.
 Block A can be passed by a pin that reads the register against a hard-coded copy of itself.
 These are the ones that prove each derivation reads what it claims to: every one MAKES A REAL
 CHANGE TO THE TREE and the document, unedited, must go red. Six are the absences, and an
 absence pin that cannot see its own subject appear is the eleven-plus-times defect this repo
 has recorded.
 
-  B35. A blank line inserted above the first `residual_disjoint_bands(` call in the tracked
+  B38. A blank line inserted above the first `residual_disjoint_bands(` call in the tracked
        patch, shifting all four sites. The ANCHORS follow it; the document does not.
-  B36. The `_ => NO_TRUNCATION,` arm deleted from `events.rs` -> loud anchor failure rather
+  B39. The `_ => NO_TRUNCATION,` arm deleted from `events.rs` -> loud anchor failure rather
        than a silently wrong line number.
-  B37. A second `!leftovers_truncated[i]` guard added to a damage push in `events.rs`, i.e.
+  B40. A second `!leftovers_truncated[i]` guard added to a damage push in `events.rs`, i.e.
        G33c FIXED. An improvement has to be recorded rather than absorbed, which is the
        property `tests/test_ledger_table_uniformity.py` mutation 9 earned.
-  B38. `skip:single_seat_boundary:phazing` added to a committed sweep. T13's absence is a
+  B41. `skip:single_seat_boundary:phazing` added to a committed sweep. T13's absence is a
        scan of the corpus, and now it finds one.
-  B39. `FROZEN_FOR_CLAIM = None` added to the differential. T1's "nothing can declare it
+  B42. `FROZEN_FOR_CLAIM = None` added to the differential. T1's "nothing can declare it
        frozen" is a name-level AST scan, and now something can.
-  B40. A real `git clone .../pokemon-showdown` step added to the workflow. T6 residue 1's
+  B43. A real `git clone .../pokemon-showdown` step added to the workflow. T6 residue 1's
        zero is a non-comment scan, and now the checkout exists.
-  B41. A committed sweep's fingerprint rewritten to the head value. T1's "no committed
+  B44. A committed sweep's fingerprint rewritten to the head value. T1's "no committed
        artifact carries it" is progress when it happens and must be recorded, not absorbed.
-  B42. A `defender_active.hp,` context line added inside one of C149's split hunks.
-  B43. Ledger §7 item 5 marked RESOLVED. A resolved §7 item cannot keep a register slot, and
+  B45. A `defender_active.hp,` context line added inside one of C149's split hunks.
+  B46. Ledger §7 item 5 marked RESOLVED. A resolved §7 item cannot keep a register slot, and
        the register's item count moves with the ledger.
-  B44. A C154 verdict flipped `UNREACHABLE_TRACED` -> `NOT_OBSERVED_AT_SCOPE`. T6 is
+  B47. A C154 verdict flipped `UNREACHABLE_TRACED` -> `NOT_OBSERVED_AT_SCOPE`. T6 is
        DISCHARGED-IN-SCOPE only while the artifact says all 26 were traced.
-  B45. The ledger's §4 population sentence reworded -> loud anchor failure.
-  B46. ⚠ **EVERY** C152 marker removed from the ledger's H8 row, so the row leaves the
-       re-examined set. **Its first form -- ONE marker rewritten -- SURVIVED**, because each
-       touched row carries between one and six markers and the derivation published only a
-       count. The count was correct and the check behind it could not see a row leave. That
-       is what earned `scope.section3_rows_touched_since_c138` being the ID LIST rather than
-       the number, and it is recorded rather than tidied away.
-  B47. The workflow step's `Ran N tests` guard bumped while the module is unchanged. This is
+  B48. The ledger's §4 population sentence reworded -> loud anchor failure.
+  B49. Every C152 marker removed from the ledger's H8 row, so the row leaves the
+       re-examined set. Red on the id list AND on the count -- see C1 for what this
+       mutation does NOT establish.
+  B50. The workflow step's `Ran N tests` guard bumped while the module is unchanged. This is
        the #1205 shape applied to this step's own guard: the count it demands becomes one
        its suite can never print, so the guard stops failing closed.
-  B48. The workflow comment's mutation total set to this module's TEST count -- the exact
+  B51. The workflow comment's mutation total set to this module's TEST count -- the exact
        conflation review found in the first revision.
+  B52. A SWAP: H8's marker stripped and a `C152` mention added to G1, so one row leaves the
+       re-examined set and another joins. The COUNT stays at 9 and the MEMBERSHIP changes.
+       This is the only mutation in the battery the count cannot catch, and it is therefore
+       the whole justification for publishing the id list. Verified red on
+       `scope.section3_rows_touched_since_c138` and green on
+       `scope.section3_rows_touched_count`.
+
+
+BLOCK C -- NEGATIVE CONTROLS. Mutations that must stay GREEN because they do not change the
+fact being derived. Recorded with the RED mutation that proves the same assertion is live,
+because a negative control unpaired with one is indistinguishable from an inert pin -- which
+is C154 §6's "control that could not fail", one surface over.
+
+  C1.  ⚠ ONE of the six `C152` markers on the ledger's H19 row rewritten -> GREEN, and it
+       SHOULD be. H19 with five remaining markers is still a row C152 re-examined, so
+       ground truth has not moved and a red here would be a false positive. The predicate is
+       `any(tag in line)`, insensitive to marker COUNT by construction.
+
+       ⚠ **A previous revision of this module listed exactly this edit as a mutation that
+       had SURVIVED, diagnosed the cause as "the derivation published only a count", and
+       cited it as what earned the id list. Every part of that was wrong, and review
+       measured all of it.** A row-id list is exactly as insensitive to marker count as a
+       row count is, so the id list could not have been the fix; and B49 as shipped -- every
+       marker stripped from a ONE-marker row -- moves the count too, so the count alone
+       would have caught it. The battery total then held only because a survivor had been
+       quietly replaced by a different mutation instead of being recorded. It is recorded
+       now, in the block where a green result is the correct one, and the id list is
+       justified by B52 instead.
+
+       Paired live-assertion proof: B49 (all markers stripped from a one-marker row) and
+       B52 (the swap) are both RED, so C1's green is the predicate being right rather than
+       the assertion being absent.
 
 """
 
@@ -768,13 +803,14 @@ def derive() -> dict[str, str]:
         },
         key=lambda name: (name[0], int(re.sub(r"\D", "", name)), name),
     )
-    # The IDS, not just the count. ⚠ A first version published only the count, and the
-    # mutation meant to prove it live -- one `(C152)` marker rewritten -- SURVIVED, because
-    # every touched row carries between one and six markers and removing one leaves the row
-    # in the set. The count was right; the check behind it could not see a row leave. With
-    # the ids pinned, a row joining OR leaving the re-examined set is red in both
-    # directions, and the marker is coarse by design (any C152/C153/C154 mention in the
-    # cell) so it can only over-count -- which the exact id list is what bounds.
+    # THE IDS AND THE COUNT. ⚠ The ids are NOT here because a mutation defeated the count
+    # -- a previous revision said so and review measured it false. The marker predicate is
+    # `any(tag in line)`, which is insensitive to how MANY markers a row carries by
+    # construction, so a row-id list is exactly as blind to that as a row count; and
+    # stripping every marker from a one-marker row moves the count too. What the ids catch
+    # and the count cannot is a SWAP -- one row leaving the re-examined set while another
+    # joins, which holds the count at 9 and changes the membership (battery B49). That, and
+    # telling an owner WHICH rows, is why both are published.
     facts["scope.section3_rows_touched_since_c138"] = ", ".join(touched)
     facts["scope.section3_rows_touched_count"] = str(len(touched))
     facts["scope.section3_rows_untouched_since_c138"] = str(
@@ -1313,7 +1349,16 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         return source.split("MUTATION BATTERY:", 1)[1].split('\n"""', 1)[0]
 
     def _all(self, pattern: str, haystack: str) -> str:
-        found = re.search(pattern, haystack)
+        """First capture of `pattern` in `haystack`, matched against FOLDED whitespace.
+
+        Folded because these are prose sentences in a hard-wrapped document: a sentence
+        that reflows across a line break is the same sentence, and a check that stops
+        seeing it silently passes. That is the failure direction this whole class exists
+        to remove, so it must not be the failure mode of the class itself.
+        """
+
+        folded = re.sub(r"\s+", " ", haystack)
+        found = re.search(pattern, folded)
         self.assertIsNotNone(found, f"the sentence matched by {pattern!r} is gone or reworded")
         return found.group(1)
 
@@ -1324,13 +1369,72 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         for label, pattern, haystack in (
             ("register §6 guard", r"exact `Ran (\d+) tests`", register),
             ("register §6 AST", r"derives (\d+) from the module's AST", register),
-            ("register test evidence", r"→ \*\*Ran (\d+)\ntests, OK\*\*", register),
+            ("register test evidence", r"→ \*\*Ran (\d+) tests, OK\*\*", register),
             ("workflow guard", r"Ran (\d+) tests' /tmp/c155register", step),
             ("workflow error message", r"expected (\d+) register pins", step),
             ("workflow AST", r"deriving (\d+) from the module's AST", step),
         ):
             with self.subTest(site=label):
                 self.assertEqual(int(self._all(pattern, haystack)), derived)
+
+    def test_the_guard_scan_coverage_triple_is_re_derived(self) -> None:
+        """⚠ FINDING A OF REVIEW ROUND TWO, and the last self-claim to become derived.
+
+        The register states how much of #1204's `Ran N tests` guard scan reaches this
+        workflow. Round one typed "21 of the 25" and "four" and was RIGHT. Round two
+        "re-corrected" it to 20-of-25 / 21-of-26 / five by counting a COMMENT line that
+        carries the invocation string as a guard site -- the same self-match trap the
+        sentence directly below it discloses, caught for its visible effect and shipped for
+        its arithmetic one. It also put this register into disagreement with #1205.
+
+        So the triple is derived here rather than stated: EXECUTABLE sites are lines
+        carrying the invocation that are not comments, RESOLVED comes from C154's own
+        `_guards()` -- IMPORTED, never reimplemented, because a second copy of that scan
+        free to drift is worse than one -- and unresolved is the difference.
+        """
+
+        from test_unreachable_readjudication import (  # noqa: E402
+            EveryWorkflowTestCountGuardMatchesItsModuleTests as scan,
+        )
+
+        lines = _text(WORKFLOW).splitlines()
+        carrying = [line for line in lines if "python -m unittest" in line]
+        comments = [line for line in carrying if line.strip().startswith("#")]
+        executable = len(carrying) - len(comments)
+        resolved = len(scan._guards())
+        unresolved = executable - resolved
+
+        # Anti-vacuity, and it is the specific control this finding earns: the file DOES
+        # contain a comment carrying the invocation, so "executable == carrying" would be a
+        # scan that had stopped distinguishing them -- which is the defect itself.
+        self.assertEqual(len(comments), 1, carrying)
+        self.assertGreater(executable, 20)
+        self.assertGreater(resolved, 15)
+
+        register = _text(REGISTER)
+        self.assertEqual(
+            int(self._all(r"there are \*\*(\d+) executable\*\* invocation sites", register)),
+            executable,
+        )
+        self.assertEqual(
+            int(self._all(r"the scan resolves \*\*(\d+)\*\* of them", register)), resolved
+        )
+        words = {3: "three", 4: "four", 5: "five", 6: "six"}
+        self.assertIn(unresolved, words, f"{unresolved} unresolved; extend `words`")
+        self.assertRegex(
+            re.sub(r"\s+", " ", register),
+            rf"leaves \*\*{words[unresolved]}\*\* unresolved",
+        )
+        # This step must be one of the resolved ones, and the guard it resolves to must be
+        # this module's own method count -- which is what makes the figure load-bearing
+        # rather than trivia about someone else's step.
+        mine = [
+            stated
+            for _, targets, stated in scan._guards()
+            if targets == ("tests.test_terminal_disposition_register",)
+        ]
+        source = _text("tests/test_terminal_disposition_register.py")
+        self.assertEqual(mine, [len(re.findall(r"(?m)^\s+def test", source))])
 
     def test_every_stated_mutation_count_is_the_enumerated_batterys_size(self) -> None:
         battery = self._battery()
@@ -1356,9 +1460,13 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         self.assertEqual(int(self._all(r"\*\*B\d+–B(\d+)\*\*", register)), total)
 
     def test_the_tree_only_block_is_stated_at_its_measured_size(self) -> None:
-        # THE CLAIM REVIEW CORRECTED FROM TEN TO EIGHT AND THIS PASS RE-PARTITIONED TO
-        # TWELVE. Tree-only is the property that distinguishes this pin from a diary, so the
-        # word is re-derived from the block's own length in all three places it appears.
+        # THE CLAIM REVIEW CORRECTED FROM TEN TO EIGHT, THEN THE RE-PARTITION MOVED IT
+        # AGAIN. Tree-only is the property that distinguishes this pin from a diary, so the
+        # word is re-derived from block B's own length in all three places it appears, and
+        # the number is never written into this comment -- a previous revision hard-coded
+        # TWELVE here and in A34's description and both went stale in the same round the
+        # class was added to stop exactly that. Neither was reachable by the class, because
+        # the class checks the three STATED sites and not its own prose about them.
         battery = self._battery()
         size = len(re.findall(r"(?m)^  B\d+\.", battery))
         words = {
