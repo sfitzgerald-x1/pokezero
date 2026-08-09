@@ -2939,9 +2939,17 @@ def _apply_struggle_only_move_state(
     CLOSED SINCE: ``_map_choices`` now also resolves the forced-no-move token to the
     request's substituted ``struggle`` candidate, admitted on the same fact this module
     checks one function down in ``_request_reports_only_struggle`` -- that the pseudo-move
-    is the request's ONLY move. Two routes into a Struggle-only request, and only the PP
-    route is closed: a Taunt-induced one fails EARLIER, on the unsupported ``taunt``
-    volatile (``no_worlds_constructed``), so it never reaches the mapping at all.
+    is the request's ONLY move.
+
+    BOTH ROUTES ARE NOW CLOSED. The Taunt route used to fail EARLIER than the mapping, on
+    the unsupported ``taunt`` volatile (``no_worlds_constructed``), so it never reached it;
+    ``engine_world._SUPPORTED_VOLATILES`` now admits ``taunt`` with its counter seeded, so a
+    Taunt-induced Struggle-only request builds a world, the engine's own Status filter
+    empties the taunted side's options, and the resulting ``MoveChoice::None`` lands on
+    ``struggle`` through exactly the translation above. Captured on a lone all-status
+    Blissey vs a Taunting Smeargle: 12 decisions with ``legal == ['struggle']``, 12
+    ``no_worlds_constructed`` refusals before, 0 refusals and 48/48 worlds searched after,
+    with all 12 Struggle-only decisions still present.
     """
 
     if not _request_reports_only_struggle(request):

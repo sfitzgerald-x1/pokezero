@@ -366,8 +366,11 @@ _PP_STALL = BattleStartOverride(
     },
 )
 # TAUNT -- reaches Struggle on turn 1 instead of turn 8, which is what makes the bench-leak
-# probe short. This boundary is refused downstream by `volatile_unsupported: taunt`, so it
-# exercises the payload only, which is exactly what the bench leak is about.
+# probe short. When this was written the boundary was refused downstream by
+# `volatile_unsupported: taunt`, so it exercised the payload only -- which is exactly what
+# the bench leak is about, and still all this fixture asserts. `taunt` is now in
+# `engine_world._SUPPORTED_VOLATILES` (see tests/test_engine_world_taunt.py), so the same
+# boundary DOES build a world now; that does not change what is checked here.
 _TAUNT_STALL = BattleStartOverride(
     player_teams={
         "p1": pack_team(

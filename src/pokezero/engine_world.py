@@ -91,8 +91,19 @@ _WEATHER_IDS = {
 # -> PERISH1 and faints at zero). Seeding the current count reproduces the
 # engine's state exactly, so a Perish-Song endgame is searched rather than
 # guessed — precisely the position where search matters most.
+# ``taunt`` qualifies too, and it is the only entry here needing a separate
+# duration field seeded (done below, next to Yawn's). It qualifies because gen 3's
+# clock is FIXED, so the remaining count is not hidden information:
+# `data/mods/gen3/moves.ts` pins the condition at `duration: 2` with
+# `durationCallback: undefined`, and the `onStart` that bumps duration by one
+# against an already-moved target belongs to modern Showdown -- gen4 overrides
+# `onStart` with a plain one and gen3 inherits gen4 (`data/mods/gen3/scripts.ts`:
+# `inherit: 'gen4'`). So there is no roll to guess and no dependence on which
+# side moved first. Measured on the local simulator both ways round rather than
+# read off: with a faster Taunt user and with a slower one, EXACTLY ONE
+# subsequent request carries the volatile.
 _SUPPORTED_VOLATILES = frozenset({
-    "leechseed", "flashfire", "attract", "destinybond",
+    "leechseed", "flashfire", "attract", "destinybond", "taunt",
     "perish1", "perish2", "perish3", "perish4",
 })
 
@@ -1558,6 +1569,32 @@ def _build_side_spec(
             # behaviour for that side instead of inventing a lock.
             if index is not None:
                 last_used_move = f"move:{index}"
+
+    if "taunt" in volatiles:
+        # Seed the counter at 1 for the same reason Yawn is seeded at 1 below,
+        # and on the same arithmetic. Showdown applies Taunt (gen3 duration 2)
+        # during a turn's move phase and burns the first tick at that same turn's
+        # residual; singles offers no request in between, so every Taunt a
+        # decision boundary can observe already has exactly one tick left.
+        #
+        # The engine's counter is TICKS ELAPSED, not turns remaining
+        # (gen3/generate_instructions.rs 10.15: `0 => taunt += 1`,
+        # `1 => remove the volatile`, anything else panics). Seeding 1 therefore
+        # says "this is the last taunted turn", which is what the observation
+        # means; the struct default of 0 would hold the searched mon taunted for
+        # a second turn that Showdown has already freed. Read off the built wheel
+        # rather than argued: at duration 1 the first end-of-turn emits
+        # `RemoveVolatileStatus TAUNT`, at duration 0 it emits
+        # `ChangeVolatileStatusDuration TAUNT: 1` instead
+        # (tests/test_engine_world_taunt.py pins both).
+        #
+        # NOT VERIFIED at a mid-turn force-switch snapshot, which gen <= 3 does
+        # produce (`sim/battle.ts` replaces a fainted mon after every move, not
+        # only at end of turn) and which is taken BEFORE the applying turn's
+        # residual has run. Yawn documents the same seam below. Whether the
+        # searched world's first turn maps onto the next real turn there -- which
+        # would make 1 right anyway -- was not measured.
+        volatile_durations["taunt"] = 1
 
     if "yawn" in volatiles:
         # Seed the counter at 1, NOT the struct default of 0. Showdown applies
