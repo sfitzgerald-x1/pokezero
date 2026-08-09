@@ -885,7 +885,11 @@ class ThePinIsReachableFromTheRequiredContextTests(unittest.TestCase):
             if stripped.startswith("- "):
                 stripped = stripped[2:]
             # Normalize BEFORE splitting, not after: `if : false` must key as `if`.
-            keys.append(stripped.split(":")[0].strip())
+            # Quotes stripped too -- `"if": false` is a valid YAML mapping key that
+            # parses as `if`, and without this it keyed as `"if"` and slipped the
+            # check. Found by review as a sixth defeat attempt, outside the declared
+            # threat model but a genuine one-line hardening.
+            keys.append(stripped.split(":")[0].strip().strip("\"'"))
 
         self.assertNotIn("if", keys, "the job or one of its steps became skippable")
         self.assertNotIn(
