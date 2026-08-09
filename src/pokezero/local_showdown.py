@@ -2950,6 +2950,12 @@ def _apply_struggle_only_move_state(
     Blissey vs a Taunting Smeargle: 12 decisions with ``legal == ['struggle']``, 12
     ``no_worlds_constructed`` refusals before, 0 refusals and 48/48 worlds searched after,
     with all 12 Struggle-only decisions still present.
+
+    ONE SHAPE STILL REFUSES, deliberately. At a mid-turn REPLACEMENT boundary the engine
+    runs the deferred residual on the replacement ply, so the counter the world must seed
+    depends on how old the Taunt is -- and both ages are reachable and disagree. ``taunt``
+    is withdrawn from ``_SUPPORTED_VOLATILES`` there, so that boundary keeps refusing with
+    the same ``volatile_unsupported`` it refused with before this change.
     """
 
     if not _request_reports_only_struggle(request):

@@ -24,11 +24,28 @@ ways, not read off -- and the world must say "one tick elapsed".
 
 Both halves of that are pinned below against the real wheel rather than argued:
 the Status filter, and the expiry after exactly one end-of-turn.
+
+AND WHERE IT IS NOT EXACT, IT REFUSES. "One tick elapsed" holds at an ordinary
+move boundary because the applying turn's residual has always already run. At a
+mid-turn REPLACEMENT boundary it has not, and the engine runs that deferred
+residual on the replacement ply, so the right seed depends on how old the Taunt
+is -- age 0 needs 0, age 1 needs 1, both are reachable, and the payload carries
+neither. `taunt` is therefore withdrawn from `_SUPPORTED_VOLATILES` at that
+boundary and the world fails closed, which is what `origin/main` did everywhere.
+Pinned by ``test_a_replacement_boundary_refuses_rather_than_guessing_the_age``
+and the wheel fact under it.
+
+⚠ An earlier revision of this file asserted the OPPOSITE -- that a replacement
+turn runs no residual and so cannot reach Taunt -- and built its evidence with
+``hp = 0`` and no ``force_switch`` flag, an arm production never takes. That is
+why the replacement tests below construct the payload and let
+``battle_spec_from_payload`` set the flag, instead of hand-building a Side.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import sys
 import unittest
@@ -334,99 +351,129 @@ class TauntEngineFidelityTests(unittest.TestCase):
             self._durations_field(poke_engine.State.from_string(text)), "0;0;0;0;1;0"
         )
 
+    def test_the_serialized_durations_field_is_where_we_think_it_is(self) -> None:
+        """`_durations_field` hard-codes index 9 of the `=`-delimited state.
+
+        That index is an ordering decision inside a Rust `Display` impl with nothing on
+        its side pinning it, so a reordering upstream would silently move every
+        assertion above onto some other field. Nail it down from BOTH seats: side_one's
+        durations are field 9 and side_two's are field 37, and only one of the two
+        carries the seeded Taunt -- so a shifted layout cannot satisfy both.
+        """
+
+        world = battle_spec_from_payload(
+            _payload(self.dex, p1_volatiles=("taunt",)), _override(), dex=self.dex
+        )
+        fields = build_poke_engine_state(world.spec).to_string().split("=")
+        self.assertEqual(fields[9], "0;0;0;0;1;0", "side_one durations are not field 9")
+        self.assertEqual(fields[37], "0;0;0;0;0;0", "side_two durations are not field 37")
+
+        mirrored = battle_spec_from_payload(
+            _payload(self.dex, p2_volatiles=("taunt",)), _override(), dex=self.dex
+        )
+        mirrored_fields = build_poke_engine_state(mirrored.spec).to_string().split("=")
+        self.assertEqual(mirrored_fields[9], "0;0;0;0;0;0")
+        self.assertEqual(mirrored_fields[37], "0;0;0;0;1;0")
+
     @staticmethod
     def _durations_field(state) -> str:
         """side_one's `VolatileStatusDurations` as serialized.
 
-        Field 9 of the `=`-delimited state, verified positionally by the caller rather
-        than trusted: the assertions above pin both a seeded and an unseeded value, so a
-        wrong index cannot read as a pass in both.
+        Field 9 of the `=`-delimited state. The index is pinned from both seats by
+        `test_the_serialized_durations_field_is_where_we_think_it_is`; the assertions
+        that use this helper pin both a seeded and an unseeded value, so a wrong index
+        cannot read as a pass in both.
         """
 
         return state.to_string().split("=")[9]
 
-    def test_the_taunted_move_phase_count_survives_a_mid_turn_snapshot(self) -> None:
-        """The reason `taunt` belongs in the EXACT set while `yawn` does not.
+    def test_a_replacement_boundary_refuses_rather_than_guessing_the_age(self) -> None:
+        """The seam this branch first got WRONG, now built the way production builds it.
 
-        gen <= 3 replaces a fainted mon after every move, so a world can be built one
-        residual behind reality. `yawn` is gated on `approximate_hidden_duration_volatiles`
-        for exactly that seam -- and its gen3 clock is ALSO a fixed `duration: 2` with no
-        `durationCallback`, so "the clock is fixed" cannot be what separates them.
+        Round one asserted here that a replacement turn "contributes no move phase and no
+        residual", so the seam could not reach Taunt -- and offered that as the structural
+        discriminator against Yawn. The state it measured had `hp = 0` and NO
+        `force_switch` flag. gen3 `get_all_options` checks the EXPLICIT flag first, and
+        `end_of_turn_triggered` keys on that same flag, so the flagged arm RUNS the
+        deferred residual on the replacement ply while the `hp<=0`-only arm does not.
+        `_build_side_spec` sets the flag, so the test measured an arm production never
+        takes. Claim withdrawn.
 
-        What separates them is what the effect is INDEXED ON. Taunt gates a MOVE PHASE and
-        is consumed by the residual that follows the phase it gated, so the two are atomic;
-        a replacement turn has neither, so it cannot shift the count. Yawn's observable is
-        WHICH residual applies the sleep, which is indexed on residual count alone.
+        With the flag set, the residual eats the Taunt on the replacement ply, and the
+        correct seed depends on the Taunt's AGE, which the payload does not carry.
+        Measured live on the simulator (`.probe/force_switch_taunt_live.py`):
 
-        Counted here rather than argued: the number of move phases on which the taunted
-        side is denied its Status move is 1 from an ordinary boundary AND 1 from a mid-turn
-        replacement snapshot, matching Showdown's one remaining taunted move phase in both
-        (`.probe`-measured on the live simulator, faster and slower Taunt user alike).
+            age 0 (Taunt landed on the faint turn) -> 1 taunted move phase left
+            age 1 (Taunt landed the turn before)   -> 0 taunted move phases left
 
-        This asserts nothing about Yawn's seeding, which this branch does not touch.
+        and at a `force_switch` world the engine gives 0 phases for seed 1 and 1 for
+        seed 0. No single seed is right, so the boundary fails closed instead.
         """
 
-        def side_one(taunt: int):
-            return poke_engine.Side(
+        payload = _payload(self.dex, p2_volatiles=("taunt",))
+        payload["selfRequestKind"] = "force-switch"
+        rows = payload["sides"]["p1"]["pokemon"]
+        rows[0]["condition"] = "0 fnt"     # our active fainted...
+        rows[1]["condition"] = "224/224"   # ...and this is the replacement we owe
+
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(payload, _override(), dex=self.dex)
+        self.assertEqual(caught.exception.reason, "volatile_unsupported")
+        self.assertIn("taunt", str(caught.exception))
+
+        # Anti-vacuity, two ways. The refusal must be about the BOUNDARY, not about the
+        # payload being malformed or about Taunt generally:
+        #   * the identical payload at an ordinary boundary BUILDS;
+        #   * the identical replacement boundary WITHOUT taunt also builds.
+        ordinary = _payload(self.dex, p2_volatiles=("taunt",))
+        self.assertIn(
+            "taunt",
+            battle_spec_from_payload(ordinary, _override(), dex=self.dex)
+            .spec.side_two.volatile_statuses,
+        )
+        untaunted = dict(payload)
+        untaunted["sides"] = json.loads(json.dumps(payload["sides"]))
+        untaunted["sides"]["p2"]["volatiles"] = []
+        built = battle_spec_from_payload(untaunted, _override(), dex=self.dex)
+        self.assertTrue(built.spec.side_one.force_switch)
+
+    def test_the_replacement_ply_really_does_run_the_residual(self) -> None:
+        """The engine fact the refusal above rests on, pinned at the wheel.
+
+        Both arms are exercised, because the difference between them is exactly the
+        mistake round one made: the flagged arm consumes the Taunt on the replacement
+        ply, the `hp<=0`-only arm does not.
+        """
+
+        def state(*, force_switch: bool):
+            side_one = poke_engine.Side(
+                pokemon=[
+                    poke_engine.Pokemon(id="blissey", hp=0, maxhp=300,
+                                        moves=[poke_engine.Move(id="tackle", pp=56)]),
+                    poke_engine.Pokemon(id="starmie", hp=200, maxhp=200,
+                                        moves=[poke_engine.Move(id="tackle", pp=56)]),
+                ],
+                active_index="0", force_switch=force_switch,
+            )
+            side_two = poke_engine.Side(
                 pokemon=[poke_engine.Pokemon(
-                    id="blissey", hp=300, maxhp=300,
+                    id="smeargle", hp=200, maxhp=200,
                     moves=[poke_engine.Move(id=_STATUS_MOVE, pp=16),
                            poke_engine.Move(id="tackle", pp=56)])],
                 active_index="0", volatile_statuses={"taunt"},
-                volatile_status_durations=poke_engine.VolatileStatusDurations(taunt=taunt),
+                volatile_status_durations=poke_engine.VolatileStatusDurations(taunt=1),
             )
+            return poke_engine.State(side_one=side_one, side_two=side_two)
 
-        def state(foe_fainted: bool):
-            return poke_engine.State(
-                side_one=side_one(1),
-                side_two=poke_engine.Side(
-                    pokemon=[
-                        poke_engine.Pokemon(id="smeargle", hp=0 if foe_fainted else 200,
-                                            maxhp=200,
-                                            moves=[poke_engine.Move(id="tackle", pp=56)]),
-                        poke_engine.Pokemon(id="starmie", hp=200, maxhp=200,
-                                            moves=[poke_engine.Move(id="tackle", pp=56)]),
-                    ],
-                    active_index="0",
-                ),
-            )
+        def replacement_ply(st):
+            branches = poke_engine.generate_instructions(st, "starmie", "none")
+            best = max(branches, key=lambda b: b.percentage)
+            return [str(i) for i in best.instruction_list]
 
-        def options(st):
-            return sorted(str(r.move_choice) for r in
-                          poke_engine.monte_carlo_tree_search(st, 40).side_one)
-
-        def taunted_move_phases(st, plan):
-            gated = 0
-            for own, foe in plan:
-                opts = options(st)
-                if opts != ["No Move"] and _STATUS_MOVE not in opts:
-                    gated += 1
-                branches = poke_engine.generate_instructions(st, own, foe)
-                # `apply_instructions` RETURNS the next state; it does not mutate.
-                st = st.apply_instructions(max(branches, key=lambda b: b.percentage))
-            return gated
-
-        ordinary = [("tackle", "tackle")] * 3
-        # The mid-turn shape: turn one is the opponent's forced replacement.
-        mid_turn = [("none", "starmie")] + [("tackle", "tackle")] * 2
-
-        self.assertEqual(taunted_move_phases(state(False), ordinary), 1)
-        self.assertEqual(taunted_move_phases(state(True), mid_turn), 1)
-
-        # Anti-vacuity, and the half that makes the structural claim checkable: the
-        # replacement turn really does contribute NO move phase and NO residual, so
-        # there is nothing there for a skipped residual to desynchronise.
-        replacement = state(True)
-        self.assertEqual(options(replacement), ["No Move"])
-        branches = poke_engine.generate_instructions(replacement, "none", "starmie")
-        instructions = [
-            str(i)
-            for i in max(branches, key=lambda b: b.percentage).instruction_list
-        ]
-        self.assertFalse(
-            [i for i in instructions if "TAUNT" in i.upper()],
-            f"a replacement turn must not tick the Taunt counter: {instructions}",
-        )
+        flagged = replacement_ply(state(force_switch=True))
+        derived = replacement_ply(state(force_switch=False))
+        self.assertIn("RemoveVolatileStatus SideTwo: TAUNT", flagged)
+        self.assertNotIn("RemoveVolatileStatus SideTwo: TAUNT", derived)
 
     def test_a_lone_taunted_all_status_side_leaves_the_engine_no_move(self) -> None:
         """The composition with #1202, asserted at the engine rather than argued.
