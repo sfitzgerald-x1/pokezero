@@ -95,7 +95,12 @@ class NativeCallContractTest(unittest.TestCase):
     1 skipped.
     """
 
-    def _captured_args(self, early_stop_min_sims: int = 0, **config_kwargs) -> list:
+    def _captured_args(
+        self,
+        early_stop_min_sims: int = 0,
+        sims: int | None = None,
+        **config_kwargs,
+    ) -> list:
         # leaf_eval is irrelevant to the flag and "model" demands artifact
         # paths, so the default evaluator keeps this a pure config test.
         cfg = EngineMctsConfig(**config_kwargs)
@@ -112,6 +117,7 @@ class NativeCallContractTest(unittest.TestCase):
             root_inputs="root",
             rust_fold=FOLD,
             early_stop_min_sims=early_stop_min_sims,
+            sims=sims,
         )
 
     def test_the_twelve_leading_positionals_are_the_pre_flag_contract(self) -> None:
@@ -128,6 +134,27 @@ class NativeCallContractTest(unittest.TestCase):
             ],
         )
         self.assertIs(args[6], FOLD, "the fold handle must reach slot 6 itself")
+
+    def test_the_sims_override_replaces_slot_one_and_nothing_else(self) -> None:
+        # #1009 collapses duplicate belief worlds into one deeper search by
+        # passing multiplicity x the per-world budget. That value reaches the
+        # crate through slot 1 of THIS list. The collapse counters
+        # (`worlds_collapsed`, the weighted samples) are pinned in
+        # tests/test_engine_search.py, but they all still read correctly if the
+        # override is dropped on the way to the native call -- every collapsed
+        # world would simply search at the unscaled budget, silently, and the
+        # depth ladder would read a number bought with N times less compute.
+        cfg = EngineMctsConfig()
+        default = self._captured_args()
+        self.assertEqual(default[1], cfg.search_sims)
+
+        scaled = self._captured_args(sims=cfg.search_sims * 3)
+        self.assertEqual(scaled[1], cfg.search_sims * 3)
+        self.assertEqual(
+            scaled[:1] + scaled[2:],
+            default[:1] + default[2:],
+            "the override must move slot 1 and no other argument",
+        )
 
     def test_early_stop_alone_appends_the_pair_and_not_the_flag(self) -> None:
         args = self._captured_args(early_stop_min_sims=64)

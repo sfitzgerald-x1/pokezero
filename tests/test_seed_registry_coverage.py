@@ -84,6 +84,7 @@ AND NOTHING HERE IS SKIPPED. Every JSON in the corpus must parse; see `_load_or_
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import tempfile
@@ -104,6 +105,60 @@ FIDELITY_SEED_FLOOR = 19_000_000
 # The registered final-holdout block, and the 60 seeds of it that C141 did not reach.
 FINAL_HOLDOUT_REGISTERED = (19_200_000, 19_200_199)
 FINAL_HOLDOUT_UNSWEPT_HEAD = (19_200_000, 19_200_059)
+
+# C151's window: RATIFIED by the owner on 2026-08-08, and NOT YET SWEPT. Those are two
+# different facts and this module keeps them apart, because collapsing them is the whole
+# incident: C141 treated "a window exists" as "this window is blessed", and the ledger row
+# then treated "registered" as "measured" for three days.
+#
+# It is deliberately NOT in `REGISTERED_BANDS` below, and
+# `TheRatifiedC151WindowIsNotYetSweptTests` makes that a pinned property rather than an
+# omission: the tuple's own rule is that a band joins it only once the sweep that fills it
+# is committed, so adding this one would fail
+# `test_every_registered_band_has_a_committed_witness` -- correctly, because it has no
+# witness. Ratification is not a witness.
+C151_RATIFIED_WINDOW = (19_300_000, 19_300_199)
+C151_PREDICTION = REPO / "reports" / "c151_final_holdout_rereg_prediction.md"
+C151_DISCLOSURE = REPO / "reports" / "rust-fidelity" / "final_holdout_contamination_disclosure.md"
+
+# The burned block. Spent three ways -- contaminated head, self-blessed C141 window,
+# 60-seed overrun -- and refused unconditionally by the guard.
+C151_BURNED_BLOCK = (19_200_000, 19_200_259)
+
+_DIFFERENTIAL = REPO / "scripts" / "engine_transition_differential.py"
+
+
+def guard_constant(name: str) -> object:
+    """Read a module-level constant out of the differential's SOURCE, without importing.
+
+    THE OBVIOUS VERSION OF THIS IS WRONG HERE, and it would be wrong in a way no local
+    run could show. `tests/test_final_holdout_guard.py` imports these constants directly,
+    and that is correct for it: its CI step runs inside `mass-gate`, which builds the
+    engine. THIS module's step does not -- `.github/workflows/engine-fidelity-gates.yml`
+    gives `seed-registry` a bare `actions/checkout` plus `actions/setup-python` and
+    nothing else, deliberately, because the module does not use the engine. But
+    `scripts/engine_transition_differential.py` does `import poke_engine` at module
+    scope, so a plain `from engine_transition_differential import ...` here raises
+    `ModuleNotFoundError` in that job and turns it red -- while passing on any developer
+    machine with a built venv. That is a guard-in-YAML hazard pointed the other way: a
+    local run cannot see the failure.
+
+    Parsing the assignment with `ast` gets the real value from the real file with no
+    import and no engine, so the constant still cannot drift unnoticed -- which was the
+    point of not hardcoding it.
+    """
+
+    tree = ast.parse(_DIFFERENTIAL.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    return ast.literal_eval(node.value)
+    raise AssertionError(
+        f"{name} is no longer a module-level literal assignment in "
+        f"{_DIFFERENTIAL.relative_to(REPO).as_posix()}; this reader went blind rather "
+        "than wrong, so it raises instead of returning a default"
+    )
 
 # Every band of fidelity seed space that the committed record actually touches.
 # MEASURED by running `_seed_intervals` over every committed JSON under `reports/` and
@@ -362,6 +417,20 @@ def _ledger_text() -> str:
     return LEDGER.read_text()
 
 
+def _cells(row: str) -> list[str]:
+    """A GFM table row's cells, with the leading and trailing empties dropped.
+
+    Deliberately naive about escaped pipes -- `tests/test_ledger_table_uniformity.py` owns
+    that rule, validated against three real renderers, and duplicating it here would be a
+    second inferred copy of a rule that was already got wrong once. Every row this module
+    reads is checked rectangular against the header, so a row that would split differently
+    under the real rule fails there first.
+    """
+
+    parts = row.split("|")
+    return [part.strip() for part in parts[1:-1]] if len(parts) >= 3 else []
+
+
 class FidelitySeedCoverageTests(unittest.TestCase):
     """The registry, re-derived from the artifacts rather than read."""
 
@@ -608,10 +677,14 @@ class TheLedgerRowSaysWhatTheArtifactsSayTests(unittest.TestCase):
         # empty slice passes, and that is the whole class of failure this module was
         # written to stop.
         self.assertGreaterEqual(len(self.table.splitlines()), 10)
-        # Six fidelity rows: dev, c73, validation holdout, and the three the final
-        # holdout now decomposes into. Exact, so collapsing the decomposition back to
-        # one row -- which is how the false status got there -- is red.
-        self.assertEqual(self.table.count("fidelity differential"), 6)
+        # Seven fidelity rows: dev, c73, validation holdout, the three the final holdout
+        # decomposes into, and C151's PROPOSED replacement window. Exact, so collapsing
+        # the decomposition back to one row -- which is how the false status got there --
+        # is red. 6 -> 7 with C151's row; the guard in
+        # `.github/workflows/engine-fidelity-gates.yml` that pins this module's test COUNT
+        # is a separate number and was bumped 30 -> 36 in the same commit, because that
+        # one lives in YAML and no local run can see it.
+        self.assertEqual(self.table.count("fidelity differential"), 7)
         self.assertGreater(len(self.section), 2_000)
 
     def test_the_false_status_is_gone_from_the_table(self) -> None:
@@ -646,6 +719,228 @@ class TheLedgerRowSaysWhatTheArtifactsSayTests(unittest.TestCase):
     def test_the_section_points_at_the_enforced_version(self) -> None:
         self.assertIn("tests/test_seed_registry_coverage.py", self.section)
 
+
+class TheRatifiedC151WindowIsNotYetSweptTests(unittest.TestCase):
+    """`19,300,000`-`19,300,199` is RATIFIED and UNSWEPT. Those are two facts, not one.
+
+    THIS CLASS IS DESIGNED TO GO RED ON THE DAY THE SWEEP LANDS, and that is its job
+    rather than a defect. The registered final holdout was spent by C141 on a window the
+    executing agent chose itself, and the ledger row describing it stayed false for three
+    days because no check re-derived it. Both halves of that are guarded here:
+
+      * **ratified is not swept.** The band is absent from `REGISTERED_BANDS`, no
+        committed artifact touches it, and the prediction document says the sweep has not
+        run. Ratification buys the window, not the measurement.
+      * **the blessing is mechanical.** The owner's name and window live in
+        `OWNER_RATIFIED` in the guard, and this module re-reads that constant from source
+        and holds the ledger row, the prediction document and the guard to one another.
+        C141's failure was that "only the owner can bless the replacement window" was a
+        sentence in a document, and a sentence can be walked past.
+
+    Once swept, the virginity pin turns red, which is the signal to do the ratification
+    bookkeeping in the prediction document's section 10 and delete this class.
+
+    MUTATION BATTERY: 21 applied across this class and
+    `TheBurnedBlockAndTheOwnerRatificationTests`, 21 caught, plus clean-tree controls that
+    stay green. Recorded because this repository has found four inert pins and eight
+    checks that assert nothing. Each mutation was applied to a clean tree, both modules run
+    with caches cleared and exit codes captured directly, and the tree restored with
+    `git checkout HEAD -- .` with the restoration verified by `git status --porcelain`
+    before the next one. The eleven that reach THIS class:
+
+      * band added to `REGISTERED_BANDS` -> 3 red, including the witness pin;
+      * a synthetic artifact covering `19,300,000`-`19,300,199` -> 3 red, including the
+        virginity pin. This is the shape of the sweep landing and is the one that MUST fire;
+      * ledger row flipped to `CONSUMED` -> 2 red;
+      * ledger row re-ranged into the `19,200,000` block -> 3 red, including the
+        decomposition pin that keeps #1189's three rows three;
+      * `OWNER_RATIFIED`'s owner rewritten -> 3 red across both modules;
+      * `RATIFIED_FINAL_HOLDOUT` moved without its label -> 2 red (the drift pin);
+      * burned block shrunk to C141's span -> the disjointness pin, plus 3 in the guard;
+      * frozen/not-run banner removed -> 1 red; an `# OUTCOME` appended -> 1 red;
+      * the nonzero-result protocol clause deleted -> 1 red;
+      * the recovered disclosure deleted -> 1 red here and 1 in the guard;
+      * C141 un-demoted -> 1 red; the burn rationale softened in the ledger -> 1 red.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.table = registry_table()
+        cls.section = registry_section()
+        cls.intervals = fidelity_intervals()
+        cls.prediction = C151_PREDICTION.read_text(encoding="utf-8")
+
+    @staticmethod
+    def _grouped(value: int) -> str:
+        return f"{value:,}"
+
+    def _ratified_rows(self) -> list[str]:
+        low, high = C151_RATIFIED_WINDOW
+        span = f"{self._grouped(low)}`–`{self._grouped(high)}"
+        return [line for line in self.table.splitlines() if span in line]
+
+    def test_the_table_records_the_window_as_ratified_and_not_yet_swept(self) -> None:
+        rows = self._ratified_rows()
+        self.assertEqual(len(rows), 1, "the ratified window must be exactly one row")
+        row = rows[0]
+        self.assertIn("RATIFIED", row)
+        self.assertIn("NOT YET SWEPT", row)
+        self.assertIn(guard_constant("OWNER_RATIFIED")[1], row)  # type: ignore[index]
+        # It has not been measured, so it cannot carry the word that means it was.
+        self.assertNotIn("CONSUMED", row)
+        # Rectangular, or GFM silently eats the trailing cells and the status vanishes
+        # from the rendered page while the bytes still look right.
+        self.assertEqual(row.count("|"), self.table.splitlines()[0].count("|"))
+
+    def test_the_ledger_the_document_and_the_guard_all_name_one_window(self) -> None:
+        # THE CROSS-ARTIFACT TIE. Three copies of one decision -- prose, prose and code --
+        # and the C141 registry defect was exactly two copies drifting apart. Read the
+        # guard from SOURCE rather than trusting a transcription of it.
+        owner_ratified = guard_constant("OWNER_RATIFIED")
+        ratified_band = guard_constant("RATIFIED_FINAL_HOLDOUT")
+        self.assertEqual(ratified_band, C151_RATIFIED_WINDOW)
+        assert isinstance(owner_ratified, tuple)
+        low, high = (int(part.replace(",", "")) for part in owner_ratified[0].split("-"))
+        self.assertEqual((low, high), C151_RATIFIED_WINDOW)
+        for text, where in ((self.table, "the ledger row"), (self.prediction, "the document")):
+            self.assertIn(self._grouped(low), text, f"{where} does not name the window")
+            self.assertIn(self._grouped(high), text, f"{where} does not name the window")
+            self.assertIn(owner_ratified[1], text, f"{where} does not name the ratifier")
+
+    def test_ratification_is_not_a_witness_so_the_band_stays_out_of_registered_bands(self) -> None:
+        # The load-bearing pin. `REGISTERED_BANDS` is the machine-readable record of what
+        # was SWEPT. A ratified-but-unswept band in it would assert a measurement that
+        # does not exist -- and would be the same category error as C141's row.
+        self.assertNotIn(
+            C151_RATIFIED_WINDOW, {(start, end) for start, end, _ in REGISTERED_BANDS},
+            "the ratified window is in REGISTERED_BANDS, which asserts a sweep happened. "
+            "If the sweep ran, commit its artifact, flip the ledger row and delete this "
+            "class; if not, take the band back out.",
+        )
+
+    def test_the_window_is_disjoint_from_every_consumed_band_and_from_the_burn(self) -> None:
+        low, high = C151_RATIFIED_WINDOW
+        collisions = [
+            (start, end, label)
+            for start, end, label in REGISTERED_BANDS
+            if start <= high and low <= end
+        ]
+        self.assertEqual(collisions, [], "the ratified window overlaps consumed seeds")
+        burn_low, burn_high = C151_BURNED_BLOCK
+        self.assertFalse(low <= burn_high and burn_low <= high)
+        self.assertEqual(C151_BURNED_BLOCK, guard_constant("BURNED_FINAL_HOLDOUT"))
+        # Inside #1122's guarded half-line, read from the guard rather than hardcoded --
+        # if the floor ever moved, a literal here would not notice.
+        self.assertGreaterEqual(low, guard_constant("FINAL_HOLDOUT_SEED_FLOOR"))
+
+    def test_no_committed_artifact_touches_the_ratified_window(self) -> None:
+        # Virginity, RE-DERIVED from the corpus at test time rather than asserted in
+        # prose. This is the pin that fires the moment the sweep's artifact is committed.
+        low, high = C151_RATIFIED_WINDOW
+        touching = {
+            path: spans
+            for path, spans in self.intervals.items()
+            for start, end in spans
+            if start <= high and end >= low
+        }
+        self.assertEqual(
+            touching, {},
+            "a committed artifact now covers the ratified window. If the sweep ran, do "
+            "the bookkeeping in reports/c151_final_holdout_rereg_prediction.md section "
+            "10 and delete this class. If not, seeds were spent without the trigger.",
+        )
+
+    def test_the_document_is_frozen_as_to_protocol_but_the_sweep_has_not_run(self) -> None:
+        # The banner has to carry BOTH states at once, because they are genuinely
+        # different and the whole PR turns on the distinction. A document that reads as
+        # unregistered invites re-choosing the window; one that reads as complete invites
+        # appending an outcome and calling it pre-registered.
+        text = self.prediction
+        self.assertIn("REGISTERED AND FROZEN", text)
+        self.assertIn("SWEEP NOT RUN", text.upper())
+        self.assertIn("TRIGGER HAS NOT FIRED", text.upper())
+        self.assertNotIn("# OUTCOME", text)
+        # The owner's words, quoted rather than paraphrased. They are the authority the
+        # whole document rests on and must survive edits to it verbatim.
+        self.assertIn("can we sweep a new set of seeds then?", text)
+        self.assertIn(
+            "Ratified: final holdout re-registered as 19,300,000–19,300,199", text
+        )
+
+    def test_the_nonzero_result_protocol_is_registered_before_any_number_exists(self) -> None:
+        # The condition that protects "exactly once" from dying at the first divergence.
+        # Registered NOW, because the reflex on a nonzero result is to fix and then
+        # "confirm the fix", and that confirmation is a second sweep.
+        text = self.prediction
+        self.assertIn("estimate, not a gate", text)
+        self.assertIn("stands at any", text)
+        self.assertIn("never by touching the holdout again", text)
+
+    def test_the_ratification_did_not_disturb_the_final_holdout_rows(self) -> None:
+        # #1189's three rows decompose the 19,200,000 block. C151 adds rows elsewhere in
+        # the same table and must not fold them together, which would either re-open the
+        # corrected decomposition or make the new window look like a fourth segment of an
+        # already-spent block.
+        #
+        # Scoped to the RANGE cell, not the row: rows legitimately mention the block in
+        # their prose -- C151's say it is burned -- and a whole-row grep would count that.
+        rows_19_200 = [
+            line
+            for line in self.table.splitlines()
+            if len(_cells(line)) > 1 and "`19,200," in _cells(line)[1]
+        ]
+        self.assertEqual(
+            len(rows_19_200), 3,
+            "the 19,200,000 block must stay decomposed into exactly the three rows "
+            "#1189 wrote; C151 adds no row to it",
+        )
+        for row in rows_19_200:
+            self.assertNotIn("RATIFIED", row)
+        ratified = [line for line in self.table.splitlines() if "RATIFIED" in line]
+        self.assertEqual(ratified, self._ratified_rows())
+
+    def test_the_burned_block_is_recorded_as_burned_and_says_why(self) -> None:
+        # "Reserved" is what it was. It is spent three ways, and a reader told only
+        # "reserved" goes looking for the flag that lifts it -- which no longer exists.
+        self.assertIn("BURNED", self.section)
+        for reason in ("contaminated", "chose it itself", "overran"):
+            self.assertIn(reason, self.section, f"the burn rationale no longer says: {reason}")
+        self.assertIn("does not open it", self.section)
+
+    def test_the_recovered_disclosure_is_committed_and_cited_where_it_is_relied_on(self) -> None:
+        # It was cited by the frozen C141 pre-registration and existed in no blob on any
+        # ref -- the ledger recorded that as an unrepaired auditability defect. C151
+        # recovered it from outside the repo and committed it at the cited path, so the
+        # citation resolves. A citation that 404s is what created this incident.
+        self.assertTrue(C151_DISCLOSURE.is_file(), "the recovered disclosure is not committed")
+        disclosure = C151_DISCLOSURE.read_text(encoding="utf-8")
+        self.assertIn("for start in 19100000 19000000 19200000", disclosure)
+        self.assertIn("I have **not** chosen", disclosure)
+        cited = "reports/rust-fidelity/final_holdout_contamination_disclosure.md"
+        self.assertIn(cited, self.section)
+        self.assertIn(cited, self.prediction)
+
+    def test_c141_is_demoted_to_dev_evidence_in_the_ledger_and_in_its_own_report(self) -> None:
+        # Retained, relabelled, and terminal for nothing. Deleting it would break
+        # `test_every_registered_band_has_a_committed_witness` and would erase what the
+        # seeds were spent on; leaving it unlabelled invites it being re-cited as "the
+        # holdout result", which is the one thing it must never be again.
+        c141 = (REPO / "reports" / "c141_final_holdout_prediction.md").read_text(encoding="utf-8")
+        # Case-insensitive: the C141 report carries the demotion in a heading, which is
+        # legitimately shouted, and the ledger carries it in running prose. Pinning the
+        # casing would be pinning typography rather than the claim.
+        for text, where in ((self.section, "the ledger"), (c141, "the C141 report")):
+            lowered = text.lower()
+            self.assertIn("dev-window evidence", lowered, f"{where} does not demote C141")
+            self.assertIn("terminal for nothing", lowered, f"{where} does not demote C141")
+        # The C141 pre-registration's first 80 lines are byte-frozen at `3687d205`; the
+        # demotion is appended below the outcome, never edited into the frozen part.
+        self.assertGreater(
+            c141.lower().index("dev-window evidence"),
+            c141.index("# OUTCOME"),
+            "the demotion must be appended below the frozen pre-registration, not edited "
+            "into it",
+        )
 
 if __name__ == "__main__":
     unittest.main()

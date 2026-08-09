@@ -212,8 +212,14 @@ class ModelPathDepthInstrumentationTest(unittest.TestCase):
                 f"model path does not accumulate {field}; a depth ladder run on "
                 "leaf_eval='model' would carry no reached-depth evidence",
             )
+        # Matches the ACCUMULATION, not the literal increment. The guard's
+        # property is "both paths accumulate the histogram"; pinning `+= 1`
+        # additionally pinned the increment, which the model path no longer uses
+        # -- duplicate belief worlds are searched once and the sample is weighted
+        # by how many worlds it stands for. Still exactly two sites, so the guard
+        # is not weakened in the dimension it exists for.
         self.assertEqual(
-            len(re.findall(r"depth_reached_histogram\[reached\] \+= 1", source)),
+            len(re.findall(r"depth_reached_histogram\[reached\] \+= ", source)),
             2,
             "expected exactly two accumulation sites: hp_fraction and model",
         )
