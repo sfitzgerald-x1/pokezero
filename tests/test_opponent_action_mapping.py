@@ -457,13 +457,24 @@ class OpponentActionMappingTest(unittest.TestCase):
             "substituted order is a confident wrong prior, which is neither "
             "counted nor visible, unlike the refusal it replaces",
         )
-        # WHOLE map, not just the switch arms. A substituted order taken from
-        # the other seat resolves no switch arm anyway -- cross-team species
-        # match no candidate -- so a switch-only assertion scores that
-        # substitution as a pass. The MOVE arms are what separate "refused"
-        # from "substituted something that happens to resolve nothing":
-        # `action_surface` builds move candidates without the display order, so
-        # they map under every substitution and only a real refusal blanks them.
+        # WHOLE map, not just the switch arms, and the reason is not the one an
+        # earlier revision of this comment gave.
+        #
+        # A substituted order taken from the other seat resolves no switch arm
+        # ONLY WHEN THE TWO TEAMS SHARE NO SPECIES: `party_index` misses on
+        # every key, nothing is flagged active, and `legal_switch_keys` matches
+        # none of it. gen3 randombattle has no cross-side species clause
+        # (`docs/observation_compression_design.md`), so overlap is ordinary,
+        # and where it happens the shared arm binds to whatever slot the other
+        # team's layout gives it -- fully mapped and transposed. Measured in the
+        # crate fixtures: disjoint gives `[Some(0), None x5]`, one shared bench
+        # species gives `[Some(0), None, Some(5), None, None, None]`.
+        #
+        # So the disjointness is not a defence; this row of the corpus just
+        # happens to sit in it. Asserting the whole map is what catches the
+        # substitution either way -- the MOVE arms map under every substitution
+        # (`action_surface` builds move candidates without the display order),
+        # so only a real refusal blanks them.
         for label, observed in (
             ("root", refused_all),
             ("branch", refused_branch_all),

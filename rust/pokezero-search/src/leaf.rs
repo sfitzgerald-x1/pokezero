@@ -2018,10 +2018,10 @@ impl LeafContext {
     /// anyway. Fail-closed above, fail-OPEN here. A confidently wrong prior is
     /// neither counted nor visible; a refusal is both, via `prior_fallbacks`.
     ///
-    /// Callers evolve this through a branch's switches with
-    /// [`evolve_self_order`] and `opponent_prefix()`; an unknown root order
-    /// evolves to nothing and stays unknown, which
-    /// [`resolve_opponent_order`] converts into an all-`None` action map.
+    /// Callers evolve a KNOWN order through a branch's switches with
+    /// [`evolve_self_order`] and `opponent_prefix()`. An unknown order is never
+    /// evolved at all — both callers guard with `.map(..)` — so it arrives at
+    /// [`resolve_opponent_order`] as `None` and the action map refuses.
     pub(crate) fn root_opponent_order(&self) -> Option<&[String]> {
         if self.root_opponent_request_order.is_empty() {
             None
@@ -3218,11 +3218,20 @@ mod tests {
     const ORDER_THE_APPROXIMATION_CANNOT_REACH: [&str; 6] =
         ["oaa", "occ", "obb", "odd", "oee", "off"];
 
-    fn order_root_inputs() -> String {
+    /// A self party that SHARES a bench species with the opponent (`occ`).
+    ///
+    /// gen3 randombattle has no cross-side species clause, so this is an
+    /// ordinary position, not a corner case. It exists because it is the shape
+    /// in which a substituted display order stops being harmless: see
+    /// `the_refusal_holds_when_the_two_teams_share_a_species`.
+    const SELF_PARTY_SHARING_A_BENCH_SPECIES: [&str; 6] =
+        ["saa", "occ", "scc", "sdd", "see", "sff"];
+
+    fn order_root_inputs(self_party: &[&str; 6]) -> String {
         json!({
             "observation_metadata": {
                 "showdown_slot": "p1",
-                "self_team": SELF_PARTY
+                "self_team": self_party
                     .iter()
                     .map(|species| json!({"species": species}))
                     .collect::<Vec<Value>>(),
@@ -3231,9 +3240,9 @@ mod tests {
         .to_string()
     }
 
-    fn order_ctx_json(request_order: Option<&[&str]>) -> String {
+    fn order_ctx_json(self_party: &[&str; 6], request_order: Option<&[&str]>) -> String {
         let mut ctx = json!({
-            "p1": SELF_PARTY.to_vec(),
+            "p1": self_party.to_vec(),
             "p2": OPPONENT_PARTY.to_vec(),
             "turn": 1,
         });
@@ -3246,6 +3255,13 @@ mod tests {
     }
 
     fn order_context(request_order: Option<&[&str]>) -> (LeafContext, State) {
+        order_context_with_parties(&SELF_PARTY, request_order)
+    }
+
+    fn order_context_with_parties(
+        self_party: &[&str; 6],
+        request_order: Option<&[&str]>,
+    ) -> (LeafContext, State) {
         use poke_engine::state::PokemonMoveIndex;
         let mut state = State::default();
         // BOTH actives get a real move. The move arm is what makes the
@@ -3262,8 +3278,8 @@ mod tests {
         }
         let ctx = LeafContext::new(
             ORDER_TABLES_JSON,
-            &order_root_inputs(),
-            &order_ctx_json(request_order),
+            &order_root_inputs(self_party),
+            &order_ctx_json(self_party, request_order),
             &state,
         )
         .expect("fail-closed fixture context");
@@ -3313,6 +3329,39 @@ mod tests {
         assert_eq!(
             map[0], None,
             "the move arm must be refused with the rest of the node"
+        );
+    }
+
+    #[test]
+    fn the_refusal_holds_when_the_two_teams_share_a_species() {
+        // The case that turns a harmless substitution into a wrong answer, and
+        // the reason the assertions above demand the WHOLE map rather than
+        // just the switch arms.
+        //
+        // Substitute any order drawn from the other seat and, on DISJOINT
+        // parties, nothing resolves: `party_index` misses on every key, no row
+        // is flagged active, `switch_targets` falls back to `(0..len)`, and
+        // `legal_switch_keys` matches none of it. That looks like fail-closed
+        // but it is a coincidence of the species sets. Let ONE species sit on
+        // both teams -- gen3 randombattle has no cross-side species clause, so
+        // this is an ordinary position -- and that arm binds to whatever slot
+        // the SELF team's layout puts it in: fully mapped, priors applied,
+        // arms transposed.
+        //
+        // So this fixture is the one where the switch arms themselves
+        // discriminate, and it also guards a switch-scoped refusal from
+        // regressing back in under overlap.
+        let (ctx, state) = order_context_with_parties(&SELF_PARTY_SHARING_A_BENCH_SPECIES, None);
+        let options = mixed_options();
+        let map = ctx
+            .opponent_action_map(&state, &options, None, None, false)
+            .expect("opponent action map");
+        assert_eq!(
+            map,
+            vec![None; options.len()],
+            "a shared species must not give a withheld order a foothold: the \
+             refusal has to come from the rule, not from the two teams \
+             happening to be disjoint"
         );
     }
 
