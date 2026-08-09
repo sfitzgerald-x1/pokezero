@@ -288,9 +288,9 @@ table at `encoder.rs:2158-2168` as `confusion_elapsed` and `wrap_trap_elapsed`.
 2. *"`side_condition_counts()` omits `protect`, add it"* (stall). `NUMERIC_STALL_COUNTER` reads
    md `{prefix}_stall_counter`, **not** `*_side_condition_counts`, so adding `protect` to that
    export would not move the column. The C112 v2 finding that the engine *carries* the counter
-   as `protect` (`state.rs:699`, seeded at `engine_world.py:1265`) still stands and is what
+   as `protect` (`state.rs:699`, seeded at `engine_world.py:1286`) still stands and is what
    makes the fix cheap — but the write has to land on the md key.
-3. *"Encore is seeded at a deliberate floor and never advanced"*. `engine_world.py:1324`'s
+3. *"Encore is seeded at a deliberate floor and never advanced"*. `engine_world.py:1345`'s
    `volatile_durations["encore"] = 1` seeds poke-engine's own volatile duration, which this
    column never reads. That is the `approximate_sleep_turns` error (P6) under a different name.
    It looked consistent only by coincidence: at `1003#[8,9]` the root's parser
@@ -640,7 +640,7 @@ Reality at `1009` round 17 seat p2: `self_must_recharge = False`, active **Slaki
 locked-into move legal plus switches. So the shape is a **Choice lock**, and a recharge mechanism
 cannot explain why the three non-Hyper-Beam moves diverge while hyperbeam agrees.
 
-The instrument, chased rather than assumed: `engine_world.py:1885-1890` reads the request's active
+The instrument, chased rather than assumed: `engine_world.py:1953-1958` reads the request's active
 move rows into `known_pp[id] = (pp, disabled)`, carried into `MoveSpec` at `:1946,:1967`;
 `leaf.rs:1663` reads that per-move `disabled` bit. Dumping `public_materialization` for 1009 p2:
 at **round 16 (the root, a recharge request)** all four moves are `"disabled": false`; at **round
@@ -675,7 +675,7 @@ not feed this column and predicts the wrong direction.**
 `NUMERIC_SLEEP_TURNS` reads `exact.sleep_turns()` (`encoder.rs:2329`) = the JSON ledger field
 (`encoder.rs:1464`), written by `leaf.rs:1461-1470` as `base + count` with `base` the **root
 ledger's** value ("Root sleepers keep their ledger base"). `approximate_sleep_turns` only seeds
-poke-engine's internal wake-RNG counter (`engine_world.py:1735-1738`). It also predicts the wrong
+poke-engine's internal wake-RNG counter (`engine_world.py:1803-1806`). It also predicts the wrong
 sign: a `sleep_turns=0` approximation makes the leaf **lower**, while the measurement is got 0.4
 (2/5) against want 0.2 (1/5) — **higher**.
 
