@@ -1990,42 +1990,44 @@ impl LeafContext {
         )
     }
 
-    /// The opponent's ROOT display order: the sampled world's engine party
-    /// order. Always six entries and always resolves engine `Switch(party)`
-    /// indices, unlike `md["opponent_team"]`, which is the partial belief view.
-    /// Callers evolve this through a branch's switches with
-    /// [`evolve_self_order`] and `opponent_prefix()`.
-    pub(crate) fn root_opponent_order(&self) -> Vec<String> {
-        // ACTIVE-FIRST, not the raw packed party order. The head's label space
-        // is that seat's own Showdown request order, which keeps the active at
-        // slot 0 and accumulates a slot-0 swap on every switch-in; the self
-        // side gets this free because `root_self_order` comes from
-        // `md["self_team"]`, the real request. The opponent has no request, so
-        // the packed order must be corrected the same way before
-        // `evolve_self_order` layers further swaps on top of it.
-        //
-        // Measured on the golden corpus: without this swap the crate's switch
-        // slots disagree with `rollout.py::_opponent_action_index` on every row
-        // whose opponent has already switched -- i.e. from the opponent's first
-        // switch onward, which is most of a gen3 randbat. Applying the swap
-        // reproduces the label order exactly.
-        // Prefer the caller's explicit order. The fallback below -- packed
-        // party order with the active swapped to slot 0 -- reproduces the
-        // request order only while the opponent has made AT MOST ONE
-        // switch-in, and is transposed from the second onward. Four review
-        // rounds landed on that; it is kept only so ad-hoc callers that cannot
-        // supply the order degrade to a documented approximation rather than
-        // to nothing.
-        if !self.root_opponent_request_order.is_empty() {
-            return self.root_opponent_request_order.clone();
+    /// The opponent's ROOT display order — the caller's explicit
+    /// `ctx["opponent_request_order"]`, or `None` when it was withheld.
+    ///
+    /// FAIL CLOSED, and the `Option` is the point. The head's label space is
+    /// that seat's own Showdown request order, which keeps the active at slot
+    /// 0 and accumulates a slot-0 swap on EVERY switch-in. The self side gets
+    /// that free (`root_self_order` is `md["self_team"]`, the real request);
+    /// the opponent has no request, and the crate never receives the pre-root
+    /// protocol lines it would need to replay the history itself. So the order
+    /// is either supplied through the ctx channel or it is unknown, and there
+    /// is no third answer this crate can compute.
+    ///
+    /// This used to return a one-swap APPROXIMATION when the ctx channel was
+    /// silent — the packed party order with the active swapped to slot 0,
+    /// which is correct only while the opponent has made at most one
+    /// switch-in and transposed from the second onward. It is
+    /// `scripts/measure_opponent_request_order.py::wrong_one_swap`, one of the
+    /// three deliberately-wrong controls that file keeps; its own docstring
+    /// records it at ~91% wrong, and the file's header records the three
+    /// controls together at 81-96% wrong over rounds 6 and 7. No per-control
+    /// per-row artifact is committed, so treat the figure as the recorded
+    /// order of magnitude, not as a number this repo can reproduce — the
+    /// argument below does not need it. That turned Python's DELIBERATE refusal
+    /// into a wrong answer: `engine_search` omits the key precisely when it
+    /// cannot determine the order (~0.7% of decisions), and the crate answered
+    /// anyway. Fail-closed above, fail-OPEN here. A confidently wrong prior is
+    /// neither counted nor visible; a refusal is both, via `prior_fallbacks`.
+    ///
+    /// Callers evolve a KNOWN order through a branch's switches with
+    /// [`evolve_self_order`] and `opponent_prefix()`. An unknown order is never
+    /// evolved at all — both callers guard with `.map(..)` — so it arrives at
+    /// [`resolve_opponent_order`] as `None` and the action map refuses.
+    pub(crate) fn root_opponent_order(&self) -> Option<&[String]> {
+        if self.root_opponent_request_order.is_empty() {
+            None
+        } else {
+            Some(&self.root_opponent_request_order)
         }
-        let engine_side = self.engine_side_index(false);
-        let mut order = self.species_keys[engine_side].clone();
-        let active = self.root_active_party[engine_side];
-        if active < order.len() && active != 0 {
-            order.swap(0, active);
-        }
-        order
     }
 
     pub(crate) fn opponent_prefix(&self) -> &'static str {
@@ -2062,23 +2064,47 @@ impl LeafContext {
         // derivation leaf_row_inputs writes into the md team before
         // action_surface reads it back.
         //
-        // The opponent uses the same shape: the sampled world's engine party
-        // order at the root, EVOLVED through the branch's switches by the
-        // caller. Both halves matter. The engine party order is the only base
-        // that resolves engine `Switch(party)` indices -- `md["opponent_team"]`
-        // is the partial belief view and resolves almost nothing. But leaving
-        // it UNEVOLVED is also wrong: measured against the head's training
-        // label (`rollout.py` `_opponent_action_index`, that seat's own
-        // request-order action block), the two agree until the opponent's
-        // first switch and are rotated by one from then on -- which in a gen3
-        // randbat is most of the game, and permutes every opponent switch
-        // prior.
-        let root_opponent: Vec<String> =
-            if slot_is_self { Vec::new() } else { self.root_opponent_order() };
+        // The opponent uses the same shape, but its base is SUPPLIED, not
+        // derived: `ctx["opponent_request_order"]`, EVOLVED through the
+        // branch's switches by the caller. Both halves matter. Leaving it
+        // unevolved is wrong -- measured against the head's training label
+        // (`rollout.py` `_opponent_action_index`, that seat's own
+        // request-order action block), an unevolved order agrees until the
+        // opponent's first switch and is rotated by one from then on, which in
+        // a gen3 randbat is most of the game and permutes every opponent
+        // switch prior. And deriving the base in-crate is wrong for the same
+        // reason one ply earlier: the request order is a switch HISTORY the
+        // crate never sees. So an absent base is refused, not approximated.
         let order: &[String] = if slot_is_self {
             self_order.unwrap_or(&self.root_self_order)
         } else {
-            self_order.unwrap_or(&root_opponent)
+            // FAIL CLOSED on the opponent seat. Without the request order
+            // there is no honest display order to map switch arms through, so
+            // the map refuses: `gather_self_priors` rejects a map holding any
+            // `None`, the node stays uniform, and the refusal is counted in
+            // `prior_fallbacks`. See `root_opponent_order`.
+            //
+            // The refusal is WHOLE-NODE, and that OVER-REFUSES on purpose.
+            // Only switch arms depend on the display order — `action_surface`
+            // builds move candidates without consulting `self_team_order`, so
+            // an unknown order would still map moves to their correct slots.
+            // Two reasons to refuse them anyway. It puts the refusal at one
+            // explicit site instead of leaving it to emerge from an empty
+            // `switch_targets`, which is a property of `action_surface` that
+            // nothing here owns; and it is the only version of this rule a
+            // test can tell apart from doing nothing (a move arm maps to
+            // `Some(0)` under every alternative, so a switch-only refusal
+            // would be indistinguishable from deleting the fix).
+            //
+            // The cost is bounded and visible: it bites only on an opponent
+            // node with no legal switch arm — trapped, or down to its last mon
+            // — where correct move priors become a uniform fallback. That is
+            // the safe direction and it is COUNTED, which is the whole
+            // distinction this change exists to defend.
+            match resolve_opponent_order(self_order, self.root_opponent_order()) {
+                Some(order) => order,
+                None => return Ok(vec![None; options.len()]),
+            }
         };
         let active_party = active_index_usize(self_side);
         let team_flags: Vec<(String, bool)> = order
@@ -2159,6 +2185,39 @@ impl LeafContext {
         }
         Ok(map)
     }
+}
+
+/// Fail-CLOSED resolution of the OPPONENT seat's display order.
+///
+/// `branch_order` is the caller's order for this branch (the root order run
+/// through [`evolve_self_order`]); `root_order` is
+/// [`LeafContext::root_opponent_order`]. `None` means the order is UNKNOWN and
+/// the action map must refuse — never that some approximation should stand in.
+///
+/// ## On the empty-slice guard
+///
+/// Stated precisely, because the obvious justification for it is wrong. No
+/// current caller can reach it: unknown is carried as `None` end to end —
+/// `BranchFold::opponent_order` is an `Option` and `evolve_self_order` runs
+/// only on a known order — so `Some(&[])` does not arise in this crate today.
+/// It is retained as a guard against reintroducing an in-band empty sentinel,
+/// which is exactly how the first version of this fix carried unknown.
+///
+/// It is pinned by the unit test ONLY, and that is not laziness: **no
+/// behavioural fixture can separate the two worlds.** An empty display order
+/// makes `self_team_order` empty, which empties `switch_targets`
+/// (`action_surface`), so every switch arm resolves to `None` by a different
+/// route whether or not this guard exists. What the guard buys is that the
+/// refusal happens at ONE named site with one reason, not at two sites for two
+/// reasons — it does not prevent a wrong answer, because there is no wrong
+/// answer on that path to prevent.
+pub(crate) fn resolve_opponent_order<'a>(
+    branch_order: Option<&'a [String]>,
+    root_order: Option<&'a [String]>,
+) -> Option<&'a [String]> {
+    branch_order
+        .or(root_order)
+        .filter(|order| !order.is_empty())
 }
 
 /// Apply the self side's switch/drag lines to a display order: each switch
@@ -2434,14 +2493,17 @@ impl PyLeafEncoder {
             &state.side_one
         };
         // Evolve over the same branch lines the self side uses, with the
-        // OPPONENT's protocol prefix.
-        let opponent_order = lines.as_deref().map(|lines| {
-            evolve_self_order(
-                &self.ctx.root_opponent_order(),
-                lines,
-                self.ctx.opponent_prefix(),
-            )
-        });
+        // OPPONENT's protocol prefix -- and only when the root order is KNOWN,
+        // the same shape `multiply_batched_encoded_core` uses. An unknown order
+        // stays `None` and the map refuses, so this debug surface fails closed
+        // exactly as the search path does and what it shows is what the search
+        // sees.
+        let opponent_order = match (self.ctx.root_opponent_order(), lines.as_deref()) {
+            (Some(root), Some(lines)) => {
+                Some(evolve_self_order(root, lines, self.ctx.opponent_prefix()))
+            }
+            _ => None,
+        };
         let map = self.ctx.opponent_action_map(
             &state,
             &options,
@@ -3098,5 +3160,329 @@ mod tests {
             "p1",
         );
         assert_eq!(untouched, order);
+    }
+
+    // -----------------------------------------------------------------------
+    // FAIL-CLOSED opponent request order
+    //
+    // `engine_search` omits `ctx["opponent_request_order"]` exactly when it
+    // cannot determine the order (measured ~0.7% of decisions) -- a deliberate
+    // refusal. The crate used to answer anyway, with a one-swap approximation
+    // that is correct only through the opponent's FIRST switch-in. These pins
+    // are the contract that the refusal survives the layer boundary: no order
+    // in, no priors out, and the node stays uniform through the all-`None` map
+    // that `gather_self_priors` rejects and `prior_fallbacks` counts.
+    // -----------------------------------------------------------------------
+
+    /// Layout-only tables. On the switch-mapping path `action_surface` reads
+    /// `action_count` and `move_action_count` and nothing else from here, so
+    /// the census fields carry the action-block shape and the dex carries the
+    /// single entry `Tables::from_json` refuses to build without.
+    const ORDER_TABLES_JSON: &str = r#"{
+        "schema_version": "pokezero.encoder-tables.v1",
+        "vocab": {"index": {"<pad>": 0}, "oov_buckets": 1, "oov_offset": 1},
+        "layout": {
+            "schema_version": "pokezero.observation.v3",
+            "token_count": 1,
+            "categorical_feature_count": 1,
+            "numeric_feature_count": 1,
+            "action_count": 10,
+            "move_action_count": 4
+        },
+        "dex": {
+            "species": {"aa": {"types": ["normal"], "base_stats": {}}},
+            "moves": {"tackle": {"type": "normal", "max_pp": 56}}
+        }
+    }"#;
+
+    /// Engine PARTY order for each seat (`ctx["p1"]` / `ctx["p2"]`), which is
+    /// what `MoveChoice::Switch(party)` indexes. Party slot 0 is the active on
+    /// a default `State`, so the opponent's active is `oaa`.
+    const SELF_PARTY: [&str; 6] = ["saa", "sbb", "scc", "sdd", "see", "sff"];
+    const OPPONENT_PARTY: [&str; 6] = ["oaa", "obb", "occ", "odd", "oee", "off"];
+
+    /// The order the DELETED approximation produced: the packed party order
+    /// with the active swapped to slot 0, which is the identity here because
+    /// `oaa` is already party slot 0. Byte-identical to `OPPONENT_PARTY` ON
+    /// PURPOSE — it is the control, the order a crate that guesses hands back.
+    const ORDER_THE_APPROXIMATION_RETURNED: [&str; 6] =
+        ["oaa", "obb", "occ", "odd", "oee", "off"];
+
+    /// An order NO in-crate approximation can reach: three switch-ins (`occ`,
+    /// `obb`, `oaa`) accumulate three slot-0 swaps, leaving the active at slot
+    /// 0 with `occ`/`obb` behind it in reverse arrival order. This is the
+    /// discriminating half of the pair — it differs from
+    /// `ORDER_THE_APPROXIMATION_RETURNED` in exactly the two slots a second
+    /// switch-in transposes. Deleting either constant as "redundant" destroys
+    /// the comparison; they are a matched pair, not two examples.
+    const ORDER_THE_APPROXIMATION_CANNOT_REACH: [&str; 6] =
+        ["oaa", "occ", "obb", "odd", "oee", "off"];
+
+    /// A self party that SHARES a bench species with the opponent (`occ`).
+    ///
+    /// gen3 randombattle has no cross-side species clause, so this is an
+    /// ordinary position, not a corner case. It exists because it is the shape
+    /// in which a substituted display order stops being harmless: see
+    /// `the_refusal_holds_when_the_two_teams_share_a_species`.
+    const SELF_PARTY_SHARING_A_BENCH_SPECIES: [&str; 6] =
+        ["saa", "occ", "scc", "sdd", "see", "sff"];
+
+    fn order_root_inputs(self_party: &[&str; 6]) -> String {
+        json!({
+            "observation_metadata": {
+                "showdown_slot": "p1",
+                "self_team": self_party
+                    .iter()
+                    .map(|species| json!({"species": species}))
+                    .collect::<Vec<Value>>(),
+            }
+        })
+        .to_string()
+    }
+
+    fn order_ctx_json(self_party: &[&str; 6], request_order: Option<&[&str]>) -> String {
+        let mut ctx = json!({
+            "p1": self_party.to_vec(),
+            "p2": OPPONENT_PARTY.to_vec(),
+            "turn": 1,
+        });
+        // ABSENT, not empty: `engine_search` omits the key entirely when it
+        // fails closed, and that omission is the input under test.
+        if let Some(order) = request_order {
+            ctx["opponent_request_order"] = json!(order.to_vec());
+        }
+        ctx.to_string()
+    }
+
+    fn order_context(request_order: Option<&[&str]>) -> (LeafContext, State) {
+        order_context_with_parties(&SELF_PARTY, request_order)
+    }
+
+    fn order_context_with_parties(
+        self_party: &[&str; 6],
+        request_order: Option<&[&str]>,
+    ) -> (LeafContext, State) {
+        use poke_engine::state::PokemonMoveIndex;
+        let mut state = State::default();
+        // BOTH actives get a real move. The move arm is what makes the
+        // whole-node refusal distinguishable from doing nothing: switch arms
+        // resolve to `None` under several unrelated conditions (an empty
+        // display order empties `switch_targets` all by itself), but a move
+        // arm maps to its slot under every one of them. Without it these
+        // fixtures score the fix and the absence of the fix the same.
+        for side in [&mut state.side_one, &mut state.side_two] {
+            let active = side.get_active();
+            active.maxhp = 200;
+            active.hp = 200;
+            active.replace_move(PokemonMoveIndex::M0, Choices::TACKLE);
+        }
+        let ctx = LeafContext::new(
+            ORDER_TABLES_JSON,
+            &order_root_inputs(self_party),
+            &order_ctx_json(self_party, request_order),
+            &state,
+        )
+        .expect("fail-closed fixture context");
+        (ctx, state)
+    }
+
+    /// One move arm plus the five bench mons, in engine option order — the
+    /// shape of a real decision node, and deliberately MIXED: see
+    /// `order_context` for why a switch-only option list cannot discriminate.
+    fn mixed_options() -> Vec<MoveChoice> {
+        use poke_engine::state::{PokemonIndex, PokemonMoveIndex};
+        let mut options = vec![MoveChoice::Move(PokemonMoveIndex::M0)];
+        options.extend(
+            [
+                PokemonIndex::P1,
+                PokemonIndex::P2,
+                PokemonIndex::P3,
+                PokemonIndex::P4,
+                PokemonIndex::P5,
+            ]
+            .into_iter()
+            .map(MoveChoice::Switch),
+        );
+        options
+    }
+
+    #[test]
+    fn absent_opponent_request_order_refuses_the_whole_node_including_move_arms() {
+        let (ctx, state) = order_context(None);
+        let options = mixed_options();
+        let map = ctx
+            .opponent_action_map(&state, &options, None, None, false)
+            .expect("opponent action map");
+        assert_eq!(
+            map,
+            vec![None; options.len()],
+            "no request order must yield an all-None map: gather_self_priors \
+             rejects it, the node stays uniform, and prior_fallbacks counts \
+             the refusal. Any Some(_) here is a CONFIDENT prior derived from \
+             an order the crate cannot know."
+        );
+        // The MOVE arm is the load-bearing element and it is asserted twice on
+        // purpose. Switch arms return `None` under several conditions that have
+        // nothing to do with this fix; the move arm maps to `Some(0)` under all
+        // of them, so it is the only element of this map that separates the
+        // refusal from doing nothing. Deleting it makes this test inert.
+        assert_eq!(
+            map[0], None,
+            "the move arm must be refused with the rest of the node"
+        );
+    }
+
+    #[test]
+    fn the_refusal_holds_when_the_two_teams_share_a_species() {
+        // The case that turns a harmless substitution into a wrong answer, and
+        // the reason the assertions above demand the WHOLE map rather than
+        // just the switch arms.
+        //
+        // Substitute any order drawn from the other seat and, on DISJOINT
+        // parties, nothing resolves: `party_index` misses on every key, no row
+        // is flagged active, `switch_targets` falls back to `(0..len)`, and
+        // `legal_switch_keys` matches none of it. That looks like fail-closed
+        // but it is a coincidence of the species sets. Let ONE species sit on
+        // both teams -- gen3 randombattle has no cross-side species clause, so
+        // this is an ordinary position -- and that arm binds to whatever slot
+        // the SELF team's layout puts it in: fully mapped, priors applied,
+        // arms transposed.
+        //
+        // So this fixture is the one where the switch arms themselves
+        // discriminate, and it also guards a switch-scoped refusal from
+        // regressing back in under overlap.
+        let (ctx, state) = order_context_with_parties(&SELF_PARTY_SHARING_A_BENCH_SPECIES, None);
+        let options = mixed_options();
+        let map = ctx
+            .opponent_action_map(&state, &options, None, None, false)
+            .expect("opponent action map");
+        assert_eq!(
+            map,
+            vec![None; options.len()],
+            "a shared species must not give a withheld order a foothold: the \
+             refusal has to come from the rule, not from the two teams \
+             happening to be disjoint"
+        );
+    }
+
+    #[test]
+    fn an_unknown_order_reaches_the_branch_map_as_none_not_as_an_empty_order() {
+        // The branch seam, in the shape `multiply_batched_encoded_core` uses
+        // it: `BranchFold::opponent_order` is an `Option`, so an unknown root
+        // order is never evolved and arrives here as `None`. Pinning the SHAPE
+        // matters -- carrying unknown as an empty `Vec` also happens to refuse,
+        // but only because `evolve_self_order` preserves emptiness, which is a
+        // property of a function that owes this fix nothing.
+        let (ctx, state) = order_context(None);
+        let lines = ["|switch|p2a: Occ|Occ, L80, F|100/100".to_string()];
+        let branch_order = ctx
+            .root_opponent_order()
+            .map(|root| evolve_self_order(root, &lines, ctx.opponent_prefix()));
+        assert!(
+            branch_order.is_none(),
+            "an unknown root order must not be evolved into some other order"
+        );
+        let options = mixed_options();
+        let map = ctx
+            .opponent_action_map(&state, &options, branch_order.as_deref(), None, false)
+            .expect("opponent action map");
+        assert_eq!(map, vec![None; options.len()]);
+    }
+
+    #[test]
+    fn supplied_opponent_request_order_still_maps_and_the_order_is_load_bearing() {
+        // Both halves in one test ON PURPOSE. The refusal pins above pass in a
+        // world where the map ALWAYS refuses, so something has to prove the
+        // supplied-order path still resolves -- and that the map actually
+        // reads the supplied permutation rather than reproducing the packed
+        // party order it would have guessed.
+        let options = mixed_options();
+        let (ctx, state) = order_context(Some(&ORDER_THE_APPROXIMATION_RETURNED));
+        let guessable = ctx
+            .opponent_action_map(&state, &options, None, None, false)
+            .expect("opponent action map");
+        // Move arm at action 0; active `oaa` at display slot 0, so the bench
+        // follows in party order from `move_action_count` = 4.
+        assert_eq!(
+            guessable,
+            vec![Some(0), Some(4), Some(5), Some(6), Some(7), Some(8)],
+            "a supplied order must resolve every legal arm"
+        );
+
+        let (ctx, state) = order_context(Some(&ORDER_THE_APPROXIMATION_CANNOT_REACH));
+        let unguessable = ctx
+            .opponent_action_map(&state, &options, None, None, false)
+            .expect("opponent action map");
+        assert_eq!(
+            unguessable,
+            vec![Some(0), Some(5), Some(4), Some(6), Some(7), Some(8)],
+            "the map must follow the SUPPLIED order: obb and occ are \
+             transposed relative to the packed party order, so their action \
+             slots must be too"
+        );
+        assert_ne!(
+            unguessable, guessable,
+            "fixture does not discriminate: the two orders map identically, so \
+             a crate that ignored the supplied order would pass"
+        );
+    }
+
+    #[test]
+    fn the_self_seat_is_untouched_by_the_opponent_request_order() {
+        // FLAG-OFF INVARIANCE, at the only layer that can carry it here: the
+        // self map is the whole prior surface when `use_opponent_priors` is
+        // off, and it must not move when the opponent order appears or
+        // disappears. Pinned against an EXPLICIT expectation as well as
+        // against itself, so it cannot pass by both sides being empty.
+        let options = mixed_options();
+        let expected = vec![Some(0), Some(4), Some(5), Some(6), Some(7), Some(8)];
+        for request_order in [
+            None,
+            Some(&ORDER_THE_APPROXIMATION_RETURNED[..]),
+            Some(&ORDER_THE_APPROXIMATION_CANNOT_REACH[..]),
+        ] {
+            let (ctx, state) = order_context(request_order);
+            let map = ctx
+                .self_action_map(&state, &options, None, None, false)
+                .expect("self action map");
+            assert_eq!(
+                map, expected,
+                "the self seat's map must not depend on ctx[\"opponent_request_order\"]"
+            );
+        }
+    }
+
+    /// UNIT-ONLY, and labelled so it is not mistaken for a behavioural claim.
+    ///
+    /// The empty-slice cases below are unreachable from any caller in this
+    /// crate — unknown is carried as `None` end to end — and no fixture can
+    /// separate them either way, because an empty display order refuses the
+    /// same switch arms through `switch_targets`. They pin the guard's stated
+    /// contract, nothing more. See `resolve_opponent_order`'s doc; do not cite
+    /// this test as evidence that the guard prevents a wrong answer.
+    #[test]
+    fn resolve_opponent_order_treats_absent_and_empty_alike() {
+        let root = vec!["oaa".to_string(), "obb".to_string()];
+        let branch = vec!["obb".to_string(), "oaa".to_string()];
+        let empty: Vec<String> = Vec::new();
+
+        assert_eq!(resolve_opponent_order(None, None), None);
+        assert_eq!(resolve_opponent_order(Some(&empty), None), None);
+        assert_eq!(
+            resolve_opponent_order(Some(&empty), Some(&root)),
+            None,
+            "an in-band empty sentinel must not fall through to the root"
+        );
+        assert_eq!(resolve_opponent_order(None, Some(&empty)), None);
+        assert_eq!(
+            resolve_opponent_order(None, Some(&root)),
+            Some(&root[..]),
+            "the root order stands when the caller supplies no branch order"
+        );
+        assert_eq!(
+            resolve_opponent_order(Some(&branch), Some(&root)),
+            Some(&branch[..]),
+            "the caller's evolved branch order wins over the root order"
+        );
     }
 }

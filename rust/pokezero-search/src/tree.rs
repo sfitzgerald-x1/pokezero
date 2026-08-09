@@ -428,27 +428,7 @@ pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
                     Some(child) => child,
                     None => {
                         let child = new_decision_node(tree, state, depth + 1);
-                        // Model priors for the acting seat, when the encoded
-                        // core priced this branch's observation (uniform
-                        // otherwise — including a same-round pending eval,
-                        // which the core re-applies after its batch returns).
-                        if let Some((side_one, priors)) = tree.chances[chance_idx].branches[k]
-                            .child_self_priors
-                            .clone()
-                        {
-                            apply_self_priors(&mut tree.decisions[child], side_one, &priors);
-                        }
-                        // Opponent seat, same lazily-applied path. `side_one`
-                        // here is already the OPPONENT's side (the writer
-                        // stored the seat that owns these arms), so this is a
-                        // plain application to that seat's stat vector -- no
-                        // negation of the flag and no reflection of the values.
-                        if let Some((side_one, priors)) = tree.chances[chance_idx].branches[k]
-                            .child_opponent_priors
-                            .clone()
-                        {
-                            apply_self_priors(&mut tree.decisions[child], side_one, &priors);
-                        }
+                        apply_branch_child_priors(tree, chance_idx, k, child);
                         tree.chances[chance_idx].branches[k].child = Some(child);
                         child
                     }
@@ -473,6 +453,37 @@ fn unapply_path(tree: &Tree, state: &mut State, path: &[PathStep]) {
         if let Some(k) = step.branch {
             state.reverse_instructions(&tree.chances[step.chance].branches[k].instructions);
         }
+    }
+}
+
+/// Apply whatever model priors the encoded core parked on a chance branch to
+/// the child decision node just created under it.
+///
+/// Both stored vectors carry the side flag of the seat that OWNS their arms —
+/// `child_self_priors` the acting seat, `child_opponent_priors` the other one —
+/// so BOTH are applied verbatim to that seat's stat vector. There is no
+/// negation of the flag and no `1 - p` on the values: reflection at the seat
+/// boundary applies to VALUES only, and happens in
+/// `multiply_batched_encoded_core`, not here. Branches with no stored priors
+/// keep the uniform priors `make_stats` seeded (the historical behaviour, and
+/// what a same-round pending eval leaves behind until the core re-applies it).
+pub(crate) fn apply_branch_child_priors(
+    tree: &mut Tree,
+    chance_idx: usize,
+    branch_idx: usize,
+    child: usize,
+) {
+    if let Some((side_one, priors)) = tree.chances[chance_idx].branches[branch_idx]
+        .child_self_priors
+        .clone()
+    {
+        apply_self_priors(&mut tree.decisions[child], side_one, &priors);
+    }
+    if let Some((side_one, priors)) = tree.chances[chance_idx].branches[branch_idx]
+        .child_opponent_priors
+        .clone()
+    {
+        apply_self_priors(&mut tree.decisions[child], side_one, &priors);
     }
 }
 
@@ -911,6 +922,185 @@ pub(crate) fn puct_search_multi(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------
+    // Model-prior APPLY: seat routing, arity refusal, and the guarantee
+    // that priors reweight exploration WITHOUT touching values.
+    // Gather-side coverage lives in `crate::priors`.
+    // -----------------------------------------------------------------
+
+    fn prior_stats(priors: &[f32]) -> Vec<MoveStats> {
+        priors
+            .iter()
+            .enumerate()
+            .map(|(i, prior)| MoveStats {
+                display: format!("arm{i}"),
+                prior: *prior,
+                visits: 0,
+                total_value: 0.0,
+            })
+            .collect()
+    }
+
+    fn prior_node(s1: &[f32], s2: &[f32]) -> DecisionNode {
+        DecisionNode {
+            visits: 0,
+            depth: 1,
+            s1_options: vec![MoveChoice::None; s1.len()],
+            s2_options: vec![MoveChoice::None; s2.len()],
+            s1_stats: prior_stats(s1),
+            s2_stats: prior_stats(s2),
+            children: HashMap::new(),
+        }
+    }
+
+    fn priors_of(stats: &[MoveStats]) -> Vec<f32> {
+        stats.iter().map(|s| s.prior).collect()
+    }
+
+    #[test]
+    fn apply_self_priors_writes_exactly_one_seat() {
+        let mut node = prior_node(&[0.5, 0.5], &[0.5, 0.5]);
+        assert!(apply_self_priors(&mut node, true, &[0.8, 0.2]));
+        assert_eq!(priors_of(&node.s1_stats), vec![0.8, 0.2]);
+        assert_eq!(
+            priors_of(&node.s2_stats),
+            vec![0.5, 0.5],
+            "side one's priors must not leak onto side two"
+        );
+
+        let mut node = prior_node(&[0.5, 0.5], &[0.5, 0.5]);
+        assert!(apply_self_priors(&mut node, false, &[0.8, 0.2]));
+        assert_eq!(priors_of(&node.s2_stats), vec![0.8, 0.2]);
+        assert_eq!(priors_of(&node.s1_stats), vec![0.5, 0.5]);
+    }
+
+    #[test]
+    fn apply_self_priors_refuses_an_arity_mismatch_and_changes_nothing() {
+        let mut node = prior_node(&[0.5, 0.5], &[0.5, 0.5]);
+        assert!(!apply_self_priors(&mut node, true, &[0.4, 0.4, 0.2]));
+        assert_eq!(priors_of(&node.s1_stats), vec![0.5, 0.5]);
+        assert!(!apply_self_priors(&mut node, true, &[1.0]));
+        assert_eq!(priors_of(&node.s1_stats), vec![0.5, 0.5]);
+        // A partial write (zip stops at the shorter side) would leave 0.4 in
+        // arm 0 above; assert the full vector, not just the length.
+    }
+
+    /// Priors reweight EXPLORATION only. A prior write that also disturbed
+    /// visits or accumulated value would corrupt the backup, and the
+    /// exact-expectation contract is the crate's whole quality story.
+    #[test]
+    fn apply_self_priors_leaves_visits_and_values_alone() {
+        let mut node = prior_node(&[0.5, 0.5], &[0.5, 0.5]);
+        node.s1_stats[0].visits = 7;
+        node.s1_stats[0].total_value = 3.5;
+        node.visits = 9;
+        assert!(apply_self_priors(&mut node, true, &[0.9, 0.1]));
+        assert_eq!(node.s1_stats[0].visits, 7);
+        assert_eq!(node.s1_stats[0].total_value, 3.5);
+        assert_eq!(node.s1_stats[0].mean(), 0.5);
+        assert_eq!(node.visits, 9);
+    }
+
+    /// The applied prior has to actually STEER selection, otherwise the whole
+    /// opponent-priors path could be wired correctly and inert. Same stats,
+    /// same visits, only the prior differs.
+    #[test]
+    fn an_applied_prior_changes_which_arm_puct_picks() {
+        let mut node = prior_node(&[0.5, 0.5], &[0.5, 0.5]);
+        assert_eq!(
+            crate::select(&node.s2_stats, 16, 1.4, false),
+            0,
+            "uniform priors leave the first arm winning the tie"
+        );
+        assert!(apply_self_priors(&mut node, false, &[0.1, 0.9]));
+        assert_eq!(crate::select(&node.s2_stats, 16, 1.4, false), 1);
+    }
+
+    fn priored_branch(
+        self_priors: Option<(bool, Vec<f32>)>,
+        opponent_priors: Option<(bool, Vec<f32>)>,
+    ) -> ChanceBranch {
+        ChanceBranch {
+            probability: 1.0,
+            instructions: Vec::new(),
+            value_sum: 0.5,
+            visits: 1,
+            terminal: None,
+            no_expand: false,
+            pending_row: None,
+            child: None,
+            child_self_priors: self_priors,
+            child_opponent_priors: opponent_priors,
+        }
+    }
+
+    /// The lazy-apply orientation pin. The searching seat is side one, so the
+    /// branch carries `(true, self)` and `(false, opponent)`; each vector must
+    /// land on its own seat's stats. A mutant that negates either stored flag,
+    /// or that applies both vectors to one seat, fails here.
+    #[test]
+    fn both_seats_priors_land_on_their_own_stats_at_child_creation() {
+        let mut tree = Tree {
+            decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
+            chances: vec![ChanceNode {
+                branches: vec![priored_branch(
+                    Some((true, vec![0.9, 0.1])),
+                    Some((false, vec![0.2, 0.8])),
+                )],
+            }],
+        };
+        apply_branch_child_priors(&mut tree, 0, 0, 0);
+        assert_eq!(priors_of(&tree.decisions[0].s1_stats), vec![0.9, 0.1]);
+        assert_eq!(priors_of(&tree.decisions[0].s2_stats), vec![0.2, 0.8]);
+    }
+
+    /// The same branch with the searching seat on side TWO: the stored flags
+    /// invert, and so must the destinations. Together with the test above this
+    /// rules out a hard-coded "self = s1, opponent = s2" apply.
+    #[test]
+    fn stored_side_flags_route_the_apply_when_the_searching_seat_is_side_two() {
+        let mut tree = Tree {
+            decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
+            chances: vec![ChanceNode {
+                branches: vec![priored_branch(
+                    Some((false, vec![0.9, 0.1])),
+                    Some((true, vec![0.2, 0.8])),
+                )],
+            }],
+        };
+        apply_branch_child_priors(&mut tree, 0, 0, 0);
+        assert_eq!(priors_of(&tree.decisions[0].s2_stats), vec![0.9, 0.1]);
+        assert_eq!(priors_of(&tree.decisions[0].s1_stats), vec![0.2, 0.8]);
+    }
+
+    /// Opponent priors alone must not disturb the acting seat — this is the
+    /// flag-off/flag-on containment property at the apply site.
+    #[test]
+    fn an_opponent_only_branch_leaves_the_acting_seat_uniform() {
+        let mut tree = Tree {
+            decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
+            chances: vec![ChanceNode {
+                branches: vec![priored_branch(None, Some((false, vec![0.2, 0.8])))],
+            }],
+        };
+        apply_branch_child_priors(&mut tree, 0, 0, 0);
+        assert_eq!(priors_of(&tree.decisions[0].s1_stats), vec![0.5, 0.5]);
+        assert_eq!(priors_of(&tree.decisions[0].s2_stats), vec![0.2, 0.8]);
+    }
+
+    #[test]
+    fn a_branch_with_no_stored_priors_leaves_the_child_uniform() {
+        let mut tree = Tree {
+            decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
+            chances: vec![ChanceNode {
+                branches: vec![priored_branch(None, None)],
+            }],
+        };
+        apply_branch_child_priors(&mut tree, 0, 0, 0);
+        assert_eq!(priors_of(&tree.decisions[0].s1_stats), vec![0.5, 0.5]);
+        assert_eq!(priors_of(&tree.decisions[0].s2_stats), vec![0.5, 0.5]);
+    }
 
     #[test]
     fn renderer_unsafe_branch_is_rejected_at_the_tree_fold_seam() {

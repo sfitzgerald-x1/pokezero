@@ -37,13 +37,16 @@ use rand::SeedableRng;
 use tch::{CModule, Device, IValue, Kind, TchError, Tensor};
 
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
-use poke_engine::engine::state::MoveChoice;
 use poke_engine::instruction::Instruction;
 use poke_engine::state::State;
 
+use crate::priors::{
+    branch_seats, is_single_none, resolve_root_priors, resolve_round_priors, root_seats, HeadPair,
+    HeadSource,
+};
 use crate::tree::{
-    apply_self_priors, finalize, multiply_report_json, root_visit_lock, traverse, BranchSeam,
-    LeafPrice, MultiPlyConfig, MultiPlyOutcome, SearchCounters, Traversal, Tree,
+    finalize, multiply_report_json, root_visit_lock, traverse, BranchSeam, LeafPrice,
+    MultiPlyConfig, MultiPlyOutcome, SearchCounters, Traversal, Tree,
 };
 use crate::{make_stats, parse_state, sample_branch, select, stats_to_json};
 
@@ -646,63 +649,64 @@ struct BranchFold {
     fold: crate::fold::FoldStateInner,
     turn: i64,
     self_order: Vec<String>,
-    /// The opponent's party order evolved to this branch. Threaded alongside
-    /// `self_order` rather than recomputed, because switch swaps must
+    /// The opponent's request order evolved to this branch, or `None` when the
+    /// caller withheld it (`ctx["opponent_request_order"]` absent). Threaded
+    /// alongside `self_order` rather than recomputed, because switch swaps must
     /// ACCUMULATE down a line -- an unevolved order is correct only until the
     /// opponent's first switch, after which every switch prior is permuted.
-    opponent_order: Vec<String>,
+    ///
+    /// `Option`, not an empty `Vec`. UNKNOWN is a state this field has to carry
+    /// end to end -- it decides whether the opponent's switch arms are mapped
+    /// or refused (`leaf::resolve_opponent_order`) -- and an in-band empty
+    /// sentinel would make "unknown" survive only by the accident that
+    /// `evolve_self_order` preserves emptiness.
+    opponent_order: Option<Vec<String>>,
     meta: crate::leaf::LeafMeta,
 }
 
-/// Gather a leaf's action-block priors onto the acting seat's option list.
+/// Names this batch's two heads for the prior path.
 ///
-/// `priors_row` is one row of the UNMASKED softmax; the gathered subset is
-/// renormalized over the mapped options — mathematically identical to the
-/// masked softmax restricted to those actions (exp(l_i)/Σ_mapped exp(l_j)).
-/// Returns `None` — leaving the node uniform — when any option lacks an
-/// action-block slot (the whole node falls back rather than zeroing arms the
-/// model cannot see) or the mapped mass underflows.
-fn gather_self_priors(priors_row: &[f32], map: &[Option<usize>]) -> Option<Vec<f32>> {
-    if map.is_empty() {
-        return None;
+/// The whole content of this impl is WHICH FIELD IS WHICH. It exists so that
+/// `HeadPair` is built from a named source rather than from two interchangeable
+/// `&[f32]` arguments — behind the `model` feature a transposition of those two
+/// arguments is a silent head swap that no test on a libtorch-less host can
+/// see, so the swap is concentrated into these three lines instead of living at
+/// every construction site. `action_count` is the POLICY head's width; the
+/// opponent head is a separate tensor and its width is checked against this one
+/// in [`HeadPair::from_source`].
+impl HeadSource for LeafBatchOutput {
+    fn acting_head(&self) -> &[f32] {
+        &self.priors
     }
-    let mut gathered = Vec::with_capacity(map.len());
-    let mut sum = 0.0f32;
-    for entry in map {
-        let index = (*entry)?;
-        let prior = *priors_row.get(index)?;
-        sum += prior;
-        gathered.push(prior);
+    fn opponent_head(&self) -> &[f32] {
+        &self.opponent_priors
     }
-    // NaN comparisons are false, so a non-finite logit would slip past the
-    // underflow guard alone and propagate into stat.prior.
-    if !sum.is_finite() || sum <= 1e-8 {
-        return None;
+    fn action_count(&self) -> usize {
+        self.action_count
     }
-    for prior in &mut gathered {
-        *prior /= sum;
-    }
-    Some(gathered)
 }
 
-/// The acting seat's option list at a decision node, mirroring
-/// `new_decision_node`'s defensive empty-side handling so prior vectors align
-/// with the node's own arm order.
-fn self_options_at(state: &State, self_side_one: bool) -> Vec<MoveChoice> {
-    let (s1_options, s2_options) = state.get_all_options();
-    let mut options = if self_side_one {
-        s1_options
-    } else {
-        s2_options
-    };
-    if options.is_empty() {
-        options.push(MoveChoice::None);
-    }
-    options
-}
-
-fn is_single_none(options: &[MoveChoice]) -> bool {
-    options.len() == 1 && matches!(options[0], MoveChoice::None)
+/// The batch's two policy heads, checked against each other before either is
+/// read.
+///
+/// A mismatched opponent-head width does NOT fail on its own: `action_count`
+/// comes from the policy head, so striding the opponent head by it reads
+/// windows that span two leaves' distributions and are almost all in range
+/// (worked example on [`HeadPair`]). Every affected branch then reports a
+/// confident prior gathered off a blend. The campaign reads a paired delta off
+/// exactly these numbers, so this refuses instead — same standing as the
+/// fully-illegal legal-mask row in `TorchScriptLeafEval::eval_batch`.
+///
+/// WHY THE FLAG IS THREADED HERE. The opponent-width check runs only when
+/// `use_opponent_priors` is on. A flag-off run must make byte-for-byte the
+/// search it always made, including on an artifact whose opponent head is
+/// unusable — flag-off equivalence is the campaign's anchor and must not
+/// acquire a new way to fail. Passing a constant here in either direction is a
+/// real defect in both directions (`true` breaks flag-off; `false` silently
+/// disables the feature on the flag-on path), and both are pinned by
+/// `priors::tests::from_source_names_each_head_and_honours_the_flag`.
+fn head_pair(output: &LeafBatchOutput, use_opponent_priors: bool) -> PyResult<HeadPair<'_>> {
+    HeadPair::from_source(output, use_opponent_priors).map_err(PyValueError::new_err)
 }
 
 /// Multi-ply batched search where every model row is a REAL leaf observation:
@@ -836,11 +840,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let mut tree_nanos = 0u128;
     let mut root_priors: Option<Vec<f32>> = None;
     if model_priors {
-        let root_options = if self_side_one {
-            tree.decisions[0].s1_options.clone()
-        } else {
-            tree.decisions[0].s2_options.clone()
-        };
+        // Both seats' option lists, selected once from `self_side_one`. No
+        // caller-side `if self_side_one { s2 } else { s1 }` anywhere in this
+        // path: that expression is a seat swap no libtorch-less test can see.
+        let seats = root_seats(&tree.decisions[0], leaf_ctx);
+        let root_options = seats.acting_options;
         if !is_single_none(&root_options) {
             // One extra forward on the ROOT observation prices the root
             // node's priors (the root is never a chance-branch leaf).
@@ -856,54 +860,37 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             let output = evaluator.eval_batch(&batch, None)?;
             model_nanos += model_started.elapsed().as_nanos();
             model_evals += 1;
+            let heads = head_pair(&output, cfg.use_opponent_priors)?;
             // engine_authoritative = false: unchanged search semantics (the
             // root world is CONSTRUCTED, so the fresh-switch-in widening still
             // applies). See LeafContext::leaf_row_inputs.
             let map = leaf_ctx.self_action_map(&state, &root_options, None, None, false)?;
-            match gather_self_priors(&output.priors[..output.action_count], &map) {
-                Some(priors)
-                    if apply_self_priors(&mut tree.decisions[0], self_side_one, &priors) =>
-                {
-                    root_priors = Some(priors);
-                }
-                _ => prior_fallbacks += 1,
-            }
-            // Opponent-side root priors, from the SAME forward. Orientation
-            // (#937): this gathers the opponent head onto the OPPONENT's own
-            // option list and applies it to the OPPONENT's stats. Nothing is
-            // reflected -- `!self_side_one` selects the other seat's stat
-            // vector, and the option list and action map are the opponent's
-            // throughout. Only values flip at the seat boundary, elsewhere.
-            if cfg.use_opponent_priors && !output.opponent_priors.is_empty() {
-                let opponent_options = if self_side_one {
-                    tree.decisions[0].s2_options.clone()
-                } else {
-                    tree.decisions[0].s1_options.clone()
-                };
-                if !is_single_none(&opponent_options) {
-                    // Root: no branch lines yet, so the unevolved party order
-                    // is correct here by construction.
-                    let opponent_map = leaf_ctx.opponent_action_map(
-                        &state,
-                        &opponent_options,
-                        None,
-                        None,
-                        false,
-                    )?;
-                    match gather_self_priors(
-                        &output.opponent_priors[..output.action_count],
-                        &opponent_map,
-                    ) {
-                        Some(priors)
-                            if apply_self_priors(
-                                &mut tree.decisions[0],
-                                !self_side_one,
-                                &priors,
-                            ) => {}
-                        _ => prior_fallbacks += 1,
-                    }
-                }
-            }
+            // Opponent-side root priors come from the SAME forward. Orientation
+            // (#937): the opponent head is gathered onto the OPPONENT's own
+            // option list and applied to the OPPONENT's stats. Nothing is
+            // reflected; only values flip at the seat boundary, elsewhere. The
+            // seat routing itself is `resolve_root_priors`' job -- this scope
+            // only decides WHETHER there is an opponent map to resolve.
+            let opponent_options = seats.opponent_options;
+            let opponent_map = if cfg.use_opponent_priors
+                && !output.opponent_priors.is_empty()
+                && !is_single_none(&opponent_options)
+            {
+                // Root: no branch lines yet, so the unevolved party order is
+                // correct here by construction.
+                Some(leaf_ctx.opponent_action_map(&state, &opponent_options, None, None, false)?)
+            } else {
+                None
+            };
+            let resolved = resolve_root_priors(
+                &mut tree.decisions[0],
+                &heads,
+                leaf_ctx,
+                &map,
+                opponent_map.as_deref(),
+            );
+            root_priors = resolved.acting;
+            prior_fallbacks += resolved.fallbacks;
         }
     }
     let _ = crate::leaf::drain_encode_subphases(); // per-search reset
@@ -946,7 +933,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             root_fold.clone(),
                             root_turn,
                             leaf_ctx.root_self_order().to_vec(),
-                            leaf_ctx.root_opponent_order(),
+                            leaf_ctx.root_opponent_order().map(<[String]>::to_vec),
                             leaf_ctx.root_meta().clone(),
                         ),
                         Some(key) => match fold_by_branch.get(&key) {
@@ -1011,11 +998,15 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         &rendered.lines,
                         leaf_ctx.self_prefix(),
                     );
-                    let opponent_order = crate::leaf::evolve_self_order(
-                        &parent_opponent_order,
-                        &rendered.lines,
-                        leaf_ctx.opponent_prefix(),
-                    );
+                    // Evolve only what is KNOWN. An unknown order has no
+                    // switch history to accumulate onto and stays unknown.
+                    let opponent_order = parent_opponent_order.as_deref().map(|parent| {
+                        crate::leaf::evolve_self_order(
+                            parent,
+                            &rendered.lines,
+                            leaf_ctx.opponent_prefix(),
+                        )
+                    });
                     let meta = crate::leaf::evolve_leaf_meta_with_status_transitions(
                         &parent_meta,
                         &rendered.lines,
@@ -1045,7 +1036,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     // — only where a child can exist (depth cap) and the
                     // acting seat has a real choice.
                     if model_priors && seam.depth + 1 < cfg.max_depth {
-                        let options = self_options_at(leaf, self_side_one);
+                        // Both seats' lists from one selection, so neither
+                        // `if self_side_one { .. }` nor a `!self_side_one`
+                        // appears in this scope. Same reason as `root_seats`.
+                        let seats = branch_seats(leaf, leaf_ctx);
+                        let options = seats.acting_options;
                         if !is_single_none(&options) {
                             let map_started = Instant::now();
                             let map_result = leaf_ctx.self_action_map(
@@ -1066,18 +1061,18 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                                 }
                             }
                         }
-                        // Opponent seat's own options at the same future child.
-                        // `self_options_at(leaf, !self_side_one)` is the
-                        // opponent's list -- the orientation pin: the map is
-                        // built from the arms that seat owns.
+                        // Opponent seat's own options at the same future child
+                        // -- the orientation pin: the map is built from the
+                        // arms that seat owns, and `branch_seats` is what
+                        // decides which those are.
                         if cfg.use_opponent_priors {
-                            let opponent_options = self_options_at(leaf, !self_side_one);
+                            let opponent_options = seats.opponent_options;
                             if !is_single_none(&opponent_options) {
                                 let map_started = Instant::now();
                                 let map_result = leaf_ctx.opponent_action_map(
                                     leaf,
                                     &opponent_options,
-                                    Some(&opponent_order),
+                                    opponent_order.as_deref(),
                                     Some(&meta),
                                     false,
                                 );
@@ -1130,68 +1125,26 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             let output = evaluator.eval_batch(&batch, None)?;
             model_nanos += model_started.elapsed().as_nanos();
             model_evals += pending.len();
+            let heads = head_pair(&output, cfg.use_opponent_priors)?;
             // Resolve this round's prior maps against the batch's policy
             // rows: store on the branch (consumed at child creation) and
             // re-apply onto a child that was already created THIS round
             // (batch > 1 can descend a sibling before its priors resolved).
-            for (key, row, map) in &pending_maps {
-                let base = row * output.action_count;
-                let priors =
-                    gather_self_priors(&output.priors[base..base + output.action_count], map);
-                match priors {
-                    Some(priors) => {
-                        let child = tree.chances[key.0].branches[key.1].child;
-                        let applied = match child {
-                            Some(child) => apply_self_priors(
-                                &mut tree.decisions[child],
-                                self_side_one,
-                                &priors,
-                            ),
-                            None => true,
-                        };
-                        tree.chances[key.0].branches[key.1].child_self_priors =
-                            Some((self_side_one, priors));
-                        if applied {
-                            prior_branches += 1;
-                        } else {
-                            prior_fallbacks += 1;
-                        }
-                    }
-                    None => prior_fallbacks += 1,
-                }
-            }
-            // Same resolution for the opponent seat, off the SAME batch rows
-            // (one forward feeds both heads). Stored under `!self_side_one`:
-            // the seat that owns these arms, which is what apply_self_priors
-            // indexes on. No reflection anywhere in this block.
-            for (key, row, map) in &pending_opponent_maps {
-                let base = row * output.action_count;
-                let priors = gather_self_priors(
-                    &output.opponent_priors[base..base + output.action_count],
-                    map,
-                );
-                match priors {
-                    Some(priors) => {
-                        let child = tree.chances[key.0].branches[key.1].child;
-                        let applied = match child {
-                            Some(child) => apply_self_priors(
-                                &mut tree.decisions[child],
-                                !self_side_one,
-                                &priors,
-                            ),
-                            None => true,
-                        };
-                        tree.chances[key.0].branches[key.1].child_opponent_priors =
-                            Some((!self_side_one, priors));
-                        if applied {
-                            prior_branches += 1;
-                        } else {
-                            prior_fallbacks += 1;
-                        }
-                    }
-                    None => prior_fallbacks += 1,
-                }
-            }
+            // Both seats off the SAME batch rows (one forward feeds both
+            // heads). Which head each seat reads, which side it owns, and
+            // which branch slot it lands in are all decided inside
+            // `resolve_round_priors` -- this call site names no seat's side,
+            // head, or slot, because behind the `model` feature a swap in any
+            // of the three is a swap no test on a libtorch-less host can see.
+            let resolved = resolve_round_priors(
+                &mut tree,
+                &pending_maps,
+                &pending_opponent_maps,
+                &heads,
+                leaf_ctx,
+            );
+            prior_branches += resolved.applied;
+            prior_fallbacks += resolved.fallbacks;
             // SEAT ORIENTATION. The model's value is SELF-relative: every leaf
             // observation is encoded from `leaf_ctx`'s own seat (SELF /
             // OPPONENT token blocks), and the checkpoint's value target is +1
