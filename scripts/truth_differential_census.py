@@ -42,8 +42,22 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-DEFAULT_SHOWDOWN_ROOT = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
 OBSERVATION_FORMAT_ID = "gen3randombattle"
+
+
+def _default_showdown_root() -> str:
+    """Resolve the checkout the way the library does, never as a literal.
+
+    A hardcoded default here put a maintainer home directory into a tracked file,
+    which `tests.test_public_invariant` rejects -- and `pokezero.local_showdown.
+    default_showdown_root` exists precisely so the library and its harnesses
+    cannot drift on this. Resolution order: `POKEZERO_SHOWDOWN_ROOT`, then
+    conventional locations expressed via `Path.home()` and the repo root.
+    """
+
+    from pokezero.local_showdown import default_showdown_root
+
+    return str(default_showdown_root())
 
 
 # --- plan --------------------------------------------------------------------
@@ -798,7 +812,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--mode", default="run", choices=("plan", "run", "report", "queue", "witness")
     )
-    parser.add_argument("--showdown-root", default=DEFAULT_SHOWDOWN_ROOT)
+    parser.add_argument("--showdown-root", default=None)
     parser.add_argument("--out", default="-")
     # plan
     parser.add_argument("--passes", type=int, default=5)
@@ -837,6 +851,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--command", action="append", default=[],
                         help="a command line to publish beside the figures; repeatable")
     args = parser.parse_args(argv)
+    if args.showdown_root is None:
+        args.showdown_root = _default_showdown_root()
 
     if args.mode == "witness":
         from pokezero.truth_differential import identity_witness
