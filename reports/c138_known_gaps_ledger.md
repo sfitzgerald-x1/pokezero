@@ -666,8 +666,18 @@ components matched Showdown's on 15,503 of 15,503 measured full-round boundaries
 15,579 of 15,579 in holdout — 87.5 % and 86.7 % of all boundaries respectively. Branch
 probability masses were not compared, and 27 documented gap candidates are unreachable in this
 pool and therefore untested by it. About 9 % of those matches were accepted under a widened
-sleep-counter bar rather than an exact one, a further ~1 % on a ±9 % roll tolerance rather than
-exact fan membership, and terminal adjudication was not compared at all."*
+hidden-counter support bar rather than an exact one, a further ~1 % on a ±9 % roll tolerance
+rather than exact fan membership, and terminal adjudication was not compared at all."*
+
+⚠ **"Widened sleep-counter bar" became "widened hidden-counter support bar" in the same pass, and
+the reason is measured.** The gate is `gating:support`, and sleep is its dominant but not its only
+component: dev's 1,347 support-gated boundaries sit alongside a `hidden_counter_support:confusion`
+counter at **1** as well as `hidden_counter_support:sleep` at 1,352
+(`reports/artifacts/c152_head_dev_sweep.json`; those two are per-state tallies, not a partition of
+the 1,347, so they establish that the bar is not sleep-only and are **not** its composition).
+Holdout carries no confusion key at all. Naming the widest accept bar after its narrowest
+component is the same defect as a glob reported wider than it was run, one surface over — and this
+row's own cell already used the precise form, so the document disagreed with itself.
 
 ⚠ **The two match counts in that sentence were 15,501 and 15,575 until 2026-08-08 (C152) and are
 now 15,503 and 15,579** — re-derived from `reports/artifacts/c152_head_{dev,holdout}_sweep.json`

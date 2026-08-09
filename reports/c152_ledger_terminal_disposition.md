@@ -155,10 +155,23 @@ boundaries, and the two differ enormously: at head the same engine measures **0 
 31,082 boundaries** across both permitted windows. The census sizes the *mechanism*, and the
 sweeps size the *consequence*. Both are needed, and quoting either alone misstates G8.
 
-⚠ **And that zero must be quoted with its two accept bars — §9 of the ledger, added by this same
-pass, forbids the bare number.** Those 31,082 matches include **8.689 % dev / 9.185 % holdout**
-accepted on a widened sleep-counter bar, and **167 dev / 140 holdout (1.077 % / 0.899 %)** that
-match only because of the ±9 % roll window (§4). The second bar is **not incidental to G8**: the
+⚠ **And that zero must be quoted with its two accept bars — item 9 of the ledger's §6, added by
+this same pass, forbids the bare number.** Those 31,082 matches include **8.689 % dev / 9.185 %
+holdout** accepted on the **hidden-counter support bar**, and **167 dev / 140 holdout (1.077 % /
+0.899 %)** that match only because of the ±9 % roll window (§4).
+
+> ⚠ **Two pointer fixes here, both caught in review, and both are this document's own subject.**
+> The citation read *"§9 of the ledger"*, which **does not resolve** — the ledger has §1–§8, and
+> the second accept bar went in as **item 9 inside §6**. A pointer that does not resolve, in the
+> document arguing for scoped citation. (The ledger's own G8 cell cites *"§6 of this document"*
+> correctly, so the two disagreed.) And the first bar read *"a widened sleep-counter bar"*, which
+> is **narrower than the thing it names**: the gate is `gating:support`, and dev's 1,347
+> support-gated boundaries sit alongside a `hidden_counter_support:confusion` counter at **1** as
+> well as `hidden_counter_support:sleep` at 1,352 — re-derived from
+> `reports/artifacts/c152_head_dev_sweep.json`, and note those two are per-state tallies rather
+> than a partition of the 1,347, so they are quoted as evidence that the bar is not sleep-only
+> and **not** as its composition. Holdout carries no confusion key at all. The precise name is the
+> one the ledger's own cell uses: **support-gated acceptance**. The second bar is **not incidental to G8**: the
 dominant class the window absorbs is `roll_scaled_component`, **158 dev / 129 holdout** of those
 167 and 140, which is precisely what an off-fan survive representative produces. So an unknown
 part of G8's zero is the comparator's tolerance rather than agreement. The honest statement is
