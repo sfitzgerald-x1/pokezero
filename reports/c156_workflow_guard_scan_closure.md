@@ -237,6 +237,7 @@ which is `reports/c154` §6's own finding applied to this pass.
 | this branch head | `3b3b82c5` | C156 | 26 | **26** | **0** |
 | **`refs/pull/1208/merge`** | **`f07f7a6b`** | C156 | **26** | **26** | **0** |
 | **`refs/pull/1208/merge`**, re-derived after the next push | **`d4b309e4`** | C156 | **26** | **26** | **0** |
+| **`refs/pull/1208/merge`**, re-derived after the review round | **`a9ecb72f`** | C156 | **26** | **26** | **0** |
 
 ⚠ **The merge ref moves with every push, so the SHA above is the one measured and not "the" merge
 ref.** Each row is a run, not a figure carried forward from the row above it; `reports/c153`'s rule
