@@ -311,6 +311,22 @@ class TheGateHarnessMirrorsProductionTest(unittest.TestCase):
             },
             "no legal choice at all": {"action_candidates": _candidates()},
             "no candidates key": {},
+            # The two shapes where `kind == "move"` and `normalize_id` are what decide. Without
+            # them a locally-restated mirror that dropped BOTH still agreed everywhere above.
+            "switch candidate carrying a recharge move_id": {
+                "action_candidates": [
+                    {
+                        "action_index": 4,
+                        "kind": "switch",
+                        "legal": True,
+                        "move_id": "recharge",
+                        "pokemon": {"species": "Starmie"},
+                    }
+                ]
+            },
+            "legal move with no id at all": {
+                "action_candidates": [{"action_index": 0, "kind": "move", "legal": True}]
+            },
         }
         for label, metadata in shapes.items():
             with self.subTest(label):

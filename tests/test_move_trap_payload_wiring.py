@@ -27,14 +27,26 @@ that. (They reach the observation too, by other routes; what makes them the righ
 that the world lane reads them from the payload rather than from observation metadata.)
 
 SCOPE. This closes the move trap for the transcripts where the parser tracker is right, which is
-every one EXCEPT a Baton Pass: gen3 re-declares `trapped`/`trapper` with `noCopy: false`
-(`data/mods/gen4/conditions.ts`, inherited by gen3), so the trap rides a pass and the parser --
-which clears both slots on any switch -- reports False. 2 of 3 gen3 randbat Ariados sets carry
-Spider Web AND Baton Pass, so the hole is common rather than exotic. It is FAIL-CLOSED (the
-world carries no trap and the decision is refused exactly as before) and is tracked as a
-follow-up, because fixing it changes recorded v3/v4 observation VALUES for arms in flight --
-a different blast radius from this world-lane routing change. `test_a_baton_passed_trap_is_the
-_known_hole` below pins the current behaviour so the follow-up has a test to flip.
+every one EXCEPT a Baton Pass. gen3 re-declares BOTH `trapped` and `trapper` with `noCopy: false`
+(`data/mods/gen4/conditions.ts`, inherited by gen3) -- two volatiles, so TWO directions, and the
+parser's clear-both-slots-on-any-switch rule is wrong on both: the VICTIM passing (the receiver
+inherits `trapped`) and the TRAPPER passing (its receiver inherits `trapper`, so the linked trap
+survives). Both are pinned below.
+
+Decomposed, the remaining hole is small and matches the 2-of-27 residual. The whole gen3 randbat
+move-trap pool is THREE sets: Misdreavus Staller (Mean Look, no Baton Pass -- fully closed) and
+two Ariados sets (Spider Web, both with Baton Pass). Even there the hole opens only once a pass
+actually happens, so every pre-pass Spider Web turn is closed too.
+
+FAIL-CLOSED ON THE SELF SIDE, which is the exact claim. `_require_world_reproduces_trap` inspects
+only our own side, so a missed self trap is a refusal -- the pre-fix behaviour. There is no such
+check for the opponent, so a webbed-then-passed OPPONENT is built free and the search is silently
+optimistic about its escape. That is not a regression (no opponent move trap was modelled at all
+before this PR) but it is not fail-closed either, and the distinction belongs in any sentence
+that bounds this scope.
+
+Tracked as a follow-up rather than fixed, because fixing it changes recorded v3/v4 observation
+VALUES for arms in flight -- a different blast radius from this world-lane routing change.
 
 The seam test below is the one that matters: it drives real protocol lines through the
 production parser, builds the payload with the production builder, and feeds THAT payload --
@@ -194,40 +206,98 @@ class MoveTrapReachesTheWorldBuilderTest(unittest.TestCase):
                 battle_spec_from_payload(payload, _override(), dex=self.dex)
         self.assertEqual(caught.exception.reason, "self_request_state_unsupported")
 
-    def test_a_baton_passed_trap_is_the_known_hole_and_still_fails_closed(self) -> None:
+    def test_both_baton_pass_directions_are_the_known_hole_and_still_read_false(self) -> None:
         """The scope boundary, pinned so the follow-up has a test to FLIP rather than write.
 
         gen3 re-declares BOTH `trapped` and `trapper` with `noCopy: false`
-        (`data/mods/gen4/conditions.ts`, inherited via `data/mods/gen3/scripts.ts`), so a trapper
-        that webs and then Baton Passes leaves its victim trapped until the RECEIVER switches out
-        -- the behaviour `third_party/poke-engine-gen3-move-trapping.patch` models as
-        `TRAPPED => baton_passing`, verified there against real gen3 Showdown. The PARSER does not
-        model it: `_update_meanlook_trap`'s switch/drag reset clears BOTH slots unconditionally,
-        on a justification ("the volatile is noCopy") this PR corrects in place as false.
+        (`data/mods/gen4/conditions.ts`, inherited via `data/mods/gen3/scripts.ts`) -- two
+        volatiles, so TWO directions, and the parser is wrong on both. `_update_meanlook_trap`'s
+        switch/drag reset clears BOTH slots unconditionally, on a justification ("the volatile is
+        noCopy") this PR corrects in place as false.
 
-        So this transcript arrives with `meanlookTrap` False and the decision is refused exactly
-        as it was before the fix -- FAIL-CLOSED, a coverage hole and not a hazard. It is the
-        common hole rather than an exotic one: 2 of 3 gen3 randbat Ariados sets carry Spider Web
-        AND Baton Pass, and it is the established explanation for the residual records that show
-        `self_meanlook_trap: False` in late rounds of battles whose earlier rounds were True.
+          VICTIM PASSES  -- the trapped mon Baton Passes; `trapped` (`noCopy: false`) rides to the
+            RECEIVER, which the sim confirms by keeping `trapped: true` on the incoming mon's
+            request. The parser clears it.
+          TRAPPER PASSES -- the webber Baton Passes; `trapper` (`noCopy: false`) rides to ITS
+            receiver, so the linked `trapped` on the opposing active survives the switch. The
+            parser clears that too.
+
+        Both are `TRAPPED => baton_passing` in
+        `third_party/poke-engine-gen3-move-trapping.patch`, verified there against real gen3
+        Showdown: "an Ariados that webs and then passes leaves its victim trapped until the
+        receiver itself switches out".
+
+        WHICH DIRECTION THE EVIDENCE POINTS AT. The refusal records name insomnia/swarm as the
+        sampled bystander ability. Enumerating every move-trap set in `gen3/sets.json` gives
+        exactly three, and the ability lists settle it:
+
+            ariados    Bulky Support  spiderweb  batonpass=YES  [Insomnia, Swarm]
+            ariados    Bulky Setup    spiderweb  batonpass=YES  [Insomnia]
+            misdreavus Staller        meanlook   batonpass=no   [Levitate]
+
+        insomnia/swarm is ARIADOS-EXCLUSIVE within that pool -- Misdreavus is Levitate -- so the
+        records are Spider Web, not Mean Look, and ARIADOS IS THE FOE ACTIVE AT THE REFUSAL. That
+        fits the VICTIM direction: our mon was webbed, passed the trap to its receiver, and
+        Ariados is still standing across from us. Had Ariados passed, the foe active would be its
+        receiver and the bystander would be the receiver's ability instead. (An earlier version
+        of this test pinned only the trapper direction and cited that corroboration for it; that
+        was backwards.)
+
+        The same table bounds the residual: Mean Look's only carrier has no Baton Pass, so Mean
+        Look is fully closed by this PR, and the hole is Spider Web after a pass.
+
+        Both arrive with `meanlookTrap` False, so the SELF side is refused exactly as before --
+        fail-closed. See the class docstring for why the opponent side is not fail-closed and
+        what that does and does not mean.
 
         Not fixed here because the fix changes recorded v3/v4 observation VALUES
         (NUMERIC_MEANLOOK_TRAP) for arms in flight -- a different blast radius from routing an
         existing parser fact into the world payload.
         """
 
+        web = (
+            "|move|p2a: Snorlax|Spider Web|p1a: Swampert",
+            "|-activate|p1a: Swampert|trapped",
+        )
+        directions = {
+            # OUR Swampert is webbed and passes; the receiver inherits `trapped`. This is the
+            # direction the insomnia/swarm corroboration points at.
+            "victim passes": (
+                *web,
+                "|move|p1a: Swampert|Baton Pass|p1a: Swampert",
+                "|switch|p1a: Starmie|Starmie, L79, M|100/100|[from] Baton Pass",
+            ),
+            # The WEBBER passes; its receiver inherits `trapper`, so our trap survives.
+            "trapper passes": (
+                *web,
+                "|move|p2a: Snorlax|Baton Pass|p2a: Snorlax",
+                "|switch|p2a: Starmie|Starmie, L79, M|100/100|[from] Baton Pass",
+            ),
+        }
+        for label, lines in directions.items():
+            with self.subTest(label):
+                produced = self._produced_payload(*lines)
+                self.assertIs(
+                    produced["sides"]["p1"]["meanlookTrap"],
+                    False,
+                    f"parser behaviour changed on the {label!r} direction -- if the Baton Pass "
+                    "carry is now modelled, invert this subtest and update the scope notes; do "
+                    "not delete it, and do not fix one direction while leaving the other",
+                )
+
+    def test_the_control_proves_the_baton_pass_pin_is_the_pass_and_not_the_web(self) -> None:
+        """Non-vacuity for the pin above: without the pass, the same web reads True.
+
+        Otherwise a parser that never set the flag at all -- or a transcript whose `-activate`
+        line the fixture got wrong -- would satisfy both subtests and the "known hole" would be
+        pinning nothing.
+        """
+
         produced = self._produced_payload(
             "|move|p2a: Snorlax|Spider Web|p1a: Swampert",
             "|-activate|p1a: Swampert|trapped",
-            "|move|p2a: Snorlax|Baton Pass|p2a: Snorlax",
-            "|switch|p2a: Starmie|Starmie, L79, M|100/100|[from] Baton Pass",
         )
-        self.assertIs(
-            produced["sides"]["p1"]["meanlookTrap"],
-            False,
-            "parser behaviour changed -- if the Baton Pass carry is now modelled, this test "
-            "should be inverted and the scope notes updated, not deleted",
-        )
+        self.assertIs(produced["sides"]["p1"]["meanlookTrap"], True)
 
     def test_the_trap_follows_the_trapped_seat_and_not_the_trapper(self) -> None:
         """Non-vacuity for the per-slot read: `always set it on p1` would pass the tests above.
@@ -391,8 +461,14 @@ class StaleWheelIsAFallbackNotACrashTest(unittest.TestCase):
 
         `PokeEngineMoveTrapUnsupportedError` IS a `PokeEngineUnavailableError`, so putting the
         backstop first would collapse the two into one reason code and lose the "rebuild with
-        the move-trapping patch" signal the specific bucket exists to carry. Asserted against
-        the real production `require_move_trap_support` raise, not a hand-thrown instance.
+        the move-trapping patch" signal the specific bucket exists to carry.
+
+        CORRECTED: an earlier version of this docstring claimed it asserted against the real
+        `require_move_trap_support` raise. It does not -- it mocks `world_battle_spec` with a
+        hand-thrown instance, exactly like the two tests above. What it actually pins is the
+        HANDLER ORDER given the subclass relation, which the assertion below states explicitly
+        so the claim and the code agree. The real probe runs in
+        `tests/test_engine_move_trap_wiring.py` against the installed wheel.
         """
 
         import random

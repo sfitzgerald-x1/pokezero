@@ -1385,15 +1385,25 @@ class ShowdownReplayState:
     # KNOWN GAP, corrected claim. This used to say the volatile is ``noCopy``, so it "never rides a
     # Baton Pass". That is FALSE in gen3: ``data/mods/gen4/conditions.ts`` re-declares BOTH
     # ``trapped`` and ``trapper`` with ``noCopy: false``, and gen3 inherits gen4
-    # (``data/mods/gen3/scripts.ts``). A trapper that webs and then Baton Passes leaves its victim
-    # trapped until the RECEIVER itself switches out — the behaviour
-    # ``third_party/poke-engine-gen3-move-trapping.patch`` models as ``TRAPPED => baton_passing``.
-    # The clear-both-slots rule below is therefore wrong on exactly that sequence, and it matters:
-    # 2 of 3 gen3 randbat Ariados sets carry Spider Web AND Baton Pass. It is FAIL-CLOSED for the
-    # search lane (the world simply carries no trap and the decision is refused as before) and
-    # one-sided-optimistic for the observation column. Fixing it changes recorded v3/v4 tensor
-    # VALUES on those turns, so it is deliberately not bundled with the world-lane routing change
-    # that made this tracker load-bearing. Kept DISTINCT from
+    # (``data/mods/gen3/scripts.ts``). TWO volatiles means TWO broken directions, and the
+    # clear-both-slots rule below is wrong on both:
+    #   VICTIM PASSES  — the trapped mon Baton Passes and its RECEIVER inherits ``trapped``; the
+    #     sim keeps ``trapped: true`` on the incoming mon's request.
+    #   TRAPPER PASSES — the webber Baton Passes and ITS receiver inherits ``trapper``, so the
+    #     linked ``trapped`` on the opposing active survives the switch.
+    # Both are what ``third_party/poke-engine-gen3-move-trapping.patch`` models as
+    # ``TRAPPED => baton_passing``. It matters: 2 of 3 gen3 randbat Ariados sets carry Spider Web
+    # AND Baton Pass. (Mean Look's only carrier, Misdreavus's Staller set, has no Baton Pass, so
+    # Mean Look is unaffected.)
+    #
+    # FAIL-CLOSED ON THE SELF SIDE ONLY. ``_require_world_reproduces_trap`` inspects our own side,
+    # so a missed self trap is refused exactly as before the move trap was routed; there is no
+    # such check for the opponent, so a webbed-then-passed OPPONENT is built free and searched
+    # optimistically. Not a regression — no opponent move trap was modelled at all before — but
+    # not fail-closed either. Fixing the carry changes recorded v3/v4 tensor VALUES on those
+    # turns, so it is deliberately not bundled with the world-lane routing change that made this
+    # tracker load-bearing; both directions are pinned in
+    # ``tests/test_move_trap_payload_wiring.py``. Kept DISTINCT from
     # partiallytrapped (Wrap) and from the trap-ability signal. Derived ONLY from public protocol
     # lines.
     meanlook_trap: Mapping[str, bool]
@@ -2534,15 +2544,19 @@ class _ReplayParser:
                 # unconditionally on both slots — in singles the trapper is always the opposing
                 # active mon.
                 #
-                # WRONG FOR BATON PASS, and the justification that used to sit here ("the ``trapped``
-                # volatile is noCopy, so it never rides a Baton Pass") is false — see the corrected
-                # note on ``ShowdownReplayState.meanlook_trap``. gen3 re-declares both ``trapped``
-                # and ``trapper`` with ``noCopy: false``, so a Baton Pass carries the trap to the
-                # receiver on either side and this unconditional clear drops a live public fact.
-                # Fail-closed downstream; tracked as a follow-up rather than fixed here, because the
-                # fix changes recorded v3/v4 observation values (NUMERIC_MEANLOOK_TRAP) for arms in
-                # flight, a different blast radius from the world-lane routing this tracker now
-                # feeds.
+                # WRONG FOR BATON PASS IN BOTH DIRECTIONS, and the justification that used to sit
+                # here ("the ``trapped`` volatile is noCopy, so it never rides a Baton Pass") is
+                # false — see the corrected note on ``ShowdownReplayState.meanlook_trap``. gen3
+                # re-declares BOTH ``trapped`` and ``trapper`` with ``noCopy: false``, so the trap
+                # survives whether the VICTIM passes (its receiver inherits ``trapped``) or the
+                # TRAPPER passes (its receiver inherits ``trapper``). This unconditional clear
+                # drops a live public fact either way, and a fix must handle both — fixing one
+                # direction would leave the other silently broken.
+                #
+                # Fail-closed on the SELF side downstream (the opponent side has no such check).
+                # Tracked as a follow-up rather than fixed here, because the fix changes recorded
+                # v3/v4 observation values (NUMERIC_MEANLOOK_TRAP) for arms in flight, a different
+                # blast radius from the world-lane routing this tracker now feeds.
                 self.meanlook_trap[pokemon.showdown_slot] = False
                 self.meanlook_trap[_OTHER_SLOT[pokemon.showdown_slot]] = False
                 # A live type override (Castform Forecast forme / Kecleon Color Change) belongs to
@@ -5167,9 +5181,11 @@ def _update_meanlook_trap(parts: Sequence[str], meanlook_trap: dict[str, bool]) 
     RESET on ``|faint|SLOT``: the trapped mon fainting clears its own flag, and the fainting mon was
     the trapper for the other seat (the linked source-side volatile drops when the trapper faints),
     so BOTH seats clear. Switch/drag resets are handled in the parse loop, which clears BOTH seats
-    unconditionally — correct for an ordinary switch or drag, WRONG for a Baton Pass, which gen3
-    lets the trap ride (``noCopy: false`` on both ``trapped`` and ``trapper``); see the corrected
-    note on ``ShowdownReplayState.meanlook_trap``. There is no ``-end`` line for this volatile (it
+    unconditionally — correct for an ordinary switch or drag, WRONG for a Baton Pass in EITHER
+    direction, since gen3 gives both ``trapped`` and ``trapper`` ``noCopy: false``: the victim's
+    receiver inherits the trap, and the trapper's receiver inherits the link that holds it. See
+    the corrected note on ``ShowdownReplayState.meanlook_trap``.
+    There is no ``-end`` line for this volatile (it
     has no ``onEnd`` and the linked removal is silent), so faint + switch/drag are the only public
     end signals.
     """
