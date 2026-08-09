@@ -910,7 +910,7 @@ class CopiedMovesetLivePpTests(unittest.TestCase):
         """The donor is belief-SAMPLED, so it can carry a move the real one lacks.
 
         That move is this world's own fiction and the request has nothing to say
-        about it. Measured live: six of eight sampled Suicune worlds gave the
+        about it. Measured live: five of eight sampled Suicune worlds gave the
         Ditto a ``rest`` the real Suicune never had. Blanket-disabling those
         slots would be inventing a fact, and would also make the struggle-only
         assertion below pass for the wrong reason.

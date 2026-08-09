@@ -848,7 +848,7 @@ def _copied_move_spec(
 
     A slot the request does not name keeps ``_TRANSFORM_MOVE_PP``. Those exist:
     the donor is read out of the belief-SAMPLED opposing party, so a sampled
-    variant can carry a move the real donor never had (``rest`` above, in six of
+    variant can carry a move the real donor never had (``rest`` above, in five of
     the eight worlds). That move is this world's own fiction and 5 is the right
     seed for it -- the request has nothing to say about a move its Pokemon does
     not have.
