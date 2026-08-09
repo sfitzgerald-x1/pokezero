@@ -1203,6 +1203,27 @@ are the third instrument; `reports/c154_unreachable_readjudication.md` is the pa
     the workflow is now re-derived from its module's AST, because the guard had no guard. R10's cell
     in this section also still read "one non-test path" against the derived two, and is corrected
     and pinned to the graph.
+  - ⚠ **AND THE SENTENCE ABOVE — "every `Ran N tests` guard in the workflow is now re-derived" —
+    WAS FALSE OF FOUR OF THE TWENTY-FOUR WHEN IT WAS WRITTEN, and of four of twenty-six today.
+    Issue #1205, closed by C156.** The
+    class fix was the durable part and it was also the next instance of its own subject: the scan
+    looked at most **twelve lines** past each `python -m unittest`, and four steps put their guard
+    further out, behind long explanatory comments. For those four `_guards()` emitted **no entry at
+    all** — no error, no skip, absent — so the module reported success over a set it had silently
+    narrowed. One cause, four sites, invariant across every tree the program measured, which is
+    exactly what an invariant *set* under a churning *count* should have suggested. Measured gaps:
+    denominator pair **12** (the boundary case, one line past the window), spread-gate provenance
+    **16**, seed registry **23**, stat attestation **30**. Demonstrated rather than reasoned:
+    at `dbb40c5c` the seed-registry step's guard set to `Ran 99 tests` — a count its suite can never
+    print — leaves `tests/test_unreachable_readjudication.py` **green**, and the same edit is red
+    after C156. ⚠ The denominator changed under the finding and a first revision of this bullet
+    stated only today's: at `67b52790`, where the sentence above was written, the workflow held 25
+    invocation lines of which one was a comment, so **24 executable / 20 resolved / the same four
+    unresolved** (`:607`, `:646`, `:915`, `:1494`). It reached 26 by way of #1203's Taunt step and
+    #1206's own. `reports/c155` narrates 24 → 25 → 26 correctly; this bullet did not, which is the
+    ledger contradicting its sibling inside one PR. Step extent is now derived from the YAML `run:` body rather than a fixed lookahead,
+    and **coverage itself is asserted**: an executable step whose guard the scan cannot pair reddens
+    instead of leaving the scan quietly smaller. `reports/c156_workflow_guard_scan_closure.md`.
   - Smaller, all corrected in place: `UNREACHABLE_TRACED` was documented as "cannot fire for any
     caller", which is false for R1, R23 and R24 — every row now carries an explicit `ALL_CALLERS`
     or `RANDBATS_POPULATION` foreclosure scope rather than the word being softened for all 26;

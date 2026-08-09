@@ -1411,11 +1411,18 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         differently. `executable` and `resolved` move whenever ANY step is added to this
         workflow -- that is a declared coupling, stated in the register's §6, and it is what
         catches the merge skew above. The UNRESOLVED SET is the load-bearing half, it is
-        #1205's actual subject, and it is invariant: the same four modules at the old
-        merge-base, at `origin/main`, at the branch head and at the merge. It is pinned BY
-        MODULE NAME rather than by count or by line, so a line shift does not touch it and a
-        NEW unguarded step reddens it -- which is #1205's subject growing and should be
-        loud.
+        #1205's actual subject, and it is pinned BY MODULE NAME rather than by count or by
+        line, so a line shift does not touch it and a NEW unguarded step reddens it.
+
+        ⚠ **#1205 IS CLOSED AND THE SET IS NOW EMPTY (C156).** It was invariant at four --
+        the same four modules at the old merge-base, at `origin/main`, at #1206's branch
+        head and at #1206's merge -- because the cause was invariant: the scan looked at
+        most twelve lines past each invocation and those four steps put their guard 12, 16,
+        23 and 30 lines out, behind explanatory comments. The scan now derives each step's
+        extent from its `run:` body, so all executable invocations resolve. The expectation
+        below is `[]` rather than deleted: an EMPTY set that must stay empty is a stronger
+        pin than a four-member set that must stay itself, and it still reddens on exactly
+        the event that mattered -- a new unguarded step.
         """
 
         from test_unreachable_readjudication import (  # noqa: E402
@@ -1423,20 +1430,29 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         )
 
         lines = _text(WORKFLOW).splitlines()
-        carrying = [(n, line) for n, line in enumerate(lines, 1) if "python -m unittest" in line]
+        # The invocation pattern is IMPORTED, not respelled here: review's residual G is
+        # that `python3 -m unittest` and `python -munittest` are real spellings a literal
+        # match drops, and a second literal in this module is a second thing to drift.
+        carrying = [
+            (n, line) for n, line in enumerate(lines, 1) if scan.INVOCATION.search(line)
+        ]
         comments = [(n, line) for n, line in carrying if line.strip().startswith("#")]
         executable = len(carrying) - len(comments)
+        # ⚠ RESOLUTION IS IMPORTED, INCLUDING ITS NEGATIVE HALF. A previous revision took
+        # `resolved` from C154's `_guards()` and then re-implemented the pairing rule here
+        # -- `0 <= g - number <= 12` -- to get `unresolved`. That is the second copy the
+        # docstring above forbids, and it was a copy of the very window C156 replaced: it
+        # would have reported four unresolved sites against a scan that resolves them all.
+        # Both halves now come from `_sites()`, which returns unresolved sites rather than
+        # dropping them, so the two cannot disagree.
+        sites = scan._sites()
         guards = scan._guards()
         resolved = len(guards)
-        guard_lines = {line for line, _, _ in guards}
         unresolved = sorted(
             {
-                match.group(0)
-                for number, line in carrying
-                if not line.strip().startswith("#")
-                and not any(0 <= g - number <= 12 for g in guard_lines)
-                for match in [re.search(r"tests\.[A-Za-z0-9_.]+", line)]
-                if match
+                target
+                for _, targets, guard, _ in sites if guard is None
+                for target in targets
             }
         )
 
@@ -1446,22 +1462,22 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         self.assertEqual(len(comments), 1, carrying)
         self.assertGreater(executable, 20)
         self.assertGreater(resolved, 15)
+        # And the second anti-vacuity control, which zero unresolved makes necessary: with
+        # the set empty, `executable == resolved + 0` is the whole arithmetic, so a scan
+        # that had silently stopped seeing a step would satisfy it by shrinking BOTH sides.
+        # It cannot, because `executable` is a flat scan of the file and `sites` is the
+        # structured walk, and they are required to name the same lines.
+        self.assertEqual(len(sites), executable)
         self.assertEqual(executable, resolved + len(unresolved))
 
-        # THE LOAD-BEARING HALF: #1205's subject, by module name, invariant across the old
-        # merge-base, `origin/main`, the branch head and the merge.
+        # THE LOAD-BEARING HALF: #1205's subject, by module name. Empty since C156.
         self.assertEqual(
-            unresolved,
-            [
-                "tests.test_differential_denominator",
-                "tests.test_engine_stat_attestation",
-                "tests.test_seed_registry_coverage",
-                "tests.test_spread_gate_provenance",
-            ],
-            "the set of workflow steps #1204's scan cannot resolve has changed. A step "
-            "joining it is #1205's subject growing and must be recorded in the register "
-            "beside the counts; a step leaving it is #1205 being fixed and must be recorded "
-            "too.",
+            unresolved, [],
+            "the set of workflow steps #1204's scan cannot resolve has changed. C156 "
+            "closed #1205 by emptying it, so a module appearing here is a NEW blind spot: "
+            "an executable step whose `Ran N tests` guard the scan cannot pair. Add the "
+            "guard inside the step's own `run:` body and record the change in the "
+            "register beside the counts.",
         )
 
         skew = (
@@ -1484,7 +1500,7 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
             resolved,
             "the register's RESOLVED guard count does not match this tree." + skew,
         )
-        words = {3: "three", 4: "four", 5: "five", 6: "six"}
+        words = {0: "none", 1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
         self.assertIn(len(unresolved), words, f"{len(unresolved)} unresolved; extend `words`")
         self.assertRegex(
             re.sub(r"\s+", " ", register),
