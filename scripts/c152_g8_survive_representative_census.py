@@ -106,6 +106,11 @@ def census() -> dict[str, Any]:
     prices_zero_rolls = 0
     worst: list[dict[str, int]] = []
 
+    # The health axis runs to `max(f32 accumulator rolls) + 1`, which is deliberately
+    # NOT `max_damage` and NOT the integer fan's maximum: at `max_damage 159` the
+    # accumulator tops out at 158 against an integer fan topping out at 159. An
+    # earlier revision of the report called this bound "the fan maximum", which
+    # names the wrong one of the two quantities this census exists to distinguish.
     for max_damage in range(MIN_MAX_DAMAGE, MAX_MAX_DAMAGE + 1):
         fan = set(integer_fan(max_damage))
         rolls = f32_accumulator_rolls(max_damage)

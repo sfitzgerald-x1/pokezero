@@ -190,7 +190,10 @@ _C141 = {
 # (95) and here (103), set difference exactly
 # `reports/artifacts/c152_{head_dev,head_holdout,h8_nowindow_dev,h8_nowindow_holdout}_sweep.json`
 # plus the four `c152_wide_census_*_sweep.json` shards, and NOTHING removed. Not arithmetic
-# on 95. Confirmed still live at 102 and at 104.
+# on 95. Confirmed still live at 102 and at 104, RE-DERIVED AFTER MERGING `9c2adc72`
+# (#1198's mass-gate fixtures) rather than carried across the merge -- that commit adds
+# `tests/data/c152_pool_reachability_census.json`, which is under `tests/` and therefore
+# outside both selectors, so the base is still 95; re-run, not assumed.
 #
 # THE FOUR WIDE SHARDS ARE ON UNREGISTERED SEEDS `1,000,000`-`1,000,999`, deliberately, and
 # they are the reason two of this repo's "never fired" claims fell on the same day: they are

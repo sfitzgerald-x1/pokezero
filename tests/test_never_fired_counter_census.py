@@ -147,7 +147,10 @@ _CORPUS_TREES = ("reports", "docs")
 # module's `counter_artifacts()` against a worktree of `origin/main` at `d20cf840` -- 375 --
 # against 388 here, with the set difference exactly the THIRTEEN
 # `reports/artifacts/c152_*.json` this branch adds and NOTHING removed. Not arithmetic on
-# 375, and confirmed still live at 387 and at 389.
+# 375, and confirmed still live at 387 and at 389. RE-DERIVED AFTER MERGING `9c2adc72`
+# (#1198): its new JSON lives under `tests/data/`, outside this corpus, so the base holds
+# at 375 -- measured on the merged tree rather than carried, because a base that moves is
+# how these figures go stale.
 #
 # Only FOUR of the thirteen enter `tests/test_boundary_verdict_partition.py`'s sweep corpus
 # (95 -> 99): the four wide-census shards carry a top-level `boundaries_measured` too, so

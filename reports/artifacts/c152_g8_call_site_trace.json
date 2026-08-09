@@ -29,18 +29,68 @@
     }
   },
   "the_four_call_sites_and_their_ceiling_arguments": {
-    "read_from_source_not_carried": "third_party/poke-engine-src/src/gen3/generate_instructions.rs, all four `residual_disjoint_bands(` call sites enumerated",
+    "read_from_source_not_carried": "third_party/poke-engine-src/src/gen3/generate_instructions.rs, all four `residual_disjoint_bands(` call sites enumerated on the SHIPPING vendored tree at fingerprint bfdbe1c04876edcd, with each site's `ceiling` argument re-read at its line.",
     "sites": [
-      {"line": 4208, "ceiling_argument": "defender_active.hp", "split_enabled_by_c149": false},
-      {"line": 4311, "ceiling_argument": "i16::MAX", "split_enabled_by_c149": true},
-      {"line": 4417, "ceiling_argument": "defender_active.hp", "split_enabled_by_c149": false},
-      {"line": 4467, "ceiling_argument": "i16::MAX", "split_enabled_by_c149": true}
-    ]
+      {
+        "line": 4197,
+        "ceiling_argument": "defender_active.hp",
+        "split_enabled_by_c149": false,
+        "instrumented_build_line": 4208
+      },
+      {
+        "line": 4300,
+        "ceiling_argument": "i16::MAX",
+        "split_enabled_by_c149": true,
+        "instrumented_build_line": 4311
+      },
+      {
+        "line": 4406,
+        "ceiling_argument": "defender_active.hp",
+        "split_enabled_by_c149": false,
+        "instrumented_build_line": 4417
+      },
+      {
+        "line": 4456,
+        "ceiling_argument": "i16::MAX",
+        "split_enabled_by_c149": true,
+        "instrumented_build_line": 4467
+      }
+    ],
+    "line_numbers_are_the_shipping_trees": "CORRECTED IN REVIEW. The first revision recorded 4208/4311/4417/4467, which are the INSTRUMENTED build's -- shifted +11 by the eleven-line eprintln! block quoted above, inserted at ~2105, above all four sites. The values below are the shipping tree's and the +11 offset accounts for the difference exactly."
   },
   "observed_calls_on_19200244_115": [
-    {"count": 42, "max_damage": 159, "min_roll": 135, "thresholds": [82], "ceiling": 157, "rolls_at_or_above_ceiling": 2, "applicable": [], "returns": "None"},
-    {"count": 38, "max_damage": 99, "min_roll": 84, "thresholds": [], "ceiling": 32767, "rolls_at_or_above_ceiling": 0, "applicable": [], "returns": "None"},
-    {"count": 38, "max_damage": 49, "min_roll": 41, "thresholds": [], "ceiling": 32767, "rolls_at_or_above_ceiling": 0, "applicable": [], "returns": "None"}
+    {
+      "count": 42,
+      "max_damage": 159,
+      "min_roll": 135,
+      "thresholds": [
+        82
+      ],
+      "ceiling": 157,
+      "rolls_at_or_above_ceiling": 2,
+      "applicable": [],
+      "returns": "None"
+    },
+    {
+      "count": 38,
+      "max_damage": 99,
+      "min_roll": 84,
+      "thresholds": [],
+      "ceiling": 32767,
+      "rolls_at_or_above_ceiling": 0,
+      "applicable": [],
+      "returns": "None"
+    },
+    {
+      "count": 38,
+      "max_damage": 49,
+      "min_roll": 41,
+      "thresholds": [],
+      "ceiling": 32767,
+      "rolls_at_or_above_ceiling": 0,
+      "applicable": [],
+      "returns": "None"
+    }
   ],
   "reading": {
     "the_audit_claim": "In `residual_disjoint_bands`, the filter `*threshold > 0 && *threshold < ceiling && max_damage >= *threshold && min_roll < *threshold` admits nothing when every residual threshold lies below the fan minimum, so `applicable_len == 0`, the function returns `None`, and the arm is priced at the survive representative.",
@@ -49,8 +99,22 @@
     "band_and_representative": "`max_damage 159` with `ceiling 157` gives the 14-roll survive band the ledger records, and `sum(band) // len(band) = 145`, which is not a member of the exact integer fan `floor(159 * r / 100)`. Re-derived independently in `reports/artifacts/c152_g8_survive_representative_census.json`, whose model refuses to run unless it reproduces exactly this case."
   },
   "row_verdicts_at_head": {
-    "collapsed_path": {"verdict": "diverged", "branches": 9, "misses": 9},
-    "enumeration_oracle": {"verdict": "matched", "branches": 416, "misses": 0, "note": "POKEZERO_ENUMERATE_ROLLS=1; C137 made enumeration the oracle, and C147's G33b gate closure is re-derived here at the current head after both merges"},
-    "the_other_c141_row_19200131_129": {"verdict": "matched", "branches": 4, "misses": 0, "path": "collapsed"}
+    "collapsed_path": {
+      "verdict": "diverged",
+      "branches": 9,
+      "misses": 9
+    },
+    "enumeration_oracle": {
+      "verdict": "matched",
+      "branches": 416,
+      "misses": 0,
+      "note": "POKEZERO_ENUMERATE_ROLLS=1; C137 made enumeration the oracle, and C147's G33b gate closure is re-derived here at the current head after both merges"
+    },
+    "the_other_c141_row_19200131_129": {
+      "verdict": "matched",
+      "branches": 4,
+      "misses": 0,
+      "path": "collapsed"
+    }
   }
 }

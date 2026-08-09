@@ -99,8 +99,16 @@ Three distinct calls, and only three (`reports/artifacts/c152_g8_call_site_trace
 `135 < 82`, which is false, so `applicable_len == 0` and the function returns `None`.
 
 **And one thing the audit did not say.** The two call sites C149's split actually touches are the
-ones whose `ceiling` argument is `i16::MAX` — verified by reading all four call sites, lines
-4208 (`defender_active.hp`), 4311 (`i16::MAX`), 4417 (`defender_active.hp`), 4467 (`i16::MAX`).
+ones whose `ceiling` argument is `i16::MAX` — verified by reading all four, at
+`generate_instructions.rs:4197` (`defender_active.hp`), `:4300` (`i16::MAX`), `:4406`
+(`defender_active.hp`), `:4456` (`i16::MAX`).
+
+> ⚠ **Corrected in review.** These read 4208/4311/4417/4467 in the first revision, which are the
+> **instrumented** build's line numbers — shifted +11 by the eleven-line `eprintln!` block the
+> trace needed, inserted above all four. Re-derived from the **shipping** vendored tree at
+> fingerprint `bfdbe1c04876edcd`, with each site's `ceiling` argument re-read at the corrected
+> line. A line number measured on a throwaway build and quoted as the shipping tree's is the same
+> defect as a figure quoted from a tree that has since moved.
 On this boundary **both `i16::MAX` sites are reached with an empty threshold slice**. The split is
 therefore unreachable here *twice over*: not merely filtered out, but with nothing to filter. The
 one call that carries a threshold is at `ceiling = defender_active.hp = 157`, one of the two sites
@@ -123,7 +131,13 @@ the arm reproduces **zero** rolls of its own band instead of one.
 model first reproduces `19200244/115` exactly — 14-roll band, band minimum 135, representative
 145, 145 off-fan — so a model that had drifted would exit 2 rather than produce a number.
 
-Over `max_damage` 10–600 and every `health` from 1 to the fan maximum:
+Over `max_damage` 10–600 and every `health` from 1 to `max(f32 accumulator rolls) + 1`:
+
+> ⚠ **Corrected in review — that bound is not "the fan maximum", and the difference is real.**
+> The loop runs to the top of the **engine's f32 accumulator**, which is not `max_damage` and
+> not the integer fan's top: at `max_damage 159` the accumulator tops out at **158** against
+> an integer-fan maximum of **159**. Calling it "the fan maximum" names the wrong of the two
+> quantities this census exists to distinguish.
 
 | quantity | value |
 |---|---|
@@ -140,6 +154,16 @@ synthetic `(max_damage, health)` plane with uniform weight. It is **not** an inc
 boundaries, and the two differ enormously: at head the same engine measures **0 divergences over
 31,082 boundaries** across both permitted windows. The census sizes the *mechanism*, and the
 sweeps size the *consequence*. Both are needed, and quoting either alone misstates G8.
+
+⚠ **And that zero must be quoted with its two accept bars — §9 of the ledger, added by this same
+pass, forbids the bare number.** Those 31,082 matches include **8.689 % dev / 9.185 % holdout**
+accepted on a widened sleep-counter bar, and **167 dev / 140 holdout (1.077 % / 0.899 %)** that
+match only because of the ±9 % roll window (§4). The second bar is **not incidental to G8**: the
+dominant class the window absorbs is `roll_scaled_component`, **158 dev / 129 holdout** of those
+167 and 140, which is precisely what an off-fan survive representative produces. So an unknown
+part of G8's zero is the comparator's tolerance rather than agreement. The honest statement is
+narrower than "zero": the mechanism is arithmetically common, its consequence is **not separately
+measured beneath the tolerance**, and no divergent row survives it in the two permitted windows.
 
 ### 2.3 The row itself, at head
 
@@ -328,9 +352,19 @@ loser's bucket runs first the winner's drain heal **is** emitted while its own 1
 `plan.heal[winner]` then books Wish/Leftovers/drain against fewer emitted heals, the side goes
 unusable, and `residual_heal_cause` answers **`item: Leftovers`** for that drain — it tests the
 holder's item *before* its silent-drain empty-string branch, deliberately and for a reason C131
-recorded. That is precisely the mislabel G33b is about. **7 of the 24 tie calls carry a
-winner-side heal before the truncation**, so the shape is not hypothetical; no tie-arm divergence
-was *observed* in 1,400 games, and "not observed" is not "cannot happen".
+recorded. That is precisely the mislabel G33b is about. ⚠ **The exposed shape is 3 of 20, not 7 of 24 — corrected in review, and the correction is a
+scope error of exactly the kind this document is about.** 7 of the 24 tie calls do carry a
+winner-side heal before the truncation, but **4 of those 7 are `perish`-arm calls**, and
+`leftovers_slot_truncated` returns `NO_TRUNCATION` for the perish reason because Perish Song is
+order 12 — *after* all of order 10. Nothing in order 10 is skipped there, so those 4 cannot exhibit
+the mislabel at all; that all 4 carry an earlier heal is the expected consequence of the winner's
+whole order-10 bucket having already run. The tie population that can be exposed is the
+**`order_le_10` ties: 20 calls, of which 3 carry a winner-side heal.** Re-derived from
+`reports/artifacts/c152_g33b_open_arm_census.json`'s `by_arm_and_order`
+(`order_le_10|tie` 20, `perish|tie` 4) and its stored tie rows, not re-counted by hand. The
+disposition is unchanged — the shape is still not hypothetical and no tie-arm divergence was
+*observed* in 1,400 games, and "not observed" is not "cannot happen" — but the number was asserted
+over a population wider than the one the mechanism can reach.
 
 The tie arm's fix is §3.1's segment-order inference. It is filed unbuilt, with a measured benefit
 of zero *observed* rows and a mechanism that is live.
@@ -507,16 +541,32 @@ to here. **Fixed in this branch**, and pinned so it cannot recur.
 `reports/artifacts/c152_h19_family_recensus.json`.
 
 **(a) As recorded, over the widest glob available** — `reports/**/*.json` plus `docs/**/*.json`,
-74 artifacts carrying `repros`, **1,156** recorded divergent rows, each classified by the shipped
-`cert_sweep_readout.classify_row` using its own artifact's recorded `divergence_class` and
-`branch_misses`. All four families have fired. Their highest-C appearances:
+**78** artifacts carrying `repros`, **1,167** recorded divergent rows, each classified by the
+shipped `cert_sweep_readout.classify_row` using its own artifact's recorded `divergence_class` and
+`branch_misses`. Two artifacts are **excluded** from that history with the reason recorded in the
+JSON: the window-disabled `c152_h8_nowindow_*` pair is a **mutant comparator** run only for H8, and
+leaving it in inflated `I2_matcher_accounting` from 85 to 113 — a census must not absorb its own
+instrument. All four families have fired. Their highest-C appearances:
 
-| family | rows ever | last artifact | rows there |
-|---|---|---|---|
-| `LS_capped_lethal_shape` | 180 | `reports/artifacts/c149_base_dev_sweep.json` | 1 (`19000191/63`) |
-| `I2_matcher_accounting` | 85 | `reports/artifacts/c141_final_holdout_sweep.json` | 1 (`19200131/129`) |
-| `I5_boundary_truncation` | 65 | `reports/artifacts/c137_base_holdout_sweep.json` | 1 (`19100180/24`) |
-| `I3_roll_inherited` | 23 | `reports/c13_batch_e_differential.json` | 3 |
+| family | rows ever | artifacts | highest-C artifact | rows there |
+|---|---|---|---|---|
+| `LS_capped_lethal_shape` | **181** | 55 | `reports/artifacts/c152_wide_census_1000250_sweep.json` | 1 |
+| `I2_matcher_accounting` | 85 | 16 | `reports/artifacts/c141_final_holdout_sweep.json` | 1 (`19200131/129`) |
+| `I5_boundary_truncation` | 65 | 30 | `reports/artifacts/c137_encore_transform_holdout_sweep.json` | 1 (`19100180/24`) |
+| `I3_roll_inherited` | 23 | 7 | `reports/c13_batch_e_differential.json` | 3 |
+
+⚠ **CORRECTED IN REVIEW.** This block read *"74 artifacts … 1,156 … `LS_capped_lethal_shape` 180,
+last in `c149_base_dev_sweep.json`"*. Those figures were **correct when taken and false once the
+tree moved**: they came from a run made before this PR's own four wide-census shards were
+committed, and the shards then joined the glob. Re-derived from
+`reports/artifacts/c152_h19_family_recensus.json` rather than re-typed. §7.3 and the ledger's H19
+cell already carried the corrected numbers, so this document disagreed with itself and with its
+own artifact — exactly the drift the ledger's standing rule about re-deriving after a merge exists
+to catch, hit by this document while writing about it.
+
+⚠ **And `LS_capped_lethal_shape` is therefore NOT extinct.** Its highest-C row is now one row on
+**unregistered seeds** `1,000,250`–`1,000,499`, measured on this same 74-patch engine. Zero in the
+two permitted windows is not zero everywhere; see §7.3.
 
 So the honest answer to "did they survive into the c136 era" is **two of the four did**:
 `LS_capped_lethal_shape` carried `19000074/27` and `19000191/63` in both c136 dev sweeps, and
@@ -561,8 +611,10 @@ an unrunnable script and a vacuous piece of evidence.
 ### 7.1 Open after C152, exactly
 
 1. **G33b's speed-tie arm.** Measured for the first time — 24 predicate calls in 1,400 games, all
-   with a Leftovers winner, 7 carrying a winner-side heal that an over-booked plan sends to a
-   fallback answering `item: Leftovers`. No tie-arm divergence observed. Fix filed unbuilt
+   with a Leftovers winner. **20 of the 24 are `order_le_10`**, the only ones a truncation can
+   expose, and **3 of those 20** carry a winner-side heal that an over-booked plan sends to a
+   fallback answering `item: Leftovers`. (The other 4 are `perish`-arm calls, order 12, where
+   nothing in order 10 is skipped — see §3.5.) No tie-arm divergence observed. Fix filed unbuilt
    (§3.1's segment-order inference).
 2. **G33c, new.** The truncation strands the winner's order-10 **damage** bookings, so C147's heal
    gate is inert wherever the winner carries a residual status. Observed at `1000513/121`,
