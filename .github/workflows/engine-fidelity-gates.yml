@@ -1130,13 +1130,19 @@ jobs:
       # `|-heal|...|[from] item: Leftovers` line. It imports pokezero_search
       # UNGUARDED for that reason -- a skip here retires the pin silently.
       # Red/green measured in reports/c145_itemleftovers_row_adjudication.md §5.3.
+      # 22 -> 29 with CopiedMovesetLivePpTests, which pins that the copied moveset
+      # carries the request's LIVE pp/disabled rather than the transform seed. Its
+      # `test_a_drained_copy_leaves_the_engine_no_move` also imports the crate
+      # unguarded, for the same reason: it asserts at the engine that a drained copy
+      # produces `MoveChoice::None`, which is the token `_map_choices` resolves onto
+      # the request's substituted `struggle`.
       - name: Encore-on-transform world-construction pins
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_world_encore_transform -v 2>&1 \
             | tee /tmp/encoretransform.log
-          if ! grep -qE 'Ran 22 tests' /tmp/encoretransform.log; then
-            echo "::error::expected 22 tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 29 tests' /tmp/encoretransform.log; then
+            echo "::error::expected 29 tests; the suite shrank or grew"
             exit 1
           fi
           if grep -q 'skipped' /tmp/encoretransform.log; then
