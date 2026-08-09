@@ -127,20 +127,21 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`236d1cac8a784898…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`6b5a3a989252dbc8…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
-legitimate, and it has now happened **twice**. Restricting `git log 7fcd9e19..HEAD` to **all** of
+legitimate, and it has now happened **three times**. Restricting `git log 7fcd9e19..HEAD` to **all** of
 the fingerprint's inputs — the 74 gen3 patches, `poke-engine-gen3-patches.txt`,
 `poke-engine-base-source.json`, the 11 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
-exactly two commits:
+exactly three commits:
 
 | commit | input | fingerprint after |
 |---|---|---|
 | `21f484d4` (#1197) | `rust/pokezero-search/src/leaf.rs`, +31 lines | `9517aab98d56a9ba…` |
 | `578287e7` (#1207) | `rust/pokezero-search/src/priors.rs`, +91 −4 | `236d1cac8a784898…` |
+| #1211 | `rust/pokezero-search/src/events.rs`, +403 −74 | `6b5a3a989252dbc8…` |
 
 ⚠ **And the second landed while this register was in review**, three days after C153's build. That
 is not an aside: it is T1's argument, live. C151 §3 deferred the terminal sweep precisely because
@@ -247,7 +248,7 @@ truncation, which an over-booked plan sends to a fallback answering `item: Lefto
 
 **The refusal is still shipped, and that is derived too.** `leftovers_slot_truncated` ends in
 `match residual_speed_order(state)` with `_ => NO_TRUNCATION` at
-`rust/pokezero-search/src/events.rs:5394`, resolved by a unique anchor. So the tie arm is unbuilt at
+`rust/pokezero-search/src/events.rs:5525`, resolved by a unique anchor. So the tie arm is unbuilt at
 head, not merely unmeasured.
 
 **Reading, and it is the disposition.** No tie-arm divergence has been *observed*: across the same
@@ -469,7 +470,7 @@ defect did not exist on either of their trees.** A typed `25` would have shipped
 Where CI gates on the merge, **local green and CI green are different measurements**; §6 declares
 that coupling and the assertion carries the fix in its own failure message.
 
-**Every measurement behind T2–T6 predates the head build**, and none is at `236d1cac8a784898` —
+**Every measurement behind T2–T6 predates the head build**, and none is at `6b5a3a989252dbc8` —
 nor at `9517aab98d56a9ba`, the build this document was reconciled against two merges ago. Read the
 table in T1 before quoting that as a re-sweep scope: T3, T4 and T5 rest on an engine build; **T2 and
 T6 build no engine at all** and carry no `engine_fingerprint`.
@@ -685,7 +686,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.head_fingerprint` | 236d1cac8a784898 |
+| `t1.head_fingerprint` | 6b5a3a989252dbc8 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
@@ -703,12 +704,12 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t3.speed_ties_order_le_10` | 20 |
 | `t3.speed_ties_perish` | 4 |
 | `t3.speed_ties_with_a_leftovers_winner` | 24 |
-| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:5394 |
+| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:5525 |
 | `t4.boundary` | 1000513/121 |
 | `t4.branch_miss_pct` | 100.00 |
 | `t4.engine_component` | itemleftovers |
 | `t4.heal_mismatch_rows_in_the_wide_census` | 2 |
-| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:5466 |
+| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:5597 |
 | `t4.leftovers_truncated_consumers` | 1 |
 | `t4.leftovers_truncated_references` | 2 |
 | `t4.observed_component` | heal |
