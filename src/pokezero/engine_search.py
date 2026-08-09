@@ -971,6 +971,49 @@ def native_search_args(
     return search_args
 
 
+#: The id Showdown gives the recharge pseudo-move it substitutes for a locked mon's moveset.
+_RECHARGE_REQUEST_MOVE_ID = "recharge"
+
+
+def _self_request_forces_recharge(context: Any) -> bool:
+    """Whether OUR OWN request proves the active mon is spending a forced recharge turn.
+
+    Showdown's ``Pokemon.getMoves(lockedMove)`` short-circuits to a single synthetic entry --
+    ``[{move: 'Recharge', id: 'recharge'}]`` -- when and only when ``lockedMove`` is the
+    ``mustrecharge`` volatile, and sets ``this.trapped = true`` on the same call
+    (``sim/pokemon.ts``). So a one-entry active moveset spelled ``recharge`` is not evidence
+    about the lock, it IS the lock, disclosed to the seat that has to act on it.
+
+    That makes it schema-independent, which is the point: ``self_must_recharge`` rides the v4
+    feature pack and is simply absent under v2.2/v3, where these decisions were refused as
+    ``self_request_state_unsupported`` instead of searched.
+
+    Deliberately narrow. It requires EXACTLY one move and the exact id, so a Struggle-only or
+    Encore-locked request (one move, different id) and a partly-disabled moveset (several moves)
+    both read False. The synthetic entry also carries no ``pp``/``maxpp``, which is why
+    ``local_showdown._request_active_moves`` drops it and the payload's ``selfActiveMoves`` is
+    empty here -- an emptiness with several other causes, so the id is read directly.
+    """
+
+    state = getattr(context, "public_materialization_state", None)
+    request = getattr(state, "self_request", None)
+    if not isinstance(request, Mapping):
+        return False
+    active = request.get("active")
+    if not isinstance(active, Sequence) or isinstance(active, (str, bytes)) or not active:
+        return False
+    active_row = active[0]
+    if not isinstance(active_row, Mapping):
+        return False
+    moves = active_row.get("moves")
+    if not isinstance(moves, Sequence) or isinstance(moves, (str, bytes)) or len(moves) != 1:
+        return False
+    move = moves[0]
+    if not isinstance(move, Mapping):
+        return False
+    return normalize_id(str(move.get("id") or move.get("move") or "")) == _RECHARGE_REQUEST_MOVE_ID
+
+
 def opponent_request_order(context, party_species) -> list[str] | None:
     """The opponent's Showdown request order at this decision, or None.
 
@@ -2141,9 +2184,18 @@ class EngineMctsPolicy:
         BOTH SIDES, since the self side went live. Our own slot comes from
         ``self_must_recharge`` and the opponent's from ``opponent_must_recharge`` -- two keys of
         the ONE parser ``must_recharge`` tracker, published per seat. The notes below describe
-        the opponent side, whose reconstruction fallback predates the tracker; the self side has
-        no fallback and is tracker-only, so an observation without the key simply carries no self
-        lock.
+        the opponent side, whose reconstruction fallback predates the tracker.
+
+        CORRECTED: the self side is no longer tracker-only. ``_feature_pack_metadata`` publishes
+        ``self_must_recharge`` under the v4 schemas ALONE (deliberately -- an always-present key
+        changed world seeding for the v2.2/v3 arms in flight), so on every earlier schema our own
+        recharge turn carried no lock, the world got no ``mustrecharge`` volatile, and
+        ``_require_world_reproduces_trap`` refused the request's disclosed ``trapped`` flag with
+        ``self_request_state_unsupported``. The recharge turn was unsearchable on those schemas.
+
+        The self side does have a second proof, and it is not a reconstruction:
+        ``_self_request_forces_recharge`` reads OUR OWN request. It is schema-independent, so it
+        closes the gap without republishing the pack.
 
         PREFERRED SOURCE: the parser's own ``must_recharge`` tracker, surfaced on the
         observation metadata as ``opponent_must_recharge`` (spec v4 pack A1). The parser reads
@@ -2188,7 +2240,21 @@ class EngineMctsPolicy:
         # on corpus/golden-v4: 1208 decision-row PAIRS (of 1295 rows; the rest have no partner
         # row in the corpus) where seat X's `self_must_recharge` equals seat Y's
         # `opponent_must_recharge`, zero disagreements.
+        #
+        # SECOND PROOF, unioned rather than preferred: our own request. Showdown's
+        # `getMoves(lockedMove)` returns the single pseudo-move `{move: 'Recharge', id:
+        # 'recharge'}` if and only if the mon holds `mustrecharge`, and sets `trapped: true` in
+        # the same breath. That is the SAME fact the tracker reports, disclosed directly to us,
+        # so it can only agree; a union is used instead of a fallback because it cannot lose a
+        # lock the tracker found, and there is no reading of "the request offers only recharge"
+        # under which the mon is free.
+        #
+        # It is not the `opponent_must_recharge is False` case in reverse: that False is a
+        # negative proof about a seat whose request we cannot see, and the weaker reconstruction
+        # must not overrule it. Here both inputs are positive proofs about OUR seat.
         self_slot: tuple[str, ...] = ()
+        if _self_request_forces_recharge(context):
+            self_slot = (context.player_id,)
         if isinstance(observation_metadata, Mapping):
             if observation_metadata.get("self_must_recharge") is True:
                 self_slot = (context.player_id,)
