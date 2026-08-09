@@ -1190,6 +1190,365 @@ class ToxicStageWorldTest(unittest.TestCase):
         self.assertIsNone(_materialization_toxic_stage(replay, "p2"))
 
 
+class ActionPhaseToxicResetTest(unittest.TestCase):
+    """W3 — the SECOND public active-Toxic zero: an action-phase re-entry.
+
+    Measured address: battle ``fb3h2-965132`` round 180 seat p2, a mid-turn
+    ``force_switch`` whose foe (Walrein, ``288/307 tox``) had switched in earlier in
+    the same turn. All 32 world attempts refused with
+    ``materialization_blocker: toxic-stage-unknown`` because
+    ``_materialization_toxic_stage`` recognised only ONE public zero — the
+    post-upkeep faint replacement — and returned ``None`` for every other one.
+
+    The zero was never unknowable. Showdown's ``tox.onSwitchIn`` sets
+    ``statusState.stage = 0`` unconditionally (``data/conditions.ts``; gen3 adds no
+    override), which the parser already folds and which
+    ``_reseed_toxic_stage_from_residual`` already trusts when it prices a rounded
+    ``/100`` re-entry tick as stage one. What was genuinely missing is not the
+    reset, it is a BOUND: a bare "known and stage == 0" also matches a stale zero
+    whose residual the prefix never rendered. So the proof is an ident carried only
+    from the switch line to the first residual OPPORTUNITY, and these tests pin
+    both halves — that the zero is admitted, and that it dies on time.
+    """
+
+    LEADS = [
+        "|switch|p1a: LeadOne|LeadOne, L80, M|307/307",
+        "|switch|p2a: LeadTwo|LeadTwo, L80, F|300/300",
+        "|turn|1",
+    ]
+
+    @staticmethod
+    def _reentry_line(side: str) -> str:
+        return f"|switch|{side}a: Walrein|Walrein, L80, M|288/307 tox"
+
+    @classmethod
+    def _reentry_parser(
+        cls, side: str, *suffix: str, hp_visibility: str = "exact"
+    ) -> _ReplayParser:
+        parser = _ReplayParser(
+            f"toxic-action-phase-{side}",
+            complete_prefix=True,
+            hp_visibility={"p1": hp_visibility, "p2": hp_visibility},
+        )
+        parser.feed([*cls.LEADS, cls._reentry_line(side), *suffix])
+        return parser
+
+    def test_the_exemplar_mid_turn_reentry_materializes_a_zero_counter(self) -> None:
+        """The refusal address itself, on both seats."""
+        for side in ("p1", "p2"):
+            with self.subTest(side=side):
+                replay = self._reentry_parser(side).snapshot()
+                self.assertFalse(replay.post_upkeep_window)
+                self.assertEqual(
+                    replay.toxic_stage_reset_ident[side], f"{side}a: Walrein"
+                )
+                # The narrow post-upkeep proof is NOT what admits this one.
+                self.assertFalse(replay.toxic_stage_zero_after_upkeep[side])
+                self.assertEqual(_materialization_toxic_stage(replay, side), 0)
+
+    def test_the_materialized_zero_goes_on_counting(self) -> None:
+        """Not a deleted counter: the ramp resumes from the admitted zero.
+
+        A stage-0 world that then refuses to climb would be the regression this
+        class has shipped before — refusing less while measuring nothing. Each
+        rendered residual has to move the materialized counter by exactly one.
+        """
+        for side in ("p1", "p2"):
+            with self.subTest(side=side):
+                parser = self._reentry_parser(side)
+                self.assertEqual(_materialization_toxic_stage(parser.snapshot(), side), 0)
+                observed = []
+                for turn, hp in ((2, 269), (3, 231), (4, 174)):
+                    parser.feed(
+                        [
+                            f"|-damage|{side}a: Walrein|{hp}/307 tox|[from] psn",
+                            "|upkeep",
+                            f"|turn|{turn}",
+                        ]
+                    )
+                    observed.append(
+                        _materialization_toxic_stage(parser.snapshot(), side)
+                    )
+                # 19/38/57 = 1/2/3 units of floor(307/16) = 19. The engine's
+                # pre-tick counter trails the multiplier just paid by one turn.
+                self.assertEqual(observed, [1, 2, 3])
+
+    def test_the_proof_dies_at_the_first_residual_opportunity(self) -> None:
+        """A zero may not outlive the tick that would contradict it.
+
+        Neither boundary renders a Toxic residual here, which is exactly the
+        incomplete-prefix shape the old blanket refusal existed to catch. The stage
+        is still 0 and ``toxic_stage_known`` is still True, so a bare
+        "known and zero" rule would hand out a counter that is already wrong.
+        """
+        for side in ("p1", "p2"):
+            for label, suffix in (
+                ("upkeep", ("|upkeep",)),
+                ("turn", ("|turn|2",)),
+                ("upkeep-then-turn", ("|upkeep", "|turn|2")),
+            ):
+                with self.subTest(side=side, boundary=label):
+                    replay = self._reentry_parser(side, *suffix).snapshot()
+                    self.assertIsNone(replay.toxic_stage_reset_ident[side])
+                    self.assertTrue(replay.toxic_stage_known[side])
+                    self.assertEqual(replay.toxic_stage[side], 0)
+                    self.assertIsNone(_materialization_toxic_stage(replay, side))
+
+    def test_a_rendered_residual_retires_the_proof_by_superseding_it(self) -> None:
+        for side in ("p1", "p2"):
+            with self.subTest(side=side):
+                replay = self._reentry_parser(
+                    side, f"|-damage|{side}a: Walrein|269/307 tox|[from] psn"
+                ).snapshot()
+                self.assertIsNone(replay.toxic_stage_reset_ident[side])
+                self.assertEqual(replay.toxic_stage[side], 1)
+
+    def test_a_rounded_stream_reentry_still_prices_its_first_tick(self) -> None:
+        """`/100` cannot reverse-round a stage, but it can count from a proven zero."""
+        for side in ("p1", "p2"):
+            with self.subTest(side=side):
+                parser = _ReplayParser(
+                    f"toxic-action-phase-pct-{side}",
+                    complete_prefix=True,
+                    hp_visibility={"p1": "percentage", "p2": "percentage"},
+                )
+                parser.feed(
+                    [*self.LEADS, f"|switch|{side}a: Walrein|Walrein, L80, M|94/100 tox"]
+                )
+                self.assertEqual(_materialization_toxic_stage(parser.snapshot(), side), 0)
+                parser.feed(
+                    [
+                        f"|-damage|{side}a: Walrein|88/100 tox|[from] psn",
+                        "|upkeep",
+                        "|turn|2",
+                    ]
+                )
+                self.assertEqual(_materialization_toxic_stage(parser.snapshot(), side), 1)
+
+    def test_the_proof_never_arms_inside_the_post_upkeep_window(self) -> None:
+        """The faint-replacement proof keeps sole authority over its own window.
+
+        Its rejections (drag, Baton Pass, no same-seat faint) stay rejections: this
+        change adds a second proof, it does not widen the first one.
+        """
+        for side in ("p1", "p2"):
+            for label, entry in (
+                ("switch-no-faint", self._reentry_line(side)),
+                ("drag", f"|drag|{side}a: Walrein|Walrein, L80, M|288/307 tox"),
+                (
+                    "baton-pass",
+                    f"{self._reentry_line(side)}|[from] Baton Pass",
+                ),
+            ):
+                with self.subTest(side=side, entry=label):
+                    parser = _ReplayParser(
+                        f"toxic-post-upkeep-guard-{side}-{label}", complete_prefix=True
+                    )
+                    parser.feed([*self.LEADS, "|upkeep", entry])
+                    replay = parser.snapshot()
+                    self.assertTrue(replay.post_upkeep_window)
+                    self.assertIsNone(replay.toxic_stage_reset_ident[side])
+                    self.assertFalse(replay.toxic_stage_zero_after_upkeep[side])
+                    self.assertIsNone(_materialization_toxic_stage(replay, side))
+
+    def test_only_a_badly_poisoned_entry_arms_the_proof(self) -> None:
+        for side in ("p1", "p2"):
+            for label, condition in (
+                ("healthy", "288/307"),
+                ("plain-poison", "288/307 psn"),
+                ("asleep", "288/307 slp"),
+            ):
+                with self.subTest(side=side, condition=label):
+                    parser = _ReplayParser(
+                        f"toxic-entry-status-{side}-{label}", complete_prefix=True
+                    )
+                    parser.feed(
+                        [
+                            *self.LEADS,
+                            f"|switch|{side}a: Walrein|Walrein, L80, M|{condition}",
+                        ]
+                    )
+                    self.assertIsNone(parser.snapshot().toxic_stage_reset_ident[side])
+
+    def test_status_cure_and_faint_transitions_retire_the_proof(self) -> None:
+        for side in ("p1", "p2"):
+            for label, event in (
+                ("rest", f"|-status|{side}a: Walrein|slp|[from] move: Rest"),
+                ("retox", f"|-status|{side}a: Walrein|tox"),
+                ("cure", f"|-curestatus|{side}a: Walrein|tox|[msg]"),
+                ("cureteam", f"|-cureteam|{side}a: Walrein|[from] move: Aromatherapy"),
+                ("faint", f"|faint|{side}a: Walrein"),
+            ):
+                with self.subTest(side=side, event=label):
+                    replay = self._reentry_parser(side, event).snapshot()
+                    self.assertIsNone(replay.toxic_stage_reset_ident[side])
+
+    def test_a_bench_cure_leaves_the_active_proof_alone(self) -> None:
+        """Heal Bell's silent bench line cannot touch the active's counter."""
+        for side in ("p1", "p2"):
+            with self.subTest(side=side):
+                replay = self._reentry_parser(
+                    side, f"|-curestatus|{side}: Benched|par|[silent]"
+                ).snapshot()
+                self.assertEqual(
+                    replay.toxic_stage_reset_ident[side], f"{side}a: Walrein"
+                )
+                self.assertEqual(_materialization_toxic_stage(replay, side), 0)
+
+    def test_a_later_occupant_never_inherits_the_proof(self) -> None:
+        for side in ("p1", "p2"):
+            with self.subTest(side=side, entry="second-tox-mon"):
+                replay = self._reentry_parser(
+                    side, f"|drag|{side}a: Swalot|Swalot, L80, M|200/250 tox"
+                ).snapshot()
+                self.assertEqual(
+                    replay.toxic_stage_reset_ident[side], f"{side}a: Swalot"
+                )
+            with self.subTest(side=side, entry="healthy-replacement"):
+                replay = self._reentry_parser(
+                    side, f"|switch|{side}a: Swalot|Swalot, L80, M|250/250"
+                ).snapshot()
+                self.assertIsNone(replay.toxic_stage_reset_ident[side])
+            with self.subTest(side=side, entry="non-canonical-replacement"):
+                # The slot changed hands but the line could not be folded into a
+                # Pokemon. The previous occupant's proof must not stay behind.
+                replay = self._reentry_parser(
+                    side, f"|switch|{side}a: Broken|Broken|"
+                ).snapshot()
+                self.assertIsNone(replay.toxic_stage_reset_ident[side])
+                self.assertIsNone(_materialization_toxic_stage(replay, side))
+
+    def test_snapshot_resume_keeps_only_an_honest_reset_proof(self) -> None:
+        for side in ("p1", "p2"):
+            replay = self._reentry_parser(side).snapshot()
+            active = replay.public_active[side]
+            with self.subTest(side=side, case="honest"):
+                resumed = _ReplayParser.from_snapshot(replay).snapshot()
+                self.assertEqual(
+                    resumed.toxic_stage_reset_ident[side], f"{side}a: Walrein"
+                )
+                self.assertEqual(_materialization_toxic_stage(resumed, side), 0)
+            forged = {
+                "legacy-missing-field": replace(replay, toxic_stage_reset_ident={}),
+                "ident-mismatch": replace(
+                    replay, toxic_stage_reset_ident={side: f"{side}a: Someone"}
+                ),
+                "bench-ident": replace(
+                    replay, toxic_stage_reset_ident={side: f"{side}: Walrein"}
+                ),
+                "non-string-ident": replace(
+                    replay, toxic_stage_reset_ident={side: True}
+                ),
+                "stage-nonzero": replace(replay, toxic_stage={**replay.toxic_stage, side: 2}),
+                "stage-unknown": replace(
+                    replay, toxic_stage_known={**replay.toxic_stage_known, side: False}
+                ),
+                "post-upkeep": replace(replay, post_upkeep_window=True),
+                "malformed-post-upkeep": replace(replay, post_upkeep_window="yes"),
+                "active-cured": replace(
+                    replay,
+                    public_active={
+                        **replay.public_active,
+                        side: replace(active, condition="288/307"),
+                    },
+                ),
+                "active-not-current": replace(
+                    replay,
+                    public_active={
+                        **replay.public_active,
+                        side: replace(active, active=False),
+                    },
+                ),
+            }
+            # Two of the forgeries change WHICH counter is being asked for rather
+            # than the proof behind it, so only the proof itself is pinned there:
+            # `stage-nonzero` moves the read onto the ordinary ramp branch, and
+            # `active-cured` onto the "no active Toxic, harmless zero" branch.
+            keeps_its_own_answer = {"stage-nonzero", "active-cured"}
+            for label, tampered in forged.items():
+                with self.subTest(side=side, case=label):
+                    resumed = _ReplayParser.from_snapshot(tampered).snapshot()
+                    self.assertIsNone(resumed.toxic_stage_reset_ident[side])
+                    if label not in keeps_its_own_answer:
+                        self.assertIsNone(_materialization_toxic_stage(resumed, side))
+
+    def test_a_direct_snapshot_without_the_ident_still_fails_closed(self) -> None:
+        """No parser in the loop: the consumer alone must not invent the proof."""
+        base = dict(
+            toxic_stage={"p1": 0},
+            toxic_stage_known={"p1": True},
+            toxic_stage_zero_after_upkeep={"p1": False},
+            public_active={
+                "p1": ShowdownPokemon(
+                    ident="p1a: Walrein",
+                    showdown_slot="p1",
+                    species="Walrein",
+                    condition="288/307 tox",
+                    active=True,
+                )
+            },
+            post_upkeep_window=False,
+        )
+        self.assertIsNone(_materialization_toxic_stage(SimpleNamespace(**base), "p1"))
+        self.assertEqual(
+            _materialization_toxic_stage(
+                SimpleNamespace(**base, toxic_stage_reset_ident={"p1": "p1a: Walrein"}),
+                "p1",
+            ),
+            0,
+        )
+        for label, ident in (
+            ("other-seat", "p2a: Walrein"),
+            ("wrong-mon", "p1a: Swalot"),
+            ("bench", "p1: Walrein"),
+            ("missing", None),
+        ):
+            with self.subTest(ident=label):
+                self.assertIsNone(
+                    _materialization_toxic_stage(
+                        SimpleNamespace(**base, toxic_stage_reset_ident={"p1": ident}),
+                        "p1",
+                    )
+                )
+
+    def test_the_rust_root_handoff_learns_the_same_zero(self) -> None:
+        """Both lanes or neither.
+
+        The leaf spends this fact as ``toxic_reentry_pending``, which is what lets a
+        rounded ``/100`` residual render as stage one. A world admitted by the
+        materialization lane alone would search a Toxic stint stuck at zero.
+        """
+        for side in ("p1", "p2"):
+            with self.subTest(side=side):
+                replay = self._reentry_parser(side).snapshot()
+                self.assertEqual(
+                    _root_toxic_zero_after_upkeep_attestation(replay)[side],
+                    {
+                        "proof": True,
+                        "pending": False,
+                        "invalid": False,
+                        "post_upkeep_window": False,
+                    },
+                )
+                spent = self._reentry_parser(side, "|upkeep", "|turn|2").snapshot()
+                self.assertIs(
+                    _root_toxic_zero_after_upkeep_attestation(spent)[side]["proof"],
+                    False,
+                )
+                # A malformed post-upkeep field still has to serialize as JSON null
+                # so the leaf decoder fails closed rather than reading the new proof.
+                malformed = replace(
+                    replay,
+                    toxic_stage_zero_after_upkeep={
+                        **replay.toxic_stage_zero_after_upkeep,
+                        side: "yes",
+                    },
+                )
+                self.assertIsNone(
+                    _root_toxic_zero_after_upkeep_attestation(malformed)[side]["proof"]
+                )
+
+
 class TracedAbilityParserTest(unittest.TestCase):
     """W1, parser half — the CURRENT trace only, and it dies on switch-out."""
 

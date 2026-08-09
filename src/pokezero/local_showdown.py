@@ -2425,6 +2425,28 @@ def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) 
     if not stage_present or type(tracked_stage) is not int:
         return None
     if tracked_stage == 0:
+        # Second public zero: the active entered badly poisoned during THIS turn's
+        # action phase and the turn's residual phase has not run yet. Showdown's
+        # ``tox.onSwitchIn`` sets ``statusState.stage = 0`` unconditionally
+        # (``data/conditions.ts``; gen3 adds no override), so the counter is read
+        # off the protocol, not guessed — and the very next tick it will charge is
+        # stage 1, which is what a pre-tick counter of zero means to the engine.
+        #
+        # The parser retires this ident at the first residual OPPORTUNITY (the next
+        # ``|upkeep|``/``|turn|``) as well as at the residual itself, so it cannot
+        # outlive a tick that a truncated prefix failed to show. That bound is the
+        # whole difference between this and a bare ``known and stage == 0``, which
+        # would also match a stale zero whose residual was never rendered.
+        reset_present, reset_ident = provenance_value("toxic_stage_reset_ident")
+        if (
+            reset_present
+            and isinstance(reset_ident, str)
+            and _is_active_protocol_ident(reset_ident)
+            and reset_ident.startswith(f"{player}a: ")
+            and getattr(active, "ident", None) == reset_ident
+            and post_upkeep_window is False
+        ):
+            return 0
         # A poisoned replacement that entered after upkeep missed the residual
         # that just ran. Its next Toxic tick is stage 1, so the engine's
         # pre-tick counter is correctly zero. No other active-Toxic zero has

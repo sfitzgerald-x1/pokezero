@@ -1592,6 +1592,22 @@ class ShowdownReplayState:
     # boolean alone cannot survive a snapshot safely: the proof belongs to one
     # canonical p1a/p2a occupant, not merely its side.
     toxic_stage_zero_after_upkeep_ident: Mapping[str, str | None] = field(default_factory=dict)
+    # Exact active ident whose Toxic counter is publicly zero because it entered
+    # badly poisoned during THIS turn's ACTION phase and has not yet reached a
+    # residual phase. Showdown resets ``statusState.stage`` unconditionally in
+    # ``tox.onSwitchIn`` (``data/conditions.ts``; gen3 carries no override), so
+    # the switch/drag line itself is the proof -- the same public reset
+    # ``_reseed_toxic_stage_from_residual`` already relies on to price the first
+    # rounded ``/100`` tick as stage one.
+    #
+    # Deliberately narrower than "``toxic_stage_known`` and stage 0": the missing
+    # piece in a stage-0 zero is never the reset, it is whether a residual has
+    # since been charged unobserved. So this ident is retired at the first
+    # residual OPPORTUNITY -- the next ``|upkeep|`` or ``|turn|`` -- as well as by
+    # the residual itself and by every status/cure/faint/switch transition. The
+    # post-upkeep faint-replacement window keeps its own separate, longer-lived
+    # proof above; this one never arms inside it.
+    toxic_stage_reset_ident: Mapping[str, str | None] = field(default_factory=dict)
     # A public active faint is eligible to authorize exactly one same-seat
     # post-upkeep replacement. This stays distinct from the materialization
     # proof: a post-upkeep switch without a preceding same-seat faint is not
@@ -1901,6 +1917,7 @@ class _ReplayParser:
             "p1": None,
             "p2": None,
         }
+        self.toxic_stage_reset_ident: dict[str, str | None] = {"p1": None, "p2": None}
         self.toxic_faint_replacement_pending: dict[str, bool] = {"p1": False, "p2": False}
         self.toxic_faint_replacement_expected_ident: dict[str, str | None] = {
             "p1": None,
@@ -2096,6 +2113,34 @@ class _ReplayParser:
                 parser.toxic_stage_zero_after_upkeep[slot] = False
                 parser.toxic_stage_zero_after_upkeep_expires_after_turn[slot] = None
                 parser.toxic_stage_zero_after_upkeep_ident[slot] = None
+        snapshot_reset_ident = getattr(snapshot, "toxic_stage_reset_ident", {})
+        if not isinstance(snapshot_reset_ident, Mapping):
+            snapshot_reset_ident = {}
+        parser.toxic_stage_reset_ident = {}
+        for slot in ("p1", "p2"):
+            reset_ident = snapshot_reset_ident.get(slot)
+            active = parser.public_active.get(slot)
+            # Re-derive rather than copy. The proof is only ever "THIS occupant's
+            # counter is zero right now", so a resumed parser must see the same
+            # occupant, the same public tox condition, the same known zero, and the
+            # same pre-residual boundary — otherwise a legacy or forged snapshot
+            # could hand a live proof to a mon that never entered under it.
+            parser.toxic_stage_reset_ident[slot] = (
+                reset_ident
+                if (
+                    isinstance(reset_ident, str)
+                    and _is_active_protocol_ident(reset_ident)
+                    and reset_ident.startswith(f"{slot}a: ")
+                    and _is_current_public_active(active)
+                    and getattr(active, "ident", None) == reset_ident
+                    and _condition_has_status(getattr(active, "condition", None), "tox")
+                    and parser.toxic_stage_known[slot]
+                    and parser.toxic_stage[slot] == 0
+                    and post_upkeep_window_is_valid
+                    and snapshot_post_upkeep_window is False
+                )
+                else None
+            )
         if not isinstance(snapshot_faint_replacement_pending, Mapping):
             snapshot_faint_replacement_pending = {}
         if not isinstance(snapshot_expected_ident, Mapping):
@@ -2405,6 +2450,11 @@ class _ReplayParser:
             if replacement_slot in self.toxic_faint_replacement_pending:
                 self.toxic_faint_replacement_pending[replacement_slot] = False
                 self.toxic_faint_replacement_expected_ident[replacement_slot] = None
+            # Same rule for the action-phase reset proof: a malformed or otherwise
+            # unparsed occupancy change must not leave the previous occupant's
+            # zero-counter proof standing.
+            if replacement_slot in self.toxic_stage_reset_ident:
+                self.toxic_stage_reset_ident[replacement_slot] = None
             # Switch, drag, and replace protocol lines name the active singles
             # seat as p1a/p2a. Do not fold a malformed bench ident as a new
             # active Pokemon, even though its side prefix is recognizable.
@@ -2504,6 +2554,26 @@ class _ReplayParser:
                 self.toxic_stage_zero_after_upkeep_ident[pokemon.showdown_slot] = (
                     pokemon.ident
                     if self.toxic_stage_zero_after_upkeep[pokemon.showdown_slot]
+                    else None
+                )
+                # An ACTION-phase entry (``|switch|``/``|drag|``, Baton Pass included)
+                # of an already badly-poisoned mon: Showdown has just run
+                # ``tox.onSwitchIn`` and set ``statusState.stage = 0``, and this turn's
+                # residual phase has not happened yet, so the engine's pre-tick counter
+                # is exactly zero until the next ``|upkeep|``. Inside the post-upkeep
+                # window the longer-lived faint-replacement proof above owns the same
+                # fact, so this one stays out of it rather than minting a second,
+                # unbounded authority for it.
+                self.toxic_stage_reset_ident[pokemon.showdown_slot] = (
+                    pokemon.ident
+                    if (
+                        event_type in {"switch", "drag"}
+                        and self._post_upkeep_window is False
+                        and pokemon.ident == parts[2]
+                        and _is_active_protocol_ident(parts[2])
+                        and pokemon.showdown_slot == replacement_slot
+                        and _condition_has_status(pokemon.condition, "tox")
+                    )
                     else None
                 )
                 # The stall streak belongs to the mon that left the slot (the ``stall`` volatile
@@ -2609,8 +2679,21 @@ class _ReplayParser:
             # Residuals for this turn are done; anything switching in from here until the
             # next |turn| is a post-residual faint replacement.
             self._post_upkeep_window = True
+            # This turn's residual phase is over, so an action-phase zero-counter
+            # proof has had its one residual opportunity. Whether the tick was
+            # observed (stage now >= 1), unobservable (`known` cleared) or absent
+            # from the prefix entirely, the proof is spent. Retiring it here is what
+            # keeps a stage-0 zero from outliving the residual that would contradict
+            # it -- the exact failure the post-upkeep proof's deadline guards against.
+            self.toxic_stage_reset_ident = {"p1": None, "p2": None}
             self._settle_pending_rest_sleep_attempts()
         if event_type == "turn" and len(parts) >= 3:
+            # A turn marker is past the previous turn's residual opportunity, so the
+            # action-phase zero-counter proof is spent. Retired BEFORE the ordering
+            # gate below: an out-of-order marker is discarded as chronology, but it is
+            # still evidence that the prefix moved on, and a proof must never survive
+            # a boundary it cannot account for.
+            self.toxic_stage_reset_ident = {"p1": None, "p2": None}
             next_turn = canonical_turn
             turn_is_ordered = bool(
                 isinstance(next_turn, int)
@@ -2728,6 +2811,7 @@ class _ReplayParser:
             self.toxic_stage,
             self.toxic_stage_known,
             self.toxic_stage_zero_after_upkeep,
+            self.toxic_stage_reset_ident,
         )
         _update_confusion_elapsed(parts, self.confusion_elapsed)
         _update_encore_elapsed(parts, self.encore_elapsed)
@@ -3008,6 +3092,10 @@ class _ReplayParser:
         # post-upkeep replacement. It is no longer evidence for materializing
         # a stage-zero world, even if later exact recovery is impossible.
         self.toxic_stage_zero_after_upkeep[slot] = False
+        # Same for the action-phase reset proof: the counter has now been charged,
+        # so a zero is no longer this slot's public state whether or not the
+        # magnitude below turns out to be recoverable.
+        self.toxic_stage_reset_ident[slot] = None
         active = self.public_active.get(slot)
         prev_condition = (
             getattr(active, "condition", None)
@@ -3750,6 +3838,7 @@ class _ReplayParser:
                 self.toxic_stage_zero_after_upkeep_expires_after_turn
             ),
             toxic_stage_zero_after_upkeep_ident=dict(self.toxic_stage_zero_after_upkeep_ident),
+            toxic_stage_reset_ident=dict(self.toxic_stage_reset_ident),
             toxic_faint_replacement_pending=dict(self.toxic_faint_replacement_pending),
             toxic_faint_replacement_expected_ident=dict(
                 self.toxic_faint_replacement_expected_ident
@@ -5023,6 +5112,7 @@ def _update_toxic_stage(
     toxic_stage: dict[str, int],
     toxic_stage_known: dict[str, bool] | None = None,
     toxic_stage_zero_after_upkeep: dict[str, bool] | None = None,
+    toxic_stage_reset_ident: dict[str, str | None] | None = None,
 ) -> None:
     """Track the badly-poisoned (tox) ramp stage per side from |-status| / |-curestatus| /
     |-cureteam| lines.
@@ -5036,6 +5126,8 @@ def _update_toxic_stage(
     prefix that must never be materialized as a synthetic zero counter. The optional
     ``toxic_stage_zero_after_upkeep`` carries the still-pending, post-upkeep replacement proof;
     every active status/cure/faint transition retires it before changing the regular stage.
+    ``toxic_stage_reset_ident`` carries the action-phase switch-in reset proof and is retired
+    by exactly the same transitions, for the same reason.
     """
     event_type = parts[1] if len(parts) > 1 else ""
     if len(parts) < 3:
@@ -5043,10 +5135,16 @@ def _update_toxic_stage(
     slot = _slot_from_ident(parts[2])
     if slot not in toxic_stage:
         return
+
+    def retire_reset_proof() -> None:
+        if toxic_stage_reset_ident is not None:
+            toxic_stage_reset_ident[slot] = None
+
     active_target = _is_active_protocol_ident(parts[2])
     if event_type == "faint" and active_target:
         if toxic_stage_zero_after_upkeep is not None:
             toxic_stage_zero_after_upkeep[slot] = False
+        retire_reset_proof()
         toxic_stage[slot] = 0
         if toxic_stage_known is not None:
             toxic_stage_known[slot] = True
@@ -5057,6 +5155,7 @@ def _update_toxic_stage(
     elif event_type == "-status" and len(parts) >= 4 and _normalize_identifier(parts[3]) == "tox":
         if toxic_stage_zero_after_upkeep is not None:
             toxic_stage_zero_after_upkeep[slot] = False
+        retire_reset_proof()
         toxic_stage[slot] = 1
         if toxic_stage_known is not None:
             toxic_stage_known[slot] = True
@@ -5073,6 +5172,7 @@ def _update_toxic_stage(
         # as a stage-5 tick (-75) where Showdown ticked a fresh stage-1 (-15).
         if toxic_stage_zero_after_upkeep is not None:
             toxic_stage_zero_after_upkeep[slot] = False
+        retire_reset_proof()
         toxic_stage[slot] = 0
         if toxic_stage_known is not None:
             toxic_stage_known[slot] = True
@@ -5081,6 +5181,7 @@ def _update_toxic_stage(
         # so resetting the active slot's ramp matches the per-mon ``-curestatus`` reset.
         if toxic_stage_zero_after_upkeep is not None:
             toxic_stage_zero_after_upkeep[slot] = False
+        retire_reset_proof()
         toxic_stage[slot] = 0
         if toxic_stage_known is not None:
             toxic_stage_known[slot] = True
