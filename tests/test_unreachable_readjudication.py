@@ -129,7 +129,7 @@ WHAT THIS MODULE DOES NOT AND CANNOT COVER, stated rather than left to be discov
 THE MUTATION BATTERY, ENUMERATED. A battery whose members are not written down costs
 exactly what C153's cost: it claimed "12 applied, 12 caught" and a reviewer found the 13th
 survived. Each below was applied to a copy of the artifact (or to the generator, the
-ledger, the patch, the corpus or the workflow) and had to turn this module RED. All 23 do.
+ledger, the patch, the corpus or the workflow) and had to turn this module RED. All 33 do.
 
    1. a verdict word changed from `UNREACHABLE_TRACED` to `NOT_OBSERVED_AT_SCOPE`
    2. a row deleted from the artifact's verdict map
@@ -173,6 +173,42 @@ replace also rewrote the final-holdout step's guard, which gates `OWNER_RATIFIED
 
   22. the final-holdout step's `Ran N tests` guard set to any value other than 25
   23. this module's own guard left stale after adding a test
+
+**24-33 ARE C156'S, AND 24-27 ARE THE FOUR THIS BATTERY COULD NOT HAVE CAUGHT BEFORE IT.**
+Round two closed the instance and shipped the class one surface over for the third time:
+the scan that re-derives every guard reached only 22 of the 26 executable steps, and the
+four it missed were missing from its OUTPUT, not marked as missed. Each of 24-27 was run
+against `origin/main`'s scan first and observed GREEN there -- that is the demonstration
+that the coverage was absent, and without it "the fix works" would be a claim about a scan
+nobody had made fail.
+
+  24. the SEED-REGISTRY step's guard set to a count its suite can never print. This is the
+      exact probe #1205 reported: green before, red now.
+  25. the same, on the spread-gate provenance step
+  26. the same, on the stat-attestation step
+  27. the same, on the denominator pair -- whose guard sat at a gap of exactly 12, one line
+      past the old window, and is therefore the boundary case
+  28. a new executable unittest step added to the workflow with NO count guard at all, so
+      coverage is asserted rather than the site being dropped
+  29. `_run_bodies` made to return nothing, so the scan sees no sites at all. "Zero
+      unresolved" is TRUE and worthless for an empty scan; this is the control that says
+      so, and it is the same class as 24-27 rather than a different one
+  30. `load_tests = <callable>` added to a scanned module as an ASSIGNMENT. #1205's review
+      named this form as uncovered on the ground that nothing in scope uses it today
+  31. a subclass of a base declared in the same module, adding no method of its own, so
+      `unittest` collects the base's tests twice and `_methods` counts them once
+  32. a guard's `if`-block deleted and the count restated as a comment ABOVE the next step,
+      i.e. outside the `run:` body it grades. Green before, because a dropped site is
+      silence; red now, because the site is represented
+  33. the battery total in the workflow comment left at its old value while this list grew
+
+⚠ **AND TWO NEGATIVE CONTROLS, because the first one alone proves nothing.** Forty comment
+lines inserted between an invocation and its guard -- the edit that created all four blind
+spots -- must be GREEN, and it is green at `dbb40c5c` too. That is the trap: there it is
+green by going BLIND, here by resolving the site. So the control is run a second time with
+the padded step's guard ALSO falsified to a count its suite cannot print. At `dbb40c5c` that
+stays green; here it is red. Same edit, same verdict on the first pass, opposite on the
+second, and only the second distinguishes a check from a silence.
 """
 
 from __future__ import annotations
@@ -1013,31 +1049,123 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
     test method regardless of subtests, which is why the six `subTest` modules here match.
     A module defining `load_tests` would break that assumption, so its absence is checked
     BY AST rather than assumed -- and by AST rather than by substring, because a substring
-    check condemned this module for describing the rule in this very docstring.
+    check condemned this module for describing the rule in this very docstring. The AST
+    check covers BOTH forms `unittest` honours: `def load_tests(...)` and
+    `load_tests = <callable>`. The assignment form was #1205's review residual, named there
+    as uncovered and closed here, because "no module in scope uses it today" is a fact
+    about today and this pin outlives today.
+
+    ⚠ **THE SCAN ITSELF WAS THE NEXT INSTANCE OF ITS OWN CLASS, and #1205 is that.** Its
+    first version looked at most TWELVE lines past each `python -m unittest`. Four steps put
+    their `Ran N tests` guard further out, behind long explanatory comments, and for those
+    four `_guards()` emitted **no entry at all** -- no error, no skip, just absent. A pin
+    silently covering part of its subject is the same failure as a guard demanding a count
+    its suite cannot print: neither can fail. Measured before the fix, the guard sat 12, 16,
+    23 and 30 lines past its invocation for the denominator pair, the spread-gate pin, the
+    seed registry and the stat attestation respectively -- the denominator step by EXACTLY
+    the window width, i.e. one line out. Setting the seed-registry step's guard to a count
+    its suite can never print left this whole module green.
+
+    So the extent is now DERIVED rather than guessed. A step's shell body is a YAML block
+    scalar, whose extent is fixed by indentation, and the pairing rule is: a guard belongs
+    to the last executable invocation above it **within the same `run:` body**. That is why
+    `_sites()` returns one entry per invocation whether or not it found a guard -- an
+    unresolved site has to be REPRESENTED to be assertable, and
+    `test_no_executable_unittest_invocation_escapes_the_scan` asserts there are none.
+    Comment lines are excluded on both sides: the file carries the invocation string inside
+    a comment at :1202 and `Ran N tests` inside comments at seven more, and counting either
+    is the self-match trap this module has now hit three times.
     """
 
     WORKFLOW = ".github/workflows/engine-fidelity-gates.yml"
 
+    #: One executable invocation of the runner. Comment lines carrying the same string are
+    #: NOT sites; :1202 is one and counting it into the denominator already shipped once.
+    INVOCATION = "python -m unittest"
+
+    #: The guard shape. Matched on non-comment lines only, for the same reason.
+    GUARD = re.compile(r"Ran (\d+) tests")
+
+    @classmethod
+    def _lines(cls) -> list[str]:
+        with open(os.path.join(REPO, cls.WORKFLOW), encoding="utf-8") as handle:
+            return handle.read().splitlines()
+
     @staticmethod
-    def _guards() -> list[tuple[int, tuple[str, ...], int]]:
-        with open(os.path.join(REPO, EveryWorkflowTestCountGuardMatchesItsModuleTests.WORKFLOW),
-                  encoding="utf-8") as handle:
-            lines = handle.read().splitlines()
-        out = []
+    def _run_bodies(lines: list[str]) -> list[list[int]]:
+        """Zero-based line indices of every `run:` shell body, by YAML indentation.
+
+        Both scalar shapes are handled: a block (`run: |`), whose body is the following
+        run of lines indented deeper than the key, and an inline `run: <command>`, whose
+        body is the key line itself. Nothing in this workflow uses the inline shape today
+        and `test_the_scan_sees_every_invocation_a_flat_scan_sees` is what would say so
+        loudly if one appeared, rather than this returning a quietly short list.
+        """
+
+        bodies = []
         for index, line in enumerate(lines):
-            if "python -m unittest" not in line:
+            head = re.match(r"^(\s*)run:(\s*)(\S.*)?$", line)
+            if not head:
                 continue
-            window = " ".join(lines[index:index + 7])
-            targets = tuple(re.findall(r"tests\.[A-Za-z0-9_.]+", window))
-            guard = None
-            for offset in range(index, min(index + 12, len(lines))):
-                found = re.search(r"Ran (\d+) tests", lines[offset])
-                if found:
-                    guard = (offset + 1, int(found.group(1)))
-                    break
-            if targets and guard:
-                out.append((guard[0], targets, guard[1]))
-        return out
+            indent, rest = len(head.group(1)), (head.group(3) or "")
+            if not rest or rest[0] in "|>":
+                body = []
+                for offset in range(index + 1, len(lines)):
+                    following = lines[offset]
+                    if following.strip() and len(following) - len(following.lstrip()) <= indent:
+                        break
+                    body.append(offset)
+                bodies.append(body)
+            else:
+                bodies.append([index])
+        return bodies
+
+    @classmethod
+    def _sites(cls) -> list[tuple[int, tuple[str, ...], int | None, int | None]]:
+        """`(invocation_line, targets, guard_line, stated)` per EXECUTABLE invocation.
+
+        `guard_line` and `stated` are `None` for a site whose `run:` body carries no
+        `Ran N tests` below the invocation -- #1205's shape, and the reason this returns
+        unresolved sites instead of dropping them.
+        """
+
+        lines = cls._lines()
+        code = [
+            index for index, line in enumerate(lines)
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        sites = []
+        for body in cls._run_bodies(lines):
+            live = [index for index in body if index in set(code)]
+            invocations = [index for index in live if cls.INVOCATION in lines[index]]
+            guards = [index for index in live if cls.GUARD.search(lines[index])]
+            for position, index in enumerate(invocations):
+                stop = invocations[position + 1] if position + 1 < len(invocations) else len(lines)
+                # The whole shell command, followed across backslash continuations, so a
+                # step invoking TWO modules on one command -- the denominator rule at :620
+                # is one site with two modules -- yields both targets and neither the next
+                # command's. A fixed line window did both jobs wrong at once.
+                command, cursor = [lines[index]], index
+                while lines[cursor].rstrip().endswith("\\") and cursor + 1 < len(lines):
+                    cursor += 1
+                    command.append(lines[cursor])
+                targets = tuple(re.findall(r"tests\.[A-Za-z0-9_.]+", " ".join(command)))
+                mine = [g for g in guards if index < g < stop]
+                if mine:
+                    found = cls.GUARD.search(lines[mine[0]])
+                    assert found is not None
+                    sites.append((index + 1, targets, mine[0] + 1, int(found.group(1))))
+                else:
+                    sites.append((index + 1, targets, None, None))
+        return sites
+
+    @classmethod
+    def _guards(cls) -> list[tuple[int, tuple[str, ...], int]]:
+        return [
+            (guard, targets, stated)
+            for _, targets, guard, stated in cls._sites()
+            if targets and guard is not None and stated is not None
+        ]
 
     @staticmethod
     def _methods(module: str) -> int:
@@ -1048,11 +1176,20 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
         # BY AST, not by substring. A substring check condemned THIS module, whose own
         # docstring names `load_tests` while explaining the assumption -- the third
         # self-match trap in this PR, after the retraction guard and the tally literals.
-        if any(
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == "load_tests"
+        # BOTH forms `unittest` honours, not just the one in scope: #1205's review named
+        # `load_tests = <callable>` as the uncovered half, on the ground that no module
+        # uses it TODAY. A pin scoped to today is the shape this module exists to remove.
+        defined = {
+            node.name
             for node in tree.body
-        ):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        } | {
+            target.id
+            for node in tree.body if isinstance(node, (ast.Assign, ast.AnnAssign))
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+            if isinstance(target, ast.Name)
+        }
+        if "load_tests" in defined:
             raise AssertionError(
                 f"{module} defines `load_tests`, so its printed count is no longer its "
                 "method count and this pin's arithmetic does not apply to it"
@@ -1067,11 +1204,24 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
         )
 
     def test_every_ran_n_guard_equals_its_suites_test_count(self) -> None:
+        # ⚠ THE FLOOR IS DERIVED, NOT TYPED, and #1205 names why: the previous form was
+        # `>= 20` at a moment when the scan returned exactly 20, so it had ZERO margin and
+        # could not tell "the scan stopped matching the workflow's shape" from "a step was
+        # removed". A floor equal to its own subject is not a floor. The workflow's
+        # executable `Ran N tests` lines are counted here by a scan that shares no code
+        # with `_sites()` -- a flat, comment-excluding pass over the file -- so the two
+        # cannot drift into agreement.
         guards = self._guards()
-        self.assertGreaterEqual(
-            len(guards), 20,
-            "the scan found almost no `Ran N tests` guards; it has stopped matching the "
-            "workflow's shape and would pass over a weakened guard silently",
+        lines = self._lines()
+        written = [
+            number for number, line in enumerate(lines, 1)
+            if self.GUARD.search(line) and not line.strip().startswith("#")
+        ]
+        self.assertEqual(
+            sorted(line for line, _, _ in guards), written,
+            "the set of `Ran N tests` lines this scan RESOLVED is not the set the file "
+            "WRITES. A guard the scan cannot reach is a guard nothing re-derives, which "
+            "is #1205 exactly; an extra one means the scan has begun claiming comments.",
         )
         for line, targets, stated in guards:
             with self.subTest(line=line, targets=targets):
@@ -1090,6 +1240,152 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
                     "unbounded string replace in this PR did exactly that to the "
                     "final-holdout step, which gates OWNER_RATIFIED and the burn.",
                 )
+
+    def test_no_executable_unittest_invocation_escapes_the_scan(self) -> None:
+        """⚠ #1205's SUBJECT, and the assertion that closes it.
+
+        The scan used to resolve 22 of the workflow's 26 executable invocations and say
+        nothing about the other four. Coverage is now asserted rather than assumed: every
+        executable invocation must carry a guard the scan can reach. A step added without
+        a `Ran N tests` guard, or with one placed where the pairing rule cannot see it,
+        reddens HERE instead of joining a blind spot nothing enumerates.
+        """
+
+        unresolved = sorted(
+            (line, targets) for line, targets, guard, _ in self._sites() if guard is None
+        )
+        self.assertEqual(
+            unresolved, [],
+            f"{self.WORKFLOW} has executable `{self.INVOCATION}` steps whose `Ran N tests` "
+            "guard the scan cannot pair: " + repr(unresolved) + ". Either the step has no "
+            "count guard -- add one -- or its guard sits outside the step's own `run:` "
+            "body, which is where #1205's four blind spots came from.",
+        )
+
+    def test_the_scan_sees_every_invocation_a_flat_scan_sees(self) -> None:
+        """Anti-vacuity for the assertion above: zero unresolved is trivial if zero sites.
+
+        The site list is built by walking `run:` bodies. A parser that stopped recognising
+        a body would drop its invocations ENTIRELY, and "no unresolved sites" would then be
+        true and worthless -- the exact shape of the defect being closed. So the site count
+        is cross-checked against a flat, structure-free pass over the file, which excludes
+        comments because the file carries the invocation string inside one at :1202 and
+        counting it into the denominator has already shipped once.
+        """
+
+        lines = self._lines()
+        carrying = [n for n, line in enumerate(lines, 1) if self.INVOCATION in line]
+        comments = [n for n in carrying if lines[n - 1].strip().startswith("#")]
+        self.assertEqual(
+            len(comments), 1,
+            "the workflow no longer carries the invocation string inside exactly one "
+            "comment; this control's own premise has moved and must be re-measured",
+        )
+        self.assertEqual(
+            [line for line, _, _, _ in self._sites()],
+            [n for n in carrying if n not in set(comments)],
+            "the `run:`-body walk and a flat scan disagree about which lines invoke the "
+            "runner. A body the walk stops recognising takes its steps' guards out of "
+            "coverage silently, which is #1205 with a different cause.",
+        )
+
+    def test_every_scanned_module_matches_the_ast_derivations_assumptions(self) -> None:
+        """`derived == printed` rests on two things `_methods` does not itself check.
+
+        `unittest` prints one line per test method it COLLECTS, and `_methods` counts
+        `test*` methods declared directly in a class body. That equals the printed count
+        only while (a) no scanned class inherits its test methods from a base declared in
+        the same module -- those would be collected once per subclass and counted once --
+        and (b) no non-`TestCase` class carries `test*` methods, which would be counted and
+        never collected. #1205's review verified both by hand across the modules in scope;
+        a hand verification does not survive the next module, so it is a pin.
+        """
+
+        modules = sorted({
+            target
+            for _, targets, _, _ in self._sites()
+            for target in targets
+            if os.path.exists(os.path.join(REPO, target.replace(".", "/") + ".py"))
+        })
+        self.assertGreater(len(modules), 20, "the module list collapsed; this pin is vacuous")
+        for module in modules:
+            with self.subTest(module=module):
+                path = os.path.join(REPO, module.replace(".", "/") + ".py")
+                with open(path, encoding="utf-8") as handle:
+                    tree = ast.parse(handle.read())
+                local = {n.name for n in tree.body if isinstance(n, ast.ClassDef)}
+                for node in tree.body:
+                    if not isinstance(node, ast.ClassDef):
+                        continue
+                    bases = {b.id for b in node.bases if isinstance(b, ast.Name)}
+                    methods = [
+                        b.name for b in node.body
+                        if isinstance(b, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and b.name.startswith("test")
+                    ]
+                    self.assertFalse(
+                        bases & local,
+                        f"{module}.{node.name} inherits from a class declared in the same "
+                        "module, so `_methods`' per-class count no longer equals what "
+                        "`unittest` prints for it",
+                    )
+                    attributed = {
+                        b.attr for b in node.bases if isinstance(b, ast.Attribute)
+                    }
+                    self.assertFalse(
+                        methods and not (attributed & {"TestCase"}) and not bases,
+                        f"{module}.{node.name} carries {methods} and is not a TestCase "
+                        "subclass, so those methods are counted here and never collected",
+                    )
+
+    def test_the_stated_battery_size_is_the_enumerated_lists_length(self) -> None:
+        """Both statements of this module's battery size, derived from the list itself.
+
+        The size is written in two places -- this module's docstring header and the
+        workflow step's comment -- and neither was checked by anything, so C156 adding
+        eight entries could have left either at 23 exactly as `reports/c131` §6 records
+        happening elsewhere. `tests/test_terminal_disposition_register.py` pins its own
+        battery this way; the sibling that taught it the rule did not follow it.
+        """
+
+        # Scoped to the battery section: this docstring carries a SECOND numbered list
+        # ("WHAT IS PINNED"), and a whole-docstring scan silently concatenated the two.
+        battery = (__doc__ or "").split("THE MUTATION BATTERY, ENUMERATED.")[-1]
+        self.assertNotEqual(battery, __doc__, "the battery section header moved or was "
+                                              "reworded; this pin is scanning the whole "
+                                              "docstring and its numbering is meaningless")
+        entries = [int(n) for n in re.findall(r"(?m)^ {2,3}(\d+)\. ", battery)]
+        self.assertGreater(len(entries), 20, "the battery list collapsed; the counts below "
+                                             "are vacuous")
+        self.assertEqual(entries, list(range(1, len(entries) + 1)),
+                         "the battery is not consecutively numbered, so a gap could hide "
+                         "an entry that was dropped rather than caught")
+        self.assertEqual(
+            int(self._all(r"had to turn this module RED\. All (\d+) do\.", battery)),
+            len(entries),
+        )
+        self.assertEqual(
+            int(self._all(r"Battery: (\d+) mutations applied, \1 caught", self._step())),
+            len(entries),
+            "the workflow comment states a battery size this module's enumerated list does "
+            "not have. The comment is the copy a reader meets first.",
+        )
+
+    @staticmethod
+    def _all(pattern: str, haystack: str) -> str:
+        found = re.findall(pattern, haystack)
+        assert len(found) == 1, f"{pattern!r} matched {len(found)} times, expected 1"
+        return found[0]
+
+    @classmethod
+    def _step(cls) -> str:
+        """The workflow step that runs this module, comment header included."""
+
+        text = "\n".join(cls._lines())
+        blocks = re.split(r"(?m)^\n(?=      )", text)
+        owning = [b for b in blocks if f"unittest tests.{__name__.split('.')[-1]}" in b]
+        assert len(owning) == 1, f"{len(owning)} workflow blocks run this module"
+        return owning[0]
 
     def test_the_final_holdout_guard_is_pinned_at_its_measured_value(self) -> None:
         """Named explicitly, because it is the one that was broken and what it protects."""

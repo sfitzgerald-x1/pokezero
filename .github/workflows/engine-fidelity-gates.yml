@@ -842,22 +842,33 @@ jobs:
       # demonstration is RE-DERIVED from source on each run, which is what stops the 26
       # from ageing into the fifteen-stale-citations shape #1202 produced. Its own module
       # so the two censuses keep their exact-count guards untouched, per C150's precedent.
-      # Battery: 23 mutations applied, 23 caught, listed in the module docstring -- number
-      # 8 survived the first version and 13-23 are review's, each one a sentence of this
-      # pass's own that was asserted beyond what it traced. Exact count, not a floor.
+      # Battery: 33 mutations applied, 33 caught, listed in the module docstring -- number
+      # 8 survived the first version, 13-23 are review's, each one a sentence of this
+      # pass's own that was asserted beyond what it traced, and 24-33 are C156's. Exact
+      # count, not a floor, and no longer a typed one: the module derives this number from
+      # its own enumerated list and reads it back out of THIS comment.
       #
       # ⚠ This module also re-derives EVERY `Ran N tests` guard in this file from its
       # module's AST. That is not scope creep: bumping this step's own guard was done with
       # an unbounded string replace that also rewrote the FINAL-HOLDOUT step's guard --
       # which gates OWNER_RATIFIED, BURNED_FINAL_HOLDOUT and the burn -- to a count its
       # suite can never print, so it stopped failing closed and nothing noticed.
+      #
+      # ⚠ AND THE SCAN ITSELF WAS BLIND TO FOUR OF THIS FILE'S 26 EXECUTABLE STEPS until
+      # C156 (#1205). It looked at most twelve lines past each invocation; the denominator
+      # pair, the spread-gate pin, the stat attestation and the SEED REGISTRY put their
+      # guard 12, 16, 30 and 23 lines out, behind comment blocks exactly like this one, and
+      # the scan emitted no entry for them at all -- no error, no skip, absent. Setting the
+      # seed-registry guard to a count its suite can never print left this module green.
+      # Step extent is now derived from the `run:` body, and coverage is ASSERTED: an
+      # executable step with no reachable guard reddens here.
       - name: Section 4 unreachable re-adjudication
         run: |
           set -o pipefail
           python -m unittest tests.test_unreachable_readjudication -v 2>&1 \
             | tee /tmp/c154readj.log
-          if ! grep -qE 'Ran 34 tests' /tmp/c154readj.log; then
-            echo "::error::expected 34 re-adjudication pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 38 tests' /tmp/c154readj.log; then
+            echo "::error::expected 38 re-adjudication pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. TheAbsencePinsAreNotVacuousTests is the only reason

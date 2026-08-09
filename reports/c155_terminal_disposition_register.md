@@ -551,29 +551,39 @@ than leaving the next author to rediscover it.
 
 **The `Ran N tests` guard.** The step carries an exact `Ran 42 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
-covers only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
+covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
 rather than inherited from #1205's figure. The workflow holds **27** lines containing the unittest
 invocation, of which **one is a comment**, so there are **26 executable** invocation sites at this
-head; the scan resolves **22** of them and leaves **four** unresolved —
-`tests.test_differential_denominator`, `tests.test_engine_stat_attestation`,
-`tests.test_seed_registry_coverage`, `tests.test_spread_gate_provenance`. **This step is among the
+head; the scan resolves **26** of them and leaves **none** unresolved. **This step is among the
 resolved ones** — the number is not restated here, because a fourth copy of it is a fourth thing to
 go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 42 from the module's AST
 and matches the guard. All three numbers are **re-derived by the pin** rather than typed.
 
-**The counts churn; the finding does not, and they are pinned differently.** `executable` and
-`resolved` move whenever any step joins this workflow. The **unresolved set is invariant** — the
-same four modules at the old merge-base `6ef682bf`, at `origin/main`, at the branch head and at the
-merge — and it is #1205's actual subject, so it is pinned **by module name** rather than by count or
-by line. A line shift does not touch it; a new *unguarded* step reddens it, which is #1205's subject
-growing and should be loud.
+⚠ **#1205 IS CLOSED (C156), AND THE SENTENCE ABOVE IS WHAT ITS CLOSURE LOOKS LIKE.** This register
+recorded four unresolved sites —
+`tests.test_differential_denominator`, `tests.test_engine_stat_attestation`,
+`tests.test_seed_registry_coverage`, `tests.test_spread_gate_provenance` — and recorded that the set
+was **invariant** across four trees. It was, and the reason it was invariant is that its cause was:
+the scan looked at most **twelve lines** past each invocation, and those four steps put their guard
+**12, 16, 23 and 30** lines out, behind long explanatory comments. One cause, four sites, no second
+mechanism among them. `reports/c156_workflow_guard_scan_closure.md` carries the per-site diagnosis
+and the mutation battery. The scan now derives each step's extent from its own `run:` body, so the
+lookahead cannot go stale again the next time somebody writes a paragraph above a guard.
 
-⚠ **#1205's own counts are now stale and its finding is not, and this register says which.** #1205
+**The counts churn; the finding does not, and they are pinned differently.** `executable` and
+`resolved` move whenever any step joins this workflow. The **unresolved set** is #1205's actual
+subject, so it is pinned **by module name** rather than by count or by line — and it is pinned at
+**empty**, which is a stronger statement than the four-member set it replaced, not a deletion of
+it. A line shift does not touch it; a new *unguarded* step reddens it, which is a new blind spot
+opening and should be loud.
+
+⚠ **#1205's own counts went stale before it was closed, and this register says which.** #1205
 records *"24 executable guards, 20 covered, 4 silently missed"*, measured at `6ef682bf` where that
-was exact. `origin/main` has since gained #1203's Taunt step, which **is** guarded (`Ran 13 tests`,
-13 methods) and **is** resolved, so main now reads **25 executable / 21 resolved**. The four missed
-steps are unchanged. Restating #1205's 24/20 here would have been quietly wrong; the honest form is
-that its arithmetic moved with the file and its subject did not.
+was exact. `origin/main` then gained #1203's Taunt step, which **is** guarded (`Ran 13 tests`,
+13 methods) and **is** resolved, so main read **25 executable / 21 resolved**; #1206's merge read
+**26 / 22**. The four missed steps never changed. Restating #1205's 24/20 here would have been
+quietly wrong; the honest form is that its arithmetic moved with the file and its subject did not,
+until C156 moved the subject too.
 
 ⚠ **The same self-match trap, twice, and the second time it shipped.** The scan matches on the
 invocation string, so the step's own comment — which quoted that string while explaining the scan —
