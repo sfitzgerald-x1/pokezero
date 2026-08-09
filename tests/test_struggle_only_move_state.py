@@ -39,13 +39,34 @@ regression pin for that; it fails against the fold placement.
 WHICH STRUGGLE POPULATION ACTUALLY BUILDS A WORLD, enumerated rather than assumed. Every
 gen3 ``disableMove`` caller is ``disable``, ``encore``, ``imprison``, ``taunt``,
 ``torment``. ``imprison`` reports ``disabled: 'hidden'``, which ``getMoves`` resolves to
-``false`` in singles; ``taunt``/``disable``/``torment`` are in
-``showdown.TRACKED_VOLATILES`` but not in ``engine_world._SUPPORTED_VOLATILES``, so those
-boundaries raise ``volatile_unsupported`` and never reach move construction; and gen3
-Encore's ``onResidual`` removes the volatile the same turn its move hits 0 PP, so an
-Encored Struggle request does not exist. What remains -- and what ``WhatReachesTheEngineTests``
-exercises end to end -- is PP EXHAUSTION, where the stale snapshot is exactly one use too
-generous on the slot that ran out.
+``false`` in singles; ``disable``/``torment`` are in ``showdown.TRACKED_VOLATILES`` but
+not in ``engine_world._SUPPORTED_VOLATILES``, so those boundaries raise
+``volatile_unsupported`` and never reach move construction; and gen3 Encore's
+``onResidual`` removes the volatile the same turn its move hits 0 PP, so an Encored
+Struggle request does not exist.
+
+⚠ ``taunt`` WAS IN THAT REFUSED LIST AND NO LONGER IS. It joined
+``_SUPPORTED_VOLATILES`` (counter seeded at one tick elapsed) once the gen3 engine was
+shown to model the volatile exactly, so a Taunt-induced Struggle-only request now BUILDS
+a world and reaches move construction like a PP-exhausted one. Two populations now, not
+one.
+
+The PRE-EXISTING 19 tests here are unchanged by that and deliberately so: their subject
+is the PAYLOAD view, every assertion is about ``sides[self].pokemon[].moves`` versus
+``selfActiveMoves``, and both routes produce the identical payload. Measured, not
+assumed: all 19 are green in BOTH worlds, i.e. they are completely insensitive to the
+volatile change and none of them is evidence for it.
+
+The evidence that the Taunt route is closed is therefore written where it can FAIL:
+``tests/test_engine_world_taunt.py`` (construction, counter, engine fidelity) and
+``TauntStruggleOnlyReachesTheEngineTests`` below -- the lone-Blissey line, the only shape
+whose request offers ``['struggle']`` and NOTHING else, so the engine's
+``MoveChoice::None`` has to land on the pseudo-move. That 20th test is red in the null
+world.
+
+``_TAUNT_STALL`` (used by ``BenchLeakTests``) keeps a live bench on purpose and so does
+NOT reach that shape; it exercises the payload only, which is what the bench leak is
+about.
 """
 
 from __future__ import annotations
@@ -371,6 +392,25 @@ _PP_STALL = BattleStartOverride(
 # the bench leak is about, and still all this fixture asserts. `taunt` is now in
 # `engine_world._SUPPORTED_VOLATILES` (see tests/test_engine_world_taunt.py), so the same
 # boundary DOES build a world now; that does not change what is checked here.
+# TAUNT, WITH NO BENCH -- the only shape whose request is `['struggle']` and nothing
+# else. `_TAUNT_STALL` below keeps a Charmander, so Showdown offers a switch alongside
+# Struggle and poke-engine's `add_switches` has something to enumerate; with a LONE
+# all-status Blissey both are empty and `get_all_options` reaches its terminal
+# `MoveChoice::None` push. Blissey, not Bulbasaur, because every one of its four moves
+# must be Status for Taunt alone to empty the moveset -- a PP-bearing attacking slot
+# would keep the request non-Struggle.
+_TAUNT_SOLO_STALL = BattleStartOverride(
+    player_teams={
+        "p1": pack_team(
+            (FixturePokemon(species="Blissey", ability="Natural Cure",
+                            moves=("Soft-Boiled", "Toxic", "Light Screen", "Sing")),)
+        ),
+        "p2": pack_team(
+            (FixturePokemon(species="Smeargle", ability="Own Tempo",
+                            moves=("Taunt", "Tackle")),)
+        ),
+    },
+)
 _TAUNT_STALL = BattleStartOverride(
     player_teams={
         "p1": pack_team(
@@ -517,6 +557,71 @@ class BenchLeakTests(_LiveBase):
                 (False, [("sunnyday", 8, False), ("growth", 64, False)]),
                 "Taunt cleared on switch-out; a benched mon with full PP must stay usable",
             )
+
+
+class TauntStruggleOnlyReachesTheEngineTests(_LiveBase):
+    """The OTHER route to a Struggle-only request, on the only shape that isolates it.
+
+    `_TAUNT_STALL` above keeps a live bench, so its request offers
+    `['struggle', 'switch:...']` and the engine has a switch to enumerate -- which is
+    why that fixture never exercised this. `_TAUNT_SOLO_STALL` removes the bench: a
+    LONE all-status Blissey, Taunted, has no usable move and nothing to switch to, so
+    `getMoveRequestData` substitutes Struggle and it is the request's ONLY candidate.
+
+    That is the shape the docstring's Taunt paragraph claims is now closed, and this is
+    where the claim can fail. Pre-fix `world_battle_spec` raised
+    `EngineWorldUnsupported('volatile_unsupported')` here and no world existed at all;
+    the `assertRaises`-shaped null world is covered by
+    `tests/test_engine_world_taunt.py::test_a_taunted_self_side_builds_instead_of_refusing`,
+    so this one asserts the positive end to end.
+
+    What it does NOT assert, deliberately: which action search picks. That needs the
+    native wheel and lives in `test_engine_world_taunt.py`
+    (`test_a_lone_taunted_all_status_side_leaves_the_engine_no_move`).
+    """
+
+    def test_a_lone_taunted_all_status_side_builds_a_world_with_no_option(self) -> None:
+        from pokezero.engine_world import world_battle_spec
+
+        root = Path(os.environ.get("POKEZERO_SHOWDOWN_ROOT") or DEFAULT_SHOWDOWN_ROOT)
+        dex = load_showdown_dex(root)
+        with LocalShowdownEnv(self.config) as env:
+            env.reset_with_start_override(seed=11, start_override=_TAUNT_SOLO_STALL)
+            rows = self._advance_to_struggle(env, turns=6)
+            legal = env.legal_actions("p1")
+            state = env.public_materialization_state("p1")
+            payload = _public_materialization_payload(state)
+            world = world_battle_spec(state, _TAUNT_SOLO_STALL, dex=dex)
+
+        # 1. The request really is Struggle and NOTHING else -- no move, no switch.
+        #    Without this the rest is a test of some other boundary.
+        self.assertEqual([row["id"] for row in rows], ["struggle"])
+        self.assertEqual(
+            sum(1 for flag in legal if flag), 1, "a lone taunted mon has exactly one action"
+        )
+
+        # 2. Taunt is what put it there, and it is on the payload as a public volatile.
+        self.assertIn("taunt", payload["sides"]["p1"]["volatiles"])
+
+        # 3. The world BUILDS (pre-fix: volatile_unsupported), carries the volatile, and
+        #    carries the counter at one tick elapsed.
+        side = world.spec.side_one
+        self.assertIn("taunt", side.volatile_statuses)
+        self.assertEqual(side.volatile_status_durations.get("taunt"), 1)
+
+        # 4. ...and it offers the engine nothing: every active slot unselectable, and no
+        #    live bench for `add_switches` to fall through to. Those two together are the
+        #    precondition for `MoveChoice::None`, which is what #1202's translation needs.
+        active = side.pokemon[side.active_index]
+        self.assertTrue(
+            all(spec.disabled or spec.pp == 0 for spec in active.moves),
+            [(spec.id, spec.pp, spec.disabled) for spec in active.moves],
+        )
+        self.assertEqual(
+            [mon.id for i, mon in enumerate(side.pokemon) if i != side.active_index and mon.hp > 0],
+            [],
+            "the fixture must leave no live bench, or the engine enumerates a switch",
+        )
 
 
 class WhatReachesTheEngineTests(_LiveBase):

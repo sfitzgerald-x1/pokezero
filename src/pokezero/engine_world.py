@@ -102,6 +102,16 @@ _WEATHER_IDS = {
 # side moved first. Measured on the local simulator both ways round rather than
 # read off: with a faster Taunt user and with a slower one, EXACTLY ONE
 # subsequent request carries the volatile.
+#
+# ⚠ THAT ARGUMENT ALONE DOES NOT SEPARATE IT FROM YAWN, which is gated on
+# `approximate_hidden_duration_volatiles` below and whose gen3 clock is ALSO a
+# fixed `duration: 2` with no `durationCallback` and a plain `onStart`. What
+# separates them is the mid-turn-snapshot seam, and it is written out and pinned
+# at the seeding site: Taunt is a move-phase gate consumed by the residual after
+# the phase it gates, so a replacement turn -- which has neither -- cannot shift
+# it, and the taunted move-phase count is measured at 1 from both boundary
+# shapes. Yawn's observable is which residual fires, which a missing residual
+# does move. Yawn is not re-measured or moved by this.
 _SUPPORTED_VOLATILES = frozenset({
     "leechseed", "flashfire", "attract", "destinybond", "taunt",
     "perish1", "perish2", "perish3", "perish4",
@@ -1588,12 +1598,33 @@ def _build_side_spec(
         # `ChangeVolatileStatusDuration TAUNT: 1` instead
         # (tests/test_engine_world_taunt.py pins both).
         #
-        # NOT VERIFIED at a mid-turn force-switch snapshot, which gen <= 3 does
-        # produce (`sim/battle.ts` replaces a fainted mon after every move, not
-        # only at end of turn) and which is taken BEFORE the applying turn's
-        # residual has run. Yawn documents the same seam below. Whether the
-        # searched world's first turn maps onto the next real turn there -- which
-        # would make 1 right anyway -- was not measured.
+        # THE MID-TURN SNAPSHOT, WHICH IS WHY THIS IS EXACT AND YAWN IS NOT.
+        # gen <= 3 replaces a fainted mon after every move rather than only at end
+        # of turn (`sim/battle.ts`: "in gen 3 or earlier, switching in fainted
+        # pokemon is done after every move"), so a boundary taken BEFORE the
+        # applying turn's residual has run is reachable, and a world built there
+        # is one residual behind reality. That is the seam Yawn is gated on
+        # `approximate_hidden_duration_volatiles` for.
+        #
+        # It does not reach Taunt, and the difference is structural rather than a
+        # matter of degree. A replacement turn contributes NO move phase to the
+        # waiting side and NO residual: measured on the built wheel, the searched
+        # turn at such a snapshot offers side one only `No Move` and its
+        # instruction list is the switch alone, carrying no
+        # `ChangeVolatileStatusDuration`. Taunt is a MOVE-PHASE gate consumed by
+        # the residual that follows the phase it gated, so the pair is atomic and
+        # a turn with neither cannot desynchronise it. Yawn's observable is WHICH
+        # residual applies the sleep, which is indexed on the residual count
+        # alone, so a missing residual moves it.
+        #
+        # Counted rather than reasoned: taunted move phases in the searched world
+        # are 1 from an ordinary boundary and 1 from a mid-turn replacement
+        # snapshot, matching Showdown's one remaining taunted move phase in both.
+        # Pinned by tests/test_engine_world_taunt.py
+        # ::test_the_taunted_move_phase_count_survives_a_mid_turn_snapshot.
+        #
+        # This says nothing about Yawn's own seeding, which is NOT re-measured
+        # here and is deliberately left where it is.
         volatile_durations["taunt"] = 1
 
     if "yawn" in volatiles:

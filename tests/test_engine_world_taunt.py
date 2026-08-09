@@ -228,8 +228,14 @@ class TauntWorldConstructionTests(unittest.TestCase):
                 )
 
     def test_an_untaunted_side_carries_no_taunt_counter(self) -> None:
-        # A counter written unconditionally would be a silent lie on every other
-        # world, and the engine panics on a nonzero counter without the volatile.
+        # A counter written unconditionally would be a silent lie on every other world.
+        #
+        # ⚠ An earlier version of this comment justified the test with "the engine panics
+        # on a nonzero counter without the volatile", and that is FALSE: block 10.15 is
+        # gated on `volatile_statuses.contains(TAUNT)`, so a stray counter with no
+        # volatile is inert and the panic arm is unreachable from here. The test is still
+        # worth having on the honest reason -- the world must not assert a fact it did not
+        # observe, and it is what kills the seed-unconditionally mutant.
         world = self._world()
         for slot in ("side_one", "side_two"):
             with self.subTest(slot=slot):
@@ -298,11 +304,183 @@ class TauntEngineFidelityTests(unittest.TestCase):
         return build_poke_engine_state(dataclasses.replace(world.spec, side_one=side_one))
 
     def test_the_counter_survives_serialization(self) -> None:
-        # The native search crate is handed `state.to_string()`, so a duration
-        # that does not round-trip would be silently dropped on that path only.
+        """The native search crate is handed `state.to_string()`, so a duration that does
+        not round-trip would be silently dropped on that path and that path only.
+
+        ⚠ THE OBVIOUS VERSION OF THIS TEST IS WORTHLESS AND WAS WRITTEN FIRST.
+        `assertIn("TAUNT", text.upper())` is satisfied by the volatile NAME alone, and
+        `from_string(to_string(s)) == to_string(s)` is a property of the SERIALIZER, not
+        of the counter. Measured: that pair killed only M1 (remove the volatile from the
+        allow-list, so no world builds at all) and stayed green under M2 (drop the seed),
+        M3 (seed 0), M4 (seed 2) and M8 (seed 3). It asserted nothing this file is about.
+
+        The discriminating value was in the same string the whole time: the sixth field
+        is `confusion;encore;lockedmove;slowstart;taunt;yawn`, so a seeded 1 is visible as
+        `0;0;0;0;1;0`. Assert THAT, and assert it moves with the seed.
+        """
+
         text = self.state.to_string()
         self.assertIn("TAUNT", text.upper())
         self.assertEqual(poke_engine.State.from_string(text).to_string(), text)
+
+        # The counter itself, read out of the serialized form rather than assumed.
+        self.assertEqual(self._durations_field(self.state), "0;0;0;0;1;0")
+        # ...and it is the SEED that put it there, not a constant in the serializer.
+        self.assertEqual(
+            self._durations_field(self._state_with_taunt_duration(0)), "0;0;0;0;0;0"
+        )
+        # Survives the round trip with its VALUE, which is the property the crate needs.
+        self.assertEqual(
+            self._durations_field(poke_engine.State.from_string(text)), "0;0;0;0;1;0"
+        )
+
+    @staticmethod
+    def _durations_field(state) -> str:
+        """side_one's `VolatileStatusDurations` as serialized.
+
+        Field 9 of the `=`-delimited state, verified positionally by the caller rather
+        than trusted: the assertions above pin both a seeded and an unseeded value, so a
+        wrong index cannot read as a pass in both.
+        """
+
+        return state.to_string().split("=")[9]
+
+    def test_the_taunted_move_phase_count_survives_a_mid_turn_snapshot(self) -> None:
+        """The reason `taunt` belongs in the EXACT set while `yawn` does not.
+
+        gen <= 3 replaces a fainted mon after every move, so a world can be built one
+        residual behind reality. `yawn` is gated on `approximate_hidden_duration_volatiles`
+        for exactly that seam -- and its gen3 clock is ALSO a fixed `duration: 2` with no
+        `durationCallback`, so "the clock is fixed" cannot be what separates them.
+
+        What separates them is what the effect is INDEXED ON. Taunt gates a MOVE PHASE and
+        is consumed by the residual that follows the phase it gated, so the two are atomic;
+        a replacement turn has neither, so it cannot shift the count. Yawn's observable is
+        WHICH residual applies the sleep, which is indexed on residual count alone.
+
+        Counted here rather than argued: the number of move phases on which the taunted
+        side is denied its Status move is 1 from an ordinary boundary AND 1 from a mid-turn
+        replacement snapshot, matching Showdown's one remaining taunted move phase in both
+        (`.probe`-measured on the live simulator, faster and slower Taunt user alike).
+
+        This asserts nothing about Yawn's seeding, which this branch does not touch.
+        """
+
+        def side_one(taunt: int):
+            return poke_engine.Side(
+                pokemon=[poke_engine.Pokemon(
+                    id="blissey", hp=300, maxhp=300,
+                    moves=[poke_engine.Move(id=_STATUS_MOVE, pp=16),
+                           poke_engine.Move(id="tackle", pp=56)])],
+                active_index="0", volatile_statuses={"taunt"},
+                volatile_status_durations=poke_engine.VolatileStatusDurations(taunt=taunt),
+            )
+
+        def state(foe_fainted: bool):
+            return poke_engine.State(
+                side_one=side_one(1),
+                side_two=poke_engine.Side(
+                    pokemon=[
+                        poke_engine.Pokemon(id="smeargle", hp=0 if foe_fainted else 200,
+                                            maxhp=200,
+                                            moves=[poke_engine.Move(id="tackle", pp=56)]),
+                        poke_engine.Pokemon(id="starmie", hp=200, maxhp=200,
+                                            moves=[poke_engine.Move(id="tackle", pp=56)]),
+                    ],
+                    active_index="0",
+                ),
+            )
+
+        def options(st):
+            return sorted(str(r.move_choice) for r in
+                          poke_engine.monte_carlo_tree_search(st, 40).side_one)
+
+        def taunted_move_phases(st, plan):
+            gated = 0
+            for own, foe in plan:
+                opts = options(st)
+                if opts != ["No Move"] and _STATUS_MOVE not in opts:
+                    gated += 1
+                branches = poke_engine.generate_instructions(st, own, foe)
+                # `apply_instructions` RETURNS the next state; it does not mutate.
+                st = st.apply_instructions(max(branches, key=lambda b: b.percentage))
+            return gated
+
+        ordinary = [("tackle", "tackle")] * 3
+        # The mid-turn shape: turn one is the opponent's forced replacement.
+        mid_turn = [("none", "starmie")] + [("tackle", "tackle")] * 2
+
+        self.assertEqual(taunted_move_phases(state(False), ordinary), 1)
+        self.assertEqual(taunted_move_phases(state(True), mid_turn), 1)
+
+        # Anti-vacuity, and the half that makes the structural claim checkable: the
+        # replacement turn really does contribute NO move phase and NO residual, so
+        # there is nothing there for a skipped residual to desynchronise.
+        replacement = state(True)
+        self.assertEqual(options(replacement), ["No Move"])
+        branches = poke_engine.generate_instructions(replacement, "none", "starmie")
+        instructions = [
+            str(i)
+            for i in max(branches, key=lambda b: b.percentage).instruction_list
+        ]
+        self.assertFalse(
+            [i for i in instructions if "TAUNT" in i.upper()],
+            f"a replacement turn must not tick the Taunt counter: {instructions}",
+        )
+
+    def test_a_lone_taunted_all_status_side_leaves_the_engine_no_move(self) -> None:
+        """The composition with #1202, asserted at the engine rather than argued.
+
+        #1202 translates the crate's forced-no-move token onto the request's substituted
+        `struggle`, gated on Struggle being the request's only legal action. That gate is
+        reachable through Taunt only if the built world actually drives the engine to
+        `MoveChoice::None` -- i.e. `add_available_moves` contributes nothing (every slot
+        Status, and TAUNTed) AND `add_switches` contributes nothing (no live bench), so
+        `get_all_options` falls through to its terminal `options.len() == 0` push.
+
+        Both halves are needed and the test separates them: with a live bench the engine
+        enumerates the switch instead, which is exactly why the corpus scenario
+        `struggle_taunt_stall` never reached this shape and why
+        `test_struggle_only_move_state.TauntStruggleOnlyReachesTheEngineTests` had to add
+        a bench-less fixture.
+        """
+
+        def options(*, taunted: bool, bench: bool) -> set[str]:
+            mon = poke_engine.Pokemon(
+                id="blissey", hp=300, maxhp=300,
+                moves=[poke_engine.Move(id=_STATUS_MOVE, pp=16),
+                       poke_engine.Move(id="lightscreen", pp=48)],
+            )
+            party = [mon] + (
+                [poke_engine.Pokemon(id="starmie", hp=200, maxhp=200,
+                                     moves=[poke_engine.Move(id=_ATTACK_MOVE, pp=16)])]
+                if bench else []
+            )
+            kwargs = {"pokemon": party, "active_index": "0"}
+            if taunted:
+                kwargs["volatile_statuses"] = {"taunt"}
+                kwargs["volatile_status_durations"] = poke_engine.VolatileStatusDurations(
+                    taunt=1
+                )
+            state = poke_engine.State(
+                side_one=poke_engine.Side(**kwargs),
+                side_two=poke_engine.Side(
+                    pokemon=[poke_engine.Pokemon(id="smeargle", hp=200, maxhp=200,
+                                                 moves=[poke_engine.Move(id="tackle", pp=56)])],
+                    active_index="0",
+                ),
+            )
+            return {
+                str(r.move_choice)
+                for r in poke_engine.monte_carlo_tree_search(state, 40).side_one
+            }
+
+        # Anti-vacuity: untaunted, the same all-Status side has real options.
+        self.assertEqual(options(taunted=False, bench=False), {_STATUS_MOVE, "lightscreen"})
+        # TAUNTed with no bench: nothing at all, so the engine emits its forced no-move.
+        self.assertEqual(options(taunted=True, bench=False), {"No Move"})
+        # TAUNTed WITH a bench: the switch is enumerated, so this is not the class.
+        self.assertNotIn("No Move", options(taunted=True, bench=True))
 
     @staticmethod
     def _taunt_instructions(state) -> list[str]:
