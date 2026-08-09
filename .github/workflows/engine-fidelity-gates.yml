@@ -912,10 +912,10 @@ jobs:
       # its Appendix A is re-derived from tracked bytes, committed artifacts and anchors
       # resolved with uniqueness required, imported from C153's census rather than copied.
       #
-      # Battery: 52 mutations applied, 52 caught, plus
+      # Battery: 53 mutations applied, 53 caught, plus
       # one NEGATIVE CONTROL verified green, listed in the module docstring -- a
       # MUTATION count, not the test count, which a first revision of this comment conflated
-      # by writing the module's 34 tests here. FIFTEEN of the 52 are applied only to the tree
+      # by writing the module's 34 tests here. SIXTEEN of the 53 are applied only to the tree
       # and never to the document, because a pin that reads a document against a hard-coded
       # copy of itself passes every document-side mutation; the first revision claimed ten
       # and two of those ten edited the register. Exact count, not a floor, per #1163.
@@ -923,14 +923,21 @@ jobs:
       # ⚠ #1205: the guard scan added in #1204 does not cover every guard here, so do not
       # assume it will catch a drift in this one. MEASURED, and the denominator is
       # EXECUTABLE sites -- one line in this file carrying the invocation is a comment and
-      # is not a guard. Base: 24 executable, 20 resolved, 4 unresolved, which is #1205's own
-      # figure. Head: 25 executable, 21 resolved, the SAME 4 unresolved, and this step IS
-      # one of the 21, deriving 42 from the module's AST. A previous revision counted the
-      # comment into the denominator and published 20-of-25 / 21-of-26; the register now
-      # RE-DERIVES all three numbers rather than stating them. (This comment deliberately
-      # does not spell the invocation literally -- the scan matches on that string, and a
-      # revision of this very comment that quoted it added itself to the count. C154's
-      # self-match trap, twice on one step.)
+      # is not a guard. Merged tree: 26 executable, 22 resolved, 4 unresolved; this step IS
+      # one of the 22, deriving 42 from the module's AST. #1205's own "24 of 20" was exact
+      # at 6ef682bf and its COUNTS are now stale -- main gained #1203's guarded Taunt step,
+      # so main reads 25/21 -- while its FINDING, the same four unresolved steps, is not.
+      # The register re-derives all three numbers rather than stating them, and pins the
+      # unresolved SET by module name because that half does not churn.
+      #
+      # ⚠ THIS STEP FAILED IN CI WHILE GREEN ON TWO LOCAL TREES, and the reason is worth
+      # carrying: GitHub gates on refs/pull/<n>/merge. #1203 added an invocation to main
+      # after this branch was cut and this branch added its own -- each tree reads 25, the
+      # merge reads 26. A PR touching this file must merge origin/main (never rebase) and
+      # re-derive. The assertion says so in its own failure message.
+      # (This comment deliberately does not spell the invocation literally -- the scan
+      # matches on that string, and a revision of this very comment that quoted it added
+      # itself to the count. C154's self-match trap, twice on one step.)
       # The count below was re-derived the same way and from a local run.
       - name: Terminal disposition register
         run: |

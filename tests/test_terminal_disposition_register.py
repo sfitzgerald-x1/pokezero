@@ -66,7 +66,7 @@ are pinned against the two census modules' own constants, read by AST rather tha
 update the register in the same change. That is deliberate: the document that goes stale is
 the one nothing forces an author through.
 
-MUTATION BATTERY: 52 applied, 52 caught, plus 1 NEGATIVE CONTROL verified green.
+MUTATION BATTERY: 53 applied, 53 caught, plus 1 NEGATIVE CONTROL verified green.
 Partitioned by WHAT IS MUTATED. Enumerated because
 an unrecorded battery is what `tests/test_wide_seed_negative_census.py` records costing it a
 surviving mutation, and because "the tests pass" is the same kind of claim this module
@@ -140,7 +140,7 @@ BLOCK A -- A1-A37, applied to the REGISTER's own bytes.
        `TheDocumentsClaimsAboutItselfAreReDerivedTests`, which exists because review blocked
        two successive revisions on claims the document made about ITSELF.
 
-BLOCK B -- B38-B52, FIFTEEN mutations applied ONLY to the tree and never to the document.
+BLOCK B -- B38-B53, SIXTEEN mutations applied ONLY to the tree and never to the document.
 Block A can be passed by a pin that reads the register against a hard-coded copy of itself.
 These are the ones that prove each derivation reads what it claims to: every one MAKES A REAL
 CHANGE TO THE TREE and the document, unedited, must go red. Six are the absences, and an
@@ -182,6 +182,10 @@ has recorded.
        the whole justification for publishing the id list. Verified red on
        `scope.section3_rows_touched_since_c138` and green on
        `scope.section3_rows_touched_count`.
+  B53. A NEW UNGUARDED unittest step added to the workflow, so #1205's unresolved set grows
+       by one. This is the load-bearing half of the guard-scan pin: the counts churn with
+       any step, the unresolved SET is what #1205 is about, and it is pinned by module name
+       so a line shift cannot move it and a new blind spot cannot join quietly.
 
 
 BLOCK C -- NEGATIVE CONTROLS. Mutations that must stay GREEN because they do not change the
@@ -1378,19 +1382,40 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
                 self.assertEqual(int(self._all(pattern, haystack)), derived)
 
     def test_the_guard_scan_coverage_triple_is_re_derived(self) -> None:
-        """⚠ FINDING A OF REVIEW ROUND TWO, and the last self-claim to become derived.
+        """⚠ FINDING A OF REVIEW ROUND TWO, and the check that then failed in CI.
 
         The register states how much of #1204's `Ran N tests` guard scan reaches this
         workflow. Round one typed "21 of the 25" and "four" and was RIGHT. Round two
-        "re-corrected" it to 20-of-25 / 21-of-26 / five by counting a COMMENT line that
-        carries the invocation string as a guard site -- the same self-match trap the
-        sentence directly below it discloses, caught for its visible effect and shipped for
-        its arithmetic one. It also put this register into disagreement with #1205.
+        "re-corrected" it to 20-of-25 / 21-of-26 by counting a COMMENT line carrying the
+        invocation string as a guard site -- the same self-match trap the sentence beside it
+        discloses, caught for its visible effect and shipped for its arithmetic one. So the
+        triple became derived rather than stated.
 
-        So the triple is derived here rather than stated: EXECUTABLE sites are lines
-        carrying the invocation that are not comments, RESOLVED comes from C154's own
-        `_guards()` -- IMPORTED, never reimplemented, because a second copy of that scan
-        free to drift is worse than one -- and unresolved is the difference.
+        ⚠ AND THEN IT WENT RED IN CI WHILE GREEN ON TWO REVIEWERS' TREES, which is the most
+        useful thing that happened to this module. GitHub runs the gate on
+        `refs/pull/<n>/merge`, not on the branch head. #1203 landed on `main` after this
+        branch was cut and added one guarded invocation; this branch added its own; each
+        tree reads 25 executable in isolation and the MERGE reads 26. A typed 25 would have
+        shipped wrong and silently, because nothing checks a typed number. **This is the
+        first defect in three rounds that neither the author nor the reviewer could have
+        found locally -- it does not exist on either tree.** Local green and CI green are
+        different measurements when a repo gates on the merge, and this module now has a
+        first-party instance of the class the register documents.
+
+        DERIVED, never reimplemented: EXECUTABLE sites are lines carrying the invocation
+        that are not comments; RESOLVED comes from C154's own `_guards()`, IMPORTED, because
+        a second copy of that scan free to drift is worse than one; unresolved is the
+        difference.
+
+        THE COUNTS CHURN AND THE FINDING DOES NOT, so both are pinned and they are pinned
+        differently. `executable` and `resolved` move whenever ANY step is added to this
+        workflow -- that is a declared coupling, stated in the register's §6, and it is what
+        catches the merge skew above. The UNRESOLVED SET is the load-bearing half, it is
+        #1205's actual subject, and it is invariant: the same four modules at the old
+        merge-base, at `origin/main`, at the branch head and at the merge. It is pinned BY
+        MODULE NAME rather than by count or by line, so a line shift does not touch it and a
+        NEW unguarded step reddens it -- which is #1205's subject growing and should be
+        loud.
         """
 
         from test_unreachable_readjudication import (  # noqa: E402
@@ -1398,39 +1423,79 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         )
 
         lines = _text(WORKFLOW).splitlines()
-        carrying = [line for line in lines if "python -m unittest" in line]
-        comments = [line for line in carrying if line.strip().startswith("#")]
+        carrying = [(n, line) for n, line in enumerate(lines, 1) if "python -m unittest" in line]
+        comments = [(n, line) for n, line in carrying if line.strip().startswith("#")]
         executable = len(carrying) - len(comments)
-        resolved = len(scan._guards())
-        unresolved = executable - resolved
+        guards = scan._guards()
+        resolved = len(guards)
+        guard_lines = {line for line, _, _ in guards}
+        unresolved = sorted(
+            {
+                match.group(0)
+                for number, line in carrying
+                if not line.strip().startswith("#")
+                and not any(0 <= g - number <= 12 for g in guard_lines)
+                for match in [re.search(r"tests\.[A-Za-z0-9_.]+", line)]
+                if match
+            }
+        )
 
-        # Anti-vacuity, and it is the specific control this finding earns: the file DOES
-        # contain a comment carrying the invocation, so "executable == carrying" would be a
-        # scan that had stopped distinguishing them -- which is the defect itself.
+        # Anti-vacuity, and this control is the specific one the finding earns: the file DOES
+        # carry the invocation inside a comment, so `executable == len(carrying)` would mean
+        # the scan had stopped telling them apart -- which is the defect itself.
         self.assertEqual(len(comments), 1, carrying)
         self.assertGreater(executable, 20)
         self.assertGreater(resolved, 15)
+        self.assertEqual(executable, resolved + len(unresolved))
 
+        # THE LOAD-BEARING HALF: #1205's subject, by module name, invariant across the old
+        # merge-base, `origin/main`, the branch head and the merge.
+        self.assertEqual(
+            unresolved,
+            [
+                "tests.test_differential_denominator",
+                "tests.test_engine_stat_attestation",
+                "tests.test_seed_registry_coverage",
+                "tests.test_spread_gate_provenance",
+            ],
+            "the set of workflow steps #1204's scan cannot resolve has changed. A step "
+            "joining it is #1205's subject growing and must be recorded in the register "
+            "beside the counts; a step leaving it is #1205 being fixed and must be recorded "
+            "too.",
+        )
+
+        skew = (
+            "\n\nIF THIS PASSES LOCALLY AND FAILS IN CI: `main` has advanced and added a "
+            "unittest step. GitHub gates on `refs/pull/<n>/merge`, so CI measures the merged "
+            "workflow and your branch does not. MERGE `origin/main` -- do not rebase -- and "
+            "re-derive all three numbers with:\n"
+            "  grep -c 'python -m unittest' .github/workflows/engine-fidelity-gates.yml\n"
+            "  python -m unittest tests.test_terminal_disposition_register\n"
+            "This coupling is deliberate and declared in the register's §6."
+        )
         register = _text(REGISTER)
         self.assertEqual(
             int(self._all(r"there are \*\*(\d+) executable\*\* invocation sites", register)),
             executable,
+            "the register's EXECUTABLE site count does not match this tree." + skew,
         )
         self.assertEqual(
-            int(self._all(r"the scan resolves \*\*(\d+)\*\* of them", register)), resolved
+            int(self._all(r"the scan resolves \*\*(\d+)\*\* of them", register)),
+            resolved,
+            "the register's RESOLVED guard count does not match this tree." + skew,
         )
         words = {3: "three", 4: "four", 5: "five", 6: "six"}
-        self.assertIn(unresolved, words, f"{unresolved} unresolved; extend `words`")
+        self.assertIn(len(unresolved), words, f"{len(unresolved)} unresolved; extend `words`")
         self.assertRegex(
             re.sub(r"\s+", " ", register),
-            rf"leaves \*\*{words[unresolved]}\*\* unresolved",
+            rf"leaves \*\*{words[len(unresolved)]}\*\* unresolved",
         )
         # This step must be one of the resolved ones, and the guard it resolves to must be
-        # this module's own method count -- which is what makes the figure load-bearing
-        # rather than trivia about someone else's step.
+        # this module's own method count -- what makes the figure load-bearing rather than
+        # trivia about someone else's step.
         mine = [
             stated
-            for _, targets, stated in scan._guards()
+            for _, targets, stated in guards
             if targets == ("tests.test_terminal_disposition_register",)
         ]
         source = _text("tests/test_terminal_disposition_register.py")
@@ -1471,7 +1536,8 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         size = len(re.findall(r"(?m)^  B\d+\.", battery))
         words = {
             8: "EIGHT", 9: "NINE", 10: "TEN", 11: "ELEVEN", 12: "TWELVE",
-            13: "THIRTEEN", 14: "FOURTEEN", 15: "FIFTEEN",
+            13: "THIRTEEN", 14: "FOURTEEN", 15: "FIFTEEN", 16: "SIXTEEN",
+            17: "SEVENTEEN", 18: "EIGHTEEN",
         }
         self.assertIn(size, words, f"block B has {size} entries; extend `words`")
         word = words[size]

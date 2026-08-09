@@ -7,7 +7,8 @@ with different numbering each time. A document rebuilt on demand is exactly the 
 program keeps finding drifted, so this one is committed, numbered permanently, and machine-checked
 against the tree by `tests/test_terminal_disposition_register.py`.
 
-**Reconciled against** `origin/main` at `6ef682bf` (#1204). Every figure below is re-derived from
+**Reconciled against** `origin/main` at `b3eef7b6` (#1203), merged into this branch — merged, never
+rebased. The branch was cut at `6ef682bf` (#1204) and every figure was re-derived after the merge. Every figure below is re-derived from
 tracked bytes or from a committed artifact — none is carried from the list it replaces, and **six**
 statements did not survive that derivation, itemised in §5.
 
@@ -446,6 +447,15 @@ per-game negatives are much better served — the same census bounds a per-bound
 3.73 × 10⁻⁶ — and substituting the boundary denominator for the divergence one overstates a
 per-class negative by **846×**, the ratio of the two denominators.
 
+**A derived number is checked and a typed one is not, and this document has now paid for that
+twice.** Three of the four claims review blocked in round one were *typed* self-descriptions; the
+fourth round of failure was a *derived* one going red in CI while green on two local trees, because
+GitHub gates on `refs/pull/1206/merge` and `main` had gained a step neither tree carried. **The
+derived check caught a staleness that no reader, author or reviewer could have found locally — the
+defect did not exist on either of their trees.** A typed `25` would have shipped wrong and silently.
+Where CI gates on the merge, **local green and CI green are different measurements**; §6 declares
+that coupling and the assertion carries the fix in its own failure message.
+
 **Every measurement behind T2–T6 predates the head build**, and none is at
 `9517aab98d56a9ba`. Read the table in T1 before quoting that as a re-sweep scope: T3, T4 and T5
 rest on an engine build; **T2 and T6 build no engine at all** and carry no `engine_fingerprint`.
@@ -511,38 +521,70 @@ rather than OPEN. And ⚠ **T2 and T5, downgraded in review**: their *figures* a
 carries. Both statuses are right; `derived` overstated by one word, and the word is the whole
 distinction this section exists to draw.
 
-**A coupling, declared.** Appendix A pins `base.expected_counter_artifacts` and
-`base.expected_sweep_artifacts` against the two census modules' own constants. A PR that adds an
-artifact must therefore update this register in the same change. That is deliberate and it is the
-whole point: the document that goes stale is the one nothing forces an author through.
+**Two couplings, declared.** First, Appendix A pins `base.expected_counter_artifacts` and
+`base.expected_sweep_artifacts` against the two census modules' own constants, so a PR that adds an
+artifact must update this register in the same change. Second, the guard-scan counts above are
+properties of the **whole** workflow, so a PR that adds any unittest step to it reddens this module
+until the two numbers are re-derived. Both are deliberate and they are the whole point: the document
+that goes stale is the one nothing forces an author through.
+
+⚠ **The second coupling has a failure mode local runs cannot show, and it has already fired.**
+Where CI gates on the merge rather than the branch — as this repo does — **local green and CI green
+are different measurements**, and a step added to `main` after the branch was cut appears only in
+the merge. The register documents that class; it now has a first-party instance, and the assertion's
+failure message names the cause and the fix (merge `origin/main`, do not rebase, re-derive) rather
+than leaving the next author to rediscover it.
 
 **The `Ran N tests` guard.** The step carries an exact `Ran 42 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covers only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure. The workflow holds **26** lines containing the unittest
-invocation, of which **one is a comment**, so there are **25 executable** invocation sites at this
-head; the scan resolves **21** of them and leaves **four** unresolved (`:616`, `:655`, `:969`,
-`:1548`). At base: 25 lines, one comment, **24 executable**, **20 resolved**, the same four
-unresolved — which is #1205's own figure, and this register and #1205 must agree. **This step is
-among the 21**, and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 42 from the module's
-AST and matches the guard. All three numbers are now **re-derived by the pin** rather than typed;
-before this round they were typed, and they regressed.
+rather than inherited from #1205's figure. The workflow holds **27** lines containing the unittest
+invocation, of which **one is a comment**, so there are **26 executable** invocation sites at this
+head; the scan resolves **22** of them and leaves **four** unresolved —
+`tests.test_differential_denominator`, `tests.test_engine_stat_attestation`,
+`tests.test_seed_registry_coverage`, `tests.test_spread_gate_provenance`. **This step is among the
+resolved ones** — the number is not restated here, because a fourth copy of it is a fourth thing to
+go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 42 from the module's AST
+and matches the guard. All three numbers are **re-derived by the pin** rather than typed.
+
+**The counts churn; the finding does not, and they are pinned differently.** `executable` and
+`resolved` move whenever any step joins this workflow. The **unresolved set is invariant** — the
+same four modules at the old merge-base `6ef682bf`, at `origin/main`, at the branch head and at the
+merge — and it is #1205's actual subject, so it is pinned **by module name** rather than by count or
+by line. A line shift does not touch it; a new *unguarded* step reddens it, which is #1205's subject
+growing and should be loud.
+
+⚠ **#1205's own counts are now stale and its finding is not, and this register says which.** #1205
+records *"24 executable guards, 20 covered, 4 silently missed"*, measured at `6ef682bf` where that
+was exact. `origin/main` has since gained #1203's Taunt step, which **is** guarded (`Ran 13 tests`,
+13 methods) and **is** resolved, so main now reads **25 executable / 21 resolved**. The four missed
+steps are unchanged. Restating #1205's 24/20 here would have been quietly wrong; the honest form is
+that its arithmetic moved with the file and its subject did not.
 
 ⚠ **The same self-match trap, twice, and the second time it shipped.** The scan matches on the
 invocation string, so the step's own comment — which quoted that string while explaining the scan —
 counted as a site. Round one caught that for its visible effect, the step appearing twice, fixed the
-comment, and then round two **re-introduced it as an arithmetic error**: the comment line was
-counted into the denominator, giving "20 of 25 / 21 of 26 / five sites" against the true 20 of 24 /
-21 of 25 / four. Round one's own figures had been right. The correction was reported as
-"re-measured on this tree", which made it worse than a typo. It was caught by review, and the
-guard-scan triple is now the last of this document's self-claims to become machine-derived.
+comment, then round two **re-introduced it as an arithmetic error**, counting the comment into the
+denominator: "20 of 25 / 21 of 26 / five" against the true 20 of 24 / 21 of 25 / four. Round one's
+figures had been right, and the correction was reported as "re-measured on this tree", which made it
+worse than a typo. Caught by review; the triple became derived.
 
-**Mutation evidence.** **52 mutations applied, 52 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
-partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B52** edit **only the tree
+⚠ **And then the derived check failed in CI while green on two reviewers' trees — the most useful
+thing that happened to this document.** GitHub gates on `refs/pull/1206/merge`, not on the branch
+head. #1203 landed on `main` after this branch was cut and added one guarded invocation; this branch
+added its own; **each tree reads 25 executable in isolation and the merge reads 26.** A typed `25`
+would have shipped wrong and silently, because nothing checks a typed number. This is the first
+defect in three rounds that **neither the author nor the reviewer could have found locally** — it
+does not exist on either tree. Resolved by merging `origin/main` into the branch (merge, never
+rebase) and re-deriving all four trees; the assertion now carries that diagnosis in its own failure
+message.
+
+**Mutation evidence.** **53 mutations applied, 53 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
+partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B53** edit **only the tree
 and never this document**. That second number is the one that matters, because a pin reading a
 document against a hard-coded copy of itself passes every document-side mutation — and ⚠ **a first
 revision put it at ten and two of those ten edited the register**, which is the property being
-claimed, mis-stated. Fifteen is the measured figure: a patch line shift, the tie-refusal arm deleted,
+claimed, mis-stated. Sixteen is the measured figure: a patch line shift, the tie-refusal arm deleted,
 a damage push made to consult the truncation flag (G33c *fixed*), a sub-keyed single-seat counter
 added to a committed sweep, a freeze constant added to the differential, a real Showdown checkout
 added to the workflow, the head fingerprint written into an artifact, an `hp`-ceiling context line
@@ -575,10 +617,12 @@ tests, OK**. The gated family together: ledger uniformity **19**, never-fired **
 `tests/test_final_holdout_guard.py` and `tests/test_boundary_verdict_partition.py` cannot import
 without a built engine in this environment and are unchanged by this branch. Full suite, with the
 flag that is required rather than stylistic:
-`pytest tests/ -q -p no:randomly --continue-on-collection-errors` — **164 failed at base, 164 failed
-at head**, 4,416 → 4,458 passed (**+42**, exactly this module), 32 errors both sides, and the
-`FAILED` id lists are **identical in both directions**. The absolute figure is a property of the
-machine; the delta is that this branch adds zero failures.
+`pytest tests/ -q -p no:randomly --continue-on-collection-errors` — **165 failed at base, 165 failed
+at head**, 4,420 → 4,462 passed (**+42**, exactly this module), 33 errors both sides, and the
+`FAILED` id lists are **identical in both directions**. Re-measured against the **new** merge-base
+after `origin/main` was merged in: at the old base `6ef682bf` the pair read 164 / 4,416, and #1203
+brought one more engine-dependent module. The absolute figure is a property of the machine; the
+delta is that this branch adds zero failures.
 
 ---
 
