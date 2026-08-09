@@ -911,6 +911,62 @@ class EngineMctsStats:
         return payload
 
 
+def native_search_args(
+    config,
+    record: Mapping[str, Any],
+    *,
+    tables_json,
+    root_inputs,
+    rust_fold,
+    early_stop_min_sims: int,
+    sims: int | None = None,
+) -> list:
+    """The positional argument list for `search_batched_multi_encoded`.
+
+    A module-level function, not an inline block, for ONE reason: the call
+    contract is gated by tests/test_opponent_priors_flag.py, and until this was
+    extracted those tests rebuilt this list themselves and asserted against
+    their own copy. Measured in review: deleting `config.model_priors` from the
+    real assembly here -- which disables model priors AND shifts
+    `use_opponent_priors` two slots left into `early_stop_min_sims`, silently
+    truncating the search budget, exactly the catastrophe those tests claim to
+    guard -- left them at "6 passed, 1 skipped". They now call this.
+
+    The ordering rules are load-bearing:
+
+    * the first twelve positionals are the pre-flag contract, made byte for
+      byte whenever the flag is off, so a stale image cannot be broken merely
+      by updating Python;
+    * `use_opponent_priors` FOLLOWS the early-stop pair in the native
+      signature, so turning it on must also materialize that pair -- otherwise
+      `True` lands in `early_stop_min_sims`.
+
+    `sims` overrides `config.search_sims` for ONE call: #1009 concentrates
+    duplicate belief worlds into a single deeper search, so a collapsed record
+    is searched at multiplicity x the per-world budget. `None` means "use the
+    configured budget", which is every uncollapsed caller.
+    """
+    search_args = [
+        record["state_str"],
+        config.search_sims if sims is None else sims,
+        config.search_batch,
+        tables_json,
+        root_inputs,
+        record["ctx_json"],
+        rust_fold,
+        config.search_depth,
+        config.c_puct,
+        record["seed"],
+        config.deep_ko_split,
+        config.model_priors,
+    ]
+    if early_stop_min_sims or config.use_opponent_priors:
+        search_args.extend([early_stop_min_sims, record["side_key"] == "side_one"])
+    if config.use_opponent_priors:
+        search_args.append(True)
+    return search_args
+
+
 def opponent_request_order(context, party_species) -> list[str] | None:
     """The opponent's Showdown request order at this decision, or None.
 
@@ -1734,34 +1790,15 @@ class EngineMctsPolicy:
             weight: int = 1,
         ) -> Optional[dict]:
             try:
-                search_args = [
-                    record["state_str"],
-                    config.search_sims if sims is None else sims,
-                    config.search_batch,
-                    self._tables_json,
-                    root_inputs,
-                    record["ctx_json"],
-                    rust_fold,
-                    config.search_depth,
-                    config.c_puct,
-                    record["seed"],
-                    config.deep_ko_split,
-                    config.model_priors,
-                ]
-                if early_stop_min_sims or config.use_opponent_priors:
-                    # Preserve the old native call contract while the feature
-                    # is disabled, so a stale image cannot break default
-                    # full-budget search merely because Python was updated.
-                    search_args.extend(
-                        [early_stop_min_sims, record["side_key"] == "side_one"]
-                    )
-                if config.use_opponent_priors:
-                    # Positional, and it follows the early-stop pair in the
-                    # native signature -- hence the combined guard above: the
-                    # pair must be present for this to land in the right slot.
-                    # Appended ONLY when set, so a flag-off run makes exactly
-                    # the call it always did.
-                    search_args.append(True)
+                search_args = native_search_args(
+                    config,
+                    record,
+                    tables_json=self._tables_json,
+                    root_inputs=root_inputs,
+                    rust_fold=rust_fold,
+                    early_stop_min_sims=early_stop_min_sims,
+                    sims=sims,
+                )
                 report = json.loads(
                     native.search_batched_multi_encoded(*search_args)
                 )
