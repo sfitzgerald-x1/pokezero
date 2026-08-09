@@ -1294,12 +1294,143 @@ class ActionPhaseToxicResetTest(unittest.TestCase):
                     self.assertEqual(replay.toxic_stage[side], 0)
                     self.assertIsNone(_materialization_toxic_stage(replay, side))
 
+    # The canonical markers below are the ONLY ones the parser folds as chronology.
+    # `_canonical_upkeep_marker` reads the unstripped raw line and demands exactly
+    # "|upkeep", while `event_type` is taken from the stripped one, so each of these
+    # reaches the upkeep branch and is then discarded. Discarded as chronology is not
+    # the same as "did not happen": the residual boundary is still in the prefix.
+    MALFORMED_UPKEEP = ("|upkeep\r", "|upkeep ", "|upkeep\n", "|upkeep|payload", "|upkeep|")
+
+    def test_a_malformed_upkeep_marker_still_retires_the_proof(self) -> None:
+        """A boundary too malformed to fold is still a boundary. Fail closed.
+
+        This is the discriminating test for the bound: retiring only on a CANONICAL
+        `|upkeep` leaves the proof alive across a residual phase that did happen, and
+        `_materialization_toxic_stage` then answers with a concrete, WRONG `0` instead
+        of refusing. Every sibling latch in this subsystem fails closed on exactly
+        these shapes; the parity assertion below is what stops this one drifting.
+        """
+        for side in ("p1", "p2"):
+            for marker in self.MALFORMED_UPKEEP:
+                with self.subTest(side=side, marker=marker):
+                    parser = self._reentry_parser(side, marker)
+                    # Live attribute first -- see the note in
+                    # `test_only_a_badly_poisoned_entry_arms_the_proof`.
+                    self.assertIsNone(parser.toxic_stage_reset_ident[side])
+                    replay = parser.snapshot()
+                    # Not folded as chronology -- the window must NOT open ...
+                    self.assertFalse(replay.post_upkeep_window)
+                    # ... and the proof must not survive it either.
+                    self.assertIsNone(replay.toxic_stage_reset_ident[side])
+                    self.assertTrue(replay.toxic_stage_known[side])
+                    self.assertEqual(replay.toxic_stage[side], 0)
+                    self.assertIsNone(_materialization_toxic_stage(replay, side))
+
+    def test_malformed_upkeep_parity_with_the_post_upkeep_proof(self) -> None:
+        """Both zero proofs must answer a malformed marker the same way: None."""
+        for side in ("p1", "p2"):
+            other = "p2" if side == "p1" else "p1"
+            lead = "LeadOne" if side == "p1" else "LeadTwo"
+            for marker in self.MALFORMED_UPKEEP:
+                with self.subTest(side=side, marker=marker):
+                    sibling = _ReplayParser(
+                        f"toxic-malformed-upkeep-sibling-{side}", complete_prefix=True
+                    )
+                    sibling.feed(
+                        [
+                            *self.LEADS,
+                            f"|faint|{side}a: {lead}",
+                            marker,
+                            f"|switch|{side}a: Walrein|Walrein, L80, M|288/307 tox",
+                            "|turn|2",
+                        ]
+                    )
+                    sibling_replay = sibling.snapshot()
+                    self.assertFalse(
+                        sibling_replay.toxic_stage_zero_after_upkeep[side]
+                    )
+                    self.assertIsNone(
+                        _materialization_toxic_stage(sibling_replay, side)
+                    )
+                    action_phase = self._reentry_parser(side, marker).snapshot()
+                    self.assertEqual(
+                        _materialization_toxic_stage(action_phase, side),
+                        _materialization_toxic_stage(sibling_replay, side),
+                    )
+                    # The untouched seat keeps its own (absent-Toxic) answer of 0,
+                    # so the retirement is not a blanket reset of the whole parser.
+                    self.assertEqual(
+                        _materialization_toxic_stage(action_phase, other), 0
+                    )
+
+    def test_a_switch_line_too_short_to_fold_retires_the_proof(self) -> None:
+        """The occupancy clear cannot sit behind the four-field parse gate.
+
+        `|switch|p1a: Broken` has three fields, so the block that folds a switch into
+        a Pokemon never runs — and the seat has still changed hands. A line too short
+        to name the arrival is exactly where "the old occupant is still there" stops
+        being knowable. A line too short to name a SEAT retires both.
+        """
+        for side in ("p1", "p2"):
+            for label, line in (
+                ("three-field", f"|switch|{side}a: Broken"),
+                ("five-field-noncanonical", f"|switch|{side}a: Broken|Broken|"),
+                ("drag-three-field", f"|drag|{side}a: Broken"),
+                ("no-ident", "|switch"),
+                ("bench-ident", f"|switch|{side}: Benched"),
+            ):
+                with self.subTest(side=side, line=label):
+                    parser = self._reentry_parser(side, line)
+                    # Live attribute first -- see the note in
+                    # `test_only_a_badly_poisoned_entry_arms_the_proof`.
+                    self.assertIsNone(parser.toxic_stage_reset_ident[side])
+                    replay = parser.snapshot()
+                    self.assertIsNone(replay.toxic_stage_reset_ident[side])
+                    self.assertIsNone(_materialization_toxic_stage(replay, side))
+
+    def test_a_mutated_latch_is_normalized_before_the_next_line(self) -> None:
+        """`_sanitize_toxic_replacement_provenance` owns this latch too.
+
+        Live callers retain and mutate a parser between lines. The six sibling proof
+        fields are normalized on every fed line; this one is registered on the same
+        pass, so a forged value cannot authorize a world zero.
+        """
+        for side in ("p1", "p2"):
+            for label, forged in (
+                ("wrong-mon", f"{side}a: Someone"),
+                ("other-seat", f"{'p2' if side == 'p1' else 'p1'}a: Walrein"),
+                ("bench-ident", f"{side}: Walrein"),
+                ("non-string", True),
+                ("int", 1),
+            ):
+                with self.subTest(side=side, forged=label):
+                    parser = self._reentry_parser(side)
+                    parser.toxic_stage_reset_ident[side] = forged
+                    parser.feed(["|move|p1a: LeadOne|Splash|p1a: LeadOne"])
+                    self.assertIsNone(parser.toxic_stage_reset_ident[side])
+                    self.assertIsNone(
+                        _materialization_toxic_stage(parser.snapshot(), side)
+                    )
+            with self.subTest(side=side, forged="honest-survives"):
+                parser = self._reentry_parser(side)
+                parser.feed(["|move|p1a: LeadOne|Splash|p1a: LeadOne"])
+                self.assertEqual(
+                    parser.toxic_stage_reset_ident[side], f"{side}a: Walrein"
+                )
+                self.assertEqual(
+                    _materialization_toxic_stage(parser.snapshot(), side), 0
+                )
+
     def test_a_rendered_residual_retires_the_proof_by_superseding_it(self) -> None:
         for side in ("p1", "p2"):
             with self.subTest(side=side):
-                replay = self._reentry_parser(
+                parser = self._reentry_parser(
                     side, f"|-damage|{side}a: Walrein|269/307 tox|[from] psn"
-                ).snapshot()
+                )
+                # Live attribute first -- see the note in
+                # `test_only_a_badly_poisoned_entry_arms_the_proof`.
+                self.assertIsNone(parser.toxic_stage_reset_ident[side])
+                replay = parser.snapshot()
                 self.assertIsNone(replay.toxic_stage_reset_ident[side])
                 self.assertEqual(replay.toxic_stage[side], 1)
 
@@ -1352,6 +1483,9 @@ class ActionPhaseToxicResetTest(unittest.TestCase):
                     self.assertIsNone(_materialization_toxic_stage(replay, side))
 
     def test_only_a_badly_poisoned_entry_arms_the_proof(self) -> None:
+        # Read the LIVE parser attribute, not the snapshot: `snapshot()` also runs
+        # `_sanitize_toxic_replacement_provenance`, which would independently drop a
+        # wrongly-armed latch and hide the arming site this pins.
         for side in ("p1", "p2"):
             for label, condition in (
                 ("healthy", "288/307"),
@@ -1368,6 +1502,7 @@ class ActionPhaseToxicResetTest(unittest.TestCase):
                             f"|switch|{side}a: Walrein|Walrein, L80, M|{condition}",
                         ]
                     )
+                    self.assertIsNone(parser.toxic_stage_reset_ident[side])
                     self.assertIsNone(parser.snapshot().toxic_stage_reset_ident[side])
 
     def test_status_cure_and_faint_transitions_retire_the_proof(self) -> None:
@@ -1380,8 +1515,11 @@ class ActionPhaseToxicResetTest(unittest.TestCase):
                 ("faint", f"|faint|{side}a: Walrein"),
             ):
                 with self.subTest(side=side, event=label):
-                    replay = self._reentry_parser(side, event).snapshot()
-                    self.assertIsNone(replay.toxic_stage_reset_ident[side])
+                    parser = self._reentry_parser(side, event)
+                    # Live attribute first -- see the note in
+                    # `test_only_a_badly_poisoned_entry_arms_the_proof`.
+                    self.assertIsNone(parser.toxic_stage_reset_ident[side])
+                    self.assertIsNone(parser.snapshot().toxic_stage_reset_ident[side])
 
     def test_a_bench_cure_leaves_the_active_proof_alone(self) -> None:
         """Heal Bell's silent bench line cannot touch the active's counter."""
@@ -1405,16 +1543,17 @@ class ActionPhaseToxicResetTest(unittest.TestCase):
                     replay.toxic_stage_reset_ident[side], f"{side}a: Swalot"
                 )
             with self.subTest(side=side, entry="healthy-replacement"):
-                replay = self._reentry_parser(
+                parser = self._reentry_parser(
                     side, f"|switch|{side}a: Swalot|Swalot, L80, M|250/250"
-                ).snapshot()
-                self.assertIsNone(replay.toxic_stage_reset_ident[side])
+                )
+                self.assertIsNone(parser.toxic_stage_reset_ident[side])
+                self.assertIsNone(parser.snapshot().toxic_stage_reset_ident[side])
             with self.subTest(side=side, entry="non-canonical-replacement"):
                 # The slot changed hands but the line could not be folded into a
                 # Pokemon. The previous occupant's proof must not stay behind.
-                replay = self._reentry_parser(
-                    side, f"|switch|{side}a: Broken|Broken|"
-                ).snapshot()
+                parser = self._reentry_parser(side, f"|switch|{side}a: Broken|Broken|")
+                self.assertIsNone(parser.toxic_stage_reset_ident[side])
+                replay = parser.snapshot()
                 self.assertIsNone(replay.toxic_stage_reset_ident[side])
                 self.assertIsNone(_materialization_toxic_stage(replay, side))
 

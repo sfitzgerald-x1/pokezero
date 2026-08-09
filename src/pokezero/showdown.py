@@ -2313,6 +2313,11 @@ class _ReplayParser:
             "toxic_stage_zero_after_upkeep_expires_after_turn",
             "toxic_stage_zero_after_upkeep_ident",
             "toxic_faint_replacement_expected_ident",
+            # The action-phase re-entry proof is the same kind of object as the six
+            # above -- a mutable per-slot latch that authorizes a world zero -- so it
+            # is normalized on the same pass. Nothing here can forge it into an
+            # authorization: the loop below only ever writes ``None``.
+            "toxic_stage_reset_ident",
         )
         values: dict[str, dict[str, object]] = {}
         for field_name in fields:
@@ -2335,6 +2340,25 @@ class _ReplayParser:
             proof_ident = values["toxic_stage_zero_after_upkeep_ident"][slot]
             expected_ident = values["toxic_faint_replacement_expected_ident"][slot]
             active = self.public_active.get(slot)
+            # The action-phase proof is normalized on its own terms and unconditionally
+            # -- it is independent of the faint-replacement latch, so it must not ride
+            # on that latch's `continue` below. Anything other than None or a live,
+            # ident-matched, still-tox, still-known-zero occupant is dropped.
+            reset_ident = values["toxic_stage_reset_ident"][slot]
+            if reset_ident is not None and not (
+                isinstance(reset_ident, str)
+                and _is_active_protocol_ident(reset_ident)
+                and reset_ident.startswith(f"{slot}a: ")
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == reset_ident
+                and _condition_has_status(getattr(active, "condition", None), "tox")
+                and isinstance(self.toxic_stage_known, Mapping)
+                and self.toxic_stage_known.get(slot) is True
+                and isinstance(self.toxic_stage, Mapping)
+                and type(self.toxic_stage.get(slot)) is int
+                and self.toxic_stage.get(slot) == 0
+            ):
+                self.toxic_stage_reset_ident[slot] = None
             proof_is_complete = (
                 proof is True
                 and type(deadline) is int
@@ -2427,6 +2451,24 @@ class _ReplayParser:
             if showdown_slot in {"p1", "p2"}:
                 self.requests[showdown_slot] = payload
             return
+        if event_type in {"switch", "drag", "replace"}:
+            # Occupancy is changing hands. Retire the action-phase zero-counter proof
+            # for the affected seat BEFORE any parse and INDEPENDENTLY of whether the
+            # line carries enough fields to be folded into a Pokemon -- the block below
+            # needs four fields, and a three-field `|switch|p1a: Broken` would otherwise
+            # sail past it leaving the previous occupant's proof standing over a seat we
+            # can no longer name the occupant of. A proof belongs to exactly one mon; a
+            # line too short to say who arrived is precisely the case where we cannot
+            # claim the old one is still there. A line too short to name a SEAT retires
+            # both, since an unattributable occupancy change could be either.
+            vacating_slot = _slot_from_ident(parts[2]) if len(parts) >= 3 else None
+            vacated_slots = (
+                (vacating_slot,)
+                if vacating_slot in self.toxic_stage_reset_ident
+                else ("p1", "p2")
+            )
+            for slot in vacated_slots:
+                self.toxic_stage_reset_ident[slot] = None
         if event_type in {"switch", "drag", "replace"} and len(parts) >= 4:
             replacement_slot = _slot_from_ident(parts[2])
             pending_faint_replacement = (
@@ -2450,11 +2492,6 @@ class _ReplayParser:
             if replacement_slot in self.toxic_faint_replacement_pending:
                 self.toxic_faint_replacement_pending[replacement_slot] = False
                 self.toxic_faint_replacement_expected_ident[replacement_slot] = None
-            # Same rule for the action-phase reset proof: a malformed or otherwise
-            # unparsed occupancy change must not leave the previous occupant's
-            # zero-counter proof standing.
-            if replacement_slot in self.toxic_stage_reset_ident:
-                self.toxic_stage_reset_ident[replacement_slot] = None
             # Switch, drag, and replace protocol lines name the active singles
             # seat as p1a/p2a. Do not fold a malformed bench ident as a new
             # active Pokemon, even though its side prefix is recognizable.
@@ -2674,18 +2711,31 @@ class _ReplayParser:
             self.public_lines.append(line)
             return
         if event_type == "upkeep":
-            if not canonical_upkeep:
-                return
-            # Residuals for this turn are done; anything switching in from here until the
-            # next |turn| is a post-residual faint replacement.
-            self._post_upkeep_window = True
             # This turn's residual phase is over, so an action-phase zero-counter
             # proof has had its one residual opportunity. Whether the tick was
             # observed (stage now >= 1), unobservable (`known` cleared) or absent
             # from the prefix entirely, the proof is spent. Retiring it here is what
             # keeps a stage-0 zero from outliving the residual that would contradict
             # it -- the exact failure the post-upkeep proof's deadline guards against.
+            #
+            # Retired BEFORE the canonical gate, on the same reasoning as the |turn|
+            # arm below. `_canonical_upkeep_marker` reads the UNSTRIPPED raw line and
+            # demands exactly "|upkeep", while `event_type` here comes from the
+            # stripped one, so "|upkeep\r", "|upkeep ", "|upkeep\n" and
+            # "|upkeep|payload" all reach this branch and are then discarded as
+            # chronology -- correctly, since none of them may move
+            # `_post_upkeep_window`. But a marker too malformed to trust is still
+            # evidence that the prefix reached a residual boundary this proof cannot
+            # account for. Every other latch in this subsystem treats a malformed
+            # marker as in scope and fails closed; a stage-0 counter that outlived one
+            # would be the only value here that is positively WRONG rather than merely
+            # refused, and a wrong counter in a searched world is silent wrongness.
             self.toxic_stage_reset_ident = {"p1": None, "p2": None}
+            if not canonical_upkeep:
+                return
+            # Residuals for this turn are done; anything switching in from here until the
+            # next |turn| is a post-residual faint replacement.
+            self._post_upkeep_window = True
             self._settle_pending_rest_sleep_attempts()
         if event_type == "turn" and len(parts) >= 3:
             # A turn marker is past the previous turn's residual opportunity, so the
