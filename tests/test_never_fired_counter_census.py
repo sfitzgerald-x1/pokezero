@@ -165,7 +165,46 @@ _CORPUS_TREES = ("reports", "docs")
 # `scripts/c152_h19_family_recensus.py`'s family history for the opposite reason -- their
 # divergent rows are an artefact of the mutation, and counting them inflated
 # `I2_matcher_accounting` from 85 to 113 on that script's first run.
-_EXPECTED_COUNTER_ARTIFACTS = 388
+#
+# 388 -> 401 (C153, the wide-seed negative census). RE-DERIVED by executing this module's
+# `counter_artifacts()` against the base tree `origin/main` at `7fcd9e19` -- 388 -- against
+# 401 here, with the set difference exactly the THIRTEEN files this branch adds (the twelve
+# `reports/artifacts/c153_{wide,banded}_census_*_sweep.json` shards plus the derived
+# `reports/artifacts/c153_wide_negative_census.json`) and NOTHING removed. Not arithmetic on
+# 388, and confirmed still live at 400 and at 402.
+#
+# TWELVE of the thirteen enter `tests/test_boundary_verdict_partition.py`'s sweep corpus
+# (103 -> 115): the derived census carries no top-level `boundaries_measured` -- deliberately,
+# so the two selectors keep moving independently, and MEASURED rather than assumed by running
+# `_sweep_reports()` itself over this tree.
+#
+# ⚠ WHAT THESE TWELVE ARE FOR, because it is the opposite of what the rest of this corpus is
+# for. §8's newest standing rule says a negative measured only inside the two permitted
+# windows is a claim about those windows, and that widening the CORPUS -- which is all this
+# module does -- cannot find that class of error. These shards are the other half: a
+# MEASUREMENT on 10,000 games of unregistered seeds `1,001,000`-`1,010,999`, pinned in
+# `tests/test_wide_seed_negative_census.py`. They are NOT fidelity evidence and their
+# divergence counts must never be quoted as the program's.
+_EXPECTED_COUNTER_ARTIFACTS = 401
+
+# CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
+# the corpus census; it is also what enforces a structural invariant on a SIBLING module's
+# artifact, and that was true by arrangement rather than by statement until now.
+#
+# `reports/artifacts/c153_wide_negative_census.json` is keyed by counter name. This
+# module's matcher treats any nonzero number under a dotted path containing a counter name
+# as evidence -- so a numeric field added to one of those records makes the counter read
+# as FIRED. That is exactly what happened while C153 was being written: a `bound_trials`
+# field on each verdict record turned all 46 never-fired names green-to-red here, on the
+# same tree, and review then reproduced it with a differently named field and with a
+# nested sub-object. All three were caught HERE, by shape, and by nothing in the sibling
+# module, whose own two `assertNotIn`s cover only the first.
+#
+# ⚠ The coupling depends on that artifact staying inside `counter_artifacts()`'s glob.
+# A future census written to `tests/data/` would leave the corpus and lose the check with
+# no test going red. `tests/test_wide_seed_negative_census.py` asserts the glob membership
+# as a floor and names this module; this note is the other half, so neither side of the
+# dependency is silent.
 
 # ---------------------------------------------------------------------------
 # The taxonomies, derived from source rather than transcribed.
@@ -198,6 +237,28 @@ _FIRED_WORLD_UNSUPPORTED = frozenset(
 # 7 of the 19 static `classify_divergence` return sites, against H15's "only 6". The
 # seventh is `limit:world_sample_drag_target`; H15 lists it among "strict-path classes
 # the program has simply never produced".
+#
+# ⚠ 7 -> 14 on 2026-08-08 (C153). SEVEN more now have counter evidence, and every one of
+# them arrived the same way the two C152 refutations did -- by MEASURING SOMEWHERE NEW,
+# not by widening this corpus. All seven come from the 2,000-game `--matcher banded` arm
+# of `reports/artifacts/c153_banded_census_*_sweep.json`, on unregistered seeds
+# `1,009,000`-`1,010,999`: `damage_band` 375, `unclassified` 163, `status_support` 84,
+# `faint_boundary` 30, `evidence:faint_ply_no_upkeep` 30, `evidence:crit_in_step` 3,
+# `evidence:spikes_in_step` 2.
+#
+# The banded comparator is the LEGACY net-HP one, kept for continuity with the
+# pre-hardening numbers, and no committed artifact had ever used it -- which is exactly
+# what H15's cell said, and exactly why the four it filed as "banded-only" and the four
+# `evidence:*`/`unclassified` it filed as "strict-path" were indistinguishable from the
+# outside. They are not: `classify_divergence`'s own comment marks the whole tail
+# "Banded matcher (or an unparsable miss): fall back to protocol evidence", so seven of
+# H15's twelve belong to one fallback family. The five that survive are
+# `boost_delta_support`, `component_set_equal_but_unmatched`, `no_miss_recorded` and the
+# two structurally unreachable `mapper_lossy` / `no_usable_branch`.
+#
+# NONE of the seven fired on the SHIPPING strict matcher, over 8,000 games and 641,866
+# measured boundaries. That distinction is the point and is pinned separately in
+# `tests/test_wide_seed_negative_census.py`, which records the arm on every firing.
 _FIRED_DIVERGENCE_CLASSES = frozenset(
     {
         "component_extra_in_engine",
@@ -207,6 +268,14 @@ _FIRED_DIVERGENCE_CLASSES = frozenset(
         "limit:roll_divergent_lethality",
         "limit:world_sample_drag_target",
         "roll_scaled_component",
+        # C153, banded arm only.
+        "damage_band",
+        "evidence:crit_in_step",
+        "evidence:faint_ply_no_upkeep",
+        "evidence:spikes_in_step",
+        "faint_boundary",
+        "status_support",
+        "unclassified",
     }
 )
 
@@ -604,16 +673,51 @@ class NeverFiredPartitionsTests(unittest.TestCase):
             "a counter C152 proved fires has lost its evidence; the ledger's §3.5 "
             "correction is now unsupported",
         )
+        # ⚠ REWRITTEN 2026-08-08 (C153), and NOT by loosening it. The pin was
+        # `all("c152_wide_census_" in a for a in artifacts)` -- a FILENAME match, which
+        # C153's own twelve shards break for the most boring possible reason: there is
+        # now a second wide census. Widening the substring to admit `c153_` would be the
+        # move this pin's own message forbids.
+        #
+        # So the claim is asserted on its MEANING instead of on a name. The claim was
+        # never "only C152's files carry these"; it was "these counters still fire only
+        # OUTSIDE fidelity seed space, never in a dev or holdout sweep". That is now
+        # measured from each witness artifact's own recorded seed span, which is a
+        # stronger check than the substring ever was -- a future `c153_`-named sweep of
+        # the dev window would have passed the loosened substring and fails this.
+        below_floor = 19_000_000  # tests/test_seed_registry_coverage.FIDELITY_SEED_FLOOR
         for name, hits in found.items():
             with self.subTest(counter=name):
                 artifacts = {artifact for artifact, _path, _value in hits}
-                self.assertTrue(
-                    all("c152_wide_census_" in a for a in artifacts),
-                    f"{name} now has evidence outside the C152 wide census: "
-                    f"{sorted(artifacts)}. That is a NEW fact -- it would mean the "
-                    "counter reaches the permitted windows too -- and needs its own "
-                    "ledger note rather than a silently widened pin.",
-                )
+                for artifact in sorted(artifacts):
+                    document = json.loads(
+                        (REPO / artifact).read_text(encoding="utf-8")
+                    )
+                    seeds = document.get("seeds")
+                    if not isinstance(seeds, dict):
+                        # The only non-sweep witness admitted, and it is admitted by
+                        # IDENTITY rather than by shape: C153's derived census
+                        # summarises exactly the shards checked above and carries no
+                        # seed span of its own. Any other shapeless witness is a
+                        # failure, because a counter turning up in a document with no
+                        # stated seeds is precisely how a window-scoped number gets
+                        # quoted as a general one.
+                        self.assertEqual(
+                            artifact,
+                            "reports/artifacts/c153_wide_negative_census.json",
+                            f"{name} has evidence in {artifact}, which states no seed "
+                            "span, so it cannot be read as evidence about scope",
+                        )
+                        continue
+                    self.assertLess(
+                        seeds["max"],
+                        below_floor,
+                        f"{name} now fires in {artifact}, whose seeds reach "
+                        f"{seeds['max']} -- at or above the fidelity seed floor. That "
+                        "is a NEW fact -- the counter would be reaching the permitted "
+                        "windows -- and needs its own ledger note rather than a "
+                        "silently widened pin.",
+                    )
 
     def test_seven_of_the_eight_unmappable_choice_reasons_are_absent(self) -> None:
         found = scan(_NEVER_FIRED_UNMAPPABLE_CHOICE + _FIRED_UNMAPPABLE_CHOICE)
