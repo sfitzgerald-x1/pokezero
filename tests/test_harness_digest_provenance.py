@@ -206,7 +206,7 @@ class TheClosureIsWhatWeThinkItIsTests(unittest.TestCase):
             self.assertTrue(path.is_file(), path)
 
 
-def _relative_targets_naively(path: Path) -> set[str]:
+def _relative_targets_naively(path: Path, base: Path = REPO) -> set[str]:
     """Every first-party file a `from . import` in `path` can denote.
 
     DELIBERATELY AN INDEPENDENT, DUMBER IMPLEMENTATION than
@@ -226,18 +226,22 @@ def _relative_targets_naively(path: Path) -> set[str]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom) or not node.level:
             continue
-        base = path.parent
+        # NOT named `base`: that is the relativization root parameter, and shadowing
+        # it here silently reported every target relative to the wrong directory.
+        # Caught by the nested-subpackage assertion added below, which is the first
+        # thing that ever passed a non-default `base`.
+        origin = path.parent
         for _ in range(node.level - 1):
-            base = base.parent
-        heads = [base / part for part in ((node.module or "").split(".") if node.module else [])]
-        anchor = heads[-1] if heads else base
+            origin = origin.parent
+        heads = [origin / part for part in ((node.module or "").split(".") if node.module else [])]
+        anchor = heads[-1] if heads else origin
         candidates = [anchor.with_suffix(".py"), anchor / "__init__.py"]
         candidates += [anchor / f"{a.name}.py" for a in node.names]
         candidates += [anchor / a.name / "__init__.py" for a in node.names]
         for candidate in candidates:
             if candidate.is_file():
                 try:
-                    found.add(candidate.resolve().relative_to(REPO).as_posix())
+                    found.add(candidate.resolve().relative_to(base.resolve()).as_posix())
                 except ValueError:
                     continue
     return found
@@ -298,7 +302,32 @@ class ClosureCompletenessTests(unittest.TestCase):
             pkg.mkdir(parents=True)
             (pkg / "__init__.py").write_text("", encoding="utf-8")
             (pkg / "leaf.py").write_text("VALUE = 1\n", encoding="utf-8")
-            (pkg / "mid.py").write_text("from .leaf import VALUE\n", encoding="utf-8")
+            (pkg / "mid.py").write_text(
+                "from .leaf import VALUE\nfrom .deep.nested import DEEP\n", encoding="utf-8"
+            )
+            # A SUBPACKAGE, with an `..` import back out of it. No member of the real
+            # closure lives below `src/pokezero/<mod>.py` today -- `mcts_eval` and
+            # `scenario_studio` exist but the differential reaches neither -- so the
+            # nested arm of BOTH the resolver and the naive completeness scan is
+            # otherwise never exercised. Untested code that only runs after someone
+            # else's unrelated change is how the first truncation shipped.
+            deep = pkg / "deep"
+            deep.mkdir()
+            (deep / "__init__.py").write_text("", encoding="utf-8")
+            (deep / "sibling.py").write_text("S = 1\n", encoding="utf-8")
+            # Reachable ONLY through the `..` ascent, so the ascend arm is
+            # load-bearing. An earlier version of this fixture pointed `..` at
+            # `leaf.py`, which `mid.py` already imports with a single dot -- so
+            # deleting the resolver's ascend loop changed no closure member and the
+            # mutation came back green. The assertion existed and proved nothing.
+            (pkg / "only_via_parent.py").write_text("Z = 1\n", encoding="utf-8")
+            (deep / "nested.py").write_text(
+                "from ..leaf import VALUE\n"
+                "from ..only_via_parent import Z\n"
+                "from .sibling import S\n"
+                "DEEP = 1\n",
+                encoding="utf-8",
+            )
             (root / "scripts" / "root.py").write_text(
                 "from pokezero.mid import VALUE\n", encoding="utf-8"
             )
@@ -315,6 +344,31 @@ class ClosureCompletenessTests(unittest.TestCase):
                 "truncation review caught, reproduced in five files",
             )
             self.assertIn("src/pokezero/mid.py", found)
+            self.assertIn(
+                "src/pokezero/deep/nested.py", found, "did not descend into a subpackage"
+            )
+            self.assertIn(
+                "src/pokezero/deep/sibling.py",
+                found,
+                "did not follow `from .sibling import S` INSIDE a subpackage",
+            )
+            self.assertIn(
+                "src/pokezero/only_via_parent.py",
+                found,
+                "did not follow `from ..only_via_parent import Z` -- the ascend arm "
+                "is unexercised by the real closure, which has no subpackage members",
+            )
+
+            # The naive completeness scan must agree on the nested case too, or the
+            # pin that guards the resolver carries the resolver's own blind spot.
+            nested = _relative_targets_naively(deep / "nested.py", base=root)
+            self.assertIn(
+                "src/pokezero/leaf.py",
+                nested,
+                "the independent scan did not resolve `..leaf` out of a subpackage",
+            )
+            self.assertIn("src/pokezero/deep/sibling.py", nested)
+            self.assertIn("src/pokezero/only_via_parent.py", nested)
 
 
 # ---------------------------------------------------------------------------
