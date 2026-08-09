@@ -1739,6 +1739,12 @@ def _build_side_spec(
                 _active_row_moves(side_payload) if is_self else None
             ),
             encored_move=encored_move,
+            # THIRD source, lowest precedence, both seats — the same
+            # `sides[slot]["lastUsedMove"]` the transformed branch above already
+            # consults. The resolver, not this call site, owns the `"switch"`
+            # sentinel: it is part of that field's vocabulary, so every caller
+            # of the resolver should get the same reading of it.
+            public_last_used_move=last_used_move_id,
         )
         if encored_index is None:
             raise EngineWorldUnsupported(
@@ -1939,12 +1945,53 @@ def _resolve_encored_move_index(
     *,
     rows_for_active: Sequence[Mapping[str, Any]] | None,
     encored_move: str | None,
+    public_last_used_move: str | None = None,
 ) -> int | None:
     """Index of the encored move in the constructed move order, or None.
 
-    Self side: the request marks every non-encored move disabled, so exactly
-    one enabled move identifies the lock. Opponent side: the caller passes the
-    publicly-observed last move (``encored_move``).
+    Three id sources, in precedence order — the same ladder the transformed
+    branch of ``_build_side_spec`` already walks:
+
+    1. ``encored_move`` -- the caller's publicly-observed lock. On the opponent
+       seat the search lane derives this by scanning the observation's
+       ``recent_public_events``.
+    2. ``rows_for_active`` -- the self request's move rows, where Encore's
+       signature is "exactly one enabled entry" (see ``_sole_enabled_move_id``).
+    3. ``public_last_used_move`` -- the parser's public last EXECUTED move for
+       this side (``sides[slot]["lastUsedMove"]``).
+
+    Source 3 exists because sources 1 and 2 are both WINDOWED or absent, and
+    source 3 is neither:
+
+    * ``recent_public_events`` is ``replay.public_events[-24:]``
+      (``showdown.py`` ``recent_event_limit``). Once an Encored target is
+      immobilised for a few turns — asleep, frozen, recharging — its last
+      ``|move|`` line scrolls out of that window and only ``|cant|`` lines
+      remain, so source 1 goes silent while the Encore is still live. This was
+      95/1682 gen3 randbat variants' worth of `encore_move_unknown` refusals.
+    * Source 2 does not exist on the opponent seat at all: there is no opposing
+      self-request to read a disable pattern from.
+    * ``replay.last_used_move`` is a per-slot latch with NO window. It is
+      written only by a non-``[from]`` ``|move|`` line and reset to the
+      ``"switch"`` sentinel on switch/drag, i.e. it is the identical fact source
+      1 scans for, retained indefinitely instead of for 24 lines.
+
+    Soundness of source 3 as an ENCORE lock, which is why it is admissible here
+    and not a guess: Showdown's Encore locks ``target.lastMove`` and refuses to
+    start when there is none (``!move``), so the lock and the latch agree at
+    onset; while the volatile holds, the target can only execute the encored
+    move, and an immobilised turn emits ``|cant|`` which does not touch the
+    latch; Encore is ``noCopy`` and cannot survive a switch, which is exactly
+    what the ``"switch"`` sentinel filtered below would represent; and
+    Showdown's ``encore`` condition removes itself at the residual once the
+    encored move's PP hits zero, so an Encore can never be observed alongside a
+    Struggle substitution. A called move (Sleep Talk's callee, Metronome's) is
+    excluded from the latch by the same ``[from]`` discriminator source 1 uses.
+
+    Fail-closed is preserved end to end. An empty/absent latch returns None, the
+    ``switch`` sentinel returns None, and an id the SAMPLED moveset does not
+    contain returns None from ``_move_index_by_id``; all three reach the
+    caller's ``encore_move_unknown`` raise. Nothing here invents a slot.
 
     This is the NON-transformed path only. A transformed active defers to
     ``_apply_encore_locks``, because ``move_specs`` here predates the copy.
@@ -1953,6 +2000,20 @@ def _resolve_encored_move_index(
     if encored_move:
         return _move_index_by_id(move_specs, encored_move)
     target = _sole_enabled_move_id(rows_for_active)
+    if target is None:
+        # Strictly additive: only consulted where the two windowed sources
+        # already returned nothing, so no world that constructs today changes.
+        # Left un-normalized otherwise -- ``_move_index_by_id`` normalizes its
+        # target, and a second call here would be dead defensive code.
+        latch = public_last_used_move or None
+        # ``"switch"`` is the one member of the latch's vocabulary that is not a
+        # move id: the parser writes it on switch/drag to say "this mon has no
+        # last move" (``Pokemon.clearVolatile()`` nulls ``lastMove``). The rule
+        # lives here, not at the call site, because it is a fact about the FIELD
+        # -- and because relying on "no move is named switch, so the lookup
+        # misses anyway" would make the guard behaviour-inert and untestable.
+        if latch is not None and normalize_id(latch) != "switch":
+            target = latch
     if target is None:
         return None
     return _move_index_by_id(move_specs, target)
