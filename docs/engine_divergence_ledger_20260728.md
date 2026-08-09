@@ -5081,7 +5081,7 @@ The event IS parsed, and dies between the parser and the world:
   `_public_materialization_payload` — the per-side dict (~:2101-2119) carries
   boosts/volatiles/toxicStage/stallCounter/sideConditions but no
   `live_type_override` field.
-- dropped (constructor): `src/pokezero/engine_world.py:1384` builds every mon
+- dropped (constructor): `src/pokezero/engine_world.py:1391` builds every mon
   with `types=info.types` (dex base types). The only live-retype arms are
   `_apply_transform` (:619, donor types + TYPECHANGE volatile at :649) and
   `_apply_forecast_types` (:731-757, Castform, re-derived from public weather

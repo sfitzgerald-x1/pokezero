@@ -412,7 +412,7 @@ committed artifact.
 
 **Reachable only by an input this instrument does not build (4).**
 
-* `rest_sleep_refund_pending_precounts_legacy`. Raised at `engine_world.py:2079` only when a row
+* `rest_sleep_refund_pending_precounts_legacy`. Raised at `engine_world.py:2086` only when a row
   has `restSleepActiveRefundPending` and **no** `restSleepAttempts`. ⚠ The naive reading — "live
   rows always carry the counts" — is **wrong**: `local_showdown._apply_rest_sleep_provenance` sets
   the pending flag at `:2806` and then `continue`s at `:2822` without writing them. What actually
@@ -420,7 +420,7 @@ committed artifact.
   `restSleepProvenanceUnrepresentable`, and `_hp_and_status` raises on *that* at `:1927`, before it
   ever reaches `:1971`. The surviving way in is a row with the pending flag, no counts and no
   unrepresentable flag, which no live producer emits.
-* `rest_sleep_refund_pending_unsplit_legacy`. Raised at `engine_world.py:2107` only when a row
+* `rest_sleep_refund_pending_unsplit_legacy`. Raised at `engine_world.py:2114` only when a row
   carries the pre-split `restSleepRefundPending` flag and **neither** producer flag — and
   `_hp_and_status` tests both producer flags first, at `:1945` and `:1952`.
   `_mark_legacy_rest_refund_pending` has exactly **two** call sites in `local_showdown.py`

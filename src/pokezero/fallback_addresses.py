@@ -113,7 +113,7 @@ _BYSTANDER_POSITIONS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 # Seat/slot appears in two spellings across producers -- `{slot}:` unquoted
-# (`engine_world.py:2308`) and `side {slot!r}` quoted (`encore_move_unknown`). One
+# (`engine_world.py:2315`) and `side {slot!r}` quoted (`encore_move_unknown`). One
 # family therefore split by seat and the other did not, partitioning the key space
 # by an f-string accident.
 #
