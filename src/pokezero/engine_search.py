@@ -526,7 +526,9 @@ _CAUSE_SWITCH_ONLY = "all_unmapped_switch_only"
 _CAUSE_LEGALITY_MISMATCH = "all_unmapped_legality_mismatch"
 
 #: Normalized ids for the crate's display of `MoveChoice::None` -- the engine's forced no-move.
-#: Showdown names the same forced action `recharge` in the request it sends for that turn.
+#: Showdown names the same forced action `recharge` on a recharge turn and `struggle` when the
+#: request would otherwise offer no move at all. ONE engine token, TWO request spellings; both
+#: translations, and the admission test the Struggle one needs, live in `_map_choices`.
 _ENGINE_FORCED_NO_MOVE_IDS = frozenset({"nomove", "none"})
 _CAUSE_NO_LEGAL_ACTION = "no_legal_action_offered"
 _CAUSE_NO_POSITIVE_WEIGHT = "mapped_but_no_positive_weight"
@@ -974,6 +976,12 @@ def native_search_args(
 
 #: The id Showdown gives the recharge pseudo-move it substitutes for a locked mon's moveset.
 _RECHARGE_REQUEST_MOVE_ID = "recharge"
+
+#: The id Showdown gives the Struggle pseudo-move it substitutes when a mon's request would
+#: otherwise offer NO move at all (``sim/pokemon.ts`` ``getMoveRequestData``, the
+#: ``else if (!moves.length)`` arm). The engine has no Struggle arm to enumerate, so the same
+#: state reaches ``_map_choices`` as the ``MoveChoice::None`` display -- see the translation there.
+_STRUGGLE_REQUEST_MOVE_ID = "struggle"
 
 
 def self_recharge_from_action_candidates(observation_metadata: Any) -> bool:
@@ -2611,6 +2619,47 @@ class EngineMctsPolicy:
         any_legal_move = bool(move_index_by_id) or hidden_power_index is not None
         any_legal_switch = bool(switch_index_by_species)
 
+        # The request's SUBSTITUTED Struggle, and only that. See the `_ENGINE_FORCED_NO_MOVE_IDS`
+        # translation below for what it is translated to and why; this is the admission test,
+        # kept beside the two counters it is built from.
+        #
+        # Showdown substitutes Struggle at exactly one site -- `sim/pokemon.ts`
+        # `getMoveRequestData`, the `else if (!moves.length)` arm -- so a substituted Struggle
+        # is ALWAYS the request's only move, and a `struggle` candidate sitting beside another
+        # legal move is a real Struggle MOVE SLOT, not the pseudo-move. `local_showdown.py`'s
+        # `_request_reports_only_struggle` separates the two by the absent `pp`/`maxpp` fields
+        # and says of that check: "the check is what makes that a checked fact rather than an
+        # assumed one". `_action_candidate_metadata` (`showdown.py:7563`) publishes no `pp`, so
+        # the mirror available here is the count: exactly one legal move, spelled `struggle`.
+        # Review MEASURED the unguarded version absorbing a genuine mismatch -- a
+        # `gen3customgame` Blissey with moves `("Struggle", "Soft-Boiled")` mapped "No Move"
+        # onto the Struggle slot while `softboiled` was legal, which is precisely the
+        # `all_unmapped_legality_mismatch` this class is named for.
+        #
+        # NO LEGAL SWITCH is required too, and that clause is about OBSERVABILITY, not
+        # legality. With a bench the request offers `['struggle', 'switch:X']`; the engine
+        # proposing `MoveChoice::None` there means its world sees no switch where the request
+        # has one, and pre-translation that disagreement was counted in `unmapped_choices`
+        # (measured: `{"No Move": 3.0, "switch shedinja": 1.0}` mapped to the SWITCH and logged
+        # the miss). Translating it would keep the decision searched and erase the only trace.
+        # A campaign whose stop condition is `choices_unmapped == 0` cannot afford a path that
+        # reaches zero by becoming unobservable, so that shape deliberately still misses.
+        #
+        # What survives both clauses is the request that offers ONE action, and it is Struggle.
+        # There the translation cannot change which action is taken -- there is nothing else to
+        # take -- it only stops a pure naming difference from being booked as a refusal.
+        #
+        # No separate `hidden_power_index is None` clause: the loop above writes EVERY legal
+        # move id into `move_index_by_id`, including the Hidden Power one it additionally
+        # remembers under its own name, so a legal Hidden Power beside Struggle already fails
+        # the one-key test. A clause for it was written, and the null-world runner scored
+        # dropping it EQUIVALENT against a 14-case differential battery -- an unfalsifiable
+        # guard, removed rather than shipped. `test_a_legal_hidden_power_beside_struggle_
+        # blocks_the_translation` pins the behaviour instead of the redundant clause.
+        forced_struggle_index: Optional[int] = None
+        if not any_legal_switch and list(move_index_by_id) == [_STRUGGLE_REQUEST_MOVE_ID]:
+            forced_struggle_index = move_index_by_id[_STRUGGLE_REQUEST_MOVE_ID]
+
         best_index: Optional[int] = None
         best_weight = 0.0
         mapped_any = False
@@ -2642,7 +2691,34 @@ class EngineMctsPolicy:
                     # :673-675 must be zero independently of the fallback rate, and with the cause
                     # mislabelled `all_unmapped_legality_mismatch`. It only became reachable once
                     # `_recharging_slots` went symmetric and these worlds started building at all.
-                    index = move_index_by_id.get("recharge")
+                    index = move_index_by_id.get(_RECHARGE_REQUEST_MOVE_ID)
+                    if index is None:
+                        # SECOND vocabulary gap behind the SAME engine token: Struggle. The engine
+                        # has no Struggle arm to enumerate -- `MoveChoice` is Move/Switch/None and
+                        # gen3 `get_all_options` never synthesizes one -- so when
+                        # `add_available_moves` adds nothing (every slot at 0 PP or disabled) and
+                        # `add_switches` adds nothing (no live bench, or trapped), the terminal
+                        # `if options.len() == 0 { push(MoveChoice::None) }` guard fires and the
+                        # crate renders "No Move". Showdown, at the same state, substitutes the
+                        # Struggle pseudo-move (`sim/pokemon.ts` `getMoveRequestData`: `else if
+                        # (!moves.length) moves = [{ move: 'Struggle', id: 'struggle' }]`). One
+                        # forced action, two names -- the recharge case one paragraph up, again.
+                        #
+                        # `forced_struggle_index`, NOT a bare `move_index_by_id.get("struggle")`:
+                        # the admission test above is what distinguishes the SUBSTITUTED
+                        # pseudo-move from a real Struggle move slot, and what keeps the
+                        # engine-vs-request switch disagreement countable. Read it there.
+                        #
+                        # Recharge FIRST and Struggle only as the fallthrough, but the order is
+                        # documentation, not disambiguation: the two can never both be offered.
+                        # `getMoveRequestData` reaches the Struggle substitution ONLY when
+                        # `getMoves` returned an EMPTY list, and a `recharge` lock makes `getMoves`
+                        # return the one-element `[{Recharge}]` -- non-empty, so the substitution
+                        # is unreachable on a recharge turn. Offering NEITHER is the ordinary turn,
+                        # and there both lookups miss and the choice stays unmapped, which is
+                        # correct: "No Move" against a request with real moves is a genuine
+                        # engine/request disagreement, not a naming one.
+                        index = forced_struggle_index
             if index is None:
                 self.stats.unmapped_choices[choice] += 1
                 continue
