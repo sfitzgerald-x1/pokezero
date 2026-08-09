@@ -184,14 +184,32 @@ which is `reports/c154` §6's own finding applied to this pass.
 
 `executable / resolved / unresolved`, derived by the committed scan, not typed:
 
-| tree | executable | resolved | unresolved |
-|---|---|---|---|
-| `origin/main` `dbb40c5c` | 26 | 22 | 4 |
-| merge-base | 26 | 22 | 4 |
-| this branch head | 26 | **26** | **0** |
-| **`refs/pull/<n>/merge`** | **26** | **26** | **0** |
+| tree | commit | scan | executable | resolved | unresolved |
+|---|---|---|---|---|---|
+| `origin/main` | `dbb40c5c` | pre-C156 | 26 | 22 | **4** |
+| merge-base | `dbb40c5c` — identical to main, branch cut from it | pre-C156 | 26 | 22 | **4** |
+| this branch head | `3b3b82c5` | C156 | 26 | **26** | **0** |
+| **`refs/pull/1208/merge`** | **`f07f7a6b`** | C156 | **26** | **26** | **0** |
 
-The merge row is the one CI grades and the only one that settles the question; `reports/c155` §6
-records the round where a branch-derived count shipped wrong because main had moved underneath it.
-The merge figure is filled in from the PR's own merge ref after it is opened — see the PR body,
-which carries the command and its output.
+**The merge row is the one CI grades and the only one that settles the question.** `reports/c155`
+§6 records the round where a branch-derived count shipped wrong because `main` had moved underneath
+it — 25 on each tree in isolation, 26 on the merge. Reproduce:
+
+```
+git fetch origin 'refs/pull/1208/merge:refs/mergerefs/1208' -f
+git worktree add /tmp/pz-merge1208 --detach refs/mergerefs/1208
+cd /tmp/pz-merge1208 && PYTHONDONTWRITEBYTECODE=1 python3 - <<'EOF'
+import sys; sys.path.insert(0, 'tests')
+from test_unreachable_readjudication import EveryWorkflowTestCountGuardMatchesItsModuleTests as S
+lines = S._lines()
+carrying = [n for n, l in enumerate(lines, 1) if 'python -m unittest' in l]
+comments = [n for n in carrying if lines[n - 1].strip().startswith('#')]
+sites = S._sites()
+print(len(carrying), len(comments), len(carrying) - len(comments),
+      sum(s[2] is not None for s in sites), sum(s[2] is None for s in sites))
+EOF
+```
+
+Output at `f07f7a6b`: `27 1 26 26 0` — 27 lines carry the invocation, 1 is a comment, **26
+executable, 26 resolved, 0 unresolved.** `tests.test_unreachable_readjudication` on that ref: **Ran
+38 tests, OK**; `tests.test_terminal_disposition_register`: **Ran 42 tests, OK**.
