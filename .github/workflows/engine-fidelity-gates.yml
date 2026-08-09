@@ -115,6 +115,24 @@ jobs:
             reports/artifacts/c153_*.json
             scripts/c153_wide_negative_census.py
             tests/test_wide_seed_negative_census.py
+            # C154's re-adjudication of section 4's 26 UNREACHABLE verdicts. Listed for the
+            # reason every pin file and artifact above is listed: `mass-gate` is the only
+            # job that runs the pin, so without these three lines a PR whose only change is
+            # deleting the artifact, the generator or the pin matches no filter, skips this
+            # job entirely and goes green.
+            #
+            # ⚠ This comment previously said the artifact "is NOT a member of the two
+            # exact-count corpora (it sits under tests/data/ on purpose)". That was true of
+            # a placement made on a hazard nobody had measured, and review measured it
+            # false: in `reports/artifacts/` the never-fired census reports `Ran 22 tests
+            # ... OK` on it, because its reason names appear only in prose, which that
+            # census's matcher excludes in terms. The artifact IS a corpus member now
+            # (401 -> 402), so its deletion is caught twice -- here and by the exact count.
+            # The comment is corrected rather than deleted: it is the record of why the
+            # file moved.
+            reports/artifacts/c154_unreachable_readjudication.json
+            scripts/c154_unreachable_readjudication.py
+            tests/test_unreachable_readjudication.py
             # ⚠ THE LEDGER ITSELF AND ITS UNIFORMITY PIN MATCHED NOTHING across all 74
             # patterns above, and `mass-gate` is the only job that runs the uniformity
             # step. That module holds an EXACT §3 row inventory and, as of C153, the
@@ -804,6 +822,41 @@ jobs:
           # being read passes. Skipping it turns the whole module vacuous.
           if ! grep -qE '^OK$' /tmp/widecensus.log; then
             echo "::error::wide-seed census pins did not report a clean OK"
+            exit 1
+          fi
+
+      # C154. Section 4's 26 UNREACHABLE verdicts, re-adjudicated against C153's rule
+      # ("trace the raise site to the caller that actually reaches it"). The corpus census
+      # and the wide-seed census cannot do this job -- section 4's rows are neither
+      # counters nor sweeps -- so this is a third instrument, not a wider run of an
+      # existing one. Its load-bearing property is that every citation in every
+      # demonstration is RE-DERIVED from source on each run, which is what stops the 26
+      # from ageing into the fifteen-stale-citations shape #1202 produced. Its own module
+      # so the two censuses keep their exact-count guards untouched, per C150's precedent.
+      # Battery: 23 mutations applied, 23 caught, listed in the module docstring -- number
+      # 8 survived the first version and 13-23 are review's, each one a sentence of this
+      # pass's own that was asserted beyond what it traced. Exact count, not a floor.
+      #
+      # ⚠ This module also re-derives EVERY `Ran N tests` guard in this file from its
+      # module's AST. That is not scope creep: bumping this step's own guard was done with
+      # an unbounded string replace that also rewrote the FINAL-HOLDOUT step's guard --
+      # which gates OWNER_RATIFIED, BURNED_FINAL_HOLDOUT and the burn -- to a count its
+      # suite can never print, so it stopped failing closed and nothing noticed.
+      - name: Section 4 unreachable re-adjudication
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_unreachable_readjudication -v 2>&1 \
+            | tee /tmp/c154readj.log
+          if ! grep -qE 'Ran 34 tests' /tmp/c154readj.log; then
+            echo "::error::expected 34 re-adjudication pins; the suite shrank or grew"
+            exit 1
+          fi
+          # A clean OK with no skips. TheAbsencePinsAreNotVacuousTests is the only reason
+          # the 26 zeroes mean anything -- every one of them is a lookup into one dict
+          # built from one file, and a census that read nothing would make all 26 rows
+          # EASIER to assert. Skipping it turns the whole module vacuous.
+          if ! grep -qE '^OK$' /tmp/c154readj.log; then
+            echo "::error::re-adjudication pins did not report a clean OK"
             exit 1
           fi
 
