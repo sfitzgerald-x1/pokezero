@@ -1,0 +1,306 @@
+{
+  "census": {
+    "arms_pricing_zero_achievable_rolls": 16205,
+    "closure_identity_on_fan_plus_off_fan_equals_bands": true,
+    "max_damage_range": [
+      10,
+      600
+    ],
+    "off_fan_but_inside_the_band_range": 16205,
+    "off_fan_fraction_of_bands": 0.58597,
+    "representative_is_OFF_fan": 16205,
+    "representative_is_a_fan_member": 11450,
+    "sample_off_fan_windows": [
+      {
+        "band_size": 8,
+        "health": 101,
+        "max_damage": 109,
+        "representative": 96
+      },
+      {
+        "band_size": 9,
+        "health": 102,
+        "max_damage": 109,
+        "representative": 96
+      },
+      {
+        "band_size": 11,
+        "health": 105,
+        "max_damage": 110,
+        "representative": 98
+      },
+      {
+        "band_size": 12,
+        "health": 107,
+        "max_damage": 111,
+        "representative": 100
+      },
+      {
+        "band_size": 13,
+        "health": 108,
+        "max_damage": 111,
+        "representative": 100
+      },
+      {
+        "band_size": 14,
+        "health": 110,
+        "max_damage": 112,
+        "representative": 102
+      },
+      {
+        "band_size": 15,
+        "health": 111,
+        "max_damage": 112,
+        "representative": 102
+      },
+      {
+        "band_size": 15,
+        "health": 112,
+        "max_damage": 112,
+        "representative": 102
+      },
+      {
+        "band_size": 16,
+        "health": 113,
+        "max_damage": 113,
+        "representative": 104
+      },
+      {
+        "band_size": 8,
+        "health": 108,
+        "max_damage": 117,
+        "representative": 103
+      },
+      {
+        "band_size": 9,
+        "health": 109,
+        "max_damage": 117,
+        "representative": 103
+      },
+      {
+        "band_size": 8,
+        "health": 109,
+        "max_damage": 118,
+        "representative": 104
+      },
+      {
+        "band_size": 9,
+        "health": 110,
+        "max_damage": 118,
+        "representative": 104
+      },
+      {
+        "band_size": 10,
+        "health": 112,
+        "max_damage": 119,
+        "representative": 106
+      },
+      {
+        "band_size": 10,
+        "health": 113,
+        "max_damage": 119,
+        "representative": 106
+      },
+      {
+        "band_size": 11,
+        "health": 114,
+        "max_damage": 119,
+        "representative": 106
+      },
+      {
+        "band_size": 11,
+        "health": 114,
+        "max_damage": 120,
+        "representative": 107
+      },
+      {
+        "band_size": 11,
+        "health": 115,
+        "max_damage": 120,
+        "representative": 107
+      },
+      {
+        "band_size": 12,
+        "health": 117,
+        "max_damage": 121,
+        "representative": 109
+      },
+      {
+        "band_size": 13,
+        "health": 118,
+        "max_damage": 121,
+        "representative": 109
+      },
+      {
+        "band_size": 13,
+        "health": 119,
+        "max_damage": 122,
+        "representative": 110
+      },
+      {
+        "band_size": 14,
+        "health": 121,
+        "max_damage": 123,
+        "representative": 112
+      },
+      {
+        "band_size": 15,
+        "health": 122,
+        "max_damage": 123,
+        "representative": 112
+      },
+      {
+        "band_size": 15,
+        "health": 123,
+        "max_damage": 123,
+        "representative": 112
+      },
+      {
+        "band_size": 14,
+        "health": 122,
+        "max_damage": 124,
+        "representative": 113
+      },
+      {
+        "band_size": 15,
+        "health": 123,
+        "max_damage": 124,
+        "representative": 113
+      },
+      {
+        "band_size": 14,
+        "health": 123,
+        "max_damage": 125,
+        "representative": 114
+      },
+      {
+        "band_size": 15,
+        "health": 124,
+        "max_damage": 125,
+        "representative": 114
+      },
+      {
+        "band_size": 15,
+        "health": 125,
+        "max_damage": 125,
+        "representative": 114
+      },
+      {
+        "band_size": 8,
+        "health": 116,
+        "max_damage": 126,
+        "representative": 111
+      },
+      {
+        "band_size": 8,
+        "health": 117,
+        "max_damage": 126,
+        "representative": 111
+      },
+      {
+        "band_size": 9,
+        "health": 118,
+        "max_damage": 126,
+        "representative": 111
+      },
+      {
+        "band_size": 16,
+        "health": 127,
+        "max_damage": 126,
+        "representative": 116
+      },
+      {
+        "band_size": 9,
+        "health": 119,
+        "max_damage": 127,
+        "representative": 112
+      },
+      {
+        "band_size": 10,
+        "health": 121,
+        "max_damage": 128,
+        "representative": 114
+      },
+      {
+        "band_size": 11,
+        "health": 122,
+        "max_damage": 128,
+        "representative": 114
+      },
+      {
+        "band_size": 11,
+        "health": 123,
+        "max_damage": 129,
+        "representative": 115
+      },
+      {
+        "band_size": 11,
+        "health": 124,
+        "max_damage": 130,
+        "representative": 116
+      },
+      {
+        "band_size": 12,
+        "health": 126,
+        "max_damage": 131,
+        "representative": 118
+      },
+      {
+        "band_size": 12,
+        "health": 127,
+        "max_damage": 131,
+        "representative": 118
+      }
+    ],
+    "windows_examined": 180592,
+    "windows_with_a_survive_band": 27655
+  },
+  "schema": "c152-g8-survive-representative-census/1",
+  "validation_against_19200244_115": {
+    "ALL_PASS": true,
+    "band_minimum_is_135": true,
+    "band_size": 14,
+    "band_size_is_14": true,
+    "f32_accumulator_rolls": [
+      135,
+      136,
+      138,
+      139,
+      141,
+      143,
+      144,
+      146,
+      147,
+      149,
+      151,
+      152,
+      154,
+      155,
+      157,
+      158
+    ],
+    "integer_fan": [
+      135,
+      136,
+      138,
+      139,
+      141,
+      143,
+      144,
+      146,
+      147,
+      149,
+      151,
+      152,
+      154,
+      155,
+      157,
+      159
+    ],
+    "representative_is_off_fan": true,
+    "survive_representative": 145,
+    "survive_representative_is_145": true
+  },
+  "what": "How often the collapsed partition's SURVIVE representative -- compare_health_with_damage_multiples(max, health).0, an average over the f32 accumulator -- is not a member of the exact integer fan floor(max * r / 100) that Showdown throws from. An off-fan representative prices ZERO rolls of its own band rather than one. This is G8's first unmeasured remainder and the shape 19200244/115 exhibits.",
+  "why_c149_cannot_reach_it": "The C149 per-roll split lives inside the `Some(residual_bands)` arm of `residual_disjoint_bands`. The survive representative is what the partition uses when that arm is ABSENT, so no change confined to the split's two `i16::MAX`-ceiling call sites can touch it."
+}

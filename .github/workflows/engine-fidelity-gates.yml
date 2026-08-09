@@ -717,8 +717,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_never_fired_counter_census -v 2>&1 \
             | tee /tmp/neverfired.log
-          if ! grep -qE 'Ran 16 tests' /tmp/neverfired.log; then
-            echo "::error::expected 16 never-fired census pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 22 tests' /tmp/neverfired.log; then
+            echo "::error::expected 22 never-fired census pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. The three matcher pins in
@@ -747,8 +747,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_ledger_table_uniformity -v 2>&1 \
             | tee /tmp/ledgertables.log
-          if ! grep -qE 'Ran 17 tests' /tmp/ledgertables.log; then
-            echo "::error::expected 17 ledger-table pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 18 tests' /tmp/ledgertables.log; then
+            echo "::error::expected 18 ledger-table pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. TheHistoricalDropIsCaughtTests feeds the checker the

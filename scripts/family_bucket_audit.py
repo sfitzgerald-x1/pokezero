@@ -352,7 +352,15 @@ def main(argv=None) -> int:
             entry["source"] = "asserted from a prior measurement, not re-derived here"
             evidence = entry.get("evidence")
             if evidence:
-                entry["evidence_present"] = (ROOT / evidence).is_file()
+                # `ROOT` was never defined in this module, so this line raised
+                # `NameError` on EVERY input -- and it is reached unconditionally,
+                # because all five `ESTABLISHED` families are members of the
+                # registered set. The script therefore could not complete a single
+                # run between #1022 (2026-08-02) and C152, which is why ledger row
+                # H19's named settling measurement had never been executed.
+                # `tests/test_family_bucket_audit.py` exercised `signatures()` and
+                # `bucket_from_signatures()` only, never `main()`.
+                entry["evidence_present"] = (REPO_ROOT / evidence).is_file()
             entry["measured_signatures_may_disagree"] = True
         else:
             bucket, why = bucket_from_signatures(tally, measured)

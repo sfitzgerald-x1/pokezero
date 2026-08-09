@@ -124,15 +124,24 @@ what makes the pre-registration auditable at all. Two of its statements are defe
 fix is to say so here rather than to edit them, because editing them would destroy the only
 property that makes a pre-registration worth anything.
 
-- **`:15` cites a file that does not exist.**
-  `reports/rust-fidelity/final_holdout_contamination_disclosure.md` is present in **no branch
-  and as no object anywhere in history** (`git rev-list --all --objects` returns nothing for
-  that name; `reports/rust-fidelity/` is not a directory in this tree). It is marked
-  "(external)", so the existence of a disclosure is itself disclosed and not concealed — but it
-  is the **sole** justification for narrowing the window from 260 seeds to 200, it sits inside
-  the frozen pre-registration, and it is **unauditable from this repo**. A reader cannot check
-  the contamination claim, only that I said it. That is a real weakness in the pre-registration
-  and nothing in this report repairs it.
+- **`:15` cited a file that did not exist *at the time this section was written*.**
+  ⚠ **CORRECTED IN PLACE 2026-08-08 (C152).** This bullet used to read that
+  `reports/rust-fidelity/final_holdout_contamination_disclosure.md` is *"present in **no branch
+  and as no object anywhere in history**"*, with `reports/rust-fidelity/` *"not a directory in
+  this tree"*. **Both clauses are false as of the disclosure's recovery and commit**, and they
+  were left standing here long after §"DEMOTED" below superseded them at `:388` — which cites
+  the same path as *"now recovered and committed"*. A negative that is only corrected 260 lines
+  further down is still a live false negative at the place a reader meets it, so it is fixed
+  where it stands rather than only where it was noticed. Re-derived at C152 rather than carried:
+  the file is present in the working tree at that exact path and `git log --all --oneline --
+  reports/rust-fidelity/final_holdout_contamination_disclosure.md` returns commits, so the
+  `git rev-list --all --objects` negative no longer holds. **Scope of the correction:** only the
+  file's existence changes. The disclosure was *"(external)"* and unauditable from this repo
+  **when the pre-registration was frozen**, it is still the **sole** justification for narrowing
+  the window from 260 seeds to 200, and it still sits inside the frozen pre-registration — so
+  the weakness this bullet records is real and is **not** repaired by the recovery. What the
+  recovery changes is that a reader can now check the contamination claim against the document
+  itself instead of against an assertion about it.
 - **`:24` "#1155 was documentation-only" is loose.** #1155 (`16857e06`) also added
   `tests/test_roll_enumeration_scope.py` (8 lines). The **conclusion still holds**, and for a
   checkable reason rather than by assertion: `build_inputs()` in

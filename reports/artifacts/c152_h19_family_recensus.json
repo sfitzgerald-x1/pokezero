@@ -1,0 +1,255 @@
+{
+  "as_recorded": {
+    "artifacts_carrying_repros": 78,
+    "divergent_rows_classified": 1167,
+    "excluded_and_why": {
+      "paths": [
+        "reports/artifacts/c152_h8_nowindow_dev_sweep.json",
+        "reports/artifacts/c152_h8_nowindow_holdout_sweep.json"
+      ],
+      "reason": "C152's window-disabled arm is a MUTANT comparator, run only to measure H8. Its divergent rows are produced by removing the +/-9 % accept and are not evidence about the shipping matcher. Leaving them in inflated I2_matcher_accounting from 85 to 113."
+    },
+    "glob": [
+      "reports/**/*.json",
+      "docs/**/*.json"
+    ],
+    "rows_per_family": {
+      "I1_cap_state_shape": 135,
+      "I2_matcher_accounting": 85,
+      "I3_roll_inherited": 23,
+      "I4_attribution_tie": 54,
+      "I5_boundary_truncation": 65,
+      "I6_sleeptalk_callee_union": 43,
+      "LS_capped_lethal_shape": 181,
+      "LS_confusion_fan": 7,
+      "limit:roll_divergent_lethality": 275,
+      "limit:world_sample_drag_target": 39,
+      "same_turn_stat_event_gap": 1,
+      "structural_component_count_without_supported_sibling": 161,
+      "truant_loaf_phase_drift": 2,
+      "unattributed_generic": 96
+    },
+    "the_four": {
+      "I2_matcher_accounting": {
+        "artifacts": 16,
+        "highest_c_number_artifacts": [
+          {
+            "artifact": "reports/artifacts/c122_weather_holdout_sweep.json",
+            "c_number": 122,
+            "rows": 2
+          },
+          {
+            "artifact": "reports/artifacts/c126_whiteherb_holdout_sweep.json",
+            "c_number": 126,
+            "rows": 2
+          },
+          {
+            "artifact": "reports/artifacts/c126_whiteherb_holdout_sweep_extended.json",
+            "c_number": 126,
+            "rows": 2
+          },
+          {
+            "artifact": "reports/artifacts/c141_final_holdout_sweep.json",
+            "c_number": 141,
+            "rows": 1
+          }
+        ],
+        "rows_ever": 85
+      },
+      "I3_roll_inherited": {
+        "artifacts": 7,
+        "highest_c_number_artifacts": [
+          {
+            "artifact": "reports/c11_statfloor_differential.json",
+            "c_number": 11,
+            "rows": 4
+          },
+          {
+            "artifact": "reports/c12_trace_toxic_differential.json",
+            "c_number": 12,
+            "rows": 4
+          },
+          {
+            "artifact": "reports/c13_batch_e_differential.json",
+            "c_number": 13,
+            "rows": 3
+          },
+          {
+            "artifact": "reports/c13_rebaseline_differential.json",
+            "c_number": 13,
+            "rows": 3
+          }
+        ],
+        "rows_ever": 23
+      },
+      "I5_boundary_truncation": {
+        "artifacts": 30,
+        "highest_c_number_artifacts": [
+          {
+            "artifact": "reports/artifacts/c136_faintcancels_main_holdout_sweep.json",
+            "c_number": 136,
+            "rows": 1
+          },
+          {
+            "artifact": "reports/artifacts/c137_base_holdout_sweep.json",
+            "c_number": 137,
+            "rows": 1
+          },
+          {
+            "artifact": "reports/artifacts/c137_base_pristine_holdout_sweep.json",
+            "c_number": 137,
+            "rows": 1
+          },
+          {
+            "artifact": "reports/artifacts/c137_encore_transform_holdout_sweep.json",
+            "c_number": 137,
+            "rows": 1
+          }
+        ],
+        "rows_ever": 65
+      },
+      "LS_capped_lethal_shape": {
+        "artifacts": 55,
+        "highest_c_number_artifacts": [
+          {
+            "artifact": "reports/artifacts/c148_sleeptalk_double_reset_base_dev_sweep.json",
+            "c_number": 148,
+            "rows": 1
+          },
+          {
+            "artifact": "reports/artifacts/c148_sleeptalk_double_reset_gate_dev_sweep.json",
+            "c_number": 148,
+            "rows": 1
+          },
+          {
+            "artifact": "reports/artifacts/c149_base_dev_sweep.json",
+            "c_number": 149,
+            "rows": 1
+          },
+          {
+            "artifact": "reports/artifacts/c152_wide_census_1000250_sweep.json",
+            "c_number": 152,
+            "rows": 1
+          }
+        ],
+        "rows_ever": 181
+      }
+    }
+  },
+  "is_the_family_layer_wired_into_the_sweep": {
+    "differential_calls_classify_row": false,
+    "differential_imports_cert_sweep_readout": false,
+    "reading": "Both false means a divergent row today carries a `divergence_class` and no family label, so H19's 'none of their labels appears in the c136 counters' is vacuous rather than evidential."
+  },
+  "live": {
+    "reports/artifacts/c152_head_dev_sweep.json": {
+      "boundaries_measured": 15503,
+      "divergence_classes": {},
+      "rows_in_every_registered_family": 0,
+      "transitions_diverged": 0
+    },
+    "reports/artifacts/c152_head_holdout_sweep.json": {
+      "boundaries_measured": 15579,
+      "divergence_classes": {},
+      "rows_in_every_registered_family": 0,
+      "transitions_diverged": 0
+    }
+  },
+  "rereading": {
+    "rows": [
+      {
+        "artifact": "reports/artifacts/c136_faintcancels_fix_dev_sweep.json",
+        "branches": 4,
+        "family_as_recorded": "LS_capped_lethal_shape",
+        "family_on_this_build": null,
+        "seed": 19000074,
+        "step": 27,
+        "verdict_on_this_build": "matched"
+      },
+      {
+        "artifact": "reports/artifacts/c136_faintcancels_fix_dev_sweep.json",
+        "branches": 38,
+        "family_as_recorded": "LS_capped_lethal_shape",
+        "family_on_this_build": null,
+        "seed": 19000191,
+        "step": 63,
+        "verdict_on_this_build": "matched"
+      },
+      {
+        "artifact": "reports/artifacts/c136_faintcancels_main_holdout_sweep.json",
+        "branches": 12,
+        "family_as_recorded": "limit:roll_divergent_lethality",
+        "family_on_this_build": null,
+        "seed": 19100107,
+        "step": 135,
+        "verdict_on_this_build": "matched"
+      },
+      {
+        "artifact": "reports/artifacts/c136_faintcancels_main_holdout_sweep.json",
+        "branches": 1,
+        "family_as_recorded": "unattributed_generic",
+        "family_on_this_build": "unattributed_generic",
+        "seed": 19100170,
+        "step": 71,
+        "verdict_on_this_build": "diverged"
+      },
+      {
+        "artifact": "reports/artifacts/c136_faintcancels_main_holdout_sweep.json",
+        "branches": 1,
+        "family_as_recorded": "unattributed_generic",
+        "family_on_this_build": "unattributed_generic",
+        "seed": 19100170,
+        "step": 72,
+        "verdict_on_this_build": "diverged"
+      },
+      {
+        "artifact": "reports/artifacts/c136_faintcancels_main_holdout_sweep.json",
+        "branches": 1,
+        "family_as_recorded": "I5_boundary_truncation",
+        "family_on_this_build": null,
+        "seed": 19100180,
+        "step": 24,
+        "verdict_on_this_build": "matched"
+      },
+      {
+        "artifact": "reports/artifacts/c136_faintcancels_main_holdout_sweep.json",
+        "branches": 6,
+        "family_as_recorded": "limit:roll_divergent_lethality",
+        "family_on_this_build": null,
+        "seed": 19100191,
+        "step": 5,
+        "verdict_on_this_build": "matched"
+      },
+      {
+        "artifact": "reports/artifacts/c141_final_holdout_sweep.json",
+        "branches": 4,
+        "family_as_recorded": "I2_matcher_accounting",
+        "family_on_this_build": null,
+        "seed": 19200131,
+        "step": 129,
+        "verdict_on_this_build": "matched"
+      },
+      {
+        "artifact": "reports/artifacts/c141_final_holdout_sweep.json",
+        "branches": 9,
+        "family_as_recorded": "unattributed_generic",
+        "family_on_this_build": "I3_roll_inherited",
+        "seed": 19200244,
+        "step": 115,
+        "verdict_on_this_build": "diverged"
+      },
+      {
+        "artifact": "reports/artifacts/c149_base_dev_sweep.json",
+        "branches": 38,
+        "family_as_recorded": "LS_capped_lethal_shape",
+        "family_on_this_build": null,
+        "seed": 19000191,
+        "step": 63,
+        "verdict_on_this_build": "matched"
+      }
+    ],
+    "still_diverged": 3
+  },
+  "schema": "c152-h19-family-recensus/1",
+  "what": "Whether H19's four never-adjudicated families survive into the current era, measured three ways: as recorded across every committed artifact, re-read through the current build, and against fresh head sweeps."
+}
