@@ -1511,6 +1511,34 @@ class ActionPhaseToxicResetTest(unittest.TestCase):
                     )
                 )
 
+    def test_scenario_reuse_of_a_parser_drops_the_proof(self) -> None:
+        """Scenario materialization is always an ordinary action-request boundary.
+
+        It carries no evidence about which residual phase the occupant entered on,
+        so a recycled parser must not keep a replay-only proof.
+        """
+        state = {
+            "turn": 2,
+            "field": {"weather": "", "turnsRemaining": 0, "permanent": False},
+            "sides": {
+                player: {
+                    "sideConditions": {},
+                    "activeVolatiles": [],
+                    "activeSlot": 0,
+                    "pokemon": [{"status": {"id": "tox", "toxicStage": 0}}],
+                }
+                for player in ("p1", "p2")
+            },
+        }
+        for side in ("p1", "p2"):
+            with self.subTest(side=side):
+                parser = self._reentry_parser(side)
+                self.assertEqual(
+                    parser.toxic_stage_reset_ident[side], f"{side}a: Walrein"
+                )
+                _seed_scenario_parser_state(parser, state)
+                self.assertIsNone(parser.toxic_stage_reset_ident[side])
+
     def test_the_rust_root_handoff_learns_the_same_zero(self) -> None:
         """Both lanes or neither.
 

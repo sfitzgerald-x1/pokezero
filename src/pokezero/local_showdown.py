@@ -2138,6 +2138,10 @@ def _seed_scenario_parser_state(parser: _ReplayParser, state: Mapping[str, Any])
         parser.toxic_stage_zero_after_upkeep[player] = False
         parser.toxic_stage_zero_after_upkeep_expires_after_turn[player] = None
         parser.toxic_stage_zero_after_upkeep_ident[player] = None
+        # Same for the action-phase re-entry proof, and for the same reason: an
+        # ordinary action-request boundary carries no evidence that THIS occupant
+        # entered after the last residual phase.
+        parser.toxic_stage_reset_ident[player] = None
         parser.toxic_faint_replacement_pending[player] = False
         parser.toxic_faint_replacement_expected_ident[player] = None
         parser.toxic_faint_replacement_invalid[player] = False
