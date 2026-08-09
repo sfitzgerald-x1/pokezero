@@ -2886,6 +2886,54 @@ def _request_active_moves(request: Mapping[str, Any]) -> list[dict[str, Any]]:
     return copied
 
 
+def _request_reports_only_struggle(request: Mapping[str, Any]) -> bool:
+    """Whether this request is Showdown's Struggle branch, i.e. NOTHING is usable.
+
+    MEASURED, not read. The provenance list in
+    ``actor_move_states_from_request_history`` classified Struggle as "SOURCE ONLY --
+    unverified by measurement; an attempt to produce a live Struggle request failed on
+    packed-team format". Driving a gen3 Custom Game with a single-move Bulbasaur
+    (Sunny Day, 8 PP) for eight turns produced the branch on turn 8, verbatim::
+
+        [{"move": "Struggle", "id": "struggle", "target": "randomNormal", "disabled": false}]
+
+    No ``pp``, no ``maxpp``, and the active row carries no other key -- so ``trapped`` is
+    absent and SWITCHING is legal, which is what makes the fix below safe (see there).
+
+    WHY THE BRANCH IS AN ASSERTION ABOUT EVERY SLOT, which is the whole basis of the fix.
+    ``Pokemon.getMoves`` builds the full moveSlots list, folds ``moveSlot.pp <= 0`` INTO
+    ``disabled``, and then returns ``hasValidMove ? moves : []``. An empty return therefore
+    means Showdown computed ``disabled`` for every slot and every one came back true.
+    ``getMoveRequestData`` then throws that list away and substitutes the Struggle row.
+    Marking the retained snapshot all-disabled does not guess -- it restores the verdict
+    Showdown had already reached and discarded.
+
+    NARROW ON PURPOSE. The sibling pp-less shapes -- ``mustrecharge`` (measured, 6 times)
+    and the two-turn charge lock -- come off ``getMoves``'s EARLY ``if (lockedMove)``
+    return, which never evaluates the per-slot ``disabled`` at all. For those the real
+    slots are usually perfectly usable and merely pre-empted for one turn, so the same
+    marking would be a fabrication rather than a restoration. They are also inert
+    downstream: poke-engine short-circuits both on the MUSTRECHARGE volatile and on
+    ``active_is_charging_move`` before ``add_available_moves`` is consulted, so their
+    ``disabled`` flags could not change an option set even if they were written. They keep
+    the pre-existing skip.
+    """
+
+    active = request.get("active")
+    active_row = active[0] if isinstance(active, list) and active else None
+    moves = active_row.get("moves") if isinstance(active_row, Mapping) else None
+    if not isinstance(moves, list) or len(moves) != 1:
+        return False
+    only = moves[0]
+    if not isinstance(only, Mapping) or only.get("id") != "struggle":
+        return False
+    # The PP fields are what separate the substituted pseudo-move from a real move slot.
+    # Struggle is not in any gen 3 randbats set and our own team is the battle-start
+    # request team verbatim, so a pp-BEARING `struggle` row cannot occur here -- but the
+    # check is what makes that a checked fact rather than an assumed one.
+    return not isinstance(only.get("pp"), int) and not isinstance(only.get("maxpp"), int)
+
+
 def _request_materialization_kind(request: Mapping[str, Any]) -> str:
     force_switch = request.get("forceSwitch")
     if isinstance(force_switch, list) and any(bool(entry) for entry in force_switch):
@@ -2992,8 +3040,55 @@ def actor_move_states_from_request_history(
     states: dict[str, tuple[Mapping[str, Any], ...]] = {}
     for request in requests:
         identity = _request_active_pokemon_identity(request)
+        if identity is None:
+            continue
         moves = _request_active_moves(request)
-        if identity is None or not moves:
+        if not moves:
+            if _request_reports_only_struggle(request):
+                # A STRUGGLE-ONLY request is not "no information"; it is the strongest
+                # statement this interface makes about usability -- Showdown reached
+                # `hasValidMove == false`, i.e. every slot disabled, and then replaced the
+                # list. Skipping it left the entry pinned to the last pp-BEARING request,
+                # so the payload answered a Struggle request with a moveset that still
+                # advertised a usable move. Measured live at this exact boundary: the
+                # retained row said `sunnyday pp1 disabled:false` while the request offered
+                # only Struggle, and the crate duly proposed the move the world said was
+                # usable.
+                #
+                # DISABLED, not erased and not re-PP'd. The three candidate treatments and
+                # why this one:
+                #   * ERASE the identity -- strands the mon with no PP and `engine_world`
+                #     refuses it as `self_pp_unknown`. Already measured wrong for the
+                #     Transform case above (7 refusals became 8) and nothing here differs.
+                #   * ZERO the PP -- would express "out of PP", but Struggle has several
+                #     causes (Encore onto an exhausted slot, Taunt, Disable, or genuine
+                #     exhaustion) and the request does not say which. Writing 0 on a slot
+                #     that still has PP is a fabrication that outlives this turn.
+                #   * MARK EVERY SLOT DISABLED -- exactly what Showdown computed. The PP
+                #     numbers stay pinned to the last pp-bearing request, which is
+                #     unavoidable (the request carries none), but no consumer can now act
+                #     on them as if the move were selectable.
+                #
+                # STALE BY ONE DECISION IS THE FLOOR, NOT THE BOUND, and this loop handles
+                # that: consecutive Struggle turns, or a `mustrecharge`/charge turn between
+                # two Struggle turns, each re-apply the marking to the same retained entry,
+                # and any later pp-bearing request overwrites it with fresh truth.
+                #
+                # WHAT THE ENGINE THEN DOES, checked in poke-engine 0.0.47 rather than
+                # assumed: `Side::add_available_moves` requires `!disabled && pp > 0`, so it
+                # contributes nothing, `get_all_options` falls through to `add_switches`,
+                # and an untrapped side proposes exactly the switches the live Struggle
+                # request also offers (the measured request has no `trapped` key). A
+                # TRAPPED Struggle request still cannot be expressed -- the engine emits
+                # `MoveChoice::None` where Showdown offers `struggle` -- but that is not a
+                # regression: today's stale move fails to map on the same decision.
+                retained = states.get(identity)
+                if retained:
+                    states[identity] = tuple(
+                        {**move, "disabled": True} for move in retained
+                    )
+                # No retained entry means no snapshot to correct: nothing is invented, and
+                # `_move_specs` keeps its existing no-snapshot behaviour for that mon.
             continue
         own = own_by_identity.get(identity)
         if own:
@@ -3047,9 +3142,14 @@ def actor_move_states_from_request_history(
             #     `recharge`. Every other producer of that block -- outrage, thrash,
             #     petaldance, rollout, iceball, uproar, bide, fly, dig, skullbash, skyattack,
             #     razorwind -- appears in ZERO gen 3 randbats sets.
-            #   * SOURCE ONLY -- Struggle, its own `!moves.length` branch, unverified by
-            #     measurement; an attempt to produce a live Struggle request failed on
-            #     packed-team format.
+            #   * MEASURED live, and it was this module's one SOURCE-ONLY entry until then
+            #     -- Struggle, its own `!moves.length` branch. The earlier attempt to
+            #     produce one failed on packed-team format; driving a gen3 Custom Game with
+            #     a single-move Bulbasaur (Sunny Day, 8 PP) for eight turns produces it.
+            #     The captured row is `{"move": "Struggle", "id": "struggle", "target":
+            #     "randomNormal", "disabled": false}` -- pp-less, so `_request_active_moves`
+            #     drops it, exactly as the source predicted. That drop is now handled above
+            #     rather than skipped; see `_request_reports_only_struggle`.
             #
             # Subset is kept because it is the weaker, safer claim: it says "every move the
             # player may pick is one this Pokemon knows", which is what makes the moveset
