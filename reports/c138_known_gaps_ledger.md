@@ -419,10 +419,16 @@ per-boundary counter in that incidence class.** ⚠ A draft of this sentence use
 per 1,000 games, "expected ~24 and ~216", and called the shortfall seed-block variation;
 P(X ≤ 146 | λ = 216) = **2.7 × 10⁻⁷**, −4.76σ, so it is not, and the cause is #1199 rewriting the
 `local_showdown.py` fold both counters live in — i.e. the very pooling §7.3 of the C153 report
-forbids. **How far the calibration transfers is bounded and stated there**: both calibrators are
-strict branch-legality/rump counters, the 46 are 40 world-construction refusals plus 6 per-game
-abort/error counters, so every transfer is cross-family from two points on a different engine and
-harness, and it licenses **nothing** about a per-divergence class. What the census does not
+forbids. **And the in-family calibrators are better and were already here**: the census's four
+anti-vacuity controls sit on the emission paths of **34 of the 40** at 10²–10³ counts on this
+build — `struggle_not_submittable` 7,410, `volatile_unsupported` 4,827, `world_prestate_mismatch`
+2,624, `materialization_blocker` 327 — so the `UnmappableChoice`, `EngineWorldUnsupported` and
+prestate paths are demonstrably live here and a zero on them is a measurement, not an unreached
+exit. C152's two are cross-family (strict branch-legality/rump, different engine and harness) and
+do only their own path's work. What a calibrator establishes is **emission-path liveness**, not
+sample size — the rule of three does that and needs no calibrator — so the **6** per-game
+abort/error counters, which have no in-family liveness witness in this census, carry weaker zeros
+than the 40, and the whole calibration licenses **nothing** about a per-divergence class. What the census does not
 exclude is anything below those bounds, anything behind a non-default flag, and the six entries §6
 of the C153 report names as unreachable by this instrument.
 

@@ -65,7 +65,8 @@ THE MUTATION BATTERY, ENUMERATED. The sibling modules state theirs in the docstr
 module docstring"), and this one did not -- it claimed "12 applied, 12 caught" and named
 none. An independent reviewer then re-ran a battery of 13 and found the 13th survives.
 **That is exactly what an unrecorded battery costs**, so the list is here and a mutation
-added to it must be added here too.
+added to it must be added here too. 14-18 came with the §6 sync pin, added after a second
+review round found that section still carrying pre-correction prose.
 
 Each is applied to a copy of the committed artifact (or the generator) and must turn this
 module RED:
@@ -85,6 +86,11 @@ module RED:
   13. ⚠ **the COMBINED per-divergence bound detached from the shards** -- set to
       `3/803264`, the per-boundary substitution this module's own comment calls a
       four-orders-of-magnitude overstatement
+  14. §6's headline count changed from Six to Seven
+  15. §6's structural subsection count changed from (2) to (3)
+  16. §6's input-group subsection count changed from (4) to (5)
+  17. a §6 bullet de-listed so the section names one fewer entry than the generator
+  18. `public_effect_blocked` re-listed among §6's unreachable bullets
 
 ⚠ 13 was found by the reviewer, not the author, and it was the important one: `combined`
 is where the 0.32 % bound quoted in the report, in §3.5 and in H15's cell comes from, and
@@ -105,6 +111,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -598,6 +605,117 @@ class WhatTheCensusCannotSettleIsNamedTests(unittest.TestCase):
                     f"{name} is annotated as unreachable by this instrument and fired "
                     "anyway; the annotation is wrong and must be removed, not kept",
                 )
+
+
+class TheCannotReachSectionOfTheReportIsInSyncTests(unittest.TestCase):
+    """§6 of the report is prose about `CENSUS_CANNOT_REACH`. Re-derive it from the map.
+
+    ⚠ ADDED AFTER REVIEW, because §6 went out of sync in the very commit that fixed the
+    map it describes. The generator and the artifact were corrected -- `public_effect_blocked`
+    moved out, two more demonstrations re-traced -- and this narrative section was not. It
+    kept asserting that entry unreachable *"because the differential declares none"*, a
+    sentence the generator marks FALSE in capitals eleven files away in the same commit,
+    and kept three further phrases the generator had just retracted. Meanwhile the ledger
+    cross-reference added in that commit said SIX and §6 said SEVEN.
+
+    Nothing caught it: the pin above asserts `artifact == generator`, and no pin read the
+    prose. That is B1's shape -- an unpinned narrative count -- in the section whose entire
+    job is to say what the census cannot settle.
+
+    What is pinned is membership and arithmetic, not wording: the headline count, the two
+    subsection counts, and the exact set of entries listed. Wording stays free so a
+    demonstration can be improved without a test edit; a name silently joining or leaving
+    cannot.
+
+    MUTATION CHECKED: changing "Six" to "Seven", either subsection count, deleting a bullet,
+    or re-listing `public_effect_blocked` among them turns this red.
+    """
+
+    _WORDS = {"Two": 2, "Three": 3, "Four": 4, "Five": 5, "Six": 6, "Seven": 7, "Eight": 8}
+
+    def _report(self) -> str:
+        return (REPO / "reports/c153_wide_seed_negative_census.md").read_text(encoding="utf-8")
+
+    def _section_six(self) -> str:
+        text = self._report()
+        start = text.index("## 6. What this census cannot settle, named")
+        return text[start : text.index("\n## ", start + 1)]
+
+    def _listed(self) -> list[str]:
+        body = self._section_six()
+        listed_block = body[
+            body.index("**Structural") : body.index("**Not in this category")
+        ]
+        return re.findall(r"^\* `([a-z0-9_]+)`", listed_block, re.M)
+
+    def test_the_headline_count_matches_the_generator(self) -> None:
+        stated = re.search(
+            r"\*\*(" + "|".join(self._WORDS) + r")\*\* entries carry a "
+            r"`census_cannot_reach` note",
+            self._section_six(),
+        )
+        self.assertIsNotNone(
+            stated,
+            "§6's headline count sentence is gone or reworded; this pin reads it and must "
+            "be updated with it rather than silently passing",
+        )
+        self.assertEqual(
+            self._WORDS[stated.group(1)],
+            len(CENSUS_SCRIPT.CENSUS_CANNOT_REACH),
+            f"§6 says {stated.group(1)} entries carry the note; the generator has "
+            f"{len(CENSUS_SCRIPT.CENSUS_CANNOT_REACH)}",
+        )
+
+    def test_the_two_subsection_counts_match_the_generator(self) -> None:
+        body = self._section_six()
+        structural = {
+            name
+            for name, entry in CENSUS_SCRIPT.inventory().items()
+            if "structural_demonstration" in entry
+            and name in CENSUS_SCRIPT.CENSUS_CANNOT_REACH
+        }
+        expected_structural = len(structural)
+        expected_input = len(CENSUS_SCRIPT.CENSUS_CANNOT_REACH) - expected_structural
+        for label, expected in (
+            (r"\*\*Structural — not measurement results at all \((\d+)\)\.\*\*", expected_structural),
+            (
+                r"\*\*Reachable only by an input this instrument does not build \((\d+)\)\.\*\*",
+                expected_input,
+            ),
+        ):
+            found = re.search(label, body)
+            self.assertIsNotNone(found, f"§6 subsection heading {label!r} is gone")
+            with self.subTest(heading=label):
+                self.assertEqual(int(found.group(1)), expected)
+
+    def test_the_listed_entries_are_exactly_the_generators(self) -> None:
+        expected = {name.rsplit(":", 1)[-1] for name in CENSUS_SCRIPT.CENSUS_CANNOT_REACH}
+        self.assertEqual(
+            set(self._listed()),
+            expected,
+            "§6 lists a different set of unreachable entries than the generator carries",
+        )
+        self.assertEqual(
+            len(self._listed()),
+            len(expected),
+            "§6 lists an entry twice",
+        )
+
+    def test_public_effect_blocked_is_named_as_reachable_and_not_listed(self) -> None:
+        # The specific correction, pinned by name so it cannot come back as prose. It must
+        # appear in §6 -- silently deleting it would hide the retraction -- but never among
+        # the bullets, and never in the generator's map.
+        body = self._section_six()
+        self.assertIn("public_effect_blocked", body)
+        self.assertNotIn("public_effect_blocked", self._listed())
+        self.assertNotIn(
+            "skip:world_unsupported:public_effect_blocked",
+            CENSUS_SCRIPT.CENSUS_CANNOT_REACH,
+        )
+        self.assertEqual(
+            _document()["verdicts"]["skip:world_unsupported:public_effect_blocked"]["verdict"],
+            "NOT_OBSERVED_AT_SCOPE",
+        )
 
 
 class C152sRefutationsNowHaveAReproducibleBuildTests(unittest.TestCase):

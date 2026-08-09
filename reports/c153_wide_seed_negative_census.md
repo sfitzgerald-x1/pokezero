@@ -185,22 +185,39 @@ C152's rate is used, which §3.1 explains it should not be). The defensible sent
 least 4.7× rarer than the weaker of the two calibrators, at 95 %"**, and it is worth less than
 "an order of magnitude" precisely because one calibrator is thin.
 
-**And the two calibrators are one mechanism family, which bounds the transfer further.** Both are
-per-boundary counters emitted inside `evaluate_boundary_strict`'s branch-legality / rump
-machinery. The 46 are not: **40** are per-boundary refusal counters on the world-construction and
-choice-mapping path (27 `world_unsupported`, 7 `unmappable_choice`, `skip:no_action_candidates`,
+**And the right calibrators for the bulk of the inventory were already in this census.** The two
+C152 names are cross-family: both are per-boundary counters inside `evaluate_boundary_strict`'s
+branch-legality / rump machinery, measured on a different engine *and* harness, and §3.1's −4.76σ
+shift is itself evidence that family is instrument-sensitive. The 46 are elsewhere — **40** are
+per-boundary refusal counters on the world-construction and choice-mapping path (27
+`world_unsupported`, 7 `unmappable_choice`, `skip:no_action_candidates`,
 `skip:world_error:no_constructible_candidate`, `skip:no_materialization:`, `skip:world_error:`,
 `world_prestate_mismatch:side_conditions`, `world_prestate_mismatch:weather_`) and **6** are
 per-game abort/error counters (`abort:no_legal_action`, `engine_error`, `strict:no_damage_rolls`,
-`engine_error:`, `engine_error_choice:`, `strict:branch_events_error:`). So every transfer here is
-**cross-family**, from two data points, taken on a different engine *and* a different harness —
-and the −4.8σ shift in §3.1 is itself evidence that the family is instrument-sensitive.
+`engine_error:`, `engine_error_choice:`, `strict:branch_events_error:`).
 
-**What the calibration therefore licenses**: that this instrument *does* detect a per-boundary
-counter at the 10⁻³–10⁻² per-game level, because it detected both. That is a property of the
-instrument and it transfers to the 40 per-boundary refusal counters, weakly to the 6 per-game
-ones. **It licenses nothing at all about a per-divergence class**, where the denominator is 949
-and 0.32 % is one in 316 — a bound too weak to call a negative settled. The five surviving H15
+**So use the in-family ones, which this census measured on this build.** The four anti-vacuity
+controls sit on the emission paths of 34 of those 40, at 10²–10³ counts over the same 10,000
+games: `skip:unmappable_choice:struggle_not_submittable` **7,410** (the `UnmappableChoice` raise
+path, which the 7 unobserved reasons share), `skip:world_unsupported:volatile_unsupported`
+**4,827** and `skip:world_unsupported:materialization_blocker` **327** (the
+`EngineWorldUnsupported` path, shared with the 27), and `world_prestate_mismatch` **2,624** (the
+prestate comparison, shared with `side_conditions` and the `weather_` family). Those are the
+calibrators the bulk of the inventory deserves, and they are stronger than C152's two on every
+axis that matters here: same build, same harness, same run, same code path, three orders of
+magnitude more mass.
+
+**What each calibration is actually for, which a draft ran together.** The rule of three does the
+sample-size work and needs no calibrator at all — it is arithmetic on the denominator. What a
+calibrator uniquely establishes is **emission-path liveness**: that the counter keys are not dead
+code in this configuration, so a zero is a measurement rather than an artefact of the exit never
+being reached. That is the part that cannot transfer across families, and it is why the four
+controls carry the 40 and C152's two carry only their own path. Stated that way the earlier
+"transfers to the 40, weakly to the 6" was generous: the 6 per-game abort/error counters have
+**no** in-family liveness witness in this census, and their zeros are correspondingly weaker.
+
+**It licenses nothing at all about a per-divergence class**, where the denominator is 949 and
+0.32 % is one in 316 — a bound too weak to call a negative settled. The five surviving H15
 classes in §4.2 are held at that width and no further.
 
 ⚠ **And the census confirms two counters that were already known to fire, on the shipping build
@@ -303,9 +320,23 @@ exists to surface, and it means C152's wide census and this one may not be poole
 
 ## 6. What this census cannot settle, named
 
-Seven entries carry a `census_cannot_reach` note in the artifact, and the pin asserts that none of
-them is simultaneously reported as fired. **A zero produced by an instrument that could never have
-produced a one is not the same measurement as a zero produced by an instrument that could.**
+⚠ **This section is generated from `CENSUS_CANNOT_REACH` in
+`scripts/c153_wide_negative_census.py` and its two counts are pinned against it**
+(`tests/test_wide_seed_negative_census.py::TheCannotReachSectionOfTheReportIsInSyncTests`).
+It is pinned because it went out of sync exactly once, in the commit that fixed the map: the
+generator and the artifact were corrected and this prose was not, so §6 kept asserting
+`public_effect_blocked` unreachable *"because the differential declares none"* — a sentence the
+generator eleven files away marks **FALSE in capitals** in that same commit — and kept three more
+phrases the generator had just retracted. The ledger's §3.5 cross-reference, added in the same
+commit, said six while this said seven. **A narrative section that nothing re-derives is the same
+shape as a negative with no glob**, which is the rule this whole document exists to serve.
+
+**Six** entries carry a `census_cannot_reach` note in the artifact, and the pin asserts that none
+of them is simultaneously reported as fired. **A zero produced by an instrument that could never
+have produced a one is not the same measurement as a zero produced by an instrument that could.**
+
+Every entry below is traced from the raise site to the call that reaches it. That is the standard
+the category earned by failing it once.
 
 **Structural — not measurement results at all (2).**
 
@@ -313,24 +344,63 @@ produced a one is not the same measurement as a zero produced by an instrument t
   body *"every branch rendered lossy"*, and the run loop `continue`s at the
   `verdict == "skip_lossy"` branch **before** the `divergence_class:` line, which runs only under
   `verdict == "diverged"`. The classifier can never be handed the body that returns this class.
-* `no_usable_branch`. Its trigger body *"mapper produced no usable branch"* is produced nowhere in
-  the repository; its only occurrence is the classifier's own test of it.
+* `no_usable_branch`. Its trigger body *"mapper produced no usable branch"* is produced by **no
+  code**: the only occurrence on any execution path is the classifier's own test of it at
+  `engine_transition_differential.py:1915`. Scoped to executable code rather than to the
+  repository — the earlier "produced nowhere in the repository" was falsified by the commit that
+  wrote it down, since the phrase then also appeared in the generator and in the artifact.
 
-**Reachable only by an input this instrument does not build (5).**
+**Reachable only by an input this instrument does not build (4).**
 
-* `rest_sleep_refund_pending_precounts_legacy` and `rest_sleep_refund_pending_unsplit_legacy`.
-  Both are raised only for rows written by a **pre-split producer** — the first guarded by
-  `"restSleepAttempts" not in row`, the second by the pre-split flag arriving with neither
-  producer flag. `engine_world.py` calls the second branch a **CANARY** whose expected count in a
-  fresh post-split era is *exactly zero*. So a census zero here **confirms a design property** and
-  is not evidence about coverage, and reporting it as a surviving negative would be the fourth
-  category in disguise.
-* `override_side_missing` — needs a caller-supplied team override missing a slot; the differential
-  always supplies both packed teams.
-* `public_effect_blocked` — one raise per entry of the caller-declared `blocked_slots` mapping,
-  and the differential declares none.
-* `deferred_opponent_action` — keyed on payload fields `deferredOpponentActions` /
-  `deferredOpponentActionPriors` that the public-materialization payload never carries.
+* `rest_sleep_refund_pending_precounts_legacy`. Raised at `engine_world.py:1958` only when a row
+  has `restSleepActiveRefundPending` and **no** `restSleepAttempts`. ⚠ The naive reading — "live
+  rows always carry the counts" — is **wrong**: `local_showdown._apply_rest_sleep_provenance` sets
+  the pending flag at `:2784` and then `continue`s at `:2800` without writing them. What actually
+  closes the path is the **order of the tests**: that same `:2800` branch sets
+  `restSleepProvenanceUnrepresentable`, and `_hp_and_status` raises on *that* at `:1914`, before it
+  ever reaches `:1958`. The surviving way in is a row with the pending flag, no counts and no
+  unrepresentable flag, which no live producer emits.
+* `rest_sleep_refund_pending_unsplit_legacy`. Raised at `engine_world.py:1986` only when a row
+  carries the pre-split `restSleepRefundPending` flag and **neither** producer flag — and
+  `_hp_and_status` tests both producer flags first, at `:1935` and `:1939`.
+  `_mark_legacy_rest_refund_pending` has exactly **two** call sites in `local_showdown.py`
+  (`:2755`, `:2785`) and each is preceded on the same row by a producer flag
+  (`restSleepAttemptUnsettled` at `:2754`, `restSleepActiveRefundPending` at `:2784`), so a live
+  row always trips an earlier branch.
+  `engine_world.py` calls this branch a **CANARY** whose expected count in a fresh post-split era
+  is *exactly zero*. So a census zero on either of these two **confirms a design property** and is
+  not evidence about coverage; reporting it as a surviving negative would be the fourth category in
+  disguise.
+* `override_side_missing`. Raised at `engine_world.py:490` when `override.player_teams.get(slot)`
+  is falsy. The differential builds that mapping at `engine_transition_differential.py:2396` as
+  `{slot: true_teams[slot]["packed"] for slot in ("p1", "p2")}` — a comprehension over exactly the
+  two slots the loop then iterates, so a slot cannot be **absent**. The residual way in is an empty
+  packed string from the bridge snapshot, i.e. a battle started with an empty team; 10,000 games
+  produced none.
+* `deferred_opponent_action`. Raised at `engine_world.py:922`. ⚠ The payload always **carries**
+  both keys — `local_showdown._public_materialization_payload` emits them at `:2350-2352` — so
+  *"never carries"* would be false. They are always **empty**, and the closure sits a frame higher
+  than a first draft placed it: the payload reaching this raise is not one the differential builds
+  at all. `world_battle_spec` constructs its own at `engine_world.py:883`, calling
+  `_public_materialization_payload(state)` with **neither** deferred argument (both keyword-only,
+  defaulting to `None`; `dict(... or {})` at `local_showdown.py:2302`), then hands it to
+  `battle_spec_from_payload`, which reaches `_reject_unsupported_globals` at `:397`. An empty dict
+  is falsy, so the guard never fires **for any caller of `world_battle_spec`** — stronger than a
+  claim about the differential's own `:2649` / `:2760` payloads, which exist but feed the truant
+  scan and the turn number and are not on this path. The function's docstring at `:877` says it
+  outright: *"Deferred opponent actions are deliberately not forwarded"*.
+
+**Not in this category, and it was — `public_effect_blocked` is REACHABLE and measured at zero.**
+It was filed above until review, on the claim that the differential declares no `blocked_slots`.
+That claim is false: `engine_transition_differential.py:2662` passes `blocked_slots=blocked`, and
+`blocked` comes from the **production** `EngineMctsPolicy._public_effect_signals` at `:2624` on a
+live observation, which populates it on two ordinary data-dependent branches —
+`engine_search.py:2391` (item mutated with no protocol-confirmed current item) and `:2409` (active
+transformed into an unnamed species). The metadata early return at `:2363` is demonstrably not
+always taken here: the same scan's `transformed` output drove the **six**
+`transform_unexpressible` firings in §4.1. So its verdict is `NOT_OBSERVED_AT_SCOPE` with the
+ordinary per-boundary bound, not an exemption — and re-tracing the other four after this failure is
+what produced the two ⚠ corrections above.
 
 **Pool-unreachable, from §4 (3).** `future_sight_pending` (R1), `nature_not_neutral` (R7) and
 `weather_unsupported` (R8). Carried through the census with an explicit `UNREACHABLE_POOL`
