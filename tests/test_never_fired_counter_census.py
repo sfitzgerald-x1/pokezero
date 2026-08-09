@@ -185,7 +185,22 @@ _CORPUS_TREES = ("reports", "docs")
 # MEASUREMENT on 10,000 games of unregistered seeds `1,001,000`-`1,010,999`, pinned in
 # `tests/test_wide_seed_negative_census.py`. They are NOT fidelity evidence and their
 # divergence counts must never be quoted as the program's.
-_EXPECTED_COUNTER_ARTIFACTS = 401
+# 401 -> 402 (C154). RE-DERIVED by the four-step procedure the sibling corpus pins use:
+# `counter_artifacts()` run in a worktree of this branch's base returns 401 and 402 here,
+# with the set difference exactly `reports/artifacts/c154_unreachable_readjudication.json`
+# and NOTHING removed, and the pin confirmed live by perturbing it.
+#
+# ⚠ THAT ARTIFACT WAS FIRST WRITTEN TO `tests/data/`, on the stated ground that its
+# refusal-reason names beside pool counts would read here as counters firing. **Measured,
+# that was false.** Copied into the corpus and run, this module reports `Ran 22 tests ...
+# OK`: the names appear only as string VALUES inside prose, and `_evidence_in` admits a
+# dotted PATH token or a C43 sibling field and explicitly not prose -- "A name merely
+# mentioned inside prose is NOT evidence", which is load-bearing and was written down long
+# before C154 assumed otherwise. The placement bought nothing and cost the guard the note
+# at the top of this file warns about in terms. It is in the corpus now, and
+# `tests/test_unreachable_readjudication.py` asserts the MEMBERSHIP plus a live control
+# that feeds `_evidence_in` a counter-keyed copy and requires it to fire.
+_EXPECTED_COUNTER_ARTIFACTS = 402
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's
