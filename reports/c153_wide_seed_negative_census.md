@@ -122,14 +122,24 @@ rows"* in two 200-game windows. This census measures **803,264**, **25.8×** the
 windows' 31,082. A 1-in-50,000 per-boundary shape expects **16.1** hits here, so P(zero) ≈ 10⁻⁷.
 That blind spot is closed for any counter incremented per boundary.
 
-**What it demonstrably has the power to find.** The two negatives that fell in #1200 are
-the calibration, not an analogy: `skip:rump_branch_set` fired **3 times in 1,000 games**
-and `strict:branch_event_legal_error:BranchLegalRollError` **27 times in 1,000 games**.
-At those rates this census expects ~24 and ~216 respectively, and **measured 14 and 146** on the
-strict arm — the same order, running about 60–70 % of the C152 rate, which is what a different
-seed block on a different build should look like and is recorded rather than smoothed over. So a
-negative in the same incidence class as the two that fell **cannot** survive this sample by
-chance, and the calibration is an observation rather than an assumption.
+**What it demonstrably has the power to find, anchored on its own rates.** The two negatives
+that fell in #1200 are the calibration, and this census re-measured both rather than importing
+them: on its own 8,000 strict games, `strict:branch_event_legal_error:BranchLegalRollError` fired
+**146** and `skip:rump_branch_set` **14**. A hypothetical negative at those per-game rates would
+show zero here with probability ≈ 0 and ≈ 8 × 10⁻⁷ respectively. **The census's sensitivity to a
+counter in that incidence class is therefore measured, not assumed.**
+
+⚠ **A draft of this paragraph anchored on C152's rates instead — 3 and 27 per 1,000 games,
+"expected ~24 and ~216" — and explained the shortfall to 14 and 146 as "what a different seed
+block on a different build should look like". That explanation is wrong and the arithmetic says
+so: P(X ≤ 146 | λ = 216) = **2.7 × 10⁻⁷**, a **−4.76σ** shift. Seed-block variation does not
+produce 4.8σ.** The cause is the instrument change §5 documents in the same breath: #1199
+(`ef39a9bc`) rewrote the Struggle-only self-moveset fold in `local_showdown.py` — the machinery
+both counters live in — which is exactly why the harness digest moved and why §5 forbids pooling
+the two censuses. Naming the seed block was **the pooling this report forbids elsewhere**, one
+paragraph after forbidding it. The conclusion is unchanged because it never needed C152's rates;
+the reference did, and it is gone. (The other calibrator is consistent either way:
+P(X ≤ 14 | λ = 24) = 0.020, −2.04σ.)
 
 **What it cannot rule out**, stated so the verdicts are not over-read:
 
@@ -164,11 +174,34 @@ chance, and the calibration is an observation rather than an assumption.
 
 ### 4.1 §3.5's 46 all survive — and that is a result, not a null
 
-Not one of the 46 fired, over 8,000 strict games and 641,866 measured boundaries. Read with §3.1
-that is a real statement: the two negatives that fell in #1200 sit at 3 and 27 firings per 1,000
-games, and this sample would have expected roughly 24 and 216 of each. **Whatever remains in
-§3.5's four lists is at least an order of magnitude rarer than the two that fell.** The 46 keep
+Not one of the 46 fired, over 8,000 strict games and 641,866 measured boundaries. The 46 keep
 their status and gain a scope; they do not become theorems.
+
+**How much that licenses, stated at the width the evidence supports rather than at the width the
+headline invites.** ⚠ A draft said *"at least an order of magnitude rarer than the two that
+fell"*. That holds for one calibrator and not the other. Against this census's 95 % bound of
+3/8,000, `BranchLegalRollError` is **48.7×** and `skip:rump_branch_set` only **4.7×** (8.0× if
+C152's rate is used, which §3.1 explains it should not be). The defensible sentence is **"at
+least 4.7× rarer than the weaker of the two calibrators, at 95 %"**, and it is worth less than
+"an order of magnitude" precisely because one calibrator is thin.
+
+**And the two calibrators are one mechanism family, which bounds the transfer further.** Both are
+per-boundary counters emitted inside `evaluate_boundary_strict`'s branch-legality / rump
+machinery. The 46 are not: **40** are per-boundary refusal counters on the world-construction and
+choice-mapping path (27 `world_unsupported`, 7 `unmappable_choice`, `skip:no_action_candidates`,
+`skip:world_error:no_constructible_candidate`, `skip:no_materialization:`, `skip:world_error:`,
+`world_prestate_mismatch:side_conditions`, `world_prestate_mismatch:weather_`) and **6** are
+per-game abort/error counters (`abort:no_legal_action`, `engine_error`, `strict:no_damage_rolls`,
+`engine_error:`, `engine_error_choice:`, `strict:branch_events_error:`). So every transfer here is
+**cross-family**, from two data points, taken on a different engine *and* a different harness —
+and the −4.8σ shift in §3.1 is itself evidence that the family is instrument-sensitive.
+
+**What the calibration therefore licenses**: that this instrument *does* detect a per-boundary
+counter at the 10⁻³–10⁻² per-game level, because it detected both. That is a property of the
+instrument and it transfers to the 40 per-boundary refusal counters, weakly to the 6 per-game
+ones. **It licenses nothing at all about a per-divergence class**, where the denominator is 949
+and 0.32 % is one in 316 — a bound too weak to call a negative settled. The five surviving H15
+classes in §4.2 are held at that width and no further.
 
 ⚠ **And the census confirms two counters that were already known to fire, on the shipping build
 for the first time.** `skip:world_unsupported:transform_unexpressible` **6** and
@@ -193,14 +226,24 @@ committed artifact used"* list. Their firing **discharges** that scope caveat ra
 refuting the claim: the cell was right about the mechanism and honest about the scope, and twelve
 committed artifacts now use that path.
 
-⚠ **The other four are an error in the cell's categorisation, not in its count.** H15 files
+⚠ **The other four are an error in the cell's categorisation, not in its count** — and the
+correction has to be stated carefully, because an absolute version of it is also wrong. H15 files
 `evidence:crit_in_step`, `evidence:faint_ply_no_upkeep`, `evidence:spikes_in_step` and
-`unclassified` among *"strict-path classes the program has simply never produced"*. They are not
-strict-path classes. `classify_divergence` marks the whole tail they live in *"Banded matcher (or
-an unparsable miss): fall back to protocol evidence"*, so they belong to the same fallback family
-as the three above and were unmeasured for exactly the same reason. Filing them as strict-path
-made them look settled by 200-game strict sweeps that structurally cannot reach them — the
-category, not the corpus, was doing the concealing.
+`unclassified` among *"strict-path classes the program has simply never produced"*, alongside
+`component_set_equal_but_unmatched`, which really is on the strict component ladder. A draft of
+this section said flatly *"they are not strict-path classes"*. **They are strict-reachable**:
+`classify_divergence`'s comment reads *"Banded matcher (**or an unparsable miss**): fall back to
+protocol evidence"*, so the tail is entered on any path whose miss text the component regexes
+cannot parse. What is true, and is the finding, is that they are **fallback-tail** classes whose
+overwhelmingly likely producer is the banded comparator — so grouping them with a strict-ladder
+class made them look settled by 200-game strict sweeps that in practice never reach them. The
+category, not the corpus, was doing the concealing; that is a genuine third concealment mechanism
+alongside the two §8 already names.
+
+**And the absolute phrasing threw away a negative this census earned.** Stated correctly, all
+four also carry a *strict-arm* result: **zero across 641,866 strict boundaries and 261 strict
+divergences**, which is the first measurement anyone has of the fallback tail on the shipping
+matcher. That is worth keeping, and "they are not strict-path classes" would have discarded it.
 
 **Five survive**, with the divergence-denominator bound: `boost_delta_support`,
 `component_set_equal_but_unmatched` and `no_miss_recorded` are absent across 949 classified
@@ -331,11 +374,48 @@ recomputed from the twelve committed shards and the per-entry seed map, and the 
 checked last as a transcription. Recorded rather than quietly fixed because it is the same shape
 as the G8 cell this document withdrew: a number that certifies itself.
 
-**Battery: 12 mutations applied, 12 caught** (after fixing the one above, which was 10 of 12 on
-the first pass; the twelfth first-pass "survivor" was a defective mutation, `{} or {...}`, not an
-inert pin). Pins verified under **both** `python -m unittest tests.test_wide_seed_negative_census`
-and `python tests/test_wide_seed_negative_census.py` — 24 tests either way — after #1200 shipped
-five pins that only one of those two invocations collected.
+**4. The load-bearing bound was the one number no pin recomputed — found by the reviewer, not by
+me.** `test_the_stated_bounds_are_the_rule_of_three_on_the_measured_sample` looped over
+`document["arms"]`, which holds only `strict` and `banded`; `combined` got an `assertIn` and
+nothing else. So `classified_divergences: 949` and the **0.32 %** per-divergence bound quoted in
+this report, in ledger §3.5 and in H15's cell were unverified, and four mutations of the combined
+block passed green — including setting it to `3/803264`, which is literally the substitution the
+comment three lines above calls a four-orders-of-magnitude overstatement. **A pin that names a
+trap and leaves it open is worse than no pin, because the comment reads as coverage.** Fixed by
+deriving `combined` as a span like the others and rebuilding every span from the twelve shards
+rather than from the artifact's own `arms` block.
+
+**5. My path-filter audit stopped one file short of the file it was editing.** §7.1 caught C152's
+thirteen. Across all 74 patterns, `reports/c138_known_gaps_ledger.md` and
+`tests/test_ledger_table_uniformity.py` matched **nothing** — and this PR bumps that module's row
+inventory *and* its row count, so a follow-on PR deleting H22's row would have matched no filter,
+skipped `mass-gate` and gone green. Same failure mode, one file over.
+`reports/artifacts/c150_band_split_trade_census.json` is a second instance: an artifact a
+permanent ledger cell cites, unregistered. All three added.
+
+**6. One "cannot reach" was really "did not measure".** `public_effect_blocked` was filed as
+unreachable on the claim that the differential declares no `blocked_slots`. It passes
+`blocked_slots=blocked` at `engine_transition_differential.py:2662`, and `blocked` comes from the
+**production** `EngineMctsPolicy._public_effect_signals` on a live observation, populated on two
+ordinary data-dependent branches (`engine_search.py:2391`, `:2409`). The early metadata return at
+`:2363` is demonstrably not always taken: the same scan's `transformed` output drove the six
+`transform_unexpressible` firings in §4.1. Re-filed as `NOT_OBSERVED_AT_SCOPE`. The remaining four
+in that category were then re-traced rather than re-trusted, and **two of their stated reasons
+were also imprecise** — `deferred_opponent_action`'s payload always carries the keys (they are
+always empty, which is the fact that matters), and one live branch does omit
+`restSleepAttempts` (what closes that path is the unrepresentable flag the same branch sets,
+which `engine_world` tests first). Both demonstrations are now traced to the call, and the rule is
+recorded in the generator: **trace the raise site to the differential's actual call, not to a
+plausible sentence about it.**
+
+**Battery: 13 mutations, 13 caught, enumerated in the pin module's docstring** — 12 of mine plus
+the reviewer's 13th, which is defect 4 above. Two of my twelve are recorded as near-misses rather
+than tidied away: the closure mutation survived until the pin stopped reading the artifact's own
+`agrees` flag, and one first-pass "survivor" was a defective mutation (`{} or {...}` is truthy),
+not an inert pin. Pins verified under **both**
+`python -m unittest tests.test_wide_seed_negative_census` and
+`python tests/test_wide_seed_negative_census.py` — 24 tests either way — after #1200 shipped five
+pins that only one of those two invocations collected.
 
 ---
 

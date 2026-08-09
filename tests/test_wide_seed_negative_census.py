@@ -60,6 +60,41 @@ WHAT IS PINNED.
      absence pin here is a loop over the same twelve shards, and a loop over a shard set
      that stopped being read passes.
 
+THE MUTATION BATTERY, ENUMERATED. The sibling modules state theirs in the docstring
+(`tests/test_ledger_table_uniformity.py`, "9 mutations applied, 9 caught, listed in the
+module docstring"), and this one did not -- it claimed "12 applied, 12 caught" and named
+none. An independent reviewer then re-ran a battery of 13 and found the 13th survives.
+**That is exactly what an unrecorded battery costs**, so the list is here and a mutation
+added to it must be added here too.
+
+Each is applied to a copy of the committed artifact (or the generator) and must turn this
+module RED:
+
+   1. a `FIRED` verdict flipped to `NOT_OBSERVED_AT_SCOPE`
+   2. an inventory entry dropped from the artifact's verdict map
+   3. a per-seed total perturbed AND the `agrees` flag forced back to true
+   4. a shard span rewritten into the dev window
+   5. a control counter zeroed
+   6. the engine fingerprint swapped for C152's instrumented `89797289...`
+   7. a scope sentence replaced by a bare "never fired"
+   8. `CENSUS_CANNOT_REACH` emptied in the generator
+   9. a witness seed replaced by one outside every shard
+  10. C152's refutations zeroed on the strict arm
+  11. an entry with no emittable counter key admitted
+  12. the strict per-divergence bound detached from the shards
+  13. ⚠ **the COMBINED per-divergence bound detached from the shards** -- set to
+      `3/803264`, the per-boundary substitution this module's own comment calls a
+      four-orders-of-magnitude overstatement
+
+⚠ 13 was found by the reviewer, not the author, and it was the important one: `combined`
+is where the 0.32 % bound quoted in the report, in §3.5 and in H15's cell comes from, and
+the first revision of `test_the_stated_bounds_...` looped over `document["arms"]`, which
+holds only `strict` and `banded`. Four separate mutations of the combined block passed
+green. Three of the twelve above (3, 8 and 13's neighbours) were likewise near-misses at
+first: 3 survived until the closure pin stopped reading the artifact's own `agrees` flag,
+and 8's first form was a defective mutation (`{} or {...}`, which is truthy) rather than a
+surviving pin. Both are recorded rather than tidied away.
+
 WHAT IS NOT PINNED, ON PURPOSE. Nothing here asserts a divergence rate. These are
 unregistered seeds and the census is not fidelity evidence; §7.3 of
 `reports/c152_ledger_terminal_disposition.md` says so about its own predecessor and the
@@ -428,12 +463,55 @@ class TheScopeIsWhatItClaimsToBeTests(unittest.TestCase):
         )
 
     def test_the_stated_bounds_are_the_rule_of_three_on_the_measured_sample(self) -> None:
-        # A sample size chosen for convenience and reported as coverage is this program's
-        # signature defect, so the bound is recomputed here from the shards rather than
-        # read out of the artifact.
+        """Every bound, on every denominator, recomputed from the twelve committed shards.
+
+        ⚠ REWRITTEN 2026-08-08 after review. The first revision looped
+        `for arm, span in document["arms"].items()`, and `arms` holds only `strict` and
+        `banded` -- so `combined` got an `assertIn` and nothing else. **The single most
+        load-bearing number in this work was the one number no pin recomputed:** the
+        0.32 % per-divergence bound quoted in the report, in §3.5 and in H15's cell comes
+        out of `combined`. An independent battery walked four mutations through it,
+        including setting combined `rule_of_three_per_divergence_upper_95` to `3/803264`
+        -- which is literally the 1-in-267,755 substitution the comment below says
+        overstates the census by four orders of magnitude. A pin that names a trap and
+        then leaves it open is worse than no pin, because the comment reads as coverage.
+
+        Two changes, not one. `combined` is now a span like the others, and every span is
+        rebuilt from the SHARDS rather than read from the artifact's own `arms` block --
+        so a perturbed `arms` entry cannot launder itself into the bound that is checked
+        against it.
+        """
+
         document = _document()
-        self.assertIn("combined", document["statistical_bounds"])
-        for arm, span in document["arms"].items():
+
+        def span_from_shards(names: list[str]) -> dict[str, int]:
+            reports = [
+                json.loads((REPO / name).read_text(encoding="utf-8")) for name in names
+            ]
+            return {
+                "games": sum(r["games"] for r in reports),
+                "boundaries_measured": sum(r["boundaries_measured"] for r in reports),
+                "transitions_diverged": sum(r["transitions_diverged"] for r in reports),
+            }
+
+        strict_shards = document["arms"]["strict"]["shards"]
+        banded_shards = document["arms"]["banded"]["shards"]
+        spans = {
+            "strict": span_from_shards(strict_shards),
+            "banded": span_from_shards(banded_shards),
+            # DERIVED, and it must be every shard exactly once -- not the sum of two
+            # artifact fields, which is what the arithmetic being checked is made of.
+            "combined": span_from_shards(strict_shards + banded_shards),
+        }
+        self.assertEqual(
+            sorted(document["statistical_bounds"]),
+            sorted(spans),
+            "the artifact's statistical_bounds no longer covers exactly strict, banded "
+            "and combined; a missing arm is a bound nothing recomputes",
+        )
+
+        for arm in sorted(spans):
+            span = spans[arm]
             with self.subTest(arm=arm):
                 bounds = document["statistical_bounds"][arm]
                 self.assertEqual(bounds["games"], span["games"])
@@ -450,8 +528,8 @@ class TheScopeIsWhatItClaimsToBeTests(unittest.TestCase):
                 )
                 # ⚠ The denominator for a `divergence_class` negative is DIVERGENCES, not
                 # boundaries: `classify_divergence` only runs on a boundary that already
-                # diverged. Pinned separately because quoting the boundary bound for a
-                # class overstates this census by four orders of magnitude.
+                # diverged. Pinned separately, and now on `combined` too, because that is
+                # the one the ledger quotes.
                 self.assertEqual(
                     bounds["classified_divergences"], span["transitions_diverged"]
                 )
@@ -460,6 +538,18 @@ class TheScopeIsWhatItClaimsToBeTests(unittest.TestCase):
                     3 / span["transitions_diverged"],
                     places=6,
                 )
+                self.assertEqual(bounds["one_in_n_games"], round(span["games"] / 3))
+                self.assertEqual(
+                    bounds["one_in_n_boundaries"],
+                    round(span["boundaries_measured"] / 3),
+                )
+
+        # And the artifact's own `arms` block, against the same primary data -- the two
+        # scalars the ledger's "25.8x" and "803,264" sentences are read off.
+        for arm in ("strict", "banded"):
+            with self.subTest(arm=arm, block="arms"):
+                for field in ("games", "boundaries_measured", "transitions_diverged"):
+                    self.assertEqual(document["arms"][arm][field], spans[arm][field])
 
 
 class WhatTheCensusCannotSettleIsNamedTests(unittest.TestCase):

@@ -679,6 +679,67 @@ class TheKnownGapsLedgerTests(unittest.TestCase):
             f"{len(unknown)}: {unknown}",
         )
 
+    def test_the_stated_row_count_matches_the_rows(self) -> None:
+        """§1's "Shape of the document" states §3's size AND its two halves. Re-derive all three.
+
+        Added 2026-08-08 (C153), and earned the same way §1.1's UNKNOWN pin was. That
+        sentence has now been stale THREE times: it read 78/55/23 until C146 corrected it
+        to 80, C152 took it to 81, and C153's own first draft left it at 81 while adding
+        H22 -- and simultaneously wrote "taking §3 to 79" in §8 by incrementing the
+        already-superseded 78. The document asserted three different counts in one commit,
+        inside a change whose subject is uncounted drift.
+
+        `test_the_gap_row_inventory_is_exactly_pinned` below already forces an author
+        through the inventory when a row joins. It does NOT force them through this
+        sentence, which is the one a reader meets first. This pin closes that gap: the
+        header count, the engine/renderer/leaf half and the harness/process half are all
+        computed from the same selector the inventory uses.
+
+        The split is by row-id prefix, which is what the two phrases mean here: §3.0-§3.2
+        and §3.4 carry `G` ids (engine, renderer and leaf/encoder), §3.3 carries `H` ids
+        (harness/instrument and process). Derived rather than assumed -- a row whose id
+        starts with neither is a failure, so a new class cannot be absorbed silently.
+
+        MUTATION CHECKED: changing any one of the three numbers in the sentence, or
+        moving H22 into a G table, turns this red.
+        """
+        text = _ledger_text()
+        grouped = _tables_by_header(text)
+        ids = [
+            row_cells(line)[0].strip("*~ ")
+            for table in grouped.get(_REACHABILITY_HEADER, [])
+            for _, line in table["rows"]
+        ]
+        unexpected = sorted(i for i in ids if not i.startswith(("G", "H")))
+        self.assertEqual(
+            unexpected,
+            [],
+            "a §3 row id starts with neither G nor H, so the header sentence's two-way "
+            f"split no longer describes the table: {unexpected}",
+        )
+        engine_like = sum(1 for i in ids if i.startswith("G"))
+        harness_like = sum(1 for i in ids if i.startswith("H"))
+
+        stated = re.search(
+            r"§3 carries \*\*(\d+) rows\*\* \((\d+) engine/renderer/leaf, "
+            r"(\d+) harness/process\)",
+            text,
+        )
+        self.assertIsNotNone(
+            stated,
+            "§1's 'Shape of the document' row-count sentence is gone or reworded; this "
+            "pin reads it and must be updated with it rather than silently passing",
+        )
+        self.assertEqual(
+            (int(stated.group(1)), int(stated.group(2)), int(stated.group(3))),
+            (len(ids), engine_like, harness_like),
+            f"§1 states {stated.group(1)} rows ({stated.group(2)} engine/renderer/leaf, "
+            f"{stated.group(3)} harness/process); the tables carry {len(ids)} "
+            f"({engine_like} / {harness_like}). Re-derive with this selector across both "
+            "trees -- never by incrementing the previous figure, which is how this "
+            "sentence went stale three times.",
+        )
+
     def test_the_gap_row_inventory_is_exactly_pinned(self) -> None:
         # Exact, and in document order. A gap added, removed or renumbered fails here,
         # which is the point: it forces the author through the column beside it.

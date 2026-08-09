@@ -733,7 +733,7 @@
    "key_kind": "exact",
    "measurement_independent": true,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
-   "structural_demonstration": "The trigger body `mapper produced no usable branch` is produced NOWHERE in the repository. Its only occurrence is the classifier's own test of it, so no input can make `classify_divergence` return this class.",
+   "structural_demonstration": "The trigger body `mapper produced no usable branch` is produced by NO CODE in the repository: the only occurrence on any execution path is the classifier's own test of it at `engine_transition_differential.py:1915`, so no input can make `classify_divergence` return this class. Stated as 'no producer' rather than 'nowhere in the repository', which a first draft wrote and its own commit falsified -- the phrase now also appears in this docstring and in the census artifact that records it. A grep-shaped claim has to be scoped to executable code or it is false the moment it is written down.",
    "verdict": "UNREACHABLE_STRUCTURAL"
   },
   "divergence_class:status_support": {
@@ -1144,7 +1144,7 @@
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:deferred_opponent_action": {
-   "census_cannot_reach": "Keyed on the payload fields `deferredOpponentActions` / `deferredOpponentActionPriors`, which the differential's public-materialization payload never carries.",
+   "census_cannot_reach": "Raised at `engine_world.py:922` on `payload.get(\"deferredOpponentActions\") or payload.get(\"deferredOpponentActionPriors\")`. The payload always CARRIES both keys -- `local_showdown._public_materialization_payload` emits them at :2350-2352 -- so 'never carries' would be false. They are always EMPTY: both derive from keyword-only parameters defaulting to `None` (:2220-2222, `dict(... or {})` at :2302), and the differential calls that function with neither argument at both of its call sites (`engine_transition_differential.py:2649` and `:2760`). An empty dict is falsy, so the guard never fires. The field is for the opponent-action predictor, which no differential run uses.",
    "family": "section_3_5_world_unsupported",
    "key": "skip:world_unsupported:deferred_opponent_action",
    "key_kind": "exact",
@@ -1193,7 +1193,7 @@
    "verdict": "UNREACHABLE_POOL"
   },
   "skip:world_unsupported:override_side_missing": {
-   "census_cannot_reach": "Raised when a caller-supplied team override has no packed team for a slot. The differential always supplies both slots' packed teams, so the branch is dead on this instrument.",
+   "census_cannot_reach": "Raised at `engine_world.py:490` when `override.player_teams.get(slot)` is falsy. The differential builds that mapping at `engine_transition_differential.py:2396` as `{slot: true_teams[slot][\"packed\"] for slot in (\"p1\", \"p2\")}` -- a comprehension over exactly the two slots the loop then iterates, so a slot cannot be ABSENT. The residual way in is an empty packed string from the bridge snapshot, which would mean a battle started with an empty team; 10,000 games produced none.",
    "family": "section_3_5_world_unsupported",
    "key": "skip:world_unsupported:override_side_missing",
    "key_kind": "exact",
@@ -1202,7 +1202,6 @@
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:public_effect_blocked": {
-   "census_cannot_reach": "Raised once per entry of the caller-declared `blocked_slots` mapping. The differential declares none, so the loop body is never entered.",
    "family": "section_3_5_world_unsupported",
    "key": "skip:world_unsupported:public_effect_blocked",
    "key_kind": "exact",
@@ -1235,7 +1234,7 @@
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:rest_sleep_refund_pending_precounts_legacy": {
-   "census_cannot_reach": "Raised only for a row written by the PRE-write-side harness -- the guard is `\"restSleepAttempts\" not in row`. Every row the differential constructs comes from the live write side and carries the counts, so no live sweep can reach it. `engine_world.py` calls the neighbouring branch a CANARY whose expected count in a fresh post-split era is exactly zero; a census zero CONFIRMS that design property and is not evidence about coverage.",
+   "census_cannot_reach": "Raised at `engine_world.py:1958` only when a row has `restSleepActiveRefundPending` and NO `restSleepAttempts`. A live row CAN lack the counts -- `local_showdown._apply_rest_sleep_provenance` sets the pending flag at :2784 and then `continue`s at :2800 without writing them -- so the naive reading is wrong. What closes the path is the ORDER of the tests: that same :2800 branch sets `restSleepProvenanceUnrepresentable`, and `_hp_and_status` raises on THAT at :1914, before it ever reaches :1958. So the surviving way in is a row carrying the pending flag, no counts and no unrepresentable flag, which no live producer emits. `engine_world.py` calls the neighbouring branch a CANARY whose expected count in a fresh post-split era is exactly zero; a census zero CONFIRMS that design property and is not evidence about coverage.",
    "family": "section_3_5_world_unsupported",
    "key": "skip:world_unsupported:rest_sleep_refund_pending_precounts_legacy",
    "key_kind": "exact",
@@ -1244,7 +1243,7 @@
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:rest_sleep_refund_pending_unsplit_legacy": {
-   "census_cannot_reach": "Reached only when a row carries the pre-split `restSleepRefundPending` flag and NEITHER producer flag. `_mark_legacy_rest_refund_pending` sets a producer flag on every live row, so the branch is reachable only by replaying a pre-split corpus. Same canary as above: zero is the designed value, not an unmeasured absence.",
+   "census_cannot_reach": "Raised at `engine_world.py:1986` only when a row carries the pre-split `restSleepRefundPending` flag and NEITHER producer flag -- and `_hp_and_status` tests both producer flags first, at :1935 and :1943. `_mark_legacy_rest_refund_pending` has exactly TWO call sites in `local_showdown.py` (:2755 and :2785) and each is preceded on the same row by a producer flag (`restSleepAttemptUnsettled` at :2754, `restSleepActiveRefundPending` at :2784), so a live row always trips an earlier branch. Reachable only by replaying a pre-split corpus. Same canary: zero is the designed value, not an unmeasured absence.",
    "family": "section_3_5_world_unsupported",
    "key": "skip:world_unsupported:rest_sleep_refund_pending_unsplit_legacy",
    "key_kind": "exact",

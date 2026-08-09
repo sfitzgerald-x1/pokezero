@@ -228,9 +228,14 @@ STRUCTURAL_DIVERGENCE_CLASSES = {
         "be handed the body that would return this class."
     ),
     "no_usable_branch": (
-        "The trigger body `mapper produced no usable branch` is produced NOWHERE in the "
-        "repository. Its only occurrence is the classifier's own test of it, so no input "
-        "can make `classify_divergence` return this class."
+        "The trigger body `mapper produced no usable branch` is produced by NO CODE in the "
+        "repository: the only occurrence on any execution path is the classifier's own "
+        "test of it at `engine_transition_differential.py:1915`, so no input can make "
+        "`classify_divergence` return this class. Stated as 'no producer' rather than "
+        "'nowhere in the repository', which a first draft wrote and its own commit "
+        "falsified -- the phrase now also appears in this docstring and in the census "
+        "artifact that records it. A grep-shaped claim has to be scoped to executable "
+        "code or it is false the moment it is written down."
     ),
 }
 
@@ -284,36 +289,72 @@ DYNAMIC_FAMILY_EXCLUSIONS = {"skip:world_error:": {"skip:world_error:no_construc
 # one is not the same measurement as a zero produced by an instrument that could, and
 # collapsing the two is how a "closed" row turned out to be a fourth category in disguise.
 #
-# Every reason below is read off the raise site and the differential's own payload
-# builder, and each is a claim about THIS instrument, never about the engine.
+# ⚠ EVERY ENTRY BELOW IS TRACED FROM THE RAISE SITE TO THE DIFFERENTIAL'S ACTUAL CALL,
+# not to a plausible sentence about it. That rule was added after review, because the
+# first revision of this map got one entry outright wrong and two more imprecise:
+#
+#   * `public_effect_blocked` was filed here on the claim "the differential declares
+#     none". FALSE. `engine_transition_differential.py:2662` passes `blocked_slots=blocked`
+#     and `blocked` comes from the PRODUCTION `EngineMctsPolicy._public_effect_signals`
+#     (:2624) on a live observation, which populates it on two ordinary data-dependent
+#     branches -- `engine_search.py:2391` (item mutated with no protocol-confirmed current
+#     item) and `:2409` (active transformed into an unnamed species). The metadata early
+#     return at `:2363` is demonstrably not always taken here: the same scan's
+#     `transformed` output drove SIX `transform_unexpressible` firings in this census. It
+#     is REACHABLE and merely not observed, and has been moved out.
+#   * `deferred_opponent_action` said the payload "never carries" those fields. It always
+#     carries them; they are always EMPTY, which is a different fact and the one that
+#     matters.
+#   * `rest_sleep_refund_pending_precounts_legacy` said live rows always carry the
+#     counts. One live branch does not -- and sets a flag `engine_world` tests first,
+#     which is what actually closes the path.
+#
+# A category that says "the instrument cannot reach this" is doing the same work as a
+# never-fired claim, and it earns the same standard of evidence.
 CENSUS_CANNOT_REACH = {
     "skip:world_unsupported:rest_sleep_refund_pending_precounts_legacy": (
-        "Raised only for a row written by the PRE-write-side harness -- the guard is "
-        '`"restSleepAttempts" not in row`. Every row the differential constructs comes '
-        "from the live write side and carries the counts, so no live sweep can reach it. "
-        "`engine_world.py` calls the neighbouring branch a CANARY whose expected count in "
-        "a fresh post-split era is exactly zero; a census zero CONFIRMS that design "
-        "property and is not evidence about coverage."
+        "Raised at `engine_world.py:1958` only when a row has `restSleepActiveRefundPending` "
+        "and NO `restSleepAttempts`. A live row CAN lack the counts -- "
+        "`local_showdown._apply_rest_sleep_provenance` sets the pending flag at :2784 and "
+        "then `continue`s at :2800 without writing them -- so the naive reading is wrong. "
+        "What closes the path is the ORDER of the tests: that same :2800 branch sets "
+        "`restSleepProvenanceUnrepresentable`, and `_hp_and_status` raises on THAT at "
+        ":1914, before it ever reaches :1958. So the surviving way in is a row carrying the "
+        "pending flag, no counts and no unrepresentable flag, which no live producer emits. "
+        "`engine_world.py` calls the neighbouring branch a CANARY whose expected count in a "
+        "fresh post-split era is exactly zero; a census zero CONFIRMS that design property "
+        "and is not evidence about coverage."
     ),
     "skip:world_unsupported:rest_sleep_refund_pending_unsplit_legacy": (
-        "Reached only when a row carries the pre-split `restSleepRefundPending` flag and "
-        "NEITHER producer flag. `_mark_legacy_rest_refund_pending` sets a producer flag on "
-        "every live row, so the branch is reachable only by replaying a pre-split corpus. "
-        "Same canary as above: zero is the designed value, not an unmeasured absence."
+        "Raised at `engine_world.py:1986` only when a row carries the pre-split "
+        "`restSleepRefundPending` flag and NEITHER producer flag -- and `_hp_and_status` "
+        "tests both producer flags first, at :1935 and :1943. "
+        "`_mark_legacy_rest_refund_pending` has exactly TWO call sites in "
+        "`local_showdown.py` (:2755 and :2785) and each is preceded on the same row by a "
+        "producer flag (`restSleepAttemptUnsettled` at :2754, "
+        "`restSleepActiveRefundPending` at :2784), so a live row always trips an earlier "
+        "branch. Reachable only by replaying a pre-split corpus. Same canary: zero is the "
+        "designed value, not an unmeasured absence."
     ),
     "skip:world_unsupported:override_side_missing": (
-        "Raised when a caller-supplied team override has no packed team for a slot. The "
-        "differential always supplies both slots' packed teams, so the branch is dead on "
-        "this instrument."
-    ),
-    "skip:world_unsupported:public_effect_blocked": (
-        "Raised once per entry of the caller-declared `blocked_slots` mapping. The "
-        "differential declares none, so the loop body is never entered."
+        "Raised at `engine_world.py:490` when `override.player_teams.get(slot)` is falsy. "
+        "The differential builds that mapping at "
+        "`engine_transition_differential.py:2396` as "
+        '`{slot: true_teams[slot]["packed"] for slot in ("p1", "p2")}` -- a comprehension '
+        "over exactly the two slots the loop then iterates, so a slot cannot be ABSENT. "
+        "The residual way in is an empty packed string from the bridge snapshot, which "
+        "would mean a battle started with an empty team; 10,000 games produced none."
     ),
     "skip:world_unsupported:deferred_opponent_action": (
-        "Keyed on the payload fields `deferredOpponentActions` / "
-        "`deferredOpponentActionPriors`, which the differential's public-materialization "
-        "payload never carries."
+        "Raised at `engine_world.py:922` on `payload.get(\"deferredOpponentActions\") or "
+        "payload.get(\"deferredOpponentActionPriors\")`. The payload always CARRIES both "
+        "keys -- `local_showdown._public_materialization_payload` emits them at :2350-2352 "
+        "-- so 'never carries' would be false. They are always EMPTY: both derive from "
+        "keyword-only parameters defaulting to `None` (:2220-2222, `dict(... or {})` at "
+        ":2302), and the differential calls that function with neither argument at both of "
+        "its call sites (`engine_transition_differential.py:2649` and `:2760`). An empty "
+        "dict is falsy, so the guard never fires. The field is for the opponent-action "
+        "predictor, which no differential run uses."
     ),
     "divergence_class:mapper_lossy": (
         "Structural, not instrumental -- see the demonstration on the entry itself."

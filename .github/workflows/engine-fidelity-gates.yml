@@ -115,6 +115,18 @@ jobs:
             reports/artifacts/c153_*.json
             scripts/c153_wide_negative_census.py
             tests/test_wide_seed_negative_census.py
+            # ⚠ THE LEDGER ITSELF AND ITS UNIFORMITY PIN MATCHED NOTHING across all 74
+            # patterns above, and `mass-gate` is the only job that runs the uniformity
+            # step. That module holds an EXACT §3 row inventory and, as of C153, the
+            # header sentence's row count too -- so a PR whose only change is deleting a
+            # gap row from `reports/c138_known_gaps_ledger.md` matched no filter, skipped
+            # this job and went green. Found by widening C153's own path-filter audit
+            # after it had already caught the C152 block above and stopped one file short
+            # of the file it was itself editing. `reports/c150_...` is the same class: an
+            # artifact a permanent ledger cell cites, with no filter entry.
+            reports/c138_known_gaps_ledger.md
+            tests/test_ledger_table_uniformity.py
+            reports/artifacts/c150_band_split_trade_census.json
             # The coverage-bound pins' ENTIRE input. Without these listed, a PR whose
             # only change is deleting one of them skips mass-gate and goes green.
             reports/artifacts/c131_leechseed_main_dev_sweep.json
@@ -798,7 +810,7 @@ jobs:
       # header both rendered with an EMPTY Reachability cell. #1166 fixed them and the file
       # has been clean at every commit since; what it did not leave was a control, and its
       # own note says so ("not pinned ... filed as a follow-up"). This step is that
-      # follow-up, as its own module so the census above keeps its `Ran 16 tests` guard
+      # follow-up, as its own module so the census above keeps its `Ran 22 tests` guard
       # untouched. Note the escape rule here is GFM's real one -- a pipe preceded by ANY
       # backslash is escaped, verified against cmarkgfm and GitHub's /markdown API -- after
       # a first revision of this module used a parity rule and falsely condemned two rows.
@@ -809,8 +821,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_ledger_table_uniformity -v 2>&1 \
             | tee /tmp/ledgertables.log
-          if ! grep -qE 'Ran 18 tests' /tmp/ledgertables.log; then
-            echo "::error::expected 18 ledger-table pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 19 tests' /tmp/ledgertables.log; then
+            echo "::error::expected 19 ledger-table pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. TheHistoricalDropIsCaughtTests feeds the checker the
