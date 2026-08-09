@@ -196,6 +196,7 @@ def main(argv: list[str] | None = None) -> int:
     from pokezero.foulplay_bridge import (  # noqa: PLC0415 - keeps the import light
         _REFUSAL_RECORDS_PER_BATTLE,
         _REFUSAL_RECORDS_PER_RUN,
+        _refusal_allowance,
     )
 
     per_battle = (
@@ -237,9 +238,21 @@ def main(argv: list[str] | None = None) -> int:
         record_bytes = 0.0
         for games_done in range(1, args.long_run_games + 1):
             if records_on:
-                want = kept_per_game if capped else args.refusals_per_game
-                room = max(0.0, per_run - emitted) if capped else want
-                took = min(want, room)
+                if capped:
+                    # THE SHIPPED RULE, imported rather than re-implemented: an even
+                    # per-game reserve, not a prefix of the run budget. Modelling it
+                    # as a prefix over-states the cumulative bytes, because a prefix
+                    # front-loads the whole payload into the earliest writes and every
+                    # later write re-serializes it.
+                    took = min(
+                        args.refusals_per_game,
+                        _refusal_allowance(
+                            room=int(max(0.0, per_run - emitted)),
+                            games_remaining=args.long_run_games - games_done + 1,
+                        ),
+                    )
+                else:
+                    took = args.refusals_per_game
                 emitted += took
                 record_bytes += took * median_record
             rows = args.per_game_row_bytes * games_done

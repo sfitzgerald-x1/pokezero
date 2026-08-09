@@ -369,8 +369,13 @@ OPPONENT_JOURNAL_MODES = ("off", "addressed", "full")
 #    fallback rate), 250 games:
 #
 #                        off        on (capped)      if UNCAPPED
-#      cumulative     88.2 MB       120.5 MB          830.2 MB
+#      cumulative     88.2 MB       105.4 MB          830.2 MB
 #      8-game shard        -          +94.4%          +963%
+#
+#    The reserve is also CHEAPER than the prefix it replaced (105.4 vs 120.5 MB),
+#    which is not a coincidence: a prefix front-loads the whole payload into the
+#    earliest writes and `_write_json` re-serializes it once per remaining game.
+#    The unbiased sample is the cheap one.
 #
 #    At cell D's real 0.430 they agree exactly (+7.4 MB either way): the cap cannot
 #    bite on the case the default was justified against, and removes the tail on the
