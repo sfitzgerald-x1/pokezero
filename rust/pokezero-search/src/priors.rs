@@ -118,19 +118,35 @@
 //!    frozen at its root value" — precisely the fail-open
 //!    `root_opponent_order`'s docstring warns about, correct until the
 //!    opponent's first switch and permuted from then on. It changes the ACTING
-//!    seat's visits and swings `prior_branches` (258 -> 196 at sims=48 seed=17)
-//!    while leaving the opponent's ROOT visit order — the gate's only opponent
-//!    observable — untouched, because the ROOT order is not evolved at all.
-//!    Raising the budget does not help: checked at sims in
+//!    seat's visits while leaving the opponent's ROOT visit order — the gate's
+//!    only opponent observable — untouched, because the ROOT order is not
+//!    evolved at all. Raising the budget does not help: checked at sims in
 //!    {48, 96, 192, 512, 1024} x batch in {1, 8} x 4 seeds, the mutant is
 //!    concordant wherever the baseline is.
 //!
-//!    Closing it needs an observable for the opponent's INTERIOR applied
-//!    priors, and the structural reason there is none is right here:
+//!    WHY `prior_branches` CANNOT SERVE AS THE ORACLE, which is not the reason
+//!    an earlier version of this note gave. M9 is a BRANCH defect and its
+//!    applications DO reach that counter — the number moves, and it moves a
+//!    lot. It is that [`resolve_pending_priors`] sums both seats over the whole
+//!    search into ONE number, which a reshaped tree moves regardless, and not
+//!    even in a consistent direction (HEAD -> M9 at sims=48, batch=1,
+//!    seeds 5/11/17/23: 256 -> 260, 260 -> 252, 258 -> 196, 256 -> 189). There
+//!    is no invariant there to pin, only a golden number that any legitimate
+//!    change to the tree would also break.
+//!
+//!    THE FIX DIRECTION, so the next reader does not chase the wrong one: a
+//!    crate field carrying a DIGEST of the opponent's gathered prior vectors in
+//!    resolution order, per seat. Not an applied count — a count is exactly the
+//!    summed-scalar shape that fails above. A per-seat digest is order- and
+//!    value-sensitive, so a frozen opponent order changes it while a
+//!    legitimately reshaped tree that gathers the same vectors does not.
+//!
+//! 3. A SEPARATE, SMALLER GAP on the ROOT side, which is NOT M9's cause and is
+//!    recorded here only so it is not rediscovered as one.
 //!    [`RootPriorResolution`] carries no `applied` count, so the root's
-//!    opponent application never reaches `prior_branches`, and
-//!    [`resolve_pending_priors`] sums both seats into one number that a
-//!    reshaped tree moves anyway.
+//!    opponent application — unlike every branch application — never reaches
+//!    `prior_branches` at all. Nothing in the battery turns on this; the root
+//!    seat is covered by the visit-order and seat-asymmetric oracles instead.
 
 use crate::tree::{apply_self_priors, DecisionNode, Tree};
 use poke_engine::engine::state::MoveChoice;

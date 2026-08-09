@@ -39,15 +39,26 @@ Two properties carry the weight, and neither needs new crate telemetry:
   so an arm priced from the wrong head, the wrong map or the wrong seat lands
   in the wrong place in the visit order.
 
-  THE OBSERVABLE HAS A BAND, in both directions, and the gate runs inside it.
-  Measured at HEAD over sims in {48, 96, 192} x batch in {1, 8} x seed in
-  {5, 11, 17, 23} — 24 runs, `prior_fallbacks` 0 throughout: 0 discordant
-  pairs against the opponent head in all 24, and 17-18 against the acting
-  head. Below that the null weakens (12 at sims in {8, 16}); ABOVE it the
-  TRUTH weakens — at sims 512 and 1024 the true head itself picks up 1
-  discordant pair in 3/8 and 6/8 runs, because Q starts to outweigh the prior
-  term. So do not "strengthen" this gate by raising sims; 48 is inside the
-  band on purpose.
+  THE OBSERVABLE HAS A BAND, in both directions, and OUTSIDE IT THIS GATE
+  FAILS — it does not merely get weaker. `sims=48` is chosen, not defaulted.
+  Measured at HEAD, batch in {1, 8} x seed in {5, 11, 17, 23}, 8 runs per
+  budget:
+
+    sims |  true-head discordant | margin-separated pairs TIED
+      8  |  4/8 runs (2 pairs)   | 8/8 runs  (7 at batch 1, 3 at batch 8)
+     16  |  0/8                  | 8/8 runs  (7 at batch 1, 3 at batch 8)
+     48  |  0/8                  | 0/8
+     96  |  0/8                  | 0/8
+    192  |  0/8                  | 0/8
+    512  |  1 pair in 3/8 runs   | -
+   1024  |  1 pair in 6/8 runs   | -
+
+  Below the band the tie assertion fails at BOTH 8 and 16, and at 8 the truth
+  assertion fails outright: there are too few visits to order nine arms. Above
+  it the truth assertion starts failing on its own, because Q outweighs the
+  prior term. The acting-head null runs 17-18 discordant across 48/96/192 and
+  falls to 12 at batch 1 below the band. So this gate cannot be "strengthened"
+  by raising sims and cannot be "sped up" by lowering them.
 
 Each of the three tests that leans on that second property first asserts its
 own discriminating power against the null that test is actually about — the
@@ -584,12 +595,19 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
     residue: nine one-line mutations, one `--features model` wheel rebuilt per
     world, EIGHT KILLED and one MISSED.
 
-    Where the kills come from, so a future edit knows what it is spending:
-    `test_a_root_whose_seats_sit_at_different_slots...` alone accounts for six
-    of the eight and is the ONLY test that reaches the root option swap;
-    `test_a_withheld_order...` adds the other two. The ninth — the opponent's
-    branch ORDER-EVOLUTION prefix — is uncovered by all of them; read that
-    header before assuming this class covers a channel it does not.
+    Where the kills come from, so a future edit knows what it is spending.
+    `test_a_root_whose_seats_sit_at_different_slots...` accounts for six of the
+    eight on its own and is the ONLY killer of the root option swap — losing it
+    loses that mutant outright. The remaining two are the acting map fed to the
+    opponent resolve (killed by BOTH `test_permuting...` and
+    `test_a_withheld_order...`) and the swapped pending-map lists (killed by
+    `test_a_withheld_order...` and, independently, by the pre-existing
+    `test_priors_telemetry_and_batch1_determinism`). So no test here is the sole
+    killer of anything except via the asymmetric root.
+
+    The ninth — the opponent's branch ORDER-EVOLUTION prefix — is uncovered by
+    all of them; read that header before assuming this class covers a channel it
+    does not.
     """
 
     # Priors this close together are not required to order the visits; see
@@ -667,6 +685,13 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
         # each other (largest gap among them 0.0164 < 0.02), so nothing
         # admissible is lost — but that is a coincidence of this artifact, and
         # an unasserted coincidence is how a gate goes quietly vacuous.
+        #
+        # ASSERTED AT THIS FIXED SETTING ONLY, and it does not generalise: the
+        # tie count is 0/8 across batch x seed at sims 48/96/192 but nonzero in
+        # 8/8 at sims 8 and 16, and independent review found it seed-sensitive
+        # at other settings in the TRUE world. It is an anti-vacuity guard on
+        # the budget this gate actually runs, not a statistic to build a
+        # discriminator out of.
         self.assertEqual(
             self._tied_pairs(side, arms, oracle["opponent"], self.ORDER_MARGIN),
             [],
@@ -693,9 +718,22 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
         below catches). This test is the whole reason that mutation is now
         KILLED rather than EQUIVALENT.
         """
+        # FAILS rather than skips when the fixture is gone, and that choice is
+        # the point. This test is six of the battery's eight kills and the only
+        # one that reaches the root option swap, so a corpus edit that removed
+        # the last seat-asymmetric row would otherwise downgrade the largest
+        # contributor to a skip — and a suite that skips still reads green. An
+        # instrument that cannot report its own absence reports success.
+        self.assertIsNotNone(
+            self.asymmetric_position,
+            "no committed row has its two actives at different party slots. This "
+            "is not a skip: without such a root the root-side option swap is "
+            "UNOBSERVABLE (both seats' option lists become the identical value) "
+            "and this class silently loses six of its eight mutation kills. "
+            "Restore a row whose two actives sit at different slots — rows 2-4 "
+            "of the committed samples were (0,5), (0,5), (1,5).",
+        )
         position = self.asymmetric_position
-        if position is None:
-            self.skipTest("no committed row has its two actives at different party slots")
         self.assertNotEqual(position["actives"][0], position["actives"][1])
 
         ctx_json = self._ctx_with_opponent_order(position=position)
