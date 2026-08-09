@@ -401,7 +401,8 @@ class TauntEngineFidelityTests(unittest.TestCase):
 
         With the flag set, the residual eats the Taunt on the replacement ply, and the
         correct seed depends on the Taunt's AGE, which the payload does not carry.
-        Measured live on the simulator (`.probe/force_switch_taunt_live.py`):
+        Measured live on the simulator by
+        ``test_struggle_only_move_state.TauntReplacementBoundaryAgeTests``:
 
             age 0 (Taunt landed on the faint turn) -> 1 taunted move phase left
             age 1 (Taunt landed the turn before)   -> 0 taunted move phases left

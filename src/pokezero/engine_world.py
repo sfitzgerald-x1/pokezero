@@ -1123,7 +1123,11 @@ def _build_side_spec(
         # So the seed has to say how many ticks are ALREADY elapsed, and at this
         # boundary that depends on the Taunt's AGE, which the payload does not
         # carry. Both ages are reachable and they disagree, measured live on the
-        # simulator (`.probe/force_switch_taunt_live.py`):
+        # simulator by
+        # tests/test_struggle_only_move_state.py::TauntReplacementBoundaryAgeTests
+        # -- which asserts the DISAGREEMENT itself, so if a future change ever
+        # made the two ages behave alike that pin goes red and this refusal
+        # should be revisited:
         #
         #   age 0 (Taunt landed on the faint turn)   -> 1 taunted move phase left
         #                                               => the engine needs seed 0
@@ -1135,7 +1139,10 @@ def _build_side_spec(
         # here; picking either trades one silent error for the opposite one. The
         # age IS publicly derivable -- Showdown announces `-start ... move: Taunt`
         # on a known turn -- but the parser does not track it today, so deriving
-        # it is follow-up work and not a guess to make here.
+        # it is follow-up work and not a guess to make here. Note the size of that
+        # follow-up before assuming it is small: `TRACKED_VOLATILES` doubles as the
+        # observation encoder's vocabulary and the bridge's materialization
+        # allowlist, so an age field lands in the observation spec too.
         #
         # Withdrawing from `supported` rather than minting a new reason is
         # deliberate: the resulting `volatile_unsupported: side 'pN': ['taunt']`
