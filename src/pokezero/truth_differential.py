@@ -391,12 +391,18 @@ def probe_policy_config(production: EngineMctsConfig, *, sims: int | None = None
 
     import dataclasses
 
+    resolved_sims = int(sims) if sims else production.search_sims
     return dataclasses.replace(
         production,
         worlds=1,
         sample_retry_factor=1,
         early_stop=False,
-        search_sims=int(sims) if sims else production.search_sims,
+        search_sims=resolved_sims,
+        # `search_batch <= search_sims` is a config invariant. Clamping here rather
+        # than making the caller do it: a budget sweep that lowers sims below the
+        # default batch otherwise dies in `__post_init__`, which reads as "that
+        # budget is unsupported" when it is only unspelled.
+        search_batch=min(production.search_batch, resolved_sims),
     )
 
 

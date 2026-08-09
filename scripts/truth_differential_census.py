@@ -588,11 +588,12 @@ def run_shard(args: argparse.Namespace) -> int:
 def _shard_games(plan: Mapping[str, Any] | None, args: argparse.Namespace) -> list[dict[str, Any]]:
     if plan is None:
         base = int(args.control_seed_base)
-        return [
+        games = [
             {"game_index": index, "seed": base + index, "packed": None}
             for index in range(args.control_games)
         ]
-    games = list(plan["games"])
+    else:
+        games = list(plan["games"])
     if args.shard:
         index, total = (int(part) for part in args.shard.split("/"))
         games = [game for position, game in enumerate(games) if position % total == index]
@@ -640,9 +641,163 @@ def merge_shards(paths: Iterable[Path]) -> dict[str, Any]:
 # --- cli ---------------------------------------------------------------------
 
 
+def render_queue(summary: Mapping[str, Any], *, commands: Sequence[str], title: str) -> str:
+    """Render the inventory as the new QUEUE, one table per UNIT.
+
+    ``world_failure_reasons`` counts WORLDS, ``fallback_reasons`` counts
+    DECISIONS and ``lossy_subcase_renders`` counts BRANCH RENDERS. They are never
+    co-ranked in one table, and every figure is printed beside the command that
+    produced it.
+    """
+
+    lines: list[str] = [f"# {title}", ""]
+    lines.append("## Commands that produced every figure below")
+    lines.append("")
+    lines.append("```sh")
+    lines.extend(commands)
+    lines.append("```")
+    lines.append("")
+    probed = summary.get("truth_probed_decisions") or 0
+    rate = summary.get("truth_rejection_rate")
+    lines.append("## The number")
+    lines.append("")
+    lines.append("| quantity | unit | value |")
+    lines.append("|---|---|---|")
+    lines.append(f"| truth-rejection rate | DECISIONS | {_pct(rate)} |")
+    lines.append(
+        f"| truth-rejected decisions | DECISIONS | {summary.get('truth_rejected_decisions')} |"
+    )
+    lines.append(f"| truth-probed decisions | DECISIONS | {probed} |")
+    lines.append(
+        f"| distinct open predicates | PREDICATES | {summary.get('distinct_open_predicates')} |"
+    )
+    lines.append(
+        "| sampler-search-failure rate | DECISIONS | "
+        f"{_pct(summary.get('sampler_search_failure_rate'))} |"
+    )
+    lines.append(
+        "| production fallback rate (same block) | DECISIONS | "
+        f"{_pct(summary.get('production_fallback_rate'))} |"
+    )
+    lines.append(
+        f"| decisions seen | DECISIONS | {summary.get('decisions_seen')} |"
+    )
+    lines.append(f"| battles | BATTLES | {summary.get('battles')} |")
+    lines.append(
+        "| truth unavailable (instrument gap) | DECISIONS | "
+        f"{summary.get('truth_unavailable_decisions')} |"
+    )
+    lines.append(
+        f"| instrument errors | EVENTS | {summary.get('instrument_error_total')} |"
+    )
+    lines.append("")
+    lines.append("## The queue: every predicate that rejected the TRUE world")
+    lines.append("")
+    lines.append(
+        "Frequency is UNCAPPED. `decisions` is the number of decisions on which the "
+        "predicate rejected the truth; `counter units` is the raw source-counter delta, "
+        "whose unit is that counter's unit (WORLDS for construction and crate keys, "
+        "DECISIONS for fallback literals). Never compare the two columns across stages."
+    )
+    lines.append("")
+    lines.append("| # | predicate | stage | channel family | decisions | counter units |")
+    lines.append("|---|---|---|---|---|---|")
+    for index, row in enumerate(summary.get("predicates") or [], start=1):
+        lines.append(
+            f"| {index} | `{row['predicate']}` | {row['stage']} | {row['family']} | "
+            f"{row['decisions']} | {row['counter_units']} |"
+        )
+    if not summary.get("predicates"):
+        lines.append("| - | *(empty)* | - | - | 0 | 0 |")
+    lines.append("")
+    lines.append("## Exemplars (one per predicate, first occurrence)")
+    lines.append("")
+    for row in summary.get("predicates") or []:
+        exemplar = row.get("exemplar") or {}
+        lines.append(f"### `{row['predicate']}`")
+        lines.append("")
+        lines.append("```json")
+        lines.append(json.dumps(exemplar, indent=1, sort_keys=True))
+        lines.append("```")
+        lines.append("")
+    lines.append("## Branch renders (a SEPARATE unit; not refusals)")
+    lines.append("")
+    lines.append("| lossy subcase | BRANCH RENDERS |")
+    lines.append("|---|---|")
+    for name, count in (summary.get("lossy_subcase_renders") or {}).items():
+        lines.append(f"| `{name}` | {count} |")
+    if not summary.get("lossy_subcase_renders"):
+        lines.append("| *(none observed)* | 0 |")
+    lines.append("")
+    lines.append("## Decision-level fallback literals")
+    lines.append("")
+    lines.append("| literal | truth arm (DECISIONS) | production arm (DECISIONS) |")
+    lines.append("|---|---|---|")
+    literals = sorted(
+        set(summary.get("truth_fallback_literals") or {})
+        | set(summary.get("production_fallback_literals") or {})
+    )
+    for literal in literals:
+        lines.append(
+            f"| `{literal}` | {(summary.get('truth_fallback_literals') or {}).get(literal, 0)} "
+            f"| {(summary.get('production_fallback_literals') or {}).get(literal, 0)} |"
+        )
+    if not literals:
+        lines.append("| *(none)* | 0 | 0 |")
+    lines.append("")
+    lines.append("## Sampler-search failure (the isolated residual)")
+    lines.append("")
+    lines.append(
+        "The truth constructs, but belief sampling found NO consistent completion in "
+        "`worlds * sample_retry_factor` tries. A conditioning problem, not a guard "
+        "problem. Never folded into the truth-rejection rate."
+    )
+    lines.append("")
+    lines.append("| sampling failure reason | WORLDS |")
+    lines.append("|---|---|")
+    for name, count in sorted(
+        (summary.get("sampler_search_failure_reasons") or {}).items(),
+        key=lambda item: -item[1],
+    ):
+        lines.append(f"| `{name}` | {count} |")
+    if not summary.get("sampler_search_failure_reasons"):
+        lines.append("| *(none)* | 0 |")
+    lines.append("")
+    lines.append("## Identity witness (per shard, from the LOADED module)")
+    lines.append("")
+    lines.append("```json")
+    lines.append(
+        json.dumps(
+            [
+                {
+                    "path": shard["path"],
+                    "witness": shard.get("identity_witness"),
+                    "mismatches_vs_neutral_cwd_child": shard.get(
+                        "identity_witness_mismatches"
+                    ),
+                }
+                for shard in (summary.get("shards") or [])[:2]
+            ],
+            indent=1,
+            sort_keys=True,
+        )
+    )
+    lines.append("```")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _pct(value: Any) -> str:
+    if value is None:
+        return "UNMEASURED (no denominator)"
+    return f"{value:.4%}"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", default="run", choices=("plan", "run", "report", "witness"))
+    parser.add_argument(
+        "--mode", default="run", choices=("plan", "run", "report", "queue", "witness")
+    )
     parser.add_argument("--showdown-root", default=DEFAULT_SHOWDOWN_ROOT)
     parser.add_argument("--out", default="-")
     # plan
@@ -675,8 +830,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--truth-repeats", type=int, default=1)
     parser.add_argument("--force", default="none",
                         choices=("none", "construct", "abort", "unmapped"))
-    # report
+    # report / queue
     parser.add_argument("--shards", nargs="*", default=[])
+    parser.add_argument("--summary", help="a --mode report output, for --mode queue")
+    parser.add_argument("--queue-title", default="Truth-injection differential census")
+    parser.add_argument("--command", action="append", default=[],
+                        help="a command line to publish beside the figures; repeatable")
     args = parser.parse_args(argv)
 
     if args.mode == "witness":
@@ -710,6 +869,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.mode == "report":
         summary = merge_shards(Path(path) for path in args.shards)
         text = json.dumps(summary, indent=1, sort_keys=True)
+        if args.out == "-":
+            print(text)
+        else:
+            Path(args.out).write_text(text, encoding="utf-8")
+            print(f"wrote {args.out}")
+        return 0
+
+    if args.mode == "queue":
+        if args.summary:
+            summary = json.loads(Path(args.summary).read_text(encoding="utf-8"))
+        else:
+            summary = merge_shards(Path(path) for path in args.shards)
+        text = render_queue(summary, commands=args.command, title=args.queue_title)
         if args.out == "-":
             print(text)
         else:
