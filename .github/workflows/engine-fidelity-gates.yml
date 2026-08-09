@@ -908,21 +908,28 @@ jobs:
       # its Appendix A is re-derived from tracked bytes, committed artifacts and anchors
       # resolved with uniqueness required, imported from C153's census rather than copied.
       #
-      # Battery: 34 mutations applied, 34 caught, listed in the module docstring. Ten of
-      # them are applied ONLY to the tree and never to the document, because a pin that
-      # reads a document against a hard-coded copy of itself passes every document-side
-      # mutation. Exact count, not a floor, per #1163.
+      # Battery: 48 mutations applied, 48 caught, listed in the module docstring -- a
+      # MUTATION count, not the test count, which a first revision of this comment conflated
+      # by writing the module's 34 tests here. FOURTEEN of the 48 are applied only to the tree
+      # and never to the document, because a pin that reads a document against a hard-coded
+      # copy of itself passes every document-side mutation; the first revision claimed ten
+      # and two of those ten edited the register. Exact count, not a floor, per #1163.
       #
-      # ⚠ #1205: the guard-scan added in #1204 covers 20 of the 24 `Ran N tests` guards in
-      # this file, so do not assume it will catch a drift in this one. The count below was
-      # re-derived from the module's own AST and from a local run.
+      # ⚠ #1205: the guard scan added in #1204 does not cover every guard here, so do not
+      # assume it will catch a drift in this one. MEASURED on this tree rather than
+      # inherited from #1205's figure: at this branch's head the scan resolves 21 guards
+      # out of 26 invocation sites (base: 20 of 25), and this step IS one of the 21,
+      # deriving 41 from the module's AST. (This comment deliberately does not spell the invocation literally --
+      # the scan matches on that string, so a first revision of it made the file appear to
+      # gain an invocation. The self-match trap C154 records three times, one more time.)
+      # The count below was re-derived the same way and from a local run.
       - name: Terminal disposition register
         run: |
           set -o pipefail
           python -m unittest tests.test_terminal_disposition_register -v 2>&1 \
             | tee /tmp/c155register.log
-          if ! grep -qE 'Ran 34 tests' /tmp/c155register.log; then
-            echo "::error::expected 34 register pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 41 tests' /tmp/c155register.log; then
+            echo "::error::expected 41 register pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. TheDerivationsReadSomethingTests is the only reason

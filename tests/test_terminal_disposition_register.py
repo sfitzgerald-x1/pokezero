@@ -56,6 +56,8 @@ WHAT IS NOT PINNED, ON PURPOSE, AND THE REGISTER SAYS SO PER ITEM.
   * T6 residue 4. The four phrase-guard normalisations are derived from C154's pin; "no
     fifth obfuscation exists" is not a claim any check makes.
   * The classification of T11 and T14 as STANDING rather than OPEN.
+  * T2's "still unmeasured" and T5's "uncompared". Their figures are derived; the STATUS
+    rests on the ledger's prose, not on an absence scan. Both carry `derived + reading`.
 
 A DECLARED COUPLING. `base.expected_counter_artifacts` and `base.expected_sweep_artifacts`
 are pinned against the two census modules' own constants, read by AST rather than imported
@@ -64,88 +66,114 @@ are pinned against the two census modules' own constants, read by AST rather tha
 update the register in the same change. That is deliberate: the document that goes stale is
 the one nothing forces an author through.
 
-MUTATION BATTERY: 37 applied, 37 caught, in two blocks. Enumerated because an unrecorded
-battery is what `tests/test_wide_seed_negative_census.py` records costing it a surviving
-mutation, and because "the tests pass" is the same kind of claim this module replaces. Each
-was applied to a clean tree, this module run, and the tree restored.
+MUTATION BATTERY: 48 applied, 48 caught, partitioned by WHAT IS MUTATED. Enumerated because
+an unrecorded battery is what `tests/test_wide_seed_negative_census.py` records costing it a
+surviving mutation, and because "the tests pass" is the same kind of claim this module
+replaces. Each was applied to a clean tree, this module run, and the tree restored.
 
-BLOCK A -- 1-27, applied to the DOCUMENT and to source the document cites.
+⚠ THE FIRST REVISION MIS-PARTITIONED ITS OWN BATTERY, and review caught it. It said "block
+B's ten are applied only to the tree", when two of that block's ten -- deleting an accept bar
+from a paragraph, adding a bare pipe to a table row -- edit the REGISTER and fire through
+document-reading tests. Inflated, not fabricated; and tree-only is the property that
+distinguishes this pin from a diary, so the split is now by target and the number is stated
+where it can be checked. Three of the old block A (a patch line shift and two `events.rs`
+edits) were likewise tree-side and have moved the other way.
 
-   1. `T7` deleted from the register's item table -> 3 red (inventory, §7 coverage, count).
-   2. `T15` appended with a well-formed row -> 3 red. An item cannot join silently.
-   3. `T3` and `T4` swapped in the table -> 1 red. Order is part of the inventory.
-   4. `T2`'s status changed OPEN -> DISCHARGED-IN-SCOPE (manufacturing terminality) -> 1 red.
-   5. `T6`'s status changed DISCHARGED-IN-SCOPE -> OPEN (manufacturing openness) -> 1 red.
-   6. `T1`'s actor changed AGENT-THEN-OWNER -> OWNER -> 1 red. The vocabulary is closed and
-      the value is pinned per item.
-   7. `T11`'s actor changed to AGENT -> 1 red.
-   8. `t1.head_fingerprint` changed one hex digit -> 1 red.
-   9. `t1.committed_json_carrying_head_fingerprint` 0 -> 1 -> 1 red.
-  10. `t1.freeze_declaration_constants` 0 -> 1 -> 1 red.
-  11. `t2.hp_ceiling_site_lines` changed to the vendored `4197, 4406` -> 1 red. This is the
-      historical defect replayed: a line number from a tree no check can resolve.
-  12. A blank line inserted above the first `residual_disjoint_bands(` call in the patch,
-      shifting all four sites -> 1 red on the two line-list keys, with the values the
-      anchors now produce. The anchors follow; the DOCUMENT does not, which is the point.
-  13. `t2.split_hunks_touching_an_hp_ceiling_site` 0 -> 1 -> 1 red.
-  14. `t3.speed_ties_order_le_10` 20 -> 24, i.e. the over-broad population C152 corrected in
-      review -> 1 red.
-  15. `t3.order_le_10_ties_carrying_a_winner_heal` 3 -> 7 -> 1 red.
-  16. `t3.tie_refusal_line` decremented by one -> 1 red.
-  17. The `_ => NO_TRUNCATION,` arm deleted from `events.rs` -> 1 red, loudly, via the
-      anchor rather than via a wrong number.
-  18. A second `!leftovers_truncated[i]` guard added to a damage push in `events.rs`
-      (i.e. G33c FIXED) -> 2 red on the reference and consumer counts. An improvement has
-      to be recorded rather than absorbed, which is the property
-      `tests/test_ledger_table_uniformity.py` mutation 9 earned.
-  19. `t4.branch_miss_pct` 100.00 -> 99.00 -> 1 red.
-  20. `t5.subkeyed_single_seat_counters_in_corpus` 0 -> 1 -> 1 red.
-  21. `t6.rows_foreclosed_over_section_4_population_only` widened to add R14 -> 1 red.
-  22. `t6.workflow_steps_checking_out_showdown` 0 -> 1 -> 1 red.
-  23. `power.divergences_for_a_tenfold_tighter_bound` 9490 -> 949 -> 1 red.
-  24. An Appendix A row DELETED (`bar.support_gated_dev`) -> 1 red on set equality. Removal
-      is as red as alteration; a pin that only checks the keys present is defeated by
-      deleting the inconvenient one.
-  25. T3's `pin` verdict downgraded `derived + reading` -> `derived` -> 1 red. Claiming a
-      pin covers a judgement is the defect C154 §5 enumerates; the column is pinned per
-      item and §6 must list every item that carries a reading.
-  26. `t4.undiagnosed_sibling_rows` emptied -> 1 red. The second row of G33c's class is the
-      thing deriving found and transcribing did not; it cannot be dropped again.
-  27. `t4.heal_mismatch_rows_in_the_wide_census` 2 -> 1, i.e. back to the count C152 and the
-      ledger's G33c cell both imply -> 1 red.
+BLOCK A -- A1-A34, applied to the REGISTER's own bytes.
 
-BLOCK B -- 28-37, applied ONLY to the tree, never to the document. Block A can be passed by
-a pin that reads the register against a hard-coded copy of itself. These are the ones that
-prove each derivation reads what it claims to: every one MAKES A REAL CHANGE TO THE TREE and
-the document, unedited, must go red. Six of them are the absences, and an absence pin that
-cannot see its own subject appear is the eleven-plus-times defect this repo has recorded.
+  A1.  `T7` deleted from the item table.
+  A2.  `T15` appended with a well-formed row. An item cannot join silently.
+  A3.  `T3` and `T4` swapped. Order is part of the inventory.
+  A4.  `T2`'s status OPEN -> DISCHARGED-IN-SCOPE, i.e. manufacturing terminality.
+  A5.  `T6`'s status DISCHARGED-IN-SCOPE -> OPEN, i.e. manufacturing openness.
+  A6.  `T1`'s actor AGENT-THEN-OWNER -> OWNER. The vocabulary is closed AND the value is
+       pinned per item, so a plausible substitution inside the vocabulary still fails.
+  A7.  `T11`'s actor -> AGENT.
+  A8.  `T3`'s `pin` verdict `derived + reading` -> `derived`. Claiming a pin covers a
+       judgement is the defect C154 §5 enumerates, and §6 must list every item carrying a
+       reading, so this fails on both halves.
+  A9.  `t1.head_fingerprint` changed by one hex digit.
+  A10. `t1.committed_json_carrying_head_fingerprint` 0 -> 1.
+  A11. `t1.freeze_declaration_constants` 0 -> 1.
+  A12. `t2.hp_ceiling_site_lines` changed to the VENDORED `4197, 4406`. The historical
+       defect replayed: a line number from a tree no check can resolve.
+  A13. `t2.split_hunks_touching_an_hp_ceiling_site` 0 -> 1.
+  A14. `t3.speed_ties_order_le_10` 20 -> 24, the over-broad population C152 itself
+       corrected in review.
+  A15. `t3.order_le_10_ties_carrying_a_winner_heal` 3 -> 7.
+  A16. `t3.tie_refusal_line` decremented by one.
+  A17. `t4.branch_miss_pct` 100.00 -> 99.00.
+  A18. `t4.undiagnosed_sibling_rows` emptied. The second row of G33c's class is what
+       deriving found and transcribing did not; it cannot be dropped again.
+  A19. `t4.heal_mismatch_rows_in_the_wide_census` 2 -> 1, back to the count C152 and the
+       ledger's G33c cell both imply.
+  A20. `t5.subkeyed_single_seat_counters_in_corpus` 0 -> 1.
+  A21. `t6.rows_foreclosed_over_section_4_population_only` widened to add R14.
+  A22. `t6.workflow_steps_checking_out_showdown` 0 -> 1.
+  A23. `power.divergences_for_a_tenfold_tighter_bound` 9490 -> 949.
+  A24. An Appendix A row DELETED (`bar.support_gated_dev`). Removal is as red as
+       alteration; a pin that only checks the keys present is defeated by deleting the
+       inconvenient one.
+  A25. The support-gated bar deleted from T2's paragraph.
+  A26. A bare `|` introduced into a register table row. GFM DROPS the surplus cells, so a
+       row can lose its actor column while keeping it in the bytes -- the G37 defect
+       `tests/test_ledger_table_uniformity.py` exists for, on a new document.
+  A27. §2's status tally 11 OPEN -> 10 OPEN. `EXPECTED_STATUS` forces an author through the
+       column; before this check nothing forced them through the sentence a reader meets
+       first, which is how the ledger's own counts went stale three times.
+  A28. A §5 entry de-listed so the section names one fewer delta than it claims.
+  A29. `scope.section3_rows_untouched_since_c138` 73 -> 0.
+  A30. `cost.head_resweep_minutes` 19 -> 5.
+  A31. The accept bars deleted from T14's paragraph, leaving a two-window zero quoted bare
+       in a DIFFERENT paragraph from A25's. Both are needed: the first revision of that
+       check keyed on the literal `31,082` and covered exactly one of the six paragraphs
+       the widened detector finds.
+  A32. The register's stated `Ran N tests` decremented while the module is unchanged.
+  A33. The register's stated mutation total incremented while this list is unchanged.
+  A34. "Twelve is the measured figure" changed to "Eleven". A32-A34 and B44-B45 all exercise
+       `TheDocumentsClaimsAboutItselfAreReDerivedTests`, which exists because review blocked
+       the first revision on four claims the document made about ITSELF.
 
-  28. `skip:single_seat_boundary:phazing` added to a committed sweep -> 2 red. T13's absence
-      is a scan of the corpus, and now it finds one.
-  29. `FROZEN_FOR_CLAIM = None` added to the differential -> 2 red. T1's "nothing can declare
-      it frozen" is a name-level AST scan, and now something can.
-  30. A real `git clone .../pokemon-showdown` step added to the workflow -> 2 red. T6 residue
-      1's zero is a non-comment scan, and now the checkout exists.
-  31. A committed sweep's fingerprint rewritten to the head value -> 4 red. T1's "no
-      committed artifact carries it" is progress when it happens and must be recorded, not
-      absorbed.
-  32. A `defender_active.hp,` context line added inside one of C149's split hunks -> 3 red.
-      T2's "the split reaches only the `i16::MAX` sites" is derived from the hunks.
-  33. Ledger §7 item 5 marked RESOLVED -> 3 red. A resolved §7 item cannot keep a register
-      slot, and the register's item count moves with the ledger.
-  34. A C154 verdict flipped `UNREACHABLE_TRACED` -> `NOT_OBSERVED_AT_SCOPE` -> 3 red. T6 is
-      DISCHARGED-IN-SCOPE only while the artifact says all 26 were traced.
-  35. The ledger's §4 population sentence reworded -> 6 red, LOUDLY, through the anchor
-      rather than through a line number that now points at whatever occupies it.
-  36. The support-gated bar deleted from T2's paragraph, leaving the zero quoted with one
-      bar -> 2 red. This is the ledger §6 item 9 rule enforced on this document.
-  37. A bare `|` introduced into a register table row -> 5 red. GFM DROPS the surplus cells,
-      so a register row can lose its actor column while keeping it in the bytes -- the G37
-      defect `tests/test_ledger_table_uniformity.py` exists for, on a new document.
+BLOCK B -- B35-B48, FOURTEEN mutations applied ONLY to the tree and never to the document.
+Block A can be passed by a pin that reads the register against a hard-coded copy of itself.
+These are the ones that prove each derivation reads what it claims to: every one MAKES A REAL
+CHANGE TO THE TREE and the document, unedited, must go red. Six are the absences, and an
+absence pin that cannot see its own subject appear is the eleven-plus-times defect this repo
+has recorded.
 
-Mutations 12, 17, 18 and all ten of block B are the ones that matter: they are applied to the
-TREE, not to the document, and they prove the derivations read the tree rather than the prose
-describing it.
+  B35. A blank line inserted above the first `residual_disjoint_bands(` call in the tracked
+       patch, shifting all four sites. The ANCHORS follow it; the document does not.
+  B36. The `_ => NO_TRUNCATION,` arm deleted from `events.rs` -> loud anchor failure rather
+       than a silently wrong line number.
+  B37. A second `!leftovers_truncated[i]` guard added to a damage push in `events.rs`, i.e.
+       G33c FIXED. An improvement has to be recorded rather than absorbed, which is the
+       property `tests/test_ledger_table_uniformity.py` mutation 9 earned.
+  B38. `skip:single_seat_boundary:phazing` added to a committed sweep. T13's absence is a
+       scan of the corpus, and now it finds one.
+  B39. `FROZEN_FOR_CLAIM = None` added to the differential. T1's "nothing can declare it
+       frozen" is a name-level AST scan, and now something can.
+  B40. A real `git clone .../pokemon-showdown` step added to the workflow. T6 residue 1's
+       zero is a non-comment scan, and now the checkout exists.
+  B41. A committed sweep's fingerprint rewritten to the head value. T1's "no committed
+       artifact carries it" is progress when it happens and must be recorded, not absorbed.
+  B42. A `defender_active.hp,` context line added inside one of C149's split hunks.
+  B43. Ledger §7 item 5 marked RESOLVED. A resolved §7 item cannot keep a register slot, and
+       the register's item count moves with the ledger.
+  B44. A C154 verdict flipped `UNREACHABLE_TRACED` -> `NOT_OBSERVED_AT_SCOPE`. T6 is
+       DISCHARGED-IN-SCOPE only while the artifact says all 26 were traced.
+  B45. The ledger's §4 population sentence reworded -> loud anchor failure.
+  B46. ⚠ **EVERY** C152 marker removed from the ledger's H8 row, so the row leaves the
+       re-examined set. **Its first form -- ONE marker rewritten -- SURVIVED**, because each
+       touched row carries between one and six markers and the derivation published only a
+       count. The count was correct and the check behind it could not see a row leave. That
+       is what earned `scope.section3_rows_touched_since_c138` being the ID LIST rather than
+       the number, and it is recorded rather than tidied away.
+  B47. The workflow step's `Ran N tests` guard bumped while the module is unchanged. This is
+       the #1205 shape applied to this step's own guard: the count it demands becomes one
+       its suite can never print, so the guard stops failing closed.
+  B48. The workflow comment's mutation total set to this module's TEST count -- the exact
+       conflation review found in the first revision.
+
 """
 
 from __future__ import annotations
@@ -246,10 +274,14 @@ EXPECTED_ACTOR: dict[str, str] = {
 #: same round. Four items carry `derived + reading` and each names its reading in §6.
 EXPECTED_PIN: dict[str, str] = {
     "T1": "derived",
-    "T2": "derived",
+    # ⚠ T2 and T5 were `derived` until review. Their FIGURES are derived; the STATUS half
+    # of each -- "still unmeasured", "uncompared" -- rests on the ledger's prose rather than
+    # on an absence scan of the kind T13 carries. Both statuses are right; the label
+    # overstated by one word, and the word is the distinction §6 exists to draw.
+    "T2": "derived + reading",
     "T3": "derived + reading",
     "T4": "derived",
-    "T5": "derived",
+    "T5": "derived + reading",
     "T6": "derived + reading",
     "T7": "derived",
     "T8": "derived",
@@ -322,6 +354,32 @@ def _register_table(header: str) -> list[list[str]]:
     return [row_cells(line) for _, line in found[0]["rows"]]
 
 
+#: A paragraph asserting a zero over the two permitted windows. Matched against the
+#: FLATTENED paragraph, because `**0** in the two head windows` is how one of the five is
+#: actually written and a literal scan walks past it.
+_TWO_WINDOW_ZERO = re.compile(
+    r"(?:\b0 divergen|\bzero divergen|\b0 in the two\b|\b0 in both\b|\bzero in both\b"
+    r"|windows are at 0\b|\bdivergence-free\b)",
+    re.IGNORECASE,
+)
+
+
+def _flatten(paragraph: str) -> str:
+    """Emphasis and code-span markers removed, whitespace folded."""
+
+    return re.sub(r"\s+", " ", paragraph.replace("*", "").replace("`", ""))
+
+
+def two_window_zero_paragraphs(text: str | None = None) -> list[str]:
+    if text is None:
+        text = _text(REGISTER)
+    return [
+        paragraph
+        for paragraph in text.split("\n\n")
+        if _TWO_WINDOW_ZERO.search(_flatten(paragraph))
+    ]
+
+
 def register_items() -> list[list[str]]:
     return _register_table(_ITEM_HEADER)
 
@@ -353,13 +411,15 @@ def section_7_unresolved() -> list[int]:
     return [n for n, t in section_7_items() if not re.match(r"^(⚠ )?\*\*RESOLVED", t)]
 
 
-def _ledger_row_ids(header: str) -> list[str]:
+def _ledger_rows(header: str) -> list[tuple[int, str]]:
     grouped = _tables_by_header(_text(LEDGER))
     return [
-        row_cells(line)[0]
-        for table in grouped.get(header, [])
-        for _, line in table["rows"]
+        entry for table in grouped.get(header, []) for entry in table["rows"]
     ]
+
+
+def _ledger_row_ids(header: str) -> list[str]:
+    return [row_cells(line)[0] for _, line in _ledger_rows(header)]
 
 
 def committed_json() -> list[str]:
@@ -694,6 +754,50 @@ def derive() -> dict[str, str]:
         f"{LEDGER}:{_anchor(LEDGER, 'cannot be reached in gen3 randbats')}"
     )
 
+    # -- how much of the ledger has actually been re-examined ---------------
+    # C152 §7.1's own sixth open item was "G0 and every other §3 row C152 did not touch".
+    # The first revision of this register absorbed that into §1's "terminal is not the
+    # absence of gaps" reading and did not carry the NUMBER, which is the figure an owner
+    # asking how much of the ledger has been looked at actually needs.
+    ledger_rows = _ledger_rows(_REACHABILITY_HEADER)
+    touched = sorted(
+        {
+            row_cells(line)[0].strip("*~ ")
+            for _, line in ledger_rows
+            if any(tag in line for tag in ("C152", "C153", "C154"))
+        },
+        key=lambda name: (name[0], int(re.sub(r"\D", "", name)), name),
+    )
+    # The IDS, not just the count. ⚠ A first version published only the count, and the
+    # mutation meant to prove it live -- one `(C152)` marker rewritten -- SURVIVED, because
+    # every touched row carries between one and six markers and removing one leaves the row
+    # in the set. The count was right; the check behind it could not see a row leave. With
+    # the ids pinned, a row joining OR leaving the re-examined set is red in both
+    # directions, and the marker is coarse by design (any C152/C153/C154 mention in the
+    # cell) so it can only over-count -- which the exact id list is what bounds.
+    facts["scope.section3_rows_touched_since_c138"] = ", ".join(touched)
+    facts["scope.section3_rows_touched_count"] = str(len(touched))
+    facts["scope.section3_rows_untouched_since_c138"] = str(
+        len(ledger_rows) - len(touched)
+    )
+    unreachable_rows = _ledger_rows(_UNREACHABLE_HEADER)
+    facts["scope.section4_rows_corrected_by_c154"] = str(
+        sum(1 for _, line in unreachable_rows if "C154" in line)
+    )
+
+    # -- what T1's agent half costs ------------------------------------------
+    # Named as work in the first revision and not costed, which for the biggest line item
+    # on the page is the same defect as an uncounted count. Taken from the two committed
+    # sweeps' own recorded wall time rather than estimated.
+    seconds = sum(_artifact(path)["elapsed_seconds"] for path in HEAD_SWEEPS.values())
+    facts["cost.head_resweep_games"] = str(
+        sum(_artifact(path)["games"] for path in HEAD_SWEEPS.values())
+    )
+    facts["cost.head_resweep_minutes"] = f"{seconds / 60:.0f}"
+
+    # -- the register's own shape, so its summary sentences cannot go stale ---
+    facts["rule.two_window_zero_paragraphs"] = str(len(two_window_zero_paragraphs()))
+
     # -- the standing bars -------------------------------------------------
     for window, path in HEAD_SWEEPS.items():
         sweep = _artifact(path)
@@ -811,7 +915,7 @@ class TheItemInventoryIsExactTests(unittest.TestCase):
 
     def test_the_item_count_is_stated_and_re_derived(self) -> None:
         stated = re.search(
-            r"\*\*Fourteen items — (\d+) under G2, (\d+) under G1\.\*\*", _text(REGISTER)
+            r"\*\*Fourteen items — (\d+) under G2, (\d+) under G1\.", _text(REGISTER)
         )
         self.assertIsNotNone(
             stated,
@@ -824,6 +928,50 @@ class TheItemInventoryIsExactTests(unittest.TestCase):
             (gates.count("G2"), gates.count("G1")),
         )
         self.assertEqual(len(gates), 14)
+
+    def test_the_status_tally_sentence_is_re_derived(self) -> None:
+        # Added in review. `EXPECTED_STATUS` already forces an author through the column
+        # when a status flips; it does NOT force them through the summary sentence a reader
+        # meets first, which is the same gap `test_the_stated_row_count_matches_the_rows`
+        # closes in the ledger after that sentence went stale three times.
+        stated = re.search(
+            r"Status tally: (\d+) OPEN, (\d+) DISCHARGED-IN-SCOPE,\s*\n?(\d+) STANDING",
+            _text(REGISTER),
+        )
+        self.assertIsNotNone(
+            stated,
+            "§2's status-tally sentence is gone or reworded; this pin reads it and must be "
+            "updated with it rather than silently passing",
+        )
+        statuses = [cells[3] for cells in register_items()]
+        self.assertEqual(
+            tuple(int(stated.group(n)) for n in (1, 2, 3)),
+            (
+                statuses.count("OPEN"),
+                statuses.count("DISCHARGED-IN-SCOPE"),
+                statuses.count("STANDING"),
+            ),
+        )
+
+    def test_the_derivation_delta_count_is_re_derived(self) -> None:
+        # §5 says how many statements did not survive the derivation, in two places. Both
+        # come from the list itself. Added in review for the same reason as the tally above.
+        text = _text(REGISTER)
+        body = text.split("## 5. What the derivation changed", 1)[1]
+        body = body.split("\n## 6.", 1)[0]
+        entries = re.findall(r"(?m)^(\d+)\. \*\*", body)
+        self.assertEqual(
+            [int(n) for n in entries],
+            list(range(1, len(entries) + 1)),
+            "§5's list is not numbered consecutively from 1",
+        )
+        words = {6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten"}
+        self.assertIn(len(entries), words, f"§5 has {len(entries)} entries; extend `words`")
+        word = words[len(entries)]
+        self.assertRegex(body, rf"\*\*{word}\*\* entries")
+        self.assertRegex(
+            text, rf"and \*\*{word.lower()}\*\*\s*\nstatements did not survive"
+        )
 
     def test_every_status_and_actor_is_from_the_closed_vocabulary(self) -> None:
         for cells in register_items():
@@ -1052,23 +1200,63 @@ class TheSection4DischargeIsScopedTests(unittest.TestCase):
 
 
 class TheStandingBarsAreQuotedWithTheirMeasurementsTests(unittest.TestCase):
-    def test_both_accept_bars_appear_wherever_the_zero_does(self) -> None:
-        # The ledger's §6 item 9 forbids a bare "0 divergences over 31,082 boundaries".
-        # The register quotes that zero once, in T2, and this is the check that both bars
-        # are in the same paragraph rather than somewhere else in the document.
-        text = _text(REGISTER)
-        paragraphs = [p for p in text.split("\n\n") if "31,082" in p]
-        self.assertEqual(len(paragraphs), 1, "the zero moved or was quoted twice")
-        block = paragraphs[0]
+    def test_both_accept_bars_appear_in_every_paragraph_quoting_a_two_window_zero(
+        self,
+    ) -> None:
+        """The ledger §6 item 9 rule, enforced on this document at the rule's own width.
+
+        ⚠ THE FIRST REVISION OF THIS CHECK WAS THE DEFECT IT ENFORCES. It selected
+        paragraphs by the literal `31,082`, which is ONE of the five places the register
+        asserts a two-window zero, and its failure message read "the zero moved or was
+        quoted twice" -- a check advertising coverage it did not have, in a module written
+        after #1205 recorded exactly that shape in the workflow's guard scan. Four
+        paragraphs carried neither bar. Found in review, not by the author.
+
+        The detector normalises markdown emphasis and code spans before matching, because
+        the T3 site is written `**0** in the two head windows` and a literal scan walks
+        straight past it -- C154's phrase guard learned the same thing four times.
+        """
+
+        paragraphs = two_window_zero_paragraphs()
+        self.assertGreaterEqual(
+            len(paragraphs),
+            5,
+            "the detector found fewer paragraphs than the five this document is known to "
+            "carry; it has stopped matching and would pass over a bare zero silently",
+        )
         derived = derive()
-        for key in (
-            "bar.support_gated_dev",
-            "bar.support_gated_holdout",
-            "bar.roll_window_dev",
-            "bar.roll_window_holdout",
-        ):
-            with self.subTest(key=key):
-                self.assertIn(derived[key], block)
+        bars = (
+            derived["bar.support_gated_dev"],
+            derived["bar.support_gated_holdout"],
+            derived["bar.roll_window_dev"],
+            derived["bar.roll_window_holdout"],
+        )
+        for index, block in enumerate(paragraphs):
+            flat = _flatten(block)
+            for bar in bars:
+                with self.subTest(paragraph=index, bar=bar, opening=block[:48]):
+                    self.assertIn(
+                        bar,
+                        flat,
+                        "a paragraph asserts a zero over the two permitted windows "
+                        "without carrying both accept bars. §6 item 9 of the ledger "
+                        "forbids the bare number, and §4 of this register repeats the "
+                        f"rule.\n\n{block}",
+                    )
+
+    def test_the_zero_detector_fires_on_a_bare_zero_and_is_quiet_otherwise(self) -> None:
+        # ANTI-VACUITY for the check above, and the control the first revision lacked. A
+        # detector that matched nothing would make every paragraph compliant.
+        bare = "The two permitted windows are at **0** divergences at head.\n"
+        self.assertEqual(len(two_window_zero_paragraphs(bare)), 1)
+        self.assertEqual(
+            two_window_zero_paragraphs("The wide census carries 12 divergent rows.\n"), []
+        )
+        # ...and emphasis around the digit must not hide it, which is the real T3 shape.
+        self.assertEqual(
+            len(two_window_zero_paragraphs("carry 12 rows and **0** in the two windows\n")),
+            1,
+        )
 
     def test_the_rule_of_three_is_applied_to_the_right_denominator(self) -> None:
         bounds = _artifact(C153_CENSUS)["statistical_bounds"]["combined"]
@@ -1077,7 +1265,7 @@ class TheStandingBarsAreQuotedWithTheirMeasurementsTests(unittest.TestCase):
             3 / bounds["classified_divergences"],
             places=6,
         )
-        # ...and the register's 847x is the RATIO OF THE DENOMINATORS, re-derived rather
+        # ...and the register's 846x is the RATIO OF THE DENOMINATORS, re-derived rather
         # than the "four orders of magnitude" C153's prose rounds it to. That substitution
         # is the one C153 records as the way to overstate a per-class negative.
         self.assertEqual(
@@ -1087,6 +1275,114 @@ class TheStandingBarsAreQuotedWithTheirMeasurementsTests(unittest.TestCase):
         self.assertLess(
             bounds["rule_of_three_per_boundary_upper_95"] * 100,
             bounds["rule_of_three_per_divergence_upper_95"],
+        )
+
+
+class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
+    """⚠ ADDED IN REVIEW, AND IT IS THE CLASS FIX RATHER THAN THE INSTANCE.
+
+    Review blocked the first revision on four false claims, and every one of them was this
+    document, its pin or its workflow step describing ITSELF: a coverage claim for a check
+    that covered one of six paragraphs, a tree-only mutation count inflated from 8 to 10,
+    the module's TEST count written into the workflow's MUTATION count, and an engine
+    fingerprint attributed to two measurements that build no engine. The substantive
+    findings all held. What did not hold was the self-description -- which is the one thing
+    a register whose subject is documentary drift cannot get wrong.
+
+    Fixing four sentences repairs the instance. This class repairs the class: every number
+    the register, this docstring and the workflow step state ABOUT THIS CHANGE is re-derived
+    from the thing it describes, so the next revision cannot bump one site and miss another.
+    `reports/c131` §6 records the same author correcting "the instance a reviewer named and
+    leaving the same defect one surface over", and C154 §0b hit it twice more.
+    """
+
+    @staticmethod
+    def _step() -> str:
+        """This module's workflow step, sliced off so a sibling step's numbers cannot
+        satisfy a claim about this one. A first version of this check read the whole file
+        and matched C150's `Battery: 10 mutations`, reporting agreement with a comment
+        forty steps away."""
+
+        text = _text(WORKFLOW)
+        start = text.index("# C155. The terminal-disposition register.")
+        return text[start:].split("      # C150. The ledger's G8 cell", 1)[0]
+
+    @staticmethod
+    def _battery() -> str:
+        source = _text("tests/test_terminal_disposition_register.py")
+        return source.split("MUTATION BATTERY:", 1)[1].split('\n"""', 1)[0]
+
+    def _all(self, pattern: str, haystack: str) -> str:
+        found = re.search(pattern, haystack)
+        self.assertIsNotNone(found, f"the sentence matched by {pattern!r} is gone or reworded")
+        return found.group(1)
+
+    def test_every_stated_test_count_is_this_modules_own_method_count(self) -> None:
+        source = _text("tests/test_terminal_disposition_register.py")
+        derived = len(re.findall(r"(?m)^\s+def test", source))
+        register, step = _text(REGISTER), self._step()
+        for label, pattern, haystack in (
+            ("register §6 guard", r"exact `Ran (\d+) tests`", register),
+            ("register §6 AST", r"derives (\d+) from the module's AST", register),
+            ("register test evidence", r"→ \*\*Ran (\d+)\ntests, OK\*\*", register),
+            ("workflow guard", r"Ran (\d+) tests' /tmp/c155register", step),
+            ("workflow error message", r"expected (\d+) register pins", step),
+            ("workflow AST", r"deriving (\d+) from the module's AST", step),
+        ):
+            with self.subTest(site=label):
+                self.assertEqual(int(self._all(pattern, haystack)), derived)
+
+    def test_every_stated_mutation_count_is_the_enumerated_batterys_size(self) -> None:
+        battery = self._battery()
+        block_a = re.findall(r"(?m)^  A(\d+)\.", battery)
+        block_b = re.findall(r"(?m)^  B(\d+)\.", battery)
+        total = len(block_a) + len(block_b)
+        self.assertGreater(total, 30, "the battery list collapsed; every count below is vacuous")
+        # The lists are consecutive and A runs into B, so a renumbering cannot hide a gap.
+        self.assertEqual(
+            [int(n) for n in block_a + block_b], list(range(1, total + 1))
+        )
+        register, step = _text(REGISTER), self._step()
+        for label, pattern, haystack in (
+            ("docstring header", r"^ (\d+) applied, \1 caught", battery),
+            ("register §6", r"\*\*(\d+) mutations applied, \1 caught\*\*", register),
+            ("workflow comment", r"Battery: (\d+) mutations applied, \1 caught", step),
+        ):
+            with self.subTest(site=label):
+                self.assertEqual(int(self._all(pattern, haystack)), total)
+        self.assertEqual(int(self._all(r"BLOCK A -- A1-A(\d+)", battery)), len(block_a))
+        self.assertEqual(int(self._all(r"BLOCK B -- B\d+-B(\d+)", battery)), total)
+        self.assertEqual(int(self._all(r"\*\*A1–A(\d+)\*\*", register)), len(block_a))
+        self.assertEqual(int(self._all(r"\*\*B\d+–B(\d+)\*\*", register)), total)
+
+    def test_the_tree_only_block_is_stated_at_its_measured_size(self) -> None:
+        # THE CLAIM REVIEW CORRECTED FROM TEN TO EIGHT AND THIS PASS RE-PARTITIONED TO
+        # TWELVE. Tree-only is the property that distinguishes this pin from a diary, so the
+        # word is re-derived from the block's own length in all three places it appears.
+        battery = self._battery()
+        size = len(re.findall(r"(?m)^  B\d+\.", battery))
+        words = {
+            8: "EIGHT", 9: "NINE", 10: "TEN", 11: "ELEVEN", 12: "TWELVE",
+            13: "THIRTEEN", 14: "FOURTEEN", 15: "FIFTEEN",
+        }
+        self.assertIn(size, words, f"block B has {size} entries; extend `words`")
+        word = words[size]
+        self.assertRegex(battery, rf"BLOCK B -- B\d+-B\d+, {word} mutations")
+        self.assertRegex(self._step(), rf"\b{word} of the \d+ are applied only to the tree")
+        self.assertRegex(_text(REGISTER), rf"(?i)\b{word.lower()} is the measured figure")
+
+    def test_the_readings_and_zero_paragraph_counts_are_stated_as_measured(self) -> None:
+        readings = [key for key, value in EXPECTED_PIN.items() if value == "derived + reading"]
+        words = {3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven"}
+        self.assertIn(len(readings), words)
+        register = _text(REGISTER)
+        self.assertEqual(
+            self._all(r"It cannot cover a reading\.\*\* (\w+) are named", register),
+            words[len(readings)],
+        )
+        self.assertEqual(
+            int(self._all(r"finds\s*\n?\*\*(\d+)\*\* paragraphs", register)),
+            len(two_window_zero_paragraphs()),
         )
 
 

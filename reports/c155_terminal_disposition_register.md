@@ -74,10 +74,10 @@ Actor vocabulary, exact: **AGENT** · **OWNER** · **AGENT-THEN-OWNER**.
 | id | item | gate | status | actor | pin |
 |---|---|---|---|---|---|
 | T1 | The engine fingerprint has moved and nothing in the tree can declare it frozen | G2 | OPEN | AGENT-THEN-OWNER | derived |
-| T2 | G8's second remainder — the two `defender_active.hp`-ceiling `residual_disjoint_bands` call sites | G1 | OPEN | AGENT | derived |
+| T2 | G8's second remainder — the two `defender_active.hp`-ceiling `residual_disjoint_bands` call sites | G1 | OPEN | AGENT | derived + reading |
 | T3 | G33b's speed-tie arm | G1 | OPEN | AGENT-THEN-OWNER | derived + reading |
 | T4 | G33c — the truncation strands the winner's order-10 damage bookings | G1 | OPEN | AGENT-THEN-OWNER | derived |
-| T5 | H1 — the single-seat population is counted and uncompared | G1 | OPEN | AGENT | derived |
+| T5 | H1 — the single-seat population is counted and uncompared | G1 | OPEN | AGENT | derived + reading |
 | T6 | §4's 26 UNREACHABLE verdicts, re-adjudicated for §4 and only §4 | G1 | DISCHARGED-IN-SCOPE | AGENT | derived + reading |
 | T7 | §7 item 1 — whether G1 (Stick) produces a differential row | G1 | OPEN | AGENT | derived |
 | T8 | §7 item 5 — co-occurrence counts are upper bounds, not draw rates | G1 | OPEN | AGENT | derived |
@@ -88,9 +88,23 @@ Actor vocabulary, exact: **AGENT** · **OWNER** · **AGENT-THEN-OWNER**.
 | T13 | §7 item 10 — the single-seat population has no taxonomy anywhere | G1 | OPEN | AGENT | derived |
 | T14 | §7 item 11 — the two zeros are a property of two windows | G1 | STANDING | — | derived + reading |
 
-**Fourteen items — 1 under G2, 13 under G1.** Eleven OPEN, one DISCHARGED-IN-SCOPE, two STANDING.
-The count and the inventory are pinned; the *classification* of T11 and T14 as STANDING is a
-reading, argued in each item.
+**Fourteen items — 1 under G2, 13 under G1. Status tally: 11 OPEN, 1 DISCHARGED-IN-SCOPE,
+2 STANDING.** Both sentences are re-derived from the table by the pin, so a status flip cannot
+update the column and leave the summary stale — which is how four counts in the ledger went bad.
+The *classification* of T11 and T14 as STANDING is a reading, argued in each item.
+
+⚠ **And the register must state how much of the ledger these fourteen items are not about.** C152's
+own §7.1 closed with *"G0 and every other §3 row C152 did not touch"* as its sixth open item; the
+first revision of this register absorbed that into §1's "terminal is not the absence of gaps"
+reading and dropped the number, which is exactly the kind of drop §5 exists to record. Derived: of
+§3's **82** rows, **9** carry a C152, C153 or C154 marker — G8, G33b, G33c, G50, H8, H12, H15, H19,
+H22 — and **73 have not been re-examined since C138**. Two of the nine (G33c, H22) are new filings
+rather than re-examinations. C154's **13** corrections all landed in §4, not §3. The **ids** are
+pinned and not merely the count, because the mutation meant to prove that check live *survived* the
+first time: every touched row carries between one and six markers, so removing one left the row in
+the set. A count that cannot see a row leave is not a check. So an owner reading "eleven OPEN items" should read it beside
+"73 §3 rows last looked at in C138"; the fourteen are what the last three passes *found*, not a
+survey of the ledger.
 
 ### Why this is fourteen and the reconstruction was six
 
@@ -114,9 +128,14 @@ artifacts carry earlier builds still — and **no committed JSON under `reports/
 the head value at all**. The move is
 legitimate: `rust/pokezero-search/src/leaf.rs` gained 31 lines in `21f484d4` (#1197), one of the 11
 crate sources the fingerprint covers. Re-derived once by restricting `git log 7fcd9e19..HEAD` to
-the fingerprint's own inputs — the gen3 patches, `patches.txt` and `rust/pokezero-search/src` — which
-returns exactly that one commit; that derivation is recorded, not pinned, because it is a statement
-about history rather than about this tree.
+**all** of the fingerprint's inputs — the 74 gen3 patches, `poke-engine-gen3-patches.txt`,
+`poke-engine-base-source.json`, the 11 crate sources, and the `Cargo.toml` / `Cargo.lock` /
+`build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — which
+returns exactly that one commit. ⚠ **A first revision named only the first three of those five
+input classes**, a scope narrower than the claim it supported, which is the rule this register
+enforces on everyone else; no commit in range touches the omitted two, so the conclusion is
+unchanged and the statement was not. That derivation is recorded, not pinned, because it is a
+statement about history rather than about this tree.
 
 **And the gate has no surface.** The window's ratification is a pinned constant, `OWNER_RATIFIED`.
 The freeze has no equivalent: **zero** module-level constants in
@@ -126,20 +145,39 @@ differential plus a literal scan of those four trees for `FROZEN`/`FREEZE` outsi
 `frozenset`/status contexts. So an owner asked to declare the fingerprint frozen today has nowhere
 to write it down.
 
-**Consequence for every other item, and this is the one the reconstruction did not state.** The
-evidence behind T2–T6 is *all* at `bfdbe1c04876edcd` or on C152's throwaway instrumented build
-`89797289f4a3b555`. None of it has been re-taken at the build that would be frozen. That does not
-make any of it wrong; it makes "measured at head" false for all of it, and a claim that quotes
-those figures against the frozen fingerprint would be quoting across a build boundary.
+**Consequence for the other items, and this is the one the reconstruction did not state — with the
+distinction review added.** Every measurement behind T2–T6 predates this build, but they do not all
+predate it in the same way, and conflating the two inflates the re-sweep an owner would be asked
+for:
 
-**Who acts.** AGENT: re-sweep the two permitted windows at the head fingerprint and commit the
-artifacts — 400 games inside `19,000,000`–`19,000,199` and `19,100,000`–`19,100,199`, no reserved
-seed, no burn contact. OWNER: declare the freeze. The declaration is not an agent act and there is
+| item | what its evidence rests on | needs an engine? |
+|---|---|---|
+| T3, T4 | C152's throwaway instrumented build `89797289f4a3b555` | yes |
+| T5 | the two committed head sweeps at `bfdbe1c04876edcd` | yes |
+| T2 | `scripts/c152_g8_survive_representative_census.py`, whose whole import list is `argparse` / `json` / `struct` / `pathlib` / `typing` | **no** |
+| T6 | `reports/artifacts/c154_unreachable_readjudication.json`, a source-and-pool trace at `source_commit 8b3e5431` and Showdown `f76228a1`, carrying **no** `engine_fingerprint` key at all | **no** |
+
+⚠ **A first revision of this paragraph said all of T2–T6 sat at one of the two engine
+fingerprints.** T2's census is stdlib arithmetic over a synthetic `(max_damage, health)` plane and
+T6's artifact builds no engine; neither artifact carries an `engine_fingerprint`. Attributing a
+build to a measurement that has none makes the freeze look like a precondition for work that does
+not depend on it — the opposite of what this register is for. So: the re-sweep below repairs T5's
+and T12's provenance. **It does not touch T2 or T6, and neither of those needs a sweep or a build
+to be discharged.**
+
+**Who acts, and what it costs.** AGENT: rebuild the engine and re-sweep the two permitted windows
+at the head fingerprint, then commit the artifacts. **Costed rather than merely named, because it is
+the largest line item on this page:** `scripts/build_search_crate_engine.sh` is a full two-consumer
+rebuild (vendor, `poke_engine` wheel, `pokezero_search` wheel, install, stamp), and the sweep itself
+is **400 games** — the same 200 + 200 that produced `reports/artifacts/c152_head_{dev,holdout}_sweep.json`,
+which record **19 minutes** of wall time between them at ~1,260 games/hour. Both windows are dev and
+validation-holdout: **no reserved seed, no burn contact, and no contact with `19,300,000`+**. The
+same run discharges T12. OWNER: declare the freeze. The declaration is not an agent act and there is
 currently no place to put it; filing a `FROZEN_FOR_CLAIM`-shaped constant beside `OWNER_RATIFIED`
 is the obvious surface and is **filed here unbuilt**, because that constant lives in the file this
 task forbids touching.
 
-### T2 — G8's second remainder · G1 · OPEN · AGENT
+### T2 — G8's second remainder · G1 · OPEN · AGENT · derived + reading
 
 **Derived.** `residual_disjoint_bands` is called from **four** sites, all in the tracked
 `third_party/poke-engine-gen3-status-aware-residual-threshold.patch`. Resolved by walking the patch
@@ -198,7 +236,8 @@ head, not merely unmeasured.
 
 **Reading, and it is the disposition.** No tie-arm divergence has been *observed*: across the same
 1,400 games the committed sweeps carry **12** divergent rows in the four wide shards (of 80,439
-measured) and **0** in the two head windows. But "not observed" is not "cannot happen", and the
+measured) and **0** in the two head windows (both bars: support-gated **8.689 % / 9.185 %**, roll window **167 / 140**). But "not observed" is not
+"cannot happen", and the
 attribution of any given divergence to a tie is **not re-derivable from a sweep artifact**: no
 verdict-producing instrument records the residual speed order. It was recorded once, by C152's
 throwaway `C152_TRUNC` instrumentation, which produced the census and no verdicts. So the tie arm's
@@ -244,13 +283,14 @@ than absorbed into the count, because absorbing it would be the sample-fitting t
 finding. Attributing it is agent work and needs no sweep: the state is committed in the artifact.
 
 **Scope.** One diagnosed row plus one undiagnosed sibling, on unregistered seeds, on C152's
-instrumented build. Zero in both permitted windows, which is the point: the shape was invisible to
-every sweep the program has run inside them. Unlike T3 the fix has a **measured** benefit.
+instrumented build. Zero in both permitted windows (both bars: support-gated **8.689 % / 9.185 %**, roll window **167 / 140**), which is the point: the
+shape was invisible to every sweep the program has run inside them. Unlike T3 the fix has a
+**measured** benefit.
 
 **Who acts.** AGENT to attribute `1000321/102` and to build the suppression; OWNER for the same
 ship/retire decision as T3.
 
-### T5 — H1, the single-seat population is counted and uncompared · G1 · OPEN · AGENT
+### T5 — H1, the single-seat population is counted and uncompared · G1 · OPEN · AGENT · derived + reading
 
 **Derived** from the two committed head sweeps: **1,742** single-seat boundaries on dev and
 **1,813** on holdout, **9.836 %** and **10.090 %** of all boundaries. They are counted in
@@ -341,8 +381,8 @@ does not mark it resolved and that the ratification exists.
 
 Every "observed" column in §3 except the rows C152 dispositioned still reads
 `reports/artifacts/c136_faintcancels_fix_{dev,holdout}_sweep.json`, i.e. is as of `aeaee2b1`. The
-head sweeps C152 committed say only that both windows are at 0 divergences, which cannot re-derive
-a per-row "observed" for a row that never had one. **This item and T1 share an instrument**: a pair
+head sweeps C152 committed say only that both windows are at 0 divergences (both bars: support-gated **8.689 % / 9.185 %**, roll window **167 / 140**),
+which cannot re-derive a per-row "observed" for a row that never had one. **This item and T1 share an instrument**: a pair
 of head-fingerprint sweeps repairs the staleness and produces the artifacts T1 needs. Derived:
 unresolved in §7. AGENT.
 
@@ -357,7 +397,8 @@ for T5. AGENT.
 
 ### T14 — §7 item 11, the two zeros are a property of two windows · G1 · STANDING · — · derived + reading
 
-Both permitted windows are at 0 divergences and the engine is not divergence-free: the same
+Both permitted windows are at 0 divergences (both bars: support-gated **8.689 % / 9.185 %**, roll window **167 / 140**) and the engine is not
+divergence-free: the same
 74-patch engine produced **12** divergent rows over **80,439** boundaries on unregistered seeds
 `1,000,000`–`1,000,999`, and C153 measured **949** classified divergences over 803,264 boundaries.
 Nothing is owed; the item exists so the two zeros are never quoted bare. STANDING is a reading; the
@@ -373,8 +414,17 @@ These are not items. They bind every item above and every claim built on one.
 support-gated acceptance at **8.689 % dev / 9.185 % holdout** (1,347 of 15,503 and 1,431 of
 15,579), and the ±9 % roll window at **167 dev / 140 holdout** matched boundaries
 (**1.077 % / 0.899 %**). A bare "0 divergences over the two windows' measured boundaries" is
-forbidden by the ledger's §6 item 9 and by this register; the one place this document quotes that
-zero, T2, carries both bars in the same paragraph and the pin checks that it does.
+forbidden by the ledger's §6 item 9 and by this register. ⚠ **The first revision of this sentence
+said "the one place this document quotes that zero, T2" and the check behind it keyed on the
+literal `31,082`.** The document quotes a two-window zero in **five** paragraphs and four of them
+carried neither bar — this register breaking its own §4 rule, behind a check advertising coverage
+it did not have, which is the #1205 shape in a document written after #1205. The rule and the
+check are now the same width: **every** paragraph asserting a zero over the two permitted windows
+carries both bar values. A detector that normalises markdown emphasis before matching — because one
+of the five is written `**0** in the two head windows`, which a literal scan walks past — finds
+**6** paragraphs, the five item-level assertions plus this one, and the count is pinned. The
+detector is exercised on a constructed bare-zero paragraph and on a non-zero one, so it cannot pass
+by finding nothing.
 
 **The per-divergence power limit.** C153's combined arm classified **949** divergences over 803,264
 boundaries. The rule of three puts the 95 % upper bound on a per-divergence class at **0.316 %** —
@@ -384,15 +434,26 @@ per-game negatives are much better served — the same census bounds a per-bound
 3.73 × 10⁻⁶ — and substituting the boundary denominator for the divergence one overstates a
 per-class negative by **846×**, the ratio of the two denominators.
 
-**Every measurement behind T2–T6 predates the head build.** See T1. It is at
-`bfdbe1c04876edcd` or on the instrumented `89797289f4a3b555`, never at `9517aab98d56a9ba`.
+**Every measurement behind T2–T6 predates the head build**, and none is at
+`9517aab98d56a9ba`. Read the table in T1 before quoting that as a re-sweep scope: T3, T4 and T5
+rest on an engine build; **T2 and T6 build no engine at all** and carry no `engine_fingerprint`.
 
 ---
 
 ## 5. What the derivation changed, against the list it replaces
 
 Recorded rather than silently corrected, because "the previous version said X" is the only way a
-maintained document proves it is maintained.
+maintained document proves it is maintained. **Six** entries, and the count is re-derived from the
+list below rather than typed.
+
+⚠ **Read this section as the author's account, not as a checkable comparison — and that limit is
+inherent, not an oversight.** The list these six deltas are measured against **exists nowhere in the
+repository**: it was assembled in conversation, three times, which is the entire reason this
+document exists. Nothing a reader can open holds the "before". Every *right-hand* side is pinned —
+the fourteen items, the §7 inventory, `1000321/102`, the four call sites, the two classification
+names, the absent freeze surface are all re-derived by the pin — but the claim that a previous
+version said otherwise rests on this author's word. It is written down so the **next** revision has
+a checkable "before", which no revision until now has had.
 
 1. **Six items became fourteen.** The reconstruction was a delta of what C152, C153 and C154 opened.
    Derived from the ledger, §7 contributes eight unresolved items where the reconstruction carried
@@ -428,44 +489,60 @@ rather than a wrong number.
 **It cannot decide whether the gates are met.** C151 §3 says the trigger is not machine-checkable
 and this register does not make it so.
 
-**It cannot cover a reading.** Four are named as such rather than absorbed, and each carries
-`derived + reading` in the `pin` column rather than `derived`: T3's disposition (the figures are
-derived; "not observed, and not measurable by a verdict instrument" is a reading), T6's residue 4
-(the four normalisations are derived; "no fifth obfuscation exists" is not), and the classification
-of T11 and of T14 as STANDING rather than OPEN.
+**It cannot cover a reading.** Six are named as such, and each carries `derived + reading` in the
+`pin` column rather than `derived`. T3's disposition — the figures are derived; "not observed, and
+not measurable by a verdict instrument" is a reading. T6's residue 4 — the four normalisations are
+derived; "no fifth obfuscation exists" is not. The classification of T11 and of T14 as STANDING
+rather than OPEN. And ⚠ **T2 and T5, downgraded in review**: their *figures* are derived, but the
+**status** half of each rests on the ledger's prose — "still unmeasured" for T2's hp-ceiling sites,
+"uncompared" for T5's single-seat population — rather than on an absence scan of the kind T13
+carries. Both statuses are right; `derived` overstated by one word, and the word is the whole
+distinction this section exists to draw.
 
 **A coupling, declared.** Appendix A pins `base.expected_counter_artifacts` and
 `base.expected_sweep_artifacts` against the two census modules' own constants. A PR that adds an
 artifact must therefore update this register in the same change. That is deliberate and it is the
 whole point: the document that goes stale is the one nothing forces an author through.
 
-**The `Ran N tests` guard.** The step carries an exact `Ran 34 tests`, re-derived from the module's
-own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard-scan
-covers only part of the workflow, so it was **not** assumed to cover this one: measured, it now sees
-**21 of the 25** `python -m unittest` invocations in the file and this step is among them,
-`EveryWorkflowTestCountGuardMatchesItsModuleTests` deriving 34 from the module and matching the
-guard. That is checked, not relied upon — the four invocations the scan still misses are #1205's
-subject and are not touched here.
+**The `Ran N tests` guard.** The step carries an exact `Ran 41 tests`, re-derived from the module's
+own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
+covers only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
+rather than inherited from #1205's figure: at base the scan resolves **20** guards out of **25**
+unittest invocation sites, at this head **21 of 26**, **this step is among the 21**, and
+`EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 41 from the module's AST and matches the
+guard. The **five** sites it does not resolve are #1205's subject and are untouched here. ⚠ **One trap hit
+in passing and recorded:** the scan matches on the invocation string itself, so a first revision of
+the step's own comment — which quoted that string while explaining the scan — made the file appear
+to gain an invocation and the step appear twice. The comment no longer spells it. That is C154's
+self-match trap, a fourth time, in the paragraph describing the scan.
 
-**Mutation evidence.** 37 mutations applied, 37 caught, enumerated in the module's docstring in two
-blocks. Block B's ten are applied **only to the tree and never to the document**, because a pin that
-reads a document against a hard-coded copy of itself passes every document-side mutation: a
-sub-keyed single-seat counter added to a committed sweep, a freeze constant added to the
-differential, a real Showdown checkout added to the workflow, the head fingerprint written into an
-artifact, an `hp`-ceiling context line added to a split hunk, a §7 item marked RESOLVED, a §4
-verdict flipped, the §4 population sentence reworded, an accept bar deleted from T2's paragraph, and
-a bare `\|` introduced into a register row. Each one is a real change to the tree that this document,
-left unedited, must fail against — which is the property eleven-plus inert pins in this repo did not
-have.
+**Mutation evidence.** **48 mutations applied, 48 caught**, enumerated in the module's docstring and
+partitioned by *what is mutated*: **A1–A34** edit this document, **B35–B48** edit **only the tree
+and never this document**. That second number is the one that matters, because a pin reading a
+document against a hard-coded copy of itself passes every document-side mutation — and ⚠ **a first
+revision put it at ten and two of those ten edited the register**, which is the property being
+claimed, mis-stated. Fourteen is the measured figure: a patch line shift, the tie-refusal arm deleted,
+a damage push made to consult the truncation flag (G33c *fixed*), a sub-keyed single-seat counter
+added to a committed sweep, a freeze constant added to the differential, a real Showdown checkout
+added to the workflow, the head fingerprint written into an artifact, an `hp`-ceiling context line
+added to a split hunk, a §7 item marked RESOLVED, a §4 verdict flipped, the §4 population sentence
+reworded, and every C152 marker stripped from a ledger row.
 
-**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 34
+⚠ **One of the forty-eight survived its first form, and that is recorded rather than tidied away.**
+B46's first version rewrote a *single* `(C152)` marker on a §3 row and stayed green, because each
+touched row carries between one and six markers and the derivation published only a **count**. The
+count was right; the check behind it could not see a row leave the re-examined set. The derivation
+now publishes the **id list**, and B46 strips every marker from one row. A count that cannot see its
+subject change is the same defect as an absence scan that cannot see its subject appear.
+
+**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 41
 tests, OK**. The gated family together: ledger uniformity **19**, never-fired **22**, wide-seed
 **36**, C154 re-adjudication **34**, seed registry **41**, single-seat coverage **3** — all OK.
 `tests/test_final_holdout_guard.py` and `tests/test_boundary_verdict_partition.py` cannot import
 without a built engine in this environment and are unchanged by this branch. Full suite, with the
 flag that is required rather than stylistic:
 `pytest tests/ -q -p no:randomly --continue-on-collection-errors` — **164 failed at base, 164 failed
-at head**, 4,416 → 4,450 passed (**+34**, exactly this module), 32 errors both sides, and the
+at head**, 4,416 → 4,457 passed (**+41**, exactly this module), 32 errors both sides, and the
 `FAILED` id lists are **identical in both directions**. The absolute figure is a property of the
 machine; the delta is that this branch adds zero failures.
 
@@ -492,11 +569,18 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `base.section4_drops` | 26 |
 | `base.section7_items` | 11 |
 | `base.section7_unresolved` | 8 |
+| `cost.head_resweep_games` | 400 |
+| `cost.head_resweep_minutes` | 19 |
 | `power.boundaries_per_classified_divergence` | 846 |
 | `power.classified_divergences` | 949 |
 | `power.divergences_for_a_tenfold_tighter_bound` | 9490 |
 | `power.one_in_n_divergences` | 316 |
 | `power.per_divergence_upper_95` | 0.316 % |
+| `rule.two_window_zero_paragraphs` | 6 |
+| `scope.section3_rows_touched_count` | 9 |
+| `scope.section3_rows_touched_since_c138` | G8, G33b, G33c, G50, H8, H12, H15, H19, H22 |
+| `scope.section3_rows_untouched_since_c138` | 73 |
+| `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.head_fingerprint` | 9517aab98d56a9ba |
