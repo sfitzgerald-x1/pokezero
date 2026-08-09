@@ -220,6 +220,11 @@ re-derived from the build's own stamp, not carried from the handoff.
 | `tests.test_never_fired_counter_census` | Ran 16, OK |
 | `tests.test_boundary_verdict_partition` | Ran 26, OK |
 | `tests.test_ledger_table_uniformity` | Ran 17, OK |
+| `tests.test_final_holdout_guard` | Ran 25, OK |
+| `tests.test_harness_digest_provenance` | Ran 28, OK |
+| `tests.test_seed_registry_coverage` | Ran 41, OK |
+| `tests.test_cert_contract_registration` | Ran 17, OK (skipped=1) |
+| `tests.test_belief_trace_attribution` | Ran 9, OK |
 
 **The CI count guard moved with the suite**: `Ran 6 tests` → `Ran 14 tests` in the
 `Mass gate` step of `.github/workflows/engine-fidelity-gates.yml`. Those guards are
@@ -231,11 +236,19 @@ above is unchanged and was re-measured, not assumed.
 (#1195, the refusal recorder) — and this branch is based on `d20cf840`. The patch stack
 (74), fingerprint and every count pin were re-derived at that base.
 
-**No sweep was run and none is claimed.** This branch adds no sweep artifact, so
-`_EXPECTED_SWEEP_ARTIFACTS` (95) and `_EXPECTED_COUNTER_ARTIFACTS` (375) are untouched;
-`test_never_fired_counter_census` and `test_boundary_verdict_partition`, which own them,
-are green at their pinned counts. No seed window was swept, and in particular nothing at
-or above `19,200,000` was touched.
+**No sweep was run and none is claimed.** This branch adds no sweep artifact. Both corpus
+pins were re-derived on the merged tree by **running each selector**, independently and
+never by arithmetic from the other: `_sweep_reports()` returns **95** against a pin of 95,
+and `counter_artifacts()` returns **375** against a pin of 375. The one new data file,
+`tests/data/c152_pool_reachability_census.json`, is in **neither** corpus — verified by
+searching both selector outputs for it, not by reading the globs — because both scan
+`reports/**` and `docs/audit_artifacts/**` and it lives under `tests/data/`. No seed window
+was swept, and in particular nothing at or above `19,200,000` was touched.
+
+It is registered in the workflow's **path filter** alongside its generator, for the reason
+that file names twice: a PR whose only change deletes the artifact would otherwise trigger
+no job at all. That is the same treatment `tests/data/collapsed_arm_mass_oracle.json` and
+its script already get.
 
 ## 6. What independent review added
 

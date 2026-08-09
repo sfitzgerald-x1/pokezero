@@ -46,6 +46,14 @@ jobs:
             scripts/verify_poke_engine_source.py
             third_party/poke-engine-base-source.json
             tests/test_branch_mass_reconstruction.py
+            # C152's pool census: the measurement behind the one owed family discharged
+            # by a reachability VERDICT rather than a fixture. Listed for the same
+            # reason the collapsed-arm oracle's pair is listed below -- a PR that
+            # DELETES the artifact or its generator would otherwise trip no workflow at
+            # all, which is the failure mode this file forbids twice. The mass-gate step
+            # reads the artifact, so a deletion reddens once the job actually runs.
+            tests/data/c152_pool_reachability_census.json
+            scripts/c152_pool_reachability_census.py
             # Without these the classifier half of B1 -- which edits the differential --
             # triggers no workflow at all. Found by review of #1081.
             scripts/engine_transition_differential.py
