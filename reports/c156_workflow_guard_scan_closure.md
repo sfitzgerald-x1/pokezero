@@ -190,6 +190,12 @@ which is `reports/c154` §6's own finding applied to this pass.
 | merge-base | `dbb40c5c` — identical to main, branch cut from it | pre-C156 | 26 | 22 | **4** |
 | this branch head | `3b3b82c5` | C156 | 26 | **26** | **0** |
 | **`refs/pull/1208/merge`** | **`f07f7a6b`** | C156 | **26** | **26** | **0** |
+| **`refs/pull/1208/merge`**, re-derived after the next push | **`d4b309e4`** | C156 | **26** | **26** | **0** |
+
+⚠ **The merge ref moves with every push, so the SHA above is the one measured and not "the" merge
+ref.** Each row is a run, not a figure carried forward from the row above it; `reports/c153`'s rule
+is that a number can be correct when taken and false later because its tree was replaced. The PR
+body carries the derivation at the final head.
 
 **The merge row is the one CI grades and the only one that settles the question.** `reports/c155`
 §6 records the round where a branch-derived count shipped wrong because `main` had moved underneath
