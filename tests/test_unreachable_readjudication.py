@@ -44,18 +44,25 @@ WHAT IS PINNED, and in every case what would have to be true for the pin to be v
      in the data and not in the sentence is red, and so is a marker on a row that was
      never corrected. This repo has shipped that exact desync three times.
 
-  5. **The retracted sentences are gone, and the guard is whitespace-normalised.** A
-     phrase guard that matches per line is blind to a hard-wrapped sentence; this repo has
-     shipped that too. The check normalises the WHOLE document to single spaces first, and
-     `test_the_phrase_guard_catches_a_hard_wrapped_retraction` feeds it a deliberately
-     wrapped copy of a retracted phrase and requires it to fire.
+  5. **The retracted sentences appear exactly where they are withdrawn, and nowhere
+     else.** Two pins, because one is not enough. The QUOTING rule requires each occurrence
+     to sit inside a quotation adjacent to the C154 marker; the EXACT OCCURRENCE INVENTORY
+     requires the count per phrase to match. The second exists because review's fourth
+     smuggle -- a re-assertion inside the correction's own cell -- satisfies the first and
+     must, since it is indistinguishable from the legitimate shape. ⚠ The normaliser folds
+     whitespace, case, markdown emphasis and zero-width characters, and each of those four
+     was added after something got past the previous three.
 
-  6. **Cross-instrument coupling is DECLARED AND CHECKED, not arranged.** The artifact is
-     keyed by refusal-reason names and carries numbers beside them, so under `reports/` it
-     would read to `tests/test_never_fired_counter_census.py` as four counters firing --
-     the shape that took the corpus census from green to six failures in C153. The pin
-     asserts `counter_artifacts()` does not select it, so the exclusion is a property
-     rather than a filesystem accident.
+  6. **Cross-instrument coupling is DECLARED AND CHECKED. ⚠ It asserted the OPPOSITE one
+     revision ago, on a hazard nobody had measured.** The artifact was written to
+     `tests/data/` because its refusal-reason names beside pool counts would supposedly
+     read to `tests/test_never_fired_counter_census.py` as four counters firing. Review
+     measured it: in the corpus, that census reports `Ran 22 tests ... OK`. The names occur
+     only as string VALUES in prose, which `_evidence_in` excludes in terms. The placement
+     bought nothing and cost the guard that census's header warns about by name, and its
+     control -- `assertIn(reason, json.dumps(document))` -- was substring-in-prose and
+     could not fail. The artifact is in `reports/artifacts/` now, membership is asserted,
+     and the control feeds `_evidence_in` a counter-keyed copy and requires it to FIRE.
 
   7. **The denominator matches the emission site.** For the five rows that close a
      differential counter the artifact records the AST-derived emission sites and the
@@ -78,7 +85,20 @@ WHAT IS PINNED, and in every case what would have to be true for the pin to be v
      version missed, Cute Charm to `attract` and Lansat Berry to `focusenergy`. If the
      scan silently stops walking files, this is what goes red.
 
- 10. **Section 8's own row count is pinned to the derived one.** It read **81** while the
+ 10. **Three sentences of this pass's own are re-derived rather than asserted**, all three
+     because review found them over-claimed: R10's `heal_subcase` caller graph (built by
+     reverse reachability, `render_move_phase` chokepoint and five dead wrappers), the
+     corrections tally (which two docstring revisions stated as SEVEN and as TEN against
+     the artifact's THIRTEEN), and R22's `move_fails_encore` set equality (previously six
+     membership assertions, which review defeated by adding `Choices::TACKLE`).
+
+ 11. **The foreclosure SCOPE is carried per row.** `UNREACHABLE_TRACED` was documented as
+     "cannot fire for any caller of X" and that is false for three rows -- R23's counter
+     fires today on the scenario corpus. Rather than soften the definition for all 26 and
+     lose the stronger result on the other 23, each row carries `ALL_CALLERS` or
+     `RANDBATS_POPULATION`.
+
+ 12. **Section 8's own row count is pinned to the derived one.** It read **81** while the
      table held 82 and `test_the_stated_row_count_matches_the_rows` pinned 82 in the
      header -- a fourth instance of "a correction applied to data does not propagate to
      the prose describing it", found by this pass and fixed with a pin rather than an
@@ -108,14 +128,8 @@ WHAT THIS MODULE DOES NOT AND CANNOT COVER, stated rather than left to be discov
 
 THE MUTATION BATTERY, ENUMERATED. A battery whose members are not written down costs
 exactly what C153's cost: it claimed "12 applied, 12 caught" and a reviewer found the 13th
-survived. Each below was applied to a copy of the artifact (or to the generator, or to the
-ledger) and had to turn this module RED. All 12 do now; **number 8 SURVIVED the first
-version and is the reason this list is here rather than a sentence claiming one exists.**
-The guard it defeated already normalised whitespace -- the fix C153 shipped -- but was
-case-sensitive, so a retracted sentence re-inserted hard-wrapped AND lower-cased walked
-straight through. That is C153's own mutation 24, one document over, in a guard written by
-someone who had just read about it. `_normalised` now case-folds and
-`test_the_phrase_guard_catches_a_hard_wrapped_retraction` asserts both halves.
+survived. Each below was applied to a copy of the artifact (or to the generator, the
+ledger, the patch or the corpus) and had to turn this module RED. All 21 do.
 
    1. a verdict word changed from `UNREACHABLE_TRACED` to `NOT_OBSERVED_AT_SCOPE`
    2. a row deleted from the artifact's verdict map
@@ -129,6 +143,28 @@ someone who had just read about it. `_normalised` now case-folds and
   10. a denominator name swapped from `boundaries_full_round` to `boundaries_measured`
   11. the volatile source scan's Lansat Berry hit deleted
   12. section 8's row count set back to 81
+
+⚠ **Number 8 SURVIVED the first version**, and that is why 1-12 are written down rather than
+counted. The guard it defeated already normalised whitespace -- C153's own fix -- but was
+case-sensitive, so a hard-wrapped, lower-cased re-insertion walked through. That is C153's
+mutation 24, one document over, in a guard written by someone who had just read about it.
+
+**13-21 ARE REVIEW'S, ADDED AFTER THIS MODULE SHIPPED CLAIMING 12 OF 12.** Every one of them
+corresponds to a sentence of this pass's own that was asserted beyond what it traced, which
+is the defect the pass exists to remove -- so they are listed as a separate block rather
+than renumbered into the first, and the count of blocks is the honest summary.
+
+  13. a `foreclosure` flipped from `RANDBATS_POPULATION` to `ALL_CALLERS`
+  14. an edge removed from the derived `heal_subcase` caller graph
+  15. `Choices::TACKLE` smuggled into the patch's `move_fails_encore` arm -- the mutation
+      that passed the previous six-membership version green
+  16. the artifact moved back out of `counter_artifacts()`'s glob
+  17. the corrections tally detached from the verdict records
+  18. a retraction restated INSIDE the correction cell that withdraws it -- which the
+      quoting rule admits and must, and which the exact occurrence inventory catches
+  19. the same phrase re-inserted with `**bold**`
+  20. the same phrase re-inserted with a soft hyphen (U+00AD) mid-word
+  21. the same phrase re-inserted with a zero-width space (U+200B) mid-word
 """
 
 from __future__ import annotations
@@ -153,7 +189,7 @@ from test_ledger_table_uniformity import (  # noqa: E402
 )
 from test_never_fired_counter_census import counter_artifacts  # noqa: E402
 
-ARTIFACT = "tests/data/c154_unreachable_readjudication.json"
+ARTIFACT = "reports/artifacts/c154_unreachable_readjudication.json"
 LEDGER = "reports/c138_known_gaps_ledger.md"
 
 #: The marker every corrected section 4 cell must carry, and that no uncorrected one may.
@@ -167,6 +203,25 @@ C154_MARKER = "⚠ **C154"
 #: retraction would make this pin unsatisfiable, so each is a clause the correction quotes
 #: only inside a `"` pair, and `test_the_retraction_quoting_rule_is_live` proves the
 #: quoting exemption cannot be smuggled through.
+#: EXACT occurrence count per phrase in the ledger, because the quoting rule alone cannot
+#: catch a re-assertion smuggled INSIDE the correction's own cell -- review's fourth
+#: smuggle, and it defeated the first version:
+#:
+#:   ⚠ **C154 correction ... FALSE.** On reflection the original was right after all:
+#:   "The expiry path has no trigger"...
+#:
+#: That passes quoting AND marker-adjacency, because both are satisfied by the legitimate
+#: retraction two sentences earlier. An exact inventory catches it on arithmetic instead of
+#: on sentiment: the phrase may appear exactly where it is withdrawn and nowhere else.
+#: R4's phrase is 2 because §8's fifth-round block quotes it as well.
+RETRACTED_OCCURRENCES = {
+    "The expiry path has no trigger": 2,
+    "The Liquid Ooze guard inside `residual_heal_cause` is therefore dead code": 1,
+    "what makes this row UNREACHABLE is the renderer interception alone": 1,
+    "This closes `_HIDDEN_INFORMATION_REQUEST_FLAGS`'s `maybeDisabled`/`maybeLocked` "
+    "(Imprison is their only producer), the `failencore` move-list edge cases, and G32": 1,
+}
+
 RETRACTED = (
     "The expiry path has no trigger",
     "The Liquid Ooze guard inside `residual_heal_cause` is therefore dead code",
@@ -232,22 +287,36 @@ def _is_a_recorded_retraction(text: str, match: "re.Match[str]") -> bool:
     return _normalised(C154_MARKER) in window
 
 
+#: Characters that render as nothing (or as a line break that never happens) and therefore
+#: let a retracted sentence past a guard that only folds whitespace. Measured, not guessed:
+#: review evaded the first version with markdown emphasis, U+00AD and U+200B, and NBSP was
+#: already caught by `\s`.
+_INVISIBLE = "\u00ad\u200b\u200c\u200d\ufeff"
+
+
 def _normalised(text: str) -> str:
-    """The whole document as one line of single-spaced, LOWERCASED words.
+    """The document as one line of single-spaced, lower-cased, unemphasised words.
 
-    ⚠ CASE-FOLDED, and that was earned by the battery rather than foreseen: mutation 8
-    re-inserted a retracted sentence hard-wrapped AND lowercased, and the first version of
-    this guard -- which already normalised whitespace -- passed it. C153's reviewer defeated
-    its phrase guard the same way and recorded it as mutation 24; the lesson did not travel
-    with the rule, so it is enforced here instead of restated.
+    ⚠ THREE EVASION CLASSES, ALL FOUND BY SOMEONE ELSE, EACH ONE TURN LATER THAN THE LAST.
 
+      * Hard wrapping. A guard that matched per line was blind to any sentence an editor
+        had wrapped. Fixed before this module shipped -- it is C153's fix.
+      * Case. Battery mutation 8 re-inserted a retracted sentence hard-wrapped AND
+        lower-cased and walked past the whitespace-only version. Found by this module's
+        own battery.
+      * **Markdown emphasis and zero-width characters, in a MARKDOWN file.** `**bold**`,
+        `*italic*`, backticks, U+00AD and U+200B all split a phrase into pieces no literal
+        match can see. Found by review, after the module shipped claiming the guard was
+        sound. This is the same defect three times: each fix addressed the instance named
+        and not the class, which is exactly the through-line `reports/c131` §6 records
+        about its own author.
 
-    ⚠ NOT `for line in text.splitlines()`. A phrase guard in this repo matched per line and
-    was therefore blind to every sentence an editor had hard-wrapped -- it passed on text
-    it was written to condemn. Normalising the WHOLE document first is the fix, and
-    `test_the_phrase_guard_catches_a_hard_wrapped_retraction` is its live control.
+    Emphasis markers and invisibles are DELETED rather than replaced by a space, because
+    `**The** expiry` and `The expiry` have to normalise to the same string.
     """
 
+    text = text.translate({ord(c): None for c in _INVISIBLE})
+    text = re.sub(r"[*_`~]+", "", text)
     return re.sub(r"\s+", " ", text).lower()
 
 
@@ -423,6 +492,29 @@ class TheLedgerProseMatchesTheDataTests(unittest.TestCase):
                 f"⚠ **C154 correction 2026-08-09 —** {phrase} still holds."
             ),
         }
+        # ⚠ THE FOURTH SMUGGLE DEFEATS THIS RULE AND IS CAUGHT BY THE OTHER ONE. A
+        # re-assertion inside the correction's OWN cell satisfies both conditions -- the
+        # quote mark and the marker are supplied by the legitimate withdrawal two sentences
+        # earlier -- so `_is_a_recorded_retraction` admits it and must. What catches it is
+        # `test_each_retracted_phrase_appears_exactly_where_it_is_withdrawn`, on the count.
+        # Asserted here, rather than left implicit, so nobody "fixes" the quoting rule to
+        # cover a case the inventory already owns.
+        in_cell = _normalised(
+            f'"{phrase}." ⚠ **C154 correction 2026-08-09 — FALSE.** On reflection the '
+            f'original was right after all: "{phrase}".'
+        )
+        matches = list(re.finditer(re.escape(phrase), in_cell))
+        self.assertEqual(len(matches), 2)
+        self.assertTrue(
+            all(_is_a_recorded_retraction(in_cell, m) for m in matches),
+            "the quoting rule now rejects the in-cell smuggle, which means it also rejects "
+            "the legitimate shape it cannot be told apart from; the inventory pin is what "
+            "separates them",
+        )
+        self.assertNotEqual(
+            len(matches), RETRACTED_OCCURRENCES[RETRACTED[0]] - 1,
+            "the inventory pin must see the extra occurrence this smuggle adds",
+        )
         for label, blob in smuggles.items():
             with self.subTest(smuggle=label):
                 text = _normalised(blob)
@@ -442,6 +534,57 @@ class TheLedgerProseMatchesTheDataTests(unittest.TestCase):
         )
         match = re.search(re.escape(phrase), legitimate)
         self.assertTrue(_is_a_recorded_retraction(legitimate, match))
+
+    def test_each_retracted_phrase_appears_exactly_where_it_is_withdrawn(self) -> None:
+        """Exact inventory, not a floor.
+
+        The quoting rule cannot catch a re-assertion smuggled inside the correction's own
+        cell, because that cell legitimately contains both a quote mark and the marker.
+        Arithmetic can: the phrase may appear exactly where it is withdrawn and nowhere
+        else.
+        """
+
+        text = _normalised(_ledger_text())
+        measured = {
+            phrase: len(re.findall(re.escape(_normalised(phrase)), text))
+            for phrase in RETRACTED_OCCURRENCES
+        }
+        self.assertEqual(
+            measured, RETRACTED_OCCURRENCES,
+            "the number of times a retracted sentence appears in the ledger has changed. "
+            "MORE means it has been restated somewhere -- including, and this is the case "
+            "the quoting rule cannot see, inside the correction that withdraws it. FEWER "
+            "means a withdrawal was deleted rather than kept struck.",
+        )
+
+    def test_the_guard_survives_emphasis_and_invisible_characters(self) -> None:
+        """Review's evasion classes, as fixtures.
+
+        `**bold**`, `*italic*`, backticks, U+00AD and U+200B all render as the same
+        sentence and all split it into pieces a literal match cannot see -- in a MARKDOWN
+        file, where emphasis is the most likely thing an editor adds. NBSP was already
+        caught by `\\s` and is kept as the control that the fixture set is not all
+        positives.
+        """
+
+        phrase = RETRACTED[0]
+        words = phrase.split()
+        evasions = {
+            "bold on one word": " ".join(["**" + words[0] + "**", *words[1:]]),
+            "italic spanning two": " ".join([f"*{words[0]} {words[1]}*", *words[2:]]),
+            "backticks": " ".join([f"`{words[0]}`", *words[1:]]),
+            "soft hyphen mid-word": phrase.replace("expiry", "ex\u00adpiry"),
+            "zero-width space mid-word": phrase.replace("trigger", "trig\u200bger"),
+            "nbsp between words": phrase.replace(" ", "\u00a0", 1),
+            "combined": "**" + words[0] + "**\u200b " + " ".join(words[1:]),
+        }
+        for label, blob in evasions.items():
+            with self.subTest(evasion=label):
+                self.assertNotEqual(blob, phrase, "the fixture is not actually evasive")
+                self.assertIn(
+                    _normalised(phrase), _normalised(blob),
+                    f"a retracted sentence written with {label} walks past the guard",
+                )
 
     def test_the_phrase_guard_catches_a_hard_wrapped_retraction(self) -> None:
         """Live control for the guard above.
@@ -482,9 +625,11 @@ class TheLedgerProseMatchesTheDataTests(unittest.TestCase):
 
         derived = sum(len(rows) for rows in _EXPECTED_GAP_ROWS)
         text = _normalised(_ledger_text())
-        # `_normalised` case-folds, so the pattern is lower case; a capitalised literal
-        # here would silently never match and this pin would fail open on the None branch.
-        stated = re.search(r"non-empty rendered \*\*reachability evidence\*\* cell on all \*\*(\d+)\*\*", text)
+        # `_normalised` case-folds AND strips `*`/`_`/backticks, so the pattern carries
+        # neither capitals nor emphasis. A literal with either would silently never match
+        # and this pin would fail open on the `assertIsNotNone` branch -- which is exactly
+        # what happened when the normaliser gained emphasis-stripping and this line did not.
+        stated = re.search(r"non-empty rendered reachability evidence cell on all (\d+)", text)
         self.assertIsNotNone(
             stated,
             "section 8's sentence about the reachability-evidence cell has moved or been "
@@ -619,30 +764,193 @@ class TheAbsencePinsAreNotVacuousTests(unittest.TestCase):
 
 
 class TheCrossInstrumentCouplingIsCheckedTests(unittest.TestCase):
-    def test_the_artifact_is_outside_the_counter_census_corpus(self) -> None:
-        """Declared coupling, checked.
+    """⚠ THIS CLASS ASSERTED THE OPPOSITE ONE REVISION AGO, ON A HAZARD NOBODY MEASURED.
 
-        `tests/test_never_fired_counter_census.py` flags a nonzero number under a dotted
-        path containing a counter name. This artifact is keyed by refusal-reason names and
-        carries pool counts beside them, so under `reports/` it would read as four
-        counters firing across the corpus -- a convenience field of exactly this shape
-        nearly inverted 46 verdicts in C153. Moving it is not a matter of taste.
-        """
+    The artifact was written to `tests/data/` on the argument that its refusal-reason names
+    beside pool counts would read to `tests/test_never_fired_counter_census.py` as four
+    counters firing. Review copied it into `reports/artifacts/`, bumped the corpus count and
+    ran the census: **`Ran 22 tests ... OK`.** The names appear only as string VALUES inside
+    prose, and that census's `_evidence_in` says in terms that "A name merely mentioned
+    inside prose is NOT evidence".
 
-        self.assertNotIn(ARTIFACT, counter_artifacts())
-        self.assertTrue(
-            ARTIFACT.startswith("tests/data/"),
-            "the artifact moved out of tests/data/; if it is now under reports/ or docs/ "
-            "the corpus census will read its pool counts as counter firings",
+    So the placement bought nothing and cost the guard the census's own header warns about
+    by name. Worse, the control that was supposed to prove the hazard real --
+    `assertIn(reason, json.dumps(document))` -- was substring-in-prose, the exact shape the
+    matcher excludes. **It could not fail.** Both are replaced here: membership in the
+    corpus is asserted, and the control now feeds `_evidence_in` a counter-keyed copy and
+    requires it to fire.
+    """
+
+    def test_the_artifact_is_inside_the_counter_census_corpus(self) -> None:
+        self.assertIn(
+            ARTIFACT, counter_artifacts(),
+            "the artifact left `counter_artifacts()`'s glob, so the shape-matching census "
+            "no longer checks it. That census caught a convenience field that nearly "
+            "inverted 46 verdicts one PR ago; leaving the corpus is a silent loss of the "
+            "only instrument that would notice the same thing here.",
         )
 
-    def test_the_names_that_would_collide_are_actually_in_the_artifact(self) -> None:
-        """Control for the pin above: prove the collision it avoids is real."""
+    def test_the_census_matcher_would_fire_on_a_counter_keyed_number(self) -> None:
+        """The control, and unlike its predecessor it can fail.
 
-        blob = json.dumps(_document())
-        for reason in ("nature_not_neutral", "weather_unsupported", "volatile_unsupported"):
-            with self.subTest(reason=reason):
-                self.assertIn(reason, blob)
+        Feed `_evidence_in` the committed artifact and a copy carrying one counter-keyed
+        number. The real one must be clean and the copy must be caught -- so a future edit
+        that files a count under a counter name is provably visible to the corpus census
+        rather than merely believed to be.
+        """
+
+        from test_never_fired_counter_census import _evidence_in
+
+        reason = "nature_not_neutral"
+        patterns = {reason: re.compile(r"(?:^|[^A-Za-z0-9_])" + reason + r"(?:$|[^A-Za-z0-9_])")}
+        document = _document()
+
+        self.assertEqual(
+            _evidence_in(document, patterns), {},
+            "the committed artifact ALREADY reads as a counter firing to the corpus "
+            "census. Whatever was just added is keyed by a counter name and carries a "
+            "number; move the number out of the name-keyed record, as C153 did.",
+        )
+
+        poisoned = json.loads(json.dumps(document))
+        poisoned["counters"] = {f"skip:world_unsupported:{reason}": 3}
+        self.assertIn(
+            reason, _evidence_in(poisoned, patterns),
+            "the corpus census does NOT see a counter-keyed nonzero number in this "
+            "artifact's shape, so its membership in the corpus is not protecting anything "
+            "and the claim in the module docstring is false.",
+        )
+
+
+class TheDerivedClaimsAreDerivedTests(unittest.TestCase):
+    """The three sentences review found asserted beyond what was traced."""
+
+    def test_the_heal_subcase_caller_graph_is_re_derived(self) -> None:
+        """R10's corrected mechanism, which got R10's own mistake wrong once.
+
+        The correction opens "this cell reasoned from its NAME without tracing its caller"
+        and then asserted, untraced, that `heal_subcase` is reached only through
+        `ambiguous_unrenderable_slug_with_protect`. There are two routes. The graph is now
+        built by reverse reachability over the file and re-derived here.
+        """
+
+        committed = _document()["pool"]["heal_subcase_call_graph"]
+        rederived = c154.rust_call_graph(c154.EV, "heal_subcase", c154.HEAL_SUBCASE_ROOT)
+        self.assertEqual(committed, rederived)
+        self.assertEqual(
+            rederived["live_entry_points"], ["branch_events"],
+            "a second live entry point reaches `heal_subcase`; R10's unemittability "
+            "argument is scoped to the Sleep Talk block and must be re-traced",
+        )
+        self.assertEqual(
+            rederived["edges_out_of_the_chokepoint"], [2138, 2159],
+            "the number of ways into the subgraph from `render_move_phase` changed",
+        )
+        self.assertEqual(len(rederived["dead_wrappers_with_no_production_caller"]), 5)
+
+    def test_the_corrections_tally_is_derived_not_typed(self) -> None:
+        """Two revisions of the generator's docstring said SEVEN and TEN against THIRTEEN.
+
+        Fifth and sixth instances of this PR's own subject, inside the generator that
+        produces the number. The count now exists in one place.
+        """
+
+        document = _document()
+        rederived = c154.correction_counts(document["verdicts"])
+        self.assertEqual(document["counts"], rederived)
+        live = {k: v for k, v in document["verdicts"].items() if k != "R26"}
+        self.assertEqual(rederived["rows"], 26)
+        self.assertEqual(
+            rederived["rows_corrected"],
+            sum(1 for v in live.values() if v["ledger_reason_status"] != "SOUND"),
+        )
+        self.assertEqual(
+            rederived["rows_corrected"],
+            sum(1 for name, v in _section_four_cells().items()
+                if name != "R26" and C154_MARKER in v),
+            "the corrections tally and the number of marked section 4 cells disagree",
+        )
+        # No prose in this PR's own files may state the tally as a literal.
+        for name in ("scripts/c154_unreachable_readjudication.py",
+                     "tests/test_unreachable_readjudication.py"):
+            with self.subTest(file=name), open(os.path.join(REPO, name), encoding="utf-8") as fh:
+                body = fh.read()
+            # Assembled from fragments so this file does not contain the literals it
+            # forbids -- a first version condemned itself, which is the same self-match
+            # trap the retraction guard needed a quoting exemption for.
+            for stale in ("corrections on " + "SEVEN", "ten wrong or " + "incomplete"):
+                self.assertNotIn(
+                    stale, body,
+                    f"{name} states the corrections tally as a literal again; it is "
+                    "derived by `correction_counts()` and pinned above",
+                )
+
+    def test_the_foreclosure_scope_is_recorded_where_it_is_narrow(self) -> None:
+        """`UNREACHABLE_TRACED` was documented as "cannot fire for any caller of X".
+
+        It is not true for every row: `volatile_unsupported` fires today for a caller
+        (`struggle_taunt_stall`, a hand-written Custom Game fixture), and R1's raise is one
+        keyword argument away. Both verdicts are right over section 4's population; the
+        word over-claimed, so the scope is carried per row.
+        """
+
+        document = _document()
+        for name, record in document["verdicts"].items():
+            if name == "R26":
+                continue
+            with self.subTest(row=name):
+                self.assertIn(record["foreclosure"], c154.FORECLOSURES)
+                narrow = record["foreclosure"] == "RANDBATS_POPULATION"
+                self.assertEqual(narrow, name in c154.NARROW_FORECLOSURE)
+                self.assertEqual(bool(record["foreclosure_note"]), narrow)
+        self.assertEqual(
+            sorted(c154.NARROW_FORECLOSURE), ["R1", "R23", "R24"],
+            "a row's foreclosure scope narrowed or widened without the report following",
+        )
+        self.assertEqual(document["counts"]["randbats_population"], 3)
+
+    def test_the_encore_fail_list_is_a_set_equality_not_a_membership_sweep(self) -> None:
+        """R22's claim, which the report called machine-checked while nothing checked it.
+
+        The previous version asserted six MEMBERSHIPS, so adding `Choices::TACKLE` to the
+        patch's match arm left the module green -- review demonstrated exactly that. Both
+        sides are measured now: the arm is parsed out of the committed patch, and the gen3
+        `failencore`-flagged set comes from the dex via the census.
+        """
+
+        shipped = c154._patch_match_arm(
+            "poke-engine-gen3-encore-failencore.patch", "fn move_fails_encore"
+        )
+        flagged = tuple(_document()["pool"]["failencore_flagged_gen3"])
+        self.assertEqual(
+            shipped, flagged,
+            "the crate's `move_fails_encore` arm and gen3's `failencore`-flagged move set "
+            "are no longer equal. R22's withdrawn clause said the edge cases were closed; "
+            "what keeps that from OPENING a row is this equality, so a difference here is "
+            "a real finding and not a pin to relax.",
+        )
+        self.assertEqual(len(shipped), 6)
+
+    def test_a_smuggled_member_breaks_the_set_equality(self) -> None:
+        """The control review used, as a fixture: the previous pin passed with TACKLE in."""
+
+        import re as _re
+
+        path = os.path.join(REPO, "third_party/poke-engine-gen3-encore-failencore.patch")
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        smuggled = text.replace("+            | Choices::TRANSFORM",
+                                "+            | Choices::TACKLE\n+            | Choices::TRANSFORM", 1)
+        self.assertNotEqual(smuggled, text, "the smuggle fixture did not apply")
+        opening = smuggled.index("matches!(", smuggled.index("fn move_fails_encore"))
+        closing = smuggled.index("\n+    )", opening)
+        added = "\n".join(l for l in smuggled[opening:closing].splitlines() if l.startswith("+"))
+        found = tuple(sorted(set(_re.findall(r"Choices::(\w+)", added))))
+        self.assertIn("TACKLE", found, "the parser cannot see an added member at all")
+        self.assertNotEqual(
+            found, tuple(_document()["pool"]["failencore_flagged_gen3"]),
+            "a smuggled member leaves the set equality intact, so it is not an equality",
+        )
 
 
 class TheHumanReadingsAreNamedTests(unittest.TestCase):
@@ -679,24 +987,6 @@ class TheHumanReadingsAreNamedTests(unittest.TestCase):
                     "world. Scope of this negative: the text of "
                     "src/pokezero/scenario_studio/service.py, nothing wider.",
                 )
-
-    def test_the_crate_encore_fail_list_matches_gen3s_failencore_flag(self) -> None:
-        """R22's withdrawn clause, and the check that stops it from opening a row.
-
-        The clause said the `failencore` edge cases were closed by eight absent moves.
-        Three of the six members are reachable, so they are not closed -- but the shipped
-        list is still right, because it is exactly gen3's `failencore`-flagged move set.
-        Derived from the committed patch here; the dex side is recorded on the row.
-        """
-
-        path = os.path.join(REPO, "third_party/poke-engine-gen3-encore-failencore.patch")
-        with open(path, encoding="utf-8") as handle:
-            text = handle.read()
-        self.assertIn("fn move_fails_encore", text)
-        for member in ("ENCORE", "MIMIC", "MIRRORMOVE", "SKETCH", "STRUGGLE", "TRANSFORM"):
-            with self.subTest(member=member):
-                self.assertIn(f"Choices::{member}", text)
-
 
 if __name__ == "__main__":
     unittest.main()

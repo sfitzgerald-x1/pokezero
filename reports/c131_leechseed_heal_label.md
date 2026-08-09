@@ -111,7 +111,7 @@ after every code change — "the numbers probably did not move" is a prediction,
   positive heal and no Leftovers, and that pin exists precisely because deleting the guard once
   left the suite green. What makes the conjunct unable to change an answer *in gen3 randbats* is
   the two earlier returns plus the item universe, not the interception — see the re-adjudication in
-  `tests/data/c154_unreachable_readjudication.json`. This bullet also collapsed two distinct
+  `reports/artifacts/c154_unreachable_readjudication.json`. This bullet also collapsed two distinct
   guards: `ResidualPlan`'s own `LIQUIDOOZE` conjunct is live and pinned in both directions.
   Left in place, struck, rather than deleted.
 - **Rain Dish and Sitrus book no plan slot either**, and both are unreachable: 0 Rain Dish sets in

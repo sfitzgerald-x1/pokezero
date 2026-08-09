@@ -1,5 +1,14 @@
 {
   "_README": "C154. Re-adjudication of all 26 UNREACHABLE verdicts in reports/c138_known_gaps_ledger.md section 4, against the C153 rule 'trace the raise site to the caller that actually reaches it'. Regenerate with scripts/c154_unreachable_readjudication.py --write, from a checkout with a built pokemon-showdown; CI builds none, so nothing re-derives the POOL half against a live pool. The CITATION half is re-derived on every run of tests/test_unreachable_readjudication.py. NEVER edit this by hand to make a test pass: the pin compares the ledger against it, so a hand edit silently moves a verdict. It lives under tests/data/ and NOT under reports/ on purpose -- see the module docstring, it is keyed by counter names.",
+  "counts": {
+    "all_callers": 23,
+    "false": 4,
+    "incomplete": 9,
+    "randbats_population": 3,
+    "rows": 26,
+    "rows_corrected": 13,
+    "sound": 13
+  },
   "pool": {
     "ability_species": {
       "Cute Charm": [
@@ -178,6 +187,14 @@
     },
     "distinct_abilities": 71,
     "distinct_moves": 125,
+    "failencore_flagged_gen3": [
+      "ENCORE",
+      "MIMIC",
+      "MIRRORMOVE",
+      "SKETCH",
+      "STRUGGLE",
+      "TRANSFORM"
+    ],
     "gen3_carriers": {
       "Cute Charm": {
         "all": [
@@ -339,6 +356,126 @@
         "Shedinja": 106
       },
       "teams": 4000
+    },
+    "heal_subcase_call_graph": {
+      "chokepoint": "render_move_phase",
+      "dead_wrappers_with_no_production_caller": [
+        "ambiguous_tail_is_fully_renderable",
+        "ambiguous_unrenderable_slug",
+        "sleeptalk_refusal_is_unsafe",
+        "unrenderable_family_at",
+        "unrenderable_tail_families"
+      ],
+      "edges": {
+        "ambiguous_tail_is_fully_renderable": [],
+        "ambiguous_tail_is_fully_renderable_with_protect": [
+          {
+            "in": "sleeptalk_refusal_is_unsafe_with_protect",
+            "line": 3461
+          },
+          {
+            "in": "ambiguous_tail_is_fully_renderable",
+            "line": 3532
+          }
+        ],
+        "ambiguous_unrenderable_slug": [],
+        "ambiguous_unrenderable_slug_with_protect": [
+          {
+            "in": "render_move_phase",
+            "line": 2159
+          },
+          {
+            "in": "ambiguous_unrenderable_slug",
+            "line": 4315
+          }
+        ],
+        "branch_events": [],
+        "heal_subcase": [
+          {
+            "in": "unrenderable_family_at_with_protect",
+            "line": 4094
+          }
+        ],
+        "render_action_phase": [
+          {
+            "in": "render_branch_events",
+            "line": 1164
+          },
+          {
+            "in": "render_branch_events",
+            "line": 1177
+          }
+        ],
+        "render_branch_events": [
+          {
+            "in": "branch_events",
+            "line": 5888
+          }
+        ],
+        "render_move_phase": [
+          {
+            "in": "render_action_phase",
+            "line": 1293
+          },
+          {
+            "in": "render_move_phase",
+            "line": 2058
+          }
+        ],
+        "sleeptalk_refusal_is_unsafe": [],
+        "sleeptalk_refusal_is_unsafe_with_protect": [
+          {
+            "in": "render_move_phase",
+            "line": 2138
+          },
+          {
+            "in": "sleeptalk_refusal_is_unsafe",
+            "line": 3449
+          }
+        ],
+        "unrenderable_family_at": [],
+        "unrenderable_family_at_with_protect": [
+          {
+            "in": "unrenderable_family_at",
+            "line": 4015
+          },
+          {
+            "in": "unrenderable_tail_families_with_protect",
+            "line": 4289
+          }
+        ],
+        "unrenderable_tail_families": [],
+        "unrenderable_tail_families_with_protect": [
+          {
+            "in": "ambiguous_tail_is_fully_renderable_with_protect",
+            "line": 3546
+          },
+          {
+            "in": "unrenderable_tail_families",
+            "line": 4263
+          },
+          {
+            "in": "ambiguous_unrenderable_slug_with_protect",
+            "line": 4329
+          }
+        ]
+      },
+      "edges_out_of_the_chokepoint": [
+        2138,
+        2159
+      ],
+      "live_entry_points": [
+        "branch_events"
+      ],
+      "roots": [
+        "ambiguous_tail_is_fully_renderable",
+        "ambiguous_unrenderable_slug",
+        "branch_events",
+        "sleeptalk_refusal_is_unsafe",
+        "unrenderable_family_at",
+        "unrenderable_tail_families"
+      ],
+      "target": "heal_subcase"
     },
     "move_classes": {
       "drain": [
@@ -887,7 +1024,7 @@
       ]
     }
   },
-  "source_commit": "2e1e1866ce2df38a88efe97cad9cad56cc771c2c",
+  "source_commit": "1fb564f6a7a44872e316b58df84d4892768164cd",
   "verdicts": {
     "R1": {
       "candidate": "Future Sight / Doom Desire -- residual order 11 and the `future_sight_pending` refusal",
@@ -911,6 +1048,8 @@
         ]
       },
       "demonstration": "`_reject_unsupported_globals` raises at `src/pokezero/engine_world.py:926` when `payload['futureSight']` has any nonzero value. THE PAYLOAD IS NOT THE DIFFERENTIAL'S: `world_battle_spec` builds its own at `src/pokezero/engine_world.py:883` and reaches the guard at `:397`, and `_public_materialization_payload` fills the key from `replay.future_sight` at `src/pokezero/local_showdown.py:2359`. That mapping has exactly one writer, `_update_future_sight` at `src/pokezero/showdown.py:4947`, gated at `:4940` on the protocol effect id being in `_FUTURE_MOVES` = `{futuresight, doomdesire}`. Both are 0 of 220 species, so the mapping is EMPTY for every gen3 randbats battle and an empty dict makes `any(...)` false -- the guard cannot fire FOR ANY CALLER of `world_battle_spec`. Residual order 11 has the same single trigger class.",
+      "foreclosure": "RANDBATS_POPULATION",
+      "foreclosure_note": "constructible from committed code -- `golden_corpus_scenarios.py`'s `future_sight_pending` spec -- and foreclosed only by which spec list the harnesses default to",
       "instruments": [
         "pool_move",
         "source_trace"
@@ -925,8 +1064,10 @@
     },
     "R10": {
       "candidate": "Shell Bell, and the `heal_drain_or_shellbell` ambiguity",
-      "correction": "\u26a0 Three upgrades, and the first changes the strength of the verdict. (1) The row argues the bucket is UNAMBIGUOUS; it is in fact UNEMITTABLE, because its only production emitter is the Sleep Talk ambiguous-tail path and no set pairs `sleeptalk` with a drain move (0 of 393). The row reasons from the bucket's NAME and never traces its caller -- the exact shape the C153 rule forbids. (2) \"the pool's only drain move is `gigadrain`\" was an assertion; it is now the `drain`-flagged subset of the pool's 125 moves, derived from the dex, with the five gen3 drain moves it excludes named. (3) The Shell Bell half rests on the same generation-time item argument R6 does and needs the same runtime clause: the pool's only item-moving moves SWAP (`trick`) or REMOVE (`knockoff`) and no gen3 mechanism creates an item. \u26a0 One site the row's sentence does not cover survives as a note: the NAMED (non-Sleep-Talk) renderer tags a heal `[from] drain` whenever `choice.drain.is_some()`, and Shell Bell sets that field, so a Shell Bell holder would be mislabelled there too -- same unreachability, second site.",
-      "demonstration": "`heal_subcase` (`rust/pokezero-search/src/events.rs:3949`) routes a positive ATTACKER-side heal with foe damage in the same tail to `heal_drain_or_shellbell` at `:3962`. \u26a0 THE BUCKET HAS ONE PRODUCTION EMITTER AND THE ROW DOES NOT NAME IT: `heal_subcase` is reached only through `ambiguous_unrenderable_slug_with_protect`, whose single non-test caller is the Sleep Talk ambiguous-tail arm at `rust/pokezero-search/src/events.rs:2159` (the bare `ambiguous_unrenderable_slug` wrapper is called only from `#[cfg(test)]`). So the tail is a SLEEP TALK CALLEE'S tail, and the bucket needs `sleeptalk` and a drain move ON THE SAME SET. Measured per set, the instrument section 8 requires for a two-thing gap: 44 of 393 sets carry `sleeptalk`, 3 carry a drain move, and 0 carry both. The bucket is therefore UNEMITTABLE in this format, which is strictly stronger than the row's \"unambiguous\". Shell Bell, the other half of the name, is implemented AS drain (`src/gen3/items.rs`, arm `Items::SHELLBELL`, sets `attacking_choice.drain`), so it produces a byte-identical `Heal` -- the ambiguity is real by construction and not by enumeration -- and it is absent from the 13-item universe.",
+      "correction": "\u26a0 Three upgrades, and the first changes the strength of the verdict. (1) The row argues the bucket is UNAMBIGUOUS; it is in fact UNEMITTABLE, because every production path into `heal_subcase` starts in `render_move_phase`'s Sleep Talk block and no set pairs `sleeptalk` with a drain move (0 of 393). The row reasons from the bucket's NAME and never traces its caller -- the exact shape the C153 rule forbids. \u26a0 **And the first revision of THIS correction did it too**, in the same sentence that names the failure: it asserted, untraced, that `heal_subcase` is reached only through `ambiguous_unrenderable_slug_with_protect`. There are two routes; review found the second. The conclusion held, the sentence did not, and nothing re-derived it -- so the graph is now built by `rust_call_graph` and pinned. (2) \"the pool's only drain move is `gigadrain`\" was an assertion; it is now the `drain`-flagged subset of the pool's 125 moves, derived from the dex, with the five gen3 drain moves it excludes named. (3) The Shell Bell half rests on the same generation-time item argument R6 does and needs the same runtime clause: the pool's only item-moving moves SWAP (`trick`) or REMOVE (`knockoff`) and no gen3 mechanism creates an item. \u26a0 One site the row's sentence does not cover survives as a note: the NAMED (non-Sleep-Talk) renderer tags a heal `[from] drain` whenever `choice.drain.is_some()`, and Shell Bell sets that field, so a Shell Bell holder would be mislabelled there too -- same unreachability, second site.",
+      "demonstration": "`heal_subcase` (`rust/pokezero-search/src/events.rs:3949`) routes a positive ATTACKER-side heal with foe damage in the same tail to `heal_drain_or_shellbell` at `:3962`. \u26a0 THE BUCKET HAS ONE PRODUCTION EMITTER AND THE ROW DOES NOT NAME IT. The caller graph is DERIVED, not asserted (see `heal_subcase_call_graph`): the crate entry point `['branch_events']` reaches `heal_subcase` only through `render_move_phase`, whose remaining 5 graph roots are thin non-`_with_protect` wrappers with ZERO production callers. `render_move_phase` has exactly 2 edges into the subgraph, both inside its Sleep Talk block -- the `sleeptalk_refusal_is_unsafe_with_protect` predicate at `rust/pokezero-search/src/events.rs:2138` and the slug emit at `:2159`. Only the second produces a KEY; the first is a boolean test whose result is discarded. So the tail is always a SLEEP TALK CALLEE'S tail, and the bucket needs `sleeptalk` and a drain move ON THE SAME SET. Measured per set, the instrument section 8 requires for a two-thing gap: 44 of 393 sets carry `sleeptalk`, 3 carry a drain move, and 0 carry both. The bucket is therefore UNEMITTABLE in this format, which is strictly stronger than the row's \"unambiguous\". Shell Bell, the other half of the name, is implemented AS drain (`src/gen3/items.rs`, arm `Items::SHELLBELL`, sets `attacking_choice.drain`), so it produces a byte-identical `Heal` -- the ambiguity is real by construction and not by enumeration -- and it is absent from the 13-item universe.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "generation",
         "pool_move",
@@ -958,6 +1099,8 @@
       "candidate": "The `TwoToFiveHits` flat-3.2 approximation",
       "correction": null,
       "demonstration": "The pool's `multihit` move set is derived from the dex over all 125 pool moves and is exactly [['bonemerang', '2']] -- one move, whose `multihit` is the SCALAR 2, not a `[2,5]` range. Every `[2,5]` move is therefore 0 of 220. Whole-pool absence, so it is side-independent: no side can use one and no side can be hit by one.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_move",
         "dex"
@@ -981,6 +1124,8 @@
       "candidate": "Rest's Insomnia / Vital Spirit fail clauses",
       "correction": null,
       "demonstration": "PER-SET co-occurrence, which is the instrument section 8 requires for a gap needing two things at once: 55 of 393 sets carry `rest` and 0 of those 55 list Insomnia or Vital Spirit. Rest is `target: self` and the ability is the user's own, so same-side is the CORRECT instrument here and the `target: normal` caution does not apply. Comatose is gen7.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_set_co_occurrence"
       ],
@@ -996,6 +1141,8 @@
       "candidate": "Belly Drum's Shedinja `maxhp === 1` fail clause",
       "correction": null,
       "demonstration": "Shedinja has 1 set, movepool [['agility', 'batonpass', 'hiddenpowerfighting', 'shadowball', 'silverwind', 'toxic']], and 0 of its 1 sets carry `bellydrum` (against 3 Belly Drum sets pool-wide). Belly Drum is `target: self`, so the same-side instrument is the right one. It ships for source parity only.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_set_co_occurrence"
       ],
@@ -1019,8 +1166,10 @@
     },
     "R14": {
       "candidate": "N5 -- the residual ceiling overshooting into a move-KO",
-      "correction": "\u26a0 **The corrected argument still had a hole, in the same cross-side family the row already carries a \u26a0 for.** It rests entirely on Wonder Guard and never asks whether the OPPONENT can take Wonder Guard away. In gen3 the two moves that can are Skill Swap ([] of 220) and Role Play ([]); Gastro Acid, Worry Seed, Entrainment, Simple Beam and Mold Breaker are all gen4+. Both are 0, so the route is closed -- but nothing had closed it until it was measured. Transform is in the pool (['ditto', 'mew'] species) and is not a route either: it copies the target's ability onto the user and does not copy HP. \u26a0 **And the exhaustive type enumeration the row is proud of is VACUOUS.** \"Of the pool's 125 moves, every move that is super-effective against Bug/Ghost is single-hit\" is true, but so is 'every move in the pool except Bonemerang is single-hit' -- the multi-hit census already gave the whole result and the type scan adds nothing. It is kept here (17 moves, all single-hit) as a control, not as the argument. \u26a0 The argument the row does not make is stronger and simpler, and c129 made it: `residual_disjoint_bands` admits a band only under `threshold < ceiling` with `ceiling = defender.hp`, so at `hit_count == 1` the arm deals strictly less than the defender's HP by construction and cannot overshoot into a KO at all; and Shedinja's `hp == 1` makes `0 < threshold < 1` unsatisfiable, so no band is ever built for the one species that motivated the row. \u26a0 Finally, the row says \"the N5 code\" as though there were one site: the same `(threshold + hit_count - 1) / hit_count` ceiling appears TWICE in `src/gen3/generate_instructions.rs`, at `residual_per_hit` and at `crit_residual_per_hit` on the crit-straddle branch, so a reader checking one of them has checked half.",
+      "correction": "\u26a0 **The corrected argument still had a hole, in the same cross-side family the row already carries a \u26a0 for.** It rests entirely on Wonder Guard and never asks whether the OPPONENT can take Wonder Guard away. In gen3 the two moves that can are Skill Swap ([] of 220) and Role Play ([]); Gastro Acid, Worry Seed, Entrainment, Simple Beam and Mold Breaker are all gen4+. Both are 0, so the route is closed -- but nothing had closed it until it was measured. Transform is in the pool (['ditto', 'mew'] species) and is not a route either: it copies the target's ability onto the user and does not copy HP. \u26a0 **And the exhaustive type enumeration the row is proud of is VACUOUS.** \"Of the pool's 125 moves, every move that is super-effective against Bug/Ghost is single-hit\" is true, but so is 'every move in the pool except Bonemerang is single-hit' -- the multi-hit census already gave the whole result and the type scan adds nothing. It is kept here (17 moves, all single-hit) as a control, not as the argument. \u26a0 The argument the row does not make is stronger and simpler, and c129 made it: `residual_disjoint_bands` admits a band only under `0 < threshold < ceiling`, and at the TWO KILL sites -- which are the two the N5 ceiling sits in -- that `ceiling` is `defender_active.hp`. So at `hit_count == 1` the arm deals strictly less than the defender's HP by construction and cannot overshoot into a KO, and Shedinja's `hp == 1` makes `0 < threshold < 1` unsatisfiable, so no band is ever built for the one species that motivated the row. \u26a0 Scoped to the kill sites deliberately: a first revision wrote `ceiling = defender.hp` flat, and it is `i16::MAX` at the other TWO of the four call sites (the survive mirrors). The argument holds where it is used; the sentence did not hold as written. \u26a0 Finally, the row says \"the N5 code\" as though there were one site: the same `(threshold + hit_count - 1) / hit_count` ceiling appears TWICE in `src/gen3/generate_instructions.rs`, at `residual_per_hit` and at `crit_residual_per_hit` on the crit-straddle branch, so a reader checking one of them has checked half.",
       "demonstration": "N5 needs `maxhp <= 47` AND `hit_count > 1`. Over 24,000 generated Pokemon the minimum max HP is 1 and the only species at or below 47 is ['Shedinja']. The pool's only multi-hit move is Bonemerang (Ground); `getEffectiveness('Ground', ['Bug','Ghost'])` is -1 -- resisted, not immune -- so Wonder Guard blocks it. Enumerated exhaustively over the pool's 125 moves: 17 are super-effective against Bug/Ghost and EVERY ONE is single-hit.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "generation",
         "pool_move",
@@ -1130,6 +1279,8 @@
       "candidate": "Magic Coat / reflect path, and Ingrain blocking phazing",
       "correction": null,
       "demonstration": "`magiccoat`, `ingrain` are each **0 of 220** species. Whole-pool absence, so side-independent. Both ARE in `TRACKED_VOLATILES` (`src/pokezero/showdown.py:4697`) and neither is in `_SUPPORTED_VOLATILES` (`src/pokezero/engine_world.py:94`), so the refusal at `src/pokezero/engine_world.py:1160` genuinely IS keyed to them -- it simply has no producer. The `reflectable: true` flag Roar and Whirlwind carry upstream is inert for want of a Magic Coat user.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_move",
         "source_trace"
@@ -1146,6 +1297,8 @@
       "candidate": "Dragon Rage and Psywave emit no instructions",
       "correction": null,
       "demonstration": "`dragonrage`, `psywave`, `nightshade` are each **0 of 220** species. Whole-pool absence, so side-independent -- these are `target: normal` moves and the verdict holds anyway, because no side has them to use. Night Shade was fixed by the fixed-damage-pipeline patch regardless. The pool's `damage`-flagged move set is exactly ['seismictoss'].",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_move",
         "dex"
@@ -1166,6 +1319,8 @@
       "candidate": "Eruption / Water Spout one-ULP ordering divergence",
       "correction": null,
       "demonstration": "`eruption`, `waterspout` are each **0 of 220** species. Whole-pool absence, side-independent.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_move"
       ],
@@ -1181,6 +1336,8 @@
       "candidate": "Locked-continuation PP on Outrage / Petal Dance / Thrash",
       "correction": null,
       "demonstration": "`outrage`, `petaldance`, `thrash` are each **0 of 220** species. The reachable half of that patch is Solar Beam (['exeggutor', 'sunflora', 'tangela', 'victreebel'] species) and Hyper Beam (['slaking']), which is the control that keeps this from being a vacuous absence.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_move"
       ],
@@ -1206,6 +1363,8 @@
       "candidate": "Snore treated as not sleep-usable",
       "correction": null,
       "demonstration": "`snore` is each **0 of 220** species. Sleep Talk, the other sleep-usable move, IS in the pool at 44 of 393 sets, so the absence is a fact about Snore and not about sleep moves.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_move"
       ],
@@ -1233,6 +1392,8 @@
         ]
       },
       "demonstration": "`hail` is each **0 of 220** species as a move, and the gen3 weather-producer set is ENUMERATED rather than asserted: the only `Dex.mod('gen3')` moves carrying a `weather` field are ['hail', 'raindance', 'sandstorm', 'snowscape', 'sunnyday'], and the only non-`Future` abilities that set weather are Drizzle, Drought and Sand Stream. Snow Warning, the sole hail-setting ability, reports `gen: 4, isNonstandard: 'Future'` -- it does not exist in gen3 at all. NO gen3 item sets weather. Two independent routes, both closed, and the downstream counter is closed with them: `world_prestate_mismatch:` is emitted at `scripts/engine_transition_differential.py:2753` with the suffix taken from the mismatch text, so a `weather_HAIL` suffix requires a HAIL prestate that no route can produce.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_move",
         "dex",
@@ -1272,6 +1433,8 @@
       "candidate": "Low Kick's weight-based base power, which Transform does not copy",
       "correction": null,
       "demonstration": "`lowkick` is each **0 of 220** species. Transform IS in the pool (['ditto', 'mew'] species), so the row's second clause is about a reachable copier and an unreachable move, not about two absences.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_move"
       ],
@@ -1290,6 +1453,8 @@
       "candidate": "Reflect / Light Screen keeping a trailing float position in the damage pipeline",
       "correction": "\u26a0 **The row flags itself for re-checking and then answers with an assertion.** \"`engine_world` *can construct* screens as side conditions -- but no battle path reaches that state\" is the shape this pass exists to replace, and re-tracing it moves where the closure sits. It is NOT `side_condition_unsupported` (`src/pokezero/engine_world.py:1360`): that fires for a condition OUTSIDE the map, and `reflect`, `lightscreen`, `safeguard` and `mist` are all INSIDE it, with turn counters derived rather than copied. If a screen ever appeared, engine_world would build it. The only thing that keeps it from appearing is the protocol: a mapped condition enters solely through a `|-sidestart|` line, and no pool Pokemon can emit one for a screen -- with no copier route either, since `metronome`, `assist`, `mirrormove`, `mimic`, `sketch`, `naturepower` and `magiccoat` are each 0 and Sleep Talk draws from the user's own slots. `spikes` (['cacturne', 'cloyster', 'deoxysdefense', 'deoxysspeed', 'forretress', 'glalie', 'omastar', 'qwilfish', 'roselia', 'skarmory', 'smeargle'] species) is the live control on the same map. \u26a0 One capability the row does not mention and that is not a battle path: the scenario harness injects arbitrary side conditions at `src/pokezero/local_showdown.py:2005`. No committed scenario under `scenarios/` sets one, so it is the same shape as the row's own parenthetical -- recorded rather than left to be found again.",
       "demonstration": "`reflect`, `lightscreen`, `safeguard`, `mist` are each **0 of 220** species. No Pokemon in the pool can set a screen, and the construction capability the row flags is traced rather than waved at: `_build_side_spec` maps side conditions through `_SIDE_CONDITION_IDS` (`src/pokezero/engine_world.py:118`), which DOES carry `reflect`, `lightscreen`, `safeguard` and `mist`, and refuses an unmapped one at `:1360`. The values it maps come from `side_payload['sideConditions']`, filled from `replay.side_condition_counts` at `src/pokezero/local_showdown.py:2321`, whose live writer is the `-sidestart` arm of the protocol fold. A screen therefore needs a `|-sidestart|\u2026|move: Reflect` line, which needs a pool Pokemon to use the move. `spikes` is the control: it is the one mapped condition the pool CAN set (['cacturne', 'cloyster', 'deoxysdefense', 'deoxysspeed', 'forretress', 'glalie', 'omastar', 'qwilfish', 'roselia', 'skarmory', 'smeargle'] species), so the map is not dead.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_move",
         "source_trace"
@@ -1319,8 +1484,10 @@
     },
     "R22": {
       "candidate": "Mimic, Imprison, Psych Up, Metronome, Assist, Nature Power, Sketch, Mirror Move",
-      "correction": "\u26a0 **Two clauses are wrong, one of them flatly.** (1) \"This closes \u2026 the `failencore` move-list edge cases\" is FALSE. `move_fails_encore` (third_party/poke-engine-gen3-encore-failencore.patch:26, symbol in `src/gen3/generate_instructions.rs`) matches `ENCORE | MIMIC | MIRRORMOVE | SKETCH | STRUGGLE | TRANSFORM`, and R22's eight names cover only three of the six: `encore` is ['alakazam', 'dewgong', 'illumise', 'jumpluff', 'minun', 'mrmime', 'pikachu', 'plusle', 'raichu', 'shuckle', 'smeargle', 'spinda', 'swalot', 'togetic', 'walrein', 'wobbuffet'] of 220 species, `transform` is ['ditto', 'mew'], and Struggle is reachable by PP exhaustion. Half that list is live in ordinary play. **Nothing opens**, and that was checked rather than hoped: the crate's six are exactly the non-`Future` gen3 moves carrying Showdown's `failencore` flag, which is the condition `encore.condition.onStart` actually tests, so the shipped list is right for its three reachable members too. The clause is withdrawn; the patch is not. (2) \"closes `_HIDDEN_INFORMATION_REQUEST_FLAGS`'s `maybeDisabled`/`maybeLocked`\" uses the wrong verb. That frozenset (`src/pokezero/engine_world.py:219`) is a TOLERATE-list: its members are filtered OUT of the refusal binding at `:456`, so those two flags never caused a refusal to begin with. What unreachability protects is a SILENT one -- under Imprison the singles request reports the blocked moves as `disabled: false`, engine_world tolerates the flag, and search would plan a move Showdown rejects.",
+      "correction": "\u26a0 **Two clauses are wrong, one of them flatly.** (1) \"This closes \u2026 the `failencore` move-list edge cases\" is FALSE. `move_fails_encore` (third_party/poke-engine-gen3-encore-failencore.patch:26, symbol in `src/gen3/generate_instructions.rs`) matches `ENCORE | MIMIC | MIRRORMOVE | SKETCH | STRUGGLE | TRANSFORM`, and R22's eight names cover only three of the six: `encore` is ['alakazam', 'dewgong', 'illumise', 'jumpluff', 'minun', 'mrmime', 'pikachu', 'plusle', 'raichu', 'shuckle', 'smeargle', 'spinda', 'swalot', 'togetic', 'walrein', 'wobbuffet'] of 220 species, `transform` is ['ditto', 'mew'], and Struggle is reachable by PP exhaustion. Half that list is live in ordinary play. **Nothing opens**, and that is a SET EQUALITY, measured on both sides: the arm's alternatives parsed out of the committed patch are ['ENCORE', 'MIMIC', 'MIRRORMOVE', 'SKETCH', 'STRUGGLE', 'TRANSFORM'], and the non-`Future` gen3 moves carrying Showdown's `failencore` flag -- the condition `encore.condition.onStart` actually tests -- are ['ENCORE', 'MIMIC', 'MIRRORMOVE', 'SKETCH', 'STRUGGLE', 'TRANSFORM']. Equal, so the shipped list is right for its three reachable members too. \u26a0 A first revision called this machine-checked while the pin asserted six MEMBERSHIPS, which review defeated by adding `Choices::TACKLE` to the arm and watching the module stay green. The clause is withdrawn; the patch is not. (2) \"closes `_HIDDEN_INFORMATION_REQUEST_FLAGS`'s `maybeDisabled`/`maybeLocked`\" uses the wrong verb. That frozenset (`src/pokezero/engine_world.py:219`) is a TOLERATE-list: its members are filtered OUT of the refusal binding at `:456`, so those two flags never caused a refusal to begin with. What unreachability protects is a SILENT one -- under Imprison the singles request reports the blocked moves as `disabled: false`, engine_world tolerates the flag, and search would plan a move Showdown rejects.",
       "demonstration": "`mimic`, `imprison`, `psychup`, `metronome`, `assist`, `naturepower`, `sketch`, `mirrormove` are each **0 of 220** species. Whole-pool absence, side-independent -- which matters for `imprison`, whose producer runs on the FOE (`onFoeDisableMove`), because both teams draw from the same 220-species pool. `maybeDisabled` has exactly one `= true` site in the whole Showdown tree, inside `imprison.condition.onFoeDisableMove`, and gen3 does not override that condition; `maybeLocked` has no `= true` site outside the gen1 partial-trapping mod and in gen3 is definitionally `maybeLocked || maybeDisabled`. G32 closes with `psychup` at 0, because the only in-pool move-caller is Sleep Talk (44 sets) and it selects from the user's OWN move slots.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_move",
         "source_trace"
@@ -1383,6 +1550,8 @@
         ]
       },
       "demonstration": "`focusenergy`, `mudsport`, `watersport`, `taunt`, `torment`, `disable`, `nightmare`, `foresight` are each **0 of 220** species. The refusal IS keyed to them, traced: `_build_side_spec` reads the token list at `src/pokezero/engine_world.py:1062`, subtracts `supported` at `:1158` and raises at `:1160`. The tokens that can appear are exactly `TRACKED_VOLATILES` (`src/pokezero/showdown.py:4697`, enforced at `:4908`, carried into the payload at `src/pokezero/local_showdown.py:2250`), all eight are members, and none is admitted by `_SUPPORTED_VOLATILES` (`src/pokezero/engine_world.py:94`) or by any contextual expansion -- so each WOULD raise if it ever appeared.",
+      "foreclosure": "RANDBATS_POPULATION",
+      "foreclosure_note": "`volatile_unsupported: side 'p1': ['taunt']` FIRES today on the scenario corpus (`struggle_taunt_stall`); the counter is already filed REACHABLE at H5b",
       "instruments": [
         "pool_move",
         "dex",
@@ -1463,6 +1632,8 @@
       "candidate": "Attract as a *move*",
       "correction": "\u26a0 Two scope notes the row's phrasing invites a reader to get wrong. `attract` is a MEMBER of `_SUPPORTED_VOLATILES` (`src/pokezero/engine_world.py:94`), so the volatile is expressed and searched, not refused -- unlike the eight in R23, which is the neighbouring row. And \"reachable only through Cute Charm\" is randbats-scoped: the scenario corpus produces it from the move itself (`attract_snorlax`).",
       "demonstration": "`attract` is each **0 of 220** species. The gen3 producers of the `attract` VOLATILE are enumerated: the move (0), the ability Cute Charm (gen3, in pool on ['clefable', 'delcatty', 'wigglytuff']), the item Destiny Knot (gen4) and G-Max Cuddle (gen8). Baton Pass cannot move it -- the condition carries `noCopy: true`. So the volatile is reachable only through Cute Charm, which is G37's correctly-scoped row.",
+      "foreclosure": "RANDBATS_POPULATION",
+      "foreclosure_note": "the scenario corpus produces the `attract` volatile from the move itself (`attract_snorlax`)",
       "instruments": [
         "pool_move",
         "pool_ability",
@@ -1491,6 +1662,8 @@
       "candidate": "Sleep Talk calling Haze / Psych Up / Roar / Whirlwind / Baton Pass",
       "correction": null,
       "demonstration": "PER-SET co-occurrence on this `sets.json`: 44 of 393 sets carry `sleeptalk` and 0 of those 44 also carry any of the five. Sleep Talk selects from the USER'S OWN move slots, so same-side co-occurrence is the correct instrument and a whole-pool count would be the wrong one. Measured on this file, not carried from the crate's three-universe count.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_set_co_occurrence"
       ],
@@ -1527,6 +1700,8 @@
       "candidate": "Quick Claw, King's Rock, Bright Powder, Lax Incense, Focus Band, Scope Lens, Berry Juice, the status berries, and every type-boosting item outside the 13",
       "correction": "\u26a0 Same missing runtime clause as R6 and R10, and it matters most here because this row is the one the ledger uses to retire a whole block of mechanics at once. A 13-item generation census bounds what a team STARTS with. It is closed in play as well, measured: `trick` (['furret', 'kecleon'] of 220) swaps and `knockoff` (['banette', 'hariyama', 'lickitung', 'sableye']) removes, `thief`/`covet`/`recycle`/`switcheroo`/`bugbite` are each 0, and no gen3 mechanism creates an item -- so no fourteenth item can appear mid-battle.",
       "demonstration": "The universe is 13 items over 24,000 generated Pokemon under a second seed scheme: ['Choice Band', 'Leftovers', 'Liechi Berry', 'Light Ball', 'Lum Berry', 'Petaya Berry', 'Salac Berry', 'Silk Scarf', 'Soul Dew', 'Stick', 'Thick Club', 'Twisted Spoon', 'White Herb']. Every item the row names is absent from it, and each exists in the gen3 dex, so the closure is the generator's rather than the dex's. What it retires is stated positively: no priority randomness, no item-sourced flinch, no evasion or crit item, no HP-restoring berry, no item-sourced heal-on-damage.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "generation",
         "dex",
@@ -1650,6 +1825,8 @@
       "candidate": "Rain Dish's `maxhp/16` rain heal and its missing `ResidualPlan` slot",
       "correction": null,
       "demonstration": "Rain Dish is **0 of 393 sets**, and the check is made at the SPECIES level too because a set list is an upper bound on nothing here: the gen3 species carrying Rain Dish are ['Lombre', 'Lotad', 'Ludicolo'], of which only ['Ludicolo'] is in the pool at all, and 0 of Ludicolo's 1 sets list Rain Dish. Trace is the only pool mechanism that can import an ability a set does not list and it COPIES THE OPPONENT'S, so it cannot manufacture one absent from the whole pool.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_ability",
         "dex",
@@ -1678,8 +1855,10 @@
     },
     "R4": {
       "candidate": "Weather-expiry sand/hail chip truncation",
-      "correction": "\u26a0 **The row's sentence \"The expiry path has no trigger\" is FALSE.** The order-8 decrement-and-clear block fires on every Rain Dance (['gorebyss', 'huntail', 'kingdra', 'ludicolo', 'mantine', 'omastar', 'seaking'] species) and Sunny Day (['exeggutor', 'sunflora', 'tangela', 'victreebel']), and `weather_survives_upkeep` evaluates FALSE on their expiring turn -- the expiry path is exercised in ordinary play. What has no trigger is the narrower thing the row is titled after: a chipping weather with a FINITE counter. Rain and sun do not chip; sand and hail are the only chipping weathers and neither can hold a finite counter in this pool. The verdict survives; the sentence that carried it does not. Two neighbouring over-readings are corrected with it: permanent (`-1`) weather is NOT Tyranitar-only -- Kyogre's Drizzle and Groudon's Drought write it too -- and the payload-seeding lane cannot inject finite sand either, but by a different mechanism the row does not cite: `_weather_fields` returns `-1` only under `weatherFromAbility`, and a prefix that saw only `[upkeep]` lines fails closed at `weather_turns_unknown` rather than fabricating a counter.",
+      "correction": "\u26a0 **The row's sentence \"The expiry path has no trigger\" is FALSE.** The order-8 decrement-and-clear block fires on every Rain Dance (['gorebyss', 'huntail', 'kingdra', 'ludicolo', 'mantine', 'omastar', 'seaking'] species) and Sunny Day (['exeggutor', 'sunflora', 'tangela', 'victreebel']), and `weather_survives_upkeep` evaluates FALSE on their expiring turn -- the expiry path is exercised in ordinary play. What has no trigger is the narrower thing the row is titled after: a chipping weather with a FINITE counter. Rain and sun do not chip; sand and hail are the only chipping weathers and neither can hold a finite counter in this pool. The verdict survives; the sentence that carried it does not. Two neighbouring over-readings are corrected with it: permanent (`-1`) weather is NOT Tyranitar-only -- Kyogre's Drizzle and Groudon's Drought write it too -- and the payload-seeding lane cannot inject finite sand either, but by a different mechanism the row does not cite. \u26a0 Stated precisely, because a first revision of this correction wrote \"`_weather_fields` returns `-1` ONLY under `weatherFromAbility`\" and that is false -- it also returns `(\"none\", -1)` at `src/pokezero/engine_world.py:941` for absent or `none` weather, which is the commonest case in the corpus. The accurate statement is narrower: `-1` for a NAMED weather requires `weatherFromAbility`, and a prefix that saw only `[upkeep]` lines fails closed at `weather_turns_unknown` rather than fabricating a counter, so the seeding lane cannot inject finite sand.",
       "demonstration": "`sandstorm`, `hail` are each **0 of 220** species as moves, so the only sand writer left is Sand Stream -- carried by ['tyranitar'] alone, on all 3 of its 3 sets -- which writes `WEATHER_ABILITY_TURNS = -1` (`src/gen3/abilities.rs`, symbol `ability_on_switch_in`, arm `Abilities::SANDSTREAM`). The expiry block in `add_end_of_turn_instructions` is guarded on `state.weather.turns_remaining > 0`, which `-1` fails, so permanent sand is never decremented and never reaches the `== 0` clear. The chip gate is a SEPARATE expression, `weather_survives_upkeep = turns_remaining != 1`, and `weather_chips` returns `Some` only for HAIL or SAND -- so `turns_remaining == 1` and a chipping weather cannot coincide.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_move",
         "pool_ability",
@@ -1715,6 +1894,8 @@
       "candidate": "Dry Skin's rain heal at order 10.3",
       "correction": null,
       "demonstration": "`Dex.mod('gen3').abilities.get('dryskin')` reports `gen: 4, isNonstandard: 'Future'` -- it does not exist in gen3, which is stronger than 'dead code for gen3 randbats' because it closes the format change as well. Measured 0 of 393 sets for completeness.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "dex",
         "pool_ability"
@@ -1735,6 +1916,8 @@
       "candidate": "Sitrus Berry, and the monotonicity break it causes in the residual mirror's bisection",
       "correction": "\u26a0 **The stated reason is a GENERATION-TIME argument and the row needs a RUNTIME one too.** \"`getItem` cannot return it\" says what a team starts with and nothing about acquisition in play -- which is the exact gap that made R26 wrong, in this document, about this mechanic, one row after this one. Closed here by measurement: `trick` is ['furret', 'kecleon'] of 220 species and `knockoff` ['banette', 'hariyama', 'lickitung', 'sableye'], and both only SWAP or REMOVE; `thief`, `covet`, `recycle`, `switcheroo` and `bugbite` are each 0, and no gen3 mechanism CREATES an item. A closed set of 13 stays closed under permutation and deletion, so Sitrus cannot enter mid-battle either.",
       "demonstration": "The item universe is measured, not read: 24,000 generated Pokemon under a second seed scheme ([1, 2, 3, i] for i in range(4000)) carry exactly 13 distinct items, and Sitrus Berry is not among them, reproducing section 1.3's 13 under a scheme section 8 requires presence facts to survive. Sitrus DOES exist in gen3 (`gen: 3`), so the closure is the generator's, not the dex's.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "generation",
         "pool_move",
@@ -1804,6 +1987,8 @@
         ]
       },
       "demonstration": "`_build_pokemon_spec` raises at `src/pokezero/engine_world.py:1758` when `normalize_id(mon.nature)` (read at `:1756`) is outside `_NEUTRAL_NATURES` (`:54`). `mon` is a `FixturePokemon` and the production path builds it in `unpack_pokemon` from field 6 of the PACKED TEAM STRING at `src/pokezero/engine_world.py:304` -- the differential's own `scripts/engine_transition_differential.py:2396` hands it `true_teams[slot]['packed']` from the bridge snapshot. Natures are unset on 24,000 of 24,000 generated Pokemon, so field 6 is empty and `nature` is `\"\"`.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "generation",
         "source_trace"
@@ -1838,6 +2023,8 @@
         ]
       },
       "demonstration": "`_weather_fields` raises at `src/pokezero/engine_world.py:944` when `_WEATHER_IDS.get(weather_id)` (`:942`) misses. `weather_id` is `normalize_id(str(payload['weather']))`; the payload key is filled from `replay.weather` at `src/pokezero/local_showdown.py:2356`, whose only writer is `_update_weather` at `src/pokezero/showdown.py:5255`, which returns `_normalize_identifier(parts[2])` (`:8005`, `re.sub(r'[^a-z0-9]+', '', lower())`) of the second field of a `|-weather|` line. Showdown emits the CONDITION NAME there -- `RainDance`, `SunnyDay`, `Sandstorm`, `Hail`, or `none` -- so the four reachable ids are exactly `raindance`, `sunnyday`, `sandstorm`, `hail`, and `none` is early-returned before the lookup. All four are KEYS of `_WEATHER_IDS`, so the lookup cannot miss.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "source_trace",
         "dex"
@@ -1873,6 +2060,8 @@
       "candidate": "Liquid Ooze mislabelled by the residual-heal renderer",
       "correction": "\u26a0 **The row's second sentence is FALSE and is a NON SEQUITUR from its first.** \"The Liquid Ooze guard inside `residual_heal_cause` is therefore dead code\" does not follow from the negative-heal interception, because the guard is not in a negative-heal branch. It is the conjunct `ability != Abilities::LIQUIDOOZE` at `rust/pokezero-search/src/events.rs:5685`, inside the LEECHSEED arm, which only runs on a POSITIVE heal -- exactly the heals the interception lets through. `residual_heal_cause` takes no heal amount at all (`(state, side, next_ins)`), so the sign of the heal is not a fact it can see. It is not dead in the literal sense either: the crate PINS it, at `rust/pokezero-search/src/events.rs:9171`, with a positive heal of 6 and no Leftovers, and that pin's own note records that it exists because deleting the guard once left the suite green. What actually forecloses the conjunct IN THIS FORMAT is the two EARLIER returns plus the item universe: a resolving Wish returns at `:5638` and a Leftovers holder at `:5679`, so the conjunct is only consulted for a positive residual heal on a side holding NEITHER -- and the engine's residual heal producers are Leftovers, Sitrus (outside the 13-item universe, R6), Wish (already returned) and the Leech Seed drain, which under Liquid Ooze is NEGATIVE and intercepted. That enumeration, not the interception, is the demonstration. \u26a0 Two further scope errors in the same cell. The row says \"what makes this row UNREACHABLE is the renderer interception ALONE\": there are THREE ooze-aware sites, not one. The residual plan's own conjunct at `rust/pokezero-search/src/events.rs:5478` is separately pinned in both directions and is live. And the MOVE-PHASE ooze path is a different renderer with its own interception at `rust/pokezero-search/src/events.rs:3284`, which is genuinely REACHABLE -- `gigadrain` on ['exeggutor', 'parasect'] against Liquid Ooze on ['swalot', 'tentacruel'] -- so the mechanic half of this row survives only because that renderer handles it too, which the row does not say. `reports/c131` \u00a75 carries the same false sentence and is corrected by reference.",
       "demonstration": "`render_residual_instruction` (`rust/pokezero-search/src/events.rs:4978`) intercepts a negative `Instruction::Heal` at `:5006` and renders it as `|-damage|\u2026|[from] ability: Liquid Ooze` in the THEN arm; `plan.take(side, true)` and the `residual_heal_cause` fallback (`:5015`) are the ELSE arm, and `residual_heal_cause` (`:5624`) has exactly ONE call site in the crate. So the drain-reversal damage can never be labelled by the fallback, which is what the row's headline gap needed. Liquid Ooze itself IS reachable -- ['swalot', 'tentacruel'] carry it, `leechseed` is ['bellossom', 'cacturne', 'celebi', 'exeggutor', 'jumpluff', 'meganium', 'sceptile', 'shiftry', 'sunflora', 'tangela', 'tropius', 'venusaur'] of 220 and both moves are `target: normal`, so the seeder-versus-holder pairing is cross-side and ordinary.",
+      "foreclosure": "ALL_CALLERS",
+      "foreclosure_note": null,
       "instruments": [
         "pool_ability",
         "pool_move",

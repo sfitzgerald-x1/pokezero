@@ -17,11 +17,17 @@ adopted. The class is not confined to the category that earned the rule.
 
 ``reports/c138_known_gaps_ledger.md`` section 4 holds 26 UNREACHABLE verdicts (R1-R27,
 R26 withdrawn) that had never been through it. They were carried on prior work's word.
-At 3-in-7 that is not a formality, and it was not: this pass files corrections on SEVEN
-of the 26. Every one of the seven keeps its UNREACHABLE verdict and loses its stated
-mechanism, which is the ``deferred_opponent_action`` shape rather than the
-``public_effect_blocked`` one -- section 4 has no eighth wrong verdict that this pass
-could find.
+At 3-in-7 that is not a formality, and it was not.
+
+⚠ HOW MANY CORRECTIONS THIS PASS FILES IS NOT WRITTEN HERE, and that is deliberate. Two
+earlier revisions of this docstring said SEVEN in one paragraph and TEN in another while
+the artifact carried THIRTEEN -- the fifth and sixth instances of the defect this PR's own
+ledger edits are about, in the generator that produces the number. The count lives in the
+artifact, is derived by ``correction_counts()`` below, and is asserted against the verdict
+records by ``tests/test_unreachable_readjudication.py``. Every row keeps its UNREACHABLE
+verdict and the corrected ones lose only their stated mechanism, which is the
+``deferred_opponent_action`` shape rather than the ``public_effect_blocked`` one -- section
+4 has no wrong VERDICT that this pass could find.
 
 WHAT THIS SCRIPT IS. One artifact generator. It re-derives, from source and from the
 vendored Showdown checkout, every measurement any section 4 row rests on, and pairs each
@@ -31,9 +37,15 @@ then holds the ledger against the artifact.
 THE THREE VERDICT WORDS, and none of them is "verified unreachable, measured":
 
   * ``UNREACHABLE_TRACED``      -- with the call path and the specific statement that
-                                   forecloses it, of the form "X builds its own payload
-                                   at f:N with neither argument and hands it to Y, which
-                                   raises at :M, so it cannot fire FOR ANY CALLER of X".
+                                   forecloses it. ⚠ Every row additionally carries a
+                                   ``foreclosure`` field, because the word alone
+                                   over-claims: 24 rows are ``ALL_CALLERS`` ("X builds its
+                                   own payload at f:N with neither argument and hands it
+                                   to Y, which raises at :M, so it cannot fire FOR ANY
+                                   CALLER of X"), and three are ``RANDBATS_POPULATION`` --
+                                   foreclosed over section 4's stated population and NOT
+                                   over every caller. R23's counter fires today on the
+                                   scenario corpus. See ``FORECLOSURES``.
   * ``NOT_OBSERVED_AT_SCOPE``   -- reachable in principle, measured zero, with the scope,
                                    the bound and the denominator that MATCHES THE
                                    EMISSION SITE.
@@ -103,22 +115,35 @@ different reason, and this artifact measures it: the pool's only item-moving mov
 ``recycle``, ``switcheroo`` and ``bugbite`` are each 0 of 220, and no gen3 mechanism
 CREATES an item. A closed set stays closed under permutation and deletion.
 
-WHERE THIS ARTIFACT LIVES, AND WHY IT IS NOT UNDER ``reports/``.
-``tests/test_never_fired_counter_census.py`` selects every committed JSON under
-``reports/`` and ``docs/`` and flags a NONZERO NUMBER under a dotted path containing a
-counter name. This artifact is keyed by refusal-reason names -- ``nature_not_neutral``,
-``weather_unsupported``, ``volatile_unsupported``, ``future_sight_pending`` -- and carries
-pool counts beside them, so placed under ``reports/`` it would read as four counters
-firing across the corpus. That is not hypothetical: C153 put two numbers in a
-counter-keyed record and turned the corpus census from green to six failures on the same
-tree. It lives in ``tests/data/`` instead, and the pin ASSERTS that
-``counter_artifacts()`` does not select it, so the exclusion is a checked property rather
-than a filesystem accident.
+WHERE THIS ARTIFACT LIVES, AND THE CLAIM THAT PUT IT SOMEWHERE ELSE FIRST.
+
+It lives in ``reports/artifacts/``, inside ``counter_artifacts()``'s glob, so
+``tests/test_never_fired_counter_census.py`` shape-checks it on every run like every other
+committed measurement.
+
+⚠ A first revision put it in ``tests/data/`` and argued the move at length: the artifact is
+keyed by refusal-reason names -- ``nature_not_neutral``, ``weather_unsupported``,
+``volatile_unsupported``, ``future_sight_pending`` -- and carries pool counts beside them,
+so under ``reports/`` it would supposedly read as four counters firing across the corpus.
+**Measured, that is false.** Copied into ``reports/artifacts/`` with
+``_EXPECTED_COUNTER_ARTIFACTS`` bumped, the census reports ``Ran 22 tests ... OK``. The
+names appear only as string VALUES inside prose, and ``_evidence_in`` admits exactly two
+shapes -- a counter name as a token in the leaf's dotted PATH, or C43's string-field-plus-
+numeric-sibling -- and its docstring says in terms that "A name merely mentioned inside
+prose is NOT evidence", an exclusion that predates this pass and is load-bearing for two
+other rows.
+
+So the placement bought nothing, and it COST the guard that census's own header warns
+about by name: "A future census written to ``tests/data/`` would leave the corpus and lose
+the check with no test going red." One PR earlier a convenience field of exactly that shape
+nearly inverted 46 verdicts and the shape-matching census is what caught it. The rule this
+leaves behind is the one this whole pass is about: **a hazard asserted is not a hazard
+measured**, and it was asserted in the docstring of the instrument built to stop that.
 
 Regenerate with::
 
     python scripts/c154_unreachable_readjudication.py --write \\
-        tests/data/c154_unreachable_readjudication.json
+        reports/artifacts/c154_unreachable_readjudication.json
 
 from a machine with a pokemon-showdown checkout resolvable by
 ``pokezero.local_showdown.default_showdown_root`` (``POKEZERO_SHOWDOWN_ROOT`` wins) and a
@@ -390,6 +415,17 @@ for (const id of poolMoves) {
 }
 const bonemerang = dex.moves.get('bonemerang');
 
+// --- R22. Showdown's own `failencore` flag, which is what `encore.condition.onStart`
+// tests. `Future` entries are excluded: they do not exist in a gen3 battle, so including
+// them would make the set equality against the crate's arm fail for the wrong reason.
+const failencore_flagged_gen3 = [];
+for (const mv of dex.moves.all()) {
+  if (mv.flags && mv.flags.failencore && mv.isNonstandard !== 'Future') {
+    failencore_flagged_gen3.push(mv.id.toUpperCase());
+  }
+}
+failencore_flagged_gen3.sort();
+
 // --- gen3 EXISTENCE, which is a different question from pool membership.
 const dex_abilities = {};
 for (const id of args.dex_abilities) {
@@ -487,6 +523,7 @@ process.stdout.write(JSON.stringify({
   bonemerang_effectiveness: dex.getEffectiveness('Ground', [t1, t2]),
   bonemerang_immune: !dex.getImmunity('Ground', [t1, t2]),
   bonemerang_multihit: bonemerang.multihit,
+  failencore_flagged_gen3,
   shedinja_movepool: (sets['shedinja'] ? sets['shedinja'].sets.map(s => s.movepool) : null),
   dex_abilities,
   dex_items,
@@ -517,6 +554,102 @@ GEN3_DRAIN_MOVES = ("absorb", "megadrain", "gigadrain", "leechlife", "dreameater
 #: c129 measured every N5 overshoot state at or below this max HP. R14's whole argument
 #: is that Shedinja is the pool's only species that reaches it.
 N5_MAXHP_CEILING = 47
+
+
+#: Where the R10 caller graph has to terminate. Named rather than discovered, so a route
+#: that reaches `heal_subcase` from somewhere ELSE is a loud failure instead of a quietly
+#: wider graph.
+HEAL_SUBCASE_ROOT = "render_move_phase"
+
+
+def rust_call_graph(relative: str, target: str, root: str) -> dict[str, Any]:
+    """Every PRODUCTION path from `root` to `target` in a Rust file, by reverse reachability.
+
+    ⚠ THIS EXISTS BECAUSE R10'S CORRECTION MADE R10'S MISTAKE. The correction opens "this
+    cell reasoned from its NAME without tracing its caller" and then asserted, untraced,
+    that `heal_subcase` is reached ONLY through `ambiguous_unrenderable_slug_with_protect`.
+    There are TWO routes and review found the second: the `sleeptalk_refusal_is_unsafe_
+    with_protect` predicate at the head of the same block reaches it as well. The
+    CONCLUSION survives -- both roots are `render_move_phase`'s Sleep Talk block and only
+    one of the two emits a slug -- but a sentence nothing re-derives is exactly what this
+    pass exists to remove, so the graph is derived here and pinned.
+
+    Callers are attributed to the enclosing top-level `fn`, and everything at or after
+    `mod tests` is excluded: five of the six functions on this graph have a thin non-
+    `_with_protect` wrapper whose only callers are tests, and counting those would report a
+    production graph that does not exist.
+    """
+
+    lines = (ROOT / relative).read_text(encoding="utf-8").splitlines()
+    try:
+        test_start = next(n for n, line in enumerate(lines, 1) if line.strip().startswith("mod tests"))
+    except StopIteration:
+        raise SystemExit(f"no `mod tests` boundary in {relative}; the production filter is inert")
+    defs = [
+        (n, m.group(1))
+        for n, line in enumerate(lines, 1)
+        if (m := re.match(r"(?:pub )?fn (\w+)", line))
+    ]
+
+    def enclosing(number: int) -> str | None:
+        found = None
+        for n, name in defs:
+            if n <= number:
+                found = name
+            else:
+                break
+        return found
+
+    def callers(name: str) -> list[dict[str, Any]]:
+        pattern = re.compile(r"(?<![\w])" + re.escape(name) + r"\s*\(")
+        out = []
+        for n, line in enumerate(lines, 1):
+            if n >= test_start or "///" in line or line.lstrip().startswith("//"):
+                continue
+            if re.match(r"\s*(?:pub )?fn " + re.escape(name) + r"\s*\(", line):
+                continue
+            if pattern.search(line):
+                out.append({"line": n, "in": enclosing(n)})
+        return out
+
+    edges: dict[str, list[dict[str, Any]]] = {}
+    frontier, seen = [target], {target}
+    while frontier:
+        current = frontier.pop()
+        found = callers(current)
+        edges[current] = found
+        for site in found:
+            parent = site["in"]
+            if parent and parent != current and parent not in seen:
+                seen.add(parent)
+                frontier.append(parent)
+    roots = sorted(name for name, found in edges.items() if not found)
+    # ⚠ CLASSIFY THE ROOTS, or "roots" is as vague as the sentence this replaces. Five of
+    # them are thin non-`_with_protect` wrappers whose only callers are tests: they are
+    # graph roots because they are DEAD in production, not because they are entry points.
+    # Discriminated structurally -- a dead wrapper's `<name>_with_protect` twin is also on
+    # the graph -- rather than by matching on the suffix, which would also accept a real
+    # entry point that happened to be named that way.
+    dead_wrappers = sorted(r for r in roots if f"{r}_with_protect" in edges)
+    live_entry_points = sorted(set(roots) - set(dead_wrappers))
+    # Edges FROM the chokepoint INTO the subgraph. `callee != root` drops
+    # `render_move_phase`'s own tail recursion at :2058, which is not a way in -- a first
+    # version reported three edges and the sentence said two.
+    through_root = sorted(
+        site["line"]
+        for callee, found in edges.items()
+        for site in found
+        if site["in"] == root and callee != root
+    )
+    return {
+        "target": target,
+        "edges": {k: edges[k] for k in sorted(edges)},
+        "roots": roots,
+        "dead_wrappers_with_no_production_caller": dead_wrappers,
+        "live_entry_points": live_entry_points,
+        "chokepoint": root,
+        "edges_out_of_the_chokepoint": through_root,
+    }
 
 
 def _showdown_commit(root: Path) -> str:
@@ -604,6 +737,7 @@ def census(root: Path) -> dict[str, Any]:
         raise SystemExit(f"ERROR: census failed\n{result.stdout}\n{result.stderr}")
     out = json.loads(result.stdout)
     out["volatile_producers_by_source"] = _volatile_producers_by_source(root)
+    out["heal_subcase_call_graph"] = rust_call_graph(EV, "heal_subcase", HEAL_SUBCASE_ROOT)
     out["volatile_source_scan_roots"] = ["data/**/*.ts (mods: gen3 only)", "sim/**/*.ts"]
     out["showdown_commit"] = _showdown_commit(root)
     out["generation_seed_scheme"] = GENERATION_SEED_SCHEME
@@ -617,11 +751,46 @@ def census(root: Path) -> dict[str, Any]:
 #: The only three verdict words. A row that needs a fourth is a row this pass got wrong.
 VERDICTS = ("UNREACHABLE_TRACED", "NOT_OBSERVED_AT_SCOPE", "WRONG")
 
+#: ⚠ THE SCOPE OF THE FORECLOSURE, and it is not decoration.
+#:
+#: `UNREACHABLE_TRACED` was first documented as "cannot fire FOR ANY CALLER of X", which is
+#: the shape the `deferred_opponent_action` demonstration has and the shape a reader will
+#: assume. It is WRONG for at least two rows and the pass shipped saying otherwise.
+#: `volatile_unsupported` DOES fire, today, for a caller -- `struggle_taunt_stall`, a
+#: hand-written Custom Game fixture -- and R1's raise is one keyword argument from firing.
+#: Section 4's own population is "cannot be reached in gen3 randbats", so both verdicts are
+#: right; the WORD was over-claiming.
+#:
+#: Recorded per row rather than fixed by softening the definition for all 26, because 24 of
+#: them really are all-callers foreclosures and flattening that would throw away the
+#: stronger result. Refusing a fourth VERDICT category and then quietly widening the third
+#: is the same error in a different place.
+FORECLOSURES = ("ALL_CALLERS", "RANDBATS_POPULATION")
+
+#: The rows whose foreclosure holds only over section 4's population. Each is a row whose
+#: correction records a live firing or a committed construction outside sampled randbats.
+NARROW_FORECLOSURE = {
+    "R1": (
+        "constructible from committed code -- `golden_corpus_scenarios.py`'s "
+        "`future_sight_pending` spec -- and foreclosed only by which spec list the harnesses "
+        "default to"
+    ),
+    "R23": (
+        "`volatile_unsupported: side 'p1': ['taunt']` FIRES today on the scenario corpus "
+        "(`struggle_taunt_stall`); the counter is already filed REACHABLE at H5b"
+    ),
+    "R24": (
+        "the scenario corpus produces the `attract` volatile from the move itself "
+        "(`attract_snorlax`)"
+    ),
+}
+
 #: How the LEDGER'S OWN stated reason fared, which is a separate judgement from the
-#: verdict and is the one that moved here. C153's three-in-seven were one wrong verdict
-#: and two wrong reasons; this pass found no wrong verdict and ten wrong or incomplete
-#: reasons, so the distinction has to be recorded per row or the result reads as "26
-#: confirmed".
+#: verdict and is the one that moved here. C153's three-in-seven were one wrong verdict and
+#: two wrong reasons; this pass found no wrong verdict and a number of wrong-or-incomplete
+#: reasons that is DERIVED rather than typed -- see `correction_counts()`, and see the
+#: docstring for the two stale figures that were typed here before it existed. Without the
+#: distinction the result reads as "26 confirmed".
 REASON_STATUSES = ("SOUND", "INCOMPLETE", "FALSE")
 
 #: The engine source under `third_party/poke-engine-src/` is GITIGNORED and regenerated,
@@ -630,6 +799,34 @@ REASON_STATUSES = ("SOUND", "INCOMPLETE", "FALSE")
 #: that introduces it -- and the patch IS anchored, so the citation still breaks loudly if
 #: the patch stops carrying the code.
 PATCHES = "third_party"
+
+
+def _patch_match_arm(name: str, needle: str) -> tuple[str, ...]:
+    """The `Choices::X | Choices::Y | ...` alternatives of the `matches!` under `needle`.
+
+    Returned as a SET so a comparison against gen3's `failencore`-flagged move set is an
+    equality rather than a membership sweep. Reading the added (`+`) lines of the patch
+    rather than the materialized tree, because `third_party/poke-engine-src/` is gitignored
+    and regenerated -- so this is committed evidence, which a symbol citation is not.
+    """
+
+    text = (ROOT / f"{PATCHES}/{name}").read_text(encoding="utf-8")
+    start = text.index(needle)
+    # From the `matches!(` to its closing paren, NOT from the fn signature -- whose own
+    # `(move_id: &Choices)` closes first and made a first version of this read an empty arm.
+    opening = text.index("matches!(", start)
+    closing = text.index("\n+    )", opening)
+    arm = text[opening:closing]
+    # `+` lines only: the arm is what the patch ADDS, and a context line that merely
+    # mentions a `Choices::` variant is not part of the shipped set.
+    added = "\n".join(line for line in arm.splitlines() if line.startswith("+"))
+    found = tuple(sorted(set(re.findall(r"Choices::(\w+)", added))))
+    if not found:
+        raise SystemExit(
+            f"no `Choices::` alternatives found under {needle!r} in {name}; the arm has "
+            "moved and the set-equality claim on it is unverified, not merely unchecked."
+        )
+    return found
 
 
 def _patch(name: str, needle: str) -> str:
@@ -645,6 +842,31 @@ def _weather_id_keys() -> list[str]:
     from pokezero.engine_world import _WEATHER_IDS  # noqa: PLC0415
 
     return list(_WEATHER_IDS)
+
+
+def correction_counts(records: dict[str, Any]) -> dict[str, int]:
+    """The corrections tally, DERIVED from the records rather than typed in a docstring.
+
+    ⚠ Two revisions of this module's docstring said SEVEN in one paragraph and TEN in
+    another while the artifact carried THIRTEEN -- the fifth and sixth instances of the
+    exact defect this pass files against the ledger, inside the generator that produces the
+    number. There is now one place the count exists and a pin that holds the prose to it.
+    R26 is excluded from `rows_corrected` because it was withdrawn before this pass and has
+    no verdict of its own.
+    """
+
+    live = {k: v for k, v in records.items() if k != "R26"}
+    tally: dict[str, int] = {"rows": len(live)}
+    for status in REASON_STATUSES:
+        tally[status.lower()] = sum(
+            1 for v in live.values() if v["ledger_reason_status"] == status
+        )
+    tally["rows_corrected"] = tally["incomplete"] + tally["false"]
+    tally["all_callers"] = sum(1 for v in live.values() if v["foreclosure"] == "ALL_CALLERS")
+    tally["randbats_population"] = sum(
+        1 for v in live.values() if v["foreclosure"] == "RANDBATS_POPULATION"
+    )
+    return tally
 
 
 def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
@@ -733,10 +955,13 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
     rv = "src/pokezero/randbat_vocab.py"
     item_vocab = _anchor(rv, "GEN3_RANDBAT_ITEMS = (")
     sleeptalk_emit = _anchor(EV, "&ambiguous_unrenderable_slug_with_protect(")
+    sleeptalk_guard = _anchor(EV, "if !sleeptalk_refusal_is_unsafe_with_protect(")
     ooze_plan_guard = _anchor(EV, "drains_opponent[i] = opponent")
     ooze_pin = _anchor(EV, "fn liquid_ooze_on_the_seeder_means_a_heal_here_is_not_the_drain() {")
     move_phase_ooze = _anchor(EV, "[from] ability: Liquid Ooze|[of] {defender_ident}")
+    weather_none_return = _anchor(EW, 'return "none", -1')
     ss = "src/pokezero/scenario_studio/domain.py"
+    scenario_weather_ids = _anchor(ss, "SCENARIO_WEATHER_IDS = (")
     scenario_nature = _anchor(ss, 'nature=self.nature,')
     fidelity_caller = _anchor("src/pokezero/engine_fidelity.py", "_build_pokemon_spec(mon, None, dex=dex, slot=slot, is_self=False)")
     scenario_sidestart = _anchor(LS, 'lines.append(f"|-sidestart|{player}: scenario|{name}")')
@@ -744,6 +969,13 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
     hidden_flags = _anchor(EW, '_HIDDEN_INFORMATION_REQUEST_FLAGS = frozenset({"maybeTrapped"')
     hidden_filter = _anchor(EW, 'if flag not in _HIDDEN_INFORMATION_REQUEST_FLAGS and flag != "trapped"')
     failencore_patch = _patch("poke-engine-gen3-encore-failencore.patch", "fn move_fails_encore")
+    # ⚠ PARSED, not listed. The report claimed this set equality was machine-checked while
+    # the pin asserted six MEMBERSHIPS -- so adding `Choices::TACKLE` to the patch's match
+    # arm left the module green, which review demonstrated. A membership check on a set
+    # equality claim is a check that cannot fail in the direction that matters.
+    failencore_shipped = _patch_match_arm(
+        "poke-engine-gen3-encore-failencore.patch", "fn move_fails_encore"
+    )
 
     records: dict[str, Any] = {}
 
@@ -772,6 +1004,8 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             "row": name,
             "candidate": candidate,
             "verdict": verdict,
+            "foreclosure": "RANDBATS_POPULATION" if name in NARROW_FORECLOSURE else "ALL_CALLERS",
+            "foreclosure_note": NARROW_FORECLOSURE.get(name),
             "ledger_reason_status": reason_status,
             "correction": correction,
             "demonstration": demonstration,
@@ -909,9 +1143,14 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             "over-readings are corrected with it: permanent (`-1`) weather is NOT "
             "Tyranitar-only -- Kyogre's Drizzle and Groudon's Drought write it too -- and "
             "the payload-seeding lane cannot inject finite sand either, but by a "
-            "different mechanism the row does not cite: `_weather_fields` returns `-1` "
-            "only under `weatherFromAbility`, and a prefix that saw only `[upkeep]` lines "
-            "fails closed at `weather_turns_unknown` rather than fabricating a counter."
+            "different mechanism the row does not cite. ⚠ Stated precisely, because a first "
+            f"revision of this correction wrote \"`_weather_fields` returns `-1` ONLY under "
+            "`weatherFromAbility`\" and that is false -- it also returns `(\"none\", -1)` at "
+            f"`{EW}:{weather_none_return}` for absent or `none` weather, which is the "
+            "commonest case in the corpus. The accurate statement is narrower: `-1` for a "
+            "NAMED weather requires `weatherFromAbility`, and a prefix that saw only "
+            "`[upkeep]` lines fails closed at `weather_turns_unknown` rather than "
+            "fabricating a counter, so the seeding lane cannot inject finite sand."
         ),
     )
 
@@ -1115,14 +1354,22 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
         "INCOMPLETE",
         f"`heal_subcase` (`{EV}:{subcase_fn}`) routes a positive ATTACKER-side heal with "
         f"foe damage in the same tail to `heal_drain_or_shellbell` at `:{subcase_bucket}`. "
-        "⚠ THE BUCKET HAS ONE PRODUCTION EMITTER AND THE ROW DOES NOT NAME IT: "
-        f"`heal_subcase` is reached only through `ambiguous_unrenderable_slug_with_protect`, "
-        f"whose single non-test caller is the Sleep Talk ambiguous-tail arm at "
-        f"`{EV}:{sleeptalk_emit}` (the bare `ambiguous_unrenderable_slug` wrapper is called "
-        "only from `#[cfg(test)]`). So the tail is a SLEEP TALK CALLEE'S tail, and the "
-        "bucket needs `sleeptalk` and a drain move ON THE SAME SET. Measured per set, the "
-        f"instrument section 8 requires for a two-thing gap: {co['sleeptalk_sets']} of "
-        f"{pool['sets']} sets carry `sleeptalk`, {co['drain_sets']} carry a drain move, and "
+        "⚠ THE BUCKET HAS ONE PRODUCTION EMITTER AND THE ROW DOES NOT NAME IT. The "
+        "caller graph is DERIVED, not asserted (see `heal_subcase_call_graph`): the crate "
+        f"entry point `{pool['heal_subcase_call_graph']['live_entry_points']}` reaches "
+        f"`heal_subcase` only through `{HEAL_SUBCASE_ROOT}`, whose remaining "
+        f"{len(pool['heal_subcase_call_graph']['dead_wrappers_with_no_production_caller'])} "
+        "graph roots are thin non-`_with_protect` wrappers with ZERO production callers. "
+        f"`{HEAL_SUBCASE_ROOT}` has exactly "
+        f"{len(pool['heal_subcase_call_graph']['edges_out_of_the_chokepoint'])} edges into "
+        "the subgraph, both inside its Sleep Talk block -- the "
+        f"`sleeptalk_refusal_is_unsafe_with_protect` predicate at `{EV}:{sleeptalk_guard}` "
+        f"and the slug emit at `:{sleeptalk_emit}`. Only the second produces a KEY; the "
+        "first is a boolean test whose result is discarded. So the tail is always a SLEEP "
+        "TALK CALLEE'S tail, and the bucket needs `sleeptalk` and a drain move ON THE SAME "
+        "SET. Measured per set, the instrument section 8 requires for a two-thing gap: "
+        f"{co['sleeptalk_sets']} of {pool['sets']} sets carry `sleeptalk`, "
+        f"{co['drain_sets']} carry a drain move, and "
         f"{co['sleeptalk_with_a_drain_move']} carry both. The bucket is therefore "
         "UNEMITTABLE in this format, which is strictly stronger than the row's "
         "\"unambiguous\". Shell Bell, the other half of the name, is implemented AS drain "
@@ -1140,13 +1387,18 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             "sleeptalk_with_a_drain_move": co["sleeptalk_with_a_drain_move"],
         },
         correction=(
-            "⚠ Three upgrades, and the first changes the strength of the verdict. (1) "
+"⚠ Three upgrades, and the first changes the strength of the verdict. (1) "
             "The row argues the bucket is UNAMBIGUOUS; it is in fact UNEMITTABLE, because "
-            "its only production emitter is the Sleep Talk ambiguous-tail path and no set "
-            "pairs `sleeptalk` with a drain move ("
-            f"{co['sleeptalk_with_a_drain_move']} of {pool['sets']}). The row reasons from "
-            "the bucket's NAME and never traces its caller -- the exact shape the C153 "
-            "rule forbids. (2) \"the pool's only drain move is `gigadrain`\" was an "
+            "every production path into `heal_subcase` starts in "
+            f"`{HEAL_SUBCASE_ROOT}`'s Sleep Talk block and no set pairs `sleeptalk` with a "
+            f"drain move ({co['sleeptalk_with_a_drain_move']} of {pool['sets']}). The row "
+            "reasons from the bucket's NAME and never traces its caller -- the exact shape "
+            "the C153 rule forbids. ⚠ **And the first revision of THIS correction did it "
+            "too**, in the same sentence that names the failure: it asserted, untraced, "
+            "that `heal_subcase` is reached only through "
+            "`ambiguous_unrenderable_slug_with_protect`. There are two routes; review found "
+            "the second. The conclusion held, the sentence did not, and nothing re-derived "
+            "it -- so the graph is now built by `rust_call_graph` and pinned. (2) \"the pool's only drain move is `gigadrain`\" was an "
             "assertion; it is now the `drain`-flagged subset of the pool's "
             f"{pool['distinct_moves']} moves, derived from the dex, with the five gen3 "
             "drain moves it excludes named. (3) The Shell Bell half rests on the same "
@@ -1256,11 +1508,16 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             f"type scan adds nothing. It is kept here ({len(pool['super_effective_against_wonder_guard'])} "
             "moves, all single-hit) as a control, not as the argument. ⚠ The argument the "
             "row does not make is stronger and simpler, and c129 made it: "
-            "`residual_disjoint_bands` admits a band only under `threshold < ceiling` with "
-            "`ceiling = defender.hp`, so at `hit_count == 1` the arm deals strictly less "
-            "than the defender's HP by construction and cannot overshoot into a KO at all; "
-            "and Shedinja's `hp == 1` makes `0 < threshold < 1` unsatisfiable, so no band "
-            "is ever built for the one species that motivated the row. ⚠ Finally, the row "
+            "`residual_disjoint_bands` admits a band only under `0 < threshold < ceiling`, "
+            "and at the TWO KILL sites -- which are the two the N5 ceiling sits in -- that "
+            "`ceiling` is `defender_active.hp`. So at `hit_count == 1` the arm deals "
+            "strictly less than the defender's HP by construction and cannot overshoot "
+            "into a KO, and Shedinja's `hp == 1` makes `0 < threshold < 1` unsatisfiable, "
+            "so no band is ever built for the one species that motivated the row. ⚠ Scoped "
+            "to the kill sites deliberately: a first revision wrote `ceiling = "
+            "defender.hp` flat, and it is `i16::MAX` at the other TWO of the four call "
+            "sites (the survive mirrors). The argument holds where it is used; the "
+            "sentence did not hold as written. ⚠ Finally, the row "
             "says \"the N5 code\" as though there were one site: the same "
             "`(threshold + hit_count - 1) / hit_count` ceiling appears TWICE in "
             "`src/gen3/generate_instructions.rs`, at `residual_per_hit` and at "
@@ -1404,11 +1661,15 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             f"eight names cover only three of the six: `encore` is {moves['encore']} of "
             f"{pool['species']} species, `transform` is {moves['transform']}, and Struggle "
             "is reachable by PP exhaustion. Half that list is live in ordinary play. "
-            "**Nothing opens**, and that was checked rather than hoped: the crate's six "
-            "are exactly the non-`Future` gen3 moves carrying Showdown's `failencore` "
-            "flag, which is the condition `encore.condition.onStart` actually tests, so "
-            "the shipped list is right for its three reachable members too. The clause is "
-            "withdrawn; the patch is not. (2) \"closes `_HIDDEN_INFORMATION_REQUEST_FLAGS`'s "
+            "**Nothing opens**, and that is a SET EQUALITY, measured on both sides: the "
+            f"arm's alternatives parsed out of the committed patch are {list(failencore_shipped)}, "
+            "and the non-`Future` gen3 moves carrying Showdown's `failencore` flag -- the "
+            "condition `encore.condition.onStart` actually tests -- are "
+            f"{pool['failencore_flagged_gen3']}. Equal, so the shipped list is right for "
+            "its three reachable members too. ⚠ A first revision called this "
+            "machine-checked while the pin asserted six MEMBERSHIPS, which review defeated "
+            "by adding `Choices::TACKLE` to the arm and watching the module stay green. "
+            "The clause is withdrawn; the patch is not. (2) \"closes `_HIDDEN_INFORMATION_REQUEST_FLAGS`'s "
             "`maybeDisabled`/`maybeLocked`\" uses the wrong verb. That frozenset "
             f"(`{EW}:{hidden_flags}`) is a TOLERATE-list: its members are filtered OUT of "
             f"the refusal binding at `:{hidden_filter}`, so those two flags never caused a "
@@ -1579,6 +1840,7 @@ def main() -> int:
     args = parser.parse_args()
 
     pool = census(default_showdown_root())
+    verdicts = build_verdicts(pool)
     document = {
         "_README": (
             "C154. Re-adjudication of all 26 UNREACHABLE verdicts in "
@@ -1594,7 +1856,8 @@ def main() -> int:
         ),
         "source_commit": source_commit(),
         "pool": pool,
-        "verdicts": build_verdicts(pool),
+        "verdicts": verdicts,
+        "counts": correction_counts(verdicts),
     }
     text = json.dumps(document, indent=2, sort_keys=True) + "\n"
     if args.write is None:

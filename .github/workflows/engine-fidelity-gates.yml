@@ -117,7 +117,7 @@ jobs:
             tests/test_wide_seed_negative_census.py
             # C154's re-adjudication of section 4's 26 UNREACHABLE verdicts. Listed for
             # the reason every pin file and artifact above is listed, plus one specific to
-            # this pair: `tests/data/c154_unreachable_readjudication.json` is NOT a member
+            # this pair: `reports/artifacts/c154_unreachable_readjudication.json` is NOT a member
             # of the two exact-count corpora (it sits under tests/data/ on purpose -- see
             # the generator's docstring), so unlike the c152/c153 artifacts NOTHING ELSE
             # would notice its deletion. `mass-gate` is the only job that runs the pin, and
@@ -126,7 +126,7 @@ jobs:
             # green. That is the exact failure the C152 and C153 blocks above are annotated
             # against, and it lands harder here because there is no second corpus to catch
             # it.
-            tests/data/c154_unreachable_readjudication.json
+            reports/artifacts/c154_unreachable_readjudication.json
             scripts/c154_unreachable_readjudication.py
             tests/test_unreachable_readjudication.py
             # ⚠ THE LEDGER ITSELF AND ITS UNIFORMITY PIN MATCHED NOTHING across all 74
@@ -695,7 +695,7 @@ jobs:
           # 24 -> 25 on review: the AGGREGATION refusal's rationale was pinned nowhere, so
           # rewriting it down to "reserved" left both suites green while the execution
           # message's rationale was pinned three ways.
-          if ! grep -qE 'Ran 25 tests' /tmp/holdout.log; then
+          if ! grep -qE 'Ran 31 tests' /tmp/holdout.log; then
             echo "::error::expected 25 final-holdout pins; the suite shrank or grew"
             exit 1
           fi
@@ -825,15 +825,16 @@ jobs:
       # demonstration is RE-DERIVED from source on each run, which is what stops the 26
       # from ageing into the fifteen-stale-citations shape #1202 produced. Its own module
       # so the two censuses keep their exact-count guards untouched, per C150's precedent.
-      # Battery: 12 mutations applied, 12 caught, listed in the module docstring -- number
-      # 8 survived the first version. Exact count, not a floor.
+      # Battery: 21 mutations applied, 21 caught, listed in the module docstring -- number 8
+      # survived the first version and 13-21 are review's, each one a sentence of this
+      # pass's own that was asserted beyond what it traced. Exact count, not a floor.
       - name: Section 4 unreachable re-adjudication
         run: |
           set -o pipefail
           python -m unittest tests.test_unreachable_readjudication -v 2>&1 \
             | tee /tmp/c154readj.log
-          if ! grep -qE 'Ran 25 tests' /tmp/c154readj.log; then
-            echo "::error::expected 25 re-adjudication pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 31 tests' /tmp/c154readj.log; then
+            echo "::error::expected 31 re-adjudication pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. TheAbsencePinsAreNotVacuousTests is the only reason
