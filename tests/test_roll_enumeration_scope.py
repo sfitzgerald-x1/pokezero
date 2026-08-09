@@ -1103,6 +1103,28 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # exact in both directions, so an unnecessary entry fails it just as a missing
         # one does.
         "reports/c149_g8_leechseed_band_split.md",
+        # C152 adjudicates the SAME G8 row one more time and needs the same
+        # flag-off/flag-on comparison c140, c143, c147 and c149 needed: it records
+        # `19200244/115` as `diverged` on the collapsed path and `matched` under the
+        # oracle at the CURRENT head, which is how C147's closure is re-derived after
+        # two merges. Both entries are PROSE AND DATA ONLY, on no import path, and
+        # neither sets, reads or clears the flag.
+        #
+        # The report NAMES the variable in the sentence recording how the oracle column
+        # was produced. The trace artifact records it in the `row_verdicts_at_head`
+        # block for the reason c140's and c143's artifacts do: the provenance of an
+        # enumerated measurement has to say which roll path produced it.
+        #
+        # Deliberately only these two. `scripts/c152_g8_survive_representative_census.py`,
+        # `scripts/c152_g33b_open_arm_census.py`, `scripts/c152_h8_window_census.py` and
+        # `scripts/c152_h19_family_recensus.py` do NOT appear here and must not: none
+        # names the flag, and the oracle replay was produced by starting
+        # `scripts/c149_g8_row_replay.py` from a shell that already had the variable set,
+        # which the OnceLock requires anyway. This ledger is exact in both directions --
+        # verified by DELETING each of the two entries below in turn and watching this
+        # module go red -- so an unnecessary entry fails it just as a missing one does.
+        "reports/c152_ledger_terminal_disposition.md",
+        "reports/artifacts/c152_g8_call_site_trace.json",
         # `tests/test_engine_terminal_residual_roll_limit.py` belongs here too and is
         # entered ABOVE, next to the other harness entries, by #1186. This branch briefly
         # carried a second copy of it down here: #1184 (`c2227d3a`) added the mention

@@ -748,9 +748,6 @@ class H13sRefutationIsPinnedToTheWindowsTests(unittest.TestCase):
         self.assertEqual(freed, 71, "the freed skips did not reappear as measured boundaries")
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
-
 
 # ---------------------------------------------------------------------------
 # C152 additions. Three pins for the three things C152 measured that a later
@@ -935,3 +932,7 @@ class C152CensusArtifactsAreInternallyClosedTests(unittest.TestCase):
                 shipped["transitions_matched"] - without["transitions_matched"],
                 doc["boundaries_whose_accept_depended_on_the_window"][window],
             )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()
