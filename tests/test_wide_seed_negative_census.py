@@ -591,6 +591,44 @@ class WhatTheCensusCannotSettleIsNamedTests(unittest.TestCase):
     fourth category in disguise. A zero produced by an instrument that could never have
     produced a one is not the same measurement as a zero produced by one that could."""
 
+    def test_every_cited_line_number_still_points_at_what_it_claims(self) -> None:
+        """Re-resolve the demonstrations' anchors against the tree as it is now.
+
+        ⚠ ADDED AT THE MERGE OF `origin/main` AT `49c31855`. #1202 touched
+        `engine_world.py`, `local_showdown.py` and `engine_search.py`, and **fifteen line
+        citations in these demonstrations went stale in that one merge** -- the
+        precounts raise 1958 -> 1971, `unsplit_legacy` 1986 -> 1999,
+        `_public_effect_signals`'s two `blocked` branches 2391/2409 -> 2524/2542, the
+        `deferredOpponentActions` emit 2350 -> 2372. Demonstrations whose entire value is
+        that they were traced rather than asserted, invalidated by a merge, on the change
+        whose subject is exactly that.
+
+        The generator now resolves every number at generation time (`_anchor`,
+        `_anchor_after`, `_raise_line`), so a moved anchor follows the code and a deleted
+        one raises. This pin is the other half: it re-resolves them HERE and compares to
+        what the committed artifact recorded, so an artifact generated against an older
+        tree and not regenerated is red rather than quietly wrong.
+        """
+
+        recorded = _document()["verdicts"]
+        for name, demonstration in sorted(CENSUS_SCRIPT.CENSUS_CANNOT_REACH.items()):
+            with self.subTest(entry=name):
+                self.assertEqual(recorded[name]["census_cannot_reach"], demonstration)
+        for name, demonstration in sorted(
+            CENSUS_SCRIPT.STRUCTURAL_DIVERGENCE_CLASSES.items()
+        ):
+            key = f"divergence_class:{name}"
+            with self.subTest(entry=key):
+                self.assertEqual(recorded[key]["structural_demonstration"], demonstration)
+        # Anti-vacuity: the demonstrations must actually carry resolved numbers, or the
+        # comparison above is between two identical pieces of prose and proves nothing.
+        cited = re.findall(
+            r":(\d{2,5})`",
+            " ".join(CENSUS_SCRIPT.CENSUS_CANNOT_REACH.values())
+            + " ".join(CENSUS_SCRIPT.STRUCTURAL_DIVERGENCE_CLASSES.values()),
+        )
+        self.assertGreater(len(cited), 20, "the demonstrations carry no line citations")
+
     def test_every_unreachable_entry_carries_its_demonstration(self) -> None:
         demonstrated = 0
         for name, record in sorted(_document()["verdicts"].items()):

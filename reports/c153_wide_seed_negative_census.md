@@ -387,6 +387,17 @@ have produced a one is not the same measurement as a zero produced by an instrum
 Every entry below is traced from the raise site to the call that reaches it. That is the standard
 the category earned by failing it once.
 
+⚠ **And every line number below is now RESOLVED AT GENERATION TIME, because they went stale on the
+merge that landed this work.** `origin/main` at `49c31855` (#1202) touched `engine_world.py`,
+`local_showdown.py` and `engine_search.py`, and **fifteen citations moved in that single merge** —
+the precounts raise 1958 → 1971, `unsplit_legacy` 1986 → 1999, `_public_effect_signals`'s two
+`blocked` branches 2391/2409 → 2524/2542, the `deferredOpponentActions` emit 2350 → 2372.
+Demonstrations whose whole value is that they were traced, invalidated by a merge, on the change
+whose subject is exactly that. `scripts/c153_wide_negative_census.py` now resolves each by AST or
+by a uniqueness-checked anchor, so a moved line follows the code and a deleted one raises;
+`test_every_cited_line_number_still_points_at_what_it_claims` re-resolves them against the
+committed artifact.
+
 **Structural — not measurement results at all (2).**
 
 * `mapper_lossy`. `evaluate_boundary_strict` returns the verdict `skip_lossy` carrying the trigger
@@ -401,20 +412,20 @@ the category earned by failing it once.
 
 **Reachable only by an input this instrument does not build (4).**
 
-* `rest_sleep_refund_pending_precounts_legacy`. Raised at `engine_world.py:1958` only when a row
+* `rest_sleep_refund_pending_precounts_legacy`. Raised at `engine_world.py:1971` only when a row
   has `restSleepActiveRefundPending` and **no** `restSleepAttempts`. ⚠ The naive reading — "live
   rows always carry the counts" — is **wrong**: `local_showdown._apply_rest_sleep_provenance` sets
-  the pending flag at `:2784` and then `continue`s at `:2800` without writing them. What actually
-  closes the path is the **order of the tests**: that same `:2800` branch sets
-  `restSleepProvenanceUnrepresentable`, and `_hp_and_status` raises on *that* at `:1914`, before it
-  ever reaches `:1958`. The surviving way in is a row with the pending flag, no counts and no
+  the pending flag at `:2806` and then `continue`s at `:2822` without writing them. What actually
+  closes the path is the **order of the tests**: that same `:2822` branch sets
+  `restSleepProvenanceUnrepresentable`, and `_hp_and_status` raises on *that* at `:1927`, before it
+  ever reaches `:1971`. The surviving way in is a row with the pending flag, no counts and no
   unrepresentable flag, which no live producer emits.
-* `rest_sleep_refund_pending_unsplit_legacy`. Raised at `engine_world.py:1986` only when a row
+* `rest_sleep_refund_pending_unsplit_legacy`. Raised at `engine_world.py:1999` only when a row
   carries the pre-split `restSleepRefundPending` flag and **neither** producer flag — and
-  `_hp_and_status` tests both producer flags first, at `:1935` and `:1939`.
+  `_hp_and_status` tests both producer flags first, at `:1945` and `:1952`.
   `_mark_legacy_rest_refund_pending` has exactly **two** call sites in `local_showdown.py`
-  (`:2755`, `:2785`) and each is preceded on the same row by a producer flag
-  (`restSleepAttemptUnsettled` at `:2754`, `restSleepActiveRefundPending` at `:2784`), so a live
+  (`:2777`, `:2807`) and each is preceded on the same row by a producer flag
+  (`restSleepAttemptUnsettled` at `:2776`, `restSleepActiveRefundPending` at `:2806`), so a live
   row always trips an earlier branch.
   `engine_world.py` calls this branch a **CANARY** whose expected count in a fresh post-split era
   is *exactly zero*. So a census zero on either of these two **confirms a design property** and is
@@ -426,16 +437,16 @@ the category earned by failing it once.
   two slots the loop then iterates, so a slot cannot be **absent**. The residual way in is an empty
   packed string from the bridge snapshot, i.e. a battle started with an empty team; 10,000 games
   produced none.
-* `deferred_opponent_action`. Raised at `engine_world.py:922`. ⚠ The payload always **carries**
-  both keys — `local_showdown._public_materialization_payload` emits them at `:2350-2352` — so
+* `deferred_opponent_action`. Raised at `engine_world.py:923`. ⚠ The payload always **carries**
+  both keys — `local_showdown._public_materialization_payload` emits them at `:2372` — so
   *"never carries"* would be false. They are always **empty**, and the closure sits a frame higher
   than a first draft placed it: the payload reaching this raise is not one the differential builds
   at all. `world_battle_spec` constructs its own at `engine_world.py:883`, calling
   `_public_materialization_payload(state)` with **neither** deferred argument (both keyword-only,
-  defaulting to `None`; `dict(... or {})` at `local_showdown.py:2302`), then hands it to
+  defaulting to `None`; `dict(... or {})` at `local_showdown.py:2324`), then hands it to
   `battle_spec_from_payload`, which reaches `_reject_unsupported_globals` at `:397`. An empty dict
   is falsy, so the guard never fires **for any caller of `world_battle_spec`** — stronger than a
-  claim about the differential's own `:2649` / `:2760` payloads, which exist but feed the truant
+  claim about the differential's own `:2649` payload, which exist but feed the truant
   scan and the turn number and are not on this path. The function's docstring at `:877` says it
   outright: *"Deferred opponent actions are deliberately not forwarded"*.
 
@@ -444,8 +455,8 @@ It was filed above until review, on the claim that the differential declares no 
 That claim is false: `engine_transition_differential.py:2662` passes `blocked_slots=blocked`, and
 `blocked` comes from the **production** `EngineMctsPolicy._public_effect_signals` at `:2624` on a
 live observation, which populates it on two ordinary data-dependent branches —
-`engine_search.py:2391` (item mutated with no protocol-confirmed current item) and `:2409` (active
-transformed into an unnamed species). The metadata early return at `:2363` is demonstrably not
+`engine_search.py:2524` (item mutated with no protocol-confirmed current item) and `:2542` (active
+transformed into an unnamed species). The metadata early return at `:2496` is demonstrably not
 always taken here: the same scan's `transformed` output drove the **six**
 `transform_unexpressible` firings in §4.1. So its verdict is `NOT_OBSERVED_AT_SCOPE` with the
 ordinary per-boundary bound, not an exemption — and re-tracing the other four after this failure is
@@ -517,8 +528,8 @@ outside the map it was written for.** `public_effect_blocked` was filed as
 unreachable on the claim that the differential declares no `blocked_slots`. It passes
 `blocked_slots=blocked` at `engine_transition_differential.py:2662`, and `blocked` comes from the
 **production** `EngineMctsPolicy._public_effect_signals` on a live observation, populated on two
-ordinary data-dependent branches (`engine_search.py:2391`, `:2409`). The early metadata return at
-`:2363` is demonstrably not always taken: the same scan's `transformed` output drove the six
+ordinary data-dependent branches (`engine_search.py:2524`, `:2542`). The early metadata return at
+`:2496` is demonstrably not always taken: the same scan's `transformed` output drove the six
 `transform_unexpressible` firings in §4.1. Re-filed as `NOT_OBSERVED_AT_SCOPE`. The remaining four
 in that category were then re-traced rather than re-trusted, and **two of their stated reasons
 were also imprecise** — `deferred_opponent_action`'s payload always carries the keys (they are

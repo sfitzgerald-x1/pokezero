@@ -78,6 +78,112 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 DIFFERENTIAL = REPO_ROOT / "scripts/engine_transition_differential.py"
 ENGINE_WORLD = REPO_ROOT / "src/pokezero/engine_world.py"
 
+def _anchor(relative: str, needle: str, occurrence: int | None = None) -> int:
+    """1-based line number for `needle` in `relative`. UNIQUE unless an index is given.
+
+    ⚠ EVERY LINE NUMBER THIS MODULE PRINTS COMES THROUGH HERE OR `_raise_line`, and that
+    is not tidiness. C153's traced demonstrations cite absolute lines in
+    `engine_world.py`, `local_showdown.py` and `engine_search.py`, and the merge of
+    `origin/main` at `49c31855` (#1202) touched all three: `precounts_legacy` moved
+    1958 -> 1971, `unsplit_legacy` 1986 -> 1999, `_public_effect_signals`'s two `blocked`
+    branches 2391/2409 -> 2524/2542, the `deferredOpponentActions` emit 2350 -> 2372.
+    **Fifteen citations went stale in one merge**, on demonstrations whose entire value is
+    that they were traced -- the "correct when taken, false later because its tree was
+    replaced" defect, landing on the change that documents it.
+
+    Hard-coding them again only resets the clock. Resolved here, a moved anchor updates
+    itself and a deleted one raises loudly instead of silently pointing at whatever now
+    occupies that line.
+
+    UNIQUENESS IS REQUIRED BY DEFAULT, and that was earned too: a first version took the
+    first match, and three citations silently resolved to a docstring or comment mention
+    hundreds of lines above the code they meant. An ambiguous anchor is a wrong citation
+    waiting to happen, so it is an error rather than a guess.
+    """
+
+    lines = (REPO_ROOT / relative).read_text(encoding="utf-8").splitlines()
+    hits = [n for n, line in enumerate(lines, 1) if needle in line]
+    if not hits:
+        raise SystemExit(
+            f"anchor not found: {needle!r} in {relative}. The code this demonstration "
+            "traces has moved or gone; re-trace it rather than re-numbering."
+        )
+    if occurrence is None:
+        if len(hits) != 1:
+            raise SystemExit(
+                f"ambiguous anchor: {needle!r} matches {len(hits)} lines in {relative} "
+                f"({hits}). Give an occurrence index or narrow the needle."
+            )
+        return hits[0]
+    if len(hits) < occurrence:
+        raise SystemExit(
+            f"anchor {needle!r} has {len(hits)} matches in {relative}, wanted #{occurrence}"
+        )
+    return hits[occurrence - 1]
+
+
+def _anchor_after(relative: str, needle: str, after: int) -> int:
+    """First line strictly after `after` containing `needle`.
+
+    For anchors that are only identified by their POSITION relative to another anchor.
+    `row["restSleepProvenanceUnrepresentable"] = True` occurs six times in
+    `local_showdown.py`; the one that closes the precounts path is simply the first after
+    the pending flag is set, and an occurrence index would be as brittle as a literal --
+    #1202 added occurrences above it and would have shifted any index chosen today.
+    """
+
+    lines = (REPO_ROOT / relative).read_text(encoding="utf-8").splitlines()
+    for number, line in enumerate(lines, 1):
+        if number > after and needle in line:
+            return number
+    raise SystemExit(f"no {needle!r} after line {after} in {relative}")
+
+
+def _raise_line(relative: str, reason: str, occurrence: int | None = None) -> int:
+    """Line of the unique `raise EngineWorldUnsupported("<reason>", ...)` for `reason`.
+
+    By AST rather than by text, because the reason name also appears in comments and in
+    this module. Requires exactly one raise site: a reason raised from two places has no
+    single citation and must be described, not numbered.
+    """
+
+    tree = ast.parse((REPO_ROOT / relative).read_text(encoding="utf-8"))
+    hits = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Raise)
+        and isinstance(node.exc, ast.Call)
+        and (getattr(node.exc.func, "id", None) or getattr(node.exc.func, "attr", None))
+        == "EngineWorldUnsupported"
+        and node.exc.args
+        and isinstance(node.exc.args[0], ast.Constant)
+        and node.exc.args[0].value == reason
+    ]
+    if occurrence is not None:
+        # An explicit index is only admissible with a reason recorded in the caller for
+        # WHICH site is meant; `rest_sleep_provenance_unrepresentable` has three and the
+        # one that closes the precounts path is the first, the guard `_hp_and_status`
+        # reaches before either producer-flag test.
+        if len(hits) < occurrence:
+            raise SystemExit(
+                f"{reason!r} has {len(hits)} raise sites in {relative}, wanted #{occurrence}"
+            )
+        return sorted(hits)[occurrence - 1]
+    if len(hits) != 1:
+        raise SystemExit(
+            f"{reason!r} has {len(hits)} raise sites in {relative}; a demonstration that "
+            "cites one line needs exactly one, or an explicit occurrence with a stated "
+            "reason for choosing it."
+        )
+    return hits[0]
+
+
+EW = "src/pokezero/engine_world.py"
+LS = "src/pokezero/local_showdown.py"
+ES = "src/pokezero/engine_search.py"
+ETD = "scripts/engine_transition_differential.py"
+
+
 # ---------------------------------------------------------------------------
 # Taxonomies, by AST.
 # ---------------------------------------------------------------------------
@@ -328,21 +434,24 @@ POOL_UNREACHABLE_WORLD_UNSUPPORTED = frozenset(
 # that makes it structural, so a reader never has to take the word "structural" on trust.
 STRUCTURAL_DIVERGENCE_CLASSES = {
     "mapper_lossy": (
-        "`evaluate_boundary_strict` returns the verdict `skip_lossy` with the trigger "
-        "body `every branch rendered lossy`, and the run loop `continue`s at the "
-        "`verdict == \"skip_lossy\"` branch BEFORE the `divergence_class:` line, which "
-        "runs only under `verdict == \"diverged\"`. The classifier can therefore never "
-        "be handed the body that would return this class."
+        "`evaluate_boundary_strict` returns the verdict `skip_lossy` carrying the trigger "
+        "body \"every branch rendered lossy\" at "
+        f"`{ETD}:{_anchor(ETD, 'return \"skip_lossy\", [\"every branch rendered lossy\"]')}`, "
+        "and the run loop `continue`s at the `verdict == \"skip_lossy\"` branch at "
+        f"`:{_anchor(ETD, 'if verdict == \"skip_lossy\":')}` -- BEFORE the "
+        f"`divergence_class:` line at `:{_anchor(ETD, 'counts[f\"divergence_class:')}`, which "
+        "runs only under `verdict == \"diverged\"`. The classifier can never be handed the "
+        "body that returns this class."
     ),
     "no_usable_branch": (
-        "The trigger body `mapper produced no usable branch` is produced by NO CODE in the "
-        "repository: the only occurrence on any execution path is the classifier's own "
-        "test of it at `engine_transition_differential.py:1915`, so no input can make "
-        "`classify_divergence` return this class. Stated as 'no producer' rather than "
-        "'nowhere in the repository', which a first draft wrote and its own commit "
-        "falsified -- the phrase now also appears in this docstring and in the census "
-        "artifact that records it. A grep-shaped claim has to be scoped to executable "
-        "code or it is false the moment it is written down."
+        "The trigger body \"mapper produced no usable branch\" is produced by NO CODE in the "
+        "repository: the only occurrence on any execution path is the classifier's own test "
+        f"of it at `{ETD}:{_anchor(ETD, 'if \"mapper produced no usable branch\" in body:')}`, "
+        "so no input can make `classify_divergence` return this class. Stated as 'no "
+        "producer' rather than 'nowhere in the repository', which a first draft wrote and "
+        "its own commit falsified -- the phrase then also appeared in this docstring and in "
+        "the census artifact. A grep-shaped claim has to be scoped to executable code or it "
+        "is false the moment it is written down."
     ),
 }
 
@@ -424,54 +533,70 @@ DYNAMIC_FAMILY_EXCLUSIONS = {"skip:world_error:": {"skip:world_error:no_construc
 # never-fired claim, and it earns the same standard of evidence.
 CENSUS_CANNOT_REACH = {
     "skip:world_unsupported:rest_sleep_refund_pending_precounts_legacy": (
-        "Raised at `engine_world.py:1958` only when a row has `restSleepActiveRefundPending` "
-        "and NO `restSleepAttempts`. A live row CAN lack the counts -- "
-        "`local_showdown._apply_rest_sleep_provenance` sets the pending flag at :2784 and "
-        "then `continue`s at :2800 without writing them -- so the naive reading is wrong. "
-        "What closes the path is the ORDER of the tests: that same :2800 branch sets "
-        "`restSleepProvenanceUnrepresentable`, and `_hp_and_status` raises on THAT at "
-        ":1914, before it ever reaches :1958. So the surviving way in is a row carrying the "
-        "pending flag, no counts and no unrepresentable flag, which no live producer emits. "
-        "`engine_world.py` calls the neighbouring branch a CANARY whose expected count in a "
-        "fresh post-split era is exactly zero; a census zero CONFIRMS that design property "
-        "and is not evidence about coverage."
+        f"Raised at `{EW}:{_raise_line(EW, 'rest_sleep_refund_pending_precounts_legacy')}` only "
+        "when a row has `restSleepActiveRefundPending` and NO `restSleepAttempts`. ⚠ The "
+        "naive reading -- that live rows always carry the counts -- is WRONG: "
+        "`local_showdown._apply_rest_sleep_provenance` sets the pending flag at "
+        f"`{LS}:{_anchor(LS, 'row[\"restSleepActiveRefundPending\"] = True')}` and then "
+        f"`continue`s at `:{_anchor_after(LS, 'row[\"restSleepProvenanceUnrepresentable\"] = True', _anchor(LS, 'row[\"restSleepActiveRefundPending\"] = True')) + 1}` "
+        "without writing them. What closes the path is the ORDER of the tests: that same "
+        "branch sets `restSleepProvenanceUnrepresentable` at "
+        f"`:{_anchor_after(LS, 'row[\"restSleepProvenanceUnrepresentable\"] = True', _anchor(LS, 'row[\"restSleepActiveRefundPending\"] = True'))}`, and "
+        f"`_hp_and_status` raises on THAT at "
+        f"`{EW}:{_raise_line(EW, 'rest_sleep_provenance_unrepresentable', 1)}`, before it ever "
+        f"reaches `:{_raise_line(EW, 'rest_sleep_refund_pending_precounts_legacy')}`. The "
+        "surviving way in is a row carrying the pending flag, no counts and no "
+        "unrepresentable flag, which no live producer emits. `engine_world.py` calls the "
+        "neighbouring branch a CANARY whose expected count in a fresh post-split era is "
+        "exactly zero; a census zero CONFIRMS that design property and is not evidence "
+        "about coverage."
     ),
     "skip:world_unsupported:rest_sleep_refund_pending_unsplit_legacy": (
-        "Raised at `engine_world.py:1986` only when a row carries the pre-split "
-        "`restSleepRefundPending` flag and NEITHER producer flag -- and `_hp_and_status` "
-        "tests both producer flags first, at :1935 and :1939 (:1943 is a comment line -- the citation said so in a first draft, and a line number that lands on a comment is a trace nobody checked). "
+        f"Raised at `{EW}:{_raise_line(EW, 'rest_sleep_refund_pending_unsplit_legacy')}` only "
+        "when a row carries the pre-split `restSleepRefundPending` flag and NEITHER "
+        "producer flag -- and `_hp_and_status` tests both producer flags first, at "
+        f"`:{_anchor(EW, 'if bool(row.get(\"restSleepAttemptUnsettled\")):')}` and "
+        f"`:{_anchor(EW, 'if bool(row.get(\"restSleepActiveRefundPending\")):')}`. "
         "`_mark_legacy_rest_refund_pending` has exactly TWO call sites in "
-        "`local_showdown.py` (:2755 and :2785) and each is preceded on the same row by a "
-        "producer flag (`restSleepAttemptUnsettled` at :2754, "
-        "`restSleepActiveRefundPending` at :2784), so a live row always trips an earlier "
-        "branch. Reachable only by replaying a pre-split corpus. Same canary: zero is the "
-        "designed value, not an unmeasured absence."
+        f"`local_showdown.py` (`:{_anchor(LS, '_mark_legacy_rest_refund_pending(row)', 1)}` "
+        f"and `:{_anchor(LS, '_mark_legacy_rest_refund_pending(row)', 2)}`) and each is "
+        "preceded on the same row by a producer flag "
+        f"(`restSleepAttemptUnsettled` at `:{_anchor(LS, 'row[\"restSleepAttemptUnsettled\"] = True')}`, "
+        f"`restSleepActiveRefundPending` at `:{_anchor(LS, 'row[\"restSleepActiveRefundPending\"] = True')}`), "
+        "so a live row always trips an earlier branch. Reachable only by replaying a "
+        "pre-split corpus. Same canary: zero is the designed value, not an unmeasured "
+        "absence."
     ),
     "skip:world_unsupported:override_side_missing": (
-        "Raised at `engine_world.py:490` when `override.player_teams.get(slot)` is falsy. "
-        "The differential builds that mapping at "
-        "`engine_transition_differential.py:2396` as "
+        f"Raised at `{EW}:{_raise_line(EW, 'override_side_missing')}` when "
+        "`override.player_teams.get(slot)` is falsy. The differential builds that mapping "
+        f"at `{ETD}:{_anchor(ETD, 'packed = {slot: true_teams[slot]')}` as "
         '`{slot: true_teams[slot]["packed"] for slot in ("p1", "p2")}` -- a comprehension '
         "over exactly the two slots the loop then iterates, so a slot cannot be ABSENT. "
         "The residual way in is an empty packed string from the bridge snapshot, which "
         "would mean a battle started with an empty team; 10,000 games produced none."
     ),
     "skip:world_unsupported:deferred_opponent_action": (
-        "Raised at `engine_world.py:922` on `payload.get(\"deferredOpponentActions\") or "
-        "payload.get(\"deferredOpponentActionPriors\")`. The payload always CARRIES both "
-        "keys -- `local_showdown._public_materialization_payload` emits them at :2350-2352 "
-        "-- so 'never carries' would be false. They are always EMPTY, and the closure is a "
-        "frame HIGHER than a first draft placed it: the payload that reaches this raise is "
-        "not one the differential builds at all. `world_battle_spec` constructs its own at "
-        "`engine_world.py:883` by calling `_public_materialization_payload(state)` with "
-        "NEITHER deferred argument -- both are keyword-only and default to `None` "
-        "(`local_showdown.py:2220-2222`, `dict(... or {})` at :2302) -- and passes it to "
-        "`battle_spec_from_payload`, which reaches `_reject_unsupported_globals` at :397. "
+        f"Raised at `{EW}:{_raise_line(EW, 'deferred_opponent_action')}` on "
+        '`payload.get("deferredOpponentActions") or payload.get("deferredOpponentActionPriors")`. '
+        "The payload always CARRIES both keys -- "
+        "`local_showdown._public_materialization_payload` emits them at "
+        f"`{LS}:{_anchor(LS, '\"deferredOpponentActions\": deferred_actions')}` -- so a "
+        "claim that it never carries them would be false. They are always EMPTY, and the "
+        "closure is a frame HIGHER than a first draft placed it: the payload that reaches "
+        "this raise is not one the differential builds at all. `world_battle_spec` "
+        f"constructs its own at `{EW}:{_anchor(EW, 'payload = _public_materialization_payload(state)')}` "
+        "with NEITHER deferred argument -- both are keyword-only and default to `None` "
+        f"(`{LS}:{_anchor(LS, 'deferred_opponent_actions: Mapping[PlayerId, int] | None = None', 2)}`, "
+        f"`dict(... or {{}})` at `:{_anchor(LS, 'deferred_actions = dict(deferred_opponent_actions or {})')}`) "
+        f"-- and passes it to `battle_spec_from_payload`, which reaches "
+        f"`_reject_unsupported_globals` at `:{_anchor(EW, '_reject_unsupported_globals(payload)')}`. "
         "An empty dict is falsy, so the guard never fires FOR ANY CALLER of "
         "`world_battle_spec`, which is stronger than a claim about the differential's own "
-        "`:2649` / `:2760` payloads -- those exist, but they feed the truant scan and the "
-        "turn number and are not on the path to this raise. The function's own docstring "
-        "at :877 says it: \"Deferred opponent actions are deliberately not forwarded\"."
+        f"`:{_anchor(ETD, 'payload = _public_materialization_payload(mstate)')}` payload -- "
+        "that exists, but feeds the truant scan and is not on the path to this raise. The "
+        "function's own docstring at "
+        f"`{EW}:{_anchor(EW, 'opponent actions are deliberately not forwarded')}` says it."
     ),
     "divergence_class:mapper_lossy": (
         "Structural, not instrumental -- see the demonstration on the entry itself."
