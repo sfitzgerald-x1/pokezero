@@ -183,6 +183,12 @@ jobs:
             # closed. Listed so a PR that ONLY weakens the pin file still trips this
             # workflow -- and note the file was previously run by no step at all.
             tests/test_engine_world_encore_transform.py
+            # Q2: the NON-transformed Encore branch's third id source (the public
+            # `lastUsedMove` latch), with a STEP below. Same reason as the line above,
+            # and the same hole it was closing: before its step existed the file would
+            # have been run by NO workflow, because CI names modules one by one and
+            # never discovers `tests/`.
+            tests/test_engine_world_encore_last_used.py
             # C153: the Taunt volatile pins, with a STEP below. Same reason as the
             # line above -- `src/pokezero/**` covers `engine_world.py`, not the file
             # that holds the counter's value and the engine-fidelity half.
@@ -1158,6 +1164,37 @@ jobs:
           fi
           if grep -q 'skipped' /tmp/encoretransform.log; then
             echo "::error::an Encore-on-transform pin SKIPPED; they must never skip"
+            exit 1
+          fi
+
+      # Q2 (`encore_move_unknown`, opponent seat): the sibling of the step above, on the
+      # NON-transformed Encore branch. The transformed branch has consulted
+      # `sides[slot]["lastUsedMove"]` since C145; the non-transformed one did not, so an
+      # Encored mon that had been immobilised past the 24-line `recent_public_events`
+      # window refused every world. 95/1682 gen3 randbat variants, 91.30% of the
+      # world-failure census in the 2026-08-09 capture run.
+      #
+      # WHY THIS STEP EXISTS AT ALL, and it is the same hole the note above records: this
+      # workflow names modules one by one and nothing in CI discovers `tests/`. Without a
+      # step the whole battery would be run by NO job -- a fix whose tests CI never
+      # executes. The count guard lives in YAML for the reason the rest of this file
+      # gives: no local `unittest` or `pytest` run can see it, so a battery that shrinks
+      # is red here rather than quietly green.
+      #
+      # It needs NO engine and NO Showdown checkout -- `battle_spec_from_payload` is pure
+      # construction over a payload literal -- so unlike its neighbours a skip here would
+      # mean an import broke, not a missing wheel. Skips are an error either way.
+      - name: Encore public-lastUsedMove world-construction pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_engine_world_encore_last_used -v 2>&1 \
+            | tee /tmp/encorelastused.log
+          if ! grep -qE 'Ran 15 tests' /tmp/encorelastused.log; then
+            echo "::error::expected 15 tests; the suite shrank or grew"
+            exit 1
+          fi
+          if grep -q 'skipped' /tmp/encorelastused.log; then
+            echo "::error::an Encore lastUsedMove pin SKIPPED; they must never skip"
             exit 1
           fi
 

@@ -1346,10 +1346,20 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
             is already wrong.** Authoring time is exactly when this defect is born -- C156
             typed `:1202` while the comment WAS at 1202 -- so the guard fires as the mistake
             is made, before the edit that stales it. But a citation that has ALREADY drifted
-            equals no computed value and is invisible here. Not hypothetical: `:469` for the
-            contact-ability step had been wrong since #1204 (the invocation is at 482) and
-            nothing found it -- review found it by hand. Both live citations in this module
-            are de-numbered rather than left for the next reader.
+            equals no computed value and is invisible here. Not hypothetical: the
+            contact-ability step's citation named line 469 and had been wrong since #1204
+            (the invocation is at 482) and nothing found it -- review found it by hand. Both
+            live citations in this module are de-numbered rather than left for the next
+            reader.
+
+            ⚠ THAT SENTENCE USED TO CARRY THE STALE NUMBER IN `:NNNN` FORM, AND THIS GUARD
+            CAUGHT IT -- from the other end. A stale citation is invisible only while it
+            equals no computed value; an unrelated edit above it can MAKE it equal one. The
+            Q2 `encore_move_unknown` step added six lines to `FILTERS`, which slid a real
+            `Ran N tests` guard onto 469, and the guard fired on a number that had been
+            dead prose for two passes. De-numbered rather than exempted: an exemption would
+            have to be phrase-scoped, which is the shape fix 1 already failed on. The
+            historical fact is unchanged and both numbers are still stated.
         """
 
         lines = self._lines()
