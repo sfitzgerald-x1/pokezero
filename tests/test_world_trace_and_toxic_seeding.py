@@ -1413,6 +1413,13 @@ class ActionPhaseToxicResetTest(unittest.TestCase):
         "|faint|{side}: Walrein",  # bench ident: `_update_toxic_stage` early-returns
         "|win|Bot",
         "|tie",
+        # Terminal in the same sense as win/tie. No request follows one, so nothing can
+        # consult a proof that survived -- pinned anyway, because "unreachable" is what
+        # the rest of this family was called before it was measured.
+        "|prematureend",
+        "|expire|inactivity",
+        "|deinit",
+        "|noinit|nonexistent",
     )
 
     @classmethod

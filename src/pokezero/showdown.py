@@ -1303,7 +1303,16 @@ _TIMED_SIDE_CONDITIONS = ("reflect", "lightscreen", "safeguard", "mist")
 # ones whose chronology cannot be reconstructed, and a proof that survives one of them
 # answers a later request with a concrete WRONG counter instead of refusing. Every sibling
 # latch in this subsystem already fails closed on them.
-_TOXIC_RESET_PROOF_BOUNDARY_EVENTS = frozenset({"upkeep", "turn", "win", "tie"})
+#
+# The BOUNDARY set is every residual boundary plus every TERMINAL marker, not just the
+# two that end a battle cleanly. `prematureend`/`expire`/`deinit`/`noinit` end the stream
+# in exactly the sense `win`/`tie` do, and while no request can follow a terminal marker --
+# so no decision could consult a proof that survived one -- "unreachable" is what the last
+# three shapes in this family were called too. The rule is "a boundary the proof cannot
+# account for", and these are boundaries.
+_TOXIC_RESET_PROOF_BOUNDARY_EVENTS = frozenset(
+    {"upkeep", "turn", "win", "tie", "prematureend", "expire", "deinit", "noinit"}
+)
 _TOXIC_RESET_PROOF_OCCUPANCY_EVENTS = frozenset({"switch", "drag", "replace", "faint"})
 # Revealed trap abilities whose holder threatens switches while alive on the bench.
 _TRAP_ABILITIES = frozenset({"shadowtag", "arenatrap", "magnetpull"})
