@@ -287,11 +287,17 @@ class ForcedNoMoveMapsToStruggleTest(unittest.TestCase):
         self.assertEqual(dict(policy.stats.unmapped_choices), {})
         self.assertEqual(dict(policy.stats.choices_unmapped_causes), {})
 
-    def test_a_nonzero_struggle_index_is_returned_intact(self) -> None:
-        """Guards the falsy-zero trap: `a or b` chaining would be indistinguishable at 0.
+    def test_the_struggle_slots_own_action_index_is_returned(self) -> None:
+        """The mapped index is the candidate's `action_index`, not its position or a default.
 
-        Struggle is the last candidate here, so a truthiness-based fallthrough between the
-        two lookups returns the wrong arm rather than nothing.
+        Originally this docstring claimed to guard the falsy-zero trap (`get(recharge) or
+        get(struggle)`). Review measured that claim FALSE: with no recharge candidate the
+        `or` chain evaluates `None or 2` -> 2 and this test passes under the mutation. The
+        falsy-zero trap only bites when the RECHARGE lookup returns 0, which is
+        `test_the_recharge_translation_still_wins_its_own_case` below -- mutant M9 in the
+        null-world runner is killed there and nowhere else. Kept, with an honest name: the
+        Struggle candidate sits at slot 3 behind two spent slots, so an off-by-one or a
+        positional assumption is still visible here.
         """
         policy = _policy()
         context = _map_context(
@@ -300,25 +306,33 @@ class ForcedNoMoveMapsToStruggleTest(unittest.TestCase):
         self.assertEqual(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}), 2)
 
     def test_the_recharge_translation_still_wins_its_own_case(self) -> None:
-        """Adding the second lookup must not disturb the first."""
+        """Adding the second lookup must not disturb the first.
+
+        Also the file's ONLY guard against truthiness chaining between the two lookups:
+        recharge resolves to action_index 0 here, so `get(recharge) or <struggle>` evaluates
+        `0 or None` -> None and the recharge turn stops mapping.
+        """
         policy = _policy()
         context = _map_context([_move(0, "recharge")])
         self.assertEqual(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}), 0)
         self.assertEqual(dict(policy.stats.unmapped_choices), {})
 
     def test_recharge_is_preferred_if_a_request_ever_offered_both(self) -> None:
-        """Order pin. Unreachable by construction -- and the construction is the point.
+        """Unreachable by construction -- and now doubly so, which makes the ORDER moot.
 
         `sim/pokemon.ts` `getMoveRequestData` reaches the Struggle substitution ONLY via
         `else if (!moves.length)`, and a `recharge` lock makes `getMoves` return the
         one-element `[{move: 'Recharge', id: 'recharge'}]`. Non-empty, so the Struggle arm
         cannot run on a recharge turn: the two pseudo-moves are mutually exclusive at the
-        single site that emits either. The live `lastmon2` line shows the same thing from
-        the other end -- its requests are `['recharge']` or `['struggle', ...]`, never both.
+        single site that emits either. The live `lastmon2` line shows the same from the
+        other end -- its requests are `['recharge']` or `['struggle', ...]`, never both.
 
-        This test therefore pins a CHOICE, not a rule: if that invariant ever breaks, the
-        recharge arm is the one the engine's `MUSTRECHARGE` branch actually produced, and
-        the failure should be a visible behaviour change here rather than a coin flip.
+        The admission gate then enforces that invariant locally: a request carrying both
+        has two keys in `move_index_by_id`, so `forced_struggle_index` is None and the
+        Struggle arm is inert regardless of which lookup runs first. Swapping the two
+        (mutant M3) is consequently EQUIVALENT -- killed by nothing, and proven to change
+        no behaviour across a 14-case differential battery, rather than left as an
+        unexamined survivor. This test pins the OUTCOME, not the ordering.
         """
         policy = _policy()
         context = _map_context([_move(0, "struggle"), _move(1, "recharge")])
@@ -336,23 +350,81 @@ class ForcedNoMoveMapsToStruggleTest(unittest.TestCase):
         self.assertIsNone(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}))
         self.assertEqual(dict(policy.stats.unmapped_choices), {"No Move": 1})
 
-    def test_an_illegal_struggle_candidate_is_not_mapped(self) -> None:
-        """Non-vacuity for the legality filter: the candidate must be legal AND unmasked."""
+    def test_an_unadmitted_struggle_candidate_is_not_mapped(self) -> None:
+        """Both halves of the admission filter, separately.
+
+        Review found the earlier single case named "illegal" while passing `legal=True` with
+        a False mask, so the `legal` flag itself was unpinned: mutating the candidate loop's
+        `not candidate.get("legal")` to `False` survived every test here AND the end-to-end
+        probe. Defence in depth in production -- both fields trace to the same
+        `showdown.py:7530` source -- but a test may not assert coverage it does not have.
+        """
+        for label, legal, mask in (("masked out", True, [False]), ("flagged illegal", False, [True])):
+            with self.subTest(label):
+                policy = _policy()
+                context = _map_context([_move(0, "struggle", legal=legal)], mask=mask)
+                self.assertIsNone(
+                    EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0})
+                )
+                self.assertEqual(dict(policy.stats.unmapped_choices), {"No Move": 1})
+
+    def test_a_struggle_move_slot_beside_a_real_move_is_not_the_pseudo_move(self) -> None:
+        """The measured defect of the first revision, and the reason for the count gate.
+
+        Showdown substitutes Struggle only when the request would otherwise offer NO move,
+        so a `struggle` candidate beside another legal move is a real Struggle MOVE SLOT.
+        Review built exactly that in `gen3customgame` -- a Blissey with
+        `moves=("Struggle", "Soft-Boiled")` yields legal `struggle` AND legal `softboiled` --
+        and the ungated translation mapped "No Move" onto it, absorbing the genuine
+        `all_unmapped_legality_mismatch` this class exists to count.
+        """
         policy = _policy()
-        context = _map_context([_move(0, "struggle", legal=True)], mask=[False])
+        context = _map_context(
+            [_move(0, "struggle"), _move(1, "softboiled"),
+             _move(2, "slot3", legal=False), _move(3, "slot4", legal=False)]
+        )
         self.assertIsNone(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}))
         self.assertEqual(dict(policy.stats.unmapped_choices), {"No Move": 1})
+        self.assertEqual(
+            dict(policy.stats.choices_unmapped_causes), {"all_unmapped_legality_mismatch": 1}
+        )
 
-    def test_struggle_beside_a_legal_switch_still_maps_to_struggle(self) -> None:
-        """The engine proposed exactly one arm, and it was the forced no-action one.
+    def test_struggle_beside_a_legal_switch_stays_countable(self) -> None:
+        """A legal switch the engine did not propose is a disagreement, and it must stay visible.
 
-        Reachable when the engine's sampled world traps the mon (or drains it) while the
-        request still offers a bench: the search had a single arm, so the translation must
-        resolve THAT arm rather than drift to the switch the engine never proposed.
+        This is the d16/d18 shape off the `lastmon2` line: request `['struggle',
+        'switch:Shedinja']`. The engine emitting `MoveChoice::None` there means its world
+        saw no switch where the request has one. Translating would keep the decision
+        searched and leave NO counter in either world -- `fallback_reasons` never moves
+        (the switch arm still maps) and `unmapped_choices` would lose its entry. A campaign
+        whose stop condition is `choices_unmapped == 0` cannot afford a path that reaches
+        zero by becoming unobservable, so the miss is deliberate.
         """
         policy = _policy()
         context = _map_context([_move(0, "struggle"), _switch(1, "Shedinja")])
-        self.assertEqual(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}), 0)
+        self.assertEqual(
+            EngineMctsPolicy._map_choices(
+                policy, context, {"No Move": 3.0, "switch shedinja": 1.0}
+            ),
+            1,
+            "the switch the engine DID propose is the only mappable arm here",
+        )
+        self.assertEqual(dict(policy.stats.unmapped_choices), {"No Move": 1})
+
+    def test_struggle_beside_a_legal_switch_refuses_when_no_move_is_the_only_arm(self) -> None:
+        """Same shape, and the price of keeping it countable, stated rather than hidden.
+
+        With "No Move" as the engine's only arm this decision falls back instead of taking
+        the one action both sides agree is legal. That is the accepted cost of the
+        observability clause above; it is NOT the captured class (`request_legal_choices`
+        there is `["struggle"]`, no switch), and it stays counted under its own cause.
+        """
+        policy = _policy()
+        context = _map_context([_move(0, "struggle"), _switch(1, "Shedinja")])
+        self.assertIsNone(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}))
+        self.assertEqual(
+            dict(policy.stats.choices_unmapped_causes), {"all_unmapped_legality_mismatch": 1}
+        )
 
     def test_a_real_move_choice_never_reaches_the_struggle_translation(self) -> None:
         """The translation is keyed on the engine's forced-no-action token, nothing else."""
@@ -360,6 +432,21 @@ class ForcedNoMoveMapsToStruggleTest(unittest.TestCase):
         context = _map_context([_move(0, "struggle")])
         self.assertIsNone(EngineMctsPolicy._map_choices(policy, context, {"Hyper Beam": 1.0}))
         self.assertEqual(dict(policy.stats.unmapped_choices), {"Hyper Beam": 1})
+
+    def test_a_legal_hidden_power_beside_struggle_blocks_the_translation(self) -> None:
+        """Hidden Power is the one move id the map keys twice, so it gets its own case.
+
+        It lands in `move_index_by_id` under its typed id AND in `hidden_power_index`, so
+        the one-key admission test already excludes it -- an explicit
+        `hidden_power_index is None` clause was written for this and then removed, because
+        the null-world runner scored dropping it EQUIVALENT (no behaviour to cover). The
+        behaviour is pinned here instead of by an unfalsifiable clause, and this case is
+        part of what kills M11 (the count clause weakened to a membership test).
+        """
+        policy = _policy()
+        context = _map_context([_move(0, "struggle"), _move(1, "hiddenpowerice70")])
+        self.assertIsNone(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}))
+        self.assertEqual(dict(policy.stats.unmapped_choices), {"No Move": 1})
 
 
 if __name__ == "__main__":  # pragma: no cover

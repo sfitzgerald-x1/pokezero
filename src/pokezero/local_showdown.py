@@ -2931,11 +2931,17 @@ def _apply_struggle_only_move_state(
     through to ``add_switches``. With a live bench that is exactly the option set the
     Struggle request also offers. With NO legal switch -- a trapped mon, or the archetypal
     last-mon PP stall -- ``add_switches`` adds nothing either and the engine pushes
-    ``MoveChoice::None``, which ``engine_search._map_choices`` translates only to
-    ``recharge`` and so cannot map onto a request offering ``struggle``. That decision
-    still misses. It is not a regression (the pre-fix stale move failed to map on the same
-    decision) but it is not fixed here, and the completing half is a ``none -> struggle``
-    translation alongside the existing ``none -> recharge`` one.
+    ``MoveChoice::None``. When this was written ``engine_search._map_choices`` translated
+    that token only to ``recharge`` and so could not map onto a request offering
+    ``struggle``, and the decision still missed -- not a regression (the pre-fix stale move
+    failed to map on the same decision), but not fixed here either.
+
+    CLOSED SINCE: ``_map_choices`` now also resolves the forced-no-move token to the
+    request's substituted ``struggle`` candidate, admitted on the same fact this module
+    checks one function down in ``_request_reports_only_struggle`` -- that the pseudo-move
+    is the request's ONLY move. Two routes into a Struggle-only request, and only the PP
+    route is closed: a Taunt-induced one fails EARLIER, on the unsupported ``taunt``
+    volatile (``no_worlds_constructed``), so it never reaches the mapping at all.
     """
 
     if not _request_reports_only_struggle(request):
