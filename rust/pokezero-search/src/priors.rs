@@ -56,10 +56,38 @@
 //!   `impl HeadSource for LeafBatchOutput`.
 //!
 //! A seat or head swap at the `model.rs` boundary is therefore reduced and
-//! concentrated, NOT eliminated. It is still unkilled by any test, because
-//! killing it needs an integration test over the real core, which is blocked on
-//! an encoder-tables fixture rather than on libtorch. That residue belongs to
-//! the campaign's in-image gate item, not to this one.
+//! concentrated, NOT eliminated. Nothing in THIS module can kill one; that
+//! needs an integration test over the real core, which
+//! `tests/test_model_priors_search.py::OpponentPriorsEncodedSearchTest` now is
+//! — an encoded search with `use_opponent_priors=True`, against a
+//! random-weights artifact at the real v3 shape, with both heads recomputed in
+//! torch as the oracle. Measured, not predicted (`--features model` wheel
+//! rebuilt per world; the child hashes the `.so` it imported):
+//!
+//! | boundary mutation                                   | outcome |
+//! |-----------------------------------------------------|---------|
+//! | `impl HeadSource` heads transposed                   | KILLED  |
+//! | `impl SearchingSeat` negated                         | KILLED  |
+//! | root: acting map passed as the opponent map          | KILLED  |
+//! | root: `opponent_action_map` -> `self_action_map`     | KILLED  |
+//! | branch: opponent options are the acting options      | KILLED  |
+//! | branch: `opponent_action_map` -> `self_action_map`   | KILLED  |
+//! | round: the two seats' pending map lists swapped      | KILLED  |
+//! | ROOT: opponent options are the acting options        | EQUIVALENT on the fixture |
+//!
+//! The survivor is not a gap in the gate, it is a gap in the FIXTURE, and the
+//! reason is structural: `MoveChoice` is index-valued (`Move(slot)` /
+//! `Switch(party_index)`) and `seat_action_map` picks the seat from
+//! `slot_is_self`, never from the options. So on a position where both seats
+//! have the same option SHAPE the two lists are the identical value, and
+//! substituting one for the other is a no-op. All five drivable rows of both
+//! committed golden-corpus samples are (4 moves, 5 switches) on both seats, and
+//! a 192-case differential (4 ctx variants x 4 sim budgets x 2 batch sizes x 3
+//! seeds x flag on/off) over that mutant reports byte-identical search reports.
+//! Its one-ply-down twin IS killed, because interior nodes do reach asymmetric
+//! shapes. Closing it needs a committed asymmetric-seat root — a fainted
+//! reserve, a Choice/Encore/Taunt-narrowed move list, or a forced switch on one
+//! side only.
 
 use crate::tree::{apply_self_priors, DecisionNode, Tree};
 use poke_engine::engine::state::MoveChoice;
