@@ -139,6 +139,29 @@ def scenario_specs() -> tuple[ScenarioSpec, ...]:
             p2_prefs=(("calmmind",), ("calmmind",), ("psychic",)),
         ),
         ScenarioSpec(
+            # STRUGGLE, which had no corpus reach at all until this entry. Instrumenting
+            # the sweep showed `_request_reports_only_struggle` called 157 times across
+            # all 18 scenarios / 163 decisions and returning True ZERO times, so the
+            # Struggle handling in `local_showdown._apply_struggle_only_move_state` was
+            # provably inert here -- a fix with no corpus-level guard.
+            #
+            # Taunt is the shortest reliable producer: `getMoves` disables every status
+            # slot, `hasValidMove` goes false on the very next request, and
+            # `getMoveRequestData` substitutes Struggle. An all-status Blissey reaches it
+            # on decision 2 rather than after eight turns of PP drain, and the Swampert
+            # bench keeps a legal switch available so the boundary is a real choice rather
+            # than a forced one. p1 prefers `softboiled` -- a move that will be DISABLED at
+            # the Struggle boundary -- so the scripted policy exercises the fall-through
+            # instead of naming Struggle directly.
+            "struggle_taunt_stall",
+            (_mon("Blissey", ("Soft-Boiled", "Toxic", "Light Screen", "Sing"),
+                  ability="Natural Cure"), swampert),
+            (_mon("Gengar", ("Taunt", "Ice Punch", "Thunderbolt", "Giga Drain"),
+                  ability="Levitate"), swampert),
+            p1_prefs=(("softboiled",),),
+            p2_prefs=(("taunt",), ("icepunch",)),
+        ),
+        ScenarioSpec(
             "hyperbeam_recharge",
             (_mon("Slaking", ("Hyper Beam", "Earthquake", "Return", "Shadow Ball"),
                   ability="Truant", item="Choice Band", level=78), swampert),

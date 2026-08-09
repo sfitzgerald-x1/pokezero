@@ -1487,45 +1487,13 @@ def _build_side_spec(
         volatile_durations["encore"] = 1
     elif "encore" in volatiles:
         active_specs = party[active_index].moves
-        rows_for_active = _active_row_moves(side_payload) if is_self else None
         encored_index = _resolve_encored_move_index(
             active_specs,
-            rows_for_active=rows_for_active,
+            rows_for_active=(
+                _active_row_moves(side_payload) if is_self else None
+            ),
             encored_move=encored_move,
         )
-        if (
-            encored_index is None
-            and is_self
-            and _rows_report_nothing_usable(rows_for_active)
-            and last_used_move_id not in (None, "switch")
-        ):
-            # THE STRUGGLE BOUNDARY, and the gate is exactly its signature. An ordinary
-            # pp-bearing request can never present an all-disabled active row: Showdown's
-            # `getMoves` returns `[]` the moment `hasValidMove` is false, and
-            # `getMoveRequestData` substitutes Struggle. So "every row disabled" reaches
-            # here only from the Struggle marking that
-            # `local_showdown.actor_move_states_from_request_history` now writes, and this
-            # branch widens nothing else.
-            #
-            # WHY A FALLBACK IS NEEDED AT ALL. The self seat has no `encored_move`:
-            # `engine_search._public_signals` fills that map for the OPPONENT slot only.
-            # Self-seat Encore is therefore identified solely by "exactly one enabled row",
-            # and a Struggle request has none -- so without this the fold fix would convert
-            # the population it repairs from a silently wrong world into an
-            # `encore_move_unknown` refusal.
-            #
-            # The source is the one the TRANSFORMED branch above already sanctions for the
-            # identical fact: the parser's public last executed move, which under a live
-            # Encore is the encored move. It is not universal -- a SECOND consecutive
-            # Struggle turn makes `lastUsedMove` "struggle", which is in no moveset, so
-            # `_move_index_by_id` misses and the refusal below still fires. That is the
-            # honest outcome; the alternative would be inventing a slot.
-            #
-            # Binding the lock is safe even though nothing can be selected: every spec is
-            # disabled, so `Side::add_available_moves` contributes nothing whether or not
-            # the engine also filters on the encore lock, and the side's options are its
-            # switches either way.
-            encored_index = _move_index_by_id(active_specs, last_used_move_id)
         if encored_index is None:
             raise EngineWorldUnsupported(
                 "encore_move_unknown",
@@ -1633,24 +1601,6 @@ def _active_row_moves(side_payload: Mapping[str, Any]) -> list[Mapping[str, Any]
             if isinstance(moves, Sequence) and not isinstance(moves, str):
                 return [move for move in moves if isinstance(move, Mapping)]
     return None
-
-
-def _rows_report_nothing_usable(rows: Sequence[Mapping[str, Any]] | None) -> bool:
-    """Whether a request-shaped move list exists and flags EVERY entry disabled.
-
-    The complement of ``_sole_enabled_move_id``'s precondition, and the payload-side
-    signature of a Struggle-only request: ``local_showdown`` marks the retained snapshot
-    all-disabled there because Showdown's own ``getMoves`` had already computed exactly
-    that before substituting the Struggle row. An empty list is NOT this -- it is a
-    force-switch row or an absent snapshot, which say nothing about usability.
-    """
-
-    if not rows:
-        return False
-    return all(
-        isinstance(row, Mapping) and bool(row.get("disabled"))
-        for row in rows
-    )
 
 
 def _sole_enabled_move_id(rows: Sequence[Mapping[str, Any]] | None) -> str | None:

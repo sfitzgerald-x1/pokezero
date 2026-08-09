@@ -1,20 +1,20 @@
-"""A Struggle-only request must not leave the self moveset pinned to an older one.
+"""A Struggle-only request must not be answered with an older request's moveset.
 
-THE DEFECT. ``sides[self].pokemon[].moves`` in the direct-materialization payload is
-built ONLY from ``self_move_states``, folded by
-``local_showdown.actor_move_states_from_request_history``. That fold skipped any request
-where ``_request_active_moves`` returned ``[]``, and that helper drops move rows lacking
-integer ``pp`` AND ``maxpp``. Showdown's Struggle branch
-(``Pokemon.getMoveRequestData``'s ``!moves.length`` case) emits exactly one such row, so
-the fold skipped the request and the retained entry stayed pinned to the last pp-BEARING
-request. The world therefore answered a Struggle-only request with a moveset that still
-advertised a usable move.
+THE DEFECT. ``sides[self].pokemon[].moves`` in the direct-materialization payload comes
+only from ``_request_materialization_rows``, whose move state is
+``actor_move_states_from_request_history`` -- a fold that retains the most recent request
+per own Pokemon and SKIPS any request where ``_request_active_moves`` is empty, because
+that helper drops rows lacking integer ``pp`` AND ``maxpp``. Showdown's Struggle branch
+emits exactly one such row, so the row stayed pinned to the last pp-BEARING request and
+advertised a usable move at a boundary where Showdown offers only Struggle. Meanwhile
+``selfActiveMoves``, built from the CURRENT request one call later, correctly said ``[]``.
+One payload, two views of the same request, built from two different requests.
 
 MEASURED, and this repo's first live capture of the branch. The provenance list in
 ``actor_move_states_from_request_history`` had classified Struggle as "SOURCE ONLY --
 unverified by measurement; an attempt to produce a live Struggle request failed on
-packed-team format". Driving a gen3 Custom Game with a single-move Bulbasaur (Sunny Day,
-8 PP) for eight turns produces it. At that boundary, at the pre-fix commit::
+packed-team format". A gen3 Custom Game with a single-move Bulbasaur (Sunny Day, 8 PP)
+produces it on turn 8. At that boundary, on ``origin/main``::
 
     RAW REQUEST active moves : [{"move": "Struggle", "id": "struggle",
                                  "target": "randomNormal", "disabled": false}]
@@ -23,22 +23,29 @@ packed-team format". Driving a gen3 Custom Game with a single-move Bulbasaur (Su
                                             "disabled": false}]}, ...]
     VIEW B selfActiveMoves   : []
 
--- one payload, two views of the same request, built from two DIFFERENT requests. View A
-says Sunny Day is usable with 1 PP; the truth is 0 PP and unusable, and the request
-offers only Struggle. ``StruggleOnlyPayloadViewTests`` re-runs that capture and asserts
-the two views agree.
+WHY THE FIX IS AT THE PAYLOAD BOUNDARY AND NOT IN THE FOLD. The first version of this
+change marked the retained FOLD entry, and that was wrong in a way only a live run showed.
+Showdown clears ``moveSlot.disabled`` on switch-out and recomputes it every turn, so
+unusability belongs to ONE BOUNDARY; a fold entry outlives the request that wrote it.
+Measured on that version -- Bulbasaur Taunted into Struggle, then switched out::
 
-WHY "MARK EVERY SLOT DISABLED" IS A RESTORATION, NOT A GUESS. ``Pokemon.getMoves`` folds
-``moveSlot.pp <= 0`` into ``disabled`` for every slot and returns
-``hasValidMove ? moves : []``. An empty return therefore MEANS every slot came back
-disabled; ``getMoveRequestData`` then discards that list and substitutes Struggle. The
-fold now writes back the verdict Showdown had already reached.
+    fold version : bulbasaur (benched) [('sunnyday', 8, True),  ('growth', 64, True)]
+    origin/main  : bulbasaur (benched) [('sunnyday', 8, False), ('growth', 64, False)]
 
-SCOPE. The sibling pp-less shapes -- ``mustrecharge`` (measured 6 times) and the two-turn
-charge lock -- are dropped by the SAME filter but come off ``getMoves``'s early
-``if (lockedMove)`` return, which never evaluates per-slot ``disabled``. They keep the
-pre-existing skip; ``MustRechargeIsOutOfScopeTests`` pins that boundary so a later edit
-cannot widen it silently while the ``trapped`` work is in flight.
+-- full PP and no legal move in any searched line, because poke-engine's
+``re_enable_disabled_moves`` runs on the OUTGOING active only. ``BenchLeakTests`` is the
+regression pin for that; it fails against the fold placement.
+
+WHICH STRUGGLE POPULATION ACTUALLY BUILDS A WORLD, enumerated rather than assumed. Every
+gen3 ``disableMove`` caller is ``disable``, ``encore``, ``imprison``, ``taunt``,
+``torment``. ``imprison`` reports ``disabled: 'hidden'``, which ``getMoves`` resolves to
+``false`` in singles; ``taunt``/``disable``/``torment`` are in
+``showdown.TRACKED_VOLATILES`` but not in ``engine_world._SUPPORTED_VOLATILES``, so those
+boundaries raise ``volatile_unsupported`` and never reach move construction; and gen3
+Encore's ``onResidual`` removes the volatile the same turn its move hits 0 PP, so an
+Encored Struggle request does not exist. What remains -- and what ``WhatReachesTheEngineTests``
+exercises end to end -- is PP EXHAUSTION, where the stale snapshot is exactly one use too
+generous on the slot that ran out.
 """
 
 from __future__ import annotations
@@ -53,20 +60,15 @@ from pathlib import Path
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from pokezero.dex import MoveInfo, ShowdownDex, SpeciesInfo  # noqa: E402
-from pokezero.engine_world import (  # noqa: E402
-    EngineWorldUnsupported,
-    _rows_report_nothing_usable,
-    _sole_enabled_move_id,
-    battle_spec_from_payload,
-)
+from pokezero.dex import load_showdown_dex  # noqa: E402
+from pokezero.engine_world import _sole_enabled_move_id  # noqa: E402
 from pokezero.env import BattleStartOverride  # noqa: E402
-from pokezero.gen3_damage import gen3_hp_stat  # noqa: E402
 from pokezero.local_showdown import (  # noqa: E402
     DEFAULT_SHOWDOWN_ROOT,
     LocalShowdownConfig,
     LocalShowdownEnv,
     _public_materialization_payload,
+    _request_materialization_rows,
     _request_reports_only_struggle,
     actor_move_states_from_request_history,
 )
@@ -74,203 +76,267 @@ from pokezero.showdown_fixture import FixturePokemon, pack_team  # noqa: E402
 
 
 # --------------------------------------------------------------------------------------
-# The fold
+# The predicate, and the shapes it must NOT claim
 # --------------------------------------------------------------------------------------
 
-TEAM = (
-    ("p1: Bulbasaur", True, ["sunnyday", "tackle"]),
-    ("p1: Charmander", False, ["ember"]),
-)
+STRUGGLE_ROW = {
+    "move": "Struggle",
+    "id": "struggle",
+    "target": "randomNormal",
+    "disabled": False,
+}
 
 
-def _pp_request(active_moves, team_rows=TEAM):
-    """A normal request: `active[0].moves` carries pp/maxpp for every slot."""
+def _request_with_active_moves(moves):
+    return {"active": [{"moves": moves}], "side": {"pokemon": []}}
 
+
+class StruggleBranchPredicateTests(unittest.TestCase):
+    def test_the_captured_branch_is_recognised(self) -> None:
+        self.assertTrue(
+            _request_reports_only_struggle(_request_with_active_moves([STRUGGLE_ROW]))
+        )
+
+    def test_the_fixture_really_is_pp_less(self) -> None:
+        """Guard against a vacuous suite.
+
+        If a later edit gives this row `pp`/`maxpp`, `_request_active_moves` would keep
+        it, the fold would never skip, and the defect these tests describe would not
+        exist -- so several of them would pass for the wrong reason.
+        """
+
+        self.assertNotIn("pp", STRUGGLE_ROW)
+        self.assertNotIn("maxpp", STRUGGLE_ROW)
+
+    def test_a_recharge_request_is_not_the_branch(self) -> None:
+        """`mustrecharge` is dropped by the same pp filter but is NOT this.
+
+        `getMoves` returns early on `lockedMove` (`sim/pokemon.ts:966`) without evaluating
+        per-slot `disabled` at all, so its real slots are usually usable and merely
+        pre-empted for one turn. A sibling change is routing it through the MUSTRECHARGE
+        volatile; this boundary is pinned so a later widening is visible in the diff.
+        """
+
+        self.assertFalse(
+            _request_reports_only_struggle(
+                _request_with_active_moves([{"move": "Recharge", "id": "recharge"}])
+            )
+        )
+
+    def test_a_locked_charge_move_is_not_the_branch(self) -> None:
+        self.assertFalse(
+            _request_reports_only_struggle(
+                _request_with_active_moves([{"move": "Solar Beam", "id": "solarbeam"}])
+            )
+        )
+
+    def test_more_than_one_row_is_not_the_branch(self) -> None:
+        """Pins `len(moves) != 1`. Showdown's branch substitutes a list of exactly one."""
+
+        self.assertFalse(
+            _request_reports_only_struggle(
+                _request_with_active_moves(
+                    [STRUGGLE_ROW, {"id": "tackle", "pp": 5, "maxpp": 56, "disabled": False}]
+                )
+            )
+        )
+
+    def test_a_fully_pp_bearing_struggle_row_is_not_the_branch(self) -> None:
+        self.assertFalse(
+            _request_reports_only_struggle(
+                _request_with_active_moves([{**STRUGGLE_ROW, "pp": 5, "maxpp": 5}])
+            )
+        )
+
+    def test_a_half_pp_bearing_struggle_row_is_not_the_branch(self) -> None:
+        """Pins the `and` in the pp check, which the both-fields case cannot.
+
+        Requiring BOTH fields absent is deliberate: only the exact shape Showdown emits
+        triggers the marking. An `or` here would accept a half-populated row that no
+        branch of `getMoveRequestData` produces.
+        """
+
+        for partial in ({"pp": 5}, {"maxpp": 5}):
+            with self.subTest(partial=partial):
+                self.assertFalse(
+                    _request_reports_only_struggle(
+                        _request_with_active_moves([{**STRUGGLE_ROW, **partial}])
+                    )
+                )
+
+    def test_an_absent_active_row_is_not_the_branch(self) -> None:
+        for request in ({}, {"active": []}, {"active": [{}]}, {"active": [{"moves": []}]}):
+            with self.subTest(request=request):
+                self.assertFalse(_request_reports_only_struggle(request))
+
+
+# --------------------------------------------------------------------------------------
+# The row builder: scope of the marking
+# --------------------------------------------------------------------------------------
+
+
+def _team_request(active_moves, *, active_species="Bulbasaur"):
     return {
-        "active": [
-            {
-                "moves": [
-                    {"id": mid, "pp": pp, "maxpp": maxpp, "disabled": disabled}
-                    for mid, pp, maxpp, disabled in active_moves
-                ]
-            }
-        ],
+        "active": [{"moves": active_moves}],
         "side": {
             "pokemon": [
                 {
-                    "ident": ident,
-                    "details": ident.split(": ", 1)[1],
-                    "active": active,
-                    "moves": list(moves),
-                }
-                for ident, active, moves in team_rows
+                    "ident": "p1: Bulbasaur",
+                    "details": "Bulbasaur, M",
+                    "condition": "100/100",
+                    "active": active_species == "Bulbasaur",
+                    "moves": ["sunnyday", "growth"],
+                },
+                {
+                    "ident": "p1: Charmander",
+                    "details": "Charmander, F",
+                    "condition": "100/100",
+                    "active": active_species == "Charmander",
+                    "moves": ["ember"],
+                },
             ]
         },
     }
 
 
-def _struggle_request(team_rows=TEAM):
-    """Showdown's Struggle branch, VERBATIM from the live capture above."""
+_STATES = {
+    "bulbasaur": (
+        {"id": "sunnyday", "pp": 1, "maxpp": 8, "disabled": False},
+        {"id": "growth", "pp": 64, "maxpp": 64, "disabled": False},
+    ),
+    "charmander": ({"id": "ember", "pp": 40, "maxpp": 40, "disabled": False},),
+}
 
-    request = _pp_request((), team_rows)
-    request["active"] = [
-        {
-            "moves": [
-                {
-                    "move": "Struggle",
-                    "id": "struggle",
-                    "target": "randomNormal",
-                    "disabled": False,
-                }
-            ]
+_ORDINARY_ROW = {"id": "sunnyday", "pp": 1, "maxpp": 8, "disabled": False}
+
+
+def _flags(rows):
+    return {
+        row["species"]: [(m["id"], m["pp"], m["disabled"]) for m in row["moves"]]
+        for row in rows
+    }
+
+
+class RowMarkingScopeTests(unittest.TestCase):
+    def test_a_struggle_request_disables_every_move_on_the_active_row(self) -> None:
+        rows = _request_materialization_rows(
+            _team_request([STRUGGLE_ROW]), self_move_states=_STATES
+        )
+        self.assertEqual(
+            _flags(rows)["Bulbasaur"], [("sunnyday", 1, True), ("growth", 64, True)]
+        )
+
+    def test_the_benched_rows_are_untouched(self) -> None:
+        """The scope the fold placement could not express.
+
+        Nothing about a Struggle request says anything about a mon that is not active,
+        and `_move_specs` copies `disabled` verbatim onto every team row.
+        """
+
+        rows = _request_materialization_rows(
+            _team_request([STRUGGLE_ROW]), self_move_states=_STATES
+        )
+        self.assertEqual(_flags(rows)["Charmander"], [("ember", 40, False)])
+
+    def test_an_ordinary_request_is_untouched(self) -> None:
+        rows = _request_materialization_rows(
+            _team_request([_ORDINARY_ROW]), self_move_states=_STATES
+        )
+        self.assertEqual(
+            _flags(rows)["Bulbasaur"], [("sunnyday", 1, False), ("growth", 64, False)]
+        )
+
+    def test_the_retained_fold_state_is_not_written_through(self) -> None:
+        """The marking must not reach `self_move_states`, which later boundaries reuse.
+
+        `_request_materialization_rows` builds `dict(move)` copies; if a future edit marks
+        the source instead, the bench leak returns by another route. This is the unit-level
+        half of `BenchLeakTests`.
+        """
+
+        states = {k: tuple(dict(m) for m in v) for k, v in _STATES.items()}
+        _request_materialization_rows(_team_request([STRUGGLE_ROW]), self_move_states=states)
+        self.assertEqual(
+            [(m["id"], m["disabled"]) for m in states["bulbasaur"]],
+            [("sunnyday", False), ("growth", False)],
+        )
+
+    def test_a_later_boundary_from_the_same_state_is_unmarked(self) -> None:
+        """What the write-through guard buys: the marking does not accumulate."""
+
+        states = {k: tuple(dict(m) for m in v) for k, v in _STATES.items()}
+        _request_materialization_rows(_team_request([STRUGGLE_ROW]), self_move_states=states)
+        rows = _request_materialization_rows(
+            _team_request([_ORDINARY_ROW]), self_move_states=states
+        )
+        self.assertEqual(
+            _flags(rows)["Bulbasaur"], [("sunnyday", 1, False), ("growth", 64, False)]
+        )
+
+    def test_an_active_row_with_no_snapshot_invents_nothing(self) -> None:
+        rows = _request_materialization_rows(
+            _team_request([STRUGGLE_ROW]), self_move_states={}
+        )
+        self.assertEqual(_flags(rows), {"Bulbasaur": [], "Charmander": []})
+
+    def test_duplicate_idents_only_mark_the_active_row(self) -> None:
+        """`attract_snorlax` has two same-ident Blisseys sharing one retained entry.
+
+        Keying the marking on `active` rather than on identity is what keeps one
+        Blissey's Struggle out of the other's moveset.
+        """
+
+        request = {
+            "active": [{"moves": [STRUGGLE_ROW]}],
+            "side": {
+                "pokemon": [
+                    {"ident": "p1: Blissey", "details": "Blissey, F",
+                     "condition": "100/100", "active": True, "moves": ["softboiled"]},
+                    {"ident": "p1: Blissey", "details": "Blissey, F",
+                     "condition": "90/100", "active": False, "moves": ["softboiled"]},
+                ]
+            },
         }
-    ]
-    return request
-
-
-def _recharge_request(team_rows=TEAM):
-    """Showdown's `getMoves(lockedMove='recharge')` early return. Also pp-less."""
-
-    request = _pp_request((), team_rows)
-    request["active"] = [{"moves": [{"move": "Recharge", "id": "recharge"}], "trapped": True}]
-    return request
-
-
-class StruggleOnlyFoldTests(unittest.TestCase):
-    def test_the_fixture_is_the_real_branch(self) -> None:
-        """Guard against a vacuous suite: the row must be pp-LESS, or nothing is tested.
-
-        If a later edit gives this fixture `pp`/`maxpp`, `_request_active_moves` would
-        keep it and every assertion below would pass for the wrong reason.
-        """
-
-        row = _struggle_request()["active"][0]["moves"][0]
-        self.assertEqual(row["id"], "struggle")
-        self.assertNotIn("pp", row)
-        self.assertNotIn("maxpp", row)
-        self.assertTrue(_request_reports_only_struggle(_struggle_request()))
-
-    def test_a_struggle_request_marks_the_retained_snapshot_unusable(self) -> None:
-        """The defect. Pre-fix this request was skipped and `disabled` stayed False."""
-
-        pp = _pp_request((("sunnyday", 1, 8, False), ("tackle", 0, 56, True)))
-        states = actor_move_states_from_request_history(
-            [pp, _struggle_request()], initial_request=pp
-        )
-
+        states = {"blissey": ({"id": "softboiled", "pp": 8, "maxpp": 16, "disabled": False},)}
+        rows = _request_materialization_rows(request, self_move_states=states)
         self.assertEqual(
-            [(row["id"], row["disabled"]) for row in states["bulbasaur"]],
-            [("sunnyday", True), ("tackle", True)],
-            "a Struggle request says every slot is disabled; the retained row must say so",
+            [(row["active"], row["moves"][0]["disabled"]) for row in rows],
+            [(True, True), (False, False)],
         )
 
-    def test_the_identity_and_the_pp_survive(self) -> None:
-        """Not erasure. Erasing strands the mon and `engine_world` says `self_pp_unknown`.
 
-        Measured wrong for the sibling Transform case (7 refusals became 8). The PP
-        numbers stay pinned to the last pp-bearing request because the Struggle request
-        carries none -- that residual is stated, not fixed.
-        """
+class FoldIsUnchangedTests(unittest.TestCase):
+    """The fold stays pure history: a pp-less request contributes nothing to it.
 
-        pp = _pp_request((("sunnyday", 1, 8, False),))
-        states = actor_move_states_from_request_history(
-            [pp, _struggle_request()], initial_request=pp
-        )
-
-        self.assertIn("bulbasaur", states)
-        self.assertEqual(states["bulbasaur"][0]["pp"], 1)
-        self.assertEqual(states["bulbasaur"][0]["maxpp"], 8)
-
-    def test_the_pp_bearing_snapshot_is_not_mutated_in_place(self) -> None:
-        """The marking must produce a NEW row, not edit the retained mapping's."""
-
-        pp = _pp_request((("sunnyday", 1, 8, False),))
-        before = actor_move_states_from_request_history([pp], initial_request=pp)
-        after = actor_move_states_from_request_history(
-            [pp, _struggle_request()], initial_request=pp
-        )
-
-        self.assertFalse(before["bulbasaur"][0]["disabled"])
-        self.assertTrue(after["bulbasaur"][0]["disabled"])
-
-    def test_a_later_pp_bearing_request_refreshes_the_marking(self) -> None:
-        """The marking is about THIS boundary, not a permanent condemnation."""
-
-        first = _pp_request((("sunnyday", 1, 8, False),))
-        later = _pp_request((("sunnyday", 8, 8, False),))
-        states = actor_move_states_from_request_history(
-            [first, _struggle_request(), later], initial_request=first
-        )
-
-        self.assertEqual(
-            [(row["id"], row["pp"], row["disabled"]) for row in states["bulbasaur"]],
-            [("sunnyday", 8, False)],
-        )
-
-    def test_stale_by_one_decision_is_the_floor_not_the_bound(self) -> None:
-        """Consecutive pp-less turns, which is what makes "skip" unbounded.
-
-        Two Struggle turns with a `mustrecharge` between them: three consecutive requests
-        the old filter dropped. Every one of them must leave the entry unusable, not just
-        the first.
-        """
-
-        pp = _pp_request((("sunnyday", 1, 8, False),))
-        states = actor_move_states_from_request_history(
-            [pp, _struggle_request(), _recharge_request(), _struggle_request()],
-            initial_request=pp,
-        )
-
-        self.assertTrue(states["bulbasaur"][0]["disabled"])
-
-    def test_a_struggle_request_with_no_retained_entry_invents_nothing(self) -> None:
-        pp_for_other_mon = _pp_request(
-            (("ember", 25, 40, False),),
-            (("p1: Bulbasaur", False, ["sunnyday"]), ("p1: Charmander", True, ["ember"])),
-        )
-        states = actor_move_states_from_request_history(
-            [pp_for_other_mon, _struggle_request()], initial_request=pp_for_other_mon
-        )
-
-        self.assertNotIn("bulbasaur", states)
-        self.assertEqual([row["id"] for row in states["charmander"]], ["ember"])
-
-    def test_a_pp_bearing_struggle_row_is_not_the_branch(self) -> None:
-        """The predicate keys on the MISSING pp fields, not on the id alone."""
-
-        request = _struggle_request()
-        request["active"][0]["moves"][0].update({"pp": 5, "maxpp": 5})
-        self.assertFalse(_request_reports_only_struggle(request))
-
-
-class MustRechargeIsOutOfScopeTests(unittest.TestCase):
-    """A deliberate boundary, pinned so a later widening is visible in the diff.
-
-    `mustrecharge` is dropped by the SAME filter, and a sibling change is routing it
-    through the MUSTRECHARGE volatile. It is NOT marked here: `getMoves` returns early on
-    `lockedMove` without ever computing per-slot `disabled`, so the real slots are usually
-    perfectly usable and merely pre-empted for one turn. Marking them would be a
-    fabrication rather than a restoration, and it would be inert anyway --
-    `get_all_options` short-circuits on MUSTRECHARGE before `add_available_moves` runs.
+    Not a leftover assertion -- this is the property whose violation produced the bench
+    leak, so it is pinned rather than assumed.
     """
 
-    def test_a_recharge_request_is_not_the_struggle_branch(self) -> None:
-        self.assertFalse(_request_reports_only_struggle(_recharge_request()))
+    def test_a_struggle_request_leaves_the_fold_alone(self) -> None:
+        team = [
+            {"ident": "p1: Bulbasaur", "details": "Bulbasaur, M", "active": True,
+             "moves": ["sunnyday", "growth"]},
+        ]
+        pp_request = {
+            "active": [{"moves": [
+                {"id": "sunnyday", "pp": 1, "maxpp": 8, "disabled": False},
+                {"id": "growth", "pp": 64, "maxpp": 64, "disabled": False},
+            ]}],
+            "side": {"pokemon": team},
+        }
+        struggle_request = {"active": [{"moves": [STRUGGLE_ROW]}], "side": {"pokemon": team}}
 
-    def test_a_recharge_request_leaves_the_retained_snapshot_untouched(self) -> None:
-        pp = _pp_request((("sunnyday", 3, 8, False),))
         states = actor_move_states_from_request_history(
-            [pp, _recharge_request()], initial_request=pp
+            [pp_request, struggle_request], initial_request=pp_request
         )
-
         self.assertEqual(
-            [(row["id"], row["pp"], row["disabled"]) for row in states["bulbasaur"]],
-            [("sunnyday", 3, False)],
+            [(m["id"], m["pp"], m["disabled"]) for m in states["bulbasaur"]],
+            [("sunnyday", 1, False), ("growth", 64, False)],
         )
 
 
 # --------------------------------------------------------------------------------------
-# Both payload views, on a LIVE Struggle request
+# Live
 # --------------------------------------------------------------------------------------
 
 
@@ -283,20 +349,35 @@ def _integration_config() -> LocalShowdownConfig | None:
     return LocalShowdownConfig(showdown_root=root, read_timeout_seconds=20.0)
 
 
-_STRUGGLE_OVERRIDE = BattleStartOverride(
+_CHARMANDER = FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember",))
+
+# PP EXHAUSTION -- the only Struggle population that builds a world (see module docstring).
+# One move, 5 base PP -> 8 with full PP ups, so turn 8 is Struggle. Sunny Day is harmless:
+# neither side faints and the battle stays at a move request throughout.
+_PP_STALL = BattleStartOverride(
     player_teams={
-        # ONE move, 5 base PP (-> 8 with full PP ups). Eight turns of Sunny Day exhausts
-        # it and Showdown has nothing left to offer but Struggle. Sunny Day is chosen
-        # because it is harmless: neither side faints and the battle stays at a move
-        # request throughout.
         "p1": pack_team(
-            (
-                FixturePokemon(species="Bulbasaur", ability="Overgrow", moves=("Sunny Day",)),
-                FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember",)),
-            )
+            (FixturePokemon(species="Bulbasaur", ability="Overgrow", moves=("Sunny Day",)),
+             _CHARMANDER)
         ),
         "p2": pack_team(
             (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Harden",)),)
+        ),
+    },
+)
+# TAUNT -- reaches Struggle on turn 1 instead of turn 8, which is what makes the bench-leak
+# probe short. This boundary is refused downstream by `volatile_unsupported: taunt`, so it
+# exercises the payload only, which is exactly what the bench leak is about.
+_TAUNT_STALL = BattleStartOverride(
+    player_teams={
+        "p1": pack_team(
+            (FixturePokemon(species="Bulbasaur", ability="Overgrow",
+                            moves=("Sunny Day", "Growth")),
+             _CHARMANDER)
+        ),
+        "p2": pack_team(
+            (FixturePokemon(species="Squirtle", ability="Torrent",
+                            moves=("Taunt", "Water Gun")),)
         ),
     },
 )
@@ -306,35 +387,58 @@ def _enabled_ids(rows) -> list[str]:
     return [row["id"] for row in rows if not row.get("disabled")]
 
 
-class StruggleOnlyPayloadViewTests(unittest.TestCase):
-    """The two views of the SAME request must agree about what is usable.
+def _self_rows(payload):
+    return {
+        row["species"]: (
+            row["active"],
+            [(m["id"], m["pp"], m["disabled"]) for m in row["moves"]],
+        )
+        for row in payload["sides"]["p1"]["pokemon"]
+    }
 
-    Not one assertion but two, because a fix that repairs `sides[...].moves` and leaves
-    `selfActiveMoves` alone still ships an inconsistent payload. The pre-Struggle turn is
-    asserted too: it is what shows the agreement is a property of the payload rather than
-    an artefact of both views happening to be empty.
-    """
 
+class _LiveBase(unittest.TestCase):
     def setUp(self) -> None:
         config = _integration_config()
         if config is None:
             self.skipTest("a built pokemon-showdown checkout and node are required")
         self.config = config
 
-    def _payloads(self):
-        """(last pp-bearing boundary, Struggle boundary) as real payloads."""
+    @staticmethod
+    def _struggle_rows(env):
+        request = env._latest_requests.get("p1")
+        active = (request or {}).get("active")
+        rows = (active[0] if isinstance(active, list) and active else {}).get("moves")
+        return rows if rows and rows[0].get("id") == "struggle" else None
 
+    def _advance_to_struggle(self, env, *, turns: int):
+        for _ in range(turns):
+            rows = self._struggle_rows(env)
+            if rows is not None:
+                return rows
+            env.step({"p1": 0, "p2": 0})
+        raise AssertionError(f"no Struggle request was produced in {turns} turns")
+
+
+class StruggleOnlyPayloadViewTests(_LiveBase):
+    """The two views of the SAME request must agree about what is usable.
+
+    Two assertions, not one: a fix that repairs `sides[...].moves` and leaves
+    `selfActiveMoves` alone still ships an inconsistent payload. The pre-Struggle turn is
+    asserted too, so the agreement is a property of the payload rather than an artefact of
+    both views being empty.
+    """
+
+    def _payloads(self):
         previous = None
         with LocalShowdownEnv(self.config) as env:
-            env.reset_with_start_override(seed=11, start_override=_STRUGGLE_OVERRIDE)
+            env.reset_with_start_override(seed=11, start_override=_PP_STALL)
             for _ in range(16):
-                request = env._latest_requests.get("p1")
-                active = (request or {}).get("active")
-                rows = (active[0] if isinstance(active, list) and active else {}).get("moves")
                 payload = _public_materialization_payload(
                     env.public_materialization_state("p1")
                 )
-                if rows and rows[0].get("id") == "struggle":
+                rows = self._struggle_rows(env)
+                if rows is not None:
                     return previous, payload, rows
                 previous = payload
                 env.step({"p1": 0, "p2": 0})
@@ -343,23 +447,13 @@ class StruggleOnlyPayloadViewTests(unittest.TestCase):
     def test_the_two_views_agree_at_a_live_struggle_request(self) -> None:
         previous, struggle, raw_rows = self._payloads()
 
-        # The captured branch, so the test states what it measured.
         self.assertEqual(
             json.dumps(raw_rows, sort_keys=True),
-            json.dumps(
-                [
-                    {
-                        "disabled": False,
-                        "id": "struggle",
-                        "move": "Struggle",
-                        "target": "randomNormal",
-                    }
-                ],
-                sort_keys=True,
-            ),
+            json.dumps([STRUGGLE_ROW], sort_keys=True),
+            "the captured branch changed shape",
         )
 
-        # The turn BEFORE: both views name the same single usable move. Pre-fix this held
+        # The turn BEFORE: both views name the same single usable move. This holds pre-fix
         # too -- it is the regression guard, not the fix.
         prev_active = next(r for r in previous["sides"]["p1"]["pokemon"] if r["active"])
         self.assertEqual(_enabled_ids(prev_active["moves"]), ["sunnyday"])
@@ -375,255 +469,97 @@ class StruggleOnlyPayloadViewTests(unittest.TestCase):
             "VIEW A still advertised a usable move while VIEW B said nothing was usable",
         )
 
-        # The PP snapshot survives -- this is a usability correction, not an erasure.
-        self.assertEqual(
-            [(row["id"], row["pp"]) for row in active["moves"]], [("sunnyday", 1)]
-        )
+        # A usability correction, not an erasure: the PP snapshot survives. It is still one
+        # use too generous -- the request carries no PP and the true value is 0 -- and that
+        # residual is stated rather than fixed.
+        self.assertEqual([(m["id"], m["pp"]) for m in active["moves"]], [("sunnyday", 1)])
 
-        # And the single predicate every consumer applies to these rows now agrees across
-        # both views instead of disagreeing.
+        # The single predicate every consumer applies to these rows now agrees across both
+        # views instead of disagreeing.
         self.assertIsNone(_sole_enabled_move_id(active["moves"]))
         self.assertIsNone(_sole_enabled_move_id(struggle["selfActiveMoves"]))
 
 
-# --------------------------------------------------------------------------------------
-# What engine_world then builds
-# --------------------------------------------------------------------------------------
+class BenchLeakTests(_LiveBase):
+    """The marking must not ride the mon onto the bench. Pins the rejected fold placement.
 
+    Taunt clears on switch-out in Showdown, and poke-engine's `re_enable_disabled_moves`
+    runs on the OUTGOING active only (`generate_instructions.rs`), so a benched row that
+    still says `disabled` hands the search a mon with full PP and no legal move.
+    """
 
-def _move(move_id: str, pp: int) -> MoveInfo:
-    return MoveInfo(
-        id=move_id, name=move_id, type="normal", category="physical",
-        gen3_category="physical", base_power=50, accuracy=100.0, priority=0,
-        recoil=False, drain=False, heal=False, status=None, boosts={},
-        target="normal", selfdestruct=False, pp=pp,
-    )
+    def test_switching_out_of_a_struggle_boundary_leaves_the_bench_usable(self) -> None:
+        with LocalShowdownEnv(self.config) as env:
+            env.reset_with_start_override(seed=5, start_override=_TAUNT_STALL)
+            self._advance_to_struggle(env, turns=8)
 
-
-def _species(species_id: str, name: str, types, base, weight: float) -> SpeciesInfo:
-    return SpeciesInfo(
-        id=species_id, name=name, types=types, base_stats=base, weight_kg=weight
-    )
-
-
-def _dex() -> ShowdownDex:
-    return ShowdownDex(
-        moves={
-            "bodyslam": _move("bodyslam", 15),
-            "healbell": _move("healbell", 5),
-            "wish": _move("wish", 10),
-            "protect": _move("protect", 10),
-            "earthquake": _move("earthquake", 10),
-            "surf": _move("surf", 15),
-        },
-        species={
-            "delcatty": _species("delcatty", "Delcatty", ("normal",),
-                                 {"hp": 70, "atk": 65, "def": 65, "spa": 55, "spd": 55, "spe": 70}, 32.6),
-            "swampert": _species("swampert", "Swampert", ("water", "ground"),
-                                 {"hp": 100, "atk": 110, "def": 90, "spa": 85, "spd": 90, "spe": 60}, 81.9),
-        },
-        type_chart={},
-    )
-
-
-_EVS = {stat: 85 for stat in ("hp", "atk", "def", "spa", "spd", "spe")}
-_DELCATTY = FixturePokemon(
-    species="Delcatty", moves=("bodyslam", "healbell", "wish", "protect"),
-    ability="Cute Charm", item="Leftovers", level=96, evs=dict(_EVS),
-)
-_SWAMPERT = FixturePokemon(
-    species="Swampert", moves=("earthquake", "surf"), ability="Torrent",
-    item="Leftovers", level=84, evs=dict(_EVS),
-)
-_OVERRIDE = BattleStartOverride(
-    player_teams={"p1": pack_team((_DELCATTY, _SWAMPERT)), "p2": pack_team((_SWAMPERT,))}
-)
-
-# The fold's Struggle marking, as it reaches engine_world: every slot disabled, PP pinned
-# to the last pp-bearing request. Protect at 0 PP is the one that ran out and produced the
-# branch; the other three are full and were disabled by Encore.
-_STRUGGLE_ROWS = [
-    {"id": "bodyslam", "pp": 24, "maxpp": 24, "disabled": True},
-    {"id": "healbell", "pp": 5, "maxpp": 5, "disabled": True},
-    {"id": "wish", "pp": 10, "maxpp": 10, "disabled": True},
-    {"id": "protect", "pp": 0, "maxpp": 10, "disabled": True},
-]
-
-
-def _struggle_payload(dex: ShowdownDex, **overrides):
-    delcatty_hp = gen3_hp_stat(
-        int(dex.species_info("Delcatty").base_stats["hp"]), 31, 85, _DELCATTY.level
-    )
-    swampert_hp = gen3_hp_stat(
-        int(dex.species_info("Swampert").base_stats["hp"]), 31, 85, _SWAMPERT.level
-    )
-    payload = {
-        "turn": 26,
-        "weather": None,
-        "weatherSetTurn": None,
-        "weatherFromAbility": False,
-        "futureSight": {"p1": 0, "p2": 0},
-        "wishSetTurns": {},
-        "leechSeedSourceSides": {},
-        "pendingBatonPassSides": [],
-        "deferredOpponentActions": {},
-        "deferredOpponentActionPriors": {},
-        "selfPlayer": "p1",
-        "selfRequestKind": "move",
-        "selfTeamOrder": ["Delcatty", "Swampert"],
-        "selfActiveRequestState": {},
-        "selfBenchedMoveHistory": False,
-        # VIEW B under Struggle: Showdown offered nothing pp-bearing.
-        "selfActiveMoves": [],
-        "sides": {
-            "p1": {
-                "pokemon": [
-                    {
-                        "species": "Delcatty",
-                        "condition": f"{delcatty_hp}/{delcatty_hp}",
-                        "active": True,
-                        "moves": [dict(row) for row in _STRUGGLE_ROWS],
-                    },
-                    {
-                        "species": "Swampert",
-                        "condition": f"{swampert_hp}/{swampert_hp}",
-                        "active": False,
-                        "moves": [],
-                    },
-                ],
-                "boosts": {},
-                "volatiles": ["Encore"],
-                "lastUsedMove": "protect",
-                "materializationBlockers": [],
-                "toxicStage": 0,
-                "sideConditions": {},
-                "sideConditionSetTurns": {},
-            },
-            "p2": {
-                "pokemon": [
-                    {
-                        "species": "Swampert",
-                        "condition": f"{swampert_hp}/{swampert_hp}",
-                        "active": True,
-                    }
-                ],
-                "boosts": {},
-                "volatiles": [],
-                "lastUsedMove": "earthquake",
-                "materializationBlockers": [],
-                "toxicStage": 0,
-                "sideConditions": {},
-                "sideConditionSetTurns": {},
-            },
-        },
-    }
-    payload.update(overrides)
-    return payload
-
-
-class StruggleMarkedRowsReachTheEngineTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.dex = _dex()
-
-    def test_the_signature_predicate_separates_struggle_from_everything_else(self) -> None:
-        self.assertTrue(_rows_report_nothing_usable(_STRUGGLE_ROWS))
-        # An ordinary request can never look like this: Showdown returns Struggle the
-        # moment `hasValidMove` is false, so an all-disabled pp-bearing row does not exist.
-        self.assertFalse(
-            _rows_report_nothing_usable(
-                [dict(row, disabled=(row["id"] != "protect")) for row in _STRUGGLE_ROWS]
+            at_boundary = _self_rows(
+                _public_materialization_payload(env.public_materialization_state("p1"))
             )
-        )
-        # An EMPTY list is a force-switch row or an absent snapshot, not this.
-        self.assertFalse(_rows_report_nothing_usable([]))
-        self.assertFalse(_rows_report_nothing_usable(None))
+            self.assertEqual(
+                at_boundary["Bulbasaur"],
+                (True, [("sunnyday", 8, True), ("growth", 64, True)]),
+                "the active row must report nothing usable at the Struggle boundary",
+            )
 
-    def test_no_move_spec_is_selectable(self) -> None:
-        """`_move_specs` copies (pp, disabled) verbatim, so the world offers switches only.
+            legal = env.legal_actions("p1")
+            switch_index = next(i for i in range(4, len(legal)) if legal[i])
+            env.step({"p1": switch_index, "p2": 1})
 
-        Checked against poke-engine 0.0.47: `Side::add_available_moves` requires
-        `!disabled && pp > 0`, and `get_all_options` then falls through to `add_switches`
-        -- which is exactly what the live Struggle request also offers (its active row has
-        no `trapped` key).
-        """
+            after = _self_rows(
+                _public_materialization_payload(env.public_materialization_state("p1"))
+            )
+            self.assertEqual(
+                after["Bulbasaur"],
+                (False, [("sunnyday", 8, False), ("growth", 64, False)]),
+                "Taunt cleared on switch-out; a benched mon with full PP must stay usable",
+            )
 
-        world = battle_spec_from_payload(_struggle_payload(self.dex), _OVERRIDE, dex=self.dex)
+
+class WhatReachesTheEngineTests(_LiveBase):
+    """End to end on the population that actually builds a world: PP exhaustion.
+
+    `_move_specs` copies `(pp, disabled)` verbatim and `Pokemon::add_available_moves`
+    (poke-engine 0.0.47 `genx/state.rs`) requires `!disabled && pp > 0`, so an all-disabled
+    active contributes no move option and `get_all_options` falls through to
+    `add_switches`. The Python binding does not export the option vector
+    (`poke_engine_legal_actions` records this as a known gap), so the assertion is on the
+    MoveSpecs the engine reads.
+
+    NOTE the residual this test makes concrete: `sunnyday` reaches the engine at pp 1,
+    because the last pp-bearing request said 1 and the Struggle request carries no PP. Only
+    `disabled` makes it unselectable.
+    """
+
+    def test_the_constructed_world_offers_no_move_and_keeps_the_bench_usable(self) -> None:
+        from pokezero.engine_world import world_battle_spec
+
+        root = Path(os.environ.get("POKEZERO_SHOWDOWN_ROOT") or DEFAULT_SHOWDOWN_ROOT)
+        dex = load_showdown_dex(root)
+        with LocalShowdownEnv(self.config) as env:
+            env.reset_with_start_override(seed=11, start_override=_PP_STALL)
+            self._advance_to_struggle(env, turns=16)
+            world = world_battle_spec(
+                env.public_materialization_state("p1"), _PP_STALL, dex=dex
+            )
+
         side = world.spec.side_one
         active = side.pokemon[side.active_index]
         self.assertEqual(
-            [(spec.id, spec.disabled) for spec in active.moves if spec.id != "none"],
-            [("bodyslam", True), ("healbell", True), ("wish", True), ("protect", True)],
+            [(spec.id, spec.pp, spec.disabled) for spec in active.moves],
+            [("sunnyday", 1, True), ("none", 0, True), ("none", 0, True), ("none", 0, True)],
+            "the world must offer the engine no selectable move at a Struggle boundary",
         )
-        self.assertEqual([spec.pp for spec in active.moves if spec.id != "none"], [24, 5, 10, 0])
-
-    def test_self_encore_at_a_struggle_request_resolves_from_last_used_move(self) -> None:
-        """The consequence of the fold fix for `_sole_enabled_move_id`, addressed.
-
-        The self seat gets no caller-supplied `encored_move` -- `_public_signals` fills
-        that map for the OPPONENT slot only -- so self Encore was identified solely by
-        "exactly one enabled row". Marking every row disabled removes that, and without
-        the `lastUsedMove` fallback the fold fix would turn the population it repairs into
-        an `encore_move_unknown` refusal. Protect is slot 3, so a silent slot-0 fallback is
-        visible.
-        """
-
-        side = battle_spec_from_payload(
-            _struggle_payload(self.dex), _OVERRIDE, dex=self.dex
-        ).spec.side_one
-        self.assertEqual(side.last_used_move, "move:3")
-        self.assertEqual(dict(side.volatile_status_durations), {"encore": 1})
-
-    def test_an_ordinary_encore_row_still_resolves_from_the_row(self) -> None:
-        """Re-enable one row and the lock comes from THAT row, not from `lastUsedMove`.
-
-        `lastUsedMove` names a different move here so the two sources are
-        distinguishable: `wish` is slot 2, `protect` is slot 3.
-        """
-
-        payload = _struggle_payload(self.dex)
-        rows = payload["sides"]["p1"]["pokemon"][0]["moves"]
-        rows[2]["disabled"] = False  # wish, slot 2
-        payload["sides"]["p1"]["lastUsedMove"] = "protect"
-        side = battle_spec_from_payload(payload, _OVERRIDE, dex=self.dex).spec.side_one
-        self.assertEqual(side.last_used_move, "move:2")
-
-    def test_the_fallback_is_gated_on_the_struggle_signature(self) -> None:
-        """The gate itself, and the mutant that proves it is load-bearing.
-
-        Two enabled rows is the OTHER way `_sole_enabled_move_id` returns None: the
-        snapshot does not identify the lock, and `engine_world` has always refused there.
-        `lastUsedMove` is a perfectly resolvable move, so an UNGATED fallback would happily
-        build a world -- widening self-seat Encore resolution to a population the fold fix
-        has nothing to do with. Dropping `_rows_report_nothing_usable` from the condition
-        must turn this refusal into a build.
-        """
-
-        payload = _struggle_payload(self.dex)
-        rows = payload["sides"]["p1"]["pokemon"][0]["moves"]
-        rows[1]["disabled"] = False  # healbell, slot 1
-        rows[2]["disabled"] = False  # wish, slot 2
-        payload["sides"]["p1"]["lastUsedMove"] = "protect"
-
-        with self.assertRaises(EngineWorldUnsupported) as caught:
-            battle_spec_from_payload(payload, _OVERRIDE, dex=self.dex)
-        self.assertEqual(caught.exception.reason, "encore_move_unknown")
-
-    def test_a_second_consecutive_struggle_turn_still_fails_closed(self) -> None:
-        """Honest limit. After Struggling, `lastUsedMove` is `struggle`, in no moveset."""
-
-        payload = _struggle_payload(self.dex)
-        payload["sides"]["p1"]["lastUsedMove"] = "struggle"
-        with self.assertRaises(EngineWorldUnsupported) as caught:
-            battle_spec_from_payload(payload, _OVERRIDE, dex=self.dex)
-        self.assertEqual(caught.exception.reason, "encore_move_unknown")
-
-    def test_a_struggle_request_without_encore_builds_with_no_lock(self) -> None:
-        payload = _struggle_payload(self.dex)
-        payload["sides"]["p1"]["volatiles"] = []
-        side = battle_spec_from_payload(payload, _OVERRIDE, dex=self.dex).spec.side_one
-        self.assertNotIn("encore", side.volatile_statuses)
-        active = side.pokemon[side.active_index]
-        self.assertTrue(all(spec.disabled for spec in active.moves))
+        benched = [p for i, p in enumerate(side.pokemon) if i != side.active_index]
+        self.assertTrue(
+            any(
+                not spec.disabled
+                for mon in benched
+                for spec in mon.moves
+                if spec.id != "none"
+            ),
+            "a benched mon must keep a usable move",
+        )
 
 
 if __name__ == "__main__":
