@@ -41,7 +41,26 @@ had the same shape as the rows they corrected:
 Every one is corrected in place and pinned, and the nine mutations review's findings imply are now
 battery members 13–21. Nothing in the adjudication itself changed: 26 verdicts, 13 corrected reasons.
 
-## 1. Result
+⚠ **Round two found that fixing round one broke a ratification guard.** Bumping this module's own
+`Ran N tests` guard was done with an **unbounded string replace** over the workflow. Two steps
+carried `Ran 25 tests` at that moment: this one, and `tests/test_final_holdout_guard.py` — whose step
+gates `OWNER_RATIFIED`, `BURNED_FINAL_HOLDOUT` and the `19,200,000`–`19,200,259` burn, and whose
+module this PR does not touch. It became `Ran 31 tests` for a suite that can only print 25, so the
+guard stopped failing closed. Re-derived independently here: 14 + 11 = **25** methods by AST, no
+`subTest`, no `load_tests`, base was 25, and the suite prints 25. Restored.
+
+**The class fix, not just the instance.** Every `Ran N tests` guard in the workflow is now re-derived
+from its module's AST by `EveryWorkflowTestCountGuardMatchesItsModuleTests`, so a guard that stops
+matching its suite is red locally instead of inert in CI. Auditing all 22 invocations on this tree
+found exactly one mismatch — the one above. This matters more than the edit that caused it: *the
+guard had no guard*, and a step whose demanded count its suite can never print is the quietest
+possible failure mode for the thing it protects.
+
+R10's ledger cell also still said "reached through **one** non-test path" against the derived **two**
+— the fifth instance of a correction not reaching its prose, inside the correction filed against
+reasoning-without-tracing. The route count is now taken from the derived graph and pinned.
+
+## 1. Result## 1. Result
 
 **All 26 verdicts survive. Thirteen of the stated mechanisms do not** — four outright false, nine
 incomplete. That is the `deferred_opponent_action` shape thirteen times over and the
@@ -154,7 +173,7 @@ verdict that does not rest on a measurement. Where a scope is mentioned it is C1
 strict arm (8,000 games, unregistered seeds `1,001,000`–`1,008,999`), cited as the widest scope the
 program has and never as a new measurement.
 
-## 5. What the pin covers, and the four things it cannot
+## 5. What the pin covers, and the five things it cannot
 
 `tests/test_unreachable_readjudication.py`, 31 tests, gated in
 `.github/workflows/engine-fidelity-gates.yml` with an exact `Ran 31 tests` guard and a no-skip
@@ -170,7 +189,7 @@ It also pins the ledger prose against the artifact **in both directions** — a 
 carry the C154 marker and an uncorrected one must not — and holds the four retracted sentences to a
 quoting rule with three smuggle fixtures against it.
 
-Four judgements are **human readings** and are named as such rather than covered by a green test:
+Five judgements are **human readings** and are named as such rather than covered by a green test:
 
 1. R1's closure is that a committed Future Sight scenario sits in `interaction_registry_specs()`
    rather than `scenario_specs()`. The pin asserts exactly that, and asserts it reddens if the spec
@@ -187,6 +206,11 @@ Four judgements are **human readings** and are named as such rather than covered
 4. R7's scenario-studio residual is closed by "the service never builds an engine world", an
    absence over one module. The pin asserts it by grep and the assertion message states the scope
    of the negative: the text of `src/pokezero/scenario_studio/service.py`, nothing wider.
+5. ⚠ **The `NARROW_FORECLOSURE` classification itself.** Which three rows are foreclosed only over
+   section 4's population is a *reading* of what counts as that population — the pin holds the
+   artifact and the report to the same three, and reddens if the set moves, but it cannot decide
+   that a fourth row does not belong. Added after review, because a list of what no pin covers
+   that omits the classification introduced in the same round is the defect it is a list of.
 
 **The pool half is not re-derived in CI.** CI builds no pokemon-showdown checkout, so the `pool`
 block is a committed measurement at Showdown `f76228a1354b5d0f307ca2d16101294ad3a2308b`, recorded on
@@ -220,14 +244,16 @@ never-fired **22**, wide-seed **36**, ledger uniformity **19**, this module **31
 ⚠ **A first revision of this report said 21 and that was wrong.** Against the 25-test version review
 measured **18** (13 + 4 + 1), which reproduces exactly here. Every class fires; the count did not.
 
-**Full `pytest tests/` adds nothing, and the absolute figure is environment-dependent, so the DELTA
-is what is quoted.** Command: `pytest tests/ -q -p no:randomly --continue-on-collection-errors` — the
-flag is required, because plain `pytest tests -q` aborts at collection where `numpy`/`torch` are
-absent. Measured here: **157 failed at base, 157 failed at head.** Review measured **164 / 165** in a
-different environment and identified the +1 as a load-sensitive liveness test that passes 3/3 in
-isolation on both trees. Both agree on the only claim resting on this: **this PR adds zero
-failures.** ⚠ A first revision quoted the bare 157 as though it were a property of the repository
-rather than of one machine.
+**Full `pytest tests/` adds nothing, and the absolute figure is a property of the machine, so the
+DELTA is what is quoted.** Command: `pytest tests/ -q -p no:randomly --continue-on-collection-errors`
+— the flag is **required**, not stylistic: plain `pytest tests -q` exits 2 with
+`Interrupted: 23 errors during collection` where `numpy`/`torch` are absent. Measured here: **157
+failed at base, 157 failed at head.** Review measured **164 on each tree** with the `FAILED` id lists
+**identical in both directions** (`comm` empty), 32 errors decomposing the same way on both (23
+collection + 9 setup, all `ModuleNotFoundError`), and `+31 passed` exactly accounting for the new
+module; their earlier 165 was one load-sensitive `TestSweepLockLiveness` test, green 3/3 in isolation
+on both trees. Two environments, two absolute counts, **one delta: this PR adds zero failures**, and
+the failing set is unchanged.
 
 ## 6. Base state, re-derived rather than trusted
 

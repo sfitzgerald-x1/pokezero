@@ -1024,7 +1024,7 @@
       ]
     }
   },
-  "source_commit": "1fb564f6a7a44872e316b58df84d4892768164cd",
+  "source_commit": "8b3e543137745f3d0745c773ceebd18b74ef7a5e",
   "verdicts": {
     "R1": {
       "candidate": "Future Sight / Doom Desire -- residual order 11 and the `future_sight_pending` refusal",
@@ -2003,7 +2003,7 @@
     },
     "R8": {
       "candidate": "`weather_unsupported`",
-      "correction": "\u26a0 **The stated reason names the wrong side of the mapping, and it survives only by coincidence.** \"All four gen3 weathers are in `_WEATHER_IDS` (`rain`, `sun`, `sand`, `hail`)\" reads as a claim about the dict's VALUES; the lookup at `src/pokezero/engine_world.py:942` uses its KEYS. The four strings named happen to be keys as well -- they are the engine-side ALIASES -- so the membership sentence is technically true. It is still not the demonstration, because **three of the four strings it names are never what the lookup receives.** The seven keys (`src/pokezero/engine_world.py:57`) are `raindance, rain, sunnyday, sun, sandstorm, sand, hail`, and the protocol only ever produces the condition-name forms, which normalise to `raindance`, `sunnyday`, `sandstorm`, `hail`. The closure rests on the three ALIAS keys the sentence does not mention; a map holding only the four it does name would refuse every rain, sun and sand battle. \u26a0 Second, \"all four gen3 weathers\" is broader than the pool: hail is unreachable (R2), so only three can ever occur, and the one lane with no Python-side vocabulary check -- the scenario seed at `src/pokezero/local_showdown.py:2056` -- is closed by the bridge's `SCENARIO_WEATHER_IDS` allow-list, a different mechanism the row does not cite.",
+      "correction": "\u26a0 **The stated reason names the wrong side of the mapping, and it survives only by coincidence.** \"All four gen3 weathers are in `_WEATHER_IDS` (`rain`, `sun`, `sand`, `hail`)\" reads as a claim about the dict's VALUES; the lookup at `src/pokezero/engine_world.py:942` uses its KEYS. The four strings named happen to be keys as well -- they are the engine-side ALIASES -- so the membership sentence is technically true. It is still not the demonstration, because **three of the four strings it names are never what the lookup receives.** The seven keys (`src/pokezero/engine_world.py:57`) are `raindance, rain, sunnyday, sun, sandstorm, sand, hail`, and the protocol only ever produces the condition-name forms, which normalise to `raindance`, `sunnyday`, `sandstorm`, `hail`. The closure rests on the three ALIAS keys the sentence does not mention; a map holding only the four it does name would refuse every rain, sun and sand battle. \u26a0 Second, \"all four gen3 weathers\" is broader than the pool: hail is unreachable (R2), so only three can ever occur, and the one lane with no Python-side vocabulary check -- the scenario seed at `src/pokezero/local_showdown.py:2056` -- is closed by an allow-list, `SCENARIO_WEATHER_IDS` at `src/pokezero/scenario_studio/domain.py:24`, enforced at `:311`, whose five members are `\"\"` plus the four protocol ids. \u26a0 A first revision of this correction credited that constant to \"the bridge\", which is the wrong module -- it belongs to `scenario_studio`, which imports no `engine_world` at all. A cite-which-module slip inside the correction that introduces the rule *cite which guard*, left in place rather than tidied because pretending otherwise would be the next instance of it.",
       "counter": {
         "denominator": "boundaries_full_round",
         "pattern": "skip:world_unsupported:",

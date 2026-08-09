@@ -962,6 +962,7 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
     weather_none_return = _anchor(EW, 'return "none", -1')
     ss = "src/pokezero/scenario_studio/domain.py"
     scenario_weather_ids = _anchor(ss, "SCENARIO_WEATHER_IDS = (")
+    scenario_weather_check = _anchor(ss, "if weather_id not in SCENARIO_WEATHER_IDS:")
     scenario_nature = _anchor(ss, 'nature=self.nature,')
     fidelity_caller = _anchor("src/pokezero/engine_fidelity.py", "_build_pokemon_spec(mon, None, dex=dex, slot=slot, is_self=False)")
     scenario_sidestart = _anchor(LS, 'lines.append(f"|-sidestart|{player}: scenario|{name}")')
@@ -1284,9 +1285,14 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             "rain, sun and sand battle. ⚠ Second, \"all four gen3 weathers\" is broader "
             "than the pool: hail is unreachable (R2), so only three can ever occur, and "
             f"the one lane with no Python-side vocabulary check -- the scenario seed at "
-            f"`{LS}:{_anchor(LS, 'parser.weather = weather')}` -- is closed by the "
-            "bridge\'s `SCENARIO_WEATHER_IDS` allow-list, a different mechanism the row "
-            "does not cite."
+            f"`{LS}:{_anchor(LS, 'parser.weather = weather')}` -- is closed by an "
+            f"allow-list, `SCENARIO_WEATHER_IDS` at `{ss}:{scenario_weather_ids}`, enforced "
+            f"at `:{scenario_weather_check}`, whose five members are `\"\"` plus the four "
+            "protocol ids. ⚠ A first revision of this correction credited that constant to "
+            "\"the bridge\", which is the wrong module -- it belongs to `scenario_studio`, "
+            "which imports no `engine_world` at all. A cite-which-module slip inside the "
+            "correction that introduces the rule *cite which guard*, left in place rather "
+            "than tidied because pretending otherwise would be the next instance of it."
         ),
         counter=world_unsupported,
     )

@@ -112,7 +112,7 @@ WHAT THIS MODULE DOES NOT AND CANNOT COVER, stated rather than left to be discov
     set would leave this module green and the ledger wrong. Bounded and nameable, exactly
     as `scripts/c152_pool_reachability_census.py` records for its own artifact --
     regenerating is a deliberate act that shows up in review.
-  * **Four judgements are HUMAN READINGS and are marked as such on the rows themselves,
+  * **FIVE judgements are HUMAN READINGS and are marked as such on the rows themselves,
     because no pin can carry them.** (a) R1's closure is that a committed Future Sight
     scenario sits in `interaction_registry_specs()` rather than `scenario_specs()`; the
     pin can assert the two functions exist and that the spec is in the first, and it does,
@@ -129,7 +129,7 @@ WHAT THIS MODULE DOES NOT AND CANNOT COVER, stated rather than left to be discov
 THE MUTATION BATTERY, ENUMERATED. A battery whose members are not written down costs
 exactly what C153's cost: it claimed "12 applied, 12 caught" and a reviewer found the 13th
 survived. Each below was applied to a copy of the artifact (or to the generator, the
-ledger, the patch or the corpus) and had to turn this module RED. All 21 do.
+ledger, the patch, the corpus or the workflow) and had to turn this module RED. All 23 do.
 
    1. a verdict word changed from `UNREACHABLE_TRACED` to `NOT_OBSERVED_AT_SCOPE`
    2. a row deleted from the artifact's verdict map
@@ -165,10 +165,19 @@ than renumbered into the first, and the count of blocks is the honest summary.
   19. the same phrase re-inserted with `**bold**`
   20. the same phrase re-inserted with a soft hyphen (U+00AD) mid-word
   21. the same phrase re-inserted with a zero-width space (U+200B) mid-word
+
+**22-23 ARE ROUND TWO'S, and they are the ones that matter most**, because the defect they cover was
+introduced BY the fix for 13-21: bumping this module's own workflow guard with an unbounded string
+replace also rewrote the final-holdout step's guard, which gates `OWNER_RATIFIED`,
+`BURNED_FINAL_HOLDOUT` and the burn, to a count its suite can never print.
+
+  22. the final-holdout step's `Ran N tests` guard set to any value other than 25
+  23. this module's own guard left stale after adding a test
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -848,6 +857,27 @@ class TheDerivedClaimsAreDerivedTests(unittest.TestCase):
         )
         self.assertEqual(len(rederived["dead_wrappers_with_no_production_caller"]), 5)
 
+    def test_the_r10_cell_states_the_derived_route_count(self) -> None:
+        """The ledger sentence is held to the graph, not merely written from it.
+
+        It read "reached through ONE non-test path" against a derived TWO, and against this
+        document's own retraction of that very claim three sections away -- the fifth
+        instance of a correction not reaching the prose describing it, inside the pass whose
+        subject is that. Pinning the number is the only thing that stops a sixth.
+        """
+
+        routes = len(_document()["pool"]["heal_subcase_call_graph"]["edges_out_of_the_chokepoint"])
+        cell = _normalised(_section_four_cells()["R10"])
+        self.assertIn(
+            _normalised(f"by **{routes}** routes"), cell,
+            f"R10's cell does not state the derived route count ({routes}). The graph is "
+            "in the artifact; the sentence has to agree with it.",
+        )
+        self.assertNotIn(
+            _normalised("reached through one non-test path"), cell,
+            "the withdrawn 'one non-test path' wording is back in R10's cell",
+        )
+
     def test_the_corrections_tally_is_derived_not_typed(self) -> None:
         """Two revisions of the generator's docstring said SEVEN and TEN against THIRTEEN.
 
@@ -950,6 +980,127 @@ class TheDerivedClaimsAreDerivedTests(unittest.TestCase):
         self.assertNotEqual(
             found, tuple(_document()["pool"]["failencore_flagged_gen3"]),
             "a smuggled member leaves the set equality intact, so it is not an equality",
+        )
+
+
+class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
+    """⚠ THIS PASS WEAKENED THE GUARD PROTECTING THE OWNER RATIFICATION AND THE BURN.
+
+    Bumping this module's own `Ran N tests` guard was done with an UNBOUNDED string
+    replace of `Ran 25 tests` -> `Ran 31 tests` over the whole workflow. Two steps carried
+    `Ran 25` at that moment. One was this module's. The other was
+    `tests/test_final_holdout_guard.py`, whose step gates `OWNER_RATIFIED`,
+    `BURNED_FINAL_HOLDOUT` and the `19,200,000`-`19,200,259` burn -- and whose module this
+    PR does not touch at all. It became `Ran 31 tests` for a suite that can only ever print
+    25, so the guard could no longer fail closed: the count it demanded was unreachable.
+    Nothing in the repository noticed, and the neighbouring `expected 25 final-holdout
+    pins` message stayed at 25, which is what made it findable by eye.
+
+    Restoring line 698 is the instance. THIS IS THE CLASS, and the distinction is the
+    through-line of the whole pass -- `reports/c131` §6 records the same author correcting
+    "the instance a reviewer named and leaving the same defect one surface over". Every
+    `Ran N tests` guard in the workflow is re-derived here from its module's AST, so a
+    guard that stops matching its suite is red locally instead of inert in CI.
+
+    Two shapes are handled, both present today:
+
+      * a step naming a MODULE -- expected count is the module's `test*` methods;
+      * a step naming individual `Module.Class.test_method` paths -- expected count is the
+        number of paths named. The abilities step at :469 is that shape, and a first
+        version of this pin reported it as a mismatch because it looked for a file.
+
+    Modules using `subTest` are still counted by method: `unittest` prints one `Ran N` per
+    test method regardless of subtests, which is why the six `subTest` modules here match.
+    A module defining `load_tests` would break that assumption, so its absence is checked
+    BY AST rather than assumed -- and by AST rather than by substring, because a substring
+    check condemned this module for describing the rule in this very docstring.
+    """
+
+    WORKFLOW = ".github/workflows/engine-fidelity-gates.yml"
+
+    @staticmethod
+    def _guards() -> list[tuple[int, tuple[str, ...], int]]:
+        with open(os.path.join(REPO, EveryWorkflowTestCountGuardMatchesItsModuleTests.WORKFLOW),
+                  encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        out = []
+        for index, line in enumerate(lines):
+            if "python -m unittest" not in line:
+                continue
+            window = " ".join(lines[index:index + 7])
+            targets = tuple(re.findall(r"tests\.[A-Za-z0-9_.]+", window))
+            guard = None
+            for offset in range(index, min(index + 12, len(lines))):
+                found = re.search(r"Ran (\d+) tests", lines[offset])
+                if found:
+                    guard = (offset + 1, int(found.group(1)))
+                    break
+            if targets and guard:
+                out.append((guard[0], targets, guard[1]))
+        return out
+
+    @staticmethod
+    def _methods(module: str) -> int:
+        path = os.path.join(REPO, module.replace(".", "/") + ".py")
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        tree = ast.parse(source)
+        # BY AST, not by substring. A substring check condemned THIS module, whose own
+        # docstring names `load_tests` while explaining the assumption -- the third
+        # self-match trap in this PR, after the retraction guard and the tally literals.
+        if any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "load_tests"
+            for node in tree.body
+        ):
+            raise AssertionError(
+                f"{module} defines `load_tests`, so its printed count is no longer its "
+                "method count and this pin's arithmetic does not apply to it"
+            )
+        return sum(
+            1
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            for body in node.body
+            if isinstance(body, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and body.name.startswith("test")
+        )
+
+    def test_every_ran_n_guard_equals_its_suites_test_count(self) -> None:
+        guards = self._guards()
+        self.assertGreaterEqual(
+            len(guards), 20,
+            "the scan found almost no `Ran N tests` guards; it has stopped matching the "
+            "workflow's shape and would pass over a weakened guard silently",
+        )
+        for line, targets, stated in guards:
+            with self.subTest(line=line, targets=targets):
+                modules = [t for t in targets if os.path.exists(
+                    os.path.join(REPO, t.replace(".", "/") + ".py"))]
+                if modules:
+                    derived = sum(self._methods(m) for m in modules)
+                else:
+                    # Individually named `Module.Class.test_method` paths.
+                    derived = len(targets)
+                self.assertEqual(
+                    derived, stated,
+                    f"{self.WORKFLOW}:{line} demands `Ran {stated} tests` from "
+                    f"{list(targets)}, which has {derived}. A guard that names a count its "
+                    "suite cannot print never fails closed. This pin exists because an "
+                    "unbounded string replace in this PR did exactly that to the "
+                    "final-holdout step, which gates OWNER_RATIFIED and the burn.",
+                )
+
+    def test_the_final_holdout_guard_is_pinned_at_its_measured_value(self) -> None:
+        """Named explicitly, because it is the one that was broken and what it protects."""
+
+        self.assertEqual(self._methods("tests.test_final_holdout_guard"), 25)
+        guards = {line: stated for line, targets, stated in self._guards()
+                  if targets == ("tests.test_final_holdout_guard",)}
+        self.assertEqual(
+            list(guards.values()), [25],
+            "the final-holdout step's `Ran N tests` guard is not 25. That step gates "
+            "OWNER_RATIFIED, BURNED_FINAL_HOLDOUT and the 19,200,000-19,200,259 burn.",
         )
 
 
