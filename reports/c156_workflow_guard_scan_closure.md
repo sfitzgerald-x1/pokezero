@@ -289,6 +289,7 @@ because it scopes them to `dbb40c5c` and a citation scoped to a commit cannot go
 | **`refs/pull/1208/merge`** | **`f07f7a6b`** | C156 | **26** | **26** | **0** |
 | **`refs/pull/1208/merge`**, re-derived after the next push | **`d4b309e4`** | C156 | **26** | **26** | **0** |
 | **`refs/pull/1208/merge`**, re-derived after the review round | **`a9ecb72f`** | C156 | **26** | **26** | **0** |
+| **`refs/pull/1208/merge`**, re-derived after finding C's third fix | **`8326e877`** | C156 | **26** | **26** | **0** |
 
 ⚠ **The merge ref moves with every push, so the SHA above is the one measured and not "the" merge
 ref.** Each row is a run, not a figure carried forward from the row above it; `reports/c153`'s rule
