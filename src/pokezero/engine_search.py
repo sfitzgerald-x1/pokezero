@@ -975,6 +975,12 @@ def native_search_args(
 #: The id Showdown gives the recharge pseudo-move it substitutes for a locked mon's moveset.
 _RECHARGE_REQUEST_MOVE_ID = "recharge"
 
+#: The id Showdown gives the Struggle pseudo-move it substitutes when a mon's request would
+#: otherwise offer NO move at all (``sim/pokemon.ts`` ``getMoveRequestData``, the
+#: ``else if (!moves.length)`` arm). The engine has no Struggle arm to enumerate, so the same
+#: state reaches ``_map_choices`` as the ``MoveChoice::None`` display -- see the translation there.
+_STRUGGLE_REQUEST_MOVE_ID = "struggle"
+
 
 def self_recharge_from_action_candidates(observation_metadata: Any) -> bool:
     """Whether the request's LEGAL CHOICE SET is exactly the recharge pseudo-move.
@@ -2642,7 +2648,33 @@ class EngineMctsPolicy:
                     # :673-675 must be zero independently of the fallback rate, and with the cause
                     # mislabelled `all_unmapped_legality_mismatch`. It only became reachable once
                     # `_recharging_slots` went symmetric and these worlds started building at all.
-                    index = move_index_by_id.get("recharge")
+                    index = move_index_by_id.get(_RECHARGE_REQUEST_MOVE_ID)
+                    if index is None:
+                        # SECOND vocabulary gap behind the SAME engine token: Struggle. The engine
+                        # has no Struggle arm to enumerate -- `MoveChoice` is Move/Switch/None and
+                        # gen3 `get_all_options` never synthesizes one -- so when
+                        # `add_available_moves` adds nothing (every slot at 0 PP or disabled) and
+                        # `add_switches` adds nothing (no live bench, or trapped), the terminal
+                        # `if options.len() == 0 { push(MoveChoice::None) }` guard fires and the
+                        # crate renders "No Move". Showdown, at the same state, substitutes the
+                        # Struggle pseudo-move (`sim/pokemon.ts` `getMoveRequestData`: `else if
+                        # (!moves.length) moves = [{ move: 'Struggle', id: 'struggle' }]`). One
+                        # forced action, two names -- the recharge case one paragraph up, again.
+                        #
+                        # Recharge FIRST and Struggle only as the fallthrough, but the order is
+                        # documentation, not disambiguation: the two can never both be offered.
+                        # `getMoveRequestData` reaches the Struggle substitution ONLY when
+                        # `getMoves` returned an EMPTY list, and a `recharge` lock makes `getMoves`
+                        # return the one-element `[{Recharge}]` -- non-empty, so the substitution
+                        # is unreachable on a recharge turn. Offering NEITHER is the ordinary turn,
+                        # and there both lookups miss and the choice stays unmapped, which is
+                        # correct: "No Move" against a request with real moves is a genuine
+                        # engine/request disagreement, not a naming one.
+                        #
+                        # Narrow on purpose. This resolves the ENGINE's forced-no-action token to
+                        # the REQUEST's forced-no-action candidate; it never manufactures Struggle
+                        # for an engine choice that names a real move.
+                        index = move_index_by_id.get(_STRUGGLE_REQUEST_MOVE_ID)
             if index is None:
                 self.stats.unmapped_choices[choice] += 1
                 continue

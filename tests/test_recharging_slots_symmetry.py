@@ -237,5 +237,130 @@ class ForcedNoMoveMapsTest(unittest.TestCase):
         self.assertEqual(dict(policy.stats.unmapped_choices), {"No Move": 1})
 
 
+def _map_context(candidates, *, mask=None, seat: str = "p1"):
+    return SimpleNamespace(
+        player_id=seat,
+        observation=SimpleNamespace(
+            metadata={"action_candidates": candidates},
+            legal_action_mask=[True] * len(candidates) if mask is None else mask,
+        ),
+    )
+
+
+def _move(index: int, move_id: str, *, legal: bool = True) -> dict:
+    return {"action_index": index, "kind": "move", "move_id": move_id, "legal": legal}
+
+
+def _switch(index: int, species: str) -> dict:
+    return {
+        "action_index": index,
+        "kind": "switch",
+        "legal": True,
+        "pokemon": {"species": species},
+    }
+
+
+class ForcedNoMoveMapsToStruggleTest(unittest.TestCase):
+    """The SECOND vocabulary gap behind the same `MoveChoice::None` token: Struggle.
+
+    Captured, not hypothesised. Battle `bp-trap-lastmon2` d20 seat p1, the first
+    `choices_unmapped` record in the corpus whose `world_failures` is EMPTY -- 4 worlds
+    constructed AND searched, `engine_choices {"No Move": 4.0}`,
+    `request_legal_choices ["struggle"]`, cause mislabelled `all_unmapped_legality_mismatch`,
+    then 20 consecutive refusals d20-d39.
+
+    The engine has no Struggle arm: `MoveChoice` is Move/Switch/None and gen3
+    `get_all_options` never synthesizes one, so a 0-PP moveset with no live bench falls
+    through `add_available_moves` (nothing) and `add_switches` (nothing) to the terminal
+    `if options.len() == 0 { push(MoveChoice::None) }`. Showdown at the same state
+    substitutes Struggle. `_map_choices` translated `none` to `recharge` only.
+
+    The no-legal-switch precondition is MEASURED on that line, not inferred: d16 and d18
+    offered `['struggle', 'switch:Shedinja']` and SEARCHED; d20, same Struggle-only moveset
+    with the bench fainted away, REFUSED.
+    """
+
+    def test_no_move_resolves_to_the_requests_struggle_candidate(self) -> None:
+        policy = _policy()
+        context = _map_context([_move(0, "struggle")])
+        self.assertEqual(EngineMctsPolicy._map_choices(policy, context, {"No Move": 4.0}), 0)
+        self.assertEqual(dict(policy.stats.unmapped_choices), {})
+        self.assertEqual(dict(policy.stats.choices_unmapped_causes), {})
+
+    def test_a_nonzero_struggle_index_is_returned_intact(self) -> None:
+        """Guards the falsy-zero trap: `a or b` chaining would be indistinguishable at 0.
+
+        Struggle is the last candidate here, so a truthiness-based fallthrough between the
+        two lookups returns the wrong arm rather than nothing.
+        """
+        policy = _policy()
+        context = _map_context(
+            [_move(0, "pound", legal=False), _move(1, "tackle", legal=False), _move(2, "struggle")]
+        )
+        self.assertEqual(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}), 2)
+
+    def test_the_recharge_translation_still_wins_its_own_case(self) -> None:
+        """Adding the second lookup must not disturb the first."""
+        policy = _policy()
+        context = _map_context([_move(0, "recharge")])
+        self.assertEqual(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}), 0)
+        self.assertEqual(dict(policy.stats.unmapped_choices), {})
+
+    def test_recharge_is_preferred_if_a_request_ever_offered_both(self) -> None:
+        """Order pin. Unreachable by construction -- and the construction is the point.
+
+        `sim/pokemon.ts` `getMoveRequestData` reaches the Struggle substitution ONLY via
+        `else if (!moves.length)`, and a `recharge` lock makes `getMoves` return the
+        one-element `[{move: 'Recharge', id: 'recharge'}]`. Non-empty, so the Struggle arm
+        cannot run on a recharge turn: the two pseudo-moves are mutually exclusive at the
+        single site that emits either. The live `lastmon2` line shows the same thing from
+        the other end -- its requests are `['recharge']` or `['struggle', ...]`, never both.
+
+        This test therefore pins a CHOICE, not a rule: if that invariant ever breaks, the
+        recharge arm is the one the engine's `MUSTRECHARGE` branch actually produced, and
+        the failure should be a visible behaviour change here rather than a coin flip.
+        """
+        policy = _policy()
+        context = _map_context([_move(0, "struggle"), _move(1, "recharge")])
+        self.assertEqual(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}), 1)
+
+    def test_it_does_not_invent_a_struggle_when_the_request_offers_real_moves(self) -> None:
+        """Neither pseudo-move offered is the ordinary turn, and it must stay unmapped.
+
+        "No Move" against a request with real moves is a genuine engine/request
+        disagreement -- the `all_unmapped_legality_mismatch` this class is named for -- and
+        papering over it with an invented Struggle would hide a real bug behind a legal action.
+        """
+        policy = _policy()
+        context = _map_context([_move(0, "return"), _switch(1, "Snorlax")])
+        self.assertIsNone(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}))
+        self.assertEqual(dict(policy.stats.unmapped_choices), {"No Move": 1})
+
+    def test_an_illegal_struggle_candidate_is_not_mapped(self) -> None:
+        """Non-vacuity for the legality filter: the candidate must be legal AND unmasked."""
+        policy = _policy()
+        context = _map_context([_move(0, "struggle", legal=True)], mask=[False])
+        self.assertIsNone(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}))
+        self.assertEqual(dict(policy.stats.unmapped_choices), {"No Move": 1})
+
+    def test_struggle_beside_a_legal_switch_still_maps_to_struggle(self) -> None:
+        """The engine proposed exactly one arm, and it was the forced no-action one.
+
+        Reachable when the engine's sampled world traps the mon (or drains it) while the
+        request still offers a bench: the search had a single arm, so the translation must
+        resolve THAT arm rather than drift to the switch the engine never proposed.
+        """
+        policy = _policy()
+        context = _map_context([_move(0, "struggle"), _switch(1, "Shedinja")])
+        self.assertEqual(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}), 0)
+
+    def test_a_real_move_choice_never_reaches_the_struggle_translation(self) -> None:
+        """The translation is keyed on the engine's forced-no-action token, nothing else."""
+        policy = _policy()
+        context = _map_context([_move(0, "struggle")])
+        self.assertIsNone(EngineMctsPolicy._map_choices(policy, context, {"Hyper Beam": 1.0}))
+        self.assertEqual(dict(policy.stats.unmapped_choices), {"Hyper Beam": 1})
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
