@@ -309,7 +309,11 @@ _EXPECTED_GAP_ROWS: tuple[tuple[str, ...], ...] = (
         "**H1**", "**H2**", "**H3**", "**H4**", "**H5**", "**H5b**", "**H5c**",
         "**H6**", "**H7**", "**H8**", "**H9**", "**H10**", "**H11**", "**H12**",
         "**H13**", "**H14**", "**H15**", "**H16**", "**H17**", "**H18**", "**H19**",
-        "**H21**", "**H20**",
+        # 2026-08-08 (C153). H22 is the first gap this document has gained from a
+        # measurement taken OUTSIDE the two permitted windows: `classify_divergence`
+        # leaves 23.7 % of `--matcher banded` divergences in the bucket its own docstring
+        # forbids, and no committed artifact had ever run that path.
+        "**H21**", "**H22**", "**H20**",
     ),
     (
         "**G41**", "**G42**", "**G43**", "**G43b**", "**G43c**", "**G44**", "**G45**",
@@ -688,7 +692,8 @@ class TheKnownGapsLedgerTests(unittest.TestCase):
         # winner's order-10 DAMAGE bookings as well as its Leftovers heal slot, so
         # C147's gate is inert wherever the winner also carries a residual status.
         # Counted by running this selector, not by adding one to 80.
-        self.assertEqual(sum(len(rows) for rows in inventory), 81)
+        # 81 -> 82 (C153). H22 joined §3.3: the banded matcher's unnamed-bucket rate.
+        self.assertEqual(sum(len(rows) for rows in inventory), 82)
 
     def test_every_unreachable_candidate_row_records_its_measurement(self) -> None:
         grouped = _tables_by_header(_ledger_text())

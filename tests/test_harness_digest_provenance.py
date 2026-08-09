@@ -641,9 +641,29 @@ class TheEngineFingerprintStaysARebuildTriggerTests(unittest.TestCase):
 #       were taken with it, and a fingerprint that appears in a committed artifact must be
 #       explicable. It is NOT reproducible from any committed tree, by design, and no
 #       fidelity claim rests on it.
-_EXPECTED_PROVENANCE_BLOBS = 90
+# 90 -> 102 and 31 -> 31 (C153, the wide-seed negative census). RE-DERIVED by the four-step
+# procedure above: `_provenance_blobs()` executed against the base tree `origin/main` at
+# `7fcd9e19` returns 90 blobs / 31 fingerprints, and 102 / 31 here, with the set difference
+# exactly C153's twelve sweep shards and NOTHING removed. No new fingerprint: all twelve are
+# `bfdbe1c04876edcd`, the shipping build, rebuilt from the committed tree.
+#
+# ⚠ A SEVENTH MULTI-COMMIT GROUP, and it is a real one rather than bookkeeping. C152's four
+# head/mutant sweeps put `bfdbe1c04876edcd` at `d20cf840`; C153's twelve put the SAME engine
+# fingerprint at `7fcd9e19`, and the two are NOT the same instrument -- the harness digest
+# moved `e3459e1f...` -> `e0617d12...` because #1199 changed `src/pokezero/local_showdown.py`,
+# which is inside the differential's import closure. That is exactly the drift this
+# allowlist exists to make visible: an engine fingerprint alone does not identify the thing
+# that produced a sweep, and any comparison across these two commits has to say which
+# harness it is comparing.
+_EXPECTED_PROVENANCE_BLOBS = 102
 _EXPECTED_DISTINCT_FINGERPRINTS = 31
 _KNOWN_MULTI_COMMIT_FINGERPRINTS = {
+    "bfdbe1c04876edcd1957e7a360c5086cfc7eae32ccf3ba0e71d137bd76df3990": frozenset(
+        {
+            "d20cf840c05f769baaf0b1cdf27474f2894d7892",
+            "7fcd9e19150713f2611f8e718e04a977675c7d82",
+        }
+    ),
     "07a3290d11ca14ecfa8c70f89a82a99e5bdc5a47d24136f740d54c59ab3122b4": frozenset(
         {
             "05aef35f5655cb2105de0008cc6bf9a31a496de6",
@@ -700,7 +720,20 @@ _KNOWN_MULTI_COMMIT_FINGERPRINTS = {
 # TRIPWIRE, not the assertion that carries the weight -- that one is
 # `TheDifferentialStampsItTests::test_checkpoint_provenance_records_the_harness_digest`,
 # which pins the producer.
-_EXPECTED_HARNESS_STAMPED_ARTIFACTS = 8
+#
+# 8 -> 20 (C153). The twelve new census shards are the second generation of artifacts
+# written with the field, and they carry EXACTLY ONE distinct harness digest between
+# them -- `e0617d12513addf90f4c0a5bf02ea4e1a6739d9c36eec5b5b1f3bc08f2b49a03`, re-derived
+# by calling `harness_digest.harness_digest()` on this tree over the same 73-file import
+# closure rather than copied out of the artifacts it checks.
+#
+# ⚠ THAT IS A DIFFERENT VALUE FROM C152's `e3459e1f...`, at the SAME engine fingerprint,
+# and it is the first time this corpus can show the drift the module was built to
+# describe. #1199 changed `src/pokezero/local_showdown.py`, which is inside the closure,
+# so `bfdbe1c04876edcd` at `d20cf840` and `bfdbe1c04876edcd` at `7fcd9e19` are the same
+# engine driven by two different harnesses. The seventh entry in
+# `_KNOWN_MULTI_COMMIT_FINGERPRINTS` above is that fact, recorded rather than absorbed.
+_EXPECTED_HARNESS_STAMPED_ARTIFACTS = 20
 
 
 def _provenance_blobs() -> list[tuple[str, dict]]:

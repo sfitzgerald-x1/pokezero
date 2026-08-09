@@ -221,7 +221,28 @@ _C141 = {
 # added, four corpus members, which is again why the directory count and the corpus count
 # cannot check each other. `c152_h8_window_census.json` nests its scalars under
 # `arms.*.windows.*` for the same reason.
-_EXPECTED_SWEEP_ARTIFACTS = 103
+#
+# 103 -> 115 (C153, the wide-seed negative census). RE-DERIVED by running `_sweep_reports()`
+# itself -- not a reimplementation of it -- against the base tree `origin/main` at `7fcd9e19`
+# (103) and here (115), with the set difference exactly the TWELVE
+# `reports/artifacts/c153_{wide,banded}_census_*_sweep.json` shards and NOTHING removed. Not
+# arithmetic on 103. Confirmed still live at 114 and at 116.
+#
+# THE THIRTEENTH C153 ARTIFACT IS DELIBERATELY OUTSIDE THIS CORPUS, and that was verified by
+# the same set difference rather than reasoned about: `c153_wide_negative_census.json` is a
+# derived verdict map with no top-level `boundaries_measured`. Thirteen files added, twelve
+# corpus members -- the same asymmetry C147, C148, C149 and C152 each recorded, and the same
+# reason the directory count and the corpus count cannot check each other. The never-fired
+# counter corpus moves 388 -> 401 over the same change.
+#
+# EIGHT OF THE TWELVE ARE A SECOND ARM, and reading them as one population would misread both.
+# `c153_wide_census_*` is the SHIPPING `--matcher strict` configuration on 8,000 games of
+# unregistered seeds `1,001,000`-`1,008,999`. `c153_banded_census_*` is `--matcher banded` on
+# 2,000 games of `1,009,000`-`1,010,999` -- the legacy net-HP comparator, which no committed
+# artifact had ever used, and which is the only path that can reach seven of the
+# `divergence_class` values ledger row H15 calls never-produced. Its 688 divergences are an
+# artefact of the looser comparator and are NOT evidence about the shipping matcher.
+_EXPECTED_SWEEP_ARTIFACTS = 115
 #
 # 75 -> 79 (C142). MEASURED by step 2 below, and the measurement corrected an expectation:
 # the number was predicted as 78 on the belief that only three of C142's four sweep artifacts
