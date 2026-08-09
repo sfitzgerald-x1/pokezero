@@ -198,6 +198,57 @@ class ProtectMarkerStateReadTests(unittest.TestCase):
         self.assertIn(PROTECT_LINE, self._marker_branch("voltabsorb", 192)["events"])
         self.assertNotIn(PROTECT_LINE, self._marker_branch("voltabsorb", 252)["events"])
 
+    def test_the_absorb_producer_at_headroom_emits_a_different_instruction(self) -> None:
+        """THE PREMISE, demonstrated through the engine rather than argued from its source.
+
+        The whole fix rests on one claim: a Water Absorb defender with HP headroom cannot
+        have produced a ZERO heal, because the engine writes a REAL one instead. Every
+        other test here pins the renderer's REACTION to that claim; this one pins the
+        claim. Without it the suite would still be green if the engine started emitting
+        zero markers at headroom, and the fix would be rendering `Protect` over them.
+
+        No PROTECT volatile, so the absorb genuinely fires and nothing strips it. The
+        callee set is Water-typed so the conversion happens. Below full HP the branch is
+        refused as `heal_defender` -- a nonzero heal on the defender, a different
+        instruction with a different protocol line. At full HP the same setup produces
+        `heal_zero_marker`, which is the marker this module is about.
+        """
+
+        def reasons(hp: int) -> set[str]:
+            spec = BattleSpec(
+                side_one=SideSpec(
+                    pokemon=(PokemonSpec(
+                        id="registeel", level=100, types=("steel",), hp=200, maxhp=200,
+                        attack=100, defense=100, special_attack=100,
+                        special_defense=100, speed=500, status="sleep", ability=None,
+                        item=None, sleep_turns=3,
+                        moves=(MoveSpec(id="sleeptalk", pp=16),
+                               MoveSpec(id="surf", pp=32),
+                               MoveSpec(id="watergun", pp=32)),
+                    ),),
+                    volatile_statuses=(), side_conditions={}, boosts={},
+                ),
+                side_two=SideSpec(
+                    pokemon=(_defender("waterabsorb", hp),),
+                    volatile_statuses=(),  # NO Protect: the absorb is the only producer.
+                    side_conditions={}, boosts={},
+                ),
+            )
+            state = build_poke_engine_state(spec).to_string()
+            report = json.loads(
+                pokezero_search.branch_events(state, "sleeptalk", "splash", CTX, True, False)
+            )
+            out: set[str] = set()
+            for branch in report["branches"]:
+                out.update(
+                    r.rsplit("ambiguous_unrenderable:", 1)[-1]
+                    for r in branch["attribution_unsafe_reasons"]
+                )
+            return out
+
+        self.assertEqual(reasons(192), {"heal_defender"})
+        self.assertEqual(reasons(252), {"heal_zero_marker"})
+
     def test_a_non_absorb_ability_is_not_treated_as_one(self) -> None:
         """The other direction on the ability set: Flash Fire sets a volatile and never a
         heal, so it must not cost a world at any HP. Widening the guard back to
