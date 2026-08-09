@@ -170,6 +170,7 @@ _ENGINE_NO_MOVE = "none"
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from engine_build_fingerprint import STAMP_SCHEMA, assert_fresh, compute_fingerprint  # noqa: E402
 from fidelity_gate_events import truant_loaf_slots  # noqa: E402
+from harness_digest import harness_digest  # noqa: E402
 
 _ENGINE_BOOST_FIELDS = (
     "attack_boost",
@@ -2832,6 +2833,43 @@ def _checkpoint_provenance() -> dict[str, str | bool | None]:
         # from a clean one in the artifact.
         "source_tree": _source_tree_state(),
         "engine_fingerprint": fingerprint,
+        # The OTHER half of the measuring instrument, and part of the RESUME
+        # IDENTITY rather than descriptive. `engine_fingerprint` identifies the
+        # native engine and says nothing about the Python that drives it, renders
+        # both sides and decides what "matched" means -- so two sweeps can report
+        # the same fingerprint and have been produced by different harnesses. Six
+        # engine fingerprints in the committed corpus already span more than one
+        # `source_commit` for exactly that reason, and it has been confirmed live
+        # once: dev `strict:diverged_on_full_branch_set` = 1 on a fresh base build
+        # but absent from the C142 artifact at the SAME fingerprint `5fa147ff`,
+        # because the counter landed in this file after C142's sweeps ran.
+        #
+        # NOT in `_DESCRIPTIVE_PROVENANCE_KEYS`, and that is the deliberate
+        # difference from `source_tree`. `source_tree` was excluded because it
+        # flips on any tracked edit, which made a 200-game crash-safe sweep
+        # unresumable after touching a README. This digest covers this module's
+        # first-party import closure -- 73 files, relative imports followed, the
+        # world model and matcher and Showdown adapter among them -- so it does
+        # not move on prose, and a change to one of those files mid-sweep is
+        # precisely the corruption a resume must refuse rather than merge.
+        #
+        # 73 rather than a tidier subset, and the cost was measured rather than
+        # guessed: the closure reaches the training tree through `engine_search`
+        # and `pokezero/__init__`, but over the last 300 commits of `origin/main`
+        # only SEVEN touch one of those files without also touching the narrow
+        # instrument set, so honesty costs 2% of commits in extra digest churn.
+        # An earlier revision truncated to 16 by dropping relative imports and was
+        # blind to `gen3_damage`, `showdown_fixture` and `poke_engine_backend`,
+        # all on the live sweep path. See `scripts/harness_digest.py` for what it
+        # covers, what it does not, and how a future truncation is caught.
+        #
+        # One-time cost, recorded rather than hidden: a checkpoint written before
+        # this key existed has no `harness_digest` in its provenance and will not
+        # resume into a current build. That is correct -- such a record was
+        # produced by an instrument whose identity is unknown -- and it affects no
+        # committed artifact, which are read through `--merge-from` (which does
+        # not compare resume identity), not through `--resume`.
+        "harness_digest": harness_digest(),
         "image_commit": image_commit,
         # Part of the RESUME IDENTITY, deliberately. One build serves both roll
         # paths, so source_commit and engine_fingerprint are identical between a
