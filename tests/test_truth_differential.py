@@ -405,18 +405,35 @@ class PlanTests(unittest.TestCase):
         from truth_differential_census import build_plan
 
         set_source = load_gen3_randbat_source_cached(showdown_root_str())
-        plan = build_plan(set_source=set_source, passes=5, seed_base=9_800_000)
+        plan = build_plan(
+            set_source=set_source,
+            passes=5,
+            seed_base=9_800_000,
+            showdown_root=showdown_root_str(),
+        )
         coverage = plan["coverage"]
         self.assertEqual(coverage["variants_uncovered"], [])
         self.assertEqual(coverage["variants_on_one_seat_only"], [])
         self.assertGreaterEqual(coverage["min_games_per_variant"], 5)
         self.assertEqual(coverage["variants_covered"], plan["variant_count"])
-        # Species Clause is not enforced by gen3customgame, so the harness owes it.
+        # Species Clause is not enforced by gen3customgame, so the harness owes it --
+        # and it compares BASE species. Composing sides by randbat pool key put
+        # Deoxys, Deoxys-Attack, Deoxys-Defense and Deoxys-Speed on ONE team, and the
+        # first census run's top inventory row was the resulting ident collapse.
+        from truth_differential_census import base_species_ids
+
+        base = base_species_ids(showdown_root_str())
+        self.assertEqual(plan["species_ids_without_a_base_species"], [])
+        self.assertLess(plan["base_species_count"], plan["species_count"])
         for game in plan["games"]:
             for seat, packed in game["packed"].items():
-                species = [entry.split("|")[0] for entry in packed.split("]")]
-                self.assertEqual(len(species), 6, (game["seed"], seat))
-                self.assertEqual(len(set(species)), 6, (game["seed"], seat, species))
+                names = [entry.split("|")[0] for entry in packed.split("]")]
+                self.assertEqual(len(names), 6, (game["seed"], seat))
+                clause = [
+                    base.get("".join(c for c in name.lower() if c.isalnum()), name)
+                    for name in names
+                ]
+                self.assertEqual(len(set(clause)), 6, (game["seed"], seat, clause))
 
     @requires_showdown()
     def test_the_plan_is_deterministic(self) -> None:
@@ -424,8 +441,8 @@ class PlanTests(unittest.TestCase):
         from truth_differential_census import build_plan
 
         set_source = load_gen3_randbat_source_cached(showdown_root_str())
-        first = build_plan(set_source=set_source, passes=2, seed_base=1000)
-        second = build_plan(set_source=set_source, passes=2, seed_base=1000)
+        first = build_plan(set_source=set_source, passes=2, seed_base=1000, showdown_root=showdown_root_str())
+        second = build_plan(set_source=set_source, passes=2, seed_base=1000, showdown_root=showdown_root_str())
         self.assertEqual(first["games"], second["games"])
 
 

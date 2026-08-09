@@ -63,7 +63,7 @@ def _default_showdown_root() -> str:
 # --- plan --------------------------------------------------------------------
 
 
-def _variant_rows(set_source: Any) -> list[tuple[str, Any]]:
+def _variant_rows(set_source: Any, base_by_id: Mapping[str, str]) -> list[tuple[str, Any]]:
     """Every concrete variant in the pool, in a deterministic order.
 
     Re-derived from the loaded source rather than assumed: the count is a
@@ -75,9 +75,64 @@ def _variant_rows(set_source: Any) -> list[tuple[str, Any]]:
     rows: list[tuple[str, Any]] = []
     for species_key in sorted(set_source.universes):
         universe = set_source.universes[species_key]
+        clause_key = _clause_key(species_key, base_by_id)
         for variant in universe.variants:
-            rows.append((species_key, variant))
+            rows.append((clause_key, variant))
     return rows
+
+
+def base_species_ids(showdown_root: str) -> dict[str, str]:
+    """``{species id: base species id}`` straight from Showdown's own Pokedex.
+
+    Species Clause compares BASE species, and a randbat "species" is a forme:
+    `deoxys`, `deoxysattack`, `deoxysdefense` and `deoxysspeed` are four distinct
+    pool entries and ONE base species. Composing sides by pool key put all four on
+    one team, Showdown collapsed their idents, and the run's top inventory row
+    became `self_moveset_mismatch: 'Deoxys' … move 'calmmind' absent from root
+    self_team` -- a harness artifact reading as a defect, which is precisely the
+    wrong-on-contact shape report 4 section 2.1 is about.
+
+    Read from the dex rather than derived by splitting on ``-``: that split is
+    right for `Deoxys-Speed` and wrong for `Ho-Oh`, `Porygon-Z` and `Nidoran-F`,
+    and a prefix rule additionally merges `Porygon` into `Porygon2`, which are
+    different species that Species Clause allows together.
+    """
+
+    root = Path(showdown_root).expanduser().resolve()
+    script = """
+const root = process.argv[1];
+const {Pokedex} = require(root + '/dist/data/pokedex.js');
+const out = {};
+for (const [id, entry] of Object.entries(Pokedex)) {
+  out[id] = entry.baseSpecies || entry.name || id;
+}
+process.stdout.write(JSON.stringify(out));
+"""
+    result = subprocess.run(
+        ["node", "-e", script, str(root)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    raw = json.loads(result.stdout)
+    return {
+        key: "".join(ch for ch in str(value).lower() if ch.isalnum())
+        for key, value in raw.items()
+        if value
+    }
+
+
+def _clause_key(species_key: str, base_by_id: Mapping[str, str]) -> str:
+    """The key Species Clause actually compares, with a loud fallback.
+
+    An unmapped species falls back to its own id, which is the SAFE direction:
+    it can only make the harness treat two formes as distinct, and that is the
+    bug this function exists to prevent -- so unmapped ids are reported by
+    `build_plan` rather than silently absorbed.
+    """
+
+    return base_by_id.get(species_key, species_key)
 
 
 def _round_robin_by_species(rows: Sequence[tuple[str, Any]], rotation: int) -> list[tuple[str, Any]]:
@@ -147,12 +202,15 @@ def build_plan(
     set_source: Any,
     passes: int,
     seed_base: int,
+    showdown_root: str,
     team_size: int = 6,
 ) -> dict[str, Any]:
     from pokezero.determinization import _fixture_from_variant
     from pokezero.showdown_fixture import pack_team
 
-    rows = _variant_rows(set_source)
+    base_by_id = base_species_ids(showdown_root)
+    unmapped = sorted(key for key in set_source.universes if key not in base_by_id)
+    rows = _variant_rows(set_source, base_by_id)
     total = len(rows)
     games: list[dict[str, Any]] = []
     coverage: dict[str, list[list[Any]]] = defaultdict(list)
@@ -221,6 +279,8 @@ def build_plan(
         "format_id": set_source.metadata.format_id,
         "variant_count": total,
         "species_count": len(set_source.universes),
+        "base_species_count": len({_clause_key(k, base_by_id) for k in set_source.universes}),
+        "species_ids_without_a_base_species": unmapped,
         "passes": passes,
         "seed_base": seed_base,
         "team_size": team_size,
@@ -869,7 +929,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         set_source = load_gen3_randbat_source_cached(args.showdown_root)
         plan = build_plan(
-            set_source=set_source, passes=args.passes, seed_base=args.seed_base
+            set_source=set_source,
+            passes=args.passes,
+            seed_base=args.seed_base,
+            showdown_root=args.showdown_root,
         )
         text = json.dumps(plan, indent=1, sort_keys=True)
         if args.out == "-":
