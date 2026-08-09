@@ -123,6 +123,74 @@
   "UNREACHABLE_POOL": 3,
   "UNREACHABLE_STRUCTURAL": 2
  },
+ "denominator_trials": {
+  "boundaries_full_round": {
+   "rule_of_three_upper_95": 4.5554e-06,
+   "trials": 658559
+  },
+  "boundaries_measured": {
+   "rule_of_three_upper_95": 4.6739e-06,
+   "trials": 641866
+  },
+  "games": {
+   "rule_of_three_upper_95": 0.000375,
+   "trials": 8000
+  }
+ },
+ "emission_granularity": {
+  "per_boundary": [
+   "engine_error",
+   "engine_error:",
+   "engine_error_choice:",
+   "skip:no_action_candidates",
+   "skip:no_materialization:",
+   "skip:unmappable_choice:blank_move_id",
+   "skip:unmappable_choice:blank_switch_species",
+   "skip:unmappable_choice:hidden_power_ambiguous",
+   "skip:unmappable_choice:move_not_in_engine_set:",
+   "skip:unmappable_choice:no_candidate_row",
+   "skip:unmappable_choice:switch_species_not_in_party",
+   "skip:unmappable_choice:unknown_kind:",
+   "skip:world_error:",
+   "skip:world_error:no_constructible_candidate",
+   "skip:world_unsupported:boost_unsupported",
+   "skip:world_unsupported:boundary_not_move_request",
+   "skip:world_unsupported:deferred_opponent_action",
+   "skip:world_unsupported:hidden_power_iv_mismatch",
+   "skip:world_unsupported:item_state_conflict",
+   "skip:world_unsupported:move_unknown",
+   "skip:world_unsupported:override_side_missing",
+   "skip:world_unsupported:public_effect_blocked",
+   "skip:world_unsupported:public_species_not_in_world",
+   "skip:world_unsupported:rest_sleep_attempt_unsettled",
+   "skip:world_unsupported:rest_sleep_provenance_unrepresentable",
+   "skip:world_unsupported:rest_sleep_refund_pending_precounts_legacy",
+   "skip:world_unsupported:rest_sleep_refund_pending_unsplit_legacy",
+   "skip:world_unsupported:self_maxhp_mismatch",
+   "skip:world_unsupported:self_pp_unknown",
+   "skip:world_unsupported:self_world_mismatch",
+   "skip:world_unsupported:side_condition_turns_inconsistent",
+   "skip:world_unsupported:side_condition_turns_unknown",
+   "skip:world_unsupported:side_condition_unsupported",
+   "skip:world_unsupported:species_unknown",
+   "skip:world_unsupported:substitute_depletion_world_incompatible",
+   "skip:world_unsupported:substitute_health_provenance_contradiction",
+   "skip:world_unsupported:toxic_stage_inconsistent",
+   "skip:world_unsupported:toxic_stage_unknown",
+   "skip:world_unsupported:weather_turns_inconsistent",
+   "skip:world_unsupported:weather_turns_unknown",
+   "skip:world_unsupported:wish_turns_inconsistent",
+   "world_prestate_mismatch:side_conditions",
+   "world_prestate_mismatch:weather_"
+  ],
+  "per_game": [
+   "abort:no_legal_action"
+  ],
+  "per_state_or_branch_within_boundary": [
+   "strict:branch_events_error:",
+   "strict:no_damage_rolls"
+  ]
+ },
  "entries_with_no_emittable_counter_key": [],
  "inventory_size": {
   "measurement_independent": 5,
@@ -175,33 +243,124 @@
  },
  "verdicts": {
   "abort:no_legal_action": {
+   "denominator": "games",
    "family": "section_3_5_static_counter",
+   "granularity": "per_game",
    "key": "abort:no_legal_action",
    "key_kind": "exact",
+   "liveness_witnesses": [],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "run_game:2413"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "divergence_class:boost_delta_support": {
+   "denominator": "boundaries_measured",
    "family": "H15_class_claimed_banded_reachable_only",
+   "granularity": "per_boundary",
    "key": "divergence_class:boost_delta_support",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "divergence_class:component_extra_in_engine:brn",
+    "divergence_class:component_extra_in_engine:heal",
+    "divergence_class:component_extra_in_engine:itemleftovers",
+    "divergence_class:component_extra_in_engine:itemleftovers,psn",
+    "divergence_class:component_extra_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_extra_in_engine:leechseed",
+    "divergence_class:component_extra_in_engine:psn",
+    "divergence_class:component_magnitude:heal",
+    "divergence_class:component_mismatch:heal|heal,itemleftovers",
+    "divergence_class:component_mismatch:heal|itemleftovers",
+    "divergence_class:component_mismatch:leechseed|brn",
+    "divergence_class:component_mismatch:leechseed|psn",
+    "divergence_class:component_mismatch:partialtrap|psn",
+    "divergence_class:component_mismatch:psn,sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|psn",
+    "divergence_class:component_missing_in_engine:brn",
+    "divergence_class:component_missing_in_engine:brn,heal",
+    "divergence_class:component_missing_in_engine:brn,itemleftovers",
+    "divergence_class:component_missing_in_engine:heal",
+    "divergence_class:component_missing_in_engine:itemleftovers",
+    "divergence_class:component_missing_in_engine:itemleftovers,psn",
+    "divergence_class:component_missing_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_missing_in_engine:leechseed",
+    "divergence_class:component_missing_in_engine:psn",
+    "divergence_class:damage_band",
+    "divergence_class:evidence:crit_in_step",
+    "divergence_class:evidence:faint_ply_no_upkeep",
+    "divergence_class:evidence:spikes_in_step",
+    "divergence_class:faint_boundary",
+    "divergence_class:limit:roll_divergent_lethality",
+    "divergence_class:limit:world_sample_drag_target",
+    "divergence_class:roll_scaled_component",
+    "divergence_class:status_support",
+    "divergence_class:unclassified"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "run_game:2562"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "divergence_class:component_set_equal_but_unmatched": {
+   "denominator": "boundaries_measured",
    "family": "H15_class_claimed_never_produced",
+   "granularity": "per_boundary",
    "key": "divergence_class:component_set_equal_but_unmatched",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "divergence_class:component_extra_in_engine:brn",
+    "divergence_class:component_extra_in_engine:heal",
+    "divergence_class:component_extra_in_engine:itemleftovers",
+    "divergence_class:component_extra_in_engine:itemleftovers,psn",
+    "divergence_class:component_extra_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_extra_in_engine:leechseed",
+    "divergence_class:component_extra_in_engine:psn",
+    "divergence_class:component_magnitude:heal",
+    "divergence_class:component_mismatch:heal|heal,itemleftovers",
+    "divergence_class:component_mismatch:heal|itemleftovers",
+    "divergence_class:component_mismatch:leechseed|brn",
+    "divergence_class:component_mismatch:leechseed|psn",
+    "divergence_class:component_mismatch:partialtrap|psn",
+    "divergence_class:component_mismatch:psn,sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|psn",
+    "divergence_class:component_missing_in_engine:brn",
+    "divergence_class:component_missing_in_engine:brn,heal",
+    "divergence_class:component_missing_in_engine:brn,itemleftovers",
+    "divergence_class:component_missing_in_engine:heal",
+    "divergence_class:component_missing_in_engine:itemleftovers",
+    "divergence_class:component_missing_in_engine:itemleftovers,psn",
+    "divergence_class:component_missing_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_missing_in_engine:leechseed",
+    "divergence_class:component_missing_in_engine:psn",
+    "divergence_class:damage_band",
+    "divergence_class:evidence:crit_in_step",
+    "divergence_class:evidence:faint_ply_no_upkeep",
+    "divergence_class:evidence:spikes_in_step",
+    "divergence_class:faint_boundary",
+    "divergence_class:limit:roll_divergent_lethality",
+    "divergence_class:limit:world_sample_drag_target",
+    "divergence_class:roll_scaled_component",
+    "divergence_class:status_support",
+    "divergence_class:unclassified"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "run_game:2562"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "divergence_class:damage_band": {
    "arms_that_fired": [
     "banded"
    ],
+   "denominator": "boundaries_measured",
    "evidence": {
     "reports/artifacts/c153_banded_census_1009000_sweep.json": {
      "divergence_class:damage_band": 106
@@ -217,8 +376,45 @@
     }
    },
    "family": "H15_class_claimed_banded_reachable_only",
+   "granularity": "per_boundary",
    "key": "divergence_class:damage_band",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "divergence_class:component_extra_in_engine:brn",
+    "divergence_class:component_extra_in_engine:heal",
+    "divergence_class:component_extra_in_engine:itemleftovers",
+    "divergence_class:component_extra_in_engine:itemleftovers,psn",
+    "divergence_class:component_extra_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_extra_in_engine:leechseed",
+    "divergence_class:component_extra_in_engine:psn",
+    "divergence_class:component_magnitude:heal",
+    "divergence_class:component_mismatch:heal|heal,itemleftovers",
+    "divergence_class:component_mismatch:heal|itemleftovers",
+    "divergence_class:component_mismatch:leechseed|brn",
+    "divergence_class:component_mismatch:leechseed|psn",
+    "divergence_class:component_mismatch:partialtrap|psn",
+    "divergence_class:component_mismatch:psn,sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|psn",
+    "divergence_class:component_missing_in_engine:brn",
+    "divergence_class:component_missing_in_engine:brn,heal",
+    "divergence_class:component_missing_in_engine:brn,itemleftovers",
+    "divergence_class:component_missing_in_engine:heal",
+    "divergence_class:component_missing_in_engine:itemleftovers",
+    "divergence_class:component_missing_in_engine:itemleftovers,psn",
+    "divergence_class:component_missing_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_missing_in_engine:leechseed",
+    "divergence_class:component_missing_in_engine:psn",
+    "divergence_class:evidence:crit_in_step",
+    "divergence_class:evidence:faint_ply_no_upkeep",
+    "divergence_class:evidence:spikes_in_step",
+    "divergence_class:faint_boundary",
+    "divergence_class:limit:roll_divergent_lethality",
+    "divergence_class:limit:world_sample_drag_target",
+    "divergence_class:roll_scaled_component",
+    "divergence_class:status_support",
+    "divergence_class:unclassified"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
    "seeds": {
@@ -538,12 +734,16 @@
      "1010989": 1
     }
    },
+   "sites": [
+    "run_game:2562"
+   ],
    "verdict": "FIRED"
   },
   "divergence_class:evidence:crit_in_step": {
    "arms_that_fired": [
     "banded"
    ],
+   "denominator": "boundaries_measured",
    "evidence": {
     "reports/artifacts/c153_banded_census_1009500_sweep.json": {
      "divergence_class:evidence:crit_in_step": 1
@@ -553,8 +753,45 @@
     }
    },
    "family": "H15_class_claimed_never_produced",
+   "granularity": "per_boundary",
    "key": "divergence_class:evidence:crit_in_step",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "divergence_class:component_extra_in_engine:brn",
+    "divergence_class:component_extra_in_engine:heal",
+    "divergence_class:component_extra_in_engine:itemleftovers",
+    "divergence_class:component_extra_in_engine:itemleftovers,psn",
+    "divergence_class:component_extra_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_extra_in_engine:leechseed",
+    "divergence_class:component_extra_in_engine:psn",
+    "divergence_class:component_magnitude:heal",
+    "divergence_class:component_mismatch:heal|heal,itemleftovers",
+    "divergence_class:component_mismatch:heal|itemleftovers",
+    "divergence_class:component_mismatch:leechseed|brn",
+    "divergence_class:component_mismatch:leechseed|psn",
+    "divergence_class:component_mismatch:partialtrap|psn",
+    "divergence_class:component_mismatch:psn,sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|psn",
+    "divergence_class:component_missing_in_engine:brn",
+    "divergence_class:component_missing_in_engine:brn,heal",
+    "divergence_class:component_missing_in_engine:brn,itemleftovers",
+    "divergence_class:component_missing_in_engine:heal",
+    "divergence_class:component_missing_in_engine:itemleftovers",
+    "divergence_class:component_missing_in_engine:itemleftovers,psn",
+    "divergence_class:component_missing_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_missing_in_engine:leechseed",
+    "divergence_class:component_missing_in_engine:psn",
+    "divergence_class:damage_band",
+    "divergence_class:evidence:faint_ply_no_upkeep",
+    "divergence_class:evidence:spikes_in_step",
+    "divergence_class:faint_boundary",
+    "divergence_class:limit:roll_divergent_lethality",
+    "divergence_class:limit:world_sample_drag_target",
+    "divergence_class:roll_scaled_component",
+    "divergence_class:status_support",
+    "divergence_class:unclassified"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
    "seeds": {
@@ -564,12 +801,16 @@
      "1010861": 1
     }
    },
+   "sites": [
+    "run_game:2562"
+   ],
    "verdict": "FIRED"
   },
   "divergence_class:evidence:faint_ply_no_upkeep": {
    "arms_that_fired": [
     "banded"
    ],
+   "denominator": "boundaries_measured",
    "evidence": {
     "reports/artifacts/c153_banded_census_1009000_sweep.json": {
      "divergence_class:evidence:faint_ply_no_upkeep": 7
@@ -585,8 +826,45 @@
     }
    },
    "family": "H15_class_claimed_never_produced",
+   "granularity": "per_boundary",
    "key": "divergence_class:evidence:faint_ply_no_upkeep",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "divergence_class:component_extra_in_engine:brn",
+    "divergence_class:component_extra_in_engine:heal",
+    "divergence_class:component_extra_in_engine:itemleftovers",
+    "divergence_class:component_extra_in_engine:itemleftovers,psn",
+    "divergence_class:component_extra_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_extra_in_engine:leechseed",
+    "divergence_class:component_extra_in_engine:psn",
+    "divergence_class:component_magnitude:heal",
+    "divergence_class:component_mismatch:heal|heal,itemleftovers",
+    "divergence_class:component_mismatch:heal|itemleftovers",
+    "divergence_class:component_mismatch:leechseed|brn",
+    "divergence_class:component_mismatch:leechseed|psn",
+    "divergence_class:component_mismatch:partialtrap|psn",
+    "divergence_class:component_mismatch:psn,sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|psn",
+    "divergence_class:component_missing_in_engine:brn",
+    "divergence_class:component_missing_in_engine:brn,heal",
+    "divergence_class:component_missing_in_engine:brn,itemleftovers",
+    "divergence_class:component_missing_in_engine:heal",
+    "divergence_class:component_missing_in_engine:itemleftovers",
+    "divergence_class:component_missing_in_engine:itemleftovers,psn",
+    "divergence_class:component_missing_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_missing_in_engine:leechseed",
+    "divergence_class:component_missing_in_engine:psn",
+    "divergence_class:damage_band",
+    "divergence_class:evidence:crit_in_step",
+    "divergence_class:evidence:spikes_in_step",
+    "divergence_class:faint_boundary",
+    "divergence_class:limit:roll_divergent_lethality",
+    "divergence_class:limit:world_sample_drag_target",
+    "divergence_class:roll_scaled_component",
+    "divergence_class:status_support",
+    "divergence_class:unclassified"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
    "seeds": {
@@ -623,12 +901,16 @@
      "1010943": 1
     }
    },
+   "sites": [
+    "run_game:2562"
+   ],
    "verdict": "FIRED"
   },
   "divergence_class:evidence:spikes_in_step": {
    "arms_that_fired": [
     "banded"
    ],
+   "denominator": "boundaries_measured",
    "evidence": {
     "reports/artifacts/c153_banded_census_1009000_sweep.json": {
      "divergence_class:evidence:spikes_in_step": 1
@@ -638,8 +920,45 @@
     }
    },
    "family": "H15_class_claimed_never_produced",
+   "granularity": "per_boundary",
    "key": "divergence_class:evidence:spikes_in_step",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "divergence_class:component_extra_in_engine:brn",
+    "divergence_class:component_extra_in_engine:heal",
+    "divergence_class:component_extra_in_engine:itemleftovers",
+    "divergence_class:component_extra_in_engine:itemleftovers,psn",
+    "divergence_class:component_extra_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_extra_in_engine:leechseed",
+    "divergence_class:component_extra_in_engine:psn",
+    "divergence_class:component_magnitude:heal",
+    "divergence_class:component_mismatch:heal|heal,itemleftovers",
+    "divergence_class:component_mismatch:heal|itemleftovers",
+    "divergence_class:component_mismatch:leechseed|brn",
+    "divergence_class:component_mismatch:leechseed|psn",
+    "divergence_class:component_mismatch:partialtrap|psn",
+    "divergence_class:component_mismatch:psn,sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|psn",
+    "divergence_class:component_missing_in_engine:brn",
+    "divergence_class:component_missing_in_engine:brn,heal",
+    "divergence_class:component_missing_in_engine:brn,itemleftovers",
+    "divergence_class:component_missing_in_engine:heal",
+    "divergence_class:component_missing_in_engine:itemleftovers",
+    "divergence_class:component_missing_in_engine:itemleftovers,psn",
+    "divergence_class:component_missing_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_missing_in_engine:leechseed",
+    "divergence_class:component_missing_in_engine:psn",
+    "divergence_class:damage_band",
+    "divergence_class:evidence:crit_in_step",
+    "divergence_class:evidence:faint_ply_no_upkeep",
+    "divergence_class:faint_boundary",
+    "divergence_class:limit:roll_divergent_lethality",
+    "divergence_class:limit:world_sample_drag_target",
+    "divergence_class:roll_scaled_component",
+    "divergence_class:status_support",
+    "divergence_class:unclassified"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
    "seeds": {
@@ -648,12 +967,16 @@
      "1010900": 1
     }
    },
+   "sites": [
+    "run_game:2562"
+   ],
    "verdict": "FIRED"
   },
   "divergence_class:faint_boundary": {
    "arms_that_fired": [
     "banded"
    ],
+   "denominator": "boundaries_measured",
    "evidence": {
     "reports/artifacts/c153_banded_census_1009000_sweep.json": {
      "divergence_class:faint_boundary": 6
@@ -669,8 +992,45 @@
     }
    },
    "family": "H15_class_claimed_banded_reachable_only",
+   "granularity": "per_boundary",
    "key": "divergence_class:faint_boundary",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "divergence_class:component_extra_in_engine:brn",
+    "divergence_class:component_extra_in_engine:heal",
+    "divergence_class:component_extra_in_engine:itemleftovers",
+    "divergence_class:component_extra_in_engine:itemleftovers,psn",
+    "divergence_class:component_extra_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_extra_in_engine:leechseed",
+    "divergence_class:component_extra_in_engine:psn",
+    "divergence_class:component_magnitude:heal",
+    "divergence_class:component_mismatch:heal|heal,itemleftovers",
+    "divergence_class:component_mismatch:heal|itemleftovers",
+    "divergence_class:component_mismatch:leechseed|brn",
+    "divergence_class:component_mismatch:leechseed|psn",
+    "divergence_class:component_mismatch:partialtrap|psn",
+    "divergence_class:component_mismatch:psn,sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|psn",
+    "divergence_class:component_missing_in_engine:brn",
+    "divergence_class:component_missing_in_engine:brn,heal",
+    "divergence_class:component_missing_in_engine:brn,itemleftovers",
+    "divergence_class:component_missing_in_engine:heal",
+    "divergence_class:component_missing_in_engine:itemleftovers",
+    "divergence_class:component_missing_in_engine:itemleftovers,psn",
+    "divergence_class:component_missing_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_missing_in_engine:leechseed",
+    "divergence_class:component_missing_in_engine:psn",
+    "divergence_class:damage_band",
+    "divergence_class:evidence:crit_in_step",
+    "divergence_class:evidence:faint_ply_no_upkeep",
+    "divergence_class:evidence:spikes_in_step",
+    "divergence_class:limit:roll_divergent_lethality",
+    "divergence_class:limit:world_sample_drag_target",
+    "divergence_class:roll_scaled_component",
+    "divergence_class:status_support",
+    "divergence_class:unclassified"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
    "seeds": {
@@ -706,33 +1066,162 @@
      "1010885": 1
     }
    },
+   "sites": [
+    "run_game:2562"
+   ],
    "verdict": "FIRED"
   },
   "divergence_class:mapper_lossy": {
    "census_cannot_reach": "Structural, not instrumental -- see the demonstration on the entry itself.",
+   "denominator": "boundaries_measured",
    "family": "section_3_5_static_counter",
+   "granularity": "per_boundary",
    "key": "divergence_class:mapper_lossy",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "divergence_class:component_extra_in_engine:brn",
+    "divergence_class:component_extra_in_engine:heal",
+    "divergence_class:component_extra_in_engine:itemleftovers",
+    "divergence_class:component_extra_in_engine:itemleftovers,psn",
+    "divergence_class:component_extra_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_extra_in_engine:leechseed",
+    "divergence_class:component_extra_in_engine:psn",
+    "divergence_class:component_magnitude:heal",
+    "divergence_class:component_mismatch:heal|heal,itemleftovers",
+    "divergence_class:component_mismatch:heal|itemleftovers",
+    "divergence_class:component_mismatch:leechseed|brn",
+    "divergence_class:component_mismatch:leechseed|psn",
+    "divergence_class:component_mismatch:partialtrap|psn",
+    "divergence_class:component_mismatch:psn,sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|psn",
+    "divergence_class:component_missing_in_engine:brn",
+    "divergence_class:component_missing_in_engine:brn,heal",
+    "divergence_class:component_missing_in_engine:brn,itemleftovers",
+    "divergence_class:component_missing_in_engine:heal",
+    "divergence_class:component_missing_in_engine:itemleftovers",
+    "divergence_class:component_missing_in_engine:itemleftovers,psn",
+    "divergence_class:component_missing_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_missing_in_engine:leechseed",
+    "divergence_class:component_missing_in_engine:psn",
+    "divergence_class:damage_band",
+    "divergence_class:evidence:crit_in_step",
+    "divergence_class:evidence:faint_ply_no_upkeep",
+    "divergence_class:evidence:spikes_in_step",
+    "divergence_class:faint_boundary",
+    "divergence_class:limit:roll_divergent_lethality",
+    "divergence_class:limit:world_sample_drag_target",
+    "divergence_class:roll_scaled_component",
+    "divergence_class:status_support",
+    "divergence_class:unclassified"
+   ],
    "measurement_independent": true,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "run_game:2562"
+   ],
    "structural_demonstration": "`evaluate_boundary_strict` returns the verdict `skip_lossy` with the trigger body `every branch rendered lossy`, and the run loop `continue`s at the `verdict == \"skip_lossy\"` branch BEFORE the `divergence_class:` line, which runs only under `verdict == \"diverged\"`. The classifier can therefore never be handed the body that would return this class.",
    "verdict": "UNREACHABLE_STRUCTURAL"
   },
   "divergence_class:no_miss_recorded": {
+   "denominator": "boundaries_measured",
    "family": "H15_class_claimed_never_produced",
+   "granularity": "per_boundary",
    "key": "divergence_class:no_miss_recorded",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "divergence_class:component_extra_in_engine:brn",
+    "divergence_class:component_extra_in_engine:heal",
+    "divergence_class:component_extra_in_engine:itemleftovers",
+    "divergence_class:component_extra_in_engine:itemleftovers,psn",
+    "divergence_class:component_extra_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_extra_in_engine:leechseed",
+    "divergence_class:component_extra_in_engine:psn",
+    "divergence_class:component_magnitude:heal",
+    "divergence_class:component_mismatch:heal|heal,itemleftovers",
+    "divergence_class:component_mismatch:heal|itemleftovers",
+    "divergence_class:component_mismatch:leechseed|brn",
+    "divergence_class:component_mismatch:leechseed|psn",
+    "divergence_class:component_mismatch:partialtrap|psn",
+    "divergence_class:component_mismatch:psn,sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|psn",
+    "divergence_class:component_missing_in_engine:brn",
+    "divergence_class:component_missing_in_engine:brn,heal",
+    "divergence_class:component_missing_in_engine:brn,itemleftovers",
+    "divergence_class:component_missing_in_engine:heal",
+    "divergence_class:component_missing_in_engine:itemleftovers",
+    "divergence_class:component_missing_in_engine:itemleftovers,psn",
+    "divergence_class:component_missing_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_missing_in_engine:leechseed",
+    "divergence_class:component_missing_in_engine:psn",
+    "divergence_class:damage_band",
+    "divergence_class:evidence:crit_in_step",
+    "divergence_class:evidence:faint_ply_no_upkeep",
+    "divergence_class:evidence:spikes_in_step",
+    "divergence_class:faint_boundary",
+    "divergence_class:limit:roll_divergent_lethality",
+    "divergence_class:limit:world_sample_drag_target",
+    "divergence_class:roll_scaled_component",
+    "divergence_class:status_support",
+    "divergence_class:unclassified"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "run_game:2562"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "divergence_class:no_usable_branch": {
    "census_cannot_reach": "Structural, not instrumental -- see the demonstration on the entry itself.",
+   "denominator": "boundaries_measured",
    "family": "section_3_5_static_counter",
+   "granularity": "per_boundary",
    "key": "divergence_class:no_usable_branch",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "divergence_class:component_extra_in_engine:brn",
+    "divergence_class:component_extra_in_engine:heal",
+    "divergence_class:component_extra_in_engine:itemleftovers",
+    "divergence_class:component_extra_in_engine:itemleftovers,psn",
+    "divergence_class:component_extra_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_extra_in_engine:leechseed",
+    "divergence_class:component_extra_in_engine:psn",
+    "divergence_class:component_magnitude:heal",
+    "divergence_class:component_mismatch:heal|heal,itemleftovers",
+    "divergence_class:component_mismatch:heal|itemleftovers",
+    "divergence_class:component_mismatch:leechseed|brn",
+    "divergence_class:component_mismatch:leechseed|psn",
+    "divergence_class:component_mismatch:partialtrap|psn",
+    "divergence_class:component_mismatch:psn,sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|psn",
+    "divergence_class:component_missing_in_engine:brn",
+    "divergence_class:component_missing_in_engine:brn,heal",
+    "divergence_class:component_missing_in_engine:brn,itemleftovers",
+    "divergence_class:component_missing_in_engine:heal",
+    "divergence_class:component_missing_in_engine:itemleftovers",
+    "divergence_class:component_missing_in_engine:itemleftovers,psn",
+    "divergence_class:component_missing_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_missing_in_engine:leechseed",
+    "divergence_class:component_missing_in_engine:psn",
+    "divergence_class:damage_band",
+    "divergence_class:evidence:crit_in_step",
+    "divergence_class:evidence:faint_ply_no_upkeep",
+    "divergence_class:evidence:spikes_in_step",
+    "divergence_class:faint_boundary",
+    "divergence_class:limit:roll_divergent_lethality",
+    "divergence_class:limit:world_sample_drag_target",
+    "divergence_class:roll_scaled_component",
+    "divergence_class:status_support",
+    "divergence_class:unclassified"
+   ],
    "measurement_independent": true,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "run_game:2562"
+   ],
    "structural_demonstration": "The trigger body `mapper produced no usable branch` is produced by NO CODE in the repository: the only occurrence on any execution path is the classifier's own test of it at `engine_transition_differential.py:1915`, so no input can make `classify_divergence` return this class. Stated as 'no producer' rather than 'nowhere in the repository', which a first draft wrote and its own commit falsified -- the phrase now also appears in this docstring and in the census artifact that records it. A grep-shaped claim has to be scoped to executable code or it is false the moment it is written down.",
    "verdict": "UNREACHABLE_STRUCTURAL"
   },
@@ -740,6 +1229,7 @@
    "arms_that_fired": [
     "banded"
    ],
+   "denominator": "boundaries_measured",
    "evidence": {
     "reports/artifacts/c153_banded_census_1009000_sweep.json": {
      "divergence_class:status_support": 23
@@ -755,8 +1245,45 @@
     }
    },
    "family": "H15_class_claimed_banded_reachable_only",
+   "granularity": "per_boundary",
    "key": "divergence_class:status_support",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "divergence_class:component_extra_in_engine:brn",
+    "divergence_class:component_extra_in_engine:heal",
+    "divergence_class:component_extra_in_engine:itemleftovers",
+    "divergence_class:component_extra_in_engine:itemleftovers,psn",
+    "divergence_class:component_extra_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_extra_in_engine:leechseed",
+    "divergence_class:component_extra_in_engine:psn",
+    "divergence_class:component_magnitude:heal",
+    "divergence_class:component_mismatch:heal|heal,itemleftovers",
+    "divergence_class:component_mismatch:heal|itemleftovers",
+    "divergence_class:component_mismatch:leechseed|brn",
+    "divergence_class:component_mismatch:leechseed|psn",
+    "divergence_class:component_mismatch:partialtrap|psn",
+    "divergence_class:component_mismatch:psn,sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|psn",
+    "divergence_class:component_missing_in_engine:brn",
+    "divergence_class:component_missing_in_engine:brn,heal",
+    "divergence_class:component_missing_in_engine:brn,itemleftovers",
+    "divergence_class:component_missing_in_engine:heal",
+    "divergence_class:component_missing_in_engine:itemleftovers",
+    "divergence_class:component_missing_in_engine:itemleftovers,psn",
+    "divergence_class:component_missing_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_missing_in_engine:leechseed",
+    "divergence_class:component_missing_in_engine:psn",
+    "divergence_class:damage_band",
+    "divergence_class:evidence:crit_in_step",
+    "divergence_class:evidence:faint_ply_no_upkeep",
+    "divergence_class:evidence:spikes_in_step",
+    "divergence_class:faint_boundary",
+    "divergence_class:limit:roll_divergent_lethality",
+    "divergence_class:limit:world_sample_drag_target",
+    "divergence_class:roll_scaled_component",
+    "divergence_class:unclassified"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
    "seeds": {
@@ -834,12 +1361,16 @@
      "1010964": 1
     }
    },
+   "sites": [
+    "run_game:2562"
+   ],
    "verdict": "FIRED"
   },
   "divergence_class:unclassified": {
    "arms_that_fired": [
     "banded"
    ],
+   "denominator": "boundaries_measured",
    "evidence": {
     "reports/artifacts/c153_banded_census_1009000_sweep.json": {
      "divergence_class:unclassified": 30
@@ -855,8 +1386,45 @@
     }
    },
    "family": "H15_class_claimed_never_produced",
+   "granularity": "per_boundary",
    "key": "divergence_class:unclassified",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "divergence_class:component_extra_in_engine:brn",
+    "divergence_class:component_extra_in_engine:heal",
+    "divergence_class:component_extra_in_engine:itemleftovers",
+    "divergence_class:component_extra_in_engine:itemleftovers,psn",
+    "divergence_class:component_extra_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_extra_in_engine:leechseed",
+    "divergence_class:component_extra_in_engine:psn",
+    "divergence_class:component_magnitude:heal",
+    "divergence_class:component_mismatch:heal|heal,itemleftovers",
+    "divergence_class:component_mismatch:heal|itemleftovers",
+    "divergence_class:component_mismatch:leechseed|brn",
+    "divergence_class:component_mismatch:leechseed|psn",
+    "divergence_class:component_mismatch:partialtrap|psn",
+    "divergence_class:component_mismatch:psn,sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|leechseed",
+    "divergence_class:component_mismatch:sandstorm|psn",
+    "divergence_class:component_missing_in_engine:brn",
+    "divergence_class:component_missing_in_engine:brn,heal",
+    "divergence_class:component_missing_in_engine:brn,itemleftovers",
+    "divergence_class:component_missing_in_engine:heal",
+    "divergence_class:component_missing_in_engine:itemleftovers",
+    "divergence_class:component_missing_in_engine:itemleftovers,psn",
+    "divergence_class:component_missing_in_engine:itemleftovers,sandstorm",
+    "divergence_class:component_missing_in_engine:leechseed",
+    "divergence_class:component_missing_in_engine:psn",
+    "divergence_class:damage_band",
+    "divergence_class:evidence:crit_in_step",
+    "divergence_class:evidence:faint_ply_no_upkeep",
+    "divergence_class:evidence:spikes_in_step",
+    "divergence_class:faint_boundary",
+    "divergence_class:limit:roll_divergent_lethality",
+    "divergence_class:limit:world_sample_drag_target",
+    "divergence_class:roll_scaled_component",
+    "divergence_class:status_support"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
    "seeds": {
@@ -1007,403 +1575,1010 @@
      "1010998": 1
     }
    },
+   "sites": [
+    "run_game:2562"
+   ],
    "verdict": "FIRED"
   },
   "engine_error": {
+   "denominator": "boundaries_measured",
    "family": "section_3_5_static_counter",
+   "granularity": "per_boundary",
    "key": "engine_error",
    "key_kind": "exact",
+   "liveness_witnesses": [],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "run_game:2488",
+    "run_game:2492",
+    "run_game:2495"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "engine_error:": {
+   "denominator": "boundaries_measured",
    "excludes": [],
    "family": "section_3_5_dynamic_family",
+   "granularity": "per_boundary",
    "key": "engine_error:",
    "key_kind": "prefix",
+   "liveness_witnesses": [],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "run_game:2492"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "engine_error_choice:": {
+   "denominator": "boundaries_measured",
    "excludes": [],
    "family": "section_3_5_dynamic_family",
+   "granularity": "per_boundary",
    "key": "engine_error_choice:",
    "key_kind": "prefix",
+   "liveness_witnesses": [],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "run_game:2495"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:no_action_candidates": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_static_counter",
+   "granularity": "per_boundary",
    "key": "skip:no_action_candidates",
    "key_kind": "exact",
+   "liveness_witnesses": [],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2634"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:no_materialization:": {
+   "denominator": "boundaries_full_round",
    "excludes": [],
    "family": "section_3_5_dynamic_family",
+   "granularity": "per_boundary",
    "key": "skip:no_materialization:",
    "key_kind": "prefix",
+   "liveness_witnesses": [],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2615"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:unmappable_choice:blank_move_id": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_unmappable_choice",
+   "granularity": "per_boundary",
    "key": "skip:unmappable_choice:blank_move_id",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:unmappable_choice:struggle_not_submittable"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2745"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:unmappable_choice:blank_switch_species": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_unmappable_choice",
+   "granularity": "per_boundary",
    "key": "skip:unmappable_choice:blank_switch_species",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:unmappable_choice:struggle_not_submittable"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2745"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:unmappable_choice:hidden_power_ambiguous": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_unmappable_choice",
+   "granularity": "per_boundary",
    "key": "skip:unmappable_choice:hidden_power_ambiguous",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:unmappable_choice:struggle_not_submittable"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2745"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:unmappable_choice:move_not_in_engine_set:": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_unmappable_choice",
+   "granularity": "per_boundary",
    "key": "skip:unmappable_choice:move_not_in_engine_set:",
    "key_kind": "prefix",
+   "liveness_witnesses": [
+    "skip:unmappable_choice:struggle_not_submittable"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2745"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:unmappable_choice:no_candidate_row": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_unmappable_choice",
+   "granularity": "per_boundary",
    "key": "skip:unmappable_choice:no_candidate_row",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:unmappable_choice:struggle_not_submittable"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2745"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:unmappable_choice:switch_species_not_in_party": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_unmappable_choice",
+   "granularity": "per_boundary",
    "key": "skip:unmappable_choice:switch_species_not_in_party",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:unmappable_choice:struggle_not_submittable"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2745"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:unmappable_choice:unknown_kind:": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_unmappable_choice",
+   "granularity": "per_boundary",
    "key": "skip:unmappable_choice:unknown_kind:",
    "key_kind": "prefix",
+   "liveness_witnesses": [
+    "skip:unmappable_choice:struggle_not_submittable"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2745"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_error:": {
+   "denominator": "boundaries_full_round",
    "excludes": [
     "skip:world_error:no_constructible_candidate"
    ],
    "family": "section_3_5_dynamic_family",
+   "granularity": "per_boundary",
    "key": "skip:world_error:",
    "key_kind": "prefix",
+   "liveness_witnesses": [],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2704",
+    "_prepare_boundary:2731"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_error:no_constructible_candidate": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_static_counter",
+   "granularity": "per_boundary",
    "key": "skip:world_error:no_constructible_candidate",
    "key_kind": "exact",
+   "liveness_witnesses": [],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2704",
+    "_prepare_boundary:2731"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:boost_unsupported": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:boost_unsupported",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:boundary_not_move_request": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:boundary_not_move_request",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:deferred_opponent_action": {
-   "census_cannot_reach": "Raised at `engine_world.py:922` on `payload.get(\"deferredOpponentActions\") or payload.get(\"deferredOpponentActionPriors\")`. The payload always CARRIES both keys -- `local_showdown._public_materialization_payload` emits them at :2350-2352 -- so 'never carries' would be false. They are always EMPTY: both derive from keyword-only parameters defaulting to `None` (:2220-2222, `dict(... or {})` at :2302), and the differential calls that function with neither argument at both of its call sites (`engine_transition_differential.py:2649` and `:2760`). An empty dict is falsy, so the guard never fires. The field is for the opponent-action predictor, which no differential run uses.",
+   "census_cannot_reach": "Raised at `engine_world.py:922` on `payload.get(\"deferredOpponentActions\") or payload.get(\"deferredOpponentActionPriors\")`. The payload always CARRIES both keys -- `local_showdown._public_materialization_payload` emits them at :2350-2352 -- so 'never carries' would be false. They are always EMPTY, and the closure is a frame HIGHER than a first draft placed it: the payload that reaches this raise is not one the differential builds at all. `world_battle_spec` constructs its own at `engine_world.py:883` by calling `_public_materialization_payload(state)` with NEITHER deferred argument -- both are keyword-only and default to `None` (`local_showdown.py:2220-2222`, `dict(... or {})` at :2302) -- and passes it to `battle_spec_from_payload`, which reaches `_reject_unsupported_globals` at :397. An empty dict is falsy, so the guard never fires FOR ANY CALLER of `world_battle_spec`, which is stronger than a claim about the differential's own `:2649` / `:2760` payloads -- those exist, but they feed the truant scan and the turn number and are not on the path to this raise. The function's own docstring at :877 says it: \"Deferred opponent actions are deliberately not forwarded\".",
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:deferred_opponent_action",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:future_sight_pending": {
+   "denominator": "boundaries_full_round",
    "family": "retired_pool_unreachable_R1",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:future_sight_pending",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": true,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "UNREACHABLE_POOL"
   },
   "skip:world_unsupported:hidden_power_iv_mismatch": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:hidden_power_iv_mismatch",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:item_state_conflict": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:item_state_conflict",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:move_unknown": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:move_unknown",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:nature_not_neutral": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:nature_not_neutral",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": true,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "UNREACHABLE_POOL"
   },
   "skip:world_unsupported:override_side_missing": {
    "census_cannot_reach": "Raised at `engine_world.py:490` when `override.player_teams.get(slot)` is falsy. The differential builds that mapping at `engine_transition_differential.py:2396` as `{slot: true_teams[slot][\"packed\"] for slot in (\"p1\", \"p2\")}` -- a comprehension over exactly the two slots the loop then iterates, so a slot cannot be ABSENT. The residual way in is an empty packed string from the bridge snapshot, which would mean a battle started with an empty team; 10,000 games produced none.",
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:override_side_missing",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:public_effect_blocked": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:public_effect_blocked",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:public_species_not_in_world": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:public_species_not_in_world",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:rest_sleep_attempt_unsettled": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:rest_sleep_attempt_unsettled",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:rest_sleep_provenance_unrepresentable": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:rest_sleep_provenance_unrepresentable",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:rest_sleep_refund_pending_precounts_legacy": {
    "census_cannot_reach": "Raised at `engine_world.py:1958` only when a row has `restSleepActiveRefundPending` and NO `restSleepAttempts`. A live row CAN lack the counts -- `local_showdown._apply_rest_sleep_provenance` sets the pending flag at :2784 and then `continue`s at :2800 without writing them -- so the naive reading is wrong. What closes the path is the ORDER of the tests: that same :2800 branch sets `restSleepProvenanceUnrepresentable`, and `_hp_and_status` raises on THAT at :1914, before it ever reaches :1958. So the surviving way in is a row carrying the pending flag, no counts and no unrepresentable flag, which no live producer emits. `engine_world.py` calls the neighbouring branch a CANARY whose expected count in a fresh post-split era is exactly zero; a census zero CONFIRMS that design property and is not evidence about coverage.",
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:rest_sleep_refund_pending_precounts_legacy",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:rest_sleep_refund_pending_unsplit_legacy": {
-   "census_cannot_reach": "Raised at `engine_world.py:1986` only when a row carries the pre-split `restSleepRefundPending` flag and NEITHER producer flag -- and `_hp_and_status` tests both producer flags first, at :1935 and :1943. `_mark_legacy_rest_refund_pending` has exactly TWO call sites in `local_showdown.py` (:2755 and :2785) and each is preceded on the same row by a producer flag (`restSleepAttemptUnsettled` at :2754, `restSleepActiveRefundPending` at :2784), so a live row always trips an earlier branch. Reachable only by replaying a pre-split corpus. Same canary: zero is the designed value, not an unmeasured absence.",
+   "census_cannot_reach": "Raised at `engine_world.py:1986` only when a row carries the pre-split `restSleepRefundPending` flag and NEITHER producer flag -- and `_hp_and_status` tests both producer flags first, at :1935 and :1939 (:1943 is a comment line -- the citation said so in a first draft, and a line number that lands on a comment is a trace nobody checked). `_mark_legacy_rest_refund_pending` has exactly TWO call sites in `local_showdown.py` (:2755 and :2785) and each is preceded on the same row by a producer flag (`restSleepAttemptUnsettled` at :2754, `restSleepActiveRefundPending` at :2784), so a live row always trips an earlier branch. Reachable only by replaying a pre-split corpus. Same canary: zero is the designed value, not an unmeasured absence.",
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:rest_sleep_refund_pending_unsplit_legacy",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:self_maxhp_mismatch": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:self_maxhp_mismatch",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:self_pp_unknown": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:self_pp_unknown",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:self_world_mismatch": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:self_world_mismatch",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:side_condition_turns_inconsistent": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:side_condition_turns_inconsistent",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:side_condition_turns_unknown": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:side_condition_turns_unknown",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:side_condition_unsupported": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:side_condition_unsupported",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:species_unknown": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:species_unknown",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:substitute_depletion_world_incompatible": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:substitute_depletion_world_incompatible",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:substitute_health_provenance_contradiction": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:substitute_health_provenance_contradiction",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:toxic_stage_inconsistent": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:toxic_stage_inconsistent",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:toxic_stage_unknown": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:toxic_stage_unknown",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:weather_turns_inconsistent": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:weather_turns_inconsistent",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:weather_turns_unknown": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:weather_turns_unknown",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "skip:world_unsupported:weather_unsupported": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:weather_unsupported",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": true,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "UNREACHABLE_POOL"
   },
   "skip:world_unsupported:wish_turns_inconsistent": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_world_unsupported",
+   "granularity": "per_boundary",
    "key": "skip:world_unsupported:wish_turns_inconsistent",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "skip:world_unsupported:encore_move_unknown",
+    "skip:world_unsupported:materialization_blocker",
+    "skip:world_unsupported:self_request_state_unsupported",
+    "skip:world_unsupported:status_unsupported",
+    "skip:world_unsupported:transform_unexpressible",
+    "skip:world_unsupported:volatile_unsupported"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2682",
+    "_prepare_boundary:2697"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "strict:branch_events_error:": {
+   "denominator": "boundaries_measured",
    "excludes": [],
    "family": "section_3_5_dynamic_family",
+   "granularity": "per_state_or_branch_within_boundary",
    "key": "strict:branch_events_error:",
    "key_kind": "prefix",
+   "liveness_witnesses": [
+    "strict:branch_event_legal_error:BranchLegalRollError",
+    "strict:sleeptalk_union_branch"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "evaluate_boundary_strict:2065"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "strict:no_damage_rolls": {
+   "denominator": "boundaries_measured",
    "family": "section_3_5_static_counter",
+   "granularity": "per_state_or_branch_within_boundary",
    "key": "strict:no_damage_rolls",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "strict:branch_event_legal_error:BranchLegalRollError",
+    "strict:sleeptalk_union_branch"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "evaluate_boundary_strict:2083"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "world_prestate_mismatch:side_conditions": {
+   "denominator": "boundaries_full_round",
    "family": "section_3_5_static_counter",
+   "granularity": "per_boundary",
    "key": "world_prestate_mismatch:side_conditions",
    "key_kind": "exact",
+   "liveness_witnesses": [
+    "world_prestate_mismatch",
+    "world_prestate_mismatch:p1_hp",
+    "world_prestate_mismatch:p1_status",
+    "world_prestate_mismatch:p2_hp",
+    "world_prestate_mismatch:p2_status"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2753"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   },
   "world_prestate_mismatch:weather_": {
+   "denominator": "boundaries_full_round",
    "excludes": [],
    "family": "section_3_5_dynamic_family",
+   "granularity": "per_boundary",
    "key": "world_prestate_mismatch:weather_",
    "key_kind": "prefix",
+   "liveness_witnesses": [
+    "world_prestate_mismatch",
+    "world_prestate_mismatch:p1_hp",
+    "world_prestate_mismatch:p1_status",
+    "world_prestate_mismatch:p2_hp",
+    "world_prestate_mismatch:p2_status"
+   ],
    "measurement_independent": false,
    "scope": "10,000 games on unregistered seeds 1,001,000-1,010,999 (8,000 strict + 2,000 banded), 803,264 measured boundaries, engine fingerprint bfdbe1c04876edcd",
+   "sites": [
+    "_prepare_boundary:2753"
+   ],
    "verdict": "NOT_OBSERVED_AT_SCOPE"
   }
- }
+ },
+ "window_scoped_with_a_liveness_witness": [
+  "skip:unmappable_choice:blank_move_id",
+  "skip:unmappable_choice:blank_switch_species",
+  "skip:unmappable_choice:hidden_power_ambiguous",
+  "skip:unmappable_choice:move_not_in_engine_set:",
+  "skip:unmappable_choice:no_candidate_row",
+  "skip:unmappable_choice:switch_species_not_in_party",
+  "skip:unmappable_choice:unknown_kind:",
+  "skip:world_unsupported:boost_unsupported",
+  "skip:world_unsupported:boundary_not_move_request",
+  "skip:world_unsupported:deferred_opponent_action",
+  "skip:world_unsupported:hidden_power_iv_mismatch",
+  "skip:world_unsupported:item_state_conflict",
+  "skip:world_unsupported:move_unknown",
+  "skip:world_unsupported:override_side_missing",
+  "skip:world_unsupported:public_effect_blocked",
+  "skip:world_unsupported:public_species_not_in_world",
+  "skip:world_unsupported:rest_sleep_attempt_unsettled",
+  "skip:world_unsupported:rest_sleep_provenance_unrepresentable",
+  "skip:world_unsupported:rest_sleep_refund_pending_precounts_legacy",
+  "skip:world_unsupported:rest_sleep_refund_pending_unsplit_legacy",
+  "skip:world_unsupported:self_maxhp_mismatch",
+  "skip:world_unsupported:self_pp_unknown",
+  "skip:world_unsupported:self_world_mismatch",
+  "skip:world_unsupported:side_condition_turns_inconsistent",
+  "skip:world_unsupported:side_condition_turns_unknown",
+  "skip:world_unsupported:side_condition_unsupported",
+  "skip:world_unsupported:species_unknown",
+  "skip:world_unsupported:substitute_depletion_world_incompatible",
+  "skip:world_unsupported:substitute_health_provenance_contradiction",
+  "skip:world_unsupported:toxic_stage_inconsistent",
+  "skip:world_unsupported:toxic_stage_unknown",
+  "skip:world_unsupported:weather_turns_inconsistent",
+  "skip:world_unsupported:weather_turns_unknown",
+  "skip:world_unsupported:wish_turns_inconsistent",
+  "strict:branch_events_error:",
+  "strict:no_damage_rolls",
+  "world_prestate_mismatch:side_conditions",
+  "world_prestate_mismatch:weather_"
+ ]
 }

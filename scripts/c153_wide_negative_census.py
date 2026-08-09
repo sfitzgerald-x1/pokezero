@@ -152,6 +152,113 @@ def unmappable_choice_reasons() -> set[str]:
     return out
 
 
+def _differential_tree() -> tuple[ast.Module, dict[ast.AST, ast.AST]]:
+    tree = ast.parse(DIFFERENTIAL.read_text(encoding="utf-8"))
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    return tree, parents
+
+
+def emission_sites() -> list[dict[str, Any]]:
+    """Every ``counts[...] += 1`` in the differential, with its enclosing scope.
+
+    ⚠ THIS EXISTS BECAUSE A SPLIT WAS ASSERTED AND NEVER TRACED. C153 claimed the 46
+    window-scoped negatives were "40 per-boundary refusal counters plus 6 per-game
+    abort/error counters", and used that split to decide which of three rule-of-three
+    bounds a reader should apply -- the most consequential unchecked sentence in the
+    report. Resolved by AST, **five of the six are not per-game**: the three
+    `engine_error*` keys increment inside the step `while` (per boundary), and
+    `strict:no_damage_rolls` / `strict:branch_events_error:` increment inside
+    `evaluate_boundary_strict`'s `for state in states` (per state within a boundary).
+    The differential's own comment at :3134-3136 says the last two verbatim -- "PER-BRANCH
+    or PER-STATE tallies within one boundary" -- in the same block §6 and H8 both cite.
+
+    A plausible sentence about emission sites is exactly what the rule at
+    `CENSUS_CANNOT_REACH` above forbids, adopted one commit earlier and not applied here.
+    So the split is derived now, and pinned.
+    """
+
+    tree, parents = _differential_tree()
+
+    def enclosing(node: ast.AST) -> tuple[list[int], str | None, ast.AST | None]:
+        loops: list[int] = []
+        function: str | None = None
+        block_parent: ast.AST | None = None
+        cur = parents.get(node)
+        while cur is not None:
+            if isinstance(cur, (ast.For, ast.While)):
+                loops.append(cur.lineno)
+            if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)) and function is None:
+                function = cur.name
+            if block_parent is None and isinstance(
+                cur, (ast.If, ast.Try, ast.For, ast.While, ast.FunctionDef, ast.ExceptHandler)
+            ):
+                block_parent = cur
+            cur = parents.get(cur)
+        return loops, function, block_parent
+
+    found: list[dict[str, Any]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AugAssign) or not isinstance(node.target, ast.Subscript):
+            continue
+        base = node.target.value
+        if (getattr(base, "id", None) or getattr(base, "attr", None)) != "counts":
+            continue
+        key = node.target.slice
+        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            pattern, dynamic = key.value, False
+        elif isinstance(key, ast.JoinedStr) and isinstance(key.values[0], ast.Constant):
+            pattern, dynamic = key.values[0].value, True
+        else:
+            continue
+        loops, function, block = enclosing(node)
+        # PER-GAME is not a loop-depth property and cannot be read off one:
+        # `abort:no_legal_action` sits two loops deep and is per-game anyway, because the
+        # next statement returns out of `run_game`. Detected structurally.
+        siblings = getattr(block, "body", []) if block is not None else []
+        index = next(
+            (i for i, s in enumerate(siblings) if getattr(s, "lineno", None) == node.lineno),
+            None,
+        )
+        ends_the_game = (
+            function == "run_game"
+            and index is not None
+            and index + 1 < len(siblings)
+            and isinstance(siblings[index + 1], ast.Return)
+        )
+        found.append(
+            {
+                "pattern": pattern,
+                "dynamic": dynamic,
+                "line": node.lineno,
+                "function": function,
+                "loops": sorted(loops),
+                "ends_the_game": ends_the_game,
+            }
+        )
+    return found
+
+
+# Which scalar is the denominator for a never-fired claim on a counter emitted in each
+# function. Derived from the call structure, and each is a fact about where the call sits:
+#
+#   * `_prepare_boundary` is called at `engine_transition_differential.py:2420`, on the
+#     statement immediately after `counts["boundaries_full_round"] += 1` at :2419, so it
+#     runs exactly once per FULL-ROUND boundary. Its refusals fire BEFORE
+#     `boundaries_measured` increments at :2756, so `boundaries_measured` would be the
+#     wrong -- and smaller -- denominator for them.
+#   * `evaluate_boundary_strict` and the matcher's `try` in `run_game` are reached only
+#     for a boundary that `_prepare_boundary` returned, i.e. `boundaries_measured`.
+#   * a counter that returns out of `run_game` is once per GAME.
+_DENOMINATOR_BY_FUNCTION = {
+    "_prepare_boundary": "boundaries_full_round",
+    "evaluate_boundary_strict": "boundaries_measured",
+    "run_game": "boundaries_measured",
+}
+
+
 def counter_key_space() -> tuple[frozenset[str], frozenset[str]]:
     """``(exact keys, f-string prefixes)`` the differential's ``counts`` can ever carry.
 
@@ -474,6 +581,117 @@ def inventory() -> dict[str, dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def sites_for(entry: dict[str, Any], sites: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Emission sites whose key pattern can produce this inventory entry's key."""
+
+    key = entry["key"]
+    out = []
+    for site in sites:
+        pattern = site["pattern"]
+        if site["dynamic"]:
+            if key.startswith(pattern) or pattern.startswith(key):
+                out.append(site)
+        elif pattern == key or (entry["key_kind"] == "prefix" and pattern.startswith(key)):
+            out.append(site)
+    return out
+
+
+def granularity(entry: dict[str, Any], sites: list[dict[str, Any]]) -> dict[str, Any]:
+    """`{granularity, denominator}` for one entry, resolved from its emission sites.
+
+    Conservative when an entry has several sites: a counter reachable both per-game and
+    per-boundary is reported at the SMALLER denominator, because a bound has to hold for
+    every way the counter can fire.
+    """
+
+    matched = sites_for(entry, sites)
+    if not matched:
+        return {"granularity": "UNRESOLVED", "denominator": None, "sites": []}
+    if any(site["ends_the_game"] for site in matched):
+        kind, denominator = "per_game", "games"
+    elif any(
+        site["function"] == "evaluate_boundary_strict" and site["loops"] for site in matched
+    ):
+        kind = "per_state_or_branch_within_boundary"
+        denominator = "boundaries_measured"
+    else:
+        kind = "per_boundary"
+        denominator = min(
+            (_DENOMINATOR_BY_FUNCTION.get(site["function"], "boundaries_measured")
+             for site in matched),
+            key=lambda name: 0 if name == "boundaries_measured" else 1,
+        )
+    return {
+        "granularity": kind,
+        "denominator": denominator,
+        "sites": [f"{s['function']}:{s['line']}" for s in sorted(matched, key=lambda s: s["line"])],
+    }
+
+
+def liveness_witnesses(
+    entries: dict[str, dict[str, Any]],
+    sites: list[dict[str, Any]],
+    fired: dict[str, int],
+) -> dict[str, list[str]]:
+    """`entry -> counter keys whose firing ENTAILS this entry's emission site executed`.
+
+    What a calibrator is for is emission-path liveness -- proof the key is not dead code
+    in this configuration -- not sample size, which the rule of three does unaided. So a
+    witness has to be a counter whose execution implies the entry's statement was reached.
+    Three relations, each an entailment rather than a resemblance:
+
+      1. SAME STATEMENT. The `{}` families all increment at one `counts[...] += 1`, so any
+         nonzero key from that statement proves it executed.
+      2. ADJACENT IN THE SAME BLOCK. `world_prestate_mismatch` at :2752 and the keyed
+         `world_prestate_mismatch:{...}` at :2753 are consecutive in one `if` body.
+      3. STRICTLY NESTED. `strict:branch_event_legal_error:` (:2127) sits inside the same
+         `for state in states` (:2055) as `strict:no_damage_rolls` (:2083) and
+         `strict:branch_events_error:` (:2065), so its 146 firings prove that loop body ran.
+
+    Deliberately NOT "same function": that would let `world_prestate_mismatch` vouch for
+    `skip:world_error:no_constructible_candidate`, a different except-handler that may
+    never execute. An over-broad witness relation is how a liveness claim becomes the
+    thing it was meant to check.
+    """
+
+    by_line = {site["line"]: site for site in sites}
+    out: dict[str, list[str]] = {}
+    for name, entry in entries.items():
+        matched = sites_for(entry, sites)
+        witnesses: set[str] = set()
+        for site in matched:
+            for key, value in fired.items():
+                if not value:
+                    continue
+                for other in sites:
+                    if not (key.startswith(other["pattern"]) if other["dynamic"] else key == other["pattern"]):
+                        continue
+                    same_statement = other["line"] == site["line"]
+                    adjacent = (
+                        other["function"] == site["function"]
+                        and other["loops"] == site["loops"]
+                        and abs(other["line"] - site["line"]) == 1
+                    )
+                    # STRICTLY NESTED, and the entry must itself be inside a loop.
+                    # Without that last clause the relation is over-broad in exactly the
+                    # way this docstring warns about: every counter at loop depth 0 in
+                    # `_prepare_boundary` would be "witnessed" by any counter in any
+                    # loop in that function, so `skip:unmappable_choice:*` would vouch
+                    # for a `world_unsupported` reason raised in a different
+                    # except-handler. Measured before the clause was added: it inflated
+                    # the witnessed set from 39 to 41.
+                    nested = (
+                        other["function"] == site["function"]
+                        and bool(site["loops"])
+                        and set(site["loops"]) < set(other["loops"])
+                    )
+                    if same_statement or adjacent or nested:
+                        witnesses.add(key)
+        # A key never witnesses itself: the entry is by construction at zero.
+        out[name] = sorted(w for w in witnesses if w != entry["key"])
+    return {name: w for name, w in out.items() if w}
+
+
 def _counter_hits(entry: dict[str, Any], counters: dict[str, Any]) -> dict[str, int]:
     """Every nonzero counter in one shard that answers to this inventory entry."""
 
@@ -613,6 +831,14 @@ def main(argv: list[str] | None = None) -> int:
     distinct_provenance = sorted({json.dumps(p, sort_keys=True) for p in provenance.values()})
     fingerprint = json.loads(distinct_provenance[0])["engine_fingerprint"]
 
+    sites = emission_sites()
+    all_fired: dict[str, int] = {}
+    for _name, report in shards:
+        for key, value in (report.get("counters") or {}).items():
+            if isinstance(value, (int, float)) and value:
+                all_fired[key] = all_fired.get(key, 0) + value
+    witnesses = liveness_witnesses(entries, sites, all_fired)
+
     verdicts: dict[str, Any] = {}
     banded_shards = set(banded_span["shards"])
     for name, entry in sorted(entries.items()):
@@ -656,6 +882,22 @@ def main(argv: list[str] | None = None) -> int:
         )
         if name in CENSUS_CANNOT_REACH:
             record["census_cannot_reach"] = CENSUS_CANNOT_REACH[name]
+        record.update(granularity(entry, sites))
+        # ⚠ THE BOUND IS NAMED HERE AND VALUED ELSEWHERE, DELIBERATELY. A first revision
+        # put `bound_trials` and `rule_of_three_upper_95` in this record, and that broke
+        # a sibling instrument: `tests/test_never_fired_counter_census.py` scans every
+        # committed JSON for a nonzero number whose dotted PATH contains a counter name,
+        # or a name-valued string with a nonzero numeric sibling. A verdict record is
+        # keyed BY the counter name and carries it in `key`, so adding any number to it
+        # made all 46 never-fired names read as FIRED across the corpus -- the corpus
+        # census went from green to six failures on the same tree.
+        #
+        # It caught it, which is the two instruments doing their job on each other. The
+        # fix is structural rather than an exclusion: entries carry the denominator's
+        # NAME, and the numbers live in `denominator_trials` below, keyed by denominator
+        # rather than by counter. Nothing name-keyed in this artifact holds a number
+        # except a FIRED entry's own evidence, which is what evidence means.
+        record["liveness_witnesses"] = witnesses.get(name, [])
         verdicts[name] = record
 
     document = {
@@ -692,6 +934,47 @@ def main(argv: list[str] | None = None) -> int:
             ),
         },
         "entries_with_no_emittable_counter_key": unemittable,
+        # ⚠ THE SPLIT, DERIVED. This decides which of the three bounds a reader applies to
+        # a given entry, and a first revision asserted it -- "40 per-boundary plus 6
+        # per-game" -- with no trace. Five of that six are not per-game. Resolved from
+        # emission sites by AST, over the 46 window-scoped entries only.
+        "emission_granularity": {
+            kind: sorted(
+                name
+                for name, record in verdicts.items()
+                if record["family"].startswith("section_3_5")
+                and not record.get("measurement_independent")
+                and record["granularity"] == kind
+            )
+            for kind in sorted(
+                {
+                    record["granularity"]
+                    for record in verdicts.values()
+                    if record["family"].startswith("section_3_5")
+                    and not record.get("measurement_independent")
+                }
+            )
+        },
+        # The values behind every entry's `denominator` name. Keyed by denominator, never
+        # by counter name -- see the note in the verdict loop for why that matters.
+        "denominator_trials": {
+            name: {
+                "trials": value,
+                "rule_of_three_upper_95": round(3 / value, 10),
+            }
+            for name, value in (
+                ("games", strict_span["games"]),
+                ("boundaries_measured", strict_span["boundaries_measured"]),
+                ("boundaries_full_round", strict_span["boundaries_full_round"]),
+            )
+        },
+        "window_scoped_with_a_liveness_witness": sorted(
+            name
+            for name, record in verdicts.items()
+            if record["family"].startswith("section_3_5")
+            and not record.get("measurement_independent")
+            and record["liveness_witnesses"]
+        ),
         # ANTI-VACUITY. Every absence above is a loop over the same shards, and a loop
         # over a shard set that stopped being read passes. These four counters DO fire in
         # the census, so a scanner or a corpus that silently emptied turns the pin red

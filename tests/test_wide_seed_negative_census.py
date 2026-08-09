@@ -66,7 +66,8 @@ module docstring"), and this one did not -- it claimed "12 applied, 12 caught" a
 none. An independent reviewer then re-ran a battery of 13 and found the 13th survives.
 **That is exactly what an unrecorded battery costs**, so the list is here and a mutation
 added to it must be added here too. 14-18 came with the §6 sync pin, added after a second
-review round found that section still carrying pre-correction prose.
+review round found that section still carrying pre-correction prose; 19-22 came with the
+derived emission-granularity split, after a third found that split asserted and untraced.
 
 Each is applied to a copy of the committed artifact (or the generator) and must turn this
 module RED:
@@ -91,6 +92,10 @@ module RED:
   16. §6's input-group subsection count changed from (4) to (5)
   17. a §6 bullet de-listed so the section names one fewer entry than the generator
   18. `public_effect_blocked` re-listed among §6's unreachable bullets
+  19. an entry moved between granularity buckets in `emission_granularity`
+  20. a recorded `denominator_trials` value detached from the shards
+  21. an entry's `denominator` name swapped for another of the three
+  22. the derived `liveness_witnesses` list edited away from what the AST produces
 
 ⚠ 13 was found by the reviewer, not the author, and it was the important one: `combined`
 is where the 0.32 % bound quoted in the report, in §3.5 and in H15's cell comes from, and
@@ -607,6 +612,146 @@ class WhatTheCensusCannotSettleIsNamedTests(unittest.TestCase):
                 )
 
 
+class TheEmissionGranularitySplitIsDerivedTests(unittest.TestCase):
+    """Which of the three bounds applies to an entry is now AST-derived, and pinned.
+
+    ⚠ ADDED AFTER REVIEW. The report split the 46 window-scoped entries into "40
+    per-boundary refusal counters plus 6 per-game abort/error counters" and used that
+    split to tell a reader which rule-of-three bound to apply. It was never traced, and
+    **five of the six were wrong**: the three `engine_error*` keys increment inside the
+    step `while` (per boundary), and `strict:no_damage_rolls` /
+    `strict:branch_events_error:` increment inside `evaluate_boundary_strict`'s
+    `for state in states` (per state within a boundary) -- which the differential's own
+    comment at :3134-3136 says verbatim, in the block §6 and H8 both cite.
+
+    Only `abort:no_legal_action` is per-game, and not because of loop depth: it sits two
+    loops deep and is per-game because the next statement returns out of `run_game`. A
+    depth heuristic would have got it wrong in the other direction, so the derivation
+    detects the return structurally.
+
+    Consequence, and the reason this is pinned rather than corrected once: the split
+    decides a bound that differs by ~80x (3/8,000 against 3/641,866), and it was the only
+    statement in the report of which entries take which. A plausible sentence about
+    emission sites is exactly what `CENSUS_CANNOT_REACH`'s own rule forbids.
+
+    MUTATION CHECKED: moving any entry between granularity buckets in the artifact, or
+    perturbing a recorded bound away from 3/trials, turns this red.
+    """
+
+    def _window_scoped(self) -> dict[str, dict]:
+        return {
+            name: record
+            for name, record in _document()["verdicts"].items()
+            if record["family"].startswith("section_3_5")
+            and not record.get("measurement_independent")
+        }
+
+    def test_the_split_is_exactly_one_per_game_counter(self) -> None:
+        buckets = _document()["emission_granularity"]
+        self.assertEqual(
+            buckets.get("per_game"),
+            ["abort:no_legal_action"],
+            "the per-game bucket moved. Only `abort:no_legal_action` returns out of "
+            "`run_game`; everything else in the inventory fires at least once per "
+            "boundary, and quoting it the per-game bound understates the census by ~80x.",
+        )
+        self.assertEqual(sum(len(v) for v in buckets.values()), 46)
+        self.assertEqual(
+            sum(len(v) for k, v in buckets.items() if k != "per_game"),
+            45,
+        )
+
+    def test_every_window_scoped_entry_resolves_to_an_emission_site(self) -> None:
+        # An entry the AST cannot resolve has no derivable denominator, so its bound
+        # would be a guess. That must be red, not silently defaulted.
+        unresolved = sorted(
+            name
+            for name, record in self._window_scoped().items()
+            if record["granularity"] == "UNRESOLVED" or not record.get("sites")
+        )
+        self.assertEqual(unresolved, [])
+
+    def test_the_recorded_split_matches_a_live_ast_derivation(self) -> None:
+        sites = CENSUS_SCRIPT.emission_sites()
+        entries = CENSUS_SCRIPT.inventory()
+        for name, record in sorted(self._window_scoped().items()):
+            with self.subTest(entry=name):
+                derived = CENSUS_SCRIPT.granularity(entries[name], sites)
+                self.assertEqual(record["granularity"], derived["granularity"])
+                self.assertEqual(record["denominator"], derived["denominator"])
+                self.assertEqual(record["sites"], derived["sites"])
+
+    def test_each_bound_is_three_over_its_own_denominator_from_the_shards(self) -> None:
+        document = _document()
+        shards = [
+            json.loads((REPO / name).read_text(encoding="utf-8"))
+            for name in document["arms"]["strict"]["shards"]
+        ]
+        trials = {
+            "games": sum(r["games"] for r in shards),
+            "boundaries_measured": sum(r["boundaries_measured"] for r in shards),
+            "boundaries_full_round": sum(r["boundaries_full_round"] for r in shards),
+        }
+        # The three are genuinely different, so a bound cannot be right by coincidence.
+        self.assertEqual(len(set(trials.values())), 3)
+        recorded = document["denominator_trials"]
+        self.assertEqual(sorted(recorded), sorted(trials))
+        for name, value in sorted(trials.items()):
+            with self.subTest(denominator=name):
+                self.assertEqual(recorded[name]["trials"], value)
+                self.assertAlmostEqual(
+                    recorded[name]["rule_of_three_upper_95"], 3 / value, places=10
+                )
+        # Every entry names one of the three, so the join is total. The numbers live in
+        # `denominator_trials` rather than on the entry ON PURPOSE: a number under a path
+        # containing a counter name makes `tests/test_never_fired_counter_census.py` read
+        # that counter as FIRED, and a first revision of this artifact did exactly that
+        # to all 46. That sibling pin caught it; this assertion keeps the shape.
+        for name, record in sorted(self._window_scoped().items()):
+            with self.subTest(entry=name):
+                self.assertIn(record["denominator"], trials)
+                self.assertNotIn("bound_trials", record)
+                self.assertNotIn("rule_of_three_upper_95", record)
+
+    def test_the_liveness_witness_map_is_derived_and_not_vacuous(self) -> None:
+        """Emission-path liveness is what a calibrator establishes; pin how it was got.
+
+        The report's earlier claim that six entries had "no in-family liveness witness"
+        was false for three of them, so the witness relation is now computed rather than
+        asserted -- and it is deliberately narrow: same emission statement, adjacent
+        statement in one block, or strictly nested inside the entry's own loop. An
+        over-broad relation would let a different except-handler vouch for an entry, and
+        the first draft of it did exactly that (41 witnessed instead of 38).
+        """
+
+        document = _document()
+        sites = CENSUS_SCRIPT.emission_sites()
+        entries = CENSUS_SCRIPT.inventory()
+        fired: dict[str, int] = {}
+        for arm in document["arms"].values():
+            for shard in arm["shards"]:
+                for key, value in (
+                    json.loads((REPO / shard).read_text(encoding="utf-8")).get("counters") or {}
+                ).items():
+                    if isinstance(value, (int, float)) and value:
+                        fired[key] = fired.get(key, 0) + value
+        derived = CENSUS_SCRIPT.liveness_witnesses(entries, sites, fired)
+        window_scoped = self._window_scoped()
+        for name, record in sorted(window_scoped.items()):
+            with self.subTest(entry=name):
+                self.assertEqual(record["liveness_witnesses"], derived.get(name, []))
+        witnessed = set(document["window_scoped_with_a_liveness_witness"])
+        self.assertEqual(
+            witnessed,
+            {n for n, r in window_scoped.items() if r["liveness_witnesses"]},
+        )
+        # Neither vacuous nor total: a relation that witnessed everything would be as
+        # useless as one that witnessed nothing, and the unwitnessed set is what the
+        # report has to be honest about.
+        self.assertGreater(len(witnessed), 30)
+        self.assertLess(len(witnessed), len(window_scoped))
+
+
 class TheCannotReachSectionOfTheReportIsInSyncTests(unittest.TestCase):
     """§6 of the report is prose about `CENSUS_CANNOT_REACH`. Re-derive it from the map.
 
@@ -699,6 +844,57 @@ class TheCannotReachSectionOfTheReportIsInSyncTests(unittest.TestCase):
             len(self._listed()),
             len(expected),
             "§6 lists an entry twice",
+        )
+
+    def test_no_adjudicated_false_phrasing_is_asserted_anywhere_in_the_report(self) -> None:
+        """A negative pin over the four sentences review has adjudicated FALSE.
+
+        ⚠ ADDED AFTER REVIEW POINTED OUT WHAT THE COUNT-AND-MEMBERSHIP PIN MISSES. Of the
+        four §6 defects that shipped at `f4ad9802`, only ONE was a membership change
+        (`public_effect_blocked` moving out). The other three were retracted PHRASINGS
+        with the entry unmoved -- so the pin above, which checks counts and membership,
+        would have caught 1 of 4.
+
+        This is not a wording checksum, and deliberately not: a checksum would fight
+        exactly the demonstration improvements this section keeps getting. It is four
+        specific substrings that review has ruled false, in the repo's existing
+        `test_prose_alone_is_not_evidence` shape -- it constrains nothing future and
+        forbids only the return of a claim already adjudicated.
+
+        Each is allowed to appear inside a ⚠ correction note that quotes it as retracted,
+        which is how §6 records its own history; what is forbidden is a line asserting it.
+        The check is therefore per-line, skipping lines that carry the retraction marker.
+        """
+
+        retracted = (
+            "the differential declares none",
+            "never carries",
+            "nowhere in the repository",
+            "live rows always carry the counts",
+        )
+        markers = ("⚠", "would be false", "was falsified", "is **false**", "FALSE", "retract")
+        offenders = []
+        for path in (
+            "reports/c153_wide_seed_negative_census.md",
+            "reports/c138_known_gaps_ledger.md",
+        ):
+            lines = (REPO / path).read_text(encoding="utf-8").splitlines()
+            for number, line in enumerate(lines, 1):
+                # The retraction marker is looked for in a WINDOW, not on the line: these
+                # documents are hard-wrapped at ~95 columns, so a quoted phrase and the
+                # "⚠"/"FALSE" that retracts it routinely land on different lines. A
+                # strict per-line rule flagged §6's own correction note on its first run.
+                window = " ".join(lines[max(0, number - 3) : number + 2])
+                if any(marker in window for marker in markers):
+                    continue
+                for phrase in retracted:
+                    if phrase in line:
+                        offenders.append(f"{path}:{number}: {phrase!r} -- {line.strip()[:90]}")
+        self.assertEqual(
+            offenders,
+            [],
+            "a phrasing review has adjudicated FALSE is asserted again:\n"
+            + "\n".join(offenders),
         )
 
     def test_public_effect_blocked_is_named_as_reachable_and_not_listed(self) -> None:

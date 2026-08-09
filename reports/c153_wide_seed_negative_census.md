@@ -100,8 +100,11 @@ have left that negative exactly where it was, and would have reported it as meas
 ### 3.1 Justifying the size
 
 Zero events in *N* independent trials puts the 95 % upper bound on the per-trial rate at
-**3/N** (the rule of three). Quoted at both granularities because the inventory mixes
-per-game exits with per-boundary ones.
+**3/N** (the rule of three). Quoted at several granularities because the inventory mixes
+per-game exits, per-boundary refusals and per-divergence classes — **and which entry takes which
+is derived by AST rather than asserted**, in §4.1. The short version: **45 of the 46 take a
+per-boundary denominator and exactly one is per-game**, so the per-game column below applies to a
+single entry.
 
 | arm | games | measured boundaries | classified divergences | 95 % bound / game | 95 % bound / boundary | 95 % bound / divergence |
 |---|---|---|---|---|---|---|
@@ -185,36 +188,79 @@ C152's rate is used, which §3.1 explains it should not be). The defensible sent
 least 4.7× rarer than the weaker of the two calibrators, at 95 %"**, and it is worth less than
 "an order of magnitude" precisely because one calibrator is thin.
 
-**And the right calibrators for the bulk of the inventory were already in this census.** The two
-C152 names are cross-family: both are per-boundary counters inside `evaluate_boundary_strict`'s
+### The split, derived — and the bound that follows from it
+
+⚠ **A draft of this section split the 46 as "40 per-boundary refusal counters plus 6 per-game
+abort/error counters", and used that split to tell a reader which of §3.1's three bounds to apply.
+It was a plausible sentence about emission sites that nothing traced — the exact thing §6's own
+rule forbids, adopted one commit earlier — and five of the six were wrong.** Resolved by AST over
+the innermost enclosing scope (`emission_granularity` in the artifact, pinned by
+`TheEmissionGranularitySplitIsDerivedTests`):
+
+| granularity | count | denominator | 95 % bound |
+|---|---|---|---|
+| per boundary | 43 | `boundaries_full_round` 658,559 or `boundaries_measured` 641,866 | 4.56 × 10⁻⁶ / 4.67 × 10⁻⁶ |
+| per state or branch within a boundary | 2 | `boundaries_measured` 641,866 | 4.67 × 10⁻⁶ |
+| per game | **1** | `games` 8,000 | 3.75 × 10⁻⁴ |
+
+**Only `abort:no_legal_action` is per-game**, and not because of loop depth — it sits two loops
+deep, and is per-game because the next statement `return`s out of `run_game`, which the derivation
+detects structurally. The three `engine_error*` keys increment inside the step `while`, so they
+are per-boundary. `strict:no_damage_rolls` and `strict:branch_events_error:` increment inside
+`evaluate_boundary_strict`'s `for state in states`; the differential's own comment at
+`:3134-3136` says so verbatim — *"PER-BRANCH or PER-STATE tallies within one boundary"* — in the
+same block §6 and H8 both cite. **So 45 of the 46 carry the per-boundary bound, not six the
+per-game one: a factor of ~80, conservative in direction and wrong in kind.**
+
+One refinement the derivation forced: the 40 world-construction and choice-mapping refusals fire
+inside `_prepare_boundary`, which runs once per **`boundaries_full_round`** (658,559) — its
+increment is the statement immediately before the call — and they fire *before*
+`boundaries_measured` increments. Quoting them 641,866 would be the smaller, weaker denominator.
+Both are recorded per entry rather than averaged.
+
+### Which calibrator carries which entry
+
+**The right calibrators for the bulk of the inventory were already in this census.** C152's two
+names are cross-family: both are per-boundary counters inside `evaluate_boundary_strict`'s
 branch-legality / rump machinery, measured on a different engine *and* harness, and §3.1's −4.76σ
-shift is itself evidence that family is instrument-sensitive. The 46 are elsewhere — **40** are
-per-boundary refusal counters on the world-construction and choice-mapping path (27
-`world_unsupported`, 7 `unmappable_choice`, `skip:no_action_candidates`,
-`skip:world_error:no_constructible_candidate`, `skip:no_materialization:`, `skip:world_error:`,
-`world_prestate_mismatch:side_conditions`, `world_prestate_mismatch:weather_`) and **6** are
-per-game abort/error counters (`abort:no_legal_action`, `engine_error`, `strict:no_damage_rolls`,
-`engine_error:`, `engine_error_choice:`, `strict:branch_events_error:`).
+shift is itself evidence that family is instrument-sensitive. The four anti-vacuity controls are
+not — they sit on the entries' own emission statements, at 10²–10³ counts over the same 10,000
+games: `skip:unmappable_choice:struggle_not_submittable` **7,410** (the same
+`counts[f"skip:unmappable_choice:{...}"]` statement the 7 unobserved reasons use),
+`skip:world_unsupported:volatile_unsupported` **4,827** and
+`skip:world_unsupported:materialization_blocker` **327** (the same statement as the 27), and
+`world_prestate_mismatch` **2,624** (adjacent in one `if` body to the keyed increment). Same
+build, same harness, same run, same statement, three orders of magnitude more mass.
 
-**So use the in-family ones, which this census measured on this build.** The four anti-vacuity
-controls sit on the emission paths of 34 of those 40, at 10²–10³ counts over the same 10,000
-games: `skip:unmappable_choice:struggle_not_submittable` **7,410** (the `UnmappableChoice` raise
-path, which the 7 unobserved reasons share), `skip:world_unsupported:volatile_unsupported`
-**4,827** and `skip:world_unsupported:materialization_blocker` **327** (the
-`EngineWorldUnsupported` path, shared with the 27), and `world_prestate_mismatch` **2,624** (the
-prestate comparison, shared with `side_conditions` and the `weather_` family). Those are the
-calibrators the bulk of the inventory deserves, and they are stronger than C152's two on every
-axis that matters here: same build, same harness, same run, same code path, three orders of
-magnitude more mass.
-
-**What each calibration is actually for, which a draft ran together.** The rule of three does the
+**What a calibration is actually for, which a draft ran together.** The rule of three does the
 sample-size work and needs no calibrator at all — it is arithmetic on the denominator. What a
-calibrator uniquely establishes is **emission-path liveness**: that the counter keys are not dead
-code in this configuration, so a zero is a measurement rather than an artefact of the exit never
-being reached. That is the part that cannot transfer across families, and it is why the four
-controls carry the 40 and C152's two carry only their own path. Stated that way the earlier
-"transfers to the 40, weakly to the 6" was generous: the 6 per-game abort/error counters have
-**no** in-family liveness witness in this census, and their zeros are correspondingly weaker.
+calibrator uniquely establishes is **emission-path liveness**: that the key is not dead code in
+this configuration, so a zero is a measurement rather than an artefact of the exit never being
+reached. That is the part that cannot transfer across families.
+
+**So the witness relation is derived too, and deliberately narrow** — same emission statement,
+adjacent statement in one block, or strictly nested inside the entry's own loop. Nothing looser: a
+first version also admitted "same function, deeper loop", which let `skip:unmappable_choice:*`
+vouch for a `world_unsupported` reason raised in a different except-handler and inflated the
+result from 38 to 41. **38 of the 46 have a liveness witness. Eight do not**, over **six**
+independent code paths:
+
+* the `engine_error` handler at `:2488-2495` — three keys (`engine_error`, `engine_error:`,
+  `engine_error_choice:`), **one** path;
+* `skip:no_action_candidates` (`:2634`), `skip:no_materialization:` (`:2615`),
+  `skip:world_error:` (`:2704`) and `skip:world_error:no_constructible_candidate` (`:2731`) —
+  four separate except-handlers;
+* `abort:no_legal_action` (`:2413`), whose only near-witness is `abort:max_steps` at **19** — the
+  same per-game return *mechanism* but a different trigger and a different statement, so the
+  derivation excludes it and this sentence records it as weaker-than-a-witness rather than
+  promoting it.
+
+⚠ **An earlier draft said six entries had "no in-family liveness witness". That was false for
+three of them**: `strict:no_damage_rolls` and `strict:branch_events_error:` sit in the *same*
+`for state in states` loop as `strict:branch_event_legal_error:`, which fired **146** times on
+this build, this run, this path — a closer witness than three of the four controls are for their
+families. The retreat from the two-point cross-family transfer was the right move; it was applied
+to a group that did not exist as described.
 
 **It licenses nothing at all about a per-divergence class**, where the denominator is 949 and
 0.32 % is one in 316 — a bound too weak to call a negative settled. The five surviving H15
@@ -478,8 +524,20 @@ which `engine_world` tests first). Both demonstrations are now traced to the cal
 recorded in the generator: **trace the raise site to the differential's actual call, not to a
 plausible sentence about it.**
 
-**Battery: 13 mutations, 13 caught, enumerated in the pin module's docstring** — 12 of mine plus
-the reviewer's 13th, which is defect 4 above. Two of my twelve are recorded as near-misses rather
+**7. The census artifact nearly broke the corpus census, and the corpus census caught it.**
+Recording the derived split put `bound_trials` and `rule_of_three_upper_95` on each verdict
+record — which is keyed *by* the counter name and carries it in `key`.
+`tests/test_never_fired_counter_census.py` scans every committed JSON for a nonzero number whose
+dotted path contains a counter name, or a name-valued string with a nonzero numeric sibling, so
+all 46 never-fired names instantly read as **FIRED**: that module went from green to six failures
+on the same tree, in the same run. The fix is structural rather than an exclusion — entries carry
+the denominator's *name*, the numbers live in a `denominator_trials` block keyed by denominator —
+and nothing name-keyed in this artifact now holds a number except a FIRED entry's own evidence.
+Worth recording for two reasons: it is the two instruments checking each other exactly as
+intended, and an "obvious" convenience field was one commit from silently inverting 46 verdicts.
+
+**Battery: 22 mutations, 22 caught, enumerated in the pin module's docstring** — 12 of mine, the
+reviewer's 13th (defect 4 above), five for the §6 sync pin and four for the derived split. Two of my twelve are recorded as near-misses rather
 than tidied away: the closure mutation survived until the pin stopped reading the artifact's own
 `agrees` flag, and one first-pass "survivor" was a defective mutation (`{} or {...}` is truthy),
 not an inert pin. Pins verified under **both**

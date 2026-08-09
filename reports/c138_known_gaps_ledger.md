@@ -420,15 +420,26 @@ per 1,000 games, "expected ~24 and ~216", and called the shortfall seed-block va
 P(X ≤ 146 | λ = 216) = **2.7 × 10⁻⁷**, −4.76σ, so it is not, and the cause is #1199 rewriting the
 `local_showdown.py` fold both counters live in — i.e. the very pooling §7.3 of the C153 report
 forbids. **And the in-family calibrators are better and were already here**: the census's four
-anti-vacuity controls sit on the emission paths of **34 of the 40** at 10²–10³ counts on this
+anti-vacuity controls sit on the entries' **own emission statements** at 10²–10³ counts on this
 build — `struggle_not_submittable` 7,410, `volatile_unsupported` 4,827, `world_prestate_mismatch`
 2,624, `materialization_blocker` 327 — so the `UnmappableChoice`, `EngineWorldUnsupported` and
 prestate paths are demonstrably live here and a zero on them is a measurement, not an unreached
 exit. C152's two are cross-family (strict branch-legality/rump, different engine and harness) and
 do only their own path's work. What a calibrator establishes is **emission-path liveness**, not
-sample size — the rule of three does that and needs no calibrator — so the **6** per-game
-abort/error counters, which have no in-family liveness witness in this census, carry weaker zeros
-than the 40, and the whole calibration licenses **nothing** about a per-divergence class. What the census does not
+sample size — the rule of three does that and needs no calibrator.
+⚠ **A draft of this sentence said "the 6 per-game abort/error counters have no in-family liveness
+witness", and BOTH halves were untraced and wrong.** Resolved by AST over the innermost enclosing
+scope: **only one** of the 46 is per-game (`abort:no_legal_action`, and not by loop depth — the
+next statement returns out of `run_game`); the three `engine_error*` keys are per-boundary and
+`strict:no_damage_rolls` / `strict:branch_events_error:` are per-state within a boundary, which
+the differential's own comment at `:3134-3136` states verbatim. So **45 of the 46 carry the
+per-boundary bound**, not six the per-game one — a factor of ~80, conservative in direction and
+wrong in kind. And **38 of the 46 do have a witness**; the eight that do not span **six**
+independent paths, of which the `engine_error` handler is one carrying three keys. Both figures
+are now derived and pinned (`emission_granularity` and `liveness_witnesses` in
+`reports/artifacts/c153_wide_negative_census.json`,
+`tests/test_wide_seed_negative_census.py::TheEmissionGranularitySplitIsDerivedTests`).
+The whole calibration still licenses **nothing** about a per-divergence class. What the census does not
 exclude is anything below those bounds, anything behind a non-default flag, and the six entries §6
 of the C153 report names as unreachable by this instrument.
 
