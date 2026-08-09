@@ -34,6 +34,7 @@ from .determinization import gen3_randbat_belief_start_override_planner
 from .deep_line_audit import PROTOCOL_SIGNATURE_SCHEMA_VERSION, protocol_signature_counts
 from .dex import ShowdownDex, load_showdown_dex_cached
 from .env import PlayerId, TerminalState
+from .fallback_replay import RefusalRecord, attach_refusal_recorder
 from .local_showdown import (
     BRIDGE_PATH,
     LocalShowdownConfig,
@@ -290,6 +291,204 @@ OPPONENT_JOURNAL_SCHEMA_VERSION = "pokezero.opponent-journal.v1"
 # can I replay" rather than "can I replay the addresses I have".
 OPPONENT_JOURNAL_MODES = ("off", "addressed", "full")
 
+# The REFUSAL RECORDER, wired on by default.
+#
+# `fallback_samples` files an ADDRESS -- `{battle_id, round, seat, reason}` -- and
+# nothing else. Reading the state behind that address then requires replaying the
+# battle, and for a bridge shard the battle does not replay: foul-play's search is
+# wall-clock-budgeted over an unseeded `rand::rng()` (see the journal block above).
+# So for the corpus this bridge produces, "replay the address and look" is not a
+# thing anyone can do, and four eras of refusals were theorised about instead.
+#
+# `fallback_replay.attach_refusal_recorder` (#1180) captures the same state LIVE, at
+# the moment of the refusal, where no replay is needed: the world-failure classes
+# that fired ON THAT DECISION with counts, the worlds attempted/constructed/searched,
+# the engine's proposed choices, the request's legal set in the ENGINE'S vocabulary,
+# their disagreement, and the decision RNG seed. That is why this is on by default
+# and not behind an opt-in flag -- an instrument nobody remembers to switch on
+# records nothing, and every shard produced without it is another era of addresses
+# that cannot be read.
+#
+# COST. Two axes, both measured, neither asserted.
+#
+# 1. DECISION TIME. The recorder's work is three bound-method wrappers around
+#    `select_action_with_context`, `_map_choices` and `_fallback`; it sits OUTSIDE
+#    the timed native call and touches no RNG. TWO per-decision costs, not one: the
+#    first two wrappers run on every decision and the third only on a refusal, so
+#    quoting the cheap one alone would understate exactly the run this exists for.
+#    Measured (`scripts/refusal_recorder_cost.py --decisions 20000 --repeats 5`, four
+#    invocations on this checkout, median of five timing runs each):
+#
+#      non-refusing decision (snapshot only)     1.03 - 1.25 us
+#      refusing decision (snapshot + record)    11.16 - 13.77 us
+#
+#    Against the decision boundary this bridge actually runs -- a prior measurement
+#    put the median at 5.02 s on our side, plus foul-play's fixed 1,000 ms search --
+#    that is 2.1e-7 to 2.5e-7 of the boundary for a non-refusing decision and
+#    2.2e-6 to 2.7e-6 for a refusing one. Blended at the measured era-64 cell-D
+#    fallback rate of 1.00% (55 fallbacks in 5,513 decisions): 1.13 - 1.36 us, i.e.
+#    about 2.5e-7 of the boundary.
+#
+# 2. SUMMARY BYTES, measured the way the journal block measures them, because that
+#    is the axis that caught out the last author. `_write_json` rewrites the ENTIRE
+#    summary after every game when `--summary-out` is set, so bytes re-serialize
+#    O(games^2) and the document size, not the write count, is what scales.
+#
+#    Parameters taken from the REAL era-64 cell-D shards (`fp-d-probe-*-p{1,2}.json`,
+#    16 seat shards, 128 games, 5,513 decisions, 55 fallback decisions): 0.430
+#    refusals per game, 2,684 B mean per-game row, 37,270 B median seat shard.
+#    Record sizes taken from 93 REAL records captured by this recorder on a local
+#    d4/s1024/w4 batch, not from a fabricated one:
+#
+#      per refusal record          550 B median serialized (469 min, 777 max)
+#      per game                   +236 B  (+8.8% of a 2,684 B row)
+#      8-game seat shard        +1,892 B on 37,270 B: +5.1%
+#
+#    The O(games^2) axis, same per-game rate, cumulative bytes written:
+#
+#      --games 250   off 88.2 MB   refusals-on 95.6 MB   (+7.4 MB, +8.4%)
+#
+#    THAT +5.1% IS A RATE-CONDITIONAL NUMBER AND IT DOES NOT BOUND ANYTHING. A
+#    refusal record is EXPENSIVE (550 B, ~4x a journal entry) and cell D's refusals
+#    are RARE (0.430 per game); the product is small, and the product is all the
+#    +5.1% is. Scale the rate and it scales linearly with no ceiling: at 4.3
+#    refusals per game the shard is +51%, and a 100% fallback rate -- which is a
+#    REAL state this very file documents (`--no-search-fallback` exists because a
+#    searcher can play uniform-legal on every decision) -- puts 43 records on every
+#    game row and the cumulative write into the hundreds of MB.
+#
+#    So the payload is CAPPED rather than argued about, the way the producer it
+#    mirrors caps (`_FALLBACK_SAMPLES_PER_CLASS = 3` plus one-address-per-battle,
+#    `engine_search.py:457`, `:2421`). See `_REFUSAL_RECORDS_PER_BATTLE` and
+#    `_REFUSAL_RECORDS_PER_RUN` below for the ceilings and the arithmetic that
+#    picked them. What the cap drops is COUNTED and published, because
+#    `fallback_sample_addresses_dropped` is right there as the example of a
+#    truncation nobody can see.
+#
+#    What the ceilings actually buy, same tool, `--refusals-per-game 43` (the 100%
+#    fallback rate), 250 games:
+#
+#                        off        on (capped)      if UNCAPPED
+#      cumulative     88.2 MB       105.4 MB          830.2 MB
+#      8-game shard        -          +94.4%          +963%
+#
+#    The reserve is also CHEAPER than the prefix it replaced (105.4 vs 120.5 MB),
+#    which is not a coincidence: a prefix front-loads the whole payload into the
+#    earliest writes and `_write_json` re-serializes it once per remaining game.
+#    The unbiased sample is the cheap one.
+#
+#    At cell D's real 0.430 they agree exactly (+7.4 MB either way): the cap cannot
+#    bite on the case the default was justified against, and removes the tail on the
+#    case it was not.
+#
+#    The run budget is spent as an even PER-GAME RESERVE, not as a prefix -- a
+#    prefix bounds the bytes and biases the sample, which for an instrument whose
+#    job is to characterise a cell is the wrong trade. See `_refusal_allowance`.
+#
+#    And the loss is reported as TWO numbers, never one. A truncation to a published
+#    ceiling and a record that reached no game row are both "records the document
+#    does not carry", and a single count made them indistinguishable -- with the
+#    ceilings published right beside it, so a reader would attribute either to them.
+#    `records_dropped_to_ceiling` is bounded and does not condemn the run;
+#    `records_unrowed` is unexplained data loss and blocks `trustworthy`.
+#
+#    `--no-refusal-records` still exists, but it is NOT the answer to the size
+#    question and must not be sold as one: switching it off requires knowing in
+#    advance that you are in a high-refusal cell, which is the thing the recorder
+#    exists to discover. The cap is what makes the default safe; the flag is for a
+#    caller who wants the bytes back on a cell they have already read.
+#
+# HEALTH IS NEVER SILENT. `RefusalRecorder` deliberately does not raise into the
+# search -- an instrument that turns a handled refusal into a crash has changed the
+# outcome it exists to explain -- so a capture failure lands on `recorder.errors`
+# and an empty record list would otherwise read as "this run had no refusals".
+# `RefusalRecorderHealth` carries `attached`, `attach_error`, `health_reported`,
+# `instrument_errors` and `degraded_records` into the summary, and `trustworthy` is
+# a CONJUNCTION with `health_reported` so that silence reads as unknown rather than
+# as clean -- the same rule `ReplayResult.trustworthy` states.
+#
+# INVISIBLE TO THE ADDRESS READER. `fallback_addresses` accepts a mapping as a
+# cumulative stats scope iff it CONTAINS `fallback_samples` (`_walk_stats_blocks`)
+# and harvests addresses from any mapping so NAMED (`_walk_sample_blocks`). The
+# header is `refusal_recorder`, the rows are `refusals`, and no key inside a
+# serialized `RefusalRecord` is `fallback_samples`, `world_failure_reasons` or
+# `fallback_reasons` -- the record spells its own delta `world_failures`. So the
+# block can add neither a scope, nor an address, nor an occurrence count.
+# `RefusalRecordReaderInvariantTest` pins that against a real `scan_corpus`.
+REFUSAL_RECORDER_SCHEMA_VERSION = "pokezero.refusal-records.v1"
+
+# Ceilings on what reaches the DOCUMENT. Neither bounds the recorder, which is
+# #1180's object and keeps everything it captures in memory (250 records is ~140 KB
+# of Python objects; the problem was never RAM). They bound the summary, because
+# `_write_json` re-serializes the whole document once per game.
+#
+# PER BATTLE, and this one is read off real records rather than guessed. A refusal
+# cause typically closes worlds for the rest of the battle it appears in: measured on
+# a local d4/s1024/w4 batch, seed 600016 filed TEN consecutive `no_worlds_constructed`
+# refusals at rounds 7-16, every one of them `attempted=16 constructed=0` with the
+# same two world-failure classes and the same request legal set. Rounds 11-16 are six
+# more views of one incident. Eight is deliberately not one: unlike the address store,
+# whose job is a replay coordinate, a record's job is to be READ, and the first few
+# repeats are what shows the reader that it repeats -- the run of identical rounds is
+# itself the evidence that the ability in the message is a bystander. Eight keeps that
+# and drops the tail.
+_REFUSAL_RECORDS_PER_BATTLE = 8
+
+# PER RUN. 250 records x 550 B median = ~138 KB added to the document, so the
+# O(games^2) contribution over a 250-game run is bounded by 250 x 138 KB = ~34 MB
+# whatever the fallback rate does -- against ~978 MB uncapped at a 100% rate. It is
+# also comfortably above what an ordinary cell produces: cell D's measured 0.430
+# refusals per game reaches 108 over a full 250-game run, so the cap cannot bite on
+# the case the default was justified against.
+#
+# SPENT AS A PER-GAME RESERVE, NOT FIRST-COME-FIRST-SERVED. A run ceiling taken as a
+# prefix exhausts after `_REFUSAL_RECORDS_PER_RUN / _REFUSAL_RECORDS_PER_BATTLE`
+# games -- 31.25 here. Measured over 34 high-refusal games it emitted
+# `[8]*31 + [2, 0, 0]`, so on a 250-game run 219 games would contribute nothing and
+# the shard's entire refusal evidence would come from the first 12% of the seed band.
+# For an instrument whose job is to CHARACTERISE A CELL that is a biased sample
+# presented as the run's records, and counting the loss does not fix a bias --
+# it documents one. `_refusal_allowance` spends the budget evenly instead.
+_REFUSAL_RECORDS_PER_RUN = 250
+
+# Instrument errors are uncapped on the recorder and one string per failed capture:
+# 500 degraded decisions produced a 47 KB header, re-serialized into every progress
+# write. The header keeps a sample and the TOTAL, so the number is never lost even
+# though the strings are. SAMPLED BY STRIDE, not by prefix, for the same reason the
+# record budget is: the first 20 failures of a run that failed 500 times are 20 views
+# of whatever went wrong first.
+_INSTRUMENT_ERRORS_IN_HEADER = 20
+
+
+def _strided_sample(values: Sequence[str], limit: int) -> tuple[str, ...]:
+    """At most ``limit`` entries, evenly spaced, always including first and last."""
+    if len(values) <= limit:
+        return tuple(values)
+    if limit <= 1:
+        return (values[0],)
+    last = len(values) - 1
+    return tuple(values[round(index * last / (limit - 1))] for index in range(limit))
+
+
+def _refusal_allowance(*, room: int, games_remaining: int) -> int:
+    """How many records THIS game may contribute.
+
+    ``room`` is what is left of the run budget and ``games_remaining`` counts this
+    game. The even share is ``room // games_remaining``, clamped to the per-battle
+    ceiling above and floored at one so no game is silently excluded from the
+    sample. Slack returns to the pool automatically: a game that files fewer than
+    its share leaves ``room`` higher, so the share for the games after it rises.
+
+    The floor is what makes this unbiased rather than merely bounded. On a short run
+    -- the 8-game invocation `foulplay_paired_eval` actually issues -- the even share
+    is 31, so the clamp to `_REFUSAL_RECORDS_PER_BATTLE` binds first and the reserve
+    changes nothing at all. It only engages once games outnumber the budget, which is
+    exactly the case where a prefix would have thrown away the tail of the band.
+    """
+    if games_remaining <= 0:
+        return min(_REFUSAL_RECORDS_PER_BATTLE, max(0, room))
+    return max(0, min(_REFUSAL_RECORDS_PER_BATTLE, max(1, room // games_remaining), room))
+
 
 @dataclass(frozen=True)
 class ControlledFoulPlayConfig:
@@ -362,6 +561,12 @@ class ControlledFoulPlayConfig:
     # One of OPPONENT_JOURNAL_MODES; see the module-level block for the measurement
     # behind the default.
     opponent_journal: str = "addressed"
+    # Attach the #1180 refusal recorder to the engine policy and write what it
+    # captures into the summary. ON, because the state behind a bridge refusal is
+    # not recoverable any other way -- see the REFUSAL RECORDER block above for the
+    # cost and size measurements behind that default, and `--no-refusal-records`
+    # for the way out on a long run.
+    record_refusals: bool = True
 
     def __post_init__(self) -> None:
         if self.games <= 0:
@@ -605,6 +810,268 @@ def _request_digest(request_line: str | None) -> str:
 
 
 @dataclass(frozen=True)
+class RefusalRecorderHealth:
+    """Whether the refusal capture can be believed -- and whether it ran at all.
+
+    Every field here exists because its absence has a wrong reading:
+
+    ``enabled``
+        The run was configured to record. ``False`` means ``--no-refusal-records``,
+        not "no refusals".
+    ``attached``
+        The recorder actually installed on the policy. It CANNOT install on a raw
+        or root-PUCT policy -- ``RefusalRecorder._validate`` requires ``stats`` plus
+        callable ``select_action_with_context``/``_map_choices``/``_fallback``, and
+        only ``EngineMctsPolicy`` has them -- and those arms file no
+        ``fallback_samples`` either, so there is nothing to record. That is a
+        correct outcome, but it must not look like a clean engine-mcts run.
+    ``attach_error``
+        Why not, verbatim. A boolean alone sends the reader to the source.
+    ``health_reported``
+        Whether this result had an error channel at all. Defaults ``False`` and is
+        a conjunct of :attr:`trustworthy` for the reason
+        :class:`fallback_replay.BattleRun` records at length: an empty error list
+        from a runner with no error channel says nothing, and reading it as healthy
+        is the same defect as reading an empty record list as "no refusals".
+    ``instrument_errors``
+        `RefusalRecorder.errors`. Non-empty means SOME RECORD IS INCOMPLETE. The
+        recorder never raises into the search -- an instrument that turns a handled
+        refusal into a crash has changed the outcome it exists to explain -- so this
+        list is the only place a swallowed capture failure surfaces.
+    ``degraded_records``
+        Records whose pre-decision baseline was lost, so their deltas may span more
+        than one decision. Counted separately from errors because the record is
+        still worth reading, just not as a per-decision measurement.
+    ``recorded_refusals`` / ``emitted_refusals``
+        What the instrument SAW and what the document CARRIES. The journal's
+        ``recorded`` vs ``emitted`` pair is the same idea one feature earlier.
+    ``records_dropped_to_ceiling`` vs ``records_unrowed``
+        TWO NUMBERS, AND THEY MUST NOT RENDER ALIKE. Both are records that did not
+        reach the document and a single total conflated them:
+
+        * ``records_dropped_to_ceiling`` is bounded, expected, and its ceilings are
+          published right here -- a reader can reconstruct exactly what happened. It
+          does NOT block :attr:`trustworthy`.
+        * ``records_unrowed`` is DATA LOSS: a refusal filed under a battle that
+          produced no game row, because the game raised after refusing or a
+          battle_id drifted. Nothing bounds it and nothing explains it. It blocks
+          :attr:`trustworthy`.
+
+        Under one combined field the two read identically (`dropped=6` vs
+        `dropped=8`, both `trustworthy: True`), and since the header publishes the
+        ceilings a reader would attribute either to them. Worse, the end-of-run
+        accounting that keeps the identity true was UPGRADING a correct False to
+        True: the partial summaries said `reconciled: False, trustworthy: False`
+        after each game and the fixup made the final one clean. On a feature whose
+        organising principle is that silence must never read as clean, converting a
+        detected loss into a clean verdict is the wrong direction even with a number
+        left behind.
+    ``reconciled``
+        ``recorded == emitted + dropped_to_ceiling + unrowed``. Book-keeping that
+        every captured record is accounted for somewhere, so a NEW way of losing one
+        shows up as a broken identity rather than as an absence.
+    ``instrument_errors_total``
+        The full count. ``instrument_errors`` is a SAMPLE (`_INSTRUMENT_ERRORS_IN_HEADER`),
+        because the list is one string per failed capture, uncapped, and it is
+        re-serialized into every progress write.
+    """
+
+    enabled: bool = False
+    attached: bool = False
+    attach_error: str | None = None
+    health_reported: bool = False
+    instrument_errors: tuple[str, ...] = ()
+    instrument_errors_total: int = 0
+    degraded_records: int = 0
+    recorded_refusals: int = 0
+    emitted_refusals: int = 0
+    records_dropped_to_ceiling: int = 0
+    records_unrowed: int = 0
+
+    @property
+    def reconciled(self) -> bool:
+        """Every captured record reached a row, a ceiling, or the unrowed count."""
+        return self.recorded_refusals == (
+            self.emitted_refusals + self.records_dropped_to_ceiling + self.records_unrowed
+        )
+
+    @property
+    def trustworthy(self) -> bool:
+        """True only when health was REPORTED, the recorder ran, and it was clean.
+
+        ``records_dropped_to_ceiling`` is deliberately NOT a conjunct: a truncation
+        to a published ceiling is a documented, reconstructible loss, and making it
+        block the verdict would mean every high-refusal cell reported an untrustworthy
+        instrument for behaving exactly as designed. ``records_unrowed`` IS a
+        conjunct, because nothing bounds or explains it.
+
+        ``enabled`` is a conjunct as well as ``attached``. They are not the same
+        claim and only one of them is currently implied by the other: a future
+        caller that constructs this object by hand can set ``attached`` without
+        ``enabled``, and "the recorder was switched off" must never be able to
+        render as a trustworthy measurement of anything.
+        """
+        return (
+            self.enabled
+            and self.health_reported
+            and self.attached
+            and self.reconciled
+            and self.records_unrowed == 0
+            and not self.instrument_errors_total
+            and self.degraded_records == 0
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": REFUSAL_RECORDER_SCHEMA_VERSION,
+            # Where the rows live. Same contract as the journal header: every
+            # per-game key this feature writes is `records_key` or
+            # `records_key + "_" + <suffix>`, so a consumer scans the row for the
+            # prefix rather than being told each name.
+            "records_key": "refusals",
+            "enabled": self.enabled,
+            "attached": self.attached,
+            "attach_error": self.attach_error,
+            "health_reported": self.health_reported,
+            "instrument_errors": list(self.instrument_errors),
+            "instrument_errors_total": self.instrument_errors_total,
+            "degraded_records": self.degraded_records,
+            "recorded_refusals": self.recorded_refusals,
+            "emitted_refusals": self.emitted_refusals,
+            # Deliberately NOT summed into one `records_dropped`: see the class
+            # docstring. A bounded truncation and a data loss must not render alike.
+            "records_dropped_to_ceiling": self.records_dropped_to_ceiling,
+            "records_unrowed": self.records_unrowed,
+            # The ceilings, published so a reader of a truncated shard can tell
+            # WHICH bound bit without reading this file.
+            "records_per_battle_ceiling": _REFUSAL_RECORDS_PER_BATTLE,
+            "records_per_run_ceiling": _REFUSAL_RECORDS_PER_RUN,
+            "reconciled": self.reconciled,
+            "trustworthy": self.trustworthy,
+        }
+
+
+class _RefusalCapture:
+    """Owns one :func:`attach_refusal_recorder` for the lifetime of a bridge run.
+
+    Attached once around the whole game loop rather than per game, because the
+    bridge builds ONE policy and reuses it for every seed -- attaching per game
+    would install and tear down a wrapper 250 times and, worse, would silently
+    depend on the teardown order that ``_Hook`` exists to make irrelevant. Records
+    are partitioned back out per game by ``battle_id``, which is
+    ``f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"`` and unique within a run.
+
+    Attach failure is CAPTURED, NEVER RAISED. The recorder validates the policy at
+    attach time, and on a raw or root-PUCT arm that validation fails by design.
+    Letting that AttributeError escape would make a diagnostic switched on by
+    default able to abort a strength benchmark -- so it lands on
+    :attr:`attach_error` and the run continues, with the summary saying so.
+    """
+
+    def __init__(self, policy: Any, *, enabled: bool, games: int = 1) -> None:
+        self.enabled = bool(enabled)
+        self._recorder: Any = None
+        self._attach_error: str | None = None
+        #: How many games the run intends to play, so the per-run budget can be
+        #: spent as an even reserve instead of a prefix. See `_refusal_allowance`.
+        self._games = max(1, int(games))
+        self._rows_built = 0
+        #: Emitted and dropped are decided HERE, at the moment a game row is built,
+        #: and remembered -- not recomputed from the recorder at `health()` time.
+        #: Recomputing would have to re-derive which records a previous row already
+        #: took, and getting that wrong is exactly the silent-truncation shape the
+        #: reconciliation exists to catch.
+        self._emitted = 0
+        self._dropped_to_ceiling = 0
+        self._unrowed = 0
+        if not self.enabled:
+            return
+        try:
+            self._recorder = attach_refusal_recorder(policy)
+        except Exception as error:  # noqa: BLE001 -- an instrument must not abort the run
+            self._attach_error = f"{type(error).__name__}: {error}"
+
+    def records_for(self, battle_id: str) -> tuple[RefusalRecord, ...]:
+        """This battle's records, truncated to its ALLOWANCE, with the loss counted.
+
+        Called ONCE per game as its row is built, and it advances the run's budget
+        bookkeeping -- so it is not idempotent and must not be called twice for the
+        same game.
+
+        The allowance is an even share of what is left, not a prefix of the run
+        budget: see :func:`_refusal_allowance`. Everything it refuses is counted as
+        `records_dropped_to_ceiling`, which is bounded and reconstructible and
+        therefore does NOT block `trustworthy`.
+        """
+        if self._recorder is None:
+            return ()
+        self._rows_built += 1
+        mine = [
+            record for record in self._recorder.records if record.battle_id == battle_id
+        ]
+        allowance = _refusal_allowance(
+            room=max(0, _REFUSAL_RECORDS_PER_RUN - self._emitted),
+            games_remaining=self._games - self._rows_built + 1,
+        )
+        kept = tuple(mine[:allowance])
+        self._emitted += len(kept)
+        self._dropped_to_ceiling += len(mine) - len(kept)
+        return kept
+
+    def account_for_unrowed_records(self) -> None:
+        """Count records whose battle never produced a row, at end of run.
+
+        A game that raised before its result was built takes its records with it.
+        This keeps the reconciliation identity true so that a FUTURE way of losing a
+        record still shows up as a broken identity -- but it files them under
+        ``records_unrowed``, NOT under the ceiling count.
+
+        That distinction is the whole point. An earlier revision folded these into
+        the ceiling total, which made the end-of-run summary report a clean,
+        trustworthy instrument for a run that had demonstrably lost data -- and it
+        did so by UPGRADING the honest `trustworthy: False` the partial summaries had
+        already published. Reconciling a loss is not the same as excusing it.
+        """
+        if self._recorder is None:
+            return
+        unaccounted = (
+            len(self._recorder.records)
+            - self._emitted
+            - self._dropped_to_ceiling
+            - self._unrowed
+        )
+        if unaccounted > 0:
+            self._unrowed += unaccounted
+
+    def health(self) -> RefusalRecorderHealth:
+        if self._recorder is None:
+            return RefusalRecorderHealth(
+                enabled=self.enabled, attached=False, attach_error=self._attach_error
+            )
+        records = self._recorder.records
+        errors = tuple(self._recorder.errors)
+        return RefusalRecorderHealth(
+            enabled=self.enabled,
+            attached=True,
+            attach_error=None,
+            # The recorder HAS an error channel and we are reading it, which is
+            # exactly what this flag asserts.
+            health_reported=True,
+            instrument_errors=_strided_sample(errors, _INSTRUMENT_ERRORS_IN_HEADER),
+            instrument_errors_total=len(errors),
+            degraded_records=sum(1 for record in records if record.degraded),
+            recorded_refusals=len(records),
+            emitted_refusals=self._emitted,
+            records_dropped_to_ceiling=self._dropped_to_ceiling,
+            records_unrowed=self._unrowed,
+        )
+
+    def detach(self) -> None:
+        if self._recorder is not None:
+            self._recorder.detach()
+
+
+@dataclass(frozen=True)
 class ControlledFoulPlayGameResult:
     battle_id: str
     seed: int
@@ -693,6 +1160,12 @@ class ControlledFoulPlayGameResult:
     opponent_journal: tuple[OpponentJournalEntry, ...] = ()
     opponent_journal_recorded: int = 0
     opponent_journal_failures: int = 0
+    # Every refusal the #1180 recorder captured in THIS battle, with the
+    # per-decision state that produced it. Filed on the game row rather than only in
+    # a run-level list so a record travels with the battle it belongs to; the run
+    # level carries only the health header, which is a property of the instrument
+    # rather than of any one battle.
+    refusal_records: tuple[RefusalRecord, ...] = ()
 
     @property
     def outcome_score(self) -> float:
@@ -775,6 +1248,14 @@ class ControlledFoulPlayGameResult:
             # every later round of THAT battle unreplayable while leaving the others
             # sound. Without this a driver has to treat the whole shard as suspect.
             payload["opponent_moves_record_failures"] = self.opponent_journal_failures
+        if self.refusal_records:
+            # `refusals`, and NOT a name the address reader dispatches on. Every key
+            # inside a serialized `RefusalRecord` is likewise distinct from the
+            # reader's markers -- the per-decision world-failure delta is spelled
+            # `world_failures`, never `world_failure_reasons` -- so this list can add
+            # neither a cumulative scope nor an occurrence count. See the REFUSAL
+            # RECORDER block.
+            payload["refusals"] = [record.to_dict() for record in self.refusal_records]
         if self.root_puct_effective_total_visits:
             payload["root_puct_effective_total_visits"] = self.root_puct_effective_total_visits
         if self.root_puct_opponent_action_skip_categories:
@@ -891,6 +1372,10 @@ class ControlledFoulPlayBenchmarkResult:
     # bridge-level per-decision wall, which is a different quantity (it counts
     # non-searched decisions too).
     policy_stats: Mapping[str, Any] | None = None
+    # Instrument health for the #1180 refusal recorder. None means the caller did
+    # not report any -- which `to_dict` renders as the default header, i.e.
+    # `health_reported: false`, i.e. UNKNOWN. It is never rendered as clean.
+    refusal_recorder: "RefusalRecorderHealth | None" = None
 
     @property
     def completed_games(self) -> int:
@@ -1156,6 +1641,13 @@ class ControlledFoulPlayBenchmarkResult:
                 # later round in that battle cannot be trusted.
                 "record_failures": sum(game.opponent_journal_failures for game in self.games),
             },
+            # The recorder's own header, present in EVERY summary for the same
+            # reason the journal's is: an absent block and an empty one are three
+            # different states (switched off, on with nothing to record, producer
+            # too old), and a reader that cannot tell them apart will call all three
+            # "no refusals". `health_reported: false` is the default and means
+            # UNKNOWN.
+            "refusal_recorder": (self.refusal_recorder or RefusalRecorderHealth()).to_dict(),
             "game_results": [game.to_dict() for game in self.games],
         }
         if self.value_leaf_provenance is not None:
@@ -2043,6 +2535,11 @@ async def _run_controlled_foulplay_games(
     server = _FoulPlayWebsocketServer(username=config.foulplay_username, host=config.websocket_host)
     bridge = _BattleBridge(showdown_root=config.showdown_root, node_binary=config.node_binary)
     game_results: list[ControlledFoulPlayGameResult] = []
+    # ONE recorder for the whole run: the bridge reuses a single policy across every
+    # seed, and records are partitioned back per game by battle_id.
+    refusal_capture = _RefusalCapture(
+        policy, enabled=config.record_refusals, games=config.games
+    )
     try:
         await server.start()
         await bridge.start()
@@ -2082,6 +2579,7 @@ async def _run_controlled_foulplay_games(
                         foulplay_process=foulplay_process,
                         foulplay_logs=foulplay_logs,
                         trajectory_callback=trajectory_callback,
+                        refusal_capture=refusal_capture,
                     )
                 )
             finally:
@@ -2096,11 +2594,32 @@ async def _run_controlled_foulplay_games(
                         foulplay_random_seed_schedule=foulplay_random_seed_schedule[: len(game_results)],
                         value_leaf_provenance=value_leaf_provenance,
                         policy_stats=_engine_policy_stats(policy, config.policy_mode),
+                        # On the PARTIAL result too: `--summary-out` rewrites the whole
+                        # document every game, so a run killed mid-way leaves this
+                        # progress write as the only artifact. Reporting health only at
+                        # the end would make every abandoned run read as unknown.
+                        refusal_recorder=refusal_capture.health(),
                     )
                 )
     finally:
-        await bridge.close()
-        await server.close()
+        # EACH teardown in its own `finally`, so one raising cannot skip the next.
+        # Flat statements here meant a `bridge.close()` that raised skipped BOTH
+        # `server.close()` and the detach below. Leaking the detach is the worse of
+        # the two and is invisible: `_Hook.remove` never empties `recorders`, so the
+        # wrappers stay installed on a policy that outlives this call -- the
+        # comparison runner's second arm, or a caller that reuses the policy -- and
+        # every later `_fallback` fans out to N orphaned recorders that accumulate
+        # for the life of the process while nothing reads them.
+        try:
+            await bridge.close()
+        finally:
+            try:
+                await server.close()
+            finally:
+                # Records that never reached a game row are counted before the
+                # health is read, so the reconciliation identity holds.
+                refusal_capture.account_for_unrowed_records()
+                refusal_capture.detach()
 
     return ControlledFoulPlayBenchmarkResult(
         config=config,
@@ -2110,6 +2629,7 @@ async def _run_controlled_foulplay_games(
         foulplay_random_seed_schedule=foulplay_random_seed_schedule[: len(game_results)],
         value_leaf_provenance=value_leaf_provenance,
         policy_stats=_engine_policy_stats(policy, config.policy_mode),
+        refusal_recorder=refusal_capture.health(),
     )
 
 
@@ -3023,6 +3543,7 @@ async def _run_single_game(
     foulplay_process: asyncio.subprocess.Process,
     foulplay_logs: _ProcessLogBuffer,
     trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
+    refusal_capture: "_RefusalCapture | None" = None,
 ) -> ControlledFoulPlayGameResult:
     battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
     state = _ControlledBattleState(
@@ -3420,6 +3941,11 @@ async def _run_single_game(
         ),
         opponent_journal_recorded=len(state.opponent_journal),
         opponent_journal_failures=state.opponent_journal_failures,
+        # Filtered on the REAL battle_id, so a run-scoped recorder still files each
+        # refusal against the battle it happened in.
+        refusal_records=(
+            refusal_capture.records_for(battle_id) if refusal_capture is not None else ()
+        ),
     )
 
 
@@ -4512,6 +5038,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-refusal-records",
+        action="store_true",
+        help=(
+            "Switch OFF the #1180 refusal recorder, which is on by default. On, every "
+            "fallback decision the engine policy takes is written into --summary-out "
+            "with the per-decision state that produced it: the world-failure classes "
+            "that fired on THAT decision, the worlds spent, the engine's proposed "
+            "choices, the request's legal set in the engine's vocabulary and their "
+            "disagreement. Off, the summary keeps only the address, which for a "
+            "bridge shard cannot be replayed. Measured cost at the era-64 cell-D "
+            "fallback rate: ~1.3 us per decision (2.5e-7 of a 5.02 s decision "
+            "boundary) and +5.1% summary bytes; see the REFUSAL RECORDER block in "
+            "foulplay_bridge.py for both measurements and their parameters."
+        ),
+    )
+    parser.add_argument(
         "--no-search-fallback",
         action="store_true",
         help="Raise on search failure instead of falling back to the raw checkpoint action.",
@@ -4647,6 +5189,7 @@ def _config_from_args(
         capture_driver=getattr(args, "capture_driver", "checkpoint"),
         audit_observation_schema=getattr(args, "observation_schema", None),
         opponent_journal=getattr(args, "opponent_journal", "addressed"),
+        record_refusals=not getattr(args, "no_refusal_records", False),
     )
 
 
