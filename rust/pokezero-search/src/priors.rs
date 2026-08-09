@@ -61,8 +61,16 @@
 //! `tests/test_model_priors_search.py::OpponentPriorsEncodedSearchTest` now is
 //! — an encoded search with `use_opponent_priors=True`, against a
 //! random-weights artifact at the real v3 shape, with both heads recomputed in
-//! torch as the oracle. Measured, not predicted (`--features model` wheel
-//! rebuilt per world; the child hashes the `.so` it imported):
+//! torch as the oracle.
+//!
+//! MEASURED OUT OF IMAGE. Every outcome below comes from a local macOS/arm64
+//! `--features model` wheel (torch 2.12.1), not from the campaign image. The
+//! campaign's item-3 gate asks for an IN-IMAGE run; this table says the gate
+//! is sharp, it does not say the gate has been run where it counts. Do not
+//! read a discharged blocker off this comment.
+//!
+//! One wheel rebuilt and reinstalled per world; each child hashes the `.so` it
+//! imported and a world whose hash matches the baseline's is refused:
 //!
 //! | boundary mutation                                   | outcome |
 //! |-----------------------------------------------------|---------|
@@ -70,24 +78,59 @@
 //! | `impl SearchingSeat` negated                         | KILLED  |
 //! | root: acting map passed as the opponent map          | KILLED  |
 //! | root: `opponent_action_map` -> `self_action_map`     | KILLED  |
+//! | root: opponent options are the acting options        | KILLED (second fixture only) |
 //! | branch: opponent options are the acting options      | KILLED  |
 //! | branch: `opponent_action_map` -> `self_action_map`   | KILLED  |
 //! | round: the two seats' pending map lists swapped      | KILLED  |
-//! | ROOT: opponent options are the acting options        | EQUIVALENT on the fixture |
+//! | branch: `opponent_prefix()` -> `self_prefix()`       | **MISSED** |
 //!
-//! The survivor is not a gap in the gate, it is a gap in the FIXTURE, and the
-//! reason is structural: `MoveChoice` is index-valued (`Move(slot)` /
-//! `Switch(party_index)`) and `seat_action_map` picks the seat from
-//! `slot_is_self`, never from the options. So on a position where both seats
-//! have the same option SHAPE the two lists are the identical value, and
-//! substituting one for the other is a no-op. All five drivable rows of both
-//! committed golden-corpus samples are (4 moves, 5 switches) on both seats, and
-//! a 192-case differential (4 ctx variants x 4 sim budgets x 2 batch sizes x 3
-//! seeds x flag on/off) over that mutant reports byte-identical search reports.
-//! Its one-ply-down twin IS killed, because interior nodes do reach asymmetric
-//! shapes. Closing it needs a committed asymmetric-seat root — a fainted
-//! reserve, a Choice/Encore/Taunt-narrowed move list, or a forced switch on one
-//! side only.
+//! TWO FINDINGS THE TABLE COMPRESSES, both of which cost a wrong answer first.
+//!
+//! 1. WHY THE ROOT OPTION SWAP NEEDS ITS OWN FIXTURE. `MoveChoice` is
+//!    index-valued (`Move(slot)` / `Switch(party_index)`) and `seat_action_map`
+//!    picks the seat from `slot_is_self`, never from the options — so where the
+//!    two seats' option lists are the same VALUE, substituting one for the
+//!    other is a no-op. What makes them the same value is not the same option
+//!    SHAPE (an earlier version of this note said shape, and it was wrong):
+//!    `Side::add_switches` pushes every alive party index EXCEPT
+//!    `active_index`, so it is the same ACTIVE PARTY INDEX. Row 0 of the
+//!    committed sample has both actives at slot 0 and is blind to the mutation
+//!    (24/24 identical reports); rows 2-4 have them at different slots and see
+//!    it immediately (20/20 differ, `prior_fallbacks` 0 -> 1). Row 0 is the
+//!    unusual case — after any switch the two actives sit apart — so the gate
+//!    now drives BOTH, and no fainted reserve, narrowed move list or forced
+//!    switch is needed.
+//!
+//!    "Identical reports" above means every field of the search report EXCEPT
+//!    the wall-clock telemetry, which is nondeterministic on one wheel:
+//!    `elapsed_s`, `iterations_per_s`, `encode_s`, `model_s`, `tree_s`,
+//!    `fold_clone_s`, `render_s`, `fold_advance_s`, `tensor_s`,
+//!    `action_map_s`, `row_input_s`, `products_s`, `row_write_s`. Two runs of
+//!    ONE wheel agree on everything else (24/24), which is what makes the
+//!    filtered comparison a differential rather than a fudge.
+//!
+//! 2. WHAT IS STILL UNCOVERED, and it is in the channel the campaign's
+//!    label-space half depends on. Swapping `leaf_ctx.opponent_prefix()` for
+//!    `self_prefix()` in the opponent's per-branch order evolution is MISSED by
+//!    every test above. Self switch lines name the SELF party's species, which
+//!    never appear in the opponent's order, so `evolve_self_order` matches
+//!    nothing and the mutation degenerates to "the opponent's request order is
+//!    frozen at its root value" — precisely the fail-open
+//!    `root_opponent_order`'s docstring warns about, correct until the
+//!    opponent's first switch and permuted from then on. It changes the ACTING
+//!    seat's visits and swings `prior_branches` (258 -> 196 at sims=48 seed=17)
+//!    while leaving the opponent's ROOT visit order — the gate's only opponent
+//!    observable — untouched, because the ROOT order is not evolved at all.
+//!    Raising the budget does not help: checked at sims in
+//!    {48, 96, 192, 512, 1024} x batch in {1, 8} x 4 seeds, the mutant is
+//!    concordant wherever the baseline is.
+//!
+//!    Closing it needs an observable for the opponent's INTERIOR applied
+//!    priors, and the structural reason there is none is right here:
+//!    [`RootPriorResolution`] carries no `applied` count, so the root's
+//!    opponent application never reaches `prior_branches`, and
+//!    [`resolve_pending_priors`] sums both seats into one number that a
+//!    reshaped tree moves anyway.
 
 use crate::tree::{apply_self_priors, DecisionNode, Tree};
 use poke_engine::engine::state::MoveChoice;

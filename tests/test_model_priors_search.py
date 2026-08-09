@@ -37,14 +37,24 @@ Two properties carry the weight, and neither needs new crate telemetry:
   for the opponent's applied priors, so the visits ARE the observable, and
   they are a sharp one: PUCT's exploration term is proportional to the prior,
   so an arm priced from the wrong head, the wrong map or the wrong seat lands
-  in the wrong place in the visit order. Measured at HEAD over 32
-  (sims, batch, seed) combinations: 0 discordant pairs against the opponent
-  head, 17-19 against the acting head.
+  in the wrong place in the visit order.
 
-Each test that leans on that second property first asserts its own
-discriminating power, by checking that the wrong-head vector WOULD violate the
-ordering it demands. A gate whose oracle happens to agree with its null is not
-a gate.
+  THE OBSERVABLE HAS A BAND, in both directions, and the gate runs inside it.
+  Measured at HEAD over sims in {48, 96, 192} x batch in {1, 8} x seed in
+  {5, 11, 17, 23} — 24 runs, `prior_fallbacks` 0 throughout: 0 discordant
+  pairs against the opponent head in all 24, and 17-18 against the acting
+  head. Below that the null weakens (12 at sims in {8, 16}); ABOVE it the
+  TRUTH weakens — at sims 512 and 1024 the true head itself picks up 1
+  discordant pair in 3/8 and 6/8 runs, because Q starts to outweigh the prior
+  term. So do not "strengthen" this gate by raising sims; 48 is inside the
+  band on purpose.
+
+Each of the three tests that leans on that second property first asserts its
+own discriminating power against the null that test is actually about — the
+acting head for the two head-routing tests, the UNPERMUTED gather for the
+order-channel test. A gate whose oracle happens to agree with its null is not
+a gate, and "it is discriminating today" is not the same claim as "it will
+fail if it stops being".
 
 WHAT THIS DOES NOT CLOSE. The opponent head's label space is stipulated here,
 not derived: the test supplies `ctx["opponent_request_order"]` itself. Whether
@@ -98,7 +108,15 @@ _crate_ready = bool(
 )
 
 
+# Why `build_tables` did not produce an artifact, when it did not. The bare
+# `except Exception: return None` below reports a BUILD FAILURE as "no artifact
+# and no Showdown checkout", which sends a reader looking for a missing file
+# that is not the problem.
+_TABLES_FAILURE: str | None = None
+
+
 def _tables_json() -> str | None:
+    global _TABLES_FAILURE
     local = REPO_ROOT / "corpus" / "encoder_tables.json"
     if local.exists():
         payload = json.loads(local.read_text(encoding="utf-8"))
@@ -111,6 +129,7 @@ def _tables_json() -> str | None:
         from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
 
         if not Path(DEFAULT_SHOWDOWN_ROOT).exists():
+            _TABLES_FAILURE = f"no Showdown checkout at {DEFAULT_SHOWDOWN_ROOT}"
             return None
         sys.path.insert(0, str(SCRIPTS_DIR))
         from export_encoder_tables import build_tables  # noqa: E402
@@ -128,7 +147,8 @@ def _tables_json() -> str | None:
             separators=(",", ":"),
             ensure_ascii=True,
         )
-    except Exception:  # pragma: no cover - environment-dependent
+    except Exception as error:  # pragma: no cover - environment-dependent
+        _TABLES_FAILURE = f"{type(error).__name__}: {error}"
         return None
 
 
@@ -161,7 +181,7 @@ class _EncodedSearchFixture:
             # it from a Showdown checkout in-process. A skip that does not say
             # so reads like a missing fixture.
             raise unittest.SkipTest(
-                "no encoder tables artifact and no Showdown checkout. Either set "
+                f"no v3 encoder tables ({_TABLES_FAILURE}). Either set "
                 "POKEZERO_SHOWDOWN_ROOT (the tables are then built in-process), or "
                 "write corpus/encoder_tables.json with `python "
                 "scripts/export_encoder_tables.py --showdown-root <root> "
@@ -196,6 +216,18 @@ class _EncodedSearchFixture:
             fold_states[int(record["array_row_index"])] = record["fold_state"]
         games = {game.record.battle_id: game for game in corpus.games}
         cls.position = None
+        # The SECOND fixture, and the reason it exists. A root whose two seats'
+        # actives sit at the same party index gives the two seats IDENTICAL
+        # engine option lists — `Side::add_switches` pushes
+        # `MoveChoice::Switch(party_index)` for every alive index except
+        # `active_index`, and `MoveChoice` is index-valued — so on such a root a
+        # whole class of "read the other seat's option list" defects is
+        # unobservable because the two lists are the same value. Row 0 of the
+        # committed sample is exactly that (both actives at 0) and it is the
+        # UNUSUAL case: after any switch the two sit at different slots. Rows 2
+        # through 4 do, so no fixture surgery is needed — just do not stop at
+        # the first drivable row.
+        cls.asymmetric_position = None
         for index, row in enumerate(corpus.decision_rows):
             game = games[row.battle_id]
             packed = {
@@ -220,7 +252,7 @@ class _EncodedSearchFixture:
             # schema-independent public/belief inputs. Stamp the schema the live V3 policy
             # supplies so the native encoder exercises the current layout fail-closed.
             row_inputs["observation_schema_version"] = OBSERVATION_SCHEMA_VERSION_V3
-            cls.position = {
+            candidate = {
                 "state_str": state.to_string(),
                 "row_inputs": json.dumps(row_inputs, sort_keys=True),
                 "ctx": json.dumps(
@@ -232,8 +264,17 @@ class _EncodedSearchFixture:
                 ),
                 "fold_state": fold_states[index],
                 "self_side": "side_one" if row.player_id == "p1" else "side_two",
+                "actives": (
+                    int(state.side_one.active_index),
+                    int(state.side_two.active_index),
+                ),
             }
-            break
+            if cls.position is None:
+                cls.position = candidate
+            if cls.asymmetric_position is None and len(set(candidate["actives"])) == 2:
+                cls.asymmetric_position = candidate
+            if cls.position is not None and cls.asymmetric_position is not None:
+                break
         if cls.position is None:
             raise unittest.SkipTest("no committed-sample row could be driven")
 
@@ -297,15 +338,17 @@ class _EncodedSearchFixture:
         early_stop_side_one: bool = True,
         ctx_json: str | None = None,
         use_opponent_priors: bool | None = None,
+        position: dict | None = None,
     ) -> dict:
-        fold = pokezero_search.FoldState.from_payload(self.position["fold_state"])
+        position = self.position if position is None else position
+        fold = pokezero_search.FoldState.from_payload(position["fold_state"])
         args = [
-            self.position["state_str"],
+            position["state_str"],
             sims,
             batch,
             self.tables_json,
-            self.position["row_inputs"],
-            self.position["ctx"] if ctx_json is None else ctx_json,
+            position["row_inputs"],
+            position["ctx"] if ctx_json is None else ctx_json,
             fold,
             2,  # max_depth
             1.4,
@@ -323,11 +366,17 @@ class _EncodedSearchFixture:
 
     # -- opponent-seat helpers (used only by OpponentPriorsEncodedSearchTest) --
 
+    def _opponent_side_of(self, position: dict | None = None) -> str:
+        position = self.position if position is None else position
+        return "side_two" if position["self_side"] == "side_one" else "side_one"
+
     @property
     def _opponent_side(self) -> str:
-        return "side_two" if self.position["self_side"] == "side_one" else "side_one"
+        return self._opponent_side_of()
 
-    def _ctx_with_opponent_order(self, order: list[str] | None = None) -> str:
+    def _ctx_with_opponent_order(
+        self, order: list[str] | None = None, position: dict | None = None
+    ) -> str:
         """The position's ctx plus an explicit `opponent_request_order`.
 
         STIPULATED, not derived. The crate refuses the whole opponent seat
@@ -340,12 +389,13 @@ class _EncodedSearchFixture:
         through, which `test_permuting_the_supplied_order_permutes...` pins by
         permuting it.
         """
-        ctx = json.loads(self.position["ctx"])
-        slot = "p2" if self.position["self_side"] == "side_one" else "p1"
+        position = self.position if position is None else position
+        ctx = json.loads(position["ctx"])
+        slot = "p2" if position["self_side"] == "side_one" else "p1"
         ctx["opponent_request_order"] = list(ctx[slot]) if order is None else list(order)
         return json.dumps(ctx)
 
-    def _root_head_priors(self, ctx_json: str) -> dict[str, list]:
+    def _root_head_priors(self, ctx_json: str, position: dict | None = None) -> dict[str, list]:
         """Both heads at the ROOT, recomputed in torch and gathered per seat.
 
         Independent of the crate's prior path end to end: the observation comes
@@ -359,12 +409,13 @@ class _EncodedSearchFixture:
         the search's root forward passes NO legal mask, so both sides are a
         plain softmax over the full action block.
         """
-        state = self.position["state_str"]
+        position = self.position if position is None else position
+        state = position["state_str"]
         encoder = pokezero_search.LeafEncoder(
-            self.tables_json, self.position["row_inputs"], ctx_json, state
+            self.tables_json, position["row_inputs"], ctx_json, state
         )
-        fold = pokezero_search.FoldState.from_payload(self.position["fold_state"])
-        turn = int(json.loads(self.position["ctx"]).get("turn") or 0)
+        fold = pokezero_search.FoldState.from_payload(position["fold_state"])
+        turn = int(json.loads(position["ctx"]).get("turn") or 0)
         encoded = encoder.encode_leaf(state, fold, turn)
 
         tokens = int(self.layout["token_count"])
@@ -433,6 +484,24 @@ class _EncodedSearchFixture:
             for i in range(len(arms))
             for j in range(len(arms))
             if priors[i] > priors[j] + margin and visits[arms[i]] < visits[arms[j]]
+        ]
+
+    def _tied_pairs(
+        self, side_entries: list[dict], arms: list[str], priors: list[float], margin: float
+    ) -> list[tuple]:
+        """Margin-separated pairs the visits do not separate at all.
+
+        `_discordant_pairs` uses `<`, so a tie passes it. Ties are not
+        discordance, but a gate all of whose comparisons are ties has measured
+        nothing, and that degrades silently as the budget or the artifact
+        changes.
+        """
+        visits = {entry["move"]: int(entry["visits"]) for entry in side_entries}
+        return [
+            (arms[i], priors[i], arms[j], priors[j], visits[arms[i]])
+            for i in range(len(arms))
+            for j in range(len(arms))
+            if priors[i] > priors[j] + margin and visits[arms[i]] == visits[arms[j]]
         ]
 
 
@@ -512,12 +581,11 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
 
     MEASURED against the `model.rs` seat/head-routing boundary that
     `rust/pokezero-search/src/priors.rs`'s header names as its surviving
-    residue: eight one-line mutations, one `--features model` wheel rebuilt per
-    world, seven KILLED. The eighth (the ROOT's opponent option list replaced by
-    the acting seat's) is EQUIVALENT on this fixture rather than missed — see
-    that header for the structural reason and for what a fixture that could see
-    it would need. Do not weaken the two oracle tests below without re-running
-    that battery; five of the seven kills come from them.
+    residue: nine one-line mutations, one `--features model` wheel rebuilt per
+    world, EIGHT KILLED and one MISSED. Do not weaken the oracle tests below
+    without re-running that battery; six of the eight kills come from them, and
+    the ninth (the opponent's branch ORDER-EVOLUTION prefix) is uncovered — see
+    that header before assuming this class covers a channel it does not.
     """
 
     # Priors this close together are not required to order the visits; see
@@ -589,8 +657,69 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
             [],
             "opponent arms are visited out of the opponent head's own prior order",
         )
+        # A margin-separated pair that is visit-TIED satisfies `>=` without
+        # ordering anything. At this budget 4 of the 9 opponent arms take zero
+        # visits, and they happen to be exactly the arms inside ORDER_MARGIN of
+        # each other (largest gap among them 0.0164 < 0.02), so nothing
+        # admissible is lost — but that is a coincidence of this artifact, and
+        # an unasserted coincidence is how a gate goes quietly vacuous.
+        self.assertEqual(
+            self._tied_pairs(side, arms, oracle["opponent"], self.ORDER_MARGIN),
+            [],
+            "a margin-separated pair tied on visits orders nothing",
+        )
         self.assertEqual(report["prior_fallbacks"], 0)
         self.assertGreater(report["prior_branches"], 0)
+
+    def test_a_root_whose_seats_sit_at_different_slots_routes_each_seats_own_options(
+        self,
+    ) -> None:
+        """The same claim on a root where the two seats' option lists DIFFER.
+
+        `MoveChoice` is index-valued and `Side::add_switches` skips only
+        `active_index`, so when both actives sit at the same party slot the two
+        seats' option lists are the identical value and "read the other seat's
+        options" is unobservable. Row 0 of the committed sample is that case;
+        rows 2-4 are not, and they are the normal one — after any switch the
+        two actives sit at different slots.
+
+        Measured: the ROOT-side option swap is invisible on row 0 (24/24
+        digests identical) and visible on every root whose actives differ
+        (20/20 differ, and `prior_fallbacks` goes 0 -> 1, which the assertion
+        below catches). This test is the whole reason that mutation is now
+        KILLED rather than EQUIVALENT.
+        """
+        position = self.asymmetric_position
+        if position is None:
+            self.skipTest("no committed row has its two actives at different party slots")
+        self.assertNotEqual(position["actives"][0], position["actives"][1])
+
+        ctx_json = self._ctx_with_opponent_order(position=position)
+        oracle = self._root_head_priors(ctx_json, position=position)
+        report = self._search(
+            sims=48, batch=1, seed=5, model_priors=True,
+            ctx_json=ctx_json, use_opponent_priors=True, position=position,
+        )
+        arms = oracle["opponent_arms"]
+        side = report[self._opponent_side_of(position)]
+
+        self.assertEqual(
+            report["prior_fallbacks"],
+            0,
+            "an option list from the wrong seat leaves arms the opponent's map "
+            "cannot place, and the whole node falls back",
+        )
+        self.assertGreater(
+            len(
+                self._discordant_pairs(
+                    side, arms, oracle["opponent_from_acting_head"], self.ORDER_MARGIN
+                )
+            ),
+            0,
+        )
+        self.assertEqual(
+            self._discordant_pairs(side, arms, oracle["opponent"], self.ORDER_MARGIN), []
+        )
 
     def test_permuting_the_supplied_order_permutes_only_the_opponent_seat(self) -> None:
         """The opponent's label space is load-bearing AND confined to its seat.
@@ -611,6 +740,12 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
 
         base_oracle = self._root_head_priors(ctx_json)
         permuted_oracle = self._root_head_priors(permuted_ctx)
+        self.assertEqual(
+            base_oracle["opponent_arms"],
+            permuted_oracle["opponent_arms"],
+            "the permutation moves SLOTS, not the option list; the two prior "
+            "vectors below are compared against one arm order",
+        )
         self.assertNotEqual(
             base_oracle["opponent"],
             permuted_oracle["opponent"],
@@ -628,6 +763,25 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
             base["root_priors"],
             permuted["root_priors"],
             "the opponent order channel must not move the acting seat's priors",
+        )
+        # The null for THIS test is the BASE-order gather: if the permuted
+        # search still followed it, the order channel would not be reaching the
+        # search at all. Measured today: 2 discordant pairs against the base
+        # gather, 17 against the acting head. Two is not many, so it is asserted
+        # rather than assumed — an unpinned discriminating power is one artifact
+        # away from zero.
+        self.assertGreater(
+            len(
+                self._discordant_pairs(
+                    permuted[self._opponent_side],
+                    permuted_oracle["opponent_arms"],
+                    base_oracle["opponent"],
+                    self.ORDER_MARGIN,
+                )
+            ),
+            0,
+            "the permuted search is ordered just as well by the UNPERMUTED "
+            "gather, so this test cannot see the order channel",
         )
         self.assertEqual(
             self._discordant_pairs(
