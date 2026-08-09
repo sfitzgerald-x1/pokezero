@@ -114,13 +114,26 @@ WHAT IT DOES NOT COVER, stated as narrowly as it was measured:
   * The native engine. Deliberate — that is the engine fingerprint's job, and the
     two are recorded side by side rather than merged.
   * Anything reached by a COMPUTED import name. `__import__`/`importlib` with a
-    non-literal argument is invisible to this resolver. Re-measured over the 73:
-    `grep -nE 'importlib|__import__'` returns hits in `engine_build_fingerprint.py`
-    (two `__import__(name)` calls over the literal tuple
-    `("poke_engine", "pokezero_search")` — the native engine, covered by the engine
-    fingerprint), plus `importlib.util`/`import_module` sites in the training tree.
-    The gap is not structurally closed and this is the one class of import the
-    completeness pin cannot re-derive either.
+    non-literal argument is invisible to this resolver, and this is the one class
+    of import the completeness pin cannot re-derive either, so it is the residual
+    gap. Re-measured over the 73 rather than restated:
+    `grep -nE 'importlib|__import__'` matches FOUR files, and every site resolves
+    to the native engine or to nothing at all —
+
+      - `engine_build_fingerprint.py`: two `__import__(name)` calls over the
+        literal tuple `("poke_engine", "pokezero_search")`;
+      - `poke_engine_backend.py`: `probe_poke_engine`'s injectable
+        `importer=importlib.import_module`, called once on the module constant
+        `POKE_ENGINE_IMPORT_NAME`;
+      - `engine_transition_differential.py`: a comment;
+      - this file: this paragraph.
+
+    Both live sites import the native engine, which the ENGINE fingerprint covers,
+    so as of this commit the computed-import gap admits no first-party Python. That
+    is a statement about these 73 files at this commit, not a structural guarantee.
+    An earlier revision of this paragraph said "plus importlib sites in the training
+    tree", which the grep does not support; it was written from expectation rather
+    than from the output.
   * Import cycles in `src/pokezero/**` are followed, not flagged: the walk is a
     visited-set traversal, so a cycle terminates rather than recursing.
   * Third-party dependency versions, the Showdown checkout, and the interpreter.
