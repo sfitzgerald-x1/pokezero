@@ -657,19 +657,16 @@ struct BranchFold {
     meta: crate::leaf::LeafMeta,
 }
 
-/// The batch's two policy heads, checked against each other before either is
-/// read.
+/// Names this batch's two heads for the prior path.
 ///
-/// A mismatched opponent-head width does NOT fail on its own: `action_count`
-/// comes from the policy head, so striding the opponent head by it reads
-/// windows that span two leaves' distributions and are almost all in range
-/// (worked example on [`HeadPair`]). Every affected branch then reports a
-/// confident prior gathered off a blend. The campaign reads a paired delta off
-/// exactly these numbers, so this refuses instead — same standing as the
-/// fully-illegal legal-mask row in `TorchScriptLeafEval::eval_batch`.
-///
-/// Only when the flag is ON: a flag-off run must make byte-for-byte the search
-/// it always made, including on an artifact whose opponent head is unusable.
+/// The whole content of this impl is WHICH FIELD IS WHICH. It exists so that
+/// `HeadPair` is built from a named source rather than from two interchangeable
+/// `&[f32]` arguments — behind the `model` feature a transposition of those two
+/// arguments is a silent head swap that no test on a libtorch-less host can
+/// see, so the swap is concentrated into these three lines instead of living at
+/// every construction site. `action_count` is the POLICY head's width; the
+/// opponent head is a separate tensor and its width is checked against this one
+/// in [`HeadPair::from_source`].
 impl HeadSource for LeafBatchOutput {
     fn acting_head(&self) -> &[f32] {
         &self.priors
@@ -682,6 +679,25 @@ impl HeadSource for LeafBatchOutput {
     }
 }
 
+/// The batch's two policy heads, checked against each other before either is
+/// read.
+///
+/// A mismatched opponent-head width does NOT fail on its own: `action_count`
+/// comes from the policy head, so striding the opponent head by it reads
+/// windows that span two leaves' distributions and are almost all in range
+/// (worked example on [`HeadPair`]). Every affected branch then reports a
+/// confident prior gathered off a blend. The campaign reads a paired delta off
+/// exactly these numbers, so this refuses instead — same standing as the
+/// fully-illegal legal-mask row in `TorchScriptLeafEval::eval_batch`.
+///
+/// WHY THE FLAG IS THREADED HERE. The opponent-width check runs only when
+/// `use_opponent_priors` is on. A flag-off run must make byte-for-byte the
+/// search it always made, including on an artifact whose opponent head is
+/// unusable — flag-off equivalence is the campaign's anchor and must not
+/// acquire a new way to fail. Passing a constant here in either direction is a
+/// real defect in both directions (`true` breaks flag-off; `false` silently
+/// disables the feature on the flag-on path), and both are pinned by
+/// `priors::tests::from_source_names_each_head_and_honours_the_flag`.
 fn head_pair(output: &LeafBatchOutput, use_opponent_priors: bool) -> PyResult<HeadPair<'_>> {
     HeadPair::from_source(output, use_opponent_priors).map_err(PyValueError::new_err)
 }

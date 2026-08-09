@@ -198,13 +198,23 @@ pub(crate) struct HeadPair<'a> {
 }
 
 impl<'a> HeadPair<'a> {
+    /// The only public constructor. Callers name a SOURCE, never two slices, so
+    /// the two heads cannot be transposed at the call site.
+    ///
     /// `use_opponent_priors` is the flag the search runs under. With it OFF the
     /// opponent head is dropped unread, so a model whose opponent head has the
     /// wrong width still runs exactly the search it always ran — flag-off
     /// equivalence is the campaign's anchor and must not acquire a new way to
     /// fail.
-    /// The only public constructor. Callers name a SOURCE, never two slices,
-    /// so the two heads cannot be transposed at the call site.
+    ///
+    /// Both halves are load-bearing and both are pinned by
+    /// `tests::from_source_names_each_head_and_honours_the_flag`: transposing
+    /// the two `source` reads swaps the heads on every flag-on search (the
+    /// width check compares the same two lengths, so it still passes), and
+    /// hard-coding the flag breaks flag-off equivalence one way and silently
+    /// makes the whole feature inert the other — the latter being exactly how
+    /// cells B and E would read "opponent priors do not help" off a feature
+    /// that never ran.
     #[cfg_attr(not(feature = "model"), allow(dead_code))]
     pub(crate) fn from_source(
         source: &'a dyn HeadSource,
@@ -218,6 +228,10 @@ impl<'a> HeadPair<'a> {
         )
     }
 
+    /// Private: the two-slice form, reachable only through
+    /// [`Self::from_source`] in production and directly from this module's
+    /// tests. Keeping it private is what makes `from_source` the single seam
+    /// where the heads are named.
     fn new(
         acting: &'a [f32],
         opponent: &'a [f32],
@@ -400,13 +414,27 @@ pub(crate) fn branch_seats(state: &State, seat: &dyn SearchingSeat) -> RootSeats
 }
 
 /// The pure half of [`branch_seats`], split out so the empty-side defence below
-/// is reachable from a test. It is NOT reachable through a real `State`: on the
-/// gen3-patched engine `get_all_options` returned at least one option for both
-/// seats in every state probed, including one with a wholly fainted side and
-/// `battle_is_over`. The defence stays because it mirrors
-/// `new_decision_node`'s, and the two must not disagree about how many arms a
-/// node has — but "cannot currently happen" is not "cannot happen", and an
-/// untested defence is the one that rots.
+/// is reachable from a test.
+///
+/// It is NOT reachable through a real `State`, and the reason is structural
+/// rather than "not observed in the states I tried". `get_all_options` cannot
+/// return an empty vector on the vendored tree: every exit either carries its
+/// own `len() == 0` guard or routes through `Side::add_switches`
+/// (`third_party/poke-engine-src/src/gen3/state.rs`), which ends by pushing
+/// `MoveChoice::None` onto a still-empty vector. That invariant is established
+/// by `third_party/poke-engine-gen3-terminal-options.patch` — see its header
+/// for the condition it closed (a forced replacement on one side plus an
+/// unsatisfiable `switch_out_move_second_saved_move` on the other, which is
+/// NOT the same as "a side with no living reserve") — and it is pinned by
+/// `tests/gen3_terminal_options.rs` and `tests/test_engine_search_no_panic.py`.
+///
+/// So the defence below is belt-and-braces mirroring `new_decision_node`'s, and
+/// the two must not disagree about how many arms a node has. It stays, and it
+/// is tested, for a specific reason: the invariant is held by a POKEZERO PATCH
+/// TO VENDORED CODE, which is exactly the kind of thing that regresses silently
+/// on an engine bump. `vendor_poke_engine_src.sh` re-applies the patch stack
+/// against whatever upstream ships, and a patch that stops applying cleanly is
+/// a louder failure than one that applies to a rewritten function.
 fn seat_split(
     s1_options: Vec<MoveChoice>,
     s2_options: Vec<MoveChoice>,
@@ -861,6 +889,72 @@ mod tests {
         assert_eq!(heads.row(PriorSeat::Opponent, 0), Some(&opponent[..]));
     }
 
+    /// `from_source` is the ONLY public constructor and the seam the module's
+    /// structural claim rests on — every other test here reaches past it into
+    /// the private `new`, so without this one it is production code with no
+    /// coverage. Three measured survivors motivate each assertion:
+    ///
+    /// * transposing the two `source` reads swaps the heads on every flag-on
+    ///   search, and the width check compares the same two lengths so it still
+    ///   passes — the #937 orientation class, silent;
+    /// * hard-coding the flag `true` makes flag-OFF run the opponent-width
+    ///   check, so a mismatched artifact errors a search that must be
+    ///   byte-for-byte unchanged;
+    /// * hard-coding it `false` drops the opponent head with the flag ON. Every
+    ///   opponent branch falls back to uniform, `prior_fallbacks` rises, nothing
+    ///   gates on that counter, and cells B and E read "opponent priors do not
+    ///   help" off a feature that never ran.
+    #[test]
+    fn from_source_names_each_head_and_honours_the_flag() {
+        let source = Heads {
+            acting: vec![0.7, 0.1, 0.1, 0.1],
+            opponent: vec![0.1, 0.1, 0.1, 0.7],
+            action_count: 4,
+        };
+
+        // Named, not positional: the acting seat gets the acting head.
+        let heads = HeadPair::from_source(&source, true).expect("same width");
+        assert_eq!(
+            heads.row(PriorSeat::Acting, 0),
+            Some(&source.acting[..]),
+            "the acting seat must read the acting head, not the opponent's"
+        );
+        assert_eq!(
+            heads.row(PriorSeat::Opponent, 0),
+            Some(&source.opponent[..]),
+            "and the opponent seat the opponent head"
+        );
+
+        // The flag is threaded, not assumed, in BOTH directions.
+        let off = HeadPair::from_source(&source, false).expect("flag-off never refuses");
+        assert_eq!(
+            off.row(PriorSeat::Opponent, 0),
+            None,
+            "flag-off must drop the opponent head unread"
+        );
+        assert!(
+            heads.row(PriorSeat::Opponent, 0).is_some(),
+            "flag-on must NOT drop it, or the feature is inert and the cells \
+             measure nothing"
+        );
+
+        // The width check follows the flag too.
+        let mismatched = Heads {
+            acting: vec![0.25; 8],
+            opponent: vec![0.2; 10],
+            action_count: 4,
+        };
+        assert!(
+            HeadPair::from_source(&mismatched, true).is_err(),
+            "flag-on must refuse a mismatched opponent head"
+        );
+        assert!(
+            HeadPair::from_source(&mismatched, false).is_ok(),
+            "flag-off must not: the head is never read, and flag-off \
+             equivalence cannot acquire a new way to fail"
+        );
+    }
+
     /// The orientation pin. With the searching seat on side one the opponent is
     /// side two, so the opponent head lands on `s2_stats` and side one is left
     /// uniform. The side is DERIVED from `self_side_one` inside the module, so
@@ -1222,7 +1316,8 @@ mod tests {
     /// length 0 against a stat vector of length 1 falls back on every branch.
     ///
     /// Driven through `seat_split` rather than `branch_seats` because the case
-    /// is not reachable through a real `State` — see that function's docs.
+    /// is unreachable through a real `State` by construction — the
+    /// terminal-options patch, cited on that function.
     #[test]
     fn a_seat_the_engine_offers_nothing_still_gets_one_arm() {
         let seats = seat_split(Vec::new(), vec![MoveChoice::None; 2], true);
