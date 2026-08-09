@@ -1181,20 +1181,35 @@ jobs:
       # gives: no local `unittest` or `pytest` run can see it, so a battery that shrinks
       # is red here rather than quietly green.
       #
-      # It needs NO engine and NO Showdown checkout -- `battle_spec_from_payload` is pure
-      # construction over a payload literal -- so unlike its neighbours a skip here would
-      # mean an import broke, not a missing wheel. Skips are an error either way.
+      # READ THIS BEFORE TRUSTING A GREEN. 16 of the 21 tests execute here; 5 SKIP.
+      # The 16 need no engine and no Showdown checkout -- `battle_spec_from_payload` is
+      # pure construction over a payload literal -- and those are the behavioural pins.
+      # The 5 that skip are `PoolCannotReachTheLockedMoveDivergenceTests`, which scans
+      # the real gen3 set pool and `data/moves.ts` to bound at ZERO the one shape where
+      # the `lastUsedMove` latch and the Encore event scan disagree (a `[from] lockedmove`
+      # continuation, which advances Showdown's `lastMove` but not the latch). CI builds
+      # no Showdown, so they cannot run here -- the same honest gap the spread-gate step
+      # above documents. What DOES run in their place is
+      # `TheReachabilityClaimIsTiedToAMeasuredPoolTests`, a staleness alarm holding the
+      # committed pool census to the shape that scan was measured against, so a
+      # regenerated pool reddens here rather than leaving the zero silently stale.
+      #
+      # The skip count is pinned EXACTLY, not forbidden: `skipped=5` and no more. A sixth
+      # skip means a behavioural pin quietly acquired a Showdown dependency, which is how
+      # a battery goes vacuous while still reporting OK. Per-METHOD skip decorators keep
+      # the reported count at 21 in both environments; a class-level skip would collapse
+      # to one entry and drop the count to 16, defeating the count guard.
       - name: Encore public-lastUsedMove world-construction pins
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_world_encore_last_used -v 2>&1 \
             | tee /tmp/encorelastused.log
-          if ! grep -qE 'Ran 15 tests' /tmp/encorelastused.log; then
-            echo "::error::expected 15 tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 21 tests' /tmp/encorelastused.log; then
+            echo "::error::expected 21 tests; the suite shrank or grew"
             exit 1
           fi
-          if grep -q 'skipped' /tmp/encorelastused.log; then
-            echo "::error::an Encore lastUsedMove pin SKIPPED; they must never skip"
+          if ! grep -qE 'OK \(skipped=5\)' /tmp/encorelastused.log; then
+            echo "::error::expected EXACTLY 5 skips (the pool scan, which needs a Showdown checkout CI does not build). More means a behavioural pin gained a Showdown dependency; fewer means the pool scan was deleted"
             exit 1
           fi
 

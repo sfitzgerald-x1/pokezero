@@ -24,9 +24,12 @@ fail-closed on an id the sampled world does not contain).
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 import unittest
+from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -37,7 +40,9 @@ from pokezero.engine_world import (  # noqa: E402
     battle_spec_from_payload,
 )
 from pokezero.poke_engine_adapter import MoveSpec  # noqa: E402
+from pokezero.dex import normalize_id  # noqa: E402
 
+from _showdown_root import has_showdown, requires_showdown, showdown_root  # noqa: E402
 from test_engine_world import _dex, _override, _payload  # noqa: E402
 
 
@@ -330,6 +335,159 @@ class ResolverPrecedenceUnitTests(unittest.TestCase):
                 public_last_used_move="hiddenpowerground70",
             ),
             1,
+        )
+
+
+class PoolCannotReachTheLockedMoveDivergenceTests(unittest.TestCase):
+    """The one shape where the latch and the event scan disagree, bounded to zero.
+
+    The resolver's docstring argues source 3 is admissible partly because a CALLED
+    move cannot move the latch. That is true for an ordinary caller, and NOT true in
+    general: ``runMove`` takes the ``getLockedMove()`` branch, sets
+    ``sourceEffect = lockedmove``, and STILL calls ``pokemon.moveUsed(...)``, so a
+    locked continuation advances Showdown's ``lastMove`` while emitting
+    ``|[from] lockedmove``. ``showdown._ReplayParser`` rejects every ``[from]``;
+    ``determinization._called_move_line`` deliberately tolerates ``lockedmove``. The
+    two sources use DIFFERENT rules, and on that one line the latch lags.
+
+    Three reasons that is not a defect here, in increasing order of durability:
+
+    1. Precedence. Source 1 (the faithful one) outranks source 3 (the lagging one),
+       so wherever the event scan can see the line, its answer is the one used.
+    2. Direction. Where source 1 is silent, source 3 lags rather than invents -- and
+       for an Encore specifically the lock cannot BE the locked-move continuation,
+       because ``encore.onStart`` requires a move slot the target owns with pp > 0.
+    3. Reachability, pinned below at ZERO for this format.
+
+    ⚠ WHAT WOULD BREAK IT. If the pool ever gained a locking move ALONGSIDE a caller,
+    both the caller and the callee would be in the sampled moveset, so the stale latch
+    would resolve to a real slot and build a SILENTLY WRONG world instead of refusing.
+    That is why this is a pinned zero and not a comment.
+    """
+
+    #: Detectors, kept alongside the assertions so a reviewer can see they are precise
+    #: rather than substring-matching a whole move block. `getLockedMove()` fires the
+    #: LockMove event, so "can produce a `[from] lockedmove` line" is exactly "installs
+    #: the lockedmove volatile, or supplies onLockMove".
+    LOCKING = re.compile(r"volatileStatus: 'lockedmove'|\bonLockMove\b")
+    CALLER = "useMove("
+
+    #: Per-METHOD rather than per-class on purpose. A class-level skip collapses to a
+    #: single skipped entry and drops unittest's reported test COUNT (21 -> 16), and the
+    #: count is exactly what the CI step guards -- so the suite could shrink without the
+    #: guard moving. Same shape as ``tests/test_spread_gate_provenance.py``, whose step
+    #: pins ``Ran 6`` and ``OK (skipped=5)`` for this identical reason.
+    SKIP = requires_showdown("the locking-move scan reads the real gen3 set pool")
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.pool = set()
+        cls.blocks = {}
+        if not has_showdown():
+            return  # the five pins below skip; nothing here may raise instead.
+        root = showdown_root()
+        sets_path = root / "data/random-battles/gen3/sets.json"
+        moves_path = root / "data/moves.ts"
+        for entry in json.loads(sets_path.read_text(encoding="utf-8")).values():
+            rows = entry.get("sets", entry if isinstance(entry, list) else [])
+            for row in rows:
+                for move in row.get("movepool", row.get("moves", [])):
+                    cls.pool.add(normalize_id(str(move)))
+        # Brace-matched, NOT regex-delimited: a `\n\t},\n` terminator parses 477 of the
+        # 953 blocks and its "no locking move found" would have been vacuously true.
+        source = moves_path.read_text(encoding="utf-8")
+        for match in re.finditer(r"^\t(\w+): \{$", source, re.M):
+            index, depth = match.end(), 1
+            while depth:
+                depth += (source[index] == "{") - (source[index] == "}")
+                index += 1
+            cls.blocks[match.group(1)] = source[match.end() : index]
+
+    @SKIP
+    def test_the_detectors_are_not_vacuous(self) -> None:
+        """Every zero below is a set intersection; an empty detector makes them all pass."""
+
+        self.assertGreater(len(self.blocks), 900)
+        self.assertGreater(len(self.pool), 100)
+        locking = {m for m, b in self.blocks.items() if self.LOCKING.search(b)}
+        callers = {m for m, b in self.blocks.items() if self.CALLER in b}
+        self.assertLessEqual(
+            {"thrash", "outrage", "petaldance", "uproar", "rollout", "iceball", "bide"},
+            locking,
+        )
+        self.assertLessEqual({"sleeptalk", "metronome", "mirrormove"}, callers)
+        # And the pool itself is populated with things this campaign knows are there.
+        self.assertLessEqual(
+            {"rest", "toxic", "protect", "sleeptalk", "solarbeam", "encore"}, self.pool
+        )
+
+    @SKIP
+    def test_no_gen3_randbats_set_carries_a_locking_move(self) -> None:
+        locking = {m for m, b in self.blocks.items() if self.LOCKING.search(b)}
+        self.assertEqual(sorted(locking & self.pool), [])
+
+    @SKIP
+    def test_the_only_caller_in_the_pool_is_sleep_talk(self) -> None:
+        """Bounds the other half of the pair: a `[from] lockedmove` line needs a caller
+        only when the LOCKING move is called, but a lone caller with nothing lockable to
+        call cannot produce one either."""
+
+        callers = {m for m, b in self.blocks.items() if self.CALLER in b}
+        self.assertEqual(sorted(callers & self.pool), ["sleeptalk"])
+
+    @SKIP
+    def test_the_only_charge_move_in_the_pool_sets_the_latch_to_itself(self) -> None:
+        """Solar Beam is the pool's only two-turn move, and it is not a divergence.
+
+        Its turn-1 line is an ordinary non-`[from]` `|move|`, so the latch takes
+        `solarbeam`; the release turn names the same id. There is no caller/callee pair
+        for the two rules to disagree about.
+        """
+
+        charge = {m for m, b in self.blocks.items() if re.search(r"(?<!re)charge: 1", b)}
+        self.assertLessEqual({"solarbeam", "razorwind", "skullbash", "fly", "dig"}, charge)
+        self.assertEqual(sorted(charge & self.pool), ["solarbeam"])
+
+    @SKIP
+    def test_the_other_latch_perturbers_are_absent_too(self) -> None:
+        """Disable, Mimic and Sketch are the moves that could put a Struggle or a
+        substituted id under a live Encore. All absent; see the resolver docstring's
+        argument (4), which is scoped to PP exhaustion and not to these."""
+
+        for move in ("disable", "mimic", "sketch", "struggle"):
+            with self.subTest(move=move):
+                self.assertNotIn(move, self.pool)
+
+
+class TheReachabilityClaimIsTiedToAMeasuredPoolTests(unittest.TestCase):
+    """Runs EVERYWHERE, including CI, which the scan above deliberately does not.
+
+    The five pins above need the real Showdown checkout, and CI builds none -- the same
+    honest gap `tests/test_spread_gate_provenance.py` documents. That would leave the
+    resolver docstring's "no locking move in this pool" resting on a scan nothing in CI
+    can execute, and a zero nobody re-measures is a zero that goes stale silently.
+
+    So this ties the claim to the committed pool census instead. It does NOT re-derive
+    reachability -- it asserts the POOL the reachability was measured against has not
+    moved. If the set data is regenerated and the pool changes shape, this reddens in CI
+    and a human re-runs the checkout-dependent scan. That is a staleness alarm, which is
+    the honest thing to promise here, and not a proof.
+    """
+
+    def test_the_committed_census_still_describes_the_pool_that_was_scanned(self) -> None:
+        census = json.loads(
+            (Path(ROOT) / "tests/data/c152_pool_reachability_census.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            (census["species"], census["sets"], census["distinct_moves"]),
+            (220, 393, 125),
+            "the gen3 randbats pool has changed shape since the locking-move "
+            "reachability scan in PoolCannotReachTheLockedMoveDivergenceTests was "
+            "measured. Re-run that class against a real checkout "
+            "(POKEZERO_SHOWDOWN_ROOT=...) and re-derive the zero before editing "
+            "these numbers.",
         )
 
 

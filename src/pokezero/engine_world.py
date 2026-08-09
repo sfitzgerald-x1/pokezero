@@ -1972,21 +1972,61 @@ def _resolve_encored_move_index(
     * Source 2 does not exist on the opponent seat at all: there is no opposing
       self-request to read a disable pattern from.
     * ``replay.last_used_move`` is a per-slot latch with NO window. It is
-      written only by a non-``[from]`` ``|move|`` line and reset to the
-      ``"switch"`` sentinel on switch/drag, i.e. it is the identical fact source
-      1 scans for, retained indefinitely instead of for 24 lines.
+      written only by a ``|move|`` line carrying no ``[from]`` tag, and reset to
+      the ``"switch"`` sentinel on switch/drag. It tracks NEARLY the same fact
+      source 1 scans for, retained indefinitely instead of for 24 lines -- see
+      the divergence note below, which is why "nearly".
 
     Soundness of source 3 as an ENCORE lock, which is why it is admissible here
-    and not a guess: Showdown's Encore locks ``target.lastMove`` and refuses to
-    start when there is none (``!move``), so the lock and the latch agree at
-    onset; while the volatile holds, the target can only execute the encored
-    move, and an immobilised turn emits ``|cant|`` which does not touch the
-    latch; Encore is ``noCopy`` and cannot survive a switch, which is exactly
-    what the ``"switch"`` sentinel filtered below would represent; and
-    Showdown's ``encore`` condition removes itself at the residual once the
-    encored move's PP hits zero, so an Encore can never be observed alongside a
-    Struggle substitution. A called move (Sleep Talk's callee, Metronome's) is
-    excluded from the latch by the same ``[from]`` discriminator source 1 uses.
+    and not a guess:
+
+    1. ONSET AGREEMENT, and it is stronger than "there was a last move".
+       ``encore.onStart`` reads ``target.lastMove``, bails on ``!move``, and
+       ALSO bails unless that move is one of the target's own slots with PP left
+       (``!moveSlot || moveSlot.pp <= 0``) and lacks ``flags['failencore']``. So
+       whenever the volatile exists, the lock is a real slot of the target's and
+       the latch named it.
+    2. An immobilised turn emits ``|cant|``, which the latch's truth table does
+       not act on, so the answer survives exactly the case that loses source 1.
+    3. Encore is ``noCopy``: it cannot survive a switch or a Baton Pass, and a
+       switch/drag is precisely what writes the ``"switch"`` sentinel filtered
+       below. A live Encore and a latch belonging to some earlier mon cannot
+       co-occur.
+    4. Nothing in this format can substitute a different id under a live Encore.
+       ``encore.onResidual`` ends the volatile when the ENCORED move runs out of
+       PP, which covers plain exhaustion; it does NOT cover a Disable landing on
+       the encored move while Encore disables the rest, which would leave
+       Struggle under a live volatile. That shape needs ``disable``, which is
+       absent from the whole gen3 randbats pool -- and it would fail closed
+       anyway, since ``struggle`` is never in a sampled moveset.
+
+    ⚠ SOURCES 1 AND 3 DO NOT USE THE SAME ``[from]`` RULE, and the difference is
+    real. ``determinization._called_move_line`` deliberately TOLERATES
+    ``lockedmove``; the parser behind this latch rejects EVERY ``[from]``. That
+    matters because ``BattleActions.runMove`` takes the ``getLockedMove()``
+    branch, sets ``sourceEffect = lockedmove``, and STILL calls
+    ``pokemon.moveUsed(...)`` -- so a locked continuation advances Showdown's
+    ``lastMove`` while emitting ``|[from] lockedmove``. On that one line source 1
+    is FAITHFUL and this latch is CONSERVATIVELY STALE (Sleep Talk calling
+    Thrash: source 1 says ``thrash``, the latch still says ``sleeptalk``).
+
+    Three things keep that harmless here, and only the third is contingent:
+    PRECEDENCE -- the faithful source outranks the conservative one, so wherever
+    source 1 can see the line its answer wins; DIRECTION -- where source 1 is
+    silent the latch lags rather than invents; and REACHABILITY -- no gen3
+    randbats set carries a locking move at all (0 of 220 species; the pool's only
+    caller is ``sleeptalk`` and its only charge move is ``solarbeam``, whose
+    turn-1 line is un-tagged and names the same id). Pinned, with anti-vacuity
+    controls, by ``tests/test_engine_world_encore_last_used.py``
+    ::PoolCannotReachTheLockedMoveDivergenceTests, and the parser half by
+    ``tests/test_last_used_move_provenance.py``
+    ::test_a_lockedmove_continuation_does_NOT_advance_the_latch.
+
+    ⚠ IF THE POOL EVER GAINS A LOCKING MOVE ALONGSIDE A CALLER, this stops being
+    harmless and the failure inverts: both caller and callee would be in the
+    sampled moveset, so the stale latch would resolve to a REAL slot and build a
+    silently wrong world instead of refusing. That is why the zero above is a
+    test and not a comment.
 
     Fail-closed is preserved end to end. An empty/absent latch returns None, the
     ``switch`` sentinel returns None, and an id the SAMPLED moveset does not
