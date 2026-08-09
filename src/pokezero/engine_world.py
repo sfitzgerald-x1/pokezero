@@ -1060,6 +1060,19 @@ def _build_side_spec(
         raise EngineWorldUnsupported("payload_malformed", f"side {slot!r} has no active row")
 
     volatiles = [normalize_id(str(v)) for v in side_payload.get("volatiles") or ()]
+    if side_payload.get("meanlookTrap") is True and "trapped" not in volatiles:
+        # Showdown's move-trap arrives on its OWN payload key, not in `volatiles`: the parser
+        # tracks `|-activate|SLOT|trapped` in `meanlook_trap`, separate from the
+        # TRACKED_VOLATILES-gated bag, because that bag is also the observation encoder's
+        # vocabulary and the Node bridge's materialization allowlist. See the producer note in
+        # `local_showdown._public_materialization_payload`.
+        #
+        # Joined HERE, before the allowlist below, so the move trap takes exactly the path a
+        # payload-carried `trapped` already takes -- the same `require_move_trap_support()`
+        # wheel gate, the same `_SUPPORTED_VOLATILES` admission, and the same
+        # `_require_world_reproduces_trap` discharge. Nothing downstream learns there are two
+        # producers.
+        volatiles = volatiles + ["trapped"]
     supported = _SUPPORTED_VOLATILES | ({"substitute"} if approximate_substitute_health else set())
     if approximate_partial_trap_turns:
         # Gen 3 Wrap/Bind/Clamp/Fire Spin/Whirlpool run 2-5 RANDOM turns, and

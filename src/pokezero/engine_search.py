@@ -50,7 +50,11 @@ from .determinization import (
 from .public_action_capture import public_action_rounds_from_trajectory_metadata
 from .engine_world import EngineWorld, EngineWorldUnsupported, world_battle_spec
 from .randbat import canonical_gen3_randbat_species_id
-from .poke_engine_adapter import PokeEngineAttractUnsupportedError, build_poke_engine_state
+from .poke_engine_adapter import (
+    PokeEngineAttractUnsupportedError,
+    PokeEngineMoveTrapUnsupportedError,
+    build_poke_engine_state,
+)
 from .policy import PolicyContext, PolicyDecision, legal_action_indices
 
 _fallback_logger = logging.getLogger("pokezero.engine_search.fallback")
@@ -1182,6 +1186,16 @@ class EngineMctsPolicy:
                 # permits a world; classify a missing patch as an attributed
                 # fallback instead of silently searching an optimistic state.
                 self.stats.world_failure_reasons["attract_patch_unavailable"] += 1
+                continue
+            except PokeEngineMoveTrapUnsupportedError:
+                # Same shape, newly reachable. `require_move_trap_support` has always guarded
+                # the TRAPPED volatile, but until the move trap was routed into the payload no
+                # production world ever carried one, so the raise had no live caller and would
+                # have escaped `_search` as a hard crash on an unpatched wheel. Attribute it
+                # like the Attract probe: an unpatched wheel drops TRAPPED silently and would
+                # hand the trapped seat its switch options back, so declining is correct --
+                # but declining is a fallback, not a crashed run.
+                self.stats.world_failure_reasons["move_trap_patch_unavailable"] += 1
                 continue
             except EngineWorldUnsupported as error:
                 self.stats.world_failure_reasons[_world_failure_key(error)] += 1

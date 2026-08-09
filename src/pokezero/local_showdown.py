@@ -2248,6 +2248,28 @@ def _public_materialization_payload(
             "pokemon": rows,
             "boosts": dict(replay.boosts.get(player, {})),
             "volatiles": list(replay.volatiles.get(player, ())),
+            # Mean Look / Spider Web / Block: this slot's active mon is switch-locked by the
+            # OPPOSING active. A separate key rather than a `volatiles` entry, because the two
+            # lists have different owners and different consumers:
+            #
+            #   `volatiles` is `_update_volatiles`'s output, gated on TRACKED_VOLATILES -- the
+            #   closed set that also enumerates the observation encoder's `volatile:<id>` vocab
+            #   (randbat_vocab) and that the Node bridge's STATIC_PUBLIC_VOLATILES mirrors.
+            #   Adding `trapped` there would (a) mint a v3 vocab row and unfreeze byte-frozen
+            #   v3 tensors, which already carry this fact as NUMERIC_MEANLOOK_TRAP, and (b) make
+            #   `materialize` throw, since the bridge cannot rebuild the linked `trapper`
+            #   volatile on the source mon.
+            #
+            #   `meanlook_trap` is the parser's own per-slot tracker for `|-activate|SLOT|trapped`
+            #   (spec v3 change 8). It reaches the OBSERVATION already; this is the world lane's
+            #   twin, exactly as `truantPhase` below is the world lane's twin of the truant
+            #   tracker. engine_world turns it into the engine's TRAPPED volatile; the bridge
+            #   ignores the key, so the direct path is unchanged.
+            #
+            # Without it the world builder never saw a move trap: `sides[self].volatiles` was
+            # `[]` on every Mean Look turn, so `_require_world_reproduces_trap` found no cause
+            # for the request's disclosed `trapped` flag and refused the decision.
+            "meanlookTrap": bool(replay.meanlook_trap.get(player, False)),
             # A fresh Substitute is exact. Deterministic fixed-damage chronology
             # carries world-portable depletion; other surviving hits remain
             # explicitly unknown so engine_world declines them.
