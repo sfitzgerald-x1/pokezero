@@ -67,7 +67,9 @@ none. An independent reviewer then re-ran a battery of 13 and found the 13th sur
 **That is exactly what an unrecorded battery costs**, so the list is here and a mutation
 added to it must be added here too. 14-18 came with the §6 sync pin, added after a second
 review round found that section still carrying pre-correction prose; 19-22 came with the
-derived emission-granularity split, after a third found that split asserted and untraced.
+derived emission-granularity split, after a third found that split asserted and untraced;
+23-25 are review's own smuggles against the negative pin's first exemption rule, which they
+defeated -- all three are green under the window version and red under the quoting one.
 
 Each is applied to a copy of the committed artifact (or the generator) and must turn this
 module RED:
@@ -96,6 +98,9 @@ module RED:
   20. a recorded `denominator_trials` value detached from the shards
   21. an entry's `denominator` name swapped for another of the three
   22. the derived `liveness_witnesses` list edited away from what the AST produces
+  23. a retracted phrase smuggled UNQUOTED into a §6 bullet (which opens with `⚠`)
+  24. the same, capitalised, to defeat a case-sensitive match
+  25. a bare `⚠ Housekeeping note.` two lines above an unquoted assertion
 
 ⚠ 13 was found by the reviewer, not the author, and it was the important one: `combined`
 is where the 0.32 % bound quoted in the report, in §3.5 and in H15's cell comes from, and
@@ -105,6 +110,23 @@ green. Three of the twelve above (3, 8 and 13's neighbours) were likewise near-m
 first: 3 survived until the closure pin stopped reading the artifact's own `agrees` flag,
 and 8's first form was a defective mutation (`{} or {...}`, which is truthy) rather than a
 surviving pin. Both are recorded rather than tidied away.
+
+CROSS-INSTRUMENT COUPLING, DECLARED. This module and
+`tests/test_never_fired_counter_census.py` check each other, and until now that was true
+by arrangement rather than by statement:
+
+  * THIS module pins a MEASUREMENT taken outside the two permitted windows; that one pins
+    an ABSENCE over the committed corpus. Neither can do the other's job, which is the
+    whole content of §8's standing rule.
+  * The corpus module is what actually enforces "no number may sit under a dotted path
+    containing a counter name" in the artifact this module owns. It caught that defect on
+    the same tree, in three variants, by shape. The two `assertNotIn`s here are a
+    regression pin for the instance, not the invariant.
+  * ⚠ RESIDUAL RISK: that enforcement depends on
+    `reports/artifacts/c153_wide_negative_census.json` being a member of
+    `counter_artifacts()`'s glob. Moving a future census to `tests/data/` would drop it out
+    of the corpus and lose the check with no test going red. Asserted here as a floor, and
+    named in both modules so the dependency is deliberate.
 
 WHAT IS NOT PINNED, ON PURPOSE. Nothing here asserts a divergence rate. These are
 unregistered seeds and the census is not fidelity evidence; §7.3 of
@@ -705,8 +727,30 @@ class TheEmissionGranularitySplitIsDerivedTests(unittest.TestCase):
         # Every entry names one of the three, so the join is total. The numbers live in
         # `denominator_trials` rather than on the entry ON PURPOSE: a number under a path
         # containing a counter name makes `tests/test_never_fired_counter_census.py` read
-        # that counter as FIRED, and a first revision of this artifact did exactly that
-        # to all 46. That sibling pin caught it; this assertion keeps the shape.
+        # that counter as FIRED, and a first revision of this artifact did exactly that to
+        # all 46.
+        #
+        # ⚠ WHAT THE TWO `assertNotIn`s BELOW ARE, STATED HONESTLY. A first draft of this
+        # comment said they "keep the shape". They do not. Review replayed three variants:
+        # `bound_trials` back on the record -> red here; a DIFFERENTLY NAMED numeric field
+        # (`expected_hits_at_c152_rate`) -> green; a NESTED numeric sub-object
+        # (`power.trials`) -> green. These two lines are a two-name regression pin against
+        # the exact defect that shipped, not the invariant.
+        #
+        # THE INVARIANT IS ENFORCED BY A DIFFERENT MODULE, and that is deliberate design
+        # rather than luck: `tests/test_never_fired_counter_census.py` matches on SHAPE --
+        # any nonzero number under a dotted path containing a counter name -- so it caught
+        # all three variants. RESIDUAL RISK, recorded because it is currently unstated
+        # anywhere else: that guard holds only while this derived artifact stays inside
+        # `counter_artifacts()`'s glob (`reports/` and `docs/`, recursive). A future census
+        # written to `tests/data/` would leave the glob and lose the protection silently,
+        # with nothing here noticing. See the cross-instrument note in this module's
+        # docstring.
+        self.assertTrue(
+            str(CENSUS.relative_to(REPO)).startswith(("reports/", "docs/")),
+            "the derived census left the corpus glob that enforces the "
+            "no-numbers-under-a-counter-name invariant; see the residual-risk note above",
+        )
         for name, record in sorted(self._window_scoped().items()):
             with self.subTest(entry=name):
                 self.assertIn(record["denominator"], trials)
@@ -846,6 +890,43 @@ class TheCannotReachSectionOfTheReportIsInSyncTests(unittest.TestCase):
             "§6 lists an entry twice",
         )
 
+    # Spans on a line that mark text as QUOTED rather than asserted: a GFM emphasis-quote
+    # `*"..."*`, a plain double-quoted run, or a code span. Deliberately not a proximity
+    # window -- see the docstring below for the smuggling that killed the window version.
+    _QUOTED_SPAN = re.compile(r'\*"[^"]*"\*|"[^"]*"|`[^`]*`')
+
+    @staticmethod
+    def _blocks(path: Path) -> list[tuple[int, str]]:
+        """`(first line number, whitespace-normalised block)` per markdown block.
+
+        ⚠ NOT per physical line, and the difference is not cosmetic. Both documents are
+        hard-wrapped at ~95 columns, so a quoted retraction routinely straddles a line
+        break: the rest-sleep one reads `"live` at the end of one line and
+        `rows always carry the counts"` at the start of the next. A per-line matcher never
+        sees that phrase AT ALL -- it passes vacuously, which is the same blind spot in the
+        other direction, and an unquoted assertion wrapped the same way would also escape.
+
+        Blocks are separated by blank lines and by list-item starts, so a bullet is its own
+        block and a quoted span cannot be borrowed from the paragraph above it.
+        """
+
+        blocks: list[tuple[int, str]] = []
+        current: list[str] = []
+        start = 1
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            begins_item = line.lstrip().startswith(("* ", "- ", "| ")) or not line.strip()
+            if begins_item and current:
+                blocks.append((start, " ".join(current)))
+                current = []
+            if not line.strip():
+                continue
+            if not current:
+                start = number
+            current.append(line.strip())
+        if current:
+            blocks.append((start, " ".join(current)))
+        return blocks
+
     def test_no_adjudicated_false_phrasing_is_asserted_anywhere_in_the_report(self) -> None:
         """A negative pin over the four sentences review has adjudicated FALSE.
 
@@ -861,9 +942,23 @@ class TheCannotReachSectionOfTheReportIsInSyncTests(unittest.TestCase):
         `test_prose_alone_is_not_evidence` shape -- it constrains nothing future and
         forbids only the return of a claim already adjudicated.
 
-        Each is allowed to appear inside a ⚠ correction note that quotes it as retracted,
-        which is how §6 records its own history; what is forbidden is a line asserting it.
-        The check is therefore per-line, skipping lines that carry the retraction marker.
+        ⚠ THE EXEMPTION IS QUOTING, NOT PROXIMITY, AND THE FIRST VERSION HAD IT WRONG.
+        That version exempted any line within a few lines of a `⚠` / `FALSE` / `retract`
+        marker, on the reasoning that these documents hard-wrap and a retraction and its
+        quoted phrase land on different lines. **Every §6 bullet opens with `⚠`**, so the
+        window covered precisely the paragraphs the pin exists to protect: review smuggled
+        "the public-materialization payload never carries them at all" into the
+        `deferred_opponent_action` bullet and "live rows always carry the counts" into the
+        rest-sleep bullet, and both went green. A bare housekeeping `⚠` two lines above any
+        assertion exempted it anywhere -- 15 % of this report's lines and 25 % of the
+        ledger's. The docstring's own "what is forbidden is a line asserting it" was false
+        as implemented.
+
+        So the rule is now a property of the OCCURRENCE, not of its neighbourhood: the
+        phrase must sit inside quote marks on the line that carries it -- `*"..."*`, a
+        plain double-quoted run, or a code span. Every legitimate retraction in both
+        documents already writes it that way, so this is strictly stricter and passes the
+        text unchanged.
         """
 
         retracted = (
@@ -872,30 +967,70 @@ class TheCannotReachSectionOfTheReportIsInSyncTests(unittest.TestCase):
             "nowhere in the repository",
             "live rows always carry the counts",
         )
-        markers = ("⚠", "would be false", "was falsified", "is **false**", "FALSE", "retract")
         offenders = []
         for path in (
             "reports/c153_wide_seed_negative_census.md",
             "reports/c138_known_gaps_ledger.md",
         ):
-            lines = (REPO / path).read_text(encoding="utf-8").splitlines()
-            for number, line in enumerate(lines, 1):
-                # The retraction marker is looked for in a WINDOW, not on the line: these
-                # documents are hard-wrapped at ~95 columns, so a quoted phrase and the
-                # "⚠"/"FALSE" that retracts it routinely land on different lines. A
-                # strict per-line rule flagged §6's own correction note on its first run.
-                window = " ".join(lines[max(0, number - 3) : number + 2])
-                if any(marker in window for marker in markers):
-                    continue
+            for number, line in self._blocks(REPO / path):
+                quoted = [m.span() for m in self._QUOTED_SPAN.finditer(line)]
+                # CASE-INSENSITIVE. One of review's three smuggles passed the first
+                # version of this pin on a capital letter alone -- "Live rows always
+                # carry the counts" at the head of a sentence. A retracted claim is not
+                # a different claim for being sentence-cased.
+                haystack = line.casefold()
                 for phrase in retracted:
-                    if phrase in line:
-                        offenders.append(f"{path}:{number}: {phrase!r} -- {line.strip()[:90]}")
+                    needle = phrase.casefold()
+                    start = haystack.find(needle)
+                    while start != -1:
+                        end = start + len(needle)
+                        inside = any(lo <= start and end <= hi for lo, hi in quoted)
+                        if not inside:
+                            offenders.append(
+                                f"{path}:{number}: {phrase!r} asserted unquoted -- "
+                                f"{line.strip()[:90]}"
+                            )
+                            break
+                        start = haystack.find(needle, end)
         self.assertEqual(
             offenders,
             [],
-            "a phrasing review has adjudicated FALSE is asserted again:\n"
-            + "\n".join(offenders),
+            "a phrasing review has adjudicated FALSE is asserted outside quote marks. "
+            "Quote it as retracted, or do not write it:\n" + "\n".join(offenders),
         )
+
+    def test_the_quoting_exemption_cannot_be_smuggled(self) -> None:
+        """The three smuggles that passed the window version, as fixtures.
+
+        A negative pin is only worth its exemption rule, and this one's first exemption
+        rule was defeated by the documents' own house style. These are the exact strings
+        review used; each must be seen as an unquoted assertion.
+        """
+
+        smuggles = (
+            "⚠ Housekeeping note.",  # the bare marker that used to exempt a whole window
+            "the public-materialization payload never carries them at all, so the guard "
+            "cannot fire.",
+            "Every live row always carry the counts, so the branch is dead.",
+        )
+        quoted_forms = (
+            'the earlier *"never carries"* is retracted',
+            'a draft said "live rows always carry the counts" and it was wrong',
+            'the sentence `the differential declares none` is false',
+        )
+        for text in smuggles[1:]:
+            with self.subTest(smuggle=text[:40]):
+                spans = [m.span() for m in self._QUOTED_SPAN.finditer(text)]
+                phrase = "never carries" if "never carries" in text else "always carry the counts"
+                start = text.find(phrase)
+                self.assertFalse(
+                    any(lo <= start and start + len(phrase) <= hi for lo, hi in spans),
+                    f"{text!r} would still be exempt, so the pin is smugglable",
+                )
+        for text in quoted_forms:
+            with self.subTest(legitimate=text[:40]):
+                spans = [m.span() for m in self._QUOTED_SPAN.finditer(text)]
+                self.assertTrue(spans, f"{text!r} has no quoted span; a real retraction must")
 
     def test_public_effect_blocked_is_named_as_reachable_and_not_listed(self) -> None:
         # The specific correction, pinned by name so it cannot come back as prose. It must

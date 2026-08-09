@@ -187,6 +187,25 @@ _CORPUS_TREES = ("reports", "docs")
 # divergence counts must never be quoted as the program's.
 _EXPECTED_COUNTER_ARTIFACTS = 401
 
+# CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
+# the corpus census; it is also what enforces a structural invariant on a SIBLING module's
+# artifact, and that was true by arrangement rather than by statement until now.
+#
+# `reports/artifacts/c153_wide_negative_census.json` is keyed by counter name. This
+# module's matcher treats any nonzero number under a dotted path containing a counter name
+# as evidence -- so a numeric field added to one of those records makes the counter read
+# as FIRED. That is exactly what happened while C153 was being written: a `bound_trials`
+# field on each verdict record turned all 46 never-fired names green-to-red here, on the
+# same tree, and review then reproduced it with a differently named field and with a
+# nested sub-object. All three were caught HERE, by shape, and by nothing in the sibling
+# module, whose own two `assertNotIn`s cover only the first.
+#
+# ⚠ The coupling depends on that artifact staying inside `counter_artifacts()`'s glob.
+# A future census written to `tests/data/` would leave the corpus and lose the check with
+# no test going red. `tests/test_wide_seed_negative_census.py` asserts the glob membership
+# as a floor and names this module; this note is the other half, so neither side of the
+# dependency is silent.
+
 # ---------------------------------------------------------------------------
 # The taxonomies, derived from source rather than transcribed.
 # ---------------------------------------------------------------------------

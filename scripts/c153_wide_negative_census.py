@@ -398,7 +398,11 @@ DYNAMIC_FAMILY_EXCLUSIONS = {"skip:world_error:": {"skip:world_error:no_construc
 #
 # ⚠ EVERY ENTRY BELOW IS TRACED FROM THE RAISE SITE TO THE DIFFERENTIAL'S ACTUAL CALL,
 # not to a plausible sentence about it. That rule was added after review, because the
-# first revision of this map got one entry outright wrong and two more imprecise:
+# first revision of this map got THREE OF ITS SEVEN entries wrong -- one outright, two
+# imprecise -- and because the same failure class then recurred OUTSIDE the map it was
+# written for: the emission-granularity split in the report was a fourth instance, and it
+# is not one of these seven entries. The rate is 3 of 7; the lesson is that the class is
+# not confined to the category that earned the rule.
 #
 #   * `public_effect_blocked` was filed here on the claim "the differential declares
 #     none". FALSE. `engine_transition_differential.py:2662` passes `blocked_slots=blocked`
@@ -637,8 +641,16 @@ def liveness_witnesses(
 
     What a calibrator is for is emission-path liveness -- proof the key is not dead code
     in this configuration -- not sample size, which the rule of three does unaided. So a
-    witness has to be a counter whose execution implies the entry's statement was reached.
-    Three relations, each an entailment rather than a resemblance:
+    witness has to be a counter whose execution implies the entry's REGION was reached.
+    Three relations, and they are not equally strong:
+
+    ⚠ The first two are exact entailments of the statement being executed. The third is
+    NOT, and saying so matters: `nested` entails that the enclosing loop body ran and that
+    the guarded region executed -- it does not entail that the entry's own `except` handler
+    or `if` branch is reachable. It is the weakest of the three, it is the only one resting
+    on structure rather than identity, and it carries exactly 2 of the 38 witnessed
+    entries. 34 rest on same-statement identity and 2 on adjacency. Any sentence calling
+    the nested pair the strongest witnesses in the census has it backwards.
 
       1. SAME STATEMENT. The `{}` families all increment at one `counts[...] += 1`, so any
          nonzero key from that statement proves it executed.

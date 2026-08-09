@@ -258,8 +258,11 @@ independent code paths:
 ⚠ **An earlier draft said six entries had "no in-family liveness witness". That was false for
 three of them**: `strict:no_damage_rolls` and `strict:branch_events_error:` sit in the *same*
 `for state in states` loop as `strict:branch_event_legal_error:`, which fired **146** times on
-this build, this run, this path — a closer witness than three of the four controls are for their
-families. The retreat from the two-point cross-family transfer was the right move; it was applied
+this build, this run, this path. ⚠ **But they are the weakest two of the 38, not the strongest** —
+a draft of this note, and the review comment that prompted it, both had that backwards. They are
+the only pair resting on **nesting**, which entails the enclosing loop body ran and the guarded
+region executed, *not* that the entry's own `except` branch is reachable. 34 of the 38 rest on
+same-statement identity and 2 on adjacency; those are the strong ones. The retreat from the two-point cross-family transfer was the right move; it was applied
 to a group that did not exist as described.
 
 **It licenses nothing at all about a per-divergence class**, where the denominator is 949 and
@@ -509,7 +512,8 @@ skipped `mass-gate` and gone green. Same failure mode, one file over.
 `reports/artifacts/c150_band_split_trade_census.json` is a second instance: an artifact a
 permanent ledger cell cites, unregistered. All three added.
 
-**6. One "cannot reach" was really "did not measure".** `public_effect_blocked` was filed as
+**6. Three of the seven `census_cannot_reach` entries were defective — and the class then recurred
+outside the map it was written for.** `public_effect_blocked` was filed as
 unreachable on the claim that the differential declares no `blocked_slots`. It passes
 `blocked_slots=blocked` at `engine_transition_differential.py:2662`, and `blocked` comes from the
 **production** `EngineMctsPolicy._public_effect_signals` on a live observation, populated on two
@@ -535,6 +539,17 @@ the denominator's *name*, the numbers live in a `denominator_trials` block keyed
 and nothing name-keyed in this artifact now holds a number except a FIRED entry's own evidence.
 Worth recording for two reasons: it is the two instruments checking each other exactly as
 intended, and an "obvious" convenience field was one commit from silently inverting 46 verdicts.
+
+**8. The negative pin's first exemption rule was smugglable, in the worst possible place.** It
+exempted any line within a few lines of a `⚠` / `FALSE` / `retract` marker — and **every §6 bullet
+opens with `⚠`**, so the window covered exactly the paragraphs the pin protects. Review smuggled
+two retracted claims straight into those bullets and both went green; a bare housekeeping `⚠` two
+lines above any assertion exempted it anywhere, over 15 % of this report's lines and 25 % of the
+ledger's. The rule is now a property of the **occurrence**: the phrase must sit inside quote marks,
+matched case-insensitively, over whitespace-normalised markdown blocks rather than physical lines —
+because both documents hard-wrap, and the legitimate rest-sleep retraction straddles a line break,
+so a strict per-line matcher never saw that phrase at all and passed vacuously. All four phrases
+are now verified *seen*, and all three of review's smuggles are caught.
 
 **Battery: 22 mutations, 22 caught, enumerated in the pin module's docstring** — 12 of mine, the
 reviewer's 13th (defect 4 above), five for the §6 sync pin and four for the derived split. Two of my twelve are recorded as near-misses rather
