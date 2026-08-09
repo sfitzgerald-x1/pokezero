@@ -91,8 +91,35 @@ _WEATHER_IDS = {
 # -> PERISH1 and faints at zero). Seeding the current count reproduces the
 # engine's state exactly, so a Perish-Song endgame is searched rather than
 # guessed — precisely the position where search matters most.
+# ``taunt`` qualifies too, and it is the only entry here needing a separate
+# duration field seeded (done below, next to Yawn's). It qualifies because gen 3's
+# clock is FIXED, so the remaining count is not hidden information:
+# `data/mods/gen3/moves.ts` pins the condition at `duration: 2` with
+# `durationCallback: undefined`, and the `onStart` that bumps duration by one
+# against an already-moved target belongs to modern Showdown -- gen4 overrides
+# `onStart` with a plain one and gen3 inherits gen4 (`data/mods/gen3/scripts.ts`:
+# `inherit: 'gen4'`). So there is no roll to guess and no dependence on which
+# side moved first. Measured on the local simulator both ways round rather than
+# read off: with a faster Taunt user and with a slower one, EXACTLY ONE
+# subsequent request carries the volatile.
+#
+# ⚠ THAT ARGUMENT ALONE DOES NOT SEPARATE IT FROM YAWN, which is gated on
+# `approximate_hidden_duration_volatiles` below and whose gen3 clock is ALSO a
+# fixed `duration: 2` with no `durationCallback` and a plain `onStart`. So "the
+# clock is fixed, therefore nothing is hidden" is true of both and is NOT a
+# discriminator. An earlier revision of this branch claimed a structural one and
+# it was false; see the withdrawal note at the seeding site.
+#
+# The honest statement is narrower, and it is what the entry rests on: the count
+# is exact at an ORDINARY boundary, which is measured, and at the one boundary
+# where it is not -- a mid-turn replacement, where the answer depends on the
+# Taunt's age and the payload does not carry it -- `taunt` is REMOVED from this
+# set again and the world fails closed. Exact where admitted, refused where not.
+# Yawn takes the other option at the same seam (approximate rather than refuse);
+# that is a policy difference, it is not re-measured here, and nothing about Yawn
+# is changed by this.
 _SUPPORTED_VOLATILES = frozenset({
-    "leechseed", "flashfire", "attract", "destinybond",
+    "leechseed", "flashfire", "attract", "destinybond", "taunt",
     "perish1", "perish2", "perish3", "perish4",
 })
 
@@ -503,6 +530,7 @@ def battle_spec_from_payload(
             approximate_partial_trap_turns=approximate_partial_trap_turns,
             approximate_hidden_duration_volatiles=approximate_hidden_duration_volatiles,
             force_switch=is_self_slot and self_force_switch,
+            world_owes_replacement=self_force_switch,
             baton_passing=is_self_slot and self_baton_passing,
             opponent_committed_pending=(not is_self_slot) and self_baton_passing,
             wish_set_turn=_wish_set_turn(payload, slot),
@@ -971,6 +999,12 @@ def _build_side_spec(
     approximate_partial_trap_turns: bool = False,
     approximate_hidden_duration_volatiles: bool = False,
     force_switch: bool = False,
+    # WORLD-level, unlike `force_switch`, which is per-side (`is_self_slot and
+    # self_force_switch`). The deferred residual block runs on the replacement ply
+    # for BOTH sides, so a volatile whose clock that block advances is ambiguous on
+    # either seat -- the opponent's Taunt is the measured case, and the opponent's
+    # own `force_switch` is always False.
+    world_owes_replacement: bool = False,
     wish_set_turn: int | None = None,
     encored_move: str | None = None,
     removed_item_species: frozenset[str] = frozenset(),
@@ -1074,6 +1108,47 @@ def _build_side_spec(
         # producers.
         volatiles = volatiles + ["trapped"]
     supported = _SUPPORTED_VOLATILES | ({"substitute"} if approximate_substitute_health else set())
+    if world_owes_replacement and "taunt" in supported:
+        # TAUNT IS EXACT AT AN ORDINARY BOUNDARY AND AMBIGUOUS AT THIS ONE, so it
+        # is withdrawn from the allow-list here rather than seeded with a guess.
+        #
+        # A replacement boundary is taken BEFORE the faint turn's residual has
+        # run (gen <= 3 replaces after every move), and the engine RUNS that
+        # deferred residual on the replacement ply: `end_of_turn_triggered`
+        # returns true whenever either side's `force_switch` is set, which is the
+        # flag `battle_spec_from_payload` sets from `selfRequestKind`. Measured
+        # through the real path -- the replacement ply's instruction list carries
+        # `Heal SideTwo` (Leftovers) and `RemoveVolatileStatus SideTwo: TAUNT`.
+        #
+        # So the seed has to say how many ticks are ALREADY elapsed, and at this
+        # boundary that depends on the Taunt's AGE, which the payload does not
+        # carry. Both ages are reachable and they disagree, measured live on the
+        # simulator by
+        # tests/test_struggle_only_move_state.py::TauntReplacementBoundaryAgeTests
+        # -- which asserts the DISAGREEMENT itself, so if a future change ever
+        # made the two ages behave alike that pin goes red and this refusal
+        # should be revisited:
+        #
+        #   age 0 (Taunt landed on the faint turn)   -> 1 taunted move phase left
+        #                                               => the engine needs seed 0
+        #   age 1 (Taunt landed the turn before)     -> 0 taunted move phases left
+        #                                               => the engine needs seed 1
+        #
+        # and at a `force_switch` world the engine gives 0 phases for seed 1 and
+        # 1 phase for seed 0. There is therefore NO single seed that is right
+        # here; picking either trades one silent error for the opposite one. The
+        # age IS publicly derivable -- Showdown announces `-start ... move: Taunt`
+        # on a known turn -- but the parser does not track it today, so deriving
+        # it is follow-up work and not a guess to make here. Note the size of that
+        # follow-up before assuming it is small: `TRACKED_VOLATILES` doubles as the
+        # observation encoder's vocabulary and the bridge's materialization
+        # allowlist, so an age field lands in the observation spec too.
+        #
+        # Withdrawing from `supported` rather than minting a new reason is
+        # deliberate: the resulting `volatile_unsupported: side 'pN': ['taunt']`
+        # is exactly what this boundary is, it keeps the fail-closed shape
+        # identical to `origin/main`'s, and it adds no counter key to the census.
+        supported = supported - {"taunt"}
     if approximate_partial_trap_turns:
         # Gen 3 Wrap/Bind/Clamp/Fire Spin/Whirlpool run 2-5 RANDOM turns, and
         # the public replay never sees the roll. The vendored engine models
@@ -1558,6 +1633,46 @@ def _build_side_spec(
             # behaviour for that side instead of inventing a lock.
             if index is not None:
                 last_used_move = f"move:{index}"
+
+    if "taunt" in volatiles:
+        # Seed the counter at 1 for the same reason Yawn is seeded at 1 below,
+        # and on the same arithmetic. Showdown applies Taunt (gen3 duration 2)
+        # during a turn's move phase and burns the first tick at that same turn's
+        # residual; singles offers no request in between, so every Taunt a
+        # decision boundary can observe already has exactly one tick left.
+        #
+        # The engine's counter is TICKS ELAPSED, not turns remaining
+        # (gen3/generate_instructions.rs 10.15: `0 => taunt += 1`,
+        # `1 => remove the volatile`, anything else panics). Seeding 1 therefore
+        # says "this is the last taunted turn", which is what the observation
+        # means; the struct default of 0 would hold the searched mon taunted for
+        # a second turn that Showdown has already freed. Read off the built wheel
+        # rather than argued: at duration 1 the first end-of-turn emits
+        # `RemoveVolatileStatus TAUNT`, at duration 0 it emits
+        # `ChangeVolatileStatusDuration TAUNT: 1` instead
+        # (tests/test_engine_world_taunt.py pins both).
+        #
+        # THIS SEED IS ONLY REACHED AT AN ORDINARY BOUNDARY. The replacement
+        # boundary, where the count is ambiguous, is withdrawn from the allow-list
+        # further up in this function and never gets here -- see that block for
+        # the measurement.
+        #
+        # ⚠ A PREVIOUS REVISION OF THIS COMMENT CLAIMED THE OPPOSITE AND WAS
+        # WRONG. It said a replacement turn "contributes NO move phase and NO
+        # residual", so the seam "cannot reach Taunt", and offered that as the
+        # structural discriminator against Yawn. The measurement behind it built
+        # the engine state with `hp = 0` and NO `force_switch` flag, which is not
+        # what `_build_side_spec` emits: gen3 `get_all_options` checks the
+        # explicit flag FIRST, and `end_of_turn_triggered` returns true on that
+        # flag, so production takes the arm that DOES run the residual. Withdrawn
+        # rather than reworded.
+        #
+        # There is no structural discriminator against Yawn, and none is claimed.
+        # The difference is a POLICY one, stated plainly: at the ambiguous
+        # boundary Taunt fails closed and Yawn is approximated behind
+        # `approximate_hidden_duration_volatiles`. Whether Yawn should fail closed
+        # too is not measured here and nothing about Yawn is changed.
+        volatile_durations["taunt"] = 1
 
     if "yawn" in volatiles:
         # Seed the counter at 1, NOT the struct default of 0. Showdown applies

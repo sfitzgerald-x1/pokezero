@@ -106,6 +106,34 @@ class ScenarioSweepLiveTests(unittest.TestCase):
             attract["world_failure_reasons"],
         )
 
+    def test_the_taunt_route_into_a_struggle_only_request_searches(self) -> None:
+        # `struggle_taunt_stall` (added by #1199) drove the Taunt route into a
+        # Struggle-only request and contributed 9 `no_worlds_constructed`
+        # refusals, every one `volatile_unsupported: side 'p1': ['taunt']` --
+        # the world was never built, so the `none -> struggle` translation #1202
+        # added downstream was never reached on this route. `taunt` is now in
+        # `engine_world._SUPPORTED_VOLATILES` with its counter seeded, so the
+        # scenario must search straight through.
+        #
+        # Measured on this exact scenario, `worlds=2`: 9 refusals / 30 of 102
+        # worlds constructed before, 0 refusals / 48 of 48 after.
+        from pokezero.golden_corpus_scenarios import run_scenario_fallback_sweep
+
+        specs = {s.name: s for s in scenario_specs()}
+        report = run_scenario_fallback_sweep(
+            showdown_root=os.environ.get("POKEZERO_SHOWDOWN_ROOT")
+            or showdown_root_str(),
+            specs=[specs["struggle_taunt_stall"]],
+        )
+        stats = report["struggle_taunt_stall"]
+        self.assertEqual(stats["fallback_decisions"], 0, stats["world_failure_reasons"])
+        self.assertGreater(stats["searched_decisions"], 0)
+        self.assertEqual(sum(stats["unmapped_choices"].values()), 0)
+        self.assertFalse(
+            any("volatile_unsupported" in reason for reason in stats["world_failure_reasons"]),
+            stats["world_failure_reasons"],
+        )
+
     def test_item_state_scenarios_search_instead_of_failing_closed(self) -> None:
         # The Trick-swap current-item override + berry-consumption clearing:
         # decisions after a public exchange/eat must SEARCH — the pre-fix

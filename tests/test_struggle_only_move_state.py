@@ -39,13 +39,34 @@ regression pin for that; it fails against the fold placement.
 WHICH STRUGGLE POPULATION ACTUALLY BUILDS A WORLD, enumerated rather than assumed. Every
 gen3 ``disableMove`` caller is ``disable``, ``encore``, ``imprison``, ``taunt``,
 ``torment``. ``imprison`` reports ``disabled: 'hidden'``, which ``getMoves`` resolves to
-``false`` in singles; ``taunt``/``disable``/``torment`` are in
-``showdown.TRACKED_VOLATILES`` but not in ``engine_world._SUPPORTED_VOLATILES``, so those
-boundaries raise ``volatile_unsupported`` and never reach move construction; and gen3
-Encore's ``onResidual`` removes the volatile the same turn its move hits 0 PP, so an
-Encored Struggle request does not exist. What remains -- and what ``WhatReachesTheEngineTests``
-exercises end to end -- is PP EXHAUSTION, where the stale snapshot is exactly one use too
-generous on the slot that ran out.
+``false`` in singles; ``disable``/``torment`` are in ``showdown.TRACKED_VOLATILES`` but
+not in ``engine_world._SUPPORTED_VOLATILES``, so those boundaries raise
+``volatile_unsupported`` and never reach move construction; and gen3 Encore's
+``onResidual`` removes the volatile the same turn its move hits 0 PP, so an Encored
+Struggle request does not exist.
+
+⚠ ``taunt`` WAS IN THAT REFUSED LIST AND NO LONGER IS. It joined
+``_SUPPORTED_VOLATILES`` (counter seeded at one tick elapsed) once the gen3 engine was
+shown to model the volatile exactly, so a Taunt-induced Struggle-only request now BUILDS
+a world and reaches move construction like a PP-exhausted one. Two populations now, not
+one.
+
+The PRE-EXISTING 19 tests here are unchanged by that and deliberately so: their subject
+is the PAYLOAD view, every assertion is about ``sides[self].pokemon[].moves`` versus
+``selfActiveMoves``, and both routes produce the identical payload. Measured, not
+assumed: all 19 are green in BOTH worlds, i.e. they are completely insensitive to the
+volatile change and none of them is evidence for it.
+
+The evidence that the Taunt route is closed is therefore written where it can FAIL:
+``tests/test_engine_world_taunt.py`` (construction, counter, engine fidelity) and
+``TauntStruggleOnlyReachesTheEngineTests`` below -- the lone-Blissey line, the only shape
+whose request offers ``['struggle']`` and NOTHING else, so the engine's
+``MoveChoice::None`` has to land on the pseudo-move. That 20th test is red in the null
+world.
+
+``_TAUNT_STALL`` (used by ``BenchLeakTests``) keeps a live bench on purpose and so does
+NOT reach that shape; it exercises the payload only, which is what the bench leak is
+about.
 """
 
 from __future__ import annotations
@@ -366,8 +387,30 @@ _PP_STALL = BattleStartOverride(
     },
 )
 # TAUNT -- reaches Struggle on turn 1 instead of turn 8, which is what makes the bench-leak
-# probe short. This boundary is refused downstream by `volatile_unsupported: taunt`, so it
-# exercises the payload only, which is exactly what the bench leak is about.
+# probe short. When this was written the boundary was refused downstream by
+# `volatile_unsupported: taunt`, so it exercised the payload only -- which is exactly what
+# the bench leak is about, and still all this fixture asserts. `taunt` is now in
+# `engine_world._SUPPORTED_VOLATILES` (see tests/test_engine_world_taunt.py), so the same
+# boundary DOES build a world now; that does not change what is checked here.
+# TAUNT, WITH NO BENCH -- the only shape whose request is `['struggle']` and nothing
+# else. `_TAUNT_STALL` below keeps a Charmander, so Showdown offers a switch alongside
+# Struggle and poke-engine's `add_switches` has something to enumerate; with a LONE
+# all-status Blissey both are empty and `get_all_options` reaches its terminal
+# `MoveChoice::None` push. Blissey, not Bulbasaur, because every one of its four moves
+# must be Status for Taunt alone to empty the moveset -- a PP-bearing attacking slot
+# would keep the request non-Struggle.
+_TAUNT_SOLO_STALL = BattleStartOverride(
+    player_teams={
+        "p1": pack_team(
+            (FixturePokemon(species="Blissey", ability="Natural Cure",
+                            moves=("Soft-Boiled", "Toxic", "Light Screen", "Sing")),)
+        ),
+        "p2": pack_team(
+            (FixturePokemon(species="Smeargle", ability="Own Tempo",
+                            moves=("Taunt", "Tackle")),)
+        ),
+    },
+)
 _TAUNT_STALL = BattleStartOverride(
     player_teams={
         "p1": pack_team(
@@ -395,6 +438,53 @@ def _self_rows(payload):
         )
         for row in payload["sides"]["p1"]["pokemon"]
     }
+
+
+# THE REPLACEMENT-BOUNDARY AGE PAIR. These two exist because `engine_world` DECLINES to
+# build a world at a mid-turn replacement boundary while a Taunt is up, and the reason it
+# declines is that these two shapes need different seeds and the payload cannot tell them
+# apart. That reason is measured here rather than asserted in a comment.
+#
+# Both use Shadow Ball rather than Body Slam so the KO is deterministic: it is the only
+# way to hurt a Ghost (Shedinja), and it cannot touch a Normal (Smeargle) at all, so the
+# age-1 taunter is guaranteed to survive its first turn instead of surviving by damage roll.
+#
+# AGE 0 -- the Taunt lands and its user dies on the SAME turn. Shedinja is exact for it:
+# base speed 40 beats Snorlax's 30, so the Taunt lands first, and it has literally 1 HP, so
+# the KO cannot slip to the next turn. (Two earlier fixtures failed here and failed
+# visibly: a level-40 Smeargle was too slow to land the Taunt at all, and a level-80
+# Magikarp was too bulky to die on schedule, which collapsed the case into age 1.)
+_TAUNT_REPLACEMENT_AGE0 = BattleStartOverride(
+    player_teams={
+        "p1": pack_team((
+            FixturePokemon(species="Shedinja", ability="Wonder Guard",
+                           moves=("Taunt", "Shadow Ball"), level=80),
+            FixturePokemon(species="Magikarp", ability="Swift Swim",
+                           moves=("Splash",), level=5),
+        )),
+        "p2": pack_team((
+            FixturePokemon(species="Snorlax", ability="Immunity",
+                           moves=("Shadow Ball", "Rest"), level=80),
+        )),
+    },
+)
+# AGE 1 -- the Taunt lands on turn 1, its user survives (Normal is immune to Shadow Ball),
+# we pivot into a sack on turn 2, and the sack dies that turn. The replacement boundary is
+# therefore reached with the Taunt already one residual old.
+_TAUNT_REPLACEMENT_AGE1 = BattleStartOverride(
+    player_teams={
+        "p1": pack_team((
+            FixturePokemon(species="Smeargle", ability="Own Tempo",
+                           moves=("Taunt", "Tackle"), level=80),
+            FixturePokemon(species="Magikarp", ability="Swift Swim",
+                           moves=("Splash",), level=5),
+        )),
+        "p2": pack_team((
+            FixturePokemon(species="Snorlax", ability="Immunity",
+                           moves=("Shadow Ball", "Rest"), level=80),
+        )),
+    },
+)
 
 
 class _LiveBase(unittest.TestCase):
@@ -514,6 +604,180 @@ class BenchLeakTests(_LiveBase):
                 (False, [("sunnyday", 8, False), ("growth", 64, False)]),
                 "Taunt cleared on switch-out; a benched mon with full PP must stay usable",
             )
+
+
+class TauntStruggleOnlyReachesTheEngineTests(_LiveBase):
+    """The OTHER route to a Struggle-only request, on the only shape that isolates it.
+
+    `_TAUNT_STALL` above keeps a live bench, so its request offers
+    `['struggle', 'switch:...']` and the engine has a switch to enumerate -- which is
+    why that fixture never exercised this. `_TAUNT_SOLO_STALL` removes the bench: a
+    LONE all-status Blissey, Taunted, has no usable move and nothing to switch to, so
+    `getMoveRequestData` substitutes Struggle and it is the request's ONLY candidate.
+
+    That is the shape the docstring's Taunt paragraph claims is now closed, and this is
+    where the claim can fail. Pre-fix `world_battle_spec` raised
+    `EngineWorldUnsupported('volatile_unsupported')` here and no world existed at all;
+    the `assertRaises`-shaped null world is covered by
+    `tests/test_engine_world_taunt.py::test_a_taunted_self_side_builds_instead_of_refusing`,
+    so this one asserts the positive end to end.
+
+    What it does NOT assert, deliberately: which action search picks. That needs the
+    native wheel and lives in `test_engine_world_taunt.py`
+    (`test_a_lone_taunted_all_status_side_leaves_the_engine_no_move`).
+    """
+
+    def test_a_lone_taunted_all_status_side_builds_a_world_with_no_option(self) -> None:
+        from pokezero.engine_world import world_battle_spec
+
+        root = Path(os.environ.get("POKEZERO_SHOWDOWN_ROOT") or DEFAULT_SHOWDOWN_ROOT)
+        dex = load_showdown_dex(root)
+        with LocalShowdownEnv(self.config) as env:
+            env.reset_with_start_override(seed=11, start_override=_TAUNT_SOLO_STALL)
+            rows = self._advance_to_struggle(env, turns=6)
+            legal = env.legal_actions("p1")
+            state = env.public_materialization_state("p1")
+            payload = _public_materialization_payload(state)
+            world = world_battle_spec(state, _TAUNT_SOLO_STALL, dex=dex)
+
+        # 1. The request really is Struggle and NOTHING else -- no move, no switch.
+        #    Without this the rest is a test of some other boundary.
+        self.assertEqual([row["id"] for row in rows], ["struggle"])
+        self.assertEqual(
+            sum(1 for flag in legal if flag), 1, "a lone taunted mon has exactly one action"
+        )
+
+        # 2. Taunt is what put it there, and it is on the payload as a public volatile.
+        self.assertIn("taunt", payload["sides"]["p1"]["volatiles"])
+
+        # 3. The world BUILDS (pre-fix: volatile_unsupported), carries the volatile, and
+        #    carries the counter at one tick elapsed.
+        side = world.spec.side_one
+        self.assertIn("taunt", side.volatile_statuses)
+        self.assertEqual(side.volatile_status_durations.get("taunt"), 1)
+
+        # 4. ...and it offers the engine nothing: every active slot unselectable, and no
+        #    live bench for `add_switches` to fall through to. Those two together are the
+        #    precondition for `MoveChoice::None`, which is what #1202's translation needs.
+        active = side.pokemon[side.active_index]
+        self.assertTrue(
+            all(spec.disabled or spec.pp == 0 for spec in active.moves),
+            [(spec.id, spec.pp, spec.disabled) for spec in active.moves],
+        )
+        self.assertEqual(
+            [mon.id for i, mon in enumerate(side.pokemon) if i != side.active_index and mon.hp > 0],
+            [],
+            "the fixture must leave no live bench, or the engine enumerates a switch",
+        )
+
+
+class TauntReplacementBoundaryAgeTests(_LiveBase):
+    """Why a Taunt at a mid-turn replacement boundary is REFUSED rather than seeded.
+
+    The engine runs the deferred residual block on the replacement ply (it keys on the
+    explicit `force_switch` flag, which `_build_side_spec` sets from `selfRequestKind`),
+    so the world has to say how many ticks of the Taunt have ALREADY elapsed. At an
+    ordinary boundary that is always exactly one. Here it depends on how old the Taunt is,
+    and these two cases are the proof that both answers are reachable:
+
+        age 0 -> the taunted side still owes one taunted move phase  (engine needs seed 0)
+        age 1 -> it owes none                                        (engine needs seed 1)
+
+    Since the payload carries no age, no single seed is right and `engine_world` withdraws
+    `taunt` from the allow-list at this boundary. THIS is the measurement that decision
+    rests on; it was a local probe when the decision was made, and a citation to a file
+    that is not in the tree is not evidence.
+    """
+
+    def _walk(self, override, *, pivot: bool):
+        """Return (snapshot at the replacement boundary, next move request)."""
+        seen = []
+        with LocalShowdownEnv(self.config) as env:
+            env.reset_with_start_override(seed=4242, start_override=override)
+            self._advance(env, prefer=0)                      # turn 1: Taunt
+            if pivot:
+                mask = env.legal_actions("p1")
+                switch = next(i for i in range(4, len(mask)) if mask[i])
+                self._advance(env, prefer=switch)             # turn 2: pivot into the sack
+            for _ in range(4):
+                snapshot = self._observe(env)
+                if snapshot is None:
+                    break
+                seen.append(snapshot)
+                if snapshot["kind"] == "force-switch":
+                    if not self._advance(env):
+                        break
+                    after = self._observe(env)
+                    return snapshot, after
+                if not self._advance(env):
+                    break
+        raise AssertionError(f"no replacement boundary was reached; saw {seen}")
+
+    @staticmethod
+    def _observe(env):
+        try:
+            payload = _public_materialization_payload(env.public_materialization_state("p1"))
+        except Exception:
+            return None
+        return {
+            "turn": payload.get("turn"),
+            "kind": payload.get("selfRequestKind"),
+            "p2_volatiles": sorted(payload["sides"]["p2"].get("volatiles") or ()),
+        }
+
+    @staticmethod
+    def _advance(env, *, prefer=None) -> bool:
+        players = env.requested_players()
+        if not players:
+            return False
+        actions = {}
+        for player in players:
+            mask = env.legal_actions(player)
+            index = prefer if (player == "p1" and prefer is not None
+                               and prefer < len(mask) and mask[prefer]) else None
+            if index is None:
+                index = next((i for i, flag in enumerate(mask) if flag), None)
+            if index is None:
+                return False
+            actions[player] = index
+        env.step(actions)
+        return True
+
+    def test_a_taunt_landed_on_the_faint_turn_still_owes_a_move_phase(self) -> None:
+        boundary, after = self._walk(_TAUNT_REPLACEMENT_AGE0, pivot=False)
+        # The case must BE the case it claims: a replacement boundary, taunt up, on the
+        # same turn the Taunt landed.
+        self.assertEqual(boundary["kind"], "force-switch")
+        self.assertIn("taunt", boundary["p2_volatiles"])
+        self.assertEqual(boundary["turn"], 1, "age 0 means the faint is on the Taunt's turn")
+        # ...and after the replacement they are STILL taunted: one phase still owed.
+        self.assertIn("taunt", after["p2_volatiles"])
+        self.assertEqual(after["kind"], "move")
+
+    def test_a_taunt_a_turn_old_owes_none(self) -> None:
+        boundary, after = self._walk(_TAUNT_REPLACEMENT_AGE1, pivot=True)
+        self.assertEqual(boundary["kind"], "force-switch")
+        self.assertIn("taunt", boundary["p2_volatiles"])
+        self.assertGreater(boundary["turn"], 1, "age 1 means the faint is a later turn")
+        # ...and after the replacement it is GONE: nothing owed, the opposite answer.
+        self.assertNotIn("taunt", after["p2_volatiles"])
+        self.assertEqual(after["kind"], "move")
+
+    def test_the_two_ages_disagree_which_is_the_whole_point(self) -> None:
+        """Stated as one assertion so the pair cannot silently converge.
+
+        If a future change made both ages behave alike, the two tests above would both
+        still pass only if that change also flipped one of them -- but the REASON for the
+        refusal is the disagreement itself, so it gets its own row.
+        """
+        _, age0 = self._walk(_TAUNT_REPLACEMENT_AGE0, pivot=False)
+        _, age1 = self._walk(_TAUNT_REPLACEMENT_AGE1, pivot=True)
+        self.assertNotEqual(
+            "taunt" in age0["p2_volatiles"],
+            "taunt" in age1["p2_volatiles"],
+            "the two ages must disagree; if they agree, one seed would suffice and "
+            "engine_world should stop refusing this boundary",
+        )
 
 
 class WhatReachesTheEngineTests(_LiveBase):
