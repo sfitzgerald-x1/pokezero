@@ -91,6 +91,7 @@ from pokezero.foulplay_bridge import (
     RefusalRecorderHealth,
     _REFUSAL_RECORDS_PER_BATTLE,
     _REFUSAL_RECORDS_PER_RUN,
+    _strided_sample,
     _config_from_args,
     _RefusalCapture,
     _run_controlled_foulplay_games,
@@ -250,20 +251,54 @@ class RefusalRecorderHealthTest(unittest.TestCase):
             # emitted nor dropped, and before this conjunct existed it vanished
             # while `recorded_refusals` still counted it and this still said True.
             ("reconciled", dict(base, recorded_refusals=3, emitted_refusals=1,
-                                records_dropped=1)),
+                                records_dropped_to_ceiling=1)),
+            ("records_unrowed", dict(base, recorded_refusals=3, emitted_refusals=2,
+                                     records_unrowed=1)),
         ):
             with self.subTest(conjunct=name):
                 self.assertFalse(RefusalRecorderHealth(**broken).trustworthy)
 
-    def test_a_truncated_run_is_reconciled_but_says_it_truncated(self) -> None:
-        """Dropping to a ceiling is honest; dropping silently is not."""
-        health = RefusalRecorderHealth(
+    def test_a_ceiling_truncation_and_a_data_loss_do_not_render_alike(self) -> None:
+        """The two states a single `records_dropped` conflated.
+
+        Truncation to a PUBLISHED ceiling is bounded and reconstructible; a record
+        whose battle produced no row is unexplained loss. Under one field both read
+        `trustworthy: True`, and because the header publishes the ceilings a reader
+        attributes any non-zero drop to them.
+        """
+        truncated = RefusalRecorderHealth(
             enabled=True, attached=True, health_reported=True,
-            recorded_refusals=40, emitted_refusals=8, records_dropped=32,
+            recorded_refusals=40, emitted_refusals=8, records_dropped_to_ceiling=32,
         )
-        self.assertTrue(health.reconciled)
-        self.assertTrue(health.trustworthy)
-        self.assertEqual(health.to_dict()["records_dropped"], 32)
+        lost = RefusalRecorderHealth(
+            enabled=True, attached=True, health_reported=True,
+            recorded_refusals=8, emitted_refusals=0, records_unrowed=8,
+        )
+
+        self.assertTrue(truncated.reconciled)
+        self.assertTrue(truncated.trustworthy)
+        self.assertTrue(lost.reconciled)
+        self.assertFalse(lost.trustworthy)
+        # ...and the numbers land in different keys, so a reader is not left to
+        # infer which of the two happened.
+        self.assertEqual(truncated.to_dict()["records_dropped_to_ceiling"], 32)
+        self.assertEqual(truncated.to_dict()["records_unrowed"], 0)
+        self.assertEqual(lost.to_dict()["records_dropped_to_ceiling"], 0)
+        self.assertEqual(lost.to_dict()["records_unrowed"], 8)
+
+    def test_the_error_sample_spans_the_run_rather_than_its_opening(self) -> None:
+        """The first 20 failures of a 500-failure run are 20 views of the first one."""
+        errors = tuple(f"error-{index:03d}" for index in range(500))
+        sample = _strided_sample(errors, 20)
+
+        self.assertEqual(len(sample), 20)
+        self.assertEqual(sample[0], "error-000")
+        self.assertEqual(sample[-1], "error-499")
+        self.assertEqual(len(set(sample)), 20)
+        # A prefix would have every entry inside the first 4% of the run.
+        self.assertGreater(int(sample[10].split("-")[1]), 100)
+        # Short lists are returned whole, not resampled.
+        self.assertEqual(_strided_sample(errors[:5], 20), errors[:5])
 
     def test_instrument_errors_are_sampled_but_the_count_is_not(self) -> None:
         """The list is one string per failed capture and it is uncapped upstream."""
@@ -1031,9 +1066,13 @@ class RefusalRecorderWiringTest(unittest.TestCase):
         self.assertEqual(len(result.games[0].refusal_records), _REFUSAL_RECORDS_PER_BATTLE)
         self.assertEqual(header["recorded_refusals"], 14)
         self.assertEqual(header["emitted_refusals"], _REFUSAL_RECORDS_PER_BATTLE)
-        self.assertEqual(header["records_dropped"], 14 - _REFUSAL_RECORDS_PER_BATTLE)
-        # Truncation is not corruption: the identity still holds and the ceiling is
-        # published so a reader can tell WHICH bound bit.
+        self.assertEqual(
+            header["records_dropped_to_ceiling"], 14 - _REFUSAL_RECORDS_PER_BATTLE
+        )
+        self.assertEqual(header["records_unrowed"], 0)
+        # Truncation is not corruption: the identity still holds, the ceiling is
+        # published so a reader can tell WHICH bound bit, and a bounded documented
+        # loss does not condemn the instrument.
         self.assertTrue(header["reconciled"])
         self.assertTrue(header["trustworthy"])
         self.assertEqual(header["records_per_battle_ceiling"], _REFUSAL_RECORDS_PER_BATTLE)
@@ -1069,16 +1108,59 @@ class RefusalRecorderWiringTest(unittest.TestCase):
 
         self.assertEqual(header["emitted_refusals"], _REFUSAL_RECORDS_PER_RUN)
         self.assertEqual(sum(emitted), _REFUSAL_RECORDS_PER_RUN)
-        # Front-loaded, not spread: the ceiling is a hard stop, so the games past it
-        # emit nothing rather than each losing a little invisibly.
-        self.assertEqual(emitted[0], _REFUSAL_RECORDS_PER_BATTLE)
-        self.assertEqual(emitted[-1], 0)
         self.assertEqual(header["recorded_refusals"], games * _REFUSAL_RECORDS_PER_BATTLE)
         self.assertEqual(
-            header["records_dropped"],
+            header["records_dropped_to_ceiling"],
             header["recorded_refusals"] - _REFUSAL_RECORDS_PER_RUN,
         )
+        self.assertEqual(header["records_unrowed"], 0)
         self.assertTrue(header["reconciled"])
+
+    def test_the_run_budget_is_spent_evenly_and_not_as_a_prefix(self) -> None:
+        """A prefix is a biased sample presented as the run's records.
+
+        Spent first-come-first-served the budget is gone after
+        `_REFUSAL_RECORDS_PER_RUN / _REFUSAL_RECORDS_PER_BATTLE` = 31.25 games:
+        measured over 34 high-refusal games it emitted `[8]*31 + [2, 0, 0]`, so on a
+        250-game run 219 games would contribute NOTHING and the shard's refusal
+        evidence would come entirely from the first 12% of the seed band. For an
+        instrument whose job is to characterise a cell that is worse than a smaller
+        unbiased sample, and counting the loss documents the bias rather than fixing
+        it.
+        """
+        policy = _EnginePolicyStub()
+        games = 34
+        result, _ = self._play(
+            config=_config(), policy=policy, games=games,
+            rounds=_REFUSAL_RECORDS_PER_BATTLE,
+            refuse_rounds=range(_REFUSAL_RECORDS_PER_BATTLE),
+        )
+        emitted = [len(row.refusal_records) for row in result.games]
+
+        # Still bounded...
+        self.assertLessEqual(sum(emitted), _REFUSAL_RECORDS_PER_RUN)
+        # ...and EVERY game contributes. This is the assertion a prefix fails.
+        self.assertEqual(emitted.count(0), 0)
+        self.assertGreaterEqual(min(emitted), 1)
+        # Evenly, not lumpily: no game gets more than one extra over the leanest.
+        self.assertLessEqual(max(emitted) - min(emitted), 1)
+
+    def test_a_short_run_is_untouched_by_the_reserve(self) -> None:
+        """The 8-game invocation `foulplay_paired_eval` actually issues.
+
+        The even share there is 31, so the per-battle ceiling binds first and the
+        reserve changes nothing. A reserve that quietly throttled the real producer
+        would be a regression dressed as a fix.
+        """
+        policy = _EnginePolicyStub()
+        result, _ = self._play(
+            config=_config(), policy=policy, games=8,
+            rounds=_REFUSAL_RECORDS_PER_BATTLE + 4,
+            refuse_rounds=range(_REFUSAL_RECORDS_PER_BATTLE + 4),
+        )
+        emitted = [len(row.refusal_records) for row in result.games]
+
+        self.assertEqual(emitted, [_REFUSAL_RECORDS_PER_BATTLE] * 8)
 
     def test_every_progress_write_reconciles_too(self) -> None:
         """The header is re-serialized once per game; each one must add up.
@@ -1102,18 +1184,22 @@ class RefusalRecorderWiringTest(unittest.TestCase):
                     header["emitted_refusals"], _REFUSAL_RECORDS_PER_BATTLE * (index + 1)
                 )
                 self.assertEqual(
-                    header["records_dropped"],
+                    header["records_dropped_to_ceiling"],
                     (12 - _REFUSAL_RECORDS_PER_BATTLE) * (index + 1),
                 )
+                self.assertEqual(header["records_unrowed"], 0)
                 self.assertTrue(header["reconciled"])
 
-    def test_a_record_belonging_to_no_game_row_breaks_the_identity(self) -> None:
-        """The silent-loss case the reconciliation exists for.
+    def test_a_record_belonging_to_no_game_row_is_a_LOSS_not_a_truncation(self) -> None:
+        """The end-of-run fixup must not upgrade an honest False to True.
 
         A refusal filed under a battle id that never produces a row -- a game that
-        raised after refusing, or a battle_id filter that drifted -- is dropped from
-        the document while the recorder still counted it. `records_dropped` catches
-        it as a NUMBER, which is the only form in which a missing record is visible.
+        raised after refusing, or a battle_id filter that drifted -- never reaches
+        the document. Reconciling it keeps the identity true so a NEW way of losing
+        a record is still visible as a broken identity; filing it under the CEILING
+        count would make the run report a clean instrument for demonstrably losing
+        data, and would do it by overwriting the honest verdict the partial
+        summaries already published.
         """
         policy = _EnginePolicyStub()
 
@@ -1122,14 +1208,20 @@ class RefusalRecorderWiringTest(unittest.TestCase):
             policy.refuse(_Context("battle-nowhere", decision_round, "p1"))
             return None
 
-        result, _ = self._play(config=_config(), policy=policy, boundary=boundary)
+        result, progress = self._play(config=_config(), policy=policy, boundary=boundary)
         header = result.to_dict()["refusal_recorder"]
 
         self.assertEqual(header["recorded_refusals"], 8)
         self.assertEqual(header["emitted_refusals"], 0)
-        # Counted at end of run rather than silently absent.
-        self.assertEqual(header["records_dropped"], 8)
+        self.assertEqual(header["records_unrowed"], 8)
+        # NOT the ceiling: the header publishes both ceilings, so a reader would
+        # attribute a ceiling count to them and stop looking.
+        self.assertEqual(header["records_dropped_to_ceiling"], 0)
+        # Accounted for, and STILL not clean.
         self.assertTrue(header["reconciled"])
+        self.assertFalse(header["trustworthy"])
+        # The partials were already honest, and the end-of-run fixup left them so.
+        self.assertFalse(progress[0].to_dict()["refusal_recorder"]["trustworthy"])
 
 
 class _proc:

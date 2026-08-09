@@ -376,6 +376,17 @@ OPPONENT_JOURNAL_MODES = ("off", "addressed", "full")
 #    bite on the case the default was justified against, and removes the tail on the
 #    case it was not.
 #
+#    The run budget is spent as an even PER-GAME RESERVE, not as a prefix -- a
+#    prefix bounds the bytes and biases the sample, which for an instrument whose
+#    job is to characterise a cell is the wrong trade. See `_refusal_allowance`.
+#
+#    And the loss is reported as TWO numbers, never one. A truncation to a published
+#    ceiling and a record that reached no game row are both "records the document
+#    does not carry", and a single count made them indistinguishable -- with the
+#    ceilings published right beside it, so a reader would attribute either to them.
+#    `records_dropped_to_ceiling` is bounded and does not condemn the run;
+#    `records_unrowed` is unexplained data loss and blocks `trustworthy`.
+#
 #    `--no-refusal-records` still exists, but it is NOT the answer to the size
 #    question and must not be sold as one: switching it off requires knowing in
 #    advance that you are in a high-refusal cell, which is the thing the recorder
@@ -424,13 +435,54 @@ _REFUSAL_RECORDS_PER_BATTLE = 8
 # also comfortably above what an ordinary cell produces: cell D's measured 0.430
 # refusals per game reaches 108 over a full 250-game run, so the cap cannot bite on
 # the case the default was justified against.
+#
+# SPENT AS A PER-GAME RESERVE, NOT FIRST-COME-FIRST-SERVED. A run ceiling taken as a
+# prefix exhausts after `_REFUSAL_RECORDS_PER_RUN / _REFUSAL_RECORDS_PER_BATTLE`
+# games -- 31.25 here. Measured over 34 high-refusal games it emitted
+# `[8]*31 + [2, 0, 0]`, so on a 250-game run 219 games would contribute nothing and
+# the shard's entire refusal evidence would come from the first 12% of the seed band.
+# For an instrument whose job is to CHARACTERISE A CELL that is a biased sample
+# presented as the run's records, and counting the loss does not fix a bias --
+# it documents one. `_refusal_allowance` spends the budget evenly instead.
 _REFUSAL_RECORDS_PER_RUN = 250
 
 # Instrument errors are uncapped on the recorder and one string per failed capture:
 # 500 degraded decisions produced a 47 KB header, re-serialized into every progress
 # write. The header keeps a sample and the TOTAL, so the number is never lost even
-# though the strings are.
+# though the strings are. SAMPLED BY STRIDE, not by prefix, for the same reason the
+# record budget is: the first 20 failures of a run that failed 500 times are 20 views
+# of whatever went wrong first.
 _INSTRUMENT_ERRORS_IN_HEADER = 20
+
+
+def _strided_sample(values: Sequence[str], limit: int) -> tuple[str, ...]:
+    """At most ``limit`` entries, evenly spaced, always including first and last."""
+    if len(values) <= limit:
+        return tuple(values)
+    if limit <= 1:
+        return (values[0],)
+    last = len(values) - 1
+    return tuple(values[round(index * last / (limit - 1))] for index in range(limit))
+
+
+def _refusal_allowance(*, room: int, games_remaining: int) -> int:
+    """How many records THIS game may contribute.
+
+    ``room`` is what is left of the run budget and ``games_remaining`` counts this
+    game. The even share is ``room // games_remaining``, clamped to the per-battle
+    ceiling above and floored at one so no game is silently excluded from the
+    sample. Slack returns to the pool automatically: a game that files fewer than
+    its share leaves ``room`` higher, so the share for the games after it rises.
+
+    The floor is what makes this unbiased rather than merely bounded. On a short run
+    -- the 8-game invocation `foulplay_paired_eval` actually issues -- the even share
+    is 31, so the clamp to `_REFUSAL_RECORDS_PER_BATTLE` binds first and the reserve
+    changes nothing at all. It only engages once games outnumber the budget, which is
+    exactly the case where a prefix would have thrown away the tail of the band.
+    """
+    if games_remaining <= 0:
+        return min(_REFUSAL_RECORDS_PER_BATTLE, max(0, room))
+    return max(0, min(_REFUSAL_RECORDS_PER_BATTLE, max(1, room // games_remaining), room))
 
 
 @dataclass(frozen=True)
@@ -785,16 +837,34 @@ class RefusalRecorderHealth:
         Records whose pre-decision baseline was lost, so their deltas may span more
         than one decision. Counted separately from errors because the record is
         still worth reading, just not as a per-decision measurement.
-    ``recorded_refusals`` / ``emitted_refusals`` / ``records_dropped``
-        What the instrument SAW, what the document CARRIES, and what the ceilings
-        threw away. Three numbers rather than one because they can disagree three
-        ways, and the reconciliation `recorded == emitted + dropped` is a conjunct
-        of :attr:`trustworthy`. That identity is not book-keeping for its own sake:
-        records are partitioned onto game rows by ``battle_id``, so a record whose
-        battle has no row is silently lost, and before the identity existed it was
-        lost while ``recorded_refusals`` still counted it and ``trustworthy`` still
-        said True. The journal's ``recorded`` vs ``emitted`` pair is the same idea
-        one feature earlier.
+    ``recorded_refusals`` / ``emitted_refusals``
+        What the instrument SAW and what the document CARRIES. The journal's
+        ``recorded`` vs ``emitted`` pair is the same idea one feature earlier.
+    ``records_dropped_to_ceiling`` vs ``records_unrowed``
+        TWO NUMBERS, AND THEY MUST NOT RENDER ALIKE. Both are records that did not
+        reach the document and a single total conflated them:
+
+        * ``records_dropped_to_ceiling`` is bounded, expected, and its ceilings are
+          published right here -- a reader can reconstruct exactly what happened. It
+          does NOT block :attr:`trustworthy`.
+        * ``records_unrowed`` is DATA LOSS: a refusal filed under a battle that
+          produced no game row, because the game raised after refusing or a
+          battle_id drifted. Nothing bounds it and nothing explains it. It blocks
+          :attr:`trustworthy`.
+
+        Under one combined field the two read identically (`dropped=6` vs
+        `dropped=8`, both `trustworthy: True`), and since the header publishes the
+        ceilings a reader would attribute either to them. Worse, the end-of-run
+        accounting that keeps the identity true was UPGRADING a correct False to
+        True: the partial summaries said `reconciled: False, trustworthy: False`
+        after each game and the fixup made the final one clean. On a feature whose
+        organising principle is that silence must never read as clean, converting a
+        detected loss into a clean verdict is the wrong direction even with a number
+        left behind.
+    ``reconciled``
+        ``recorded == emitted + dropped_to_ceiling + unrowed``. Book-keeping that
+        every captured record is accounted for somewhere, so a NEW way of losing one
+        shows up as a broken identity rather than as an absence.
     ``instrument_errors_total``
         The full count. ``instrument_errors`` is a SAMPLE (`_INSTRUMENT_ERRORS_IN_HEADER`),
         because the list is one string per failed capture, uncapped, and it is
@@ -810,16 +880,25 @@ class RefusalRecorderHealth:
     degraded_records: int = 0
     recorded_refusals: int = 0
     emitted_refusals: int = 0
-    records_dropped: int = 0
+    records_dropped_to_ceiling: int = 0
+    records_unrowed: int = 0
 
     @property
     def reconciled(self) -> bool:
-        """Every captured record was either written to a row or counted as dropped."""
-        return self.recorded_refusals == self.emitted_refusals + self.records_dropped
+        """Every captured record reached a row, a ceiling, or the unrowed count."""
+        return self.recorded_refusals == (
+            self.emitted_refusals + self.records_dropped_to_ceiling + self.records_unrowed
+        )
 
     @property
     def trustworthy(self) -> bool:
         """True only when health was REPORTED, the recorder ran, and it was clean.
+
+        ``records_dropped_to_ceiling`` is deliberately NOT a conjunct: a truncation
+        to a published ceiling is a documented, reconstructible loss, and making it
+        block the verdict would mean every high-refusal cell reported an untrustworthy
+        instrument for behaving exactly as designed. ``records_unrowed`` IS a
+        conjunct, because nothing bounds or explains it.
 
         ``enabled`` is a conjunct as well as ``attached``. They are not the same
         claim and only one of them is currently implied by the other: a future
@@ -832,6 +911,7 @@ class RefusalRecorderHealth:
             and self.health_reported
             and self.attached
             and self.reconciled
+            and self.records_unrowed == 0
             and not self.instrument_errors_total
             and self.degraded_records == 0
         )
@@ -853,7 +933,10 @@ class RefusalRecorderHealth:
             "degraded_records": self.degraded_records,
             "recorded_refusals": self.recorded_refusals,
             "emitted_refusals": self.emitted_refusals,
-            "records_dropped": self.records_dropped,
+            # Deliberately NOT summed into one `records_dropped`: see the class
+            # docstring. A bounded truncation and a data loss must not render alike.
+            "records_dropped_to_ceiling": self.records_dropped_to_ceiling,
+            "records_unrowed": self.records_unrowed,
             # The ceilings, published so a reader of a truncated shard can tell
             # WHICH bound bit without reading this file.
             "records_per_battle_ceiling": _REFUSAL_RECORDS_PER_BATTLE,
@@ -880,17 +963,22 @@ class _RefusalCapture:
     :attr:`attach_error` and the run continues, with the summary saying so.
     """
 
-    def __init__(self, policy: Any, *, enabled: bool) -> None:
+    def __init__(self, policy: Any, *, enabled: bool, games: int = 1) -> None:
         self.enabled = bool(enabled)
         self._recorder: Any = None
         self._attach_error: str | None = None
+        #: How many games the run intends to play, so the per-run budget can be
+        #: spent as an even reserve instead of a prefix. See `_refusal_allowance`.
+        self._games = max(1, int(games))
+        self._rows_built = 0
         #: Emitted and dropped are decided HERE, at the moment a game row is built,
         #: and remembered -- not recomputed from the recorder at `health()` time.
         #: Recomputing would have to re-derive which records a previous row already
         #: took, and getting that wrong is exactly the silent-truncation shape the
         #: reconciliation exists to catch.
         self._emitted = 0
-        self._dropped = 0
+        self._dropped_to_ceiling = 0
+        self._unrowed = 0
         if not self.enabled:
             return
         try:
@@ -899,38 +987,56 @@ class _RefusalCapture:
             self._attach_error = f"{type(error).__name__}: {error}"
 
     def records_for(self, battle_id: str) -> tuple[RefusalRecord, ...]:
-        """This battle's records, truncated to the ceilings, with the loss counted.
+        """This battle's records, truncated to its ALLOWANCE, with the loss counted.
 
-        Called ONCE per game as its row is built. Everything the ceilings refuse is
-        added to ``_dropped``, so `recorded == emitted + dropped` holds over the run
-        and a record belonging to no row shows up as a broken identity rather than
-        as an absence.
+        Called ONCE per game as its row is built, and it advances the run's budget
+        bookkeeping -- so it is not idempotent and must not be called twice for the
+        same game.
+
+        The allowance is an even share of what is left, not a prefix of the run
+        budget: see :func:`_refusal_allowance`. Everything it refuses is counted as
+        `records_dropped_to_ceiling`, which is bounded and reconstructible and
+        therefore does NOT block `trustworthy`.
         """
         if self._recorder is None:
             return ()
+        self._rows_built += 1
         mine = [
             record for record in self._recorder.records if record.battle_id == battle_id
         ]
-        room = max(0, _REFUSAL_RECORDS_PER_RUN - self._emitted)
-        kept = tuple(mine[: min(_REFUSAL_RECORDS_PER_BATTLE, room)])
+        allowance = _refusal_allowance(
+            room=max(0, _REFUSAL_RECORDS_PER_RUN - self._emitted),
+            games_remaining=self._games - self._rows_built + 1,
+        )
+        kept = tuple(mine[:allowance])
         self._emitted += len(kept)
-        self._dropped += len(mine) - len(kept)
+        self._dropped_to_ceiling += len(mine) - len(kept)
         return kept
 
     def account_for_unrowed_records(self) -> None:
         """Count records whose battle never produced a row, at end of run.
 
         A game that raised before its result was built takes its records with it.
-        Without this they are neither emitted nor dropped, the reconciliation
-        breaks, and `trustworthy` goes False -- which is the correct verdict but a
-        confusing one. Counting them as dropped keeps the identity true and leaves
-        the loss visible as a NUMBER, which is the whole point of the triple.
+        This keeps the reconciliation identity true so that a FUTURE way of losing a
+        record still shows up as a broken identity -- but it files them under
+        ``records_unrowed``, NOT under the ceiling count.
+
+        That distinction is the whole point. An earlier revision folded these into
+        the ceiling total, which made the end-of-run summary report a clean,
+        trustworthy instrument for a run that had demonstrably lost data -- and it
+        did so by UPGRADING the honest `trustworthy: False` the partial summaries had
+        already published. Reconciling a loss is not the same as excusing it.
         """
         if self._recorder is None:
             return
-        unaccounted = len(self._recorder.records) - self._emitted - self._dropped
+        unaccounted = (
+            len(self._recorder.records)
+            - self._emitted
+            - self._dropped_to_ceiling
+            - self._unrowed
+        )
         if unaccounted > 0:
-            self._dropped += unaccounted
+            self._unrowed += unaccounted
 
     def health(self) -> RefusalRecorderHealth:
         if self._recorder is None:
@@ -946,12 +1052,13 @@ class _RefusalCapture:
             # The recorder HAS an error channel and we are reading it, which is
             # exactly what this flag asserts.
             health_reported=True,
-            instrument_errors=errors[:_INSTRUMENT_ERRORS_IN_HEADER],
+            instrument_errors=_strided_sample(errors, _INSTRUMENT_ERRORS_IN_HEADER),
             instrument_errors_total=len(errors),
             degraded_records=sum(1 for record in records if record.degraded),
             recorded_refusals=len(records),
             emitted_refusals=self._emitted,
-            records_dropped=self._dropped,
+            records_dropped_to_ceiling=self._dropped_to_ceiling,
+            records_unrowed=self._unrowed,
         )
 
     def detach(self) -> None:
@@ -2425,7 +2532,9 @@ async def _run_controlled_foulplay_games(
     game_results: list[ControlledFoulPlayGameResult] = []
     # ONE recorder for the whole run: the bridge reuses a single policy across every
     # seed, and records are partitioned back per game by battle_id.
-    refusal_capture = _RefusalCapture(policy, enabled=config.record_refusals)
+    refusal_capture = _RefusalCapture(
+        policy, enabled=config.record_refusals, games=config.games
+    )
     try:
         await server.start()
         await bridge.start()
