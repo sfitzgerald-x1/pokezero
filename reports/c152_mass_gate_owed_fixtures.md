@@ -89,10 +89,29 @@ Dish to copy — the cross-side check c138's R26 correction requires. The step i
 gen3-legal (`Dex.mod('gen3').abilities.get('raindish')` resolves, `num: 44`) and live in
 `residual_phase_final_hp`, so this is unreachable **in the pool**, not in gen3.
 
-That verdict is machine-checked, not commented: `POOL_UNREACHABLE` carries it and
-`test_every_owed_family_has_a_fixture_or_a_reachability_verdict` asserts the mapping from
-`OWED_FAMILIES` is total in **both** directions, and that no family is both shipped and
-waived.
+Two assertions carry that verdict, and they cover different things — the distinction
+matters, because the first revision of this branch conflated them and the c137 bullet
+inherited a claim broader than what ran:
+
+- `test_every_owed_family_has_a_fixture_or_a_reachability_verdict` asserts the mapping
+  from `OWED_FAMILIES` is total in **both** directions and that no family is both shipped
+  and waived. It says nothing about the pool.
+- `test_the_rain_dish_waiver_is_backed_by_the_committed_census` asserts
+  `POOL_UNREACHABLE`'s **figures** — 220 species / 393 sets / 71 abilities / 0 Rain Dish /
+  0 Dry Skin / Trace present / `f76228a1` — against
+  `tests/data/c152_pool_reachability_census.json`, regenerated out of process by
+  `scripts/c152_pool_reachability_census.py`. `POOL_UNREACHABLE` is structured data rather
+  than prose so there is something to compare.
+
+**What the second one does not do**, stated because a waiver is the only thing standing
+between this branch and an undischarged obligation: it does **not** re-derive the census
+against a live pool. CI builds no Showdown checkout and this module's workflow step
+forbids skips outright, so a live derivation cannot run in the mass gate at all. A
+Showdown bump that put Rain Dish on a gen3 set would leave artifact, gate and waiver
+green and wrong. The census therefore records the commit it was taken at, which bounds
+the staleness and makes regeneration a reviewable act. Both directions were mutated to
+confirm the pin is not inert: setting the census's `Rain Dish` to 1 reddens it, and
+drifting the waiver's `distinct_abilities` to 70 reddens it.
 
 **Scope of these negatives.** Each "exactly one" / "not one of them" above is exactly as
 wide as the glob that produced it: the union of `movepool` and `abilities` over every set
@@ -194,7 +213,7 @@ re-derived from the build's own stamp, not carried from the handoff.
 
 | module | result |
 |---|---|
-| `tests.test_branch_mass_reconstruction` (this gate) | **Ran 13, OK** (was 6) |
+| `tests.test_branch_mass_reconstruction` (this gate) | **Ran 14, OK** (was 6) |
 | `tests.test_collapsed_arm_mass_oracle` | Ran 7, OK |
 | `tests.test_roll_enumeration_scope` | Ran 17, OK |
 | `tests.test_poke_engine_patch_stack` | Ran 4, OK |
@@ -202,7 +221,7 @@ re-derived from the build's own stamp, not carried from the handoff.
 | `tests.test_boundary_verdict_partition` | Ran 26, OK |
 | `tests.test_ledger_table_uniformity` | Ran 17, OK |
 
-**The CI count guard moved with the suite**: `Ran 6 tests` → `Ran 13 tests` in the
+**The CI count guard moved with the suite**: `Ran 6 tests` → `Ran 14 tests` in the
 `Mass gate` step of `.github/workflows/engine-fidelity-gates.yml`. Those guards are
 invisible to a local run and have reddened CI here before. Every other count pin listed
 above is unchanged and was re-measured, not assumed.
@@ -218,7 +237,38 @@ above is unchanged and was re-measured, not assumed.
 are green at their pinned counts. No seed window was swept, and in particular nothing at
 or above `19,200,000` was touched.
 
-## 6. What remains open after this
+## 6. What independent review added
+
+Review of #1198 re-applied **all seven** mutations through its own replica of the build
+path and reproduced every figure to four decimals, and confirmed the central claim
+directly: **the pre-existing nine had FAIL count 0 on every one of the seven.** It also
+established three things this branch had not:
+
+- **The case-B guard is load-bearing, prospectively.** Moving
+  `multihit-bonemerang-sand` to `hp=140` — the case-B site — makes
+  `test_the_owed_matrix_is_not_vacuous` go **red** while the KO-mass row stays **green**,
+  because at that site the mass row agrees *for the wrong reason* (§4). Without the
+  structural assertion a drifted fixture would have read as coverage. That is the exact
+  defect class this repository keeps finding, caught before it shipped rather than after.
+- **The bail-set exclusion pre-dates this work.** The sentence ruling it out of fixture
+  scope is byte-identical at `d20cf840`; this branch only reflowed it. So the four-vs-five
+  reconciliation in this document's header dropped nothing and was not authored to shrink
+  the obligation. In code the bail set is the three early `return None`s in
+  `residual_phase_final_hp` (SITRUSBERRY, LUMBERRY, SHEDSKIN), and a scalar quiet-turn
+  tick genuinely cannot express Sitrus's non-monotone threshold heal.
+- **The fourth-bullet split is structural, not editorial.** The four mirror steps are four
+  separate `if` blocks in `generate_instructions.rs`, so treating the bullet as one family
+  would have let one fixture stand for four branches.
+
+And it found three scope defects, all fixed here:
+
+| | defect | fix |
+|---|---|---|
+| **F1** | The c137 bullet said the Rain Dish verdict was "machine-checked by `POOL_UNREACHABLE`". `POOL_UNREACHABLE` held **prose**; the only assertion checked the family→(fixture\|verdict) mapping was total. Nothing re-derived 71/0. §2 of this document stated it correctly; the bullet compressed it into a stronger claim. | Bullet corrected, and the underlying fact is now pinned: `POOL_UNREACHABLE` is structured figures, `scripts/c152_pool_reachability_census.py` produces `tests/data/c152_pool_reachability_census.json`, and `test_the_rain_dish_waiver_is_backed_by_the_committed_census` compares them (14th test; CI guard 13 → 14). Its own limits are in §2. |
+| **F2** | `test_every_owed_family_has_a_fixture_or_a_reachability_verdict` catches a family losing its **last** fixture (relabelling both Leech Seed fixtures reddens it) but not a **mislabel that leaves both families populated** (repointing `leechseed-crit-fan`'s `covers` at `mirror-step-partial-trap` reads 14/14 OK). Its docstring claimed only the former, so this is documentation, not a defect. | Docstring now states the gap and names what holds the line instead — `test_the_owed_matrix_is_not_vacuous`, which asserts each fixture's shape structurally, so a mislabel is a documentation defect rather than a coverage one. |
+| **F3** | The c137 bullet omitted that the Wish row is a control. A reader of the bullet alone could count seven mass-discriminating fixtures where there are **six**. | Added to the bullet as scope item (iv). It was already disclosed correctly in the test file and in §3.1 here. |
+
+## 7. What remains open after this
 
 - **The bail set** — the fifth entry in the docstring's uncovered list, out of fixture
   scope by that same sentence. Needs a different reconstruction, not another fixture.

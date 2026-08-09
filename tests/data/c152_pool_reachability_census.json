@@ -1,0 +1,34 @@
+{
+  "_README": "Pool-reachability census behind C152's Rain Dish waiver and section 2's table. Instruments are c138 section 1.2's. Regenerate with scripts/c152_pool_reachability_census.py --write, from a checkout with a built pokemon-showdown; CI builds none, so nothing re-derives this against a live pool. NEVER edit it by hand to make a test pass: the test compares POOL_UNREACHABLE against it, so a hand edit silently moves the waiver.",
+  "distinct_abilities": 71,
+  "distinct_moves": 125,
+  "move_classes": {
+    "fixed_damage": [
+      "seismictoss"
+    ],
+    "multihit": [
+      "bonemerang"
+    ],
+    "ohko": [],
+    "partiallytrapped": [
+      "wrap"
+    ]
+  },
+  "named_abilities": {
+    "Dry Skin": 0,
+    "Rain Dish": 0,
+    "Trace": 2
+  },
+  "named_moves": {
+    "bonemerang": 1,
+    "leechseed": 12,
+    "seismictoss": 11,
+    "wish": 16,
+    "wrap": 1
+  },
+  "raindish_exists_in_gen3": true,
+  "raindish_num": 44,
+  "sets": 393,
+  "showdown_commit": "f76228a1354b5d0f307ca2d16101294ad3a2308b",
+  "species": 220
+}

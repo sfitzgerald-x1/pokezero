@@ -279,22 +279,52 @@ OWED_FAMILIES = (
     "mirror-step-partial-trap",
 )
 
+#: The committed pool census the reachability verdicts below are read from.
+#: Produced out of process by ``scripts/c152_pool_reachability_census.py`` against a
+#: pokemon-showdown checkout, because CI builds none and this module's workflow step
+#: forbids skips outright -- so a live re-derivation cannot run here.
+POOL_CENSUS_PATH = ROOT / "tests" / "data" / "c152_pool_reachability_census.json"
+
 #: Families discharged by a REACHABILITY measurement instead of a fixture, in the
 #: convention of ``reports/c138_known_gaps_ledger.md`` §1.1: the verdict AND the
 #: instrument that produced it. A fixture for an unreachable step reads as coverage
 #: of behaviour no game can execute, which is the "inert pin" shape this repository
 #: has found five times.
+#:
+#: ``counts`` is the load-bearing part and is FIGURES, not prose, deliberately. An
+#: earlier version of this waiver was prose alone and c137's bullet described it as
+#: "machine-checked" -- which was false as stated: the only assertion checked that
+#: the family had *a* verdict, not that Rain Dish is absent. The figures below are
+#: asserted against ``POOL_CENSUS_PATH`` by
+#: ``test_the_rain_dish_waiver_is_backed_by_the_committed_census``.
 POOL_UNREACHABLE = {
-    "mirror-step-rain-dish": (
-        "UNREACHABLE. Instrument: the union of every set's `abilities` in "
-        "`data/random-battles/gen3/sets.json` at Showdown f76228a1 -- 71 distinct "
-        "ability names over 393 sets / 220 species, and Rain Dish is not one of "
-        "them (nor is Dry Skin, the other 10.3 healer the mirror's own comment "
-        "flags). Trace IS in that 71, and cannot manufacture it: Trace copies the "
-        "OPPONENT's ability, and no pool member has Rain Dish to copy. The step is "
-        "gen3-legal (`Dex.mod('gen3').abilities.get('raindish')` resolves, num 44) "
-        "and live in the mirror, so it is unreachable in the POOL, not in gen3."
-    ),
+    "mirror-step-rain-dish": {
+        "verdict": "UNREACHABLE",
+        "instrument": (
+            "the union of every set's `abilities` in "
+            "`data/random-battles/gen3/sets.json`, per c138 §1.2"
+        ),
+        "counts": {
+            "showdown_commit": "f76228a1354b5d0f307ca2d16101294ad3a2308b",
+            "species": 220,
+            "sets": 393,
+            "distinct_abilities": 71,
+            # The verdict itself: zero pool sets list either order-10.3 healer.
+            "Rain Dish": 0,
+            # The mirror's own comment names DRYSKIN as the other HP-changing
+            # ability at 10.3, so a waiver measuring only Rain Dish would be
+            # narrower than the step it waives.
+            "Dry Skin": 0,
+        },
+        "note": (
+            "Trace IS in the 71 and cannot manufacture it: Trace copies the "
+            "OPPONENT's ability, and no pool member has Rain Dish to copy -- the "
+            "cross-side check c138's R26 correction requires. The step is "
+            "gen3-legal (`Dex.mod('gen3').abilities.get('raindish')` resolves, "
+            "num 44) and live in the mirror, so it is unreachable in the POOL, "
+            "not in gen3."
+        ),
+    },
 }
 
 
@@ -842,6 +872,18 @@ class BranchMassReconstruction(unittest.TestCase):
         covered" alone would stay green if a fixture drifted onto a family name
         that is not owed, and "every fixture names an owed family" alone would stay
         green if a family lost its last fixture.
+
+        WHAT THIS DOES NOT CATCH, measured by review of #1198 rather than reasoned
+        about. It catches a family losing its LAST fixture -- relabelling BOTH
+        Leech Seed fixtures reddens it. It does NOT catch a MISLABEL that leaves
+        both families populated: repointing ``leechseed-crit-fan``'s ``covers`` at
+        ``mirror-step-partial-trap`` leaves every family accounted for and the
+        whole module reads 14/14 OK, while Leech Seed silently drops from two
+        fixtures to one. What holds that line instead is
+        ``test_the_owed_matrix_is_not_vacuous``, which asserts each fixture's SHAPE
+        structurally -- a mislabelled fixture keeps its shape, so the mislabel is a
+        documentation defect rather than a coverage one, but this method is not the
+        thing that would object and its docstring should not imply otherwise.
         """
         covered = {case.covers for case in OWED_CASES}
         accounted = covered | set(POOL_UNREACHABLE)
@@ -861,6 +903,62 @@ class BranchMassReconstruction(unittest.TestCase):
             overlap, [],
             f"{overlap} is BOTH shipped as a fixture and recorded unreachable; one "
             f"of the two is wrong and the fixture is the more likely",
+        )
+
+    def test_the_rain_dish_waiver_is_backed_by_the_committed_census(self):
+        """The one family discharged WITHOUT a fixture must show its measurement.
+
+        Rain Dish is waived, not covered, so the waiver is the only thing standing
+        between this branch and an undischarged obligation. Review of #1198 found
+        the figures behind it living in prose while c137's bullet called them
+        "machine-checked" -- nothing re-derived 71 abilities / 0 Rain Dish. This is
+        that assertion.
+
+        SCOPE, because the obvious reading is again too strong. This compares
+        ``POOL_UNREACHABLE``'s figures against a COMMITTED census
+        (``scripts/c152_pool_reachability_census.py``, regenerated out of process).
+        It therefore catches the waiver's prose drifting from its own measurement,
+        and it makes any change to the numbers a deliberate, reviewable edit. It
+        does NOT re-derive them against a live pool: CI builds no Showdown checkout
+        and this module's workflow step forbids skips, so a live derivation cannot
+        run here at all. A Showdown bump that put Rain Dish on a gen3 set would
+        leave artifact, gate and waiver green and wrong -- which is why the
+        ``showdown_commit`` the census was taken at is one of the pinned figures.
+        """
+        census = json.loads(POOL_CENSUS_PATH.read_text(encoding="utf-8"))
+        waiver = POOL_UNREACHABLE["mirror-step-rain-dish"]
+        self.assertEqual(waiver["verdict"], "UNREACHABLE")
+
+        counts = waiver["counts"]
+        for key in ("showdown_commit", "species", "sets", "distinct_abilities"):
+            self.assertEqual(
+                counts[key], census[key],
+                f"the Rain Dish waiver says {key}={counts[key]!r} and the committed "
+                f"census says {census[key]!r}. Regenerating the census is NOT the "
+                f"fix unless the pool really moved; the waiver is what changes.",
+            )
+        for ability in ("Rain Dish", "Dry Skin"):
+            self.assertEqual(
+                counts[ability], census["named_abilities"][ability],
+                f"the waiver and the census disagree about {ability}",
+            )
+            self.assertEqual(
+                census["named_abilities"][ability], 0,
+                f"{ability} is now in the gen3 randbats pool, so mirror step 10.3 "
+                f"is REACHABLE and c137 §4's obligation is no longer discharged for "
+                f"it by a verdict. It needs a fixture.",
+            )
+        # The two halves of "unreachable in the POOL, not in gen3". If the step
+        # stopped existing in gen3 the waiver would still be true but its stated
+        # reason would be wrong, and a reader would carry the wrong model forward.
+        self.assertTrue(census["raindish_exists_in_gen3"])
+        self.assertEqual(census["raindish_num"], 44)
+        # Trace is the only pool mechanism that could import an absent ability, and
+        # the waiver's note turns on it being present-but-powerless here.
+        self.assertGreater(
+            census["named_abilities"]["Trace"], 0,
+            "Trace has left the pool; the waiver's cross-side note now describes a "
+            "mechanism that is not there, even though its conclusion still holds",
         )
 
     def test_the_owed_matrix_is_not_vacuous(self):
