@@ -565,7 +565,16 @@ def battle_spec_from_payload(
             )
 
     if transformed_slots:
-        built_sides = _apply_transform(built_sides, transformed_slots)
+        built_sides = _apply_transform(
+            built_sides,
+            transformed_slots,
+            self_player=self_player,
+            self_active_request_moves=self_active_request_moves,
+            self_request_struggle_only=_self_request_is_struggle_only(
+                sides_payload.get(self_player),
+                self_active_request_moves,
+            ),
+        )
 
     # AFTER the copy, never before: the slot index an Encore lock resolves to is
     # only meaningful against the moveset the engine will actually read.
@@ -620,9 +629,68 @@ def battle_spec_from_payload(
 _TRANSFORM_MOVE_PP = 5
 
 
+def _self_request_is_struggle_only(
+    side_payload: Any,
+    self_active_request_moves: Sequence[Mapping[str, Any]] | None,
+) -> bool:
+    """Whether the acting seat's request is Showdown's Struggle branch.
+
+    ``local_showdown._request_reports_only_struggle`` is the primary reader of
+    that branch, but it reads the RAW request, which does not reach here. Both
+    halves of its verdict do, and this is the payload-side mirror:
+
+      * ``selfActiveMoves`` is empty. ``_request_active_moves`` keeps only rows
+        carrying int ``pp``/``maxpp``, and the substituted Struggle row carries
+        neither, so the branch always publishes ``[]``.
+      * EVERY move on the acting side's active row is ``disabled``. That is the
+        marking ``_apply_struggle_only_move_state`` writes at exactly this
+        branch and nowhere else, and it is what separates Struggle from its
+        pp-less siblings -- ``mustrecharge`` and the two-turn charge lock also
+        publish ``selfActiveMoves: []``, because they too come off a request
+        whose one move row has no ``pp``, but they leave the row's own
+        ``disabled`` flags alone.
+
+    The second clause cannot be satisfied by an ordinary request: the rows come
+    from ``_request_active_moves``, and a request whose every slot was disabled
+    would have had ``getMoves`` return ``[]`` and been replaced by the Struggle
+    row before any pp-bearing row could be retained. So an all-disabled
+    non-empty row list only ever comes from the marking.
+
+    ``None`` rather than ``[]`` for ``selfActiveMoves`` means the payload has no
+    such key at all (a bare test literal), which is not evidence of anything.
+    """
+
+    if self_active_request_moves is None or self_active_request_moves:
+        return False
+    if not isinstance(side_payload, Mapping):
+        return False
+    rows = _active_row_moves(side_payload)
+    return bool(rows) and all(bool(row.get("disabled")) for row in rows)
+
+
+def _request_move_state_by_id(
+    self_active_request_moves: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, tuple[int, bool]]:
+    """``normalized move id -> (pp, disabled)`` from the acting seat's request."""
+
+    state: dict[str, tuple[int, bool]] = {}
+    for row in self_active_request_moves or ():
+        if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
+            continue
+        pp = row.get("pp")
+        if not isinstance(pp, int):
+            continue
+        state[normalize_id(row["id"])] = (pp, bool(row.get("disabled")))
+    return state
+
+
 def _apply_transform(
     sides: Mapping[str, SideSpec],
     transformed_slots: Mapping[str, str],
+    *,
+    self_player: str | None = None,
+    self_active_request_moves: Sequence[Mapping[str, Any]] | None = None,
+    self_request_struggle_only: bool = False,
 ) -> dict[str, SideSpec]:
     """Re-express a publicly Transformed active as the mon it copied.
 
@@ -638,6 +706,11 @@ def _apply_transform(
     already contains the exact mon that was copied, with that world's own
     belief-sampled spread. Reading it here keeps the two sides consistent — a
     dex lookup would invent a spread the opponent's own party contradicts.
+
+    The copied moveset's IDENTITY comes from that sampled donor, but its
+    per-slot USABILITY does not: on our own seat the request reports the copy's
+    live PP and disable state, and ``_copied_move_spec`` overlays it. Read that
+    function for why re-seeding it was wrong.
 
     Two things are deliberately NOT copied, because gen3 does not copy them:
     HP/maxhp (the transformer keeps its own, which is why a transformed Ditto
@@ -666,8 +739,10 @@ def _apply_transform(
         run those two restores at all.
     """
 
+    request_move_state = _request_move_state_by_id(self_active_request_moves)
     updated = dict(sides)
     for slot, target_species in transformed_slots.items():
+        is_self = self_player is not None and slot == self_player
         side = updated.get(slot)
         donor_side = updated.get("p2" if slot == "p1" else "p1")
         if side is None or donor_side is None or not side.pokemon:
@@ -710,7 +785,11 @@ def _apply_transform(
             ability=donor.ability,
             weight_kg=donor.weight_kg,
             moves=tuple(
-                replace(move, pp=_TRANSFORM_MOVE_PP, disabled=False)
+                _copied_move_spec(
+                    move,
+                    request_move_state=request_move_state if is_self else {},
+                    struggle_only=is_self and self_request_struggle_only,
+                )
                 for move in donor.moves
             ),
         )
@@ -727,6 +806,85 @@ def _apply_transform(
             side, pokemon=tuple(party), volatile_statuses=tuple(volatiles)
         )
     return updated
+
+
+def _copied_move_spec(
+    move: Any,
+    *,
+    request_move_state: Mapping[str, tuple[int, bool]],
+    struggle_only: bool,
+) -> Any:
+    """One slot of the copied moveset, with its LIVE usability.
+
+    THE DEFECT THIS CLOSES. ``_TRANSFORM_MOVE_PP`` is what Showdown writes at
+    the instant Transform resolves, and re-writing it on every world build says
+    the copy is always as fresh as it was on turn one. It is not: the
+    transformer spends that PP like any other, and Showdown reports the spend to
+    us on our own seat, in ``selfActiveMoves`` -- the RAW request, which for a
+    transformed active lists the COPIED moves (the same source
+    ``_build_side_spec`` already reads Encore's disable pattern off, and NOT the
+    active ROW, which stays the pre-Transform snapshot on purpose so the
+    transformer's own PP survives reversion). Every world therefore believed a
+    Ditto that had drained Surf to 0 still had five of them.
+
+    Measured on ``fb3h1-960111`` p2, a Ditto transformed into Suicune: at round
+    63 the request read ``surf 0/24 disabled, substitute 1/10, icebeam 0/10
+    disabled, calmmind 0/20 disabled`` while all eight worlds built
+    ``surf 5, rest 5, icebeam 5, calmmind 5``, none disabled. One round later
+    the real Ditto ran out entirely, Showdown substituted the Struggle
+    pseudo-move, and the engine -- still holding four full moves -- proposed
+    four of them against a request offering only ``struggle``. Nothing mapped:
+    ``choices_unmapped`` / ``all_unmapped_legality_mismatch``, on all 40
+    remaining rounds of the battle.
+
+    ``struggle_only`` is that last state, where the request publishes no move
+    rows at all to overlay and the only fact available is the one Showdown
+    already computed for every slot: none of them is usable. It is applied to
+    EVERY copied slot, including slots the sampled donor has and the real donor
+    does not, because the verdict is about the transformer, not the moveset.
+    PP is left pinned there rather than zeroed, exactly as
+    ``_apply_struggle_only_move_state`` leaves it: the Struggle request carries
+    no PP, and ``Pokemon::add_available_moves`` already refuses a disabled slot.
+
+    A slot the request does not name keeps ``_TRANSFORM_MOVE_PP``, and the reason
+    is NOT that the request has nothing to say about it. It says the opposite:
+    on our own seat the request enumerates the copy's ENTIRE moveset, so a slot
+    the sampled donor carries and the request does not name is PROVABLY not in
+    the real copy (``rest`` above, in five of the eight worlds -- the donor comes
+    from the belief-SAMPLED opposing party, which can carry a move the real
+    Suicune never had). Disabling it would remove a fiction, not invent a fact.
+
+    It is left usable so that the fiction stays COUNTABLE. An unusable slot is
+    silently absent from the engine's options; a usable one gets proposed, misses
+    the request, and lands in ``EngineSearchStats.unmapped_choices`` -- 16 on the
+    exemplar battle and 10 on the 60-game batch, which is the belief sampler's
+    moveset error made visible on a counter rather than swallowed by the world
+    builder. This class was found by that counter, and the burndown's stop
+    condition is read off it.
+
+    Note the asymmetry with the non-transformed self path, which does the other
+    thing: it refuses outright rather than invent PP for a slot with no
+    request-known snapshot (``self_pp_unknown``, :2490). The difference is who
+    owns the error. There the missing PP is OUR OWN Pokemon's and a guess would
+    be silently wrong; here the extra slot belongs to a sampled OPPONENT variant
+    that this world invented, and refusing every Transform world whose sampled
+    donor over-covers the real one would trade a counted miss for a refusal.
+    """
+
+    move_id = normalize_id(move.id)
+    # Request rows report Hidden Power as plain `hiddenpower`; the spec id is the
+    # engine's typed+BP form. Same tolerance `_move_specs` applies on the
+    # non-transformed path, and gen3 has at most one Hidden Power slot.
+    keys = (move_id, "hiddenpower") if move_id.startswith("hiddenpower") else (move_id,)
+    known = next(
+        (request_move_state[key] for key in keys if key in request_move_state), None
+    )
+    # The two inputs are mutually exclusive as things stand -- the struggle-only
+    # branch is admitted only on an EMPTY `selfActiveMoves`, so there is nothing
+    # to overlay there -- and the `or` is how they compose rather than a claim
+    # that both can be true at once.
+    pp, disabled = known if known is not None else (_TRANSFORM_MOVE_PP, False)
+    return replace(move, pp=pp, disabled=disabled or struggle_only)
 
 
 def _require_world_reproduces_trap(

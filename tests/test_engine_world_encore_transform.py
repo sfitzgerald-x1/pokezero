@@ -46,6 +46,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from pokezero.dex import MoveInfo, ShowdownDex, SpeciesInfo  # noqa: E402
 from pokezero.engine_world import (  # noqa: E402
+    _TRANSFORM_MOVE_PP,
     EngineWorldUnsupported,
     _resolve_encored_move_index,
     _sole_enabled_move_id,
@@ -791,6 +792,292 @@ class LockIndexToResidualBlockTests(unittest.TestCase):
                 len([line for line in events if "[from] item: Leftovers" in line]), 2
             )
             self.assertTrue(any("|bodyslam|" in line for line in events))
+
+
+class CopiedMovesetLivePpTests(unittest.TestCase):
+    """The copied moveset's PP is the transformer's SPEND, not the copy's seed.
+
+    ``_TRANSFORM_MOVE_PP`` is what Showdown writes at the instant Transform
+    resolves. ``_apply_transform`` re-wrote it on EVERY world build, so a Ditto
+    that had drained the copy to zero was rebuilt with five of everything, every
+    round, for the rest of the battle. The spend is not hidden: on our own seat
+    the request reports it in ``selfActiveMoves`` -- the same source this file's
+    Encore tests already read the copied moveset's disable pattern from.
+
+    THE ABSORBING END OF IT, and why this is a fallback row rather than a search-
+    quality one. When the last copied PP goes, Showdown's ``getMoves`` returns
+    ``[]`` and ``getMoveRequestData`` substitutes the Struggle pseudo-move, so
+    the request offers ``struggle`` and nothing else. The engine, still holding
+    four full moves, proposes four of them; none is offered; ``_map_choices``
+    maps nothing and the decision falls to ``choices_unmapped`` /
+    ``all_unmapped_legality_mismatch``. The Struggle translation #1202 added
+    cannot help, because it is keyed on the ENGINE emitting ``MoveChoice::None``
+    and this engine has four moves to propose. Nothing about the position
+    changes afterwards, so it refuses again, and again: measured on
+    ``fb3h1-960111`` p2 (Ditto into Suicune) as 40 refusals across rounds 64-104,
+    every remaining decision of the battle.
+
+    The fix is upstream of the mapper. With the request's own PP on the copy the
+    engine runs out exactly when Showdown does, ``get_all_options`` falls through
+    to its terminal ``MoveChoice::None`` push, and #1202's translation -- already
+    shipped, already gated on Struggle being the request's only action -- lands
+    it on ``struggle``. ``test_a_drained_copy_leaves_the_engine_no_move`` is the
+    link that says so at the engine rather than arguing it.
+    """
+
+    def setUp(self) -> None:
+        self.dex = _dex()
+
+    def _payload_unencored(self, **kwargs):
+        """The transformed-Ditto fixture with Encore taken OFF.
+
+        Encore is orthogonal here and would mask the thing under test: an
+        encored side is restricted to one slot whatever the other three say.
+        """
+
+        payload = _payload(self.dex, **kwargs)
+        payload["sides"]["p1"]["volatiles"] = []
+        return payload
+
+    def _payload_all_usable(self):
+        """...and with the fixture's Encore DISABLE PATTERN off the request too.
+
+        ``_payload``'s ``selfActiveMoves`` is Encore's signature -- three slots
+        reported disabled. Now that those flags reach the built world, leaving
+        them on would make an "every copied move is enumerable" control assert
+        one move rather than four.
+        """
+
+        payload = self._payload_unencored()
+        payload["selfActiveMoves"] = [
+            dict(row, pp=row["maxpp"], disabled=False)
+            for row in payload["selfActiveMoves"]
+        ]
+        return payload
+
+    def _build(self, payload):
+        return battle_spec_from_payload(
+            payload, _override(), dex=self.dex,
+            transformed_slots={"p1": _DELCATTY.species},
+        )
+
+    def _copied(self, payload):
+        side = self._build(payload).spec.side_one
+        active = side.pokemon[side.active_index]
+        return [(spec.id, spec.pp, spec.disabled) for spec in active.moves]
+
+    @staticmethod
+    def _struggle_only(payload):
+        """Showdown's Struggle branch, as it reaches the world builder.
+
+        Both halves, because ``_self_request_is_struggle_only`` needs both:
+        ``selfActiveMoves`` empty (``_request_active_moves`` drops the pp-less
+        Struggle row), and every move on the active row marked disabled by
+        ``local_showdown._apply_struggle_only_move_state``.
+        """
+
+        payload["selfActiveMoves"] = []
+        for move in payload["sides"]["p1"]["pokemon"][0]["moves"]:
+            move["disabled"] = True
+        return payload
+
+    def test_the_fixture_request_disagrees_with_the_transform_seed(self) -> None:
+        """Anti-vacuity: the numbers under test must not already be the seed."""
+
+        rows = _payload(self.dex)["selfActiveMoves"]
+        self.assertEqual([row["id"] for row in rows],
+                         ["bodyslam", "healbell", "wish", "protect"])
+        self.assertNotEqual([row["pp"] for row in rows], [_TRANSFORM_MOVE_PP] * 4)
+        self.assertTrue(any(row["disabled"] for row in rows))
+
+    def test_the_copied_moveset_carries_the_requests_live_pp(self) -> None:
+        """RED before the fix at four slots of ``(5, False)``."""
+
+        payload = self._payload_unencored()
+        payload["selfActiveMoves"] = [
+            {"id": "bodyslam", "pp": 0, "maxpp": 24, "disabled": True},
+            {"id": "healbell", "pp": 3, "maxpp": 5, "disabled": False},
+            {"id": "wish", "pp": 0, "maxpp": 10, "disabled": True},
+            {"id": "protect", "pp": 1, "maxpp": 10, "disabled": False},
+        ]
+        self.assertEqual(
+            self._copied(payload),
+            [("bodyslam", 0, True), ("healbell", 3, False),
+             ("wish", 0, True), ("protect", 1, False)],
+        )
+
+    def test_a_slot_the_request_does_not_name_keeps_the_transform_seed(self) -> None:
+        """The donor is belief-SAMPLED, so it can carry a move the real one lacks.
+
+        Measured live: five of eight sampled Suicune worlds gave the Ditto a
+        ``rest`` the real Suicune never had. The request PROVES that slot is not
+        in the real copy -- on our own seat it enumerates the whole moveset -- so
+        disabling it would remove a fiction rather than invent a fact. It is kept
+        usable anyway, so the fiction is proposed, misses, and is COUNTED in
+        ``unmapped_choices`` instead of being silently deleted from the world.
+        See ``_copied_move_spec`` for why that trade is the right way round.
+
+        It also keeps the struggle-only assertion below from passing for the
+        wrong reason: if unnamed slots were disabled here, that test could not
+        tell a struggle-only verdict from this rule firing.
+        """
+
+        payload = self._payload_unencored()
+        payload["selfActiveMoves"] = [
+            {"id": "bodyslam", "pp": 0, "maxpp": 24, "disabled": True},
+        ]
+        self.assertEqual(
+            self._copied(payload),
+            [("bodyslam", 0, True),
+             ("healbell", _TRANSFORM_MOVE_PP, False),
+             ("wish", _TRANSFORM_MOVE_PP, False),
+             ("protect", _TRANSFORM_MOVE_PP, False)],
+        )
+
+    def test_a_struggle_only_request_builds_an_unusable_copied_moveset(self) -> None:
+        """RED before the fix: four usable moves against a request offering none.
+
+        Every slot, including the ones the request cannot name -- the verdict is
+        about the transformer, not about which moves this world happened to
+        sample. PP is left pinned rather than zeroed, exactly as
+        ``_apply_struggle_only_move_state`` leaves it on the non-transformed
+        path: the Struggle request carries none, and ``add_available_moves``
+        already refuses a disabled slot.
+        """
+
+        payload = self._struggle_only(self._payload_unencored())
+        self.assertEqual(
+            self._copied(payload),
+            [("bodyslam", _TRANSFORM_MOVE_PP, True),
+             ("healbell", _TRANSFORM_MOVE_PP, True),
+             ("wish", _TRANSFORM_MOVE_PP, True),
+             ("protect", _TRANSFORM_MOVE_PP, True)],
+        )
+
+    def test_the_struggle_only_verdict_is_cause_free(self) -> None:
+        """The marking says WHAT Showdown computed, never WHY, and that is the point.
+
+        Review asked whether a Struggle-only request arising from something other
+        than spent copied PP still refuses. It does not, and this row says so
+        rather than leaving it to be re-derived: the predicate reads
+        ``_apply_struggle_only_move_state``'s all-disabled marking, which
+        ``Pokemon.getMoves`` writes after folding EVERY unusability -- ``pp <= 0``,
+        Taunt, Torment, Disable, a choice lock -- into one ``disabled`` verdict per
+        slot. There is no cause left in it by the time it reaches here, so every
+        cause that reaches the same request gets the same world.
+
+        Not a claim that every such shape BUILDS: a cause that is itself an
+        unsupported volatile still fails closed earlier, on the volatile, as
+        ``no_worlds_constructed`` rather than ``choices_unmapped``. Disable is that
+        case and is asserted here so the two exits are not confused.
+        """
+
+        for volatiles in ([], ["Taunt"]):
+            with self.subTest(volatiles=volatiles or ["pp-exhaustion"]):
+                payload = self._payload_unencored()
+                payload["sides"]["p1"]["volatiles"] = list(volatiles)
+                self.assertEqual(
+                    self._copied(self._struggle_only(payload)),
+                    [(move, _TRANSFORM_MOVE_PP, True)
+                     for move in ("bodyslam", "healbell", "wish", "protect")],
+                )
+        payload = self._payload_unencored()
+        payload["sides"]["p1"]["volatiles"] = ["Disable"]
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            self._copied(self._struggle_only(payload))
+        self.assertEqual(caught.exception.reason, "volatile_unsupported")
+
+    def test_an_empty_request_alone_is_not_the_struggle_branch(self) -> None:
+        """The negative control, and the reason the marking is the second half.
+
+        ``mustrecharge`` and the two-turn charge lock also publish
+        ``selfActiveMoves: []`` -- their one move row carries no ``pp`` either,
+        so ``_request_active_moves`` drops it. They come off ``getMoves``'s early
+        ``if (lockedMove)`` return, which never evaluates per-slot ``disabled``
+        at all, so the active row's own flags stay untouched and the copied set
+        stays usable. Reading emptiness alone would disable a moveset that is
+        merely pre-empted for one turn.
+        """
+
+        payload = self._payload_unencored()
+        payload["selfActiveMoves"] = []
+        self.assertFalse(
+            any(row["disabled"] for row in payload["sides"]["p1"]["pokemon"][0]["moves"])
+        )
+        self.assertEqual(
+            self._copied(payload),
+            [(move, _TRANSFORM_MOVE_PP, False)
+             for move in ("bodyslam", "healbell", "wish", "protect")],
+        )
+
+    def test_the_opponent_seat_is_not_touched(self) -> None:
+        """``selfActiveMoves`` is OUR request. A transformed opponent keeps the seed.
+
+        Their PP spend is not public, so the exemption that gives every opponent
+        move full catalog PP applies to a copied moveset too.
+        """
+
+        payload = _payload_opponent_transformed(self.dex)
+        payload["selfActiveMoves"] = [
+            {"id": "bodyslam", "pp": 0, "maxpp": 24, "disabled": True},
+            {"id": "healbell", "pp": 0, "maxpp": 5, "disabled": True},
+            {"id": "wish", "pp": 0, "maxpp": 10, "disabled": True},
+            {"id": "protect", "pp": 0, "maxpp": 10, "disabled": True},
+        ]
+        world = battle_spec_from_payload(
+            payload, _override_opponent_transformed(), dex=self.dex,
+            transformed_slots={"p2": _DELCATTY.species},
+            encored_moves={"p2": "protect"},
+        )
+        side = world.spec.side_two
+        active = side.pokemon[side.active_index]
+        self.assertEqual(
+            [(spec.id, spec.pp, spec.disabled) for spec in active.moves],
+            [(move, _TRANSFORM_MOVE_PP, False)
+             for move in ("bodyslam", "healbell", "wish", "protect")],
+        )
+
+    def test_a_drained_copy_leaves_the_engine_no_move(self) -> None:
+        """The link to #1202, asserted at the engine rather than argued.
+
+        #1202 translates the crate's forced-no-move token onto the request's
+        substituted ``struggle``. Reaching that gate needs the built world to
+        drive ``get_all_options`` to its terminal ``options.len() == 0`` push:
+        ``add_available_moves`` contributes nothing (every copied slot disabled)
+        AND ``add_switches`` contributes nothing (the fixture's only bench mon is
+        fainted). Both halves are separated below.
+        """
+
+        def move_choices(payload, *, bench: bool):
+            if bench:
+                bench_hp = _maxhp(_SWAMPERT, self.dex)
+                payload["sides"]["p1"]["pokemon"][1]["condition"] = (
+                    f"{bench_hp}/{bench_hp}"
+                )
+            world = self._build(payload)
+            state = build_poke_engine_state(world.spec, module=poke_engine)
+            return {
+                str(result.move_choice)
+                for result in poke_engine.monte_carlo_tree_search(state, 40).side_one
+            }
+
+        # Anti-vacuity: the same fixture, PP intact, enumerates the copied moves.
+        self.assertEqual(
+            move_choices(self._payload_all_usable(), bench=False),
+            {"bodyslam", "healbell", "wish", "protect"},
+        )
+        # Drained, no live bench: the engine has nothing, which is the token
+        # `_map_choices` resolves onto the request's `struggle`.
+        self.assertEqual(
+            move_choices(self._struggle_only(self._payload_unencored()), bench=False),
+            {"No Move"},
+        )
+        # Drained WITH a live bench: the switch is enumerated, so the request
+        # offers `['struggle', 'switch:...']` and this is not the class.
+        self.assertNotIn(
+            "No Move",
+            move_choices(self._struggle_only(self._payload_unencored()), bench=True),
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
