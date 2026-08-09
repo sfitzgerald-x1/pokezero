@@ -992,8 +992,17 @@ def opponent_request_order(context, party_species) -> list[str] | None:
     Fails closed rather than guessing: the walk returns None when the public
     data is inconsistent, and sets `active_position` to None when it loses
     track of the permutation. Either means no order. A wrong order silently
-    permutes opponent switch priors, which is strictly worse than the crate's
-    documented one-swap fallback.
+    permutes opponent switch priors, and nothing downstream can detect it.
+
+    Returning None is now a REFUSAL the crate honours, not a hand-off to a
+    fallback. It used to be the latter: `leaf.rs::root_opponent_order`
+    substituted a one-swap approximation whenever this returned None, so the
+    refusal became a confident wrong answer one layer down -- fail-closed here,
+    fail-OPEN there. The crate refuses too as of #1194: the opponent action map
+    is all-`None`, the node keeps uniform priors, and the refusal is counted in
+    `prior_fallbacks`. Do not reintroduce a caller-side fallback on the
+    strength of this docstring; there is no longer anything to degrade to, and
+    that is deliberate.
     """
     from .determinization import _public_opponent_team_index_walk
 

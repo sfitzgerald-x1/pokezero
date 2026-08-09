@@ -649,11 +649,18 @@ struct BranchFold {
     fold: crate::fold::FoldStateInner,
     turn: i64,
     self_order: Vec<String>,
-    /// The opponent's party order evolved to this branch. Threaded alongside
-    /// `self_order` rather than recomputed, because switch swaps must
+    /// The opponent's request order evolved to this branch, or `None` when the
+    /// caller withheld it (`ctx["opponent_request_order"]` absent). Threaded
+    /// alongside `self_order` rather than recomputed, because switch swaps must
     /// ACCUMULATE down a line -- an unevolved order is correct only until the
     /// opponent's first switch, after which every switch prior is permuted.
-    opponent_order: Vec<String>,
+    ///
+    /// `Option`, not an empty `Vec`. UNKNOWN is a state this field has to carry
+    /// end to end -- it decides whether the opponent's switch arms are mapped
+    /// or refused (`leaf::resolve_opponent_order`) -- and an in-band empty
+    /// sentinel would make "unknown" survive only by the accident that
+    /// `evolve_self_order` preserves emptiness.
+    opponent_order: Option<Vec<String>>,
     meta: crate::leaf::LeafMeta,
 }
 
@@ -926,7 +933,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             root_fold.clone(),
                             root_turn,
                             leaf_ctx.root_self_order().to_vec(),
-                            leaf_ctx.root_opponent_order(),
+                            leaf_ctx.root_opponent_order().map(<[String]>::to_vec),
                             leaf_ctx.root_meta().clone(),
                         ),
                         Some(key) => match fold_by_branch.get(&key) {
@@ -991,11 +998,15 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         &rendered.lines,
                         leaf_ctx.self_prefix(),
                     );
-                    let opponent_order = crate::leaf::evolve_self_order(
-                        &parent_opponent_order,
-                        &rendered.lines,
-                        leaf_ctx.opponent_prefix(),
-                    );
+                    // Evolve only what is KNOWN. An unknown order has no
+                    // switch history to accumulate onto and stays unknown.
+                    let opponent_order = parent_opponent_order.as_deref().map(|parent| {
+                        crate::leaf::evolve_self_order(
+                            parent,
+                            &rendered.lines,
+                            leaf_ctx.opponent_prefix(),
+                        )
+                    });
                     let meta = crate::leaf::evolve_leaf_meta_with_status_transitions(
                         &parent_meta,
                         &rendered.lines,
@@ -1061,7 +1072,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                                 let map_result = leaf_ctx.opponent_action_map(
                                     leaf,
                                     &opponent_options,
-                                    Some(&opponent_order),
+                                    opponent_order.as_deref(),
                                     Some(&meta),
                                     false,
                                 );

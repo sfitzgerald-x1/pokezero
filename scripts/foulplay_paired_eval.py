@@ -326,10 +326,15 @@ def main(argv=None) -> int:
     #   - the crate's gather/apply path has zero Rust tests;
     #   - the flag-on native-slot pin cannot run without libtorch;
     #   - no in-image gate has confirmed APPLIED priors end to end against a
-    #     real checkpoint;
-    #   - and when no order can be supplied, the crate falls back to a one-swap
-    #     approximation measured ~91% wrong -- so fail-closed in Python is
-    #     fail-OPEN in the crate.
+    #     real checkpoint.
+    #
+    # CLOSED since: when no order could be supplied the crate substituted a
+    # one-swap approximation -- `wrong_one_swap`, one of the three controls
+    # cited above at 81-96%, recorded at ~91% in its own docstring -- so the
+    # ~0.7% Python fails closed on was fail-OPEN in the crate. The crate now refuses
+    # instead -- all-`None` action map, node stays uniform, refusal counted in
+    # `prior_fallbacks` -- so a withheld order costs a counted fallback rather
+    # than a confident wrong prior.
     #
     # A wrong gather does not fail. It returns a confident paired delta and the
     # campaign reads "opponent priors do not help" off a permutation. Cells B
