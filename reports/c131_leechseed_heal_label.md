@@ -100,9 +100,20 @@ after every code change — "the numbers probably did not move" is a prediction,
 - **Five unpinned exemptions in `weather_chips`**: ROCK, GROUND, STEEL (sand condition), ICE (hail
   branch), and the `hp <= 0` gate. Each verified to leave the suite green when deleted. Pre-existing,
   but this change added a fourth disjunct to that condition and pinned only its own.
-- **The Liquid Ooze guard is dead code.** Liquid Ooze is emitted as a *negative* heal, which
-  `events.rs:3261` routes to the damage renderer, so it never reaches `residual_heal_cause`. Its pin
-  is real against deleting the guard; the guard protects nothing reachable.
+- ~~**The Liquid Ooze guard is dead code.**~~ ⚠ **RETRACTED 2026-08-09 (C154) — this bullet is
+  false, and `reports/c138_known_gaps_ledger.md` R9 carried it forward for a year.** The premise is
+  right: a negative heal is intercepted and rendered as `-damage`, so it never reaches
+  `residual_heal_cause`. The conclusion does not follow from it, because **the guard is not in a
+  negative-heal branch.** It is the conjunct `ability != Abilities::LIQUIDOOZE` inside the
+  LEECHSEED arm, reached only on a POSITIVE heal — exactly the heals the interception lets through
+  — and `residual_heal_cause` takes no heal amount at all, so the sign is not a fact it can see.
+  Nor does the guard "protect nothing reachable" in the literal sense: the crate now pins it with a
+  positive heal and no Leftovers, and that pin exists precisely because deleting the guard once
+  left the suite green. What makes the conjunct unable to change an answer *in gen3 randbats* is
+  the two earlier returns plus the item universe, not the interception — see the re-adjudication in
+  `tests/data/c154_unreachable_readjudication.json`. This bullet also collapsed two distinct
+  guards: `ResidualPlan`'s own `LIQUIDOOZE` conjunct is live and pinned in both directions.
+  Left in place, struck, rather than deleted.
 - **Rain Dish and Sitrus book no plan slot either**, and both are unreachable: 0 Rain Dish sets in
   `sets.json`, and `teams.ts:452-513` `getItem` cannot return Sitrus Berry.
 - A pre-existing red in `tests/test_engine_terminal_residual_roll_limit` that fails identically on

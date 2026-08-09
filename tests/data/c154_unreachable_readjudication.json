@@ -1,0 +1,1910 @@
+{
+  "_README": "C154. Re-adjudication of all 26 UNREACHABLE verdicts in reports/c138_known_gaps_ledger.md section 4, against the C153 rule 'trace the raise site to the caller that actually reaches it'. Regenerate with scripts/c154_unreachable_readjudication.py --write, from a checkout with a built pokemon-showdown; CI builds none, so nothing re-derives the POOL half against a live pool. The CITATION half is re-derived on every run of tests/test_unreachable_readjudication.py. NEVER edit this by hand to make a test pass: the pin compares the ledger against it, so a hand edit silently moves a verdict. It lives under tests/data/ and NOT under reports/ on purpose -- see the module docstring, it is keyed by counter names.",
+  "pool": {
+    "ability_species": {
+      "Cute Charm": [
+        "clefable",
+        "delcatty",
+        "wigglytuff"
+      ],
+      "Dry Skin": [],
+      "Insomnia": [
+        "ariados",
+        "banette",
+        "hypno",
+        "murkrow",
+        "noctowl"
+      ],
+      "Liquid Ooze": [
+        "swalot",
+        "tentacruel"
+      ],
+      "Rain Dish": [],
+      "Sand Stream": [
+        "tyranitar"
+      ],
+      "Shell Armor": [
+        "cloyster",
+        "omastar"
+      ],
+      "Snow Warning": [],
+      "Trace": [
+        "gardevoir",
+        "porygon2"
+      ],
+      "Vital Spirit": [
+        "primeape",
+        "vigoroth"
+      ],
+      "Wonder Guard": [
+        "shedinja"
+      ]
+    },
+    "bonemerang_effectiveness": -1,
+    "bonemerang_immune": false,
+    "bonemerang_multihit": 2,
+    "co_occurrence": {
+      "bellydrum_sets": 3,
+      "drain_sets": 3,
+      "ludicolo_sets": 1,
+      "ludicolo_sets_with_rain_dish": 0,
+      "rest_sets": 55,
+      "rest_with_insomnia_or_vital_spirit": 0,
+      "shedinja_sets_with_bellydrum": 0,
+      "sleeptalk_sets": 44,
+      "sleeptalk_with_a_drain_move": 0,
+      "sleeptalk_with_haze_psychup_roar_whirlwind_batonpass": 0,
+      "tyranitar_sets": 3,
+      "tyranitar_sets_with_sand_stream": 3
+    },
+    "dex_abilities": {
+      "dryskin": {
+        "exists": true,
+        "gen": 4,
+        "isNonstandard": "Future"
+      },
+      "raindish": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      },
+      "sandstream": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      },
+      "snowwarning": {
+        "exists": true,
+        "gen": 4,
+        "isNonstandard": "Future"
+      }
+    },
+    "dex_items": {
+      "aspearberry": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      },
+      "berryjuice": {
+        "exists": true,
+        "gen": 2,
+        "isNonstandard": "Unobtainable"
+      },
+      "brightpowder": {
+        "exists": true,
+        "gen": 2,
+        "isNonstandard": null
+      },
+      "cheriberry": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      },
+      "chestoberry": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      },
+      "focusband": {
+        "exists": true,
+        "gen": 2,
+        "isNonstandard": null
+      },
+      "kingsrock": {
+        "exists": true,
+        "gen": 2,
+        "isNonstandard": null
+      },
+      "lansatberry": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      },
+      "laxincense": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      },
+      "leftovers": {
+        "exists": true,
+        "gen": 2,
+        "isNonstandard": null
+      },
+      "leppaberry": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      },
+      "oranberry": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      },
+      "pechaberry": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      },
+      "persimberry": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      },
+      "quickclaw": {
+        "exists": true,
+        "gen": 2,
+        "isNonstandard": null
+      },
+      "rawstberry": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      },
+      "scopelens": {
+        "exists": true,
+        "gen": 2,
+        "isNonstandard": null
+      },
+      "shellbell": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      },
+      "sitrusberry": {
+        "exists": true,
+        "gen": 3,
+        "isNonstandard": null
+      }
+    },
+    "distinct_abilities": 71,
+    "distinct_moves": 125,
+    "gen3_carriers": {
+      "Cute Charm": {
+        "all": [
+          "Clefable",
+          "Clefairy",
+          "Cleffa",
+          "Delcatty",
+          "Igglybuff",
+          "Jigglypuff",
+          "Skitty",
+          "Wigglytuff"
+        ],
+        "in_pool": [
+          "Clefable",
+          "Delcatty",
+          "Wigglytuff"
+        ]
+      },
+      "Dry Skin": {
+        "all": [],
+        "in_pool": []
+      },
+      "Insomnia": {
+        "all": [
+          "Ariados",
+          "Banette",
+          "Drowzee",
+          "Hoothoot",
+          "Hypno",
+          "Murkrow",
+          "Noctowl",
+          "Shuppet",
+          "Spinarak"
+        ],
+        "in_pool": [
+          "Ariados",
+          "Banette",
+          "Hypno",
+          "Murkrow",
+          "Noctowl"
+        ]
+      },
+      "Liquid Ooze": {
+        "all": [
+          "Gulpin",
+          "Swalot",
+          "Tentacool",
+          "Tentacruel"
+        ],
+        "in_pool": [
+          "Swalot",
+          "Tentacruel"
+        ]
+      },
+      "Rain Dish": {
+        "all": [
+          "Lombre",
+          "Lotad",
+          "Ludicolo"
+        ],
+        "in_pool": [
+          "Ludicolo"
+        ]
+      },
+      "Sand Stream": {
+        "all": [
+          "Tyranitar"
+        ],
+        "in_pool": [
+          "Tyranitar"
+        ]
+      },
+      "Shell Armor": {
+        "all": [
+          "Clamperl",
+          "Cloyster",
+          "Corphish",
+          "Crawdaunt",
+          "Kingler",
+          "Krabby",
+          "Lapras",
+          "Omanyte",
+          "Omastar",
+          "Shellder"
+        ],
+        "in_pool": [
+          "Cloyster",
+          "Crawdaunt",
+          "Kingler",
+          "Lapras",
+          "Omastar"
+        ]
+      },
+      "Snow Warning": {
+        "all": [],
+        "in_pool": []
+      },
+      "Trace": {
+        "all": [
+          "Gardevoir",
+          "Kirlia",
+          "Porygon",
+          "Porygon2",
+          "Ralts"
+        ],
+        "in_pool": [
+          "Gardevoir",
+          "Porygon2"
+        ]
+      },
+      "Vital Spirit": {
+        "all": [
+          "Delibird",
+          "Mankey",
+          "Primeape",
+          "Vigoroth"
+        ],
+        "in_pool": [
+          "Delibird",
+          "Primeape",
+          "Vigoroth"
+        ]
+      },
+      "Wonder Guard": {
+        "all": [
+          "Shedinja"
+        ],
+        "in_pool": [
+          "Shedinja"
+        ]
+      }
+    },
+    "generation_seed_scheme": "[1, 2, 3, i] for i in range(4000)",
+    "generative": {
+      "distinct_items": 13,
+      "items": {
+        "Choice Band": 2947,
+        "Leftovers": 17250,
+        "Liechi Berry": 442,
+        "Light Ball": 127,
+        "Lum Berry": 419,
+        "Petaya Berry": 980,
+        "Salac Berry": 1166,
+        "Silk Scarf": 61,
+        "Soul Dew": 238,
+        "Stick": 104,
+        "Thick Club": 92,
+        "Twisted Spoon": 55,
+        "White Herb": 119
+      },
+      "level_max": 100,
+      "level_min": 66,
+      "maxhp_ceiling": 47,
+      "maxhp_min": 1,
+      "nature_set": 0,
+      "nature_unset": 24000,
+      "pokemon": 24000,
+      "species_at_or_below_maxhp_ceiling": {
+        "Shedinja": 106
+      },
+      "teams": 4000
+    },
+    "move_classes": {
+      "drain": [
+        "gigadrain"
+      ],
+      "fixed_damage": [
+        "seismictoss"
+      ],
+      "multihit": [
+        [
+          "bonemerang",
+          "2"
+        ]
+      ],
+      "ohko": [],
+      "partiallytrapped": [
+        "wrap"
+      ]
+    },
+    "move_species": {
+      "absorb": [],
+      "assist": [],
+      "attract": [],
+      "batonpass": [
+        "absol",
+        "aipom",
+        "ariados",
+        "celebi",
+        "delcatty",
+        "espeon",
+        "farfetchd",
+        "girafarig",
+        "hypno",
+        "jolteon",
+        "ledian",
+        "lunatone",
+        "mawile",
+        "minun",
+        "mrmime",
+        "ninjask",
+        "plusle",
+        "scizor",
+        "scyther",
+        "shedinja",
+        "umbreon",
+        "venomoth",
+        "volbeat",
+        "xatu",
+        "zapdos"
+      ],
+      "bellydrum": [
+        "charizard",
+        "linoone"
+      ],
+      "bonemerang": [
+        "marowak"
+      ],
+      "bugbite": [],
+      "covet": [],
+      "disable": [],
+      "doomdesire": [],
+      "dragonrage": [],
+      "drainpunch": [],
+      "dreameater": [],
+      "encore": [
+        "alakazam",
+        "dewgong",
+        "illumise",
+        "jumpluff",
+        "minun",
+        "mrmime",
+        "pikachu",
+        "plusle",
+        "raichu",
+        "shuckle",
+        "smeargle",
+        "spinda",
+        "swalot",
+        "togetic",
+        "walrein",
+        "wobbuffet"
+      ],
+      "eruption": [],
+      "focusenergy": [],
+      "foresight": [],
+      "futuresight": [],
+      "gigadrain": [
+        "exeggutor",
+        "parasect"
+      ],
+      "hail": [],
+      "haze": [
+        "altaria",
+        "crobat",
+        "mantine",
+        "weezing"
+      ],
+      "hyperbeam": [
+        "slaking"
+      ],
+      "imprison": [],
+      "ingrain": [],
+      "knockoff": [
+        "banette",
+        "hariyama",
+        "lickitung",
+        "sableye"
+      ],
+      "leechlife": [],
+      "leechseed": [
+        "bellossom",
+        "cacturne",
+        "celebi",
+        "exeggutor",
+        "jumpluff",
+        "meganium",
+        "sceptile",
+        "shiftry",
+        "sunflora",
+        "tangela",
+        "tropius",
+        "venusaur"
+      ],
+      "lightscreen": [],
+      "lowkick": [],
+      "magiccoat": [],
+      "megadrain": [],
+      "metronome": [],
+      "mimic": [],
+      "mirrormove": [],
+      "mist": [],
+      "mudsport": [],
+      "naturepower": [],
+      "nightmare": [],
+      "nightshade": [],
+      "odorsleuth": [],
+      "outrage": [],
+      "petaldance": [],
+      "psychup": [],
+      "psywave": [],
+      "raindance": [
+        "gorebyss",
+        "huntail",
+        "kingdra",
+        "ludicolo",
+        "mantine",
+        "omastar",
+        "seaking"
+      ],
+      "recycle": [],
+      "reflect": [],
+      "rest": [
+        "altaria",
+        "arbok",
+        "arcanine",
+        "articuno",
+        "azumarill",
+        "blastoise",
+        "camerupt",
+        "dewgong",
+        "donphan",
+        "dunsparce",
+        "dusclops",
+        "entei",
+        "girafarig",
+        "granbull",
+        "hariyama",
+        "kangaskhan",
+        "kyogre",
+        "lanturn",
+        "lapras",
+        "machamp",
+        "magcargo",
+        "magneton",
+        "mantine",
+        "pelipper",
+        "piloswine",
+        "politoed",
+        "poliwrath",
+        "quagsire",
+        "raikou",
+        "regice",
+        "regirock",
+        "registeel",
+        "relicanth",
+        "shuckle",
+        "slowbro",
+        "slowking",
+        "snorlax",
+        "steelix",
+        "suicune",
+        "swampert",
+        "tyranitar",
+        "wailord",
+        "walrein",
+        "whiscash",
+        "xatu",
+        "zapdos"
+      ],
+      "roar": [
+        "blastoise",
+        "steelix"
+      ],
+      "roleplay": [],
+      "safeguard": [],
+      "sandstorm": [],
+      "sketch": [],
+      "skillswap": [],
+      "sleeptalk": [
+        "arbok",
+        "arcanine",
+        "articuno",
+        "azumarill",
+        "blastoise",
+        "camerupt",
+        "dewgong",
+        "donphan",
+        "dunsparce",
+        "dusclops",
+        "entei",
+        "granbull",
+        "hariyama",
+        "kyogre",
+        "lanturn",
+        "lapras",
+        "machamp",
+        "magcargo",
+        "magneton",
+        "mantine",
+        "pelipper",
+        "piloswine",
+        "politoed",
+        "poliwrath",
+        "quagsire",
+        "raikou",
+        "regice",
+        "regirock",
+        "registeel",
+        "relicanth",
+        "slowbro",
+        "slowking",
+        "snorlax",
+        "suicune",
+        "swampert",
+        "tyranitar",
+        "wailord",
+        "walrein",
+        "whiscash",
+        "zapdos"
+      ],
+      "snore": [],
+      "solarbeam": [
+        "exeggutor",
+        "sunflora",
+        "tangela",
+        "victreebel"
+      ],
+      "spikes": [
+        "cacturne",
+        "cloyster",
+        "deoxysdefense",
+        "deoxysspeed",
+        "forretress",
+        "glalie",
+        "omastar",
+        "qwilfish",
+        "roselia",
+        "skarmory",
+        "smeargle"
+      ],
+      "sunnyday": [
+        "exeggutor",
+        "sunflora",
+        "tangela",
+        "victreebel"
+      ],
+      "switcheroo": [],
+      "taunt": [],
+      "thief": [],
+      "thrash": [],
+      "torment": [],
+      "transform": [
+        "ditto",
+        "mew"
+      ],
+      "trick": [
+        "furret",
+        "kecleon"
+      ],
+      "watersport": [],
+      "waterspout": [],
+      "whirlwind": [
+        "dustox",
+        "noctowl",
+        "skarmory"
+      ]
+    },
+    "sets": 393,
+    "shedinja_movepool": [
+      [
+        "agility",
+        "batonpass",
+        "hiddenpowerfighting",
+        "shadowball",
+        "silverwind",
+        "toxic"
+      ]
+    ],
+    "showdown_commit": "f76228a1354b5d0f307ca2d16101294ad3a2308b",
+    "species": 220,
+    "super_effective_against_wonder_guard": [
+      [
+        "aerialace",
+        "Flying",
+        null
+      ],
+      [
+        "crunch",
+        "Dark",
+        null
+      ],
+      [
+        "drillpeck",
+        "Flying",
+        null
+      ],
+      [
+        "fireblast",
+        "Fire",
+        null
+      ],
+      [
+        "firepunch",
+        "Fire",
+        null
+      ],
+      [
+        "flamethrower",
+        "Fire",
+        null
+      ],
+      [
+        "hiddenpowerdark",
+        "Dark",
+        null
+      ],
+      [
+        "hiddenpowerfire",
+        "Fire",
+        null
+      ],
+      [
+        "hiddenpowerflying",
+        "Flying",
+        null
+      ],
+      [
+        "hiddenpowerghost",
+        "Ghost",
+        null
+      ],
+      [
+        "hiddenpowerrock",
+        "Rock",
+        null
+      ],
+      [
+        "knockoff",
+        "Dark",
+        null
+      ],
+      [
+        "overheat",
+        "Fire",
+        null
+      ],
+      [
+        "pursuit",
+        "Dark",
+        null
+      ],
+      [
+        "rockslide",
+        "Rock",
+        null
+      ],
+      [
+        "sacredfire",
+        "Fire",
+        null
+      ],
+      [
+        "shadowball",
+        "Ghost",
+        null
+      ]
+    ],
+    "targets": {
+      "absorb": "normal",
+      "assist": "self",
+      "attract": "normal",
+      "batonpass": "self",
+      "bellydrum": "self",
+      "bonemerang": "normal",
+      "bugbite": "normal",
+      "covet": "normal",
+      "disable": "normal",
+      "doomdesire": "normal",
+      "dragonrage": "normal",
+      "drainpunch": "normal",
+      "dreameater": "normal",
+      "encore": "normal",
+      "eruption": "allAdjacentFoes",
+      "focusenergy": "self",
+      "foresight": "normal",
+      "futuresight": "normal",
+      "gigadrain": "normal",
+      "hail": "all",
+      "haze": "all",
+      "hyperbeam": "normal",
+      "imprison": "self",
+      "ingrain": "self",
+      "knockoff": "normal",
+      "leechlife": "normal",
+      "leechseed": "normal",
+      "lightscreen": "allySide",
+      "lowkick": "normal",
+      "magiccoat": "self",
+      "megadrain": "normal",
+      "metronome": "self",
+      "mimic": "normal",
+      "mirrormove": "self",
+      "mist": "allySide",
+      "mudsport": "all",
+      "naturepower": "self",
+      "nightmare": "normal",
+      "nightshade": "normal",
+      "odorsleuth": "normal",
+      "outrage": "randomNormal",
+      "petaldance": "randomNormal",
+      "psychup": "normal",
+      "psywave": "normal",
+      "raindance": "all",
+      "recycle": "self",
+      "reflect": "allySide",
+      "rest": "self",
+      "roar": "normal",
+      "roleplay": "normal",
+      "safeguard": "allySide",
+      "sandstorm": "all",
+      "sketch": "normal",
+      "skillswap": "normal",
+      "sleeptalk": "self",
+      "snore": "normal",
+      "solarbeam": "normal",
+      "spikes": "foeSide",
+      "sunnyday": "all",
+      "switcheroo": "normal",
+      "taunt": "normal",
+      "thief": "normal",
+      "thrash": "randomNormal",
+      "torment": "normal",
+      "transform": "normal",
+      "trick": "normal",
+      "watersport": "all",
+      "waterspout": "allAdjacentFoes",
+      "whirlwind": "normal"
+    },
+    "volatile_producers_by_data": {
+      "attract": [
+        "attract"
+      ],
+      "disable": [
+        "disable"
+      ],
+      "focusenergy": [
+        "focusenergy"
+      ],
+      "foresight": [
+        "foresight",
+        "odorsleuth"
+      ],
+      "imprison": [
+        "imprison"
+      ],
+      "mudsport": [
+        "mudsport"
+      ],
+      "nightmare": [
+        "nightmare"
+      ],
+      "taunt": [
+        "taunt"
+      ],
+      "torment": [
+        "torment"
+      ],
+      "watersport": [
+        "watersport"
+      ]
+    },
+    "volatile_producers_by_source": {
+      "attract": [
+        "data/abilities.ts:792",
+        "data/items.ts:1399",
+        "data/mods/gen3/abilities.ts:7",
+        "data/moves.ts:6846"
+      ],
+      "disable": [
+        "data/abilities.ts:779"
+      ],
+      "focusenergy": [
+        "data/items.ts:3263",
+        "sim/battle-actions.ts:1549"
+      ],
+      "foresight": [],
+      "imprison": [],
+      "mudsport": [],
+      "nightmare": [],
+      "taunt": [],
+      "torment": [
+        "data/moves.ts:7053"
+      ],
+      "watersport": []
+    },
+    "volatile_source_scan_roots": [
+      "data/**/*.ts (mods: gen3 only)",
+      "sim/**/*.ts"
+    ],
+    "weather_setters": {
+      "hail": [
+        "hail"
+      ],
+      "raindance": [
+        "raindance"
+      ],
+      "sandstorm": [
+        "sandstorm"
+      ],
+      "snowscape": [
+        "chillyreception",
+        "snowscape"
+      ],
+      "sunnyday": [
+        "sunnyday"
+      ]
+    }
+  },
+  "source_commit": "2e1e1866ce2df38a88efe97cad9cad56cc771c2c",
+  "verdicts": {
+    "R1": {
+      "candidate": "Future Sight / Doom Desire -- residual order 11 and the `future_sight_pending` refusal",
+      "correction": "\u26a0 Two things the row does not say, and the second is the one that decides the verdict. (1) The payload ALWAYS CARRIES the key -- `src/pokezero/local_showdown.py:2359` is unconditional -- so the closure is 'the mapping is always EMPTY', never 'the key is absent'. That is the exact distinction C153 drew for `deferred_opponent_action` and did not carry over to this row. (2) **The repo ships a Custom Game scenario that casts Future Sight** (`src/pokezero/golden_corpus_scenarios.py:469`, an Alakazam with the move and a scripted preference for it), so the raise is constructible from committed code. What keeps it unreached is that the spec sits in `interaction_registry_specs()` (`:353`) and not `scenario_specs()` (`:109`), and every world-building harness -- including `run_scenario_fallback_sweep` (`:578`) -- defaults to the latter. That is a ONE-KEYWORD-ARGUMENT closure: passing `specs=interaction_registry_specs()` fires the raise immediately. 'Dead code in this format' is right; 'retired' would not be.",
+      "counter": {
+        "denominator": "boundaries_full_round",
+        "pattern": "skip:world_unsupported:",
+        "sites": [
+          {
+            "function": "_prepare_boundary",
+            "line": 2682,
+            "loop_depth": 0,
+            "per_game": false
+          },
+          {
+            "function": "_prepare_boundary",
+            "line": 2697,
+            "loop_depth": 0,
+            "per_game": false
+          }
+        ]
+      },
+      "demonstration": "`_reject_unsupported_globals` raises at `src/pokezero/engine_world.py:926` when `payload['futureSight']` has any nonzero value. THE PAYLOAD IS NOT THE DIFFERENTIAL'S: `world_battle_spec` builds its own at `src/pokezero/engine_world.py:883` and reaches the guard at `:397`, and `_public_materialization_payload` fills the key from `replay.future_sight` at `src/pokezero/local_showdown.py:2359`. That mapping has exactly one writer, `_update_future_sight` at `src/pokezero/showdown.py:4947`, gated at `:4940` on the protocol effect id being in `_FUTURE_MOVES` = `{futuresight, doomdesire}`. Both are 0 of 220 species, so the mapping is EMPTY for every gen3 randbats battle and an empty dict makes `any(...)` false -- the guard cannot fire FOR ANY CALLER of `world_battle_spec`. Residual order 11 has the same single trigger class.",
+      "instruments": [
+        "pool_move",
+        "source_trace"
+      ],
+      "ledger_reason_status": "INCOMPLETE",
+      "measurements": {
+        "doomdesire": [],
+        "futuresight": []
+      },
+      "row": "R1",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R10": {
+      "candidate": "Shell Bell, and the `heal_drain_or_shellbell` ambiguity",
+      "correction": "\u26a0 Three upgrades, and the first changes the strength of the verdict. (1) The row argues the bucket is UNAMBIGUOUS; it is in fact UNEMITTABLE, because its only production emitter is the Sleep Talk ambiguous-tail path and no set pairs `sleeptalk` with a drain move (0 of 393). The row reasons from the bucket's NAME and never traces its caller -- the exact shape the C153 rule forbids. (2) \"the pool's only drain move is `gigadrain`\" was an assertion; it is now the `drain`-flagged subset of the pool's 125 moves, derived from the dex, with the five gen3 drain moves it excludes named. (3) The Shell Bell half rests on the same generation-time item argument R6 does and needs the same runtime clause: the pool's only item-moving moves SWAP (`trick`) or REMOVE (`knockoff`) and no gen3 mechanism creates an item. \u26a0 One site the row's sentence does not cover survives as a note: the NAMED (non-Sleep-Talk) renderer tags a heal `[from] drain` whenever `choice.drain.is_some()`, and Shell Bell sets that field, so a Shell Bell holder would be mislabelled there too -- same unreachability, second site.",
+      "demonstration": "`heal_subcase` (`rust/pokezero-search/src/events.rs:3949`) routes a positive ATTACKER-side heal with foe damage in the same tail to `heal_drain_or_shellbell` at `:3962`. \u26a0 THE BUCKET HAS ONE PRODUCTION EMITTER AND THE ROW DOES NOT NAME IT: `heal_subcase` is reached only through `ambiguous_unrenderable_slug_with_protect`, whose single non-test caller is the Sleep Talk ambiguous-tail arm at `rust/pokezero-search/src/events.rs:2159` (the bare `ambiguous_unrenderable_slug` wrapper is called only from `#[cfg(test)]`). So the tail is a SLEEP TALK CALLEE'S tail, and the bucket needs `sleeptalk` and a drain move ON THE SAME SET. Measured per set, the instrument section 8 requires for a two-thing gap: 44 of 393 sets carry `sleeptalk`, 3 carry a drain move, and 0 carry both. The bucket is therefore UNEMITTABLE in this format, which is strictly stronger than the row's \"unambiguous\". Shell Bell, the other half of the name, is implemented AS drain (`src/gen3/items.rs`, arm `Items::SHELLBELL`, sets `attacking_choice.drain`), so it produces a byte-identical `Heal` -- the ambiguity is real by construction and not by enumeration -- and it is absent from the 13-item universe.",
+      "instruments": [
+        "generation",
+        "pool_move",
+        "dex",
+        "source_trace"
+      ],
+      "ledger_reason_status": "INCOMPLETE",
+      "measurements": {
+        "drain_sets": 3,
+        "gigadrain_species": [
+          "exeggutor",
+          "parasect"
+        ],
+        "pool_drain_moves": [
+          "gigadrain"
+        ],
+        "shellbell": {
+          "exists": true,
+          "gen": 3,
+          "isNonstandard": null
+        },
+        "sleeptalk_sets": 44,
+        "sleeptalk_with_a_drain_move": 0
+      },
+      "row": "R10",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R11": {
+      "candidate": "The `TwoToFiveHits` flat-3.2 approximation",
+      "correction": null,
+      "demonstration": "The pool's `multihit` move set is derived from the dex over all 125 pool moves and is exactly [['bonemerang', '2']] -- one move, whose `multihit` is the SCALAR 2, not a `[2,5]` range. Every `[2,5]` move is therefore 0 of 220. Whole-pool absence, so it is side-independent: no side can use one and no side can be hit by one.",
+      "instruments": [
+        "pool_move",
+        "dex"
+      ],
+      "ledger_reason_status": "SOUND",
+      "measurements": {
+        "bonemerang": [
+          "marowak"
+        ],
+        "multihit": [
+          [
+            "bonemerang",
+            "2"
+          ]
+        ]
+      },
+      "row": "R11",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R12": {
+      "candidate": "Rest's Insomnia / Vital Spirit fail clauses",
+      "correction": null,
+      "demonstration": "PER-SET co-occurrence, which is the instrument section 8 requires for a gap needing two things at once: 55 of 393 sets carry `rest` and 0 of those 55 list Insomnia or Vital Spirit. Rest is `target: self` and the ability is the user's own, so same-side is the CORRECT instrument here and the `target: normal` caution does not apply. Comatose is gen7.",
+      "instruments": [
+        "pool_set_co_occurrence"
+      ],
+      "ledger_reason_status": "SOUND",
+      "measurements": {
+        "rest_sets": 55,
+        "rest_with_insomnia_or_vital_spirit": 0
+      },
+      "row": "R12",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R13": {
+      "candidate": "Belly Drum's Shedinja `maxhp === 1` fail clause",
+      "correction": null,
+      "demonstration": "Shedinja has 1 set, movepool [['agility', 'batonpass', 'hiddenpowerfighting', 'shadowball', 'silverwind', 'toxic']], and 0 of its 1 sets carry `bellydrum` (against 3 Belly Drum sets pool-wide). Belly Drum is `target: self`, so the same-side instrument is the right one. It ships for source parity only.",
+      "instruments": [
+        "pool_set_co_occurrence"
+      ],
+      "ledger_reason_status": "SOUND",
+      "measurements": {
+        "bellydrum_sets": 3,
+        "shedinja_movepool": [
+          [
+            "agility",
+            "batonpass",
+            "hiddenpowerfighting",
+            "shadowball",
+            "silverwind",
+            "toxic"
+          ]
+        ],
+        "shedinja_sets_with_bellydrum": 0
+      },
+      "row": "R13",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R14": {
+      "candidate": "N5 -- the residual ceiling overshooting into a move-KO",
+      "correction": "\u26a0 **The corrected argument still had a hole, in the same cross-side family the row already carries a \u26a0 for.** It rests entirely on Wonder Guard and never asks whether the OPPONENT can take Wonder Guard away. In gen3 the two moves that can are Skill Swap ([] of 220) and Role Play ([]); Gastro Acid, Worry Seed, Entrainment, Simple Beam and Mold Breaker are all gen4+. Both are 0, so the route is closed -- but nothing had closed it until it was measured. Transform is in the pool (['ditto', 'mew'] species) and is not a route either: it copies the target's ability onto the user and does not copy HP. \u26a0 **And the exhaustive type enumeration the row is proud of is VACUOUS.** \"Of the pool's 125 moves, every move that is super-effective against Bug/Ghost is single-hit\" is true, but so is 'every move in the pool except Bonemerang is single-hit' -- the multi-hit census already gave the whole result and the type scan adds nothing. It is kept here (17 moves, all single-hit) as a control, not as the argument. \u26a0 The argument the row does not make is stronger and simpler, and c129 made it: `residual_disjoint_bands` admits a band only under `threshold < ceiling` with `ceiling = defender.hp`, so at `hit_count == 1` the arm deals strictly less than the defender's HP by construction and cannot overshoot into a KO at all; and Shedinja's `hp == 1` makes `0 < threshold < 1` unsatisfiable, so no band is ever built for the one species that motivated the row. \u26a0 Finally, the row says \"the N5 code\" as though there were one site: the same `(threshold + hit_count - 1) / hit_count` ceiling appears TWICE in `src/gen3/generate_instructions.rs`, at `residual_per_hit` and at `crit_residual_per_hit` on the crit-straddle branch, so a reader checking one of them has checked half.",
+      "demonstration": "N5 needs `maxhp <= 47` AND `hit_count > 1`. Over 24,000 generated Pokemon the minimum max HP is 1 and the only species at or below 47 is ['Shedinja']. The pool's only multi-hit move is Bonemerang (Ground); `getEffectiveness('Ground', ['Bug','Ghost'])` is -1 -- resisted, not immune -- so Wonder Guard blocks it. Enumerated exhaustively over the pool's 125 moves: 17 are super-effective against Bug/Ghost and EVERY ONE is single-hit.",
+      "instruments": [
+        "generation",
+        "pool_move",
+        "dex"
+      ],
+      "ledger_reason_status": "INCOMPLETE",
+      "measurements": {
+        "bonemerang_effectiveness": -1,
+        "maxhp_min": 1,
+        "roleplay": [],
+        "skillswap": [],
+        "species_at_or_below_ceiling": {
+          "Shedinja": 106
+        },
+        "super_effective": [
+          [
+            "aerialace",
+            "Flying",
+            null
+          ],
+          [
+            "crunch",
+            "Dark",
+            null
+          ],
+          [
+            "drillpeck",
+            "Flying",
+            null
+          ],
+          [
+            "fireblast",
+            "Fire",
+            null
+          ],
+          [
+            "firepunch",
+            "Fire",
+            null
+          ],
+          [
+            "flamethrower",
+            "Fire",
+            null
+          ],
+          [
+            "hiddenpowerdark",
+            "Dark",
+            null
+          ],
+          [
+            "hiddenpowerfire",
+            "Fire",
+            null
+          ],
+          [
+            "hiddenpowerflying",
+            "Flying",
+            null
+          ],
+          [
+            "hiddenpowerghost",
+            "Ghost",
+            null
+          ],
+          [
+            "hiddenpowerrock",
+            "Rock",
+            null
+          ],
+          [
+            "knockoff",
+            "Dark",
+            null
+          ],
+          [
+            "overheat",
+            "Fire",
+            null
+          ],
+          [
+            "pursuit",
+            "Dark",
+            null
+          ],
+          [
+            "rockslide",
+            "Rock",
+            null
+          ],
+          [
+            "sacredfire",
+            "Fire",
+            null
+          ],
+          [
+            "shadowball",
+            "Ghost",
+            null
+          ]
+        ]
+      },
+      "row": "R14",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R15": {
+      "candidate": "Magic Coat / reflect path, and Ingrain blocking phazing",
+      "correction": null,
+      "demonstration": "`magiccoat`, `ingrain` are each **0 of 220** species. Whole-pool absence, so side-independent. Both ARE in `TRACKED_VOLATILES` (`src/pokezero/showdown.py:4697`) and neither is in `_SUPPORTED_VOLATILES` (`src/pokezero/engine_world.py:94`), so the refusal at `src/pokezero/engine_world.py:1160` genuinely IS keyed to them -- it simply has no producer. The `reflectable: true` flag Roar and Whirlwind carry upstream is inert for want of a Magic Coat user.",
+      "instruments": [
+        "pool_move",
+        "source_trace"
+      ],
+      "ledger_reason_status": "SOUND",
+      "measurements": {
+        "ingrain": [],
+        "magiccoat": []
+      },
+      "row": "R15",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R16": {
+      "candidate": "Dragon Rage and Psywave emit no instructions",
+      "correction": null,
+      "demonstration": "`dragonrage`, `psywave`, `nightshade` are each **0 of 220** species. Whole-pool absence, so side-independent -- these are `target: normal` moves and the verdict holds anyway, because no side has them to use. Night Shade was fixed by the fixed-damage-pipeline patch regardless. The pool's `damage`-flagged move set is exactly ['seismictoss'].",
+      "instruments": [
+        "pool_move",
+        "dex"
+      ],
+      "ledger_reason_status": "SOUND",
+      "measurements": {
+        "dragonrage": [],
+        "fixed_damage": [
+          "seismictoss"
+        ],
+        "nightshade": [],
+        "psywave": []
+      },
+      "row": "R16",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R17": {
+      "candidate": "Eruption / Water Spout one-ULP ordering divergence",
+      "correction": null,
+      "demonstration": "`eruption`, `waterspout` are each **0 of 220** species. Whole-pool absence, side-independent.",
+      "instruments": [
+        "pool_move"
+      ],
+      "ledger_reason_status": "SOUND",
+      "measurements": {
+        "eruption": [],
+        "waterspout": []
+      },
+      "row": "R17",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R18": {
+      "candidate": "Locked-continuation PP on Outrage / Petal Dance / Thrash",
+      "correction": null,
+      "demonstration": "`outrage`, `petaldance`, `thrash` are each **0 of 220** species. The reachable half of that patch is Solar Beam (['exeggutor', 'sunflora', 'tangela', 'victreebel'] species) and Hyper Beam (['slaking']), which is the control that keeps this from being a vacuous absence.",
+      "instruments": [
+        "pool_move"
+      ],
+      "ledger_reason_status": "SOUND",
+      "measurements": {
+        "hyperbeam": [
+          "slaking"
+        ],
+        "outrage": [],
+        "petaldance": [],
+        "solarbeam": [
+          "exeggutor",
+          "sunflora",
+          "tangela",
+          "victreebel"
+        ],
+        "thrash": []
+      },
+      "row": "R18",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R19": {
+      "candidate": "Snore treated as not sleep-usable",
+      "correction": null,
+      "demonstration": "`snore` is each **0 of 220** species. Sleep Talk, the other sleep-usable move, IS in the pool at 44 of 393 sets, so the absence is a fact about Snore and not about sleep moves.",
+      "instruments": [
+        "pool_move"
+      ],
+      "ledger_reason_status": "SOUND",
+      "measurements": {
+        "sleeptalk_sets": 44,
+        "snore": []
+      },
+      "row": "R19",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R2": {
+      "candidate": "Hail, and everything downstream -- the ICE branch of `weather_chips`, hail item/ability interactions, `world_prestate_mismatch:weather_HAIL`",
+      "correction": null,
+      "counter": {
+        "denominator": "boundaries_full_round",
+        "pattern": "world_prestate_mismatch:",
+        "sites": [
+          {
+            "function": "_prepare_boundary",
+            "line": 2753,
+            "loop_depth": 0,
+            "per_game": false
+          }
+        ]
+      },
+      "demonstration": "`hail` is each **0 of 220** species as a move, and the gen3 weather-producer set is ENUMERATED rather than asserted: the only `Dex.mod('gen3')` moves carrying a `weather` field are ['hail', 'raindance', 'sandstorm', 'snowscape', 'sunnyday'], and the only non-`Future` abilities that set weather are Drizzle, Drought and Sand Stream. Snow Warning, the sole hail-setting ability, reports `gen: 4, isNonstandard: 'Future'` -- it does not exist in gen3 at all. NO gen3 item sets weather. Two independent routes, both closed, and the downstream counter is closed with them: `world_prestate_mismatch:` is emitted at `scripts/engine_transition_differential.py:2753` with the suffix taken from the mismatch text, so a `weather_HAIL` suffix requires a HAIL prestate that no route can produce.",
+      "instruments": [
+        "pool_move",
+        "dex",
+        "source_trace"
+      ],
+      "ledger_reason_status": "SOUND",
+      "measurements": {
+        "hail": [],
+        "snowwarning": {
+          "exists": true,
+          "gen": 4,
+          "isNonstandard": "Future"
+        },
+        "weather_setting_moves": {
+          "hail": [
+            "hail"
+          ],
+          "raindance": [
+            "raindance"
+          ],
+          "sandstorm": [
+            "sandstorm"
+          ],
+          "snowscape": [
+            "chillyreception",
+            "snowscape"
+          ],
+          "sunnyday": [
+            "sunnyday"
+          ]
+        }
+      },
+      "row": "R2",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R20": {
+      "candidate": "Low Kick's weight-based base power, which Transform does not copy",
+      "correction": null,
+      "demonstration": "`lowkick` is each **0 of 220** species. Transform IS in the pool (['ditto', 'mew'] species), so the row's second clause is about a reachable copier and an unreachable move, not about two absences.",
+      "instruments": [
+        "pool_move"
+      ],
+      "ledger_reason_status": "SOUND",
+      "measurements": {
+        "lowkick": [],
+        "transform": [
+          "ditto",
+          "mew"
+        ]
+      },
+      "row": "R20",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R21": {
+      "candidate": "Reflect / Light Screen keeping a trailing float position in the damage pipeline",
+      "correction": "\u26a0 **The row flags itself for re-checking and then answers with an assertion.** \"`engine_world` *can construct* screens as side conditions -- but no battle path reaches that state\" is the shape this pass exists to replace, and re-tracing it moves where the closure sits. It is NOT `side_condition_unsupported` (`src/pokezero/engine_world.py:1360`): that fires for a condition OUTSIDE the map, and `reflect`, `lightscreen`, `safeguard` and `mist` are all INSIDE it, with turn counters derived rather than copied. If a screen ever appeared, engine_world would build it. The only thing that keeps it from appearing is the protocol: a mapped condition enters solely through a `|-sidestart|` line, and no pool Pokemon can emit one for a screen -- with no copier route either, since `metronome`, `assist`, `mirrormove`, `mimic`, `sketch`, `naturepower` and `magiccoat` are each 0 and Sleep Talk draws from the user's own slots. `spikes` (['cacturne', 'cloyster', 'deoxysdefense', 'deoxysspeed', 'forretress', 'glalie', 'omastar', 'qwilfish', 'roselia', 'skarmory', 'smeargle'] species) is the live control on the same map. \u26a0 One capability the row does not mention and that is not a battle path: the scenario harness injects arbitrary side conditions at `src/pokezero/local_showdown.py:2005`. No committed scenario under `scenarios/` sets one, so it is the same shape as the row's own parenthetical -- recorded rather than left to be found again.",
+      "demonstration": "`reflect`, `lightscreen`, `safeguard`, `mist` are each **0 of 220** species. No Pokemon in the pool can set a screen, and the construction capability the row flags is traced rather than waved at: `_build_side_spec` maps side conditions through `_SIDE_CONDITION_IDS` (`src/pokezero/engine_world.py:118`), which DOES carry `reflect`, `lightscreen`, `safeguard` and `mist`, and refuses an unmapped one at `:1360`. The values it maps come from `side_payload['sideConditions']`, filled from `replay.side_condition_counts` at `src/pokezero/local_showdown.py:2321`, whose live writer is the `-sidestart` arm of the protocol fold. A screen therefore needs a `|-sidestart|\u2026|move: Reflect` line, which needs a pool Pokemon to use the move. `spikes` is the control: it is the one mapped condition the pool CAN set (['cacturne', 'cloyster', 'deoxysdefense', 'deoxysspeed', 'forretress', 'glalie', 'omastar', 'qwilfish', 'roselia', 'skarmory', 'smeargle'] species), so the map is not dead.",
+      "instruments": [
+        "pool_move",
+        "source_trace"
+      ],
+      "ledger_reason_status": "INCOMPLETE",
+      "measurements": {
+        "lightscreen": [],
+        "mist": [],
+        "reflect": [],
+        "safeguard": [],
+        "spikes": [
+          "cacturne",
+          "cloyster",
+          "deoxysdefense",
+          "deoxysspeed",
+          "forretress",
+          "glalie",
+          "omastar",
+          "qwilfish",
+          "roselia",
+          "skarmory",
+          "smeargle"
+        ]
+      },
+      "row": "R21",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R22": {
+      "candidate": "Mimic, Imprison, Psych Up, Metronome, Assist, Nature Power, Sketch, Mirror Move",
+      "correction": "\u26a0 **Two clauses are wrong, one of them flatly.** (1) \"This closes \u2026 the `failencore` move-list edge cases\" is FALSE. `move_fails_encore` (third_party/poke-engine-gen3-encore-failencore.patch:26, symbol in `src/gen3/generate_instructions.rs`) matches `ENCORE | MIMIC | MIRRORMOVE | SKETCH | STRUGGLE | TRANSFORM`, and R22's eight names cover only three of the six: `encore` is ['alakazam', 'dewgong', 'illumise', 'jumpluff', 'minun', 'mrmime', 'pikachu', 'plusle', 'raichu', 'shuckle', 'smeargle', 'spinda', 'swalot', 'togetic', 'walrein', 'wobbuffet'] of 220 species, `transform` is ['ditto', 'mew'], and Struggle is reachable by PP exhaustion. Half that list is live in ordinary play. **Nothing opens**, and that was checked rather than hoped: the crate's six are exactly the non-`Future` gen3 moves carrying Showdown's `failencore` flag, which is the condition `encore.condition.onStart` actually tests, so the shipped list is right for its three reachable members too. The clause is withdrawn; the patch is not. (2) \"closes `_HIDDEN_INFORMATION_REQUEST_FLAGS`'s `maybeDisabled`/`maybeLocked`\" uses the wrong verb. That frozenset (`src/pokezero/engine_world.py:219`) is a TOLERATE-list: its members are filtered OUT of the refusal binding at `:456`, so those two flags never caused a refusal to begin with. What unreachability protects is a SILENT one -- under Imprison the singles request reports the blocked moves as `disabled: false`, engine_world tolerates the flag, and search would plan a move Showdown rejects.",
+      "demonstration": "`mimic`, `imprison`, `psychup`, `metronome`, `assist`, `naturepower`, `sketch`, `mirrormove` are each **0 of 220** species. Whole-pool absence, side-independent -- which matters for `imprison`, whose producer runs on the FOE (`onFoeDisableMove`), because both teams draw from the same 220-species pool. `maybeDisabled` has exactly one `= true` site in the whole Showdown tree, inside `imprison.condition.onFoeDisableMove`, and gen3 does not override that condition; `maybeLocked` has no `= true` site outside the gen1 partial-trapping mod and in gen3 is definitionally `maybeLocked || maybeDisabled`. G32 closes with `psychup` at 0, because the only in-pool move-caller is Sleep Talk (44 sets) and it selects from the user's OWN move slots.",
+      "instruments": [
+        "pool_move",
+        "source_trace"
+      ],
+      "ledger_reason_status": "FALSE",
+      "measurements": {
+        "assist": [],
+        "encore": [
+          "alakazam",
+          "dewgong",
+          "illumise",
+          "jumpluff",
+          "minun",
+          "mrmime",
+          "pikachu",
+          "plusle",
+          "raichu",
+          "shuckle",
+          "smeargle",
+          "spinda",
+          "swalot",
+          "togetic",
+          "walrein",
+          "wobbuffet"
+        ],
+        "imprison": [],
+        "metronome": [],
+        "mimic": [],
+        "mirrormove": [],
+        "naturepower": [],
+        "psychup": [],
+        "sketch": [],
+        "transform": [
+          "ditto",
+          "mew"
+        ]
+      },
+      "row": "R22",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R23": {
+      "candidate": "Focus Energy, Mud Sport, Water Sport, Taunt, Torment, Disable, Nightmare, Foresight",
+      "correction": "\u26a0 **\"Each 0 of 220 as moves\" is not the whole producer set for two of the eight, and \"cannot fire from play\" is false at the scope it is written.** (1) The `foresight` VOLATILE has a second gen3 move producer, `odorsleuth` (`volatileStatus: 'foresight'`, no condition of its own), also 0 of 220 -- the row checks one move id where two exist, which is the R26 shape. (2) `focusenergy` has a live gen3 NON-MOVE producer: Lansat Berry (`gen: 3`, `onEat` calls `addVolatile('focusenergy')`). A move census cannot see it; what forecloses it is the item universe -- Lansat is not among the 13 the generator returns, and no pool move creates an item. (3) The refusal DOES fire, on this repo's own scenario corpus: `struggle_taunt_stall` is refused with `volatile_unsupported: side 'p1': ['taunt']`, recorded in `docs/belief_edge_case_matrix.md` and in `tests/test_struggle_only_move_state.py`. The correct scope is \"cannot fire from SAMPLED RANDBATS play\"; it is measured live from hand-written Custom Game fixtures. \u26a0 And the enumeration that found (1) and (2) is itself a corrected instrument: a first version walked `Dex.mod('gen3')` and regexed `JSON.stringify` of each ability and item, which DROPS FUNCTIONS and therefore reported that the same-named move is the only producer of all ten -- a scan that could not fail. Both scans are recorded on this row, `by_data` and `by_source`.",
+      "counter": {
+        "denominator": "boundaries_full_round",
+        "pattern": "skip:world_unsupported:",
+        "sites": [
+          {
+            "function": "_prepare_boundary",
+            "line": 2682,
+            "loop_depth": 0,
+            "per_game": false
+          },
+          {
+            "function": "_prepare_boundary",
+            "line": 2697,
+            "loop_depth": 0,
+            "per_game": false
+          }
+        ]
+      },
+      "demonstration": "`focusenergy`, `mudsport`, `watersport`, `taunt`, `torment`, `disable`, `nightmare`, `foresight` are each **0 of 220** species. The refusal IS keyed to them, traced: `_build_side_spec` reads the token list at `src/pokezero/engine_world.py:1062`, subtracts `supported` at `:1158` and raises at `:1160`. The tokens that can appear are exactly `TRACKED_VOLATILES` (`src/pokezero/showdown.py:4697`, enforced at `:4908`, carried into the payload at `src/pokezero/local_showdown.py:2250`), all eight are members, and none is admitted by `_SUPPORTED_VOLATILES` (`src/pokezero/engine_world.py:94`) or by any contextual expansion -- so each WOULD raise if it ever appeared.",
+      "instruments": [
+        "pool_move",
+        "dex",
+        "generation",
+        "source_trace"
+      ],
+      "ledger_reason_status": "FALSE",
+      "measurements": {
+        "distinct_items": 13,
+        "lansatberry": {
+          "exists": true,
+          "gen": 3,
+          "isNonstandard": null
+        },
+        "odorsleuth": [],
+        "volatile_producers_by_data": {
+          "attract": [
+            "attract"
+          ],
+          "disable": [
+            "disable"
+          ],
+          "focusenergy": [
+            "focusenergy"
+          ],
+          "foresight": [
+            "foresight",
+            "odorsleuth"
+          ],
+          "imprison": [
+            "imprison"
+          ],
+          "mudsport": [
+            "mudsport"
+          ],
+          "nightmare": [
+            "nightmare"
+          ],
+          "taunt": [
+            "taunt"
+          ],
+          "torment": [
+            "torment"
+          ],
+          "watersport": [
+            "watersport"
+          ]
+        },
+        "volatile_producers_by_source": {
+          "attract": [
+            "data/abilities.ts:792",
+            "data/items.ts:1399",
+            "data/mods/gen3/abilities.ts:7",
+            "data/moves.ts:6846"
+          ],
+          "disable": [
+            "data/abilities.ts:779"
+          ],
+          "focusenergy": [
+            "data/items.ts:3263",
+            "sim/battle-actions.ts:1549"
+          ],
+          "foresight": [],
+          "imprison": [],
+          "mudsport": [],
+          "nightmare": [],
+          "taunt": [],
+          "torment": [
+            "data/moves.ts:7053"
+          ],
+          "watersport": []
+        }
+      },
+      "row": "R23",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R24": {
+      "candidate": "Attract as a *move*",
+      "correction": "\u26a0 Two scope notes the row's phrasing invites a reader to get wrong. `attract` is a MEMBER of `_SUPPORTED_VOLATILES` (`src/pokezero/engine_world.py:94`), so the volatile is expressed and searched, not refused -- unlike the eight in R23, which is the neighbouring row. And \"reachable only through Cute Charm\" is randbats-scoped: the scenario corpus produces it from the move itself (`attract_snorlax`).",
+      "demonstration": "`attract` is each **0 of 220** species. The gen3 producers of the `attract` VOLATILE are enumerated: the move (0), the ability Cute Charm (gen3, in pool on ['clefable', 'delcatty', 'wigglytuff']), the item Destiny Knot (gen4) and G-Max Cuddle (gen8). Baton Pass cannot move it -- the condition carries `noCopy: true`. So the volatile is reachable only through Cute Charm, which is G37's correctly-scoped row.",
+      "instruments": [
+        "pool_move",
+        "pool_ability",
+        "dex",
+        "source_trace"
+      ],
+      "ledger_reason_status": "INCOMPLETE",
+      "measurements": {
+        "attract": [],
+        "cute_charm": [
+          "clefable",
+          "delcatty",
+          "wigglytuff"
+        ],
+        "producers": [
+          "data/abilities.ts:792",
+          "data/items.ts:1399",
+          "data/mods/gen3/abilities.ts:7",
+          "data/moves.ts:6846"
+        ]
+      },
+      "row": "R24",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R25": {
+      "candidate": "Sleep Talk calling Haze / Psych Up / Roar / Whirlwind / Baton Pass",
+      "correction": null,
+      "demonstration": "PER-SET co-occurrence on this `sets.json`: 44 of 393 sets carry `sleeptalk` and 0 of those 44 also carry any of the five. Sleep Talk selects from the USER'S OWN move slots, so same-side co-occurrence is the correct instrument and a whole-pool count would be the wrong one. Measured on this file, not carried from the crate's three-universe count.",
+      "instruments": [
+        "pool_set_co_occurrence"
+      ],
+      "ledger_reason_status": "SOUND",
+      "measurements": {
+        "paired": 0,
+        "sleeptalk_sets": 44
+      },
+      "row": "R25",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R26": {
+      "candidate": "Trick-style item acquisition reaching White Herb",
+      "correction": "Withdrawn and reclassified REACHABLE at G49 before this pass. Carried here with no verdict of its own because an inventory that silently drops a name is how a 'closed' row turns out to be a fourth category in disguise -- and because R6, R10 and R27 were still resting on the generation-time argument R26 died of, which is what this pass found.",
+      "demonstration": null,
+      "instruments": [],
+      "ledger_reason_status": "FALSE",
+      "measurements": {
+        "knockoff": [
+          "banette",
+          "hariyama",
+          "lickitung",
+          "sableye"
+        ],
+        "trick": [
+          "furret",
+          "kecleon"
+        ]
+      },
+      "row": "R26",
+      "verdict": "WITHDRAWN_BEFORE_THIS_PASS"
+    },
+    "R27": {
+      "candidate": "Quick Claw, King's Rock, Bright Powder, Lax Incense, Focus Band, Scope Lens, Berry Juice, the status berries, and every type-boosting item outside the 13",
+      "correction": "\u26a0 Same missing runtime clause as R6 and R10, and it matters most here because this row is the one the ledger uses to retire a whole block of mechanics at once. A 13-item generation census bounds what a team STARTS with. It is closed in play as well, measured: `trick` (['furret', 'kecleon'] of 220) swaps and `knockoff` (['banette', 'hariyama', 'lickitung', 'sableye']) removes, `thief`/`covet`/`recycle`/`switcheroo`/`bugbite` are each 0, and no gen3 mechanism creates an item -- so no fourteenth item can appear mid-battle.",
+      "demonstration": "The universe is 13 items over 24,000 generated Pokemon under a second seed scheme: ['Choice Band', 'Leftovers', 'Liechi Berry', 'Light Ball', 'Lum Berry', 'Petaya Berry', 'Salac Berry', 'Silk Scarf', 'Soul Dew', 'Stick', 'Thick Club', 'Twisted Spoon', 'White Herb']. Every item the row names is absent from it, and each exists in the gen3 dex, so the closure is the generator's rather than the dex's. What it retires is stated positively: no priority randomness, no item-sourced flinch, no evasion or crit item, no HP-restoring berry, no item-sourced heal-on-damage.",
+      "instruments": [
+        "generation",
+        "dex",
+        "pool_move"
+      ],
+      "ledger_reason_status": "INCOMPLETE",
+      "measurements": {
+        "distinct_items": 13,
+        "items": [
+          "Choice Band",
+          "Leftovers",
+          "Liechi Berry",
+          "Light Ball",
+          "Lum Berry",
+          "Petaya Berry",
+          "Salac Berry",
+          "Silk Scarf",
+          "Soul Dew",
+          "Stick",
+          "Thick Club",
+          "Twisted Spoon",
+          "White Herb"
+        ],
+        "named_absent": {
+          "aspearberry": {
+            "exists": true,
+            "gen": 3,
+            "isNonstandard": null
+          },
+          "berryjuice": {
+            "exists": true,
+            "gen": 2,
+            "isNonstandard": "Unobtainable"
+          },
+          "brightpowder": {
+            "exists": true,
+            "gen": 2,
+            "isNonstandard": null
+          },
+          "cheriberry": {
+            "exists": true,
+            "gen": 3,
+            "isNonstandard": null
+          },
+          "chestoberry": {
+            "exists": true,
+            "gen": 3,
+            "isNonstandard": null
+          },
+          "focusband": {
+            "exists": true,
+            "gen": 2,
+            "isNonstandard": null
+          },
+          "kingsrock": {
+            "exists": true,
+            "gen": 2,
+            "isNonstandard": null
+          },
+          "lansatberry": {
+            "exists": true,
+            "gen": 3,
+            "isNonstandard": null
+          },
+          "laxincense": {
+            "exists": true,
+            "gen": 3,
+            "isNonstandard": null
+          },
+          "leppaberry": {
+            "exists": true,
+            "gen": 3,
+            "isNonstandard": null
+          },
+          "oranberry": {
+            "exists": true,
+            "gen": 3,
+            "isNonstandard": null
+          },
+          "pechaberry": {
+            "exists": true,
+            "gen": 3,
+            "isNonstandard": null
+          },
+          "persimberry": {
+            "exists": true,
+            "gen": 3,
+            "isNonstandard": null
+          },
+          "quickclaw": {
+            "exists": true,
+            "gen": 2,
+            "isNonstandard": null
+          },
+          "rawstberry": {
+            "exists": true,
+            "gen": 3,
+            "isNonstandard": null
+          },
+          "scopelens": {
+            "exists": true,
+            "gen": 2,
+            "isNonstandard": null
+          },
+          "shellbell": {
+            "exists": true,
+            "gen": 3,
+            "isNonstandard": null
+          },
+          "sitrusberry": {
+            "exists": true,
+            "gen": 3,
+            "isNonstandard": null
+          }
+        }
+      },
+      "row": "R27",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R3": {
+      "candidate": "Rain Dish's `maxhp/16` rain heal and its missing `ResidualPlan` slot",
+      "correction": null,
+      "demonstration": "Rain Dish is **0 of 393 sets**, and the check is made at the SPECIES level too because a set list is an upper bound on nothing here: the gen3 species carrying Rain Dish are ['Lombre', 'Lotad', 'Ludicolo'], of which only ['Ludicolo'] is in the pool at all, and 0 of Ludicolo's 1 sets list Rain Dish. Trace is the only pool mechanism that can import an ability a set does not list and it COPIES THE OPPONENT'S, so it cannot manufacture one absent from the whole pool.",
+      "instruments": [
+        "pool_ability",
+        "dex",
+        "generation"
+      ],
+      "ledger_reason_status": "SOUND",
+      "measurements": {
+        "gen3_carriers": {
+          "all": [
+            "Lombre",
+            "Lotad",
+            "Ludicolo"
+          ],
+          "in_pool": [
+            "Ludicolo"
+          ]
+        },
+        "rain_dish_sets": 0,
+        "trace_species": [
+          "gardevoir",
+          "porygon2"
+        ]
+      },
+      "row": "R3",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R4": {
+      "candidate": "Weather-expiry sand/hail chip truncation",
+      "correction": "\u26a0 **The row's sentence \"The expiry path has no trigger\" is FALSE.** The order-8 decrement-and-clear block fires on every Rain Dance (['gorebyss', 'huntail', 'kingdra', 'ludicolo', 'mantine', 'omastar', 'seaking'] species) and Sunny Day (['exeggutor', 'sunflora', 'tangela', 'victreebel']), and `weather_survives_upkeep` evaluates FALSE on their expiring turn -- the expiry path is exercised in ordinary play. What has no trigger is the narrower thing the row is titled after: a chipping weather with a FINITE counter. Rain and sun do not chip; sand and hail are the only chipping weathers and neither can hold a finite counter in this pool. The verdict survives; the sentence that carried it does not. Two neighbouring over-readings are corrected with it: permanent (`-1`) weather is NOT Tyranitar-only -- Kyogre's Drizzle and Groudon's Drought write it too -- and the payload-seeding lane cannot inject finite sand either, but by a different mechanism the row does not cite: `_weather_fields` returns `-1` only under `weatherFromAbility`, and a prefix that saw only `[upkeep]` lines fails closed at `weather_turns_unknown` rather than fabricating a counter.",
+      "demonstration": "`sandstorm`, `hail` are each **0 of 220** species as moves, so the only sand writer left is Sand Stream -- carried by ['tyranitar'] alone, on all 3 of its 3 sets -- which writes `WEATHER_ABILITY_TURNS = -1` (`src/gen3/abilities.rs`, symbol `ability_on_switch_in`, arm `Abilities::SANDSTREAM`). The expiry block in `add_end_of_turn_instructions` is guarded on `state.weather.turns_remaining > 0`, which `-1` fails, so permanent sand is never decremented and never reaches the `== 0` clear. The chip gate is a SEPARATE expression, `weather_survives_upkeep = turns_remaining != 1`, and `weather_chips` returns `Some` only for HAIL or SAND -- so `turns_remaining == 1` and a chipping weather cannot coincide.",
+      "instruments": [
+        "pool_move",
+        "pool_ability",
+        "source_trace"
+      ],
+      "ledger_reason_status": "FALSE",
+      "measurements": {
+        "hail": [],
+        "raindance": [
+          "gorebyss",
+          "huntail",
+          "kingdra",
+          "ludicolo",
+          "mantine",
+          "omastar",
+          "seaking"
+        ],
+        "sand_stream_species": [
+          "tyranitar"
+        ],
+        "sandstorm": [],
+        "sunnyday": [
+          "exeggutor",
+          "sunflora",
+          "tangela",
+          "victreebel"
+        ]
+      },
+      "row": "R4",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R5": {
+      "candidate": "Dry Skin's rain heal at order 10.3",
+      "correction": null,
+      "demonstration": "`Dex.mod('gen3').abilities.get('dryskin')` reports `gen: 4, isNonstandard: 'Future'` -- it does not exist in gen3, which is stronger than 'dead code for gen3 randbats' because it closes the format change as well. Measured 0 of 393 sets for completeness.",
+      "instruments": [
+        "dex",
+        "pool_ability"
+      ],
+      "ledger_reason_status": "SOUND",
+      "measurements": {
+        "dry_skin_sets": 0,
+        "dryskin": {
+          "exists": true,
+          "gen": 4,
+          "isNonstandard": "Future"
+        }
+      },
+      "row": "R5",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R6": {
+      "candidate": "Sitrus Berry, and the monotonicity break it causes in the residual mirror's bisection",
+      "correction": "\u26a0 **The stated reason is a GENERATION-TIME argument and the row needs a RUNTIME one too.** \"`getItem` cannot return it\" says what a team starts with and nothing about acquisition in play -- which is the exact gap that made R26 wrong, in this document, about this mechanic, one row after this one. Closed here by measurement: `trick` is ['furret', 'kecleon'] of 220 species and `knockoff` ['banette', 'hariyama', 'lickitung', 'sableye'], and both only SWAP or REMOVE; `thief`, `covet`, `recycle`, `switcheroo` and `bugbite` are each 0, and no gen3 mechanism CREATES an item. A closed set of 13 stays closed under permutation and deletion, so Sitrus cannot enter mid-battle either.",
+      "demonstration": "The item universe is measured, not read: 24,000 generated Pokemon under a second seed scheme ([1, 2, 3, i] for i in range(4000)) carry exactly 13 distinct items, and Sitrus Berry is not among them, reproducing section 1.3's 13 under a scheme section 8 requires presence facts to survive. Sitrus DOES exist in gen3 (`gen: 3`), so the closure is the generator's, not the dex's.",
+      "instruments": [
+        "generation",
+        "pool_move",
+        "dex"
+      ],
+      "ledger_reason_status": "INCOMPLETE",
+      "measurements": {
+        "bugbite": [],
+        "covet": [],
+        "distinct_items": 13,
+        "items": [
+          "Choice Band",
+          "Leftovers",
+          "Liechi Berry",
+          "Light Ball",
+          "Lum Berry",
+          "Petaya Berry",
+          "Salac Berry",
+          "Silk Scarf",
+          "Soul Dew",
+          "Stick",
+          "Thick Club",
+          "Twisted Spoon",
+          "White Herb"
+        ],
+        "knockoff": [
+          "banette",
+          "hariyama",
+          "lickitung",
+          "sableye"
+        ],
+        "recycle": [],
+        "sitrusberry": {
+          "exists": true,
+          "gen": 3,
+          "isNonstandard": null
+        },
+        "switcheroo": [],
+        "thief": [],
+        "trick": [
+          "furret",
+          "kecleon"
+        ]
+      },
+      "row": "R6",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R7": {
+      "candidate": "`nature_not_neutral`",
+      "correction": "\u26a0 **The stated reason is HALF the demonstration, and the missing half is load-bearing in the opposite direction.** \"Generated sets carry no nature field at all\" is true and measured, but on its own it does not close the refusal -- it would OPEN it, because an absent field makes `mon.nature` falsy and `nature` the empty string. What closes it is that `\"\"` is a MEMBER of `_NEUTRAL_NATURES` (`src/pokezero/engine_world.py:54`). Without that membership the refusal would fire on every Pokemon in every battle. \u26a0 Second, the row's instrument is the generator, and the generator is not the only producer that reaches the guard. `_build_pokemon_spec` has a SECOND caller that never touches a packed team at all (`src/pokezero/engine_fidelity.py:210`), and `scenario_studio` parses `nature` out of scenario JSON with no vocabulary check and hands it to `FixturePokemon` at `src/pokezero/scenario_studio/domain.py:424`. Neither can fire today -- the fidelity fixtures pass no `nature=`, and the scenario-studio service never builds an engine world -- but for reasons the row does not state, so the pool measurement alone does not carry it.",
+      "counter": {
+        "denominator": "boundaries_full_round",
+        "pattern": "skip:world_unsupported:",
+        "sites": [
+          {
+            "function": "_prepare_boundary",
+            "line": 2682,
+            "loop_depth": 0,
+            "per_game": false
+          },
+          {
+            "function": "_prepare_boundary",
+            "line": 2697,
+            "loop_depth": 0,
+            "per_game": false
+          }
+        ]
+      },
+      "demonstration": "`_build_pokemon_spec` raises at `src/pokezero/engine_world.py:1758` when `normalize_id(mon.nature)` (read at `:1756`) is outside `_NEUTRAL_NATURES` (`:54`). `mon` is a `FixturePokemon` and the production path builds it in `unpack_pokemon` from field 6 of the PACKED TEAM STRING at `src/pokezero/engine_world.py:304` -- the differential's own `scripts/engine_transition_differential.py:2396` hands it `true_teams[slot]['packed']` from the bridge snapshot. Natures are unset on 24,000 of 24,000 generated Pokemon, so field 6 is empty and `nature` is `\"\"`.",
+      "instruments": [
+        "generation",
+        "source_trace"
+      ],
+      "ledger_reason_status": "INCOMPLETE",
+      "measurements": {
+        "nature_unset": 24000,
+        "pokemon": 24000
+      },
+      "row": "R7",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R8": {
+      "candidate": "`weather_unsupported`",
+      "correction": "\u26a0 **The stated reason names the wrong side of the mapping, and it survives only by coincidence.** \"All four gen3 weathers are in `_WEATHER_IDS` (`rain`, `sun`, `sand`, `hail`)\" reads as a claim about the dict's VALUES; the lookup at `src/pokezero/engine_world.py:942` uses its KEYS. The four strings named happen to be keys as well -- they are the engine-side ALIASES -- so the membership sentence is technically true. It is still not the demonstration, because **three of the four strings it names are never what the lookup receives.** The seven keys (`src/pokezero/engine_world.py:57`) are `raindance, rain, sunnyday, sun, sandstorm, sand, hail`, and the protocol only ever produces the condition-name forms, which normalise to `raindance`, `sunnyday`, `sandstorm`, `hail`. The closure rests on the three ALIAS keys the sentence does not mention; a map holding only the four it does name would refuse every rain, sun and sand battle. \u26a0 Second, \"all four gen3 weathers\" is broader than the pool: hail is unreachable (R2), so only three can ever occur, and the one lane with no Python-side vocabulary check -- the scenario seed at `src/pokezero/local_showdown.py:2056` -- is closed by the bridge's `SCENARIO_WEATHER_IDS` allow-list, a different mechanism the row does not cite.",
+      "counter": {
+        "denominator": "boundaries_full_round",
+        "pattern": "skip:world_unsupported:",
+        "sites": [
+          {
+            "function": "_prepare_boundary",
+            "line": 2682,
+            "loop_depth": 0,
+            "per_game": false
+          },
+          {
+            "function": "_prepare_boundary",
+            "line": 2697,
+            "loop_depth": 0,
+            "per_game": false
+          }
+        ]
+      },
+      "demonstration": "`_weather_fields` raises at `src/pokezero/engine_world.py:944` when `_WEATHER_IDS.get(weather_id)` (`:942`) misses. `weather_id` is `normalize_id(str(payload['weather']))`; the payload key is filled from `replay.weather` at `src/pokezero/local_showdown.py:2356`, whose only writer is `_update_weather` at `src/pokezero/showdown.py:5255`, which returns `_normalize_identifier(parts[2])` (`:8005`, `re.sub(r'[^a-z0-9]+', '', lower())`) of the second field of a `|-weather|` line. Showdown emits the CONDITION NAME there -- `RainDance`, `SunnyDay`, `Sandstorm`, `Hail`, or `none` -- so the four reachable ids are exactly `raindance`, `sunnyday`, `sandstorm`, `hail`, and `none` is early-returned before the lookup. All four are KEYS of `_WEATHER_IDS`, so the lookup cannot miss.",
+      "instruments": [
+        "source_trace",
+        "dex"
+      ],
+      "ledger_reason_status": "INCOMPLETE",
+      "measurements": {
+        "protocol_forms": [
+          "RainDance",
+          "SunnyDay",
+          "Sandstorm",
+          "Hail",
+          "none"
+        ],
+        "reachable_ids": [
+          "raindance",
+          "sunnyday",
+          "sandstorm"
+        ],
+        "weather_id_keys": [
+          "hail",
+          "rain",
+          "raindance",
+          "sand",
+          "sandstorm",
+          "sun",
+          "sunnyday"
+        ]
+      },
+      "row": "R8",
+      "verdict": "UNREACHABLE_TRACED"
+    },
+    "R9": {
+      "candidate": "Liquid Ooze mislabelled by the residual-heal renderer",
+      "correction": "\u26a0 **The row's second sentence is FALSE and is a NON SEQUITUR from its first.** \"The Liquid Ooze guard inside `residual_heal_cause` is therefore dead code\" does not follow from the negative-heal interception, because the guard is not in a negative-heal branch. It is the conjunct `ability != Abilities::LIQUIDOOZE` at `rust/pokezero-search/src/events.rs:5685`, inside the LEECHSEED arm, which only runs on a POSITIVE heal -- exactly the heals the interception lets through. `residual_heal_cause` takes no heal amount at all (`(state, side, next_ins)`), so the sign of the heal is not a fact it can see. It is not dead in the literal sense either: the crate PINS it, at `rust/pokezero-search/src/events.rs:9171`, with a positive heal of 6 and no Leftovers, and that pin's own note records that it exists because deleting the guard once left the suite green. What actually forecloses the conjunct IN THIS FORMAT is the two EARLIER returns plus the item universe: a resolving Wish returns at `:5638` and a Leftovers holder at `:5679`, so the conjunct is only consulted for a positive residual heal on a side holding NEITHER -- and the engine's residual heal producers are Leftovers, Sitrus (outside the 13-item universe, R6), Wish (already returned) and the Leech Seed drain, which under Liquid Ooze is NEGATIVE and intercepted. That enumeration, not the interception, is the demonstration. \u26a0 Two further scope errors in the same cell. The row says \"what makes this row UNREACHABLE is the renderer interception ALONE\": there are THREE ooze-aware sites, not one. The residual plan's own conjunct at `rust/pokezero-search/src/events.rs:5478` is separately pinned in both directions and is live. And the MOVE-PHASE ooze path is a different renderer with its own interception at `rust/pokezero-search/src/events.rs:3284`, which is genuinely REACHABLE -- `gigadrain` on ['exeggutor', 'parasect'] against Liquid Ooze on ['swalot', 'tentacruel'] -- so the mechanic half of this row survives only because that renderer handles it too, which the row does not say. `reports/c131` \u00a75 carries the same false sentence and is corrected by reference.",
+      "demonstration": "`render_residual_instruction` (`rust/pokezero-search/src/events.rs:4978`) intercepts a negative `Instruction::Heal` at `:5006` and renders it as `|-damage|\u2026|[from] ability: Liquid Ooze` in the THEN arm; `plan.take(side, true)` and the `residual_heal_cause` fallback (`:5015`) are the ELSE arm, and `residual_heal_cause` (`:5624`) has exactly ONE call site in the crate. So the drain-reversal damage can never be labelled by the fallback, which is what the row's headline gap needed. Liquid Ooze itself IS reachable -- ['swalot', 'tentacruel'] carry it, `leechseed` is ['bellossom', 'cacturne', 'celebi', 'exeggutor', 'jumpluff', 'meganium', 'sceptile', 'shiftry', 'sunflora', 'tangela', 'tropius', 'venusaur'] of 220 and both moves are `target: normal`, so the seeder-versus-holder pairing is cross-side and ordinary.",
+      "instruments": [
+        "pool_ability",
+        "pool_move",
+        "source_trace"
+      ],
+      "ledger_reason_status": "FALSE",
+      "measurements": {
+        "gigadrain": [
+          "exeggutor",
+          "parasect"
+        ],
+        "leechseed": [
+          "bellossom",
+          "cacturne",
+          "celebi",
+          "exeggutor",
+          "jumpluff",
+          "meganium",
+          "sceptile",
+          "shiftry",
+          "sunflora",
+          "tangela",
+          "tropius",
+          "venusaur"
+        ],
+        "liquid_ooze": [
+          "swalot",
+          "tentacruel"
+        ]
+      },
+      "row": "R9",
+      "verdict": "UNREACHABLE_TRACED"
+    }
+  }
+}
