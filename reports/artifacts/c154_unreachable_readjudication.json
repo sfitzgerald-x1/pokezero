@@ -1024,7 +1024,7 @@
       ]
     }
   },
-  "source_commit": "2603f177186b233e9ebfcdcb42fa0d25e976a7f1",
+  "source_commit": "8e694f81f4490d6255ced42814a3c07f7dc6d4a6",
   "verdicts": {
     "R1": {
       "candidate": "Future Sight / Doom Desire -- residual order 11 and the `future_sight_pending` refusal",
@@ -1047,7 +1047,7 @@
           }
         ]
       },
-      "demonstration": "`_reject_unsupported_globals` raises at `src/pokezero/engine_world.py:1112` when `payload['futureSight']` has any nonzero value. THE PAYLOAD IS NOT THE DIFFERENTIAL'S: `world_battle_spec` builds its own at `src/pokezero/engine_world.py:1069` and reaches the guard at `:424`, and `_public_materialization_payload` fills the key from `replay.future_sight` at `src/pokezero/local_showdown.py:2363`. That mapping has exactly one writer, `_update_future_sight` at `src/pokezero/showdown.py:5086`, gated at `:5079` on the protocol effect id being in `_FUTURE_MOVES` = `{futuresight, doomdesire}`. Both are 0 of 220 species, so the mapping is EMPTY for every gen3 randbats battle and an empty dict makes `any(...)` false -- the guard cannot fire FOR ANY CALLER of `world_battle_spec`. Residual order 11 has the same single trigger class.",
+      "demonstration": "`_reject_unsupported_globals` raises at `src/pokezero/engine_world.py:1112` when `payload['futureSight']` has any nonzero value. THE PAYLOAD IS NOT THE DIFFERENTIAL'S: `world_battle_spec` builds its own at `src/pokezero/engine_world.py:1069` and reaches the guard at `:424`, and `_public_materialization_payload` fills the key from `replay.future_sight` at `src/pokezero/local_showdown.py:2363`. That mapping has exactly one writer, `_update_future_sight` at `src/pokezero/showdown.py:5088`, gated at `:5081` on the protocol effect id being in `_FUTURE_MOVES` = `{futuresight, doomdesire}`. Both are 0 of 220 species, so the mapping is EMPTY for every gen3 randbats battle and an empty dict makes `any(...)` false -- the guard cannot fire FOR ANY CALLER of `world_battle_spec`. Residual order 11 has the same single trigger class.",
       "foreclosure": "RANDBATS_POPULATION",
       "foreclosure_note": "constructible from committed code -- `golden_corpus_scenarios.py`'s `future_sight_pending` spec -- and foreclosed only by which spec list the harnesses default to",
       "instruments": [
@@ -1278,7 +1278,7 @@
     "R15": {
       "candidate": "Magic Coat / reflect path, and Ingrain blocking phazing",
       "correction": null,
-      "demonstration": "`magiccoat`, `ingrain` are each **0 of 220** species. Whole-pool absence, so side-independent. Both ARE in `TRACKED_VOLATILES` (`src/pokezero/showdown.py:4836`) and neither is in `_SUPPORTED_VOLATILES` (`src/pokezero/engine_world.py:121`), so the refusal at `src/pokezero/engine_world.py:1393` genuinely IS keyed to them -- it simply has no producer. The `reflectable: true` flag Roar and Whirlwind carry upstream is inert for want of a Magic Coat user.",
+      "demonstration": "`magiccoat`, `ingrain` are each **0 of 220** species. Whole-pool absence, so side-independent. Both ARE in `TRACKED_VOLATILES` (`src/pokezero/showdown.py:4838`) and neither is in `_SUPPORTED_VOLATILES` (`src/pokezero/engine_world.py:121`), so the refusal at `src/pokezero/engine_world.py:1393` genuinely IS keyed to them -- it simply has no producer. The `reflectable: true` flag Roar and Whirlwind carry upstream is inert for want of a Magic Coat user.",
       "foreclosure": "ALL_CALLERS",
       "foreclosure_note": null,
       "instruments": [
@@ -1549,7 +1549,7 @@
           }
         ]
       },
-      "demonstration": "`focusenergy`, `mudsport`, `watersport`, `taunt`, `torment`, `disable`, `nightmare`, `foresight` are each **0 of 220** species. The refusal IS keyed to them, traced: `_build_side_spec` reads the token list at `src/pokezero/engine_world.py:1254`, subtracts `supported` at `:1391` and raises at `:1393`. The tokens that can appear are exactly `TRACKED_VOLATILES` (`src/pokezero/showdown.py:4836`, enforced at `:5047`, carried into the payload at `src/pokezero/local_showdown.py:2254`), all eight are members, and none is admitted by `_SUPPORTED_VOLATILES` (`src/pokezero/engine_world.py:121`) or by any contextual expansion -- so each WOULD raise if it ever appeared.",
+      "demonstration": "`focusenergy`, `mudsport`, `watersport`, `taunt`, `torment`, `disable`, `nightmare`, `foresight` are each **0 of 220** species. The refusal IS keyed to them, traced: `_build_side_spec` reads the token list at `src/pokezero/engine_world.py:1254`, subtracts `supported` at `:1391` and raises at `:1393`. The tokens that can appear are exactly `TRACKED_VOLATILES` (`src/pokezero/showdown.py:4838`, enforced at `:5049`, carried into the payload at `src/pokezero/local_showdown.py:2254`), all eight are members, and none is admitted by `_SUPPORTED_VOLATILES` (`src/pokezero/engine_world.py:121`) or by any contextual expansion -- so each WOULD raise if it ever appeared.",
       "foreclosure": "RANDBATS_POPULATION",
       "foreclosure_note": "`volatile_unsupported: side 'p1': ['taunt']` FIRES today on the scenario corpus (`struggle_taunt_stall`); the counter is already filed REACHABLE at H5b",
       "instruments": [
@@ -2022,7 +2022,7 @@
           }
         ]
       },
-      "demonstration": "`_weather_fields` raises at `src/pokezero/engine_world.py:1130` when `_WEATHER_IDS.get(weather_id)` (`:1128`) misses. `weather_id` is `normalize_id(str(payload['weather']))`; the payload key is filled from `replay.weather` at `src/pokezero/local_showdown.py:2360`, whose only writer is `_update_weather` at `src/pokezero/showdown.py:5406`, which returns `_normalize_identifier(parts[2])` (`:8156`, `re.sub(r'[^a-z0-9]+', '', lower())`) of the second field of a `|-weather|` line. Showdown emits the CONDITION NAME there -- `RainDance`, `SunnyDay`, `Sandstorm`, `Hail`, or `none` -- so the four reachable ids are exactly `raindance`, `sunnyday`, `sandstorm`, `hail`, and `none` is early-returned before the lookup. All four are KEYS of `_WEATHER_IDS`, so the lookup cannot miss.",
+      "demonstration": "`_weather_fields` raises at `src/pokezero/engine_world.py:1130` when `_WEATHER_IDS.get(weather_id)` (`:1128`) misses. `weather_id` is `normalize_id(str(payload['weather']))`; the payload key is filled from `replay.weather` at `src/pokezero/local_showdown.py:2360`, whose only writer is `_update_weather` at `src/pokezero/showdown.py:5408`, which returns `_normalize_identifier(parts[2])` (`:8158`, `re.sub(r'[^a-z0-9]+', '', lower())`) of the second field of a `|-weather|` line. Showdown emits the CONDITION NAME there -- `RainDance`, `SunnyDay`, `Sandstorm`, `Hail`, or `none` -- so the four reachable ids are exactly `raindance`, `sunnyday`, `sandstorm`, `hail`, and `none` is early-returned before the lookup. All four are KEYS of `_WEATHER_IDS`, so the lookup cannot miss.",
       "foreclosure": "ALL_CALLERS",
       "foreclosure_note": null,
       "instruments": [
