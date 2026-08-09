@@ -145,6 +145,15 @@ jobs:
             reports/c138_known_gaps_ledger.md
             tests/test_ledger_table_uniformity.py
             reports/artifacts/c150_band_split_trade_census.json
+            # C155's terminal-disposition register and its pin. Listed for the reason every
+            # pin file and document above is listed: `mass-gate` is the only job that runs
+            # the pin, so without these two lines a PR whose only change is deleting or
+            # editing the register matches no filter, skips this job and goes green. The
+            # register is the document an owner reads to decide whether
+            # `RATIFIED_SWEEP_PRECONDITION` holds, which makes an unrun pin on it the
+            # single worst place in this file for the gap the C152 block above records.
+            reports/c155_terminal_disposition_register.md
+            tests/test_terminal_disposition_register.py
             # The coverage-bound pins' ENTIRE input. Without these listed, a PR whose
             # only change is deleting one of them skips mass-gate and goes green.
             reports/artifacts/c131_leechseed_main_dev_sweep.json
@@ -888,6 +897,63 @@ jobs:
           # assertion into an unverified matcher.
           if ! grep -qE '^OK$' /tmp/ledgertables.log; then
             echo "::error::ledger table-uniformity pins did not report a clean OK"
+            exit 1
+          fi
+
+      # C155. The terminal-disposition register. `RATIFIED_SWEEP_PRECONDITION` gates the
+      # program's one terminal measurement on "the ledger is terminal AND the engine
+      # fingerprint is declared frozen", and the list of what stands between here and that
+      # had been RECONSTRUCTED three times by three agents with different numbering each
+      # time. This step is what makes the committed version a maintained document rather
+      # than a fourth reconstruction: the item inventory is exact and ORDERED (ids are
+      # permanent, so a renumbering is red), the statuses are re-derived in BOTH directions
+      # -- flipping an OPEN item to discharged manufactures terminality and flipping the
+      # discharged one to OPEN manufactures openness, and both fail -- and every figure in
+      # its Appendix A is re-derived from tracked bytes, committed artifacts and anchors
+      # resolved with uniqueness required, imported from C153's census rather than copied.
+      #
+      # Battery: 53 mutations applied, 53 caught, plus
+      # one NEGATIVE CONTROL verified green, listed in the module docstring -- a
+      # MUTATION count, not the test count, which a first revision of this comment conflated
+      # by writing the module's 34 tests here. SIXTEEN of the 53 are applied only to the tree
+      # and never to the document, because a pin that reads a document against a hard-coded
+      # copy of itself passes every document-side mutation; the first revision claimed ten
+      # and two of those ten edited the register. Exact count, not a floor, per #1163.
+      #
+      # ⚠ #1205: the guard scan added in #1204 does not cover every guard here, so do not
+      # assume it will catch a drift in this one. MEASURED, and the denominator is
+      # EXECUTABLE sites -- one line in this file carrying the invocation is a comment and
+      # is not a guard. Merged tree: 26 executable, 22 resolved, 4 unresolved; this step IS
+      # one of the 22, deriving 42 from the module's AST. #1205's own "24 of 20" was exact
+      # at 6ef682bf and its COUNTS are now stale -- main gained #1203's guarded Taunt step,
+      # so main reads 25/21 -- while its FINDING, the same four unresolved steps, is not.
+      # The register re-derives all three numbers rather than stating them, and pins the
+      # unresolved SET by module name because that half does not churn.
+      #
+      # ⚠ THIS STEP FAILED IN CI WHILE GREEN ON TWO LOCAL TREES, and the reason is worth
+      # carrying: GitHub gates on refs/pull/<n>/merge. #1203 added an invocation to main
+      # after this branch was cut and this branch added its own -- each tree reads 25, the
+      # merge reads 26. A PR touching this file must merge origin/main (never rebase) and
+      # re-derive. The assertion says so in its own failure message.
+      # (This comment deliberately does not spell the invocation literally -- the scan
+      # matches on that string, and a revision of this very comment that quoted it added
+      # itself to the count. C154's self-match trap, twice on one step.)
+      # The count below was re-derived the same way and from a local run.
+      - name: Terminal disposition register
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_terminal_disposition_register -v 2>&1 \
+            | tee /tmp/c155register.log
+          if ! grep -qE 'Ran 42 tests' /tmp/c155register.log; then
+            echo "::error::expected 42 register pins; the suite shrank or grew"
+            exit 1
+          fi
+          # A clean OK with no skips. TheDerivationsReadSomethingTests is the only reason
+          # the zeroes in Appendix A mean anything -- every one of them is a loop over a
+          # corpus or a scan of one file, and a scan that read nothing reports zero and
+          # looks like a clean result. Skipping it turns four absences vacuous at once.
+          if ! grep -qE '^OK$' /tmp/c155register.log; then
+            echo "::error::terminal-disposition register pins did not report a clean OK"
             exit 1
           fi
 
