@@ -1343,6 +1343,37 @@ impl LeafContext {
             );
         }
 
+        // V3 change 8, BOTH SIDES: the Mean Look / Spider Web move trap. Same defect shape as
+        // the MUSTRECHARGE lift immediately above, and made live by the same kind of fix.
+        //
+        // TRAPPED is absent from VOLATILE_MAP -- the parser records the move trap in its own
+        // `meanlook_trap` tracker, not in the TRACKED_VOLATILES bag -- so `tracked_volatiles`
+        // cannot carry it and `encoder.rs` reads `{prefix}_meanlook_trap` straight out of this
+        // metadata for NUMERIC_MEANLOOK_TRAP on every v3 AND v4 layout. Without this write the
+        // ROOT's bit is stamped onto every leaf in the subtree.
+        //
+        // That was harmless only because it was unreachable: a move-trapped root was refused as
+        // `self_request_state_unsupported`, so no trapped position ever entered a search. Routing
+        // the parser's move trap into the world payload makes those roots searchable, and the
+        // branch's TRAPPED then moves independently of the root -- the engine drops it when the
+        // trapper leaves the field, and a Baton Pass carries it (gen3/state.rs:825
+        // `TRAPPED => baton_passing`).
+        //
+        // And, exactly as with MUSTRECHARGE, the ACTION SURFACE below is already live: switch
+        // options come from the engine's own `get_all_options`, which honours `Side::trapped`
+        // (gen3/state.rs:493). Leaving the bag frozen would reproduce the contradiction cited
+        // above as the reason the recharge freeze had to be lifted -- action surface live,
+        // volatile bag root-frozen, inside one observation.
+        for (key, side) in [("self_meanlook_trap", self_side), ("opponent_meanlook_trap", opp_side)]
+        {
+            md.insert(
+                key.into(),
+                json!(side
+                    .volatile_statuses
+                    .contains(&PokemonVolatileStatus::TRAPPED)),
+            );
+        }
+
         // --- team conditions + active flags ---
         for (key, engine_side, side) in [
             ("self_team", self_engine, self_side),
