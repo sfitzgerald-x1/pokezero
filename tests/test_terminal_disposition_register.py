@@ -1430,7 +1430,12 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         )
 
         lines = _text(WORKFLOW).splitlines()
-        carrying = [(n, line) for n, line in enumerate(lines, 1) if "python -m unittest" in line]
+        # The invocation pattern is IMPORTED, not respelled here: review's residual G is
+        # that `python3 -m unittest` and `python -munittest` are real spellings a literal
+        # match drops, and a second literal in this module is a second thing to drift.
+        carrying = [
+            (n, line) for n, line in enumerate(lines, 1) if scan.INVOCATION.search(line)
+        ]
         comments = [(n, line) for n, line in carrying if line.strip().startswith("#")]
         executable = len(carrying) - len(comments)
         # ⚠ RESOLUTION IS IMPORTED, INCLUDING ITS NEGATIVE HALF. A previous revision took

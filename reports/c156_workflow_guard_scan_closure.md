@@ -60,7 +60,8 @@ a single structural cause, not four coincidences — which is what it turned out
    invocation above it *within the same `run:` body*. `_guards()` is now a filter over `_sites()`,
    so its return shape and its two existing callers are unchanged.
    * Comment lines are excluded on **both** sides. The file carries the invocation string inside a
-     comment at `:1202` and `Ran N tests` inside comments at seven more places; counting either has
+     invocation-carrying comment (exactly one, its line derived by the pin and deliberately not
+  typed here) and `Ran N tests` inside seven more; counting either has
      already shipped as an arithmetic error once (c155 §6).
    * Targets come from the whole shell command, followed across `\` continuations, which is what
      makes the two-module denominator step correct by construction rather than by a window width
@@ -76,19 +77,25 @@ a single structural cause, not four coincidences — which is what it turned out
    the file **writes**, computed by a scan sharing no code with `_sites()`.
 5. **`load_tests = <callable>`** (#1205's review residual) now raises alongside `def load_tests`.
    "No module in scope uses it today" is a fact about today.
-6. **The AST derivation's two unstated assumptions are pinned** —
+6. **`derived == printed` rests on THREE assumptions; two are pinned and the third is named.**
    `test_every_scanned_module_matches_the_ast_derivations_assumptions` asserts, across all 26
-   scanned modules, that no class inherits test methods from a base declared in the same module and
-   no non-`TestCase` class carries `test*` methods. #1205's review verified both by hand; a hand
-   verification does not survive the next module.
+   scanned modules, that **(a)** no class inherits test methods from a base declared in the same
+   module and **(b)** no class carrying `test*` methods fails to name a `TestCase` base. #1205's
+   review verified both by hand; a hand verification does not survive the next module. **(c)** is
+   `setUpClass` — see §4, where it is disclosed rather than claimed.
 7. **The battery size is derived** — `test_the_stated_battery_size_is_the_enumerated_lists_length`
-   reads the enumerated list's own length and requires the docstring header **and** the workflow
-   comment to state it. Both said 23 and nothing checked either; adding ten entries would have left
-   both stale.
+   reads the enumerated list's own length and requires the docstring header, the workflow comment
+   **and this report** to state it. All three are now in the loop.
+8. **The invocation is matched by regex, not by literal.** `python3 -m unittest` and
+   `python -munittest` are both spellings `unittest` honours; `"python -m unittest" in line` sees
+   neither. Measured at `dbb40c5c`: respelling one step's invocation to `python3 -munittest` drops
+   the old scan from 22 resolved guards to **21**, with no error — #1205's shape from a second
+   cause. `re.compile(r"python3?\s+-m\s*unittest")` closes it.
 
 **`.github/workflows/engine-fidelity-gates.yml`** — the C154 step's guard `Ran 34` → `Ran 38`
 (bounded replace on that step only; an unbounded one is what caused #1204's round-two defect), the
-battery comment 23 → 31, and a comment recording the blindness this closes.
+battery comment 23 → 34 (derived, see change 7 above), and a comment recording the blindness
+this closes.
 
 **`tests/test_terminal_disposition_register.py`** — the coverage triple now takes **both halves**
 from `_sites()`. It previously imported `resolved` from C154 and then re-implemented the pairing
@@ -110,43 +117,64 @@ Every mutation was applied to the tree, run with `PYTHONDONTWRITEBYTECODE=1`, an
 **M24–M27 were run against `dbb40c5c` first** — a mutation that is red on the fixed tree proves
 nothing about the broken one, and the whole claim here is that coverage was *absent*.
 
-Every row below is an observed run, not a prediction. `n/a` means the mutation has no meaning
-at `dbb40c5c` because it edits something C156 introduced.
+⚠ **The numbering below is the module docstring's enumerated list, which
+`test_the_stated_battery_size_is_the_enumerated_lists_length` derives.** A first revision of this
+table used its own numbering, which could not be reconciled with the pinned one — review could not
+map the two. Entries **1–23** are #1204's and its review's and are not restated here; **24–34** are
+C156's. Rows with no number are **controls**, not battery entries: they exercise coverage that
+already existed or that lives in another module's battery.
+
+Every row is an observed run, not a prediction. `n/a` means the mutation has no meaning at
+`dbb40c5c` because it edits something C156 introduced.
 
 | # | mutation | at `dbb40c5c` | on this branch |
 |---|---|---|---|
-| M24 | seed-registry guard `Ran 41` → `Ran 99` | **GREEN — blind** | RED |
-| M25 | spread-gate guard `Ran 6` → `Ran 99` | **GREEN — blind** | RED |
-| M26 | stat-attestation guard `Ran 16` → `Ran 99` | **GREEN — blind** | RED |
-| M27 | denominator-pair guard `Ran 31` → `Ran 99` | **GREEN — blind** | RED |
-| M28 | a new executable step with **no** count guard, placed above the seed-registry step | **GREEN — blind** | RED |
-| M28v | the same step placed directly above a **guarded** one | RED, wrong reason † | RED |
-| M28b | M28, run against the register's coverage triple instead | RED | RED |
-| M29 | `_run_bodies()` stubbed to return no bodies at all | n/a | RED |
-| M30 | `load_tests = <callable>` added to a scanned module (assignment form) | GREEN — uncovered | RED |
-| M31 | `def load_tests(...)` added to a scanned module | RED | RED |
-| M32 | a subclass of a locally-declared base, inheriting its test methods | GREEN — uncovered | RED |
-| M33 | a guard's `if`-block deleted and restated as a comment outside the `run:` body | **GREEN — blind** | RED |
-| M34 | a test added to this module with its own workflow guard left stale (battery 23) | RED | RED |
-| M35 | final-holdout guard `Ran 25` → `Ran 24` (battery 22) | RED | RED |
-| M36 | the battery total in the workflow comment left at its old value | GREEN — unpinned | RED |
-| M37 | register prose `resolves **26**` set back to `**22**` | n/a | RED |
-| M38 | register prose `leaves **none**` set back to `**four**` | n/a | RED |
+| 24 | seed-registry guard `Ran 41` → `Ran 99` | **GREEN — blind** | RED |
+| 25 | spread-gate guard `Ran 6` → `Ran 99` | **GREEN — blind** | RED |
+| 26 | stat-attestation guard `Ran 16` → `Ran 99` | **GREEN — blind** | RED |
+| 27 | denominator-pair guard `Ran 31` → `Ran 99` | **GREEN — blind** | RED |
+| 28 | a new executable step with **no** count guard, placed above the seed-registry step | **GREEN — blind** | RED |
+| 29 | `_run_bodies()` stubbed to return no bodies at all | n/a | RED |
+| 30 | `load_tests = <callable>` (assignment form) at a **resolved-at-base** site ‡ | GREEN — uncovered | RED |
+| 31 | a subclass of a locally-declared base, same **resolved-at-base** site ‡ | GREEN — uncovered | RED |
+| 32 | a guard's `if`-block deleted and restated as a comment outside the `run:` body | **GREEN — blind** | RED |
+| 33 | the battery total in the workflow comment left at its old value | GREEN — unpinned | RED |
+| 34 | a guard weakened to the **floor** shape `Ran [0-9]+ tests` | **GREEN — blind** | RED |
+| 23 | a test added to this module with its own workflow guard left stale | RED | RED |
+| 22 | final-holdout guard `Ran 25` → `Ran 24` | RED | RED |
+| — | entry 28's step placed directly above a **guarded** one | RED, wrong reason † | RED |
+| — | entry 28, run against the register's coverage triple instead | RED | RED |
+| — | `def load_tests(...)` — pre-existing coverage, re-verified | RED | RED |
+| — | `class MutantNotATestCase(object)` with a `test*` method (review's) | GREEN | RED |
+| — | register prose `resolves **26**` → `**22**` (c155's module) | n/a | RED |
+| — | register prose `leaves **none**` → `**four**` (c155's module) | n/a | RED |
 | NC1 | **control** — 40 comment lines between an invocation and its guard | GREEN | GREEN |
 | NC1b | **control** — NC1's padding **plus** that same guard falsified to 99 | **GREEN — blind** | RED |
 
-**Battery: 33 applied, 33 caught, plus 2 controls.** The module's enumerated list, its docstring
-header and the workflow comment now all state that number and
-`test_the_stated_battery_size_is_the_enumerated_lists_length` derives it from the list — M36 is that
-pin. M37 and M38 are `tests/test_terminal_disposition_register.py`'s and are **not** added to c155's
-own battery, whose A/B blocks are numbered consecutively and pinned at three sites; renumbering them
-for two entries would churn more than it records. They are recorded here instead.
+**Battery: 34 applied, 34 caught, plus 2 controls.** The module's enumerated list, its docstring
+header, the workflow comment and this report all state that number, and
+`test_the_stated_battery_size_is_the_enumerated_lists_length` derives it from the list — entry 33 is
+that pin. The two register-prose rows belong to `tests/test_terminal_disposition_register.py` and
+are **not** added to c155's own battery, whose A/B blocks are numbered consecutively and pinned at
+three sites; renumbering them for two entries would churn more than it records.
 
-† **M28v's red at `dbb40c5c` is a false positive and is recorded as one.** The old twelve-line window
-ran past the end of the unguarded step and picked up the *next* step's `Ran 128 tests`, reporting a
-mismatch against the wrong module. That is misattribution, not coverage — M28 is the same mutation
-with the new step placed where nothing is in reach, and there `dbb40c5c` is green. The `run:`-body
+‡ **The site matters and a first revision did not say so.** Entries 30 and 31 are applied to
+`tests/test_drag_limit_is_a_last_resort.py`, whose step (`:1112` invocation, `:1113` guard, gap 1)
+was **resolved** at `dbb40c5c`. Their green at base is therefore evidence that the *check* was
+absent, not that the *site* was blind — the objection review raised, and the reason the site is now
+named rather than left to be looked up.
+
+† **Entry 28's placement variant is red at `dbb40c5c` for the wrong reason, and is recorded as a
+false positive.** The old twelve-line window ran past the end of the unguarded step and picked up
+the *next* step's `Ran 128 tests`, reporting a mismatch against the wrong module. Entry 28 proper is
+the same mutation placed where nothing is in reach, and there `dbb40c5c` is green. The `run:`-body
 rule cannot misattribute: a guard belongs to an invocation in its own body or to none.
+
+**Entry 34 is a capability gain the first revision did not claim.** A guard weakened from an exact
+count to `Ran [0-9]+ tests` matches nothing in the scan's `Ran (\d+) tests` pattern, so the site
+becomes *unresolved* and reddens — where at base it simply left the scan. That is exactly the shape
+`fleet-worker.yml:45` uses today (§4), so the follow-up is cheaper than it looks: the scan already
+detects it.
 
 **NC1 alone proves nothing, which is why NC1b exists.** NC1 is the *edit that created all four blind
 spots* — a comment block growing between an invocation and its guard — and it is green on **both**
@@ -163,9 +191,19 @@ which is `reports/c154` §6's own finding applied to this pass.
   count equals its module's AST method count. It does not and cannot assert that the step *ran* —
   `^OK$` and skip-set assertions do that, per step, and four steps in this file are shape-only in CI
   by design and say so.
+* ⚠ **A THIRD assumption behind `derived == printed`, named because review found the claim of two
+  wrong, with a live counterexample in this tree.** A class that skips at `setUpClass` contributes
+  **zero** to `testsRun`, so the printed total drops below the AST count. On the merge ref,
+  `python -m unittest tests.test_spread_gate_provenance` prints **`Ran 1 test … OK (skipped=2)`**
+  against an AST-derived **6** — in one of the four modules this PR just brought into coverage.
+  It is not a defect and it is not a hole: CI has the Showdown dependency those classes gate on, so
+  the step prints `Ran 6` there, and a class-level skip appearing in CI would print a *smaller*
+  number and redden its exact-count guard. **It fails closed.** What was wrong was only the count of
+  assumptions, and the pin's docstring now names three. (c) is not pinnable from a local scan,
+  because the printed count under it is a property of the CI environment.
 * **Scope of the negatives above.** "No module defines `load_tests`" is
   `ast.parse` over the 26 modules `_sites()` names, nothing wider. "26 executable invocations" is
-  lines containing `python -m unittest` in
+  lines matching `re.compile(r"python3?\s+-m\s*unittest")` in
   `.github/workflows/engine-fidelity-gates.yml` whose stripped form does not start with `#` — this
   file only. **The other two workflows are not scanned and both have sites this scan would flag:**
   `neural-smoke.yml:29` runs `python -m unittest tests.test_neural_policy` with no count guard at
@@ -175,8 +213,16 @@ which is `reports/c154` §6's own finding applied to this pass.
   Widening the scan across workflows is **filed, not done here**: it is a change to two files this
   PR otherwise does not touch, and each site needs a count derived and reviewed on its own.
 * **The pairing rule assumes one guard per invocation.** Where a `run:` body holds several
-  invocations, the first guard below each is taken. No step in this file has more than one
-  invocation, so that branch is exercised by construction only, not by the tree.
+  invocations, the first guard below each is taken; guards *trailing* the last invocation beyond the
+  first are not paired. No step in this file has more than one invocation, so that branch is
+  exercised by construction only, not by the tree. Review probed the two-invocations-two-trailing-
+  guards shape and it **reddens** — the second guard is unclaimed, so the resolved set stops
+  matching the file's written guard lines. Fails closed, and scoped to that: it is detected, not
+  correctly attributed.
+* **Eight ways of writing a `run:` body were probed by review and all eight fail closed** — block
+  scalars with chomping indicators, heredocs, inline `run:`, a last step running to EOF, and a
+  `- run: |` step with no `name:` key. "Fail closed" here means the site is reported unresolved or
+  the flat-scan cross-check disagrees, never that it is silently dropped.
 
 ---
 

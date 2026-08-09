@@ -842,9 +842,9 @@ jobs:
       # demonstration is RE-DERIVED from source on each run, which is what stops the 26
       # from ageing into the fifteen-stale-citations shape #1202 produced. Its own module
       # so the two censuses keep their exact-count guards untouched, per C150's precedent.
-      # Battery: 33 mutations applied, 33 caught, listed in the module docstring -- number
+      # Battery: 34 mutations applied, 34 caught, listed in the module docstring -- number
       # 8 survived the first version, 13-23 are review's, each one a sentence of this
-      # pass's own that was asserted beyond what it traced, and 24-33 are C156's. Exact
+      # pass's own that was asserted beyond what it traced, and 24-34 are C156's. Exact
       # count, not a floor, and no longer a typed one: the module derives this number from
       # its own enumerated list and reads it back out of THIS comment.
       #
