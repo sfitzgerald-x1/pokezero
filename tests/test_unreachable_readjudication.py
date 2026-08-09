@@ -908,7 +908,7 @@ class TheDerivedClaimsAreDerivedTests(unittest.TestCase):
             "argument is scoped to the Sleep Talk block and must be re-traced",
         )
         self.assertEqual(
-            rederived["edges_out_of_the_chokepoint"], [2138, 2159],
+            rederived["edges_out_of_the_chokepoint"], [2155, 2176],
             "the number of ways into the subgraph from `render_move_phase` changed",
         )
         self.assertEqual(len(rederived["dead_wrappers_with_no_production_caller"]), 5)
