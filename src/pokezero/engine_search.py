@@ -50,7 +50,12 @@ from .determinization import (
 from .public_action_capture import public_action_rounds_from_trajectory_metadata
 from .engine_world import EngineWorld, EngineWorldUnsupported, world_battle_spec
 from .randbat import canonical_gen3_randbat_species_id
-from .poke_engine_adapter import PokeEngineAttractUnsupportedError, build_poke_engine_state
+from .poke_engine_adapter import (
+    PokeEngineAttractUnsupportedError,
+    PokeEngineMoveTrapUnsupportedError,
+    PokeEngineUnavailableError,
+    build_poke_engine_state,
+)
 from .policy import PolicyContext, PolicyDecision, legal_action_indices
 
 _fallback_logger = logging.getLogger("pokezero.engine_search.fallback")
@@ -521,7 +526,9 @@ _CAUSE_SWITCH_ONLY = "all_unmapped_switch_only"
 _CAUSE_LEGALITY_MISMATCH = "all_unmapped_legality_mismatch"
 
 #: Normalized ids for the crate's display of `MoveChoice::None` -- the engine's forced no-move.
-#: Showdown names the same forced action `recharge` in the request it sends for that turn.
+#: Showdown names the same forced action `recharge` on a recharge turn and `struggle` when the
+#: request would otherwise offer no move at all. ONE engine token, TWO request spellings; both
+#: translations, and the admission test the Struggle one needs, live in `_map_choices`.
 _ENGINE_FORCED_NO_MOVE_IDS = frozenset({"nomove", "none"})
 _CAUSE_NO_LEGAL_ACTION = "no_legal_action_offered"
 _CAUSE_NO_POSITIVE_WEIGHT = "mapped_but_no_positive_weight"
@@ -967,6 +974,71 @@ def native_search_args(
     return search_args
 
 
+#: The id Showdown gives the recharge pseudo-move it substitutes for a locked mon's moveset.
+_RECHARGE_REQUEST_MOVE_ID = "recharge"
+
+#: The id Showdown gives the Struggle pseudo-move it substitutes when a mon's request would
+#: otherwise offer NO move at all (``sim/pokemon.ts`` ``getMoveRequestData``, the
+#: ``else if (!moves.length)`` arm). The engine has no Struggle arm to enumerate, so the same
+#: state reaches ``_map_choices`` as the ``MoveChoice::None`` display -- see the translation there.
+_STRUGGLE_REQUEST_MOVE_ID = "struggle"
+
+
+def self_recharge_from_action_candidates(observation_metadata: Any) -> bool:
+    """Whether the request's LEGAL CHOICE SET is exactly the recharge pseudo-move.
+
+    Showdown's ``Pokemon.getMoveRequestData`` sets ``this.trapped = true`` whenever
+    ``getLockedMove()`` returns anything, and ``getMoves(lockedMove)`` short-circuits to the
+    single synthetic entry ``[{move: 'Recharge', id: 'recharge'}]`` when and only when that
+    locked move is ``recharge`` (``sim/pokemon.ts:968``, ``:1084-1088``). ``mustrecharge`` is
+    gen3's only ``onLockMove: 'recharge'``, so a request offering nothing but ``recharge`` is
+    not evidence about the lock, it IS the lock, disclosed to the seat that has to act on it.
+
+    READ FROM ``action_candidates``, NOT THE RAW REQUEST. Three reasons, in order of weight:
+
+    1. ``action_candidates`` is published by ``_observation_metadata`` UNCONDITIONALLY, on every
+       schema, unlike the v4-gated ``self_must_recharge`` this backstops. The raw request would
+       also work, but only for callers holding a ``public_materialization_state``.
+    2. It is what a RECORDED ROW carries. ``scripts/fidelity_gate_events.py``'s
+       ``production_recharging_slots`` exists to be "``recharging_slots`` as production builds
+       it", and it is handed observation metadata, not a ``PolicyContext``. A request-based rule
+       would be UNMIRRORABLE there -- the payload's ``selfActiveMoves`` drops the synthetic entry
+       (it carries no ``pp``/``maxpp``, so ``_request_active_moves`` filters it out), so the
+       corpus row has no request-side trace of the lock at all. The gate would then seed worlds
+       without MUSTRECHARGE while production seeds them with it, and stop measuring this change.
+    3. It covers contexts that carry metadata but no materialization state -- ``fallback_replay``
+       records and cached rollouts.
+
+    This is the same fold ``fallback_replay._request_legal_choices`` applies to produce the
+    ``request offered: recharge`` line in the refusal records that diagnosed this bug; the
+    candidate's ``legal`` flag is ``bool(state.legal_action_mask[action_index])`` at the source
+    (``showdown.py:7530``), so no separate mask read is needed.
+
+    Deliberately narrow: the legal set must be EXACTLY one entry, a move, spelled ``recharge``.
+    An Encore lock, a Choice lock and a mid-charge Solar Beam all present one legal move too,
+    but under their real move id, and a partly-disabled moveset presents several. Seeding
+    MUSTRECHARGE for any of those would model a mon that cannot act when it can -- silently
+    wrong, which is worse than the refusal this removes.
+    """
+
+    if not isinstance(observation_metadata, Mapping):
+        return False
+    candidates = observation_metadata.get("action_candidates")
+    if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+        return False
+    legal = [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, Mapping) and candidate.get("legal")
+    ]
+    if len(legal) != 1:
+        return False
+    only = legal[0]
+    if only.get("kind") != "move":
+        return False
+    return normalize_id(str(only.get("move_id") or "")) == _RECHARGE_REQUEST_MOVE_ID
+
+
 def opponent_request_order(context, party_species) -> list[str] | None:
     """The opponent's Showdown request order at this decision, or None.
 
@@ -1182,6 +1254,40 @@ class EngineMctsPolicy:
                 # permits a world; classify a missing patch as an attributed
                 # fallback instead of silently searching an optimistic state.
                 self.stats.world_failure_reasons["attract_patch_unavailable"] += 1
+                continue
+            except PokeEngineMoveTrapUnsupportedError:
+                # Same shape, newly reachable. `require_move_trap_support` has always guarded
+                # the TRAPPED volatile, but until the move trap was routed into the payload no
+                # production world ever carried one, so the raise had no live caller and would
+                # have escaped `_search` as a hard crash on an unpatched wheel. Attribute it
+                # like the Attract probe: an unpatched wheel drops TRAPPED silently and would
+                # hand the trapped seat its switch options back, so declining is correct --
+                # but declining is a fallback, not a crashed run.
+                self.stats.world_failure_reasons["move_trap_patch_unavailable"] += 1
+                continue
+            except PokeEngineUnavailableError as error:
+                # BACKSTOP for the whole capability-probe family, because the specific handler
+                # above does NOT cover every raise from the branch it guards. `_build_side_spec`
+                # calls `require_move_trap_support()` with no module, so it resolves the engine
+                # through `require_poke_engine()`, which raises the BASE
+                # `PokeEngineUnavailableError` when `probe_poke_engine()` is not ready -- an
+                # importable but mis-built wheel missing a required `State` method, exactly the
+                # case these buckets exist for. That is neither the subclass above nor an
+                # `EngineWorldUnsupported`, so it escaped `_search` entirely.
+                #
+                # Not fixed by plumbing `self._module` into the gate instead: production
+                # constructs `EngineMctsPolicy` with `module=None`, so `build_poke_engine_state`
+                # resolves the same global module two lines below. The two paths already agree;
+                # what was missing was a handler.
+                #
+                # Pre-existing, not introduced here -- `require_charge_state_support()` sits two
+                # lines away with the identical shape and has been reachable since `solarbeam`
+                # became a tracked volatile. Attributed by exception class so the ledger
+                # distinguishes "no engine at all" from a specific missing patch rather than
+                # folding both into one bucket.
+                self.stats.world_failure_reasons[
+                    f"engine_capability_unavailable: {type(error).__name__}"
+                ] += 1
                 continue
             except EngineWorldUnsupported as error:
                 self.stats.world_failure_reasons[_world_failure_key(error)] += 1
@@ -2127,9 +2233,21 @@ class EngineMctsPolicy:
         BOTH SIDES, since the self side went live. Our own slot comes from
         ``self_must_recharge`` and the opponent's from ``opponent_must_recharge`` -- two keys of
         the ONE parser ``must_recharge`` tracker, published per seat. The notes below describe
-        the opponent side, whose reconstruction fallback predates the tracker; the self side has
-        no fallback and is tracker-only, so an observation without the key simply carries no self
-        lock.
+        the opponent side, whose reconstruction fallback predates the tracker.
+
+        CORRECTED: the self side is no longer tracker-only. ``_feature_pack_metadata`` publishes
+        ``self_must_recharge`` under the v4 schemas ALONE (deliberately -- an always-present key
+        changed world seeding for the v2.2/v3 arms in flight), so on every earlier schema our own
+        recharge turn carried no lock, the world got no ``mustrecharge`` volatile, and
+        ``_require_world_reproduces_trap`` refused the request's disclosed ``trapped`` flag with
+        ``self_request_state_unsupported``. The recharge turn was unsearchable on those schemas.
+
+        The self side does have a second proof, and it is not a reconstruction:
+        ``self_recharge_from_action_candidates`` reads the request's own legal choice set off the
+        UNGATED ``action_candidates`` metadata. It is schema-independent, so it closes the gap
+        without republishing the pack, and it is mirrorable from a recorded corpus row -- see
+        ``scripts/fidelity_gate_events.py::production_recharging_slots``, which must stay a
+        faithful mirror of this function or the four fidelity gates stop measuring it.
 
         PREFERRED SOURCE: the parser's own ``must_recharge`` tracker, surfaced on the
         observation metadata as ``opponent_must_recharge`` (spec v4 pack A1). The parser reads
@@ -2174,7 +2292,22 @@ class EngineMctsPolicy:
         # on corpus/golden-v4: 1208 decision-row PAIRS (of 1295 rows; the rest have no partner
         # row in the corpus) where seat X's `self_must_recharge` equals seat Y's
         # `opponent_must_recharge`, zero disagreements.
+        #
+        # SECOND PROOF, unioned rather than preferred: the request's own legal choice set, read
+        # off the UNGATED `action_candidates` metadata. `getMoveRequestData` sets `trapped: true`
+        # and `getMoves` collapses the moveset to the lone `recharge` pseudo-move exactly when
+        # `mustrecharge` is held, so "the request offers nothing but recharge" is the SAME fact
+        # the tracker reports, disclosed directly to us. A union rather than a fallback because
+        # it cannot lose a lock the tracker found, and there is no reading of that request under
+        # which the mon is free. See `self_recharge_from_action_candidates` for why the metadata
+        # lane and not the raw request -- the gate harness has to be able to mirror this.
+        #
+        # It is not the `opponent_must_recharge is False` case in reverse: that False is a
+        # negative proof about a seat whose request we cannot see, and the weaker reconstruction
+        # must not overrule it. Here both inputs are positive proofs about OUR seat.
         self_slot: tuple[str, ...] = ()
+        if self_recharge_from_action_candidates(observation_metadata):
+            self_slot = (context.player_id,)
         if isinstance(observation_metadata, Mapping):
             if observation_metadata.get("self_must_recharge") is True:
                 self_slot = (context.player_id,)
@@ -2486,6 +2619,47 @@ class EngineMctsPolicy:
         any_legal_move = bool(move_index_by_id) or hidden_power_index is not None
         any_legal_switch = bool(switch_index_by_species)
 
+        # The request's SUBSTITUTED Struggle, and only that. See the `_ENGINE_FORCED_NO_MOVE_IDS`
+        # translation below for what it is translated to and why; this is the admission test,
+        # kept beside the two counters it is built from.
+        #
+        # Showdown substitutes Struggle at exactly one site -- `sim/pokemon.ts`
+        # `getMoveRequestData`, the `else if (!moves.length)` arm -- so a substituted Struggle
+        # is ALWAYS the request's only move, and a `struggle` candidate sitting beside another
+        # legal move is a real Struggle MOVE SLOT, not the pseudo-move. `local_showdown.py`'s
+        # `_request_reports_only_struggle` separates the two by the absent `pp`/`maxpp` fields
+        # and says of that check: "the check is what makes that a checked fact rather than an
+        # assumed one". `_action_candidate_metadata` (`showdown.py:7563`) publishes no `pp`, so
+        # the mirror available here is the count: exactly one legal move, spelled `struggle`.
+        # Review MEASURED the unguarded version absorbing a genuine mismatch -- a
+        # `gen3customgame` Blissey with moves `("Struggle", "Soft-Boiled")` mapped "No Move"
+        # onto the Struggle slot while `softboiled` was legal, which is precisely the
+        # `all_unmapped_legality_mismatch` this class is named for.
+        #
+        # NO LEGAL SWITCH is required too, and that clause is about OBSERVABILITY, not
+        # legality. With a bench the request offers `['struggle', 'switch:X']`; the engine
+        # proposing `MoveChoice::None` there means its world sees no switch where the request
+        # has one, and pre-translation that disagreement was counted in `unmapped_choices`
+        # (measured: `{"No Move": 3.0, "switch shedinja": 1.0}` mapped to the SWITCH and logged
+        # the miss). Translating it would keep the decision searched and erase the only trace.
+        # A campaign whose stop condition is `choices_unmapped == 0` cannot afford a path that
+        # reaches zero by becoming unobservable, so that shape deliberately still misses.
+        #
+        # What survives both clauses is the request that offers ONE action, and it is Struggle.
+        # There the translation cannot change which action is taken -- there is nothing else to
+        # take -- it only stops a pure naming difference from being booked as a refusal.
+        #
+        # No separate `hidden_power_index is None` clause: the loop above writes EVERY legal
+        # move id into `move_index_by_id`, including the Hidden Power one it additionally
+        # remembers under its own name, so a legal Hidden Power beside Struggle already fails
+        # the one-key test. A clause for it was written, and the null-world runner scored
+        # dropping it EQUIVALENT against a 14-case differential battery -- an unfalsifiable
+        # guard, removed rather than shipped. `test_a_legal_hidden_power_beside_struggle_
+        # blocks_the_translation` pins the behaviour instead of the redundant clause.
+        forced_struggle_index: Optional[int] = None
+        if not any_legal_switch and list(move_index_by_id) == [_STRUGGLE_REQUEST_MOVE_ID]:
+            forced_struggle_index = move_index_by_id[_STRUGGLE_REQUEST_MOVE_ID]
+
         best_index: Optional[int] = None
         best_weight = 0.0
         mapped_any = False
@@ -2517,7 +2691,34 @@ class EngineMctsPolicy:
                     # :673-675 must be zero independently of the fallback rate, and with the cause
                     # mislabelled `all_unmapped_legality_mismatch`. It only became reachable once
                     # `_recharging_slots` went symmetric and these worlds started building at all.
-                    index = move_index_by_id.get("recharge")
+                    index = move_index_by_id.get(_RECHARGE_REQUEST_MOVE_ID)
+                    if index is None:
+                        # SECOND vocabulary gap behind the SAME engine token: Struggle. The engine
+                        # has no Struggle arm to enumerate -- `MoveChoice` is Move/Switch/None and
+                        # gen3 `get_all_options` never synthesizes one -- so when
+                        # `add_available_moves` adds nothing (every slot at 0 PP or disabled) and
+                        # `add_switches` adds nothing (no live bench, or trapped), the terminal
+                        # `if options.len() == 0 { push(MoveChoice::None) }` guard fires and the
+                        # crate renders "No Move". Showdown, at the same state, substitutes the
+                        # Struggle pseudo-move (`sim/pokemon.ts` `getMoveRequestData`: `else if
+                        # (!moves.length) moves = [{ move: 'Struggle', id: 'struggle' }]`). One
+                        # forced action, two names -- the recharge case one paragraph up, again.
+                        #
+                        # `forced_struggle_index`, NOT a bare `move_index_by_id.get("struggle")`:
+                        # the admission test above is what distinguishes the SUBSTITUTED
+                        # pseudo-move from a real Struggle move slot, and what keeps the
+                        # engine-vs-request switch disagreement countable. Read it there.
+                        #
+                        # Recharge FIRST and Struggle only as the fallthrough, but the order is
+                        # documentation, not disambiguation: the two can never both be offered.
+                        # `getMoveRequestData` reaches the Struggle substitution ONLY when
+                        # `getMoves` returned an EMPTY list, and a `recharge` lock makes `getMoves`
+                        # return the one-element `[{Recharge}]` -- non-empty, so the substitution
+                        # is unreachable on a recharge turn. Offering NEITHER is the ordinary turn,
+                        # and there both lookups miss and the choice stays unmapped, which is
+                        # correct: "No Move" against a request with real moves is a genuine
+                        # engine/request disagreement, not a naming one.
+                        index = forced_struggle_index
             if index is None:
                 self.stats.unmapped_choices[choice] += 1
                 continue

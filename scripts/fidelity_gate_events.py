@@ -61,6 +61,10 @@ from pokezero.engine_world import (  # noqa: E402
     unpack_team,
 )
 from pokezero.poke_engine_adapter import build_poke_engine_state  # noqa: E402
+# The production rule itself, not a restatement of it: `production_recharging_slots` below has
+# to stay a faithful mirror of `engine_search._recharging_slots`, and a second copy of the fold
+# is exactly how mirrors drift.
+from pokezero.engine_search import self_recharge_from_action_candidates  # noqa: E402
 
 FLOAT_FIELDS = ("damage_fraction", "self_hp_cost", "residual", "investment")
 FLOAT_TOL = 0.02
@@ -154,21 +158,40 @@ def production_recharging_slots(anchor_metadata: Any, seat: str) -> tuple[str, .
     caught 4 of those 5, because this corpus has no self-side row where the recorded action and
     the tracker disagree.
 
+    SECOND SELF-SIDE INPUT, mirrored here because production added one: the request's own legal
+    choice set. `self_must_recharge` is published only under the v4 feature-pack schemas, so on
+    v2.2/v3 production reads `action_candidates` -- ungated metadata a corpus row already carries
+    -- and locks our slot when the only legal choice is the `recharge` pseudo-move. This helper
+    calls the SAME function production calls rather than restating the rule, because a restated
+    mirror is a second derivation that can drift; that is the whole failure mode this file exists
+    to avoid.
+
+    Mirroring it matters even though it is latent on today's corpus: both tracker keys are
+    present on all 1295 golden-v4 decision rows, so the two inputs never disagree there. Left
+    unmirrored, the gates would seed v2.2/v3 self-recharge worlds WITHOUT MUSTRECHARGE while
+    production seeds them with it, and would stop measuring the change on exactly the boundaries
+    it alters.
+
     KNOWN DIVERGENCE, stated rather than glossed: production falls back to reconstructing the
-    signal from the round-indexed public action record when the tracker key is ABSENT. This
-    returns `()` there instead. On corpus/golden-v4 that fallback covers ZERO rows -- both
+    OPPONENT signal from the round-indexed public action record when that tracker key is ABSENT.
+    This returns `()` there instead. On corpus/golden-v4 that fallback covers ZERO rows -- both
     tracker keys are present on all 1295 decision rows -- so the divergence is unexercised here
     rather than small. (An earlier version of this note said "present on 1208 of 1295"; 1208 is
     the count of rows that have a PARTNER row for the cross-seat check, a different quantity.
-    Review caught the conflation.)
+    Review caught the conflation.) There is no longer a self-side divergence: both of
+    production's self-side inputs are mirrored above.
     """
     opponent = "p2" if seat == "p1" else "p1"
     if not isinstance(anchor_metadata, Mapping):
         return ()
     slots: list[str] = []
-    # Our OWN slot, now that _recharging_slots is symmetric. Both sides come from the same
-    # parser `must_recharge` tracker, published per seat.
-    if anchor_metadata.get("self_must_recharge") is True:
+    # Our OWN slot, now that _recharging_slots is symmetric. The tracker key is the v4 source;
+    # the candidate fold is the schema-independent one production unions with it. Both are
+    # positive proofs about our own seat, so the union cannot manufacture a lock.
+    if (
+        anchor_metadata.get("self_must_recharge") is True
+        or self_recharge_from_action_candidates(anchor_metadata)
+    ):
         slots.append(seat)
     # An explicit False is a public PROOF of no lock, exactly as production treats it.
     if anchor_metadata.get("opponent_must_recharge") is True:

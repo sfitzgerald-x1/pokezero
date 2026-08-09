@@ -145,6 +145,16 @@ reconstruction only as a fallback for contexts that predate the pack — so the 
 observation are one truth with two consumers. An explicit `False` from the tracker is treated
 as a proof of no lock, not an absent signal.
 
+**Self side, amended.** Because this block is published only under the v4 schemas, the SELF
+lock was absent on v2.2/v3 and those recharge turns stayed unsearchable — Showdown sets
+`trapped: true` on a recharge request, so the world carried no `mustrecharge` volatile and
+`engine_world` refused it as `self_request_state_unsupported`. `_recharging_slots` now unions
+this tracker with the request's own legal choice set, read off the UNGATED `action_candidates`
+metadata (`engine_search.self_recharge_from_action_candidates`): `getMoveRequestData` collapses
+the moveset to the lone `recharge` pseudo-move exactly when `mustrecharge` is held. Both inputs
+are positive proofs about our own seat, so the union cannot manufacture a lock, and this pack's
+gating is unchanged.
+
 Written on BOTH sides' active tokens: the rule is side-symmetric and exact, and a one-sided
 column would be the only asymmetric per-mon scalar in the layout.
 
