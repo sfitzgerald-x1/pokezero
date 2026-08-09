@@ -46,6 +46,14 @@ jobs:
             scripts/verify_poke_engine_source.py
             third_party/poke-engine-base-source.json
             tests/test_branch_mass_reconstruction.py
+            # C152's pool census: the measurement behind the one owed family discharged
+            # by a reachability VERDICT rather than a fixture. Listed for the same
+            # reason the collapsed-arm oracle's pair is listed below -- a PR that
+            # DELETES the artifact or its generator would otherwise trip no workflow at
+            # all, which is the failure mode this file forbids twice. The mass-gate step
+            # reads the artifact, so a deletion reddens once the job actually runs.
+            tests/data/c152_pool_reachability_census.json
+            scripts/c152_pool_reachability_census.py
             # Without these the classifier half of B1 -- which edits the differential --
             # triggers no workflow at all. Found by review of #1081.
             scripts/engine_transition_differential.py
@@ -329,8 +337,14 @@ jobs:
           # cannot notice a DELETED test: removing three of four leaves the step
           # green, which is the "reads PASS while asserting less than intended"
           # shape this workflow's header forbids. Found by review of #1081.
-          if ! grep -qE 'Ran 6 tests' /tmp/massgate.log; then
-            echo "::error::expected 6 tests; the suite shrank or grew"
+          # 6 -> 14: C119 obligation 1 / c137 section 4's four owed families landed
+          # as OWED_CASES with eight methods of their own (seven, plus the Rain Dish
+          # waiver pin added in review). The two matrices are counted together
+          # because they are one module and one gate; the per-matrix guards that CI
+          # cannot see are test_the_fixture_matrix_is_the_expected_size (9) and
+          # test_the_owed_matrix_is_the_expected_size (7).
+          if ! grep -qE 'Ran 14 tests' /tmp/massgate.log; then
+            echo "::error::expected 14 tests; the suite shrank or grew"
             exit 1
           fi
           if grep -q 'skipped' /tmp/massgate.log; then

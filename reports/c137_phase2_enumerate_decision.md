@@ -172,6 +172,45 @@ What changes is only the remedy.
   engine under this decision, so the mass-gate fixtures C119 required — the crit-fan
   residual split, `fixed_damage`, multi-hit, and the Wish / Rain Dish / Leech Seed /
   partial-trap mirror steps — are owed before Phase 2 can be recorded closed.
+  ⚠ **DISCHARGED FOR THOSE FOUR FAMILIES, 2026-08-08 —
+  `reports/c152_mass_gate_owed_fixtures.md`.** Seven fixtures landed as `OWED_CASES` in
+  `tests/test_branch_mass_reconstruction.py` (6 test methods → 14; the CI count guard
+  moved with them). Each reddens under a mutation of the engine path it covers, and the
+  pre-existing nine-fixture matrix stayed **green on all seven** of those mutations —
+  which is the coverage claim, measured rather than argued. **Read the scope, because
+  four parts of this bullet are NOT discharged.**
+  (i) **Rain Dish** is discharged as pool-**UNREACHABLE**, not by a fixture: 0 of the 71
+  distinct abilities in the union of every set's `abilities` in
+  `data/random-battles/gen3/sets.json` at Showdown `f76228a1`, and Trace — which is in
+  that 71 — cannot copy an ability no pool member has. Those figures are pinned in
+  `POOL_UNREACHABLE` against a committed census
+  (`tests/data/c152_pool_reachability_census.json`,
+  `scripts/c152_pool_reachability_census.py`), so the waiver cannot drift from its own
+  measurement. **They are not re-derived against a live pool**: CI builds no Showdown
+  checkout and the mass-gate step forbids skips, so a Showdown bump that added Rain Dish
+  to a gen3 set would leave the waiver green and wrong — which is why the census records
+  the commit it was taken at. An earlier revision of this bullet said the verdict was
+  "machine-checked by `POOL_UNREACHABLE`" when `POOL_UNREACHABLE` held prose and the only
+  assertion checked that the family had *a* verdict; that was broader than what ran, and
+  the pin now exists.
+  (ii) **Multi-hit is covered at the case-a site only.** Case B's non-crit residual band
+  still compares a per-hit `max_damage_dealt` against a total-basis threshold
+  (`reports/c129` §6 **N1**, pre-existing and filed-not-fixed); independently reproduced
+  at bonemerang 140/244 burned, engine **90.0000 %** against a total-fan **58.3594 %**,
+  and deliberately left unfixtured so the gate does not pin a defect as expected.
+  (iii) **The bail set** — the fifth entry in the gate docstring's uncovered list, which
+  that list itself rules out of fixture scope — is untouched.
+  (iv) **Six of the seven fixtures discriminate on mass; the seventh is a control.**
+  `wish-mirror`'s KO-mass row cannot fail — a resolving Wish outheals every tick the
+  mirror models, so the real end-of-turn phase refuses the KO a mispriced mirror expects
+  and the mass does not move. Mirror step 7 is held by that fixture's collapsed-shape
+  pin, not by its mass row. Counting seven mass-discriminating fixtures here would
+  overstate the discharge by one.
+  One further scope note, because the obvious reading is wrong: no functional built on
+  total KO mass can see patch 74's per-roll Leech Seed split at all (splitting a lethal
+  band moves no mass between faint and alive, measured), so the two Leech Seed fixtures
+  cover the *mirror step* by mass and the *split* by an arm-shape pin at both of the
+  patch's call sites.
 - **`counters.strict:sleeptalk_union_branch` moved 126 → 617 (dev) and 105 → 612
   (holdout)** between the two spike configurations. Probably branch multiplicity, but
   "identical trajectories" is asserted elsewhere and this is the one non-gating counter
