@@ -2847,12 +2847,21 @@ def _checkpoint_provenance() -> dict[str, str | bool | None]:
         # NOT in `_DESCRIPTIVE_PROVENANCE_KEYS`, and that is the deliberate
         # difference from `source_tree`. `source_tree` was excluded because it
         # flips on any tracked edit, which made a 200-game crash-safe sweep
-        # unresumable after touching a README. This digest covers ONLY the
-        # differential's first-party import closure -- 16 files, the world model,
-        # matcher and Showdown adapter -- so it does not move on prose, and a
-        # change to one of those files mid-sweep is precisely the corruption a
-        # resume must refuse rather than merge. See `scripts/harness_digest.py`
-        # for what it covers and what it does not.
+        # unresumable after touching a README. This digest covers this module's
+        # first-party import closure -- 73 files, relative imports followed, the
+        # world model and matcher and Showdown adapter among them -- so it does
+        # not move on prose, and a change to one of those files mid-sweep is
+        # precisely the corruption a resume must refuse rather than merge.
+        #
+        # 73 rather than a tidier subset, and the cost was measured rather than
+        # guessed: the closure reaches the training tree through `engine_search`
+        # and `pokezero/__init__`, but over the last 300 commits of `origin/main`
+        # only SEVEN touch one of those files without also touching the narrow
+        # instrument set, so honesty costs 2% of commits in extra digest churn.
+        # An earlier revision truncated to 16 by dropping relative imports and was
+        # blind to `gen3_damage`, `showdown_fixture` and `poke_engine_backend`,
+        # all on the live sweep path. See `scripts/harness_digest.py` for what it
+        # covers, what it does not, and how a future truncation is caught.
         #
         # One-time cost, recorded rather than hidden: a checkpoint written before
         # this key existed has no `harness_digest` in its provenance and will not

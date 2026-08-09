@@ -1413,6 +1413,16 @@ jobs:
   # in the differential after C142's sweeps. `source_commit` made that DETECTABLE and
   # nothing asserted it.
   #
+  # IT ALSO PINS THAT THE CLOSURE IS CLOSED, which is not the same assertion as the
+  # membership list and is the one that matters most here. Review caught the first
+  # revision of `scripts/harness_digest.py` dropping every relative import: the
+  # closure came out at 16 files instead of 73, blind to `gen3_damage`,
+  # `showdown_fixture` and `poke_engine_backend` -- all on the live sweep path --
+  # while the exact-membership pin stayed green, because a list of what the resolver
+  # FOUND cannot detect what it never looked for. `ClosureCompletenessTests`
+  # re-derives relative-import targets with an independent implementation and is
+  # what makes a future truncation red by construction.
+  #
   # SAME SHAPE AS `seed-registry` ABOVE, and for the same two reasons:
   #
   #   1. DELIBERATELY NOT BEHIND THE `changes` FILTER. Its inputs include every
@@ -1451,15 +1461,16 @@ jobs:
           # battery. This guard lives in YAML and no local `unittest` or `pytest` run
           # can see it: a module that grows without its count following is how an
           # approved PR reached CI red here before.
-          if ! grep -qE 'Ran 24 tests' /tmp/harness.log; then
-            echo "::error::expected 24 harness-digest pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 28 tests' /tmp/harness.log; then
+            echo "::error::expected 28 harness-digest pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. The anti-vacuity pins -- the selector's blob
-          # count, the non-empty `build_inputs()`, and the named world/matcher/adapter
-          # members of the closure -- are the only reason the coverage claims mean
-          # anything; skip them and every statement about what the digest covers goes
-          # vacuous.
+          # count, the non-empty `build_inputs()`, the named world/matcher/adapter
+          # members of the closure, and the naive relative-import scan that keeps the
+          # COMPLETENESS pin from passing over an empty set -- are the only reason the
+          # coverage claims mean anything; skip them and every statement about what
+          # the digest covers goes vacuous.
           if ! grep -qE '^OK$' /tmp/harness.log; then
             echo "::error::harness-digest pins did not report a clean OK (skip or failure)"
             exit 1

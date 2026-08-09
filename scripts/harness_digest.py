@@ -68,36 +68,76 @@ grounds, in both directions:
 A content digest has neither failure: it is exact on a dirty tree and silent on a
 prose edit.
 
-WHAT IT COVERS. The static first-party import closure of
-`scripts/engine_transition_differential.py`, resolved by AST from the filesystem —
-`scripts/<mod>.py` for top-level imports and `src/pokezero/<...>.py` for
-`pokezero.*`. Self-maintaining: a new import into the harness enters the closure
-automatically, and `tests/test_harness_digest_provenance.py` pins the exact
-membership so one silently LEAVING is red (a vanishing member is this shape's
-fail-open, and pure addition masks it). At the time of writing the closure is 16
-files and includes the world model (`engine_world.py`), the matcher
-(`engine_fidelity.py`, `engine_fidelity_multiturn.py`) and the Showdown adapter
-(`local_showdown.py`, `poke_engine_adapter.py`) — the three named halves of the
-instrument. It includes this module, because the differential imports it, so
-tampering with the digest moves the digest.
+WHAT IT COVERS. The full static first-party import closure of
+`scripts/engine_transition_differential.py`, resolved by AST from the filesystem:
+`scripts/<mod>.py` for bare top-level imports, `src/pokezero/<...>.py` for
+`pokezero.*`, and — this is the part a first revision got wrong — RELATIVE imports
+resolved against the containing package. 73 files at the time of writing.
+
+THE TRUNCATION THAT WAS CAUGHT IN REVIEW, recorded because the number of files a
+digest covers is exactly the sort of claim that goes stale silently. The first
+revision of `_absolutize` dropped every `node.level > 0` import, with a comment
+asserting relative imports "do not occur in either layout". `src/pokezero/**`
+carries 70 relative `ImportFrom` statements across 9 of the 16 files that revision
+hashed, so the closure came out at 16 files instead of 73 — and the missing 57
+included `gen3_damage.py` (reached from `engine_world.py`), `showdown_fixture.py`
+(module-level in `engine_fidelity.py`, `engine_fidelity_multiturn.py` and
+`engine_world.py`) and `poke_engine_backend.py` (from `poke_engine_adapter.py`),
+all three on the live sweep path. A semantic off-by-one in `gen3_stat` — 10,385
+calls on a single dev game — left the digest byte-identical. The digest carried
+the very defect it exists to catch, one level in, while its own docstring claimed
+the full instrument.
+
+WHY THE FULL CLOSURE AND NOT A NARROWER, TIDIER ONE. Following relative imports
+pulls in `neural_policy.py`, `search.py`, `showdown.py` and the rest of the
+training tree through `engine_search.py` and `pokezero/__init__.py`, which looks
+like unwanted churn. It was MEASURED rather than argued: over the last 300 commits
+of `origin/main`, 42 touch at least one of the truncated 16 and 49 touch at least
+one of the honest 73 — SEVEN commits of difference, 2% of commits. That is the
+entire cost of the honest answer, and it does not come close to justifying a
+truncation that would have to be defended by proving the excluded 57 cannot affect
+a sweep. That proof is strictly harder than the claim which just failed.
+
+The residual coupling is real and worth naming as a follow-up rather than hiding
+in a resolver: the differential should not be importing the training tree at all.
+Decoupling `engine_search.py` and `pokezero/__init__.py` is the right fix for the
+churn. Truncating the digest is not.
+
+CROSS-CHECKED AGAINST RUNTIME, because a static resolver that agrees with itself
+proves nothing. Importing the differential in a built venv loads 72 first-party
+modules. Every one is in this closure; the closure additionally holds
+`inference_service.py`, which is imported lazily and so is not resident at import
+time. Static ⊇ runtime, over-capturing by exactly one file — the safe direction.
 
 WHAT IT DOES NOT COVER, stated as narrowly as it was measured:
 
   * The native engine. Deliberate — that is the engine fingerprint's job, and the
     two are recorded side by side rather than merged.
   * Anything reached by a COMPUTED import name. `__import__`/`importlib` with a
-    non-literal argument is invisible to this resolver. Measured, not assumed:
-    grepping `importlib|__import__` across the closure returns exactly three hits
-    — two `__import__(name)` calls in `engine_build_fingerprint.py` over the
-    literal tuple `("poke_engine", "pokezero_search")`, both of which are the
-    native engine and therefore covered by the engine fingerprint, and one comment
-    in the differential. So the gap is empty as of this commit; it is not
-    structurally closed.
+    non-literal argument is invisible to this resolver. Re-measured over the 73:
+    `grep -nE 'importlib|__import__'` returns hits in `engine_build_fingerprint.py`
+    (two `__import__(name)` calls over the literal tuple
+    `("poke_engine", "pokezero_search")` — the native engine, covered by the engine
+    fingerprint), plus `importlib.util`/`import_module` sites in the training tree.
+    The gap is not structurally closed and this is the one class of import the
+    completeness pin cannot re-derive either.
+  * Import cycles in `src/pokezero/**` are followed, not flagged: the walk is a
+    visited-set traversal, so a cycle terminates rather than recursing.
   * Third-party dependency versions, the Showdown checkout, and the interpreter.
     Those are runtime environment, not tracked bytes.
   * `tests/`, `docs/`, `reports/`, and every `scripts/` tool the differential does
     not import. Editing them cannot change a sweep number and must not move the
     digest.
+
+HOW A FUTURE TRUNCATION IS CAUGHT. The exact-membership pin cannot do it on its
+own — that was the second half of the review finding. A pin listing the 16 files
+that ARE found stays green forever over a truncated graph, because it can only
+detect growth that never happened. So
+`tests/test_harness_digest_provenance.py` also carries a COMPLETENESS pin, which
+re-derives every relative import target with an independent, deliberately naive
+textual implementation and asserts each one is already in the closure. A resolver
+that drops an import class goes red there immediately, by construction, without
+anyone having to notice the count stopped moving.
 
 Usage::
 
@@ -126,7 +166,7 @@ DIGEST_SCHEMA = "pokezero-harness-digest/1"
 
 
 def _resolve(module_name: str) -> Path | None:
-    """Map a dotted import name onto a tracked first-party file, or None.
+    """Map an ABSOLUTE dotted import name onto a tracked first-party file, or None.
 
     First party means exactly two layouts, which are the only two this repo has:
     a bare top-level name that is a sibling script (`scripts/` is prepended to
@@ -147,6 +187,71 @@ def _resolve(module_name: str) -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def _containing_package(path: Path) -> str | None:
+    """The dotted package a file lives in, or None if it is not under `src/`.
+
+    `src/pokezero/engine_world.py` -> `pokezero`.
+    `src/pokezero/__init__.py`     -> `pokezero` (a package's own `__init__` is
+    INSIDE the package it names, which is what makes `from .x import y` there
+    resolve to `pokezero.x` and not to `x`).
+    """
+
+    try:
+        relative = path.resolve().relative_to(PACKAGE_ROOT)
+    except ValueError:
+        return None
+    parts = list(relative.parts)
+    if parts[-1] == "__init__.py":
+        return ".".join(parts[:-1])
+    return ".".join(parts[:-1])
+
+
+def _absolutize(node: "ast.ImportFrom", source: Path) -> list[str]:
+    """Every absolute module name a single `from ... import ...` can denote.
+
+    Handles BOTH forms, and the relative one is not optional. An earlier revision
+    of this function dropped every `node.level > 0` import with a comment claiming
+    relative imports "do not occur in either layout above". That was false and it
+    was measurable: `src/pokezero/**` carries 70 relative `ImportFrom` statements
+    across 9 of the files that were being hashed, and dropping them truncated the
+    closure to 16 files where the honest answer is 73. `engine_world.py` reaches
+    `gen3_damage.py` that way, `engine_fidelity.py` reaches `showdown_fixture.py`,
+    and `poke_engine_adapter.py` reaches `poke_engine_backend.py` — all three on
+    the live sweep path. The digest was therefore blind to the majority of the
+    instrument while its docstring claimed the opposite. See
+    `tests/test_harness_digest_provenance.py` for the pin that now makes a
+    truncating resolver red rather than quietly green.
+
+    `from .thing import name` is ambiguous between a module `pkg.thing` and an
+    attribute of it, so both are returned and whichever resolves to a file wins.
+    """
+
+    if not node.level:
+        if not node.module:
+            return []
+        return [node.module] + [f"{node.module}.{a.name}" for a in node.names]
+
+    package = _containing_package(source)
+    if package is None:
+        # A relative import from outside `src/` — `scripts/` is a flat directory of
+        # top-level modules, so this cannot resolve to a first-party file. Returning
+        # nothing here is correct, and it is NOT the silent drop described above:
+        # the completeness pin re-derives relative targets independently and would
+        # flag it if such a file ever appeared.
+        return []
+    parts = package.split(".") if package else []
+    # `level == 1` is "this package"; each extra level strips one more component.
+    ascend = node.level - 1
+    if ascend:
+        if ascend > len(parts):
+            return []
+        parts = parts[: len(parts) - ascend]
+    prefix = ".".join(parts + ([node.module] if node.module else []))
+    if not prefix:
+        return []
+    return [prefix] + [f"{prefix}.{a.name}" for a in node.names]
 
 
 def harness_files(root: Path | None = None) -> list[Path]:
@@ -177,14 +282,7 @@ def harness_files(root: Path | None = None) -> list[Path]:
             if isinstance(node, ast.Import):
                 names = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom):
-                if node.level or not node.module:
-                    # Relative imports do not occur in either layout above; if one
-                    # ever does, it is a resolver gap and the membership pin in
-                    # tests/test_harness_digest_provenance.py will show it as a
-                    # closure that stopped growing.
-                    continue
-                # `from pkg import thing` — `thing` may itself be a submodule.
-                names = [node.module] + [f"{node.module}.{a.name}" for a in node.names]
+                names = _absolutize(node, path)
             else:
                 continue
             for name in names:

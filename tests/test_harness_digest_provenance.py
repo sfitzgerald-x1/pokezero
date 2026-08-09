@@ -76,6 +76,20 @@ fingerprint = _load(
 #
 # `scripts/harness_digest.py` is in its own closure because the differential
 # imports it. That is deliberate: tampering with the digest moves the digest.
+#
+# 16 -> 73, AND THIS PIN COULD NOT HAVE CAUGHT THE REASON. Review found that the
+# resolver dropped every relative import, so the closure was 16 files where the
+# honest answer is 73. A membership pin listing the 16 that ARE found stays green
+# forever over a truncated graph -- it can only detect growth that never happened,
+# which is precisely the fail-open the comment above claims it closes. The comment
+# is kept because it is true for the case it describes (a member LEAVING), and the
+# case it cannot describe is now covered by `ClosureCompletenessTests` below, which
+# re-derives relative-import targets with an independent implementation.
+#
+# The count agrees with runtime: importing the differential in a built venv loads
+# 72 first-party modules, all 73 - 1 of these, the extra being `inference_service`
+# (imported lazily, so not resident at import time). Static superset of runtime,
+# which is the safe direction.
 _EXPECTED_HARNESS_CLOSURE = frozenset(
     {
         "scripts/differential_denominator.py",
@@ -83,17 +97,74 @@ _EXPECTED_HARNESS_CLOSURE = frozenset(
         "scripts/engine_transition_differential.py",
         "scripts/fidelity_gate_events.py",
         "scripts/harness_digest.py",
+        "src/pokezero/__init__.py",
+        "src/pokezero/actions.py",
+        "src/pokezero/admission_guard.py",
         "src/pokezero/audit_provenance.py",
+        "src/pokezero/belief.py",
+        "src/pokezero/bootstrap.py",
+        "src/pokezero/category_vocab.py",
+        "src/pokezero/collection.py",
+        "src/pokezero/dataset.py",
+        "src/pokezero/determinization.py",
         "src/pokezero/dex.py",
+        "src/pokezero/diversity_population.py",
         "src/pokezero/engine_fidelity.py",
         "src/pokezero/engine_fidelity_multiturn.py",
         "src/pokezero/engine_search.py",
         "src/pokezero/engine_world.py",
         "src/pokezero/env.py",
+        "src/pokezero/evaluation.py",
+        "src/pokezero/evaluation_profiles.py",
+        "src/pokezero/gen3_damage.py",
         "src/pokezero/golden_corpus.py",
+        "src/pokezero/golden_corpus_fold.py",
+        "src/pokezero/inference_service.py",
+        "src/pokezero/investment.py",
+        "src/pokezero/linear_policy.py",
         "src/pokezero/local_showdown.py",
+        "src/pokezero/mcts_diagnostics.py",
+        "src/pokezero/neural_policy.py",
+        "src/pokezero/neural_selfplay.py",
+        "src/pokezero/observation.py",
+        "src/pokezero/opponents.py",
+        "src/pokezero/padding.py",
+        "src/pokezero/paths.py",
         "src/pokezero/poke_engine_adapter.py",
+        "src/pokezero/poke_engine_backend.py",
+        "src/pokezero/policy.py",
+        "src/pokezero/promotion.py",
+        "src/pokezero/public_action_capture.py",
+        "src/pokezero/public_decision_corpus.py",
         "src/pokezero/randbat.py",
+        "src/pokezero/randbat_vocab.py",
+        "src/pokezero/refutation_curriculum.py",
+        "src/pokezero/refutation_mining.py",
+        "src/pokezero/refutation_population.py",
+        "src/pokezero/refutation_progress.py",
+        "src/pokezero/refutation_training.py",
+        "src/pokezero/replay_benchmark.py",
+        "src/pokezero/replay_branching.py",
+        "src/pokezero/replay_import.py",
+        "src/pokezero/rollout.py",
+        "src/pokezero/root_puct_telemetry.py",
+        "src/pokezero/run_audit.py",
+        "src/pokezero/run_manifest.py",
+        "src/pokezero/search.py",
+        "src/pokezero/search_benchmark.py",
+        "src/pokezero/search_policy.py",
+        "src/pokezero/selfplay.py",
+        "src/pokezero/shaping.py",
+        "src/pokezero/showdown.py",
+        "src/pokezero/showdown_fixture.py",
+        "src/pokezero/source_metadata.py",
+        "src/pokezero/teacher_scenarios.py",
+        "src/pokezero/tier2.py",
+        "src/pokezero/trajectory.py",
+        "src/pokezero/transitions.py",
+        "src/pokezero/transitions_fold.py",
+        "src/pokezero/turn_merged.py",
+        "src/pokezero/value_calibration.py",
     }
 )
 
@@ -133,6 +204,117 @@ class TheClosureIsWhatWeThinkItIsTests(unittest.TestCase):
     def test_every_member_of_the_closure_is_a_tracked_file(self) -> None:
         for path in harness.harness_files():
             self.assertTrue(path.is_file(), path)
+
+
+def _relative_targets_naively(path: Path) -> set[str]:
+    """Every first-party file a `from . import` in `path` can denote.
+
+    DELIBERATELY AN INDEPENDENT, DUMBER IMPLEMENTATION than
+    `harness_digest._absolutize`. If this reused the resolver under test, a class
+    of import the resolver drops would be dropped here too and the completeness
+    assertion would agree with the bug -- which is exactly how the 16-file closure
+    passed its own membership pin. This one walks up `level` directories from the
+    file's own parent and looks for a matching `.py` or package directory on disk,
+    with no notion of dotted package names at all.
+    """
+
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return set()
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or not node.level:
+            continue
+        base = path.parent
+        for _ in range(node.level - 1):
+            base = base.parent
+        heads = [base / part for part in ((node.module or "").split(".") if node.module else [])]
+        anchor = heads[-1] if heads else base
+        candidates = [anchor.with_suffix(".py"), anchor / "__init__.py"]
+        candidates += [anchor / f"{a.name}.py" for a in node.names]
+        candidates += [anchor / a.name / "__init__.py" for a in node.names]
+        for candidate in candidates:
+            if candidate.is_file():
+                try:
+                    found.add(candidate.resolve().relative_to(REPO).as_posix())
+                except ValueError:
+                    continue
+    return found
+
+
+class ClosureCompletenessTests(unittest.TestCase):
+    """THE PIN THAT WOULD HAVE CAUGHT THE TRUNCATION, and the reason the membership
+    pin alone is not enough.
+
+    A closure must be CLOSED: every first-party file reachable from a member must
+    itself be a member. The membership pin cannot express that -- it lists what the
+    resolver found, so a resolver that finds too little agrees with it perfectly.
+    This asserts the invariant directly, using a resolver that shares no code with
+    the one under test.
+    """
+
+    def test_the_closure_is_closed_under_relative_imports(self) -> None:
+        members = {p.resolve().relative_to(REPO).as_posix() for p in harness.harness_files()}
+        missing: dict[str, set[str]] = {}
+        for member in sorted(members):
+            targets = _relative_targets_naively(REPO / member)
+            gap = targets - members
+            if gap:
+                missing[member] = gap
+        self.assertEqual(
+            missing,
+            {},
+            "the harness closure is NOT closed: these members relatively-import "
+            "first-party files that the digest does not hash. That is the exact "
+            "defect review found -- a resolver that drops an import class truncates "
+            "the closure while every membership pin stays green.",
+        )
+
+    def test_the_completeness_check_is_not_vacuous(self) -> None:
+        """It must actually find relative imports, or it asserts nothing.
+
+        `src/pokezero/**` carries 70 relative `ImportFrom` statements; a version of
+        this scan that found zero would pass the pin above over any closure at all.
+        """
+
+        total = sum(
+            len(_relative_targets_naively(p)) for p in harness.harness_files()
+        )
+        self.assertGreater(total, 50, "the naive relative-import scan found almost nothing")
+
+    def test_the_resolver_actually_follows_a_relative_import(self) -> None:
+        """A direct unit test on a synthetic package, independent of this repo.
+
+        The truncation survived because nothing tested the resolver's relative arm
+        in isolation; it was only ever exercised through a closure whose expected
+        value had been copied from the buggy run.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "scripts").mkdir()
+            pkg = root / "src" / "pokezero"
+            pkg.mkdir(parents=True)
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "leaf.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (pkg / "mid.py").write_text("from .leaf import VALUE\n", encoding="utf-8")
+            (root / "scripts" / "root.py").write_text(
+                "from pokezero.mid import VALUE\n", encoding="utf-8"
+            )
+            shutil.copy(REPO / "scripts" / "harness_digest.py", root / "scripts" / "harness_digest.py")
+            module = _load("harness_digest_synthetic", root / "scripts" / "harness_digest.py")
+            found = {
+                p.resolve().relative_to(root.resolve()).as_posix()
+                for p in module.harness_files(root / "scripts" / "root.py")
+            }
+            self.assertIn(
+                "src/pokezero/leaf.py",
+                found,
+                "the resolver did not follow `from .leaf import VALUE` -- this is the "
+                "truncation review caught, reproduced in five files",
+            )
+            self.assertIn("src/pokezero/mid.py", found)
 
 
 # ---------------------------------------------------------------------------
@@ -308,10 +490,12 @@ class TheDifferentialStampsItTests(unittest.TestCase):
 
         `source_tree` is excluded from resume identity because it flips on any
         tracked edit and made a 200-game crash-safe sweep unresumable after a README
-        touch. The harness digest has no such problem -- it covers 16 files, all of
-        them the instrument -- and a change to one of them mid-sweep is exactly the
-        corruption a resume must refuse rather than merge into a report describing
-        neither instrument.
+        touch. The harness digest covers the 73 files the differential imports and
+        nothing else, so it does not move on prose, and a change to one of them
+        mid-sweep is exactly the corruption a resume must refuse rather than merge
+        into a report describing neither instrument. The churn that the wider
+        closure does add was measured, not waved away: 7 of the last 300 commits on
+        `origin/main`.
         """
 
         descriptive = _module_frozenset("_DESCRIPTIVE_PROVENANCE_KEYS")
@@ -580,6 +764,26 @@ def _job_block(name: str) -> str:
     return "\n".join(lines)
 
 
+def _guard_body(block: str, needle: str) -> str:
+    """The shell `if ...; then ... fi` region containing `needle`.
+
+    Used to assert that a guard's failure arm actually exits nonzero. A structural
+    check that the guard EXISTS says nothing about whether it does anything.
+    """
+
+    lines = block.splitlines()
+    for index, line in enumerate(lines):
+        if needle not in line:
+            continue
+        body = [line]
+        for following in lines[index + 1 :]:
+            body.append(following)
+            if following.strip() == "fi":
+                break
+        return "\n".join(body)
+    raise AssertionError(f"no guard containing {needle!r} in this block")
+
+
 class ThePinIsReachableFromTheRequiredContextTests(unittest.TestCase):
     """This repo has found FOUR inert pins, the last a CI job whose result nothing
     consumed: `seed-registry pass 8s` beside `gate-status pass 3s`, the reporter
@@ -592,22 +796,83 @@ class ThePinIsReachableFromTheRequiredContextTests(unittest.TestCase):
         self.assertIn(f"\n  {_JOB_NAME}:\n", WORKFLOW.read_text(encoding="utf-8"))
 
     def test_the_job_is_unconditional(self) -> None:
-        """No `if:`, so `skipped` is not reachable and `gate-status` needs no case
-        analysis for it -- which is what lets that check demand the positive."""
+        """No `if:` at ANY depth, so `skipped` is not reachable and `gate-status`
+        needs no case analysis for it -- which is what lets that check demand the
+        positive rather than exclude a stale list of negatives.
 
-        # Line-wise, not a substring search on the block. The first revision tested
-        # `"\n    if:" not in block`, which the block's OWN FIRST LINE cannot match --
-        # it has no leading newline inside the slice -- so inserting `if:` as the first
-        # key of the job passed the pin. Caught by the mutation battery, which is the
-        # only reason it is not in the diff as an inert assertion.
-        keys = [
-            line.strip().split(":", 1)[0]
-            for line in _job_block(_JOB_NAME).splitlines()
-            if line.startswith("    ") and not line.startswith("     ") and ":" in line
-        ]
-        self.assertNotIn("if", keys, "the job became skippable; `skipped` is now reachable")
+        THREE REVISIONS, each defeated by the next mutation, recorded because the
+        pattern is the point: an assertion about YAML written as a string or indent
+        search keeps having a shape the YAML can slip around.
+
+          1. `"\\n    if:" not in block` -- defeated by `if:` as the job's FIRST key,
+             which has no leading newline inside the block slice.
+          2. A 4-space key scan splitting on ":" -- defeated TWO ways, both found in
+             review: `if : false` (space before the colon, so the key parsed as
+             `"if "` and did not match `"if"`, while `yaml.safe_load` reads the key
+             as `if`), and a STEP-level `if: false` at 8 spaces, invisible to a scan
+             that only looked at 4. The second is the worse of the two -- a job whose
+             every step skips still reports `success`, so `gate-status` is satisfied
+             and the pin is neutered while the whole workflow stays green.
+          3. This one. Every key at every depth, normalized before comparison.
+
+        And a THIRD defeat found here rather than in review, of the same family:
+        `continue-on-error: true`. It is documented to stop a failing job from
+        failing the workflow, so the pin could go red and the required context still
+        pass. It is forbidden at every depth for the same reason `if` is -- there is
+        no legitimate use of either key anywhere in this job.
+        """
+
+        keys: list[str] = []
+        for line in _job_block(_JOB_NAME).splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or ":" not in stripped:
+                continue
+            # A step is a list item, so its first key arrives as `- name: ...`.
+            if stripped.startswith("- "):
+                stripped = stripped[2:]
+            # Normalize BEFORE splitting, not after: `if : false` must key as `if`.
+            keys.append(stripped.split(":")[0].strip())
+
+        self.assertNotIn("if", keys, "the job or one of its steps became skippable")
+        self.assertNotIn(
+            "continue-on-error",
+            keys,
+            "a failing pin would no longer fail the job, so gate-status would still pass",
+        )
         self.assertNotIn("needs", keys, "the job now depends on another job and can be skipped")
-        self.assertIn("runs-on", keys, "anti-vacuity: the key scan found nothing")
+        # Anti-vacuity, and it has to name a key at each depth the scan claims to
+        # reach -- a scan that silently stopped seeing step-level keys would pass an
+        # anti-vacuity check that only asked for `runs-on`.
+        self.assertIn("runs-on", keys, "anti-vacuity: the job-level key scan found nothing")
+        self.assertIn("name", keys, "anti-vacuity: the step-level key scan found nothing")
+        self.assertIn("run", keys, "anti-vacuity: the step-body key scan found nothing")
+
+    def test_the_job_actually_runs_this_module(self) -> None:
+        """The `Ran N tests` and `^OK$` guards read a LOG, and a log can be forged.
+
+        Replacing the `run:` body with `echo 'Ran 27 tests'; echo OK` satisfies both
+        greps. Pinning the invocation is what makes them mean anything -- the fourth
+        way I could find to neuter this job while leaving it green.
+        """
+
+        block = _job_block(_JOB_NAME)
+        self.assertIn(
+            "python -m unittest tests.test_harness_digest_provenance",
+            block,
+            "the job no longer runs this module; its log guards assert nothing",
+        )
+        self.assertIn("python scripts/harness_digest.py --print", block)
+        # Both log guards must exit nonzero, for the same reason gate-status's
+        # branch must: `exit 1` -> `exit 0` is a one-character edit that leaves the
+        # grep, the message and the whole shape of the guard intact while the job
+        # passes over a shrunk or forged suite.
+        for needle in ("Ran 28 tests", "'^OK$'"):
+            with self.subTest(guard=needle):
+                self.assertIn(
+                    "exit 1",
+                    _guard_body(block, needle),
+                    f"the {needle} guard no longer exits nonzero",
+                )
 
     def test_gate_status_needs_the_job_and_consumes_its_result(self) -> None:
         block = _job_block("gate-status")
@@ -618,6 +883,18 @@ class ThePinIsReachableFromTheRequiredContextTests(unittest.TestCase):
             '[ "${HARNESS}" != "success" ]',
             block,
             "gate-status reads the result but does not fail on it",
+        )
+        # ...and the branch must actually FAIL. Found by mutation while hardening
+        # the pins above: flipping this one `exit 1` to `exit 0` leaves every
+        # structural assertion satisfied -- the job is needed, the result is read,
+        # the comparison is present -- and the required context goes green over a
+        # red pin. Testing for the presence of a check is not testing that the
+        # check does anything, which is the whole four-inert-pins lesson one level
+        # further in.
+        self.assertIn(
+            "exit 1",
+            _guard_body(block, '[ "${HARNESS}" != "success" ]'),
+            "the harness branch of gate-status no longer exits nonzero",
         )
 
     def test_the_workflow_test_count_guard_matches_this_module(self) -> None:
