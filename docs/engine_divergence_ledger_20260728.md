@@ -5066,7 +5066,7 @@ differential's.** The differential has no boundary builder of its own: it calls
 the production constructor verbatim
 (`scripts/engine_transition_differential.py:1408-1450` — `world_battle_spec`
 with `_public_effect_signals`), and `world_battle_spec`'s signature
-(`src/pokezero/engine_world.py:783-811`) has **no channel for a live type
+(`src/pokezero/engine_world.py:790-818`) has **no channel for a live type
 override at all**, so the harness could not pass one even if it derived it.
 
 The event IS parsed, and dies between the parser and the world:
@@ -5081,7 +5081,7 @@ The event IS parsed, and dies between the parser and the world:
   `_public_materialization_payload` — the per-side dict (~:2101-2119) carries
   boosts/volatiles/toxicStage/stallCounter/sideConditions but no
   `live_type_override` field.
-- dropped (constructor): `src/pokezero/engine_world.py:1337` builds every mon
+- dropped (constructor): `src/pokezero/engine_world.py:1384` builds every mon
   with `types=info.types` (dex base types). The only live-retype arms are
   `_apply_transform` (:619, donor types + TYPECHANGE volatile at :649) and
   `_apply_forecast_types` (:731-757, Castform, re-derived from public weather

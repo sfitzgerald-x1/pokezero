@@ -280,7 +280,7 @@ by side-symmetry = 112 of 119 rows attributed on golden-v2** (wish/sleep-clause 
 46, toxic line replay 24), **7 open** (encore 2, action surface 5). Scenarios: all
 10 rows open. An earlier revision called the 46 stall rows "unreachable from engine state" and posed an
 encoder-side design decision; that was a substring false-negative (the engine names
-it `protect` and `engine_world.py:1286` already seeds it) and is withdrawn.
+it `protect` and `engine_world.py:1333` already seeds it) and is withdrawn.
 
 > **SUPERSEDED — this whole paragraph.** `reports/c112_leaf_state_divergence_ledger.md` is the
 > live attribution and it reaches **119 of 119** on golden-v2, with **no side-symmetry inference

@@ -118,7 +118,7 @@ class TestCanonicalKey:
     def test_seat_spellings_are_unified_without_erasing_the_side(self):
         # The two producer spellings must agree in FORM, but the side must survive:
         # the slot in the key is the side that FAILED TO BUILD, which is independent
-        # of the acting seat (`engine_world.py:505` builds both sides every decision).
+        # of the acting seat (`engine_world.py:511` builds both sides every decision).
         # hc-d4.json records 16 `side 'p1'` and 16 `side 'p2'` in one stats block.
         quoted = ("encore_move_unknown: side '%s' is encored but the locked move "
                   "cannot be determined")

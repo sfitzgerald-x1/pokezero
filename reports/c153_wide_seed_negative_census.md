@@ -412,7 +412,7 @@ committed artifact.
 
 **Reachable only by an input this instrument does not build (4).**
 
-* `rest_sleep_refund_pending_precounts_legacy`. Raised at `engine_world.py:2039` only when a row
+* `rest_sleep_refund_pending_precounts_legacy`. Raised at `engine_world.py:2079` only when a row
   has `restSleepActiveRefundPending` and **no** `restSleepAttempts`. ⚠ The naive reading — "live
   rows always carry the counts" — is **wrong**: `local_showdown._apply_rest_sleep_provenance` sets
   the pending flag at `:2806` and then `continue`s at `:2822` without writing them. What actually
@@ -420,7 +420,7 @@ committed artifact.
   `restSleepProvenanceUnrepresentable`, and `_hp_and_status` raises on *that* at `:1927`, before it
   ever reaches `:1971`. The surviving way in is a row with the pending flag, no counts and no
   unrepresentable flag, which no live producer emits.
-* `rest_sleep_refund_pending_unsplit_legacy`. Raised at `engine_world.py:2067` only when a row
+* `rest_sleep_refund_pending_unsplit_legacy`. Raised at `engine_world.py:2107` only when a row
   carries the pre-split `restSleepRefundPending` flag and **neither** producer flag — and
   `_hp_and_status` tests both producer flags first, at `:1945` and `:1952`.
   `_mark_legacy_rest_refund_pending` has exactly **two** call sites in `local_showdown.py`
@@ -431,17 +431,17 @@ committed artifact.
   is *exactly zero*. So a census zero on either of these two **confirms a design property** and is
   not evidence about coverage; reporting it as a surviving negative would be the fourth category in
   disguise.
-* `override_side_missing`. Raised at `engine_world.py:511` when `override.player_teams.get(slot)`
+* `override_side_missing`. Raised at `engine_world.py:517` when `override.player_teams.get(slot)`
   is falsy. The differential builds that mapping at `engine_transition_differential.py:2396` as
   `{slot: true_teams[slot]["packed"] for slot in ("p1", "p2")}` — a comprehension over exactly the
   two slots the loop then iterates, so a slot cannot be **absent**. The residual way in is an empty
   packed string from the bridge snapshot, i.e. a battle started with an empty team; 10,000 games
   produced none.
-* `deferred_opponent_action`. Raised at `engine_world.py:944`. ⚠ The payload always **carries**
+* `deferred_opponent_action`. Raised at `engine_world.py:951`. ⚠ The payload always **carries**
   both keys — `local_showdown._public_materialization_payload` emits them at `:2372` — so
   *"never carries"* would be false. They are always **empty**, and the closure sits a frame higher
   than a first draft placed it: the payload reaching this raise is not one the differential builds
-  at all. `world_battle_spec` constructs its own at `engine_world.py:904`, calling
+  at all. `world_battle_spec` constructs its own at `engine_world.py:911`, calling
   `_public_materialization_payload(state)` with **neither** deferred argument (both keyword-only,
   defaulting to `None`; `dict(... or {})` at `local_showdown.py:2324`), then hands it to
   `battle_spec_from_payload`, which reaches `_reject_unsupported_globals` at `:397`. An empty dict

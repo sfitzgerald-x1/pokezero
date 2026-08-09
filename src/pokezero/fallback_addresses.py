@@ -91,7 +91,7 @@ _LITERAL = r"(?<![A-Za-z])'[^']*'(?![A-Za-z])"
 # names who was present, not what failed.
 # The three Gen 3 trapping abilities. If one of THESE names the foe, the refusal
 # means something categorically different: the foe really does carry a trapping
-# mechanism and `engine_world.py:783-789` declined the exemption anyway -- a
+# mechanism and `engine_world.py:790-796` declined the exemption anyway -- a
 # disagreement between those lines and Showdown, reachable for `magnetpull` vs a
 # non-Steel self and `arenatrap` vs a Flying/Levitate self. Every other ability
 # means no trapping mechanism was sampled at all, which is a belief-sampling desync
@@ -113,7 +113,7 @@ _BYSTANDER_POSITIONS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 # Seat/slot appears in two spellings across producers -- `{slot}:` unquoted
-# (`engine_world.py:2268`) and `side {slot!r}` quoted (`encore_move_unknown`). One
+# (`engine_world.py:2308`) and `side {slot!r}` quoted (`encore_move_unknown`). One
 # family therefore split by seat and the other did not, partitioning the key space
 # by an f-string accident.
 #
@@ -121,7 +121,7 @@ _BYSTANDER_POSITIONS: tuple[tuple[re.Pattern[str], str], ...] = (
 # revision erased it, justified by "seat is already a field on FallbackAddress" --
 # that premise is false. `FallbackAddress.seat` is `context.player_id`, the ACTING
 # seat, whereas the slot in the key is the side of the world that failed to build,
-# and `engine_world.py:505` builds both sides on every decision. So a p1 decision
+# and `engine_world.py:511` builds both sides on every decision. So a p1 decision
 # routinely carries a `side 'p2'` failure. "My own side is unexpressible" and "the
 # opponent's inferred side is unexpressible" are different bugs -- the second is a
 # belief-sampling problem -- and `hc-d4.json` records 16 of each in one block.

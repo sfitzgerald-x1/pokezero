@@ -36,7 +36,7 @@ V2.x-compatible encoder path.
 | **Light Screen** (screen) | Light Screen | 0 | screens 24 / 25 (shared count); `NUMERIC_SELF_LIGHT_SCREEN_TURNS` 49, `NUMERIC_OPP_LIGHT_SCREEN_TURNS` 53 | — |
 | **Safeguard** | Safeguard | 0 | `NUMERIC_SELF_SAFEGUARD_TURNS` 50, `NUMERIC_OPP_SAFEGUARD_TURNS` 54 | — |
 | **Mist** | Mist | 0 | `NUMERIC_SELF_MIST_TURNS` 51, `NUMERIC_OPP_MIST_TURNS` 55 | — |
-| **Future Sight / Doom Desire** (delayed attack) | Future Sight, Doom Desire | 0 | `NUMERIC_SELF_FUTURE_SIGHT` 35, `NUMERIC_OPP_FUTURE_SIGHT` 36 | Engine **also refuses** this state: `EngineWorldUnsupported("future_sight_pending")` (`engine_world.py:500`) — safe only while the mechanic is unreachable. |
+| **Future Sight / Doom Desire** (delayed attack) | Future Sight, Doom Desire | 0 | `NUMERIC_SELF_FUTURE_SIGHT` 35, `NUMERIC_OPP_FUTURE_SIGHT` 36 | Engine **also refuses** this state: `EngineWorldUnsupported("future_sight_pending")` (`engine_world.py:506`) — safe only while the mechanic is unreachable. |
 | **Hail** (weather) | Hail | 0 (+ no gen3 hail ability) | opponent weather-reveal hail pair (offset `NUMERIC_STAT_WEATHER_REVEAL_OFFSET` 97, `_WEATHER_REVEAL_ORDER` index 3): **103** (set-this-game bit), **104** (source-was-ability bit) | Hail is the one weather in `_WEATHER_REVEAL_ORDER` with **neither a move carrier nor a gen3 ability** (Snow Warning is gen4). The rain/sun/sand reveal pairs (97–102) are all live — via the Rain Dance / Sunny Day / (ability-only) Sandstorm sources and the Drizzle / Drought / Sand Stream abilities. |
 
 **Total: 14 dead numeric columns** — indices `{24, 25, 35, 36, 48, 49, 50, 51, 52, 53, 54, 55, 103, 104}`.
