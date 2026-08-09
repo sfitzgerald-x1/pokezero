@@ -145,6 +145,15 @@ jobs:
             reports/c138_known_gaps_ledger.md
             tests/test_ledger_table_uniformity.py
             reports/artifacts/c150_band_split_trade_census.json
+            # C155's terminal-disposition register and its pin. Listed for the reason every
+            # pin file and document above is listed: `mass-gate` is the only job that runs
+            # the pin, so without these two lines a PR whose only change is deleting or
+            # editing the register matches no filter, skips this job and goes green. The
+            # register is the document an owner reads to decide whether
+            # `RATIFIED_SWEEP_PRECONDITION` holds, which makes an unrun pin on it the
+            # single worst place in this file for the gap the C152 block above records.
+            reports/c155_terminal_disposition_register.md
+            tests/test_terminal_disposition_register.py
             # The coverage-bound pins' ENTIRE input. Without these listed, a PR whose
             # only change is deleting one of them skips mass-gate and goes green.
             reports/artifacts/c131_leechseed_main_dev_sweep.json
@@ -884,6 +893,44 @@ jobs:
           # assertion into an unverified matcher.
           if ! grep -qE '^OK$' /tmp/ledgertables.log; then
             echo "::error::ledger table-uniformity pins did not report a clean OK"
+            exit 1
+          fi
+
+      # C155. The terminal-disposition register. `RATIFIED_SWEEP_PRECONDITION` gates the
+      # program's one terminal measurement on "the ledger is terminal AND the engine
+      # fingerprint is declared frozen", and the list of what stands between here and that
+      # had been RECONSTRUCTED three times by three agents with different numbering each
+      # time. This step is what makes the committed version a maintained document rather
+      # than a fourth reconstruction: the item inventory is exact and ORDERED (ids are
+      # permanent, so a renumbering is red), the statuses are re-derived in BOTH directions
+      # -- flipping an OPEN item to discharged manufactures terminality and flipping the
+      # discharged one to OPEN manufactures openness, and both fail -- and every figure in
+      # its Appendix A is re-derived from tracked bytes, committed artifacts and anchors
+      # resolved with uniqueness required, imported from C153's census rather than copied.
+      #
+      # Battery: 34 mutations applied, 34 caught, listed in the module docstring. Ten of
+      # them are applied ONLY to the tree and never to the document, because a pin that
+      # reads a document against a hard-coded copy of itself passes every document-side
+      # mutation. Exact count, not a floor, per #1163.
+      #
+      # ⚠ #1205: the guard-scan added in #1204 covers 20 of the 24 `Ran N tests` guards in
+      # this file, so do not assume it will catch a drift in this one. The count below was
+      # re-derived from the module's own AST and from a local run.
+      - name: Terminal disposition register
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_terminal_disposition_register -v 2>&1 \
+            | tee /tmp/c155register.log
+          if ! grep -qE 'Ran 34 tests' /tmp/c155register.log; then
+            echo "::error::expected 34 register pins; the suite shrank or grew"
+            exit 1
+          fi
+          # A clean OK with no skips. TheDerivationsReadSomethingTests is the only reason
+          # the zeroes in Appendix A mean anything -- every one of them is a loop over a
+          # corpus or a scan of one file, and a scan that read nothing reports zero and
+          # looks like a clean result. Skipping it turns four absences vacuous at once.
+          if ! grep -qE '^OK$' /tmp/c155register.log; then
+            echo "::error::terminal-disposition register pins did not report a clean OK"
             exit 1
           fi
 

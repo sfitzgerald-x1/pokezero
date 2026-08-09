@@ -1,0 +1,546 @@
+# C155 — the terminal-disposition register
+
+**This document is the single maintained statement of what stands between the program and
+`RATIFIED_SWEEP_PRECONDITION`.** It replaces a list that had been reconstructed on demand three
+times by three agents, from `reports/c152_ledger_terminal_disposition.md` §7.1 plus C153 and C154,
+with different numbering each time. A document rebuilt on demand is exactly the artifact this
+program keeps finding drifted, so this one is committed, numbered permanently, and machine-checked
+against the tree by `tests/test_terminal_disposition_register.py`.
+
+**Reconciled against** `origin/main` at `6ef682bf` (#1204). Every figure below is re-derived from
+tracked bytes or from a committed artifact — none is carried from the list it replaces, and **six**
+statements did not survive that derivation, itemised in §5.
+
+> **What this document does NOT do.** It runs no sweep, builds no engine and consumes no seed. It
+> does not touch `OWNER_RATIFIED`, `RATIFIED_SWEEP_PRECONDITION`, `RATIFIED_FINAL_HOLDOUT`,
+> `BURNED_FINAL_HOLDOUT`, the `19,200,000`–`19,200,259` burn, C141's demotion, or
+> `reports/c151_final_holdout_rereg_prediction.md`. It writes no new JSON artifact, deliberately:
+> every figure here is already derivable from a committed one, and C154 §6 records what a
+> placement decision costs when the artifact was not needed.
+
+---
+
+## 0. The rule that makes this a register rather than a list
+
+1. **Item ids are permanent.** `T1`–`T14` are allocated once and never reused or renumbered. An
+   item that is discharged stays in place with its status changed, and the pin's inventory is
+   ordered and exact in both directions, so an item cannot be dropped, added or reordered without
+   an author touching the module beside it. Renumbering is what made the three reconstructions
+   incomparable; it is now mechanically impossible.
+2. **Every item states its evidence, its scope, and who can act on it.** The actor distinction has
+   been wrong here before — the program spent time believing C116 item 13 was blocked on the owner
+   when the owner had already done everything asked. It had: `OWNER_RATIFIED` carries
+   `19,300,000-19,300,199`, `scott, 2026-08-08`, and the prediction was registered in C151. **The
+   remaining work under both gates is agent work plus one owner declaration**, and no item below is
+   waiting on a ratification that has not happened.
+3. **Every figure is derived, and the pin says which.** Each item carries a `pin` verdict:
+   `derived` means the pin re-derives the item's status from the tree; `derived + reading` means
+   the pin re-derives the figures but the *disposition* is a human reading; `reading` means the pin
+   covers nothing but the item's presence. Pretending a pin covers a reading is the failure mode
+   C154 §5 had to add a fifth entry to its own list to avoid.
+4. **A negative carries the measurement that produced it**, per the ledger's §8 rule as widened by
+   C152: a negative measured only inside the two permitted windows is a claim about those windows.
+
+---
+
+## 1. The two gates, quoted
+
+`RATIFIED_SWEEP_PRECONDITION`, verbatim from `scripts/engine_transition_differential.py`:
+
+> `"ledger terminal AND engine fingerprint declared frozen for the claim"`
+
+They are two gates, not one. **No amount of ledger work satisfies the second**, and the second is
+the one the tree can say most about: it has moved, and nothing in the repository can declare it
+frozen. C151 §3 records that the trigger is *"a condition on program state, not a date, and it is
+**not machine-checkable**"* — so this register does not decide whether the gates are met. It
+supplies the complete, derived input to that decision.
+
+**What "terminal" is taken to mean here, and it is a reading.** Not "no gaps": the ledger is a
+ledger *of* gaps and G0 will be open at the moment of the claim. It is read as *no entry leaves an
+obligation undischarged* — no verdict withheld, no measurement owed, no claim whose scope the
+document cannot state. Items below are classified against that reading and the reading is labelled
+as one.
+
+---
+
+## 2. The register
+
+Status vocabulary, exact: **OPEN** (an obligation the tree has not discharged) ·
+**DISCHARGED-IN-SCOPE** (discharged over a stated population and not beyond it) · **STANDING** (a
+permanent scope statement; nothing is owed).
+
+Actor vocabulary, exact: **AGENT** · **OWNER** · **AGENT-THEN-OWNER**.
+
+| id | item | gate | status | actor | pin |
+|---|---|---|---|---|---|
+| T1 | The engine fingerprint has moved and nothing in the tree can declare it frozen | G2 | OPEN | AGENT-THEN-OWNER | derived |
+| T2 | G8's second remainder — the two `defender_active.hp`-ceiling `residual_disjoint_bands` call sites | G1 | OPEN | AGENT | derived |
+| T3 | G33b's speed-tie arm | G1 | OPEN | AGENT-THEN-OWNER | derived + reading |
+| T4 | G33c — the truncation strands the winner's order-10 damage bookings | G1 | OPEN | AGENT-THEN-OWNER | derived |
+| T5 | H1 — the single-seat population is counted and uncompared | G1 | OPEN | AGENT | derived |
+| T6 | §4's 26 UNREACHABLE verdicts, re-adjudicated for §4 and only §4 | G1 | DISCHARGED-IN-SCOPE | AGENT | derived + reading |
+| T7 | §7 item 1 — whether G1 (Stick) produces a differential row | G1 | OPEN | AGENT | derived |
+| T8 | §7 item 5 — co-occurrence counts are upper bounds, not draw rates | G1 | OPEN | AGENT | derived |
+| T9 | §7 item 6 — how much of G0's population is a last-mon double faint | G1 | OPEN | AGENT | derived |
+| T10 | §7 item 7 — the incidence of the missing Protect `\|-fail\|` line | G1 | OPEN | AGENT | derived |
+| T11 | §7 item 8 — nothing measured on the reserved final holdout | G1 | STANDING | OWNER | derived + reading |
+| T12 | §7 item 9 — every Observed column but C152's still reads the c136 pair | G1 | OPEN | AGENT | derived |
+| T13 | §7 item 10 — the single-seat population has no taxonomy anywhere | G1 | OPEN | AGENT | derived |
+| T14 | §7 item 11 — the two zeros are a property of two windows | G1 | STANDING | — | derived + reading |
+
+**Fourteen items — 1 under G2, 13 under G1.** Eleven OPEN, one DISCHARGED-IN-SCOPE, two STANDING.
+The count and the inventory are pinned; the *classification* of T11 and T14 as STANDING is a
+reading, argued in each item.
+
+### Why this is fourteen and the reconstruction was six
+
+The reconstruction listed six because it was assembled from a **delta** — what C152 opened, plus
+C153 and C154 — and a delta is not an inventory. Derived from the ledger instead, §7 alone
+contributes **eight** items that the document does not mark RESOLVED (T7–T14), of which the
+reconstruction carried one. Two of those eight are standing scope statements and are labelled as
+such rather than dropped, because a list of blind spots that only ever shrinks is losing them by
+attrition — which is the reason §7 item 7 exists in the ledger at all.
+
+---
+
+## 3. The items
+
+### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
+
+**Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
+this head stamps **`9517aab98d56a9ba…`**. The newest sweeps the corpus carries were taken at
+**`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
+artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
+the head value at all**. The move is
+legitimate: `rust/pokezero-search/src/leaf.rs` gained 31 lines in `21f484d4` (#1197), one of the 11
+crate sources the fingerprint covers. Re-derived once by restricting `git log 7fcd9e19..HEAD` to
+the fingerprint's own inputs — the gen3 patches, `patches.txt` and `rust/pokezero-search/src` — which
+returns exactly that one commit; that derivation is recorded, not pinned, because it is a statement
+about history rather than about this tree.
+
+**And the gate has no surface.** The window's ratification is a pinned constant, `OWNER_RATIFIED`.
+The freeze has no equivalent: **zero** module-level constants in
+`scripts/engine_transition_differential.py` name a freeze, and nothing anywhere in `scripts/`,
+`tests/`, `src/` or `.github/` records one. Scope of that negative: a name-level AST scan of the
+differential plus a literal scan of those four trees for `FROZEN`/`FREEZE` outside
+`frozenset`/status contexts. So an owner asked to declare the fingerprint frozen today has nowhere
+to write it down.
+
+**Consequence for every other item, and this is the one the reconstruction did not state.** The
+evidence behind T2–T6 is *all* at `bfdbe1c04876edcd` or on C152's throwaway instrumented build
+`89797289f4a3b555`. None of it has been re-taken at the build that would be frozen. That does not
+make any of it wrong; it makes "measured at head" false for all of it, and a claim that quotes
+those figures against the frozen fingerprint would be quoting across a build boundary.
+
+**Who acts.** AGENT: re-sweep the two permitted windows at the head fingerprint and commit the
+artifacts — 400 games inside `19,000,000`–`19,000,199` and `19,100,000`–`19,100,199`, no reserved
+seed, no burn contact. OWNER: declare the freeze. The declaration is not an agent act and there is
+currently no place to put it; filing a `FROZEN_FOR_CLAIM`-shaped constant beside `OWNER_RATIFIED`
+is the obvious surface and is **filed here unbuilt**, because that constant lives in the file this
+task forbids touching.
+
+### T2 — G8's second remainder · G1 · OPEN · AGENT
+
+**Derived.** `residual_disjoint_bands` is called from **four** sites, all in the tracked
+`third_party/poke-engine-gen3-status-aware-residual-threshold.patch`. Resolved by walking the patch
+for call lines — excluding the function's own definition, which is the fifth occurrence of the name
+and would put a parameter declaration in the ceiling column — and reading the **fourth positional
+argument**. **Resolved, not copied**, and the outcome is worth stating: they resolve to the same
+four values the reconstruction carried, unchanged at this head. That is a result of the derivation,
+not a reason to have skipped it — the same four numbers were also once quoted from an instrumented
+build, shifted by eleven lines, and looked exactly as plausible then.
+
+| site | ceiling argument | reached by C149's split |
+|---|---|---|
+| `…status-aware-residual-threshold.patch:370` | `defender_active.hp` | no |
+| `…status-aware-residual-threshold.patch:435` | `i16::MAX` | yes |
+| `…status-aware-residual-threshold.patch:510` | `defender_active.hp` | no |
+| `…status-aware-residual-threshold.patch:563` | `i16::MAX` | yes |
+
+The right file to cite is the **patch**, not `generate_instructions.rs`:
+`third_party/poke-engine-src/` is gitignored and absent from a clean checkout, so a
+`generate_instructions.rs` line number is unresolvable by any check and was the citation that went
+stale. The "reached by C149's split" column is derived rather than read off the scope comment: of
+the five hunks in `third_party/poke-engine-gen3-leechseed-residual-band-split.patch`, exactly
+**two** add the `if defender_leech_seeded {` gate, both carry an `i16::MAX,` context line, and
+**none** carries a `defender_active.hp,` one.
+
+**Scope of what IS measured.** C152 measured the *first* remainder only — the survive
+representative, `reports/artifacts/c152_g8_survive_representative_census.json`: **16,205 of 27,655**
+survive bands (**58.597 %**) price a representative off the exact integer fan and therefore
+reproduce zero achievable rolls. That is an arithmetic census over a synthetic uniformly-weighted
+plane, not an incidence. The consequence figure it is usually quoted beside — 0 divergent rows over
+31,082 boundaries in the two permitted windows — **may not be quoted without both accept bars**:
+support-gated acceptance at **8.689 % dev / 9.185 % holdout**, and the ±9 % roll window at
+**167 dev / 140 holdout** (1.077 % / 0.899 %). The dominant class that window absorbs is
+`roll_scaled_component`, which is exactly what an off-fan survive representative produces.
+
+**What is owed.** The same census, run against the two `defender_active.hp`-ceiling sites. It needs
+no sweep and no reserved seed: the first remainder's instrument is an arithmetic walk over
+`(max_damage, health)`, and the second differs only in the ceiling it passes.
+
+**Who acts.** AGENT, entirely.
+
+### T3 — G33b's speed-tie arm · G1 · OPEN · AGENT-THEN-OWNER · derived + reading
+
+**Derived** from `reports/artifacts/c152_g33b_open_arm_census.json`, over 1,400 games (the two
+permitted windows plus four 250-game shards on unregistered seeds `1,000,000`–`1,000,999`):
+**925** predicate calls at a battle-ending residual instruction, of which **24** are exact speed
+ties and all 24 have a Leftovers winner. **20** of the 24 are `order_le_10` — the only arm a
+truncation can expose, because Perish Song is order 12 and the other **4** ties are `perish` calls
+where nothing in order 10 is skipped — and **3 of those 20** carry a winner-side heal before the
+truncation, which an over-booked plan sends to a fallback answering `item: Leftovers`.
+
+**The refusal is still shipped, and that is derived too.** `leftovers_slot_truncated` ends in
+`match residual_speed_order(state)` with `_ => NO_TRUNCATION` at
+`rust/pokezero-search/src/events.rs:5394`, resolved by a unique anchor. So the tie arm is unbuilt at
+head, not merely unmeasured.
+
+**Reading, and it is the disposition.** No tie-arm divergence has been *observed*: across the same
+1,400 games the committed sweeps carry **12** divergent rows in the four wide shards (of 80,439
+measured) and **0** in the two head windows. But "not observed" is not "cannot happen", and the
+attribution of any given divergence to a tie is **not re-derivable from a sweep artifact**: no
+verdict-producing instrument records the residual speed order. It was recorded once, by C152's
+throwaway `C152_TRUNC` instrumentation, which produced the census and no verdicts. So the tie arm's
+divergence incidence has never been measured by anything that also decides verdicts, and the honest
+form of "zero observed" is that sentence rather than a count. **Two** of the twelve are the
+G33b-family mislabel class, and only one of them has ever been attributed — see T4.
+
+**Power limit on any negative here.** C153 bounds a per-divergence class at **0.316 %** — one in
+**316** — over **949** classified divergences. Ten times that many classified divergences,
+**9,490**, would be needed to tighten it tenfold, so "the tie arm never diverges" is not a claim
+any existing measurement licenses.
+
+**Who acts.** AGENT to build the fix — the segment-order inference: `leftovers_slot_truncated` is
+handed the segment as well as the state, and the two forks have different segments, so the order a
+branch took is recoverable even though `residual_speed_order` returns `None`. OWNER to decide
+whether a renderer change with a measured benefit of zero observed rows ships under C133 §7
+discipline (registered prediction plus four sweeps) before the terminal measurement, or whether the
+arm is retired with its scope stated the way the weather arm was.
+
+### T4 — G33c · G1 · OPEN · AGENT-THEN-OWNER
+
+**Derived.** The row is `1000513/121` in
+`reports/artifacts/c152_wide_census_1000500_sweep.json`: divergence class `component_mismatch:heal`
+against engine component `itemleftovers`, at branch-miss **pct 100.00**, with
+`observed_only=[('heal', 36)] engine_only=[('itemleftovers', 36)]`.
+
+**The fix is unbuilt, and that is derived exactly rather than argued.** The identifier
+`leftovers_truncated` occurs **twice** in `rust/pokezero-search/src/events.rs`: the binding from
+`leftovers_slot_truncated`, and **one** consumer, the Leftovers heal push at `:5466`. **Zero**
+damage bookings consult it. So the flag the gate already computes suppresses the winner's 10.4 heal
+and nothing else, `plan.damage[winner]` still books the status tick that the same truncation
+skipped, `plan.usable[winner]` goes false anyway, and the heal drops to the fallback regardless —
+which is why C147's gate is inert wherever the winner carries a residual status.
+
+**⚠ And there is a second row of the same class that nothing has diagnosed.** Derived, not carried:
+the four wide shards contain **2** rows of `component_mismatch:heal` against `itemleftovers`, and
+the one the ledger's G33c cell and C152 both cite is `1000513/121`. The other is
+**`1000321/102`**, in `reports/artifacts/c152_wide_census_1000250_sweep.json`, at pct 93.75 / 6.25
+across two branches with `observed_only=[('heal', 26)] engine_only=[('itemleftovers', 26)]`. It may
+well be the same mechanism — it has the same shape — but *may well be* is not an attribution, and
+G33c's "measured benefit: one row" is a claim about the row that was diagnosed. Recorded here rather
+than absorbed into the count, because absorbing it would be the sample-fitting this program keeps
+finding. Attributing it is agent work and needs no sweep: the state is committed in the artifact.
+
+**Scope.** One diagnosed row plus one undiagnosed sibling, on unregistered seeds, on C152's
+instrumented build. Zero in both permitted windows, which is the point: the shape was invisible to
+every sweep the program has run inside them. Unlike T3 the fix has a **measured** benefit.
+
+**Who acts.** AGENT to attribute `1000321/102` and to build the suppression; OWNER for the same
+ship/retire decision as T3.
+
+### T5 — H1, the single-seat population is counted and uncompared · G1 · OPEN · AGENT
+
+**Derived** from the two committed head sweeps: **1,742** single-seat boundaries on dev and
+**1,813** on holdout, **9.836 %** and **10.090 %** of all boundaries. They are counted in
+`skip:single_seat_boundary`, they are disjoint from `boundaries_full_round`, and the verdict
+partition closes exactly without them — so they are *visible* and *uncompared*, which is a
+different thing from H12's refuted claim that a population was invisible to every counter.
+
+**Scope.** Two 200-game windows at `bfdbe1c04876edcd`. See T1: this is not a head-build figure.
+
+**Who acts.** AGENT. Comparing the single-seat arm needs an instrument, not a seed; T13 is its
+prerequisite, since a comparison with no taxonomy produces one undifferentiated number.
+
+### T6 — §4's 26 UNREACHABLE verdicts · G1 · DISCHARGED-IN-SCOPE · AGENT · derived + reading
+
+**Discharged, and discharged for §4 and only §4.** C154 put all 26 through C153's tracing rule.
+Derived from `reports/artifacts/c154_unreachable_readjudication.json`: **26** verdicts
+UNREACHABLE-traced plus **1** withdrawn before the pass (R26), **13** reasons corrected (**4**
+false, **9** incomplete) and **13** sound. **Nothing closed, nothing opened** — §3's inventory is
+still 82 rows and §4's is still the same 27 candidates. This is the item where manufacturing
+openness would be as wrong as manufacturing terminality: the verdicts are re-adjudicated, and
+saying they are still "open" would be false.
+
+**Four residues, each named because the discharge does not cover it:**
+
+1. **The pool half is not re-derived in CI.** `scripts/c154_unreachable_readjudication.py` requires
+   a pokemon-showdown checkout, and **zero** steps in `.github/workflows/engine-fidelity-gates.yml`
+   check one out — the single mention of `pokemon-showdown` in that file is a comment. The `pool`
+   block is therefore a committed measurement at Showdown
+   `f76228a1354b5d0f307ca2d16101294ad3a2308b`, and a `sets.json` bump that added `taunt` to a set
+   would leave the module green and the ledger wrong. Bounded and nameable.
+2. **Five judgements are human readings**, enumerated in `reports/c154_unreachable_readjudication.md`
+   §5 and derived here as a count of that numbered list: R1's one-keyword-argument closure, R9's
+   mechanic enumeration, R22's correctness judgement, R7's one-module absence, and the
+   `NARROW_FORECLOSURE` classification itself. No pin carries any of them.
+3. **Three rows are foreclosed only over §4's own population** — **R1, R23, R24**, classified
+   `RANDBATS_POPULATION` in the artifact. So "26 UNREACHABLE" must be read against §4's stated
+   scope at `reports/c138_known_gaps_ledger.md:589`, *"cannot be reached in gen3 randbats"*,
+   resolved here by a unique anchor. R23's counter fires today on this repo's own scenario corpus.
+4. **The retraction guard is defeatable by deliberate obfuscation.** It folds whitespace, case,
+   markdown emphasis and zero-width characters, each added after something got past the previous
+   three, and the in-cell re-assertion is caught by a separate occurrence inventory rather than by a
+   stricter phrase match. Its failure direction is safe for accidents and open to an author who
+   wants past it. **That last sentence is a reading and no pin covers it** — the four normalisations
+   are derived; "no fifth obfuscation exists" is not a claim any check makes.
+
+**Who acts.** AGENT for residue 1 (a CI job that builds the checkout, or an accepted standing
+scope). Residues 2–4 are dispositions, not measurements, and the register's position is that they
+are correctly recorded as residues rather than as open rows.
+
+### T7 — §7 item 1, whether G1 (Stick) produces a differential row · G1 · OPEN · AGENT
+
+The pool reachability is settled and deterministic; what is not settled is whether the differential
+ever hands the engine a Farfetch'd holding Stick, since items are not public until revealed and
+Stick has no reveal event. The ledger's own settling measurement is a 200-game dev sweep asserting
+on `PokemonSpec.item`. Derived: §7 does not mark this item RESOLVED, and no committed artifact
+records the measurement. AGENT, inside the dev window, no reserved seed.
+
+### T8 — §7 item 5, co-occurrence counts are upper bounds · G1 · OPEN · AGENT
+
+Every *same-side* pairing verdict relied on for an UNREACHABLE came back zero, which is decisive.
+The non-zero ones — `sleeptalk`+`rest` (44 sets), `wish`+`protect` (24), `leechseed`+`substitute`
+(6) — are upper bounds and not measured draw rates, and G14 is the row where such an upper bound was
+read as a reachability fact and was wrong. Derived: unresolved in §7. AGENT.
+
+### T9 — §7 item 6, G0's last-mon fraction · G1 · OPEN · AGENT
+
+Double faints are reachable and demonstrated; the fraction where both sides are down to their final
+Pokémon is not measured, so G0's incidence is unbounded while its per-occurrence severity is large.
+Settling measurement named in the ledger: count games in a 200-game dev sweep ending in a same-ply
+double faint with both parties at one remaining Pokémon. Derived: unresolved in §7. AGENT.
+
+### T10 — §7 item 7, the missing Protect `\|-fail\|` incidence · G1 · OPEN · AGENT
+
+The mechanism is settled and the cost on the one observed shape is measured at zero. What is not
+measured is whether any shape exists where the omission costs more than a protocol line. Derived:
+unresolved in §7. AGENT.
+
+### T11 — §7 item 8, the reserved final holdout is unmeasured · G1 · STANDING · OWNER · derived + reading
+
+**This is the gated measurement itself, not a blocker on it**, and reading it as a blocker would
+make the precondition circular. Nothing has been measured at or above `19,200,000` deliberately;
+`19,200,000`–`19,200,259` is burned unconditionally and `19,300,000`–`19,300,199` is ratified and
+awaiting the trigger. **The owner has already acted here**: the window is ratified and the
+prediction is registered. Classifying this as STANDING is a reading; the derived part is that §7
+does not mark it resolved and that the ratification exists.
+
+### T12 — §7 item 9, the Observed column is as of c136 · G1 · OPEN · AGENT
+
+Every "observed" column in §3 except the rows C152 dispositioned still reads
+`reports/artifacts/c136_faintcancels_fix_{dev,holdout}_sweep.json`, i.e. is as of `aeaee2b1`. The
+head sweeps C152 committed say only that both windows are at 0 divergences, which cannot re-derive
+a per-row "observed" for a row that never had one. **This item and T1 share an instrument**: a pair
+of head-fingerprint sweeps repairs the staleness and produces the artifacts T1 needs. Derived:
+unresolved in §7. AGENT.
+
+### T13 — §7 item 10, the single-seat population has no taxonomy · G1 · OPEN · AGENT
+
+**Derived.** No sub-keyed counter `skip:single_seat_boundary:<reason>` appears in any of the 402
+committed JSON under `reports/` and `docs/`, and nothing emits one. Scope of that negative: a
+literal scan of the committed JSON corpus plus `src/` and `scripts/`, which is the glob, and it does
+not extend to an instrument nobody has committed. `reports/c132_single_seat_coverage_bound.md` §3 is
+the only mechanistic account and is argued from two hand-driven probes with no counts. Prerequisite
+for T5. AGENT.
+
+### T14 — §7 item 11, the two zeros are a property of two windows · G1 · STANDING · — · derived + reading
+
+Both permitted windows are at 0 divergences and the engine is not divergence-free: the same
+74-patch engine produced **12** divergent rows over **80,439** boundaries on unregistered seeds
+`1,000,000`–`1,000,999`, and C153 measured **949** classified divergences over 803,264 boundaries.
+Nothing is owed; the item exists so the two zeros are never quoted bare. STANDING is a reading; the
+derived part is the item's presence in §7 and the two counts above.
+
+---
+
+## 4. Standing constraints on how any of this may be quoted
+
+These are not items. They bind every item above and every claim built on one.
+
+**The two accept bars.** No residue count from the permitted windows may be quoted without both:
+support-gated acceptance at **8.689 % dev / 9.185 % holdout** (1,347 of 15,503 and 1,431 of
+15,579), and the ±9 % roll window at **167 dev / 140 holdout** matched boundaries
+(**1.077 % / 0.899 %**). A bare "0 divergences over the two windows' measured boundaries" is
+forbidden by the ledger's §6 item 9 and by this register; the one place this document quotes that
+zero, T2, carries both bars in the same paragraph and the pin checks that it does.
+
+**The per-divergence power limit.** C153's combined arm classified **949** divergences over 803,264
+boundaries. The rule of three puts the 95 % upper bound on a per-divergence class at **0.316 %** —
+**one in 316**. That is far too weak to call a class-level negative settled: a tenfold tighter bound
+needs tenfold the trials, **9,490** classified divergences, i.e. of order 10⁴. Per-boundary and
+per-game negatives are much better served — the same census bounds a per-boundary class at
+3.73 × 10⁻⁶ — and substituting the boundary denominator for the divergence one overstates a
+per-class negative by **846×**, the ratio of the two denominators.
+
+**Every measurement behind T2–T6 predates the head build.** See T1. It is at
+`bfdbe1c04876edcd` or on the instrumented `89797289f4a3b555`, never at `9517aab98d56a9ba`.
+
+---
+
+## 5. What the derivation changed, against the list it replaces
+
+Recorded rather than silently corrected, because "the previous version said X" is the only way a
+maintained document proves it is maintained.
+
+1. **Six items became fourteen.** The reconstruction was a delta of what C152, C153 and C154 opened.
+   Derived from the ledger, §7 contributes eight unresolved items where the reconstruction carried
+   one, and two of those eight are standing scope statements rather than obligations.
+2. **G8's call-site line numbers resolved to the same four values, in a different file than the one
+   they are usually cited from.** `370` / `435` / `510` / `563` are lines in the tracked **patch**;
+   C152's `4197` / `4300` / `4406` / `4456` are lines in the gitignored vendored
+   `generate_instructions.rs`, which no check can resolve and which does not exist in a clean
+   checkout. Both sets describe the same four sites. Only one of them is citable.
+3. **"No tie-arm divergence observed" is weaker than it reads.** No verdict-producing instrument
+   records the residual speed order, so a tie-arm divergence could not have been attributed by a
+   sweep even if one occurred. See T3.
+4. **The reconstruction called the §4 scope classification `NARROW_FORECLOSURE`.** That is the
+   generator's Python constant; the value recorded on each of R1, R23 and R24 in the artifact is
+   `RANDBATS_POPULATION`. Both are pinned here so the two names cannot drift apart.
+5. **Gate 2 has no surface at all**, which no reconstruction said. The window's ratification is a
+   pinned constant; the freeze has nowhere to be written down.
+6. **G33c's class has two rows in the wide census, not one.** `1000513/121` is diagnosed;
+   **`1000321/102`** is not, and neither C152 nor the ledger's G33c cell mentions it. "Measured
+   benefit: one row" is a statement about the row that was attributed, and the second is filed
+   inside T4 rather than folded into the count.
+
+---
+
+## 6. What the pin covers, and what it cannot
+
+`tests/test_terminal_disposition_register.py`. Its load-bearing property is that the item
+inventory, the item statuses and **every figure in Appendix A** are re-derived from the tree on each
+run — from tracked bytes, from committed artifacts, and from anchors resolved with uniqueness
+required, imported from C153's census rather than copied so a stale anchor is one loud failure
+rather than a wrong number.
+
+**It cannot decide whether the gates are met.** C151 §3 says the trigger is not machine-checkable
+and this register does not make it so.
+
+**It cannot cover a reading.** Four are named as such rather than absorbed, and each carries
+`derived + reading` in the `pin` column rather than `derived`: T3's disposition (the figures are
+derived; "not observed, and not measurable by a verdict instrument" is a reading), T6's residue 4
+(the four normalisations are derived; "no fifth obfuscation exists" is not), and the classification
+of T11 and of T14 as STANDING rather than OPEN.
+
+**A coupling, declared.** Appendix A pins `base.expected_counter_artifacts` and
+`base.expected_sweep_artifacts` against the two census modules' own constants. A PR that adds an
+artifact must therefore update this register in the same change. That is deliberate and it is the
+whole point: the document that goes stale is the one nothing forces an author through.
+
+**The `Ran N tests` guard.** The step carries an exact `Ran 34 tests`, re-derived from the module's
+own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard-scan
+covers only part of the workflow, so it was **not** assumed to cover this one: measured, it now sees
+**21 of the 25** `python -m unittest` invocations in the file and this step is among them,
+`EveryWorkflowTestCountGuardMatchesItsModuleTests` deriving 34 from the module and matching the
+guard. That is checked, not relied upon — the four invocations the scan still misses are #1205's
+subject and are not touched here.
+
+**Mutation evidence.** 37 mutations applied, 37 caught, enumerated in the module's docstring in two
+blocks. Block B's ten are applied **only to the tree and never to the document**, because a pin that
+reads a document against a hard-coded copy of itself passes every document-side mutation: a
+sub-keyed single-seat counter added to a committed sweep, a freeze constant added to the
+differential, a real Showdown checkout added to the workflow, the head fingerprint written into an
+artifact, an `hp`-ceiling context line added to a split hunk, a §7 item marked RESOLVED, a §4
+verdict flipped, the §4 population sentence reworded, an accept bar deleted from T2's paragraph, and
+a bare `\|` introduced into a register row. Each one is a real change to the tree that this document,
+left unedited, must fail against — which is the property eleven-plus inert pins in this repo did not
+have.
+
+**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 34
+tests, OK**. The gated family together: ledger uniformity **19**, never-fired **22**, wide-seed
+**36**, C154 re-adjudication **34**, seed registry **41**, single-seat coverage **3** — all OK.
+`tests/test_final_holdout_guard.py` and `tests/test_boundary_verdict_partition.py` cannot import
+without a built engine in this environment and are unchanged by this branch. Full suite, with the
+flag that is required rather than stylistic:
+`pytest tests/ -q -p no:randomly --continue-on-collection-errors` — **164 failed at base, 164 failed
+at head**, 4,416 → 4,450 passed (**+34**, exactly this module), 32 errors both sides, and the
+`FAILED` id lists are **identical in both directions**. The absolute figure is a property of the
+machine; the delta is that this branch adds zero failures.
+
+---
+
+## Appendix A — the pinned facts
+
+Every row is re-derived on each run of the pin, and the key set is exact in both directions: a key
+added to the derivation and not to this table is red, and so is the reverse.
+
+| key | value |
+|---|---|
+| `bar.roll_window_dev` | 167 |
+| `bar.roll_window_dev_fraction` | 1.077 % |
+| `bar.roll_window_holdout` | 140 |
+| `bar.roll_window_holdout_fraction` | 0.899 % |
+| `bar.support_gated_dev` | 8.689 % |
+| `bar.support_gated_holdout` | 9.185 % |
+| `base.expected_counter_artifacts` | 402 |
+| `base.expected_sweep_artifacts` | 115 |
+| `base.patch_stack` | 74 |
+| `base.section3_rows` | 82 |
+| `base.section4_candidates` | 27 |
+| `base.section4_drops` | 26 |
+| `base.section7_items` | 11 |
+| `base.section7_unresolved` | 8 |
+| `power.boundaries_per_classified_divergence` | 846 |
+| `power.classified_divergences` | 949 |
+| `power.divergences_for_a_tenfold_tighter_bound` | 9490 |
+| `power.one_in_n_divergences` | 316 |
+| `power.per_divergence_upper_95` | 0.316 % |
+| `t1.committed_json_carrying_head_fingerprint` | 0 |
+| `t1.freeze_declaration_constants` | 0 |
+| `t1.head_fingerprint` | 9517aab98d56a9ba |
+| `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
+| `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
+| `t2.first_remainder_off_fan_fraction` | 58.597 % |
+| `t2.hp_ceiling_site_lines` | 370, 510 |
+| `t2.hp_ceiling_sites` | 2 |
+| `t2.i16max_ceiling_site_lines` | 435, 563 |
+| `t2.i16max_ceiling_sites` | 2 |
+| `t2.residual_disjoint_bands_call_sites` | 4 |
+| `t2.split_hunks` | 2 |
+| `t2.split_hunks_touching_an_hp_ceiling_site` | 0 |
+| `t3.games` | 1400 |
+| `t3.order_le_10_ties_carrying_a_winner_heal` | 3 |
+| `t3.predicate_calls` | 925 |
+| `t3.speed_ties` | 24 |
+| `t3.speed_ties_order_le_10` | 20 |
+| `t3.speed_ties_perish` | 4 |
+| `t3.speed_ties_with_a_leftovers_winner` | 24 |
+| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:5394 |
+| `t4.boundary` | 1000513/121 |
+| `t4.branch_miss_pct` | 100.00 |
+| `t4.engine_component` | itemleftovers |
+| `t4.heal_mismatch_rows_in_the_wide_census` | 2 |
+| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:5466 |
+| `t4.leftovers_truncated_consumers` | 1 |
+| `t4.leftovers_truncated_references` | 2 |
+| `t4.observed_component` | heal |
+| `t4.undiagnosed_sibling_rows` | 1000321/102 |
+| `t4.wide_census_divergent_rows` | 12 of 80439 |
+| `t5.dev_single_seat_boundaries` | 1742 |
+| `t5.dev_single_seat_fraction` | 9.836 % |
+| `t5.holdout_single_seat_boundaries` | 1813 |
+| `t5.holdout_single_seat_fraction` | 10.090 % |
+| `t5.subkeyed_single_seat_counters_in_corpus` | 0 |
+| `t6.human_readings` | 5 |
+| `t6.pool_showdown_commit` | f76228a1354b5d0f307ca2d16101294ad3a2308b |
+| `t6.reasons_corrected` | 13 |
+| `t6.reasons_false` | 4 |
+| `t6.reasons_incomplete` | 9 |
+| `t6.reasons_sound` | 13 |
+| `t6.rows_foreclosed_over_section_4_population_only` | R1, R23, R24 |
+| `t6.section_4_population_anchor` | reports/c138_known_gaps_ledger.md:589 |
+| `t6.verdicts_unreachable` | 26 |
+| `t6.verdicts_withdrawn` | 1 |
+| `t6.workflow_steps_checking_out_showdown` | 0 |
