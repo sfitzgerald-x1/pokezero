@@ -1,0 +1,141 @@
+{
+  "arms": {
+    "count": {
+      "comparator": "shipped, unmodified behaviour (tally only)",
+      "engine_fingerprint": "bfdbe1c04876edcd1957e7a360c5086cfc7eae32ccf3ba0e71d137bd76df3990",
+      "patch_stack": 74,
+      "source_commit": "d20cf840c05f769baaf0b1cdf27474f2894d7892",
+      "windows": {
+        "dev": {
+          "boundaries_full_round": 15968,
+          "boundaries_measured": 15503,
+          "divergence_classes": {},
+          "engine_errors": 0,
+          "games": 200,
+          "seed_start": 19000000,
+          "strict_no_damage_rolls": 0,
+          "transitions_diverged": 0,
+          "transitions_matched": 15503
+        },
+        "holdout": {
+          "boundaries_full_round": 16155,
+          "boundaries_measured": 15579,
+          "divergence_classes": {},
+          "engine_errors": 0,
+          "games": 200,
+          "seed_start": 19100000,
+          "strict_no_damage_rolls": 0,
+          "transitions_diverged": 0,
+          "transitions_matched": 15579
+        }
+      }
+    },
+    "disable": {
+      "comparator": "the +/-9% window accept REMOVED: exact equality or membership in the enumerated fan, nothing else",
+      "engine_fingerprint": "bfdbe1c04876edcd1957e7a360c5086cfc7eae32ccf3ba0e71d137bd76df3990",
+      "patch_stack": 74,
+      "source_commit": "d20cf840c05f769baaf0b1cdf27474f2894d7892",
+      "windows": {
+        "dev": {
+          "boundaries_full_round": 15968,
+          "boundaries_measured": 15503,
+          "divergence_classes": {
+            "component_extra_in_engine:leechseed": 1,
+            "component_missing_in_engine:heal": 1,
+            "component_missing_in_engine:itemleftovers": 2,
+            "limit:roll_divergent_lethality": 5,
+            "roll_scaled_component": 158
+          },
+          "engine_errors": 0,
+          "games": 200,
+          "seed_start": 19000000,
+          "strict_no_damage_rolls": 0,
+          "transitions_diverged": 167,
+          "transitions_matched": 15336
+        },
+        "holdout": {
+          "boundaries_full_round": 16155,
+          "boundaries_measured": 15579,
+          "divergence_classes": {
+            "component_missing_in_engine:brn": 1,
+            "component_missing_in_engine:itemleftovers": 1,
+            "limit:roll_divergent_lethality": 9,
+            "roll_scaled_component": 129
+          },
+          "engine_errors": 0,
+          "games": 200,
+          "seed_start": 19100000,
+          "strict_no_damage_rolls": 0,
+          "transitions_diverged": 140,
+          "transitions_matched": 15439
+        }
+      }
+    }
+  },
+  "boundaries_whose_accept_depended_on_the_window": {
+    "dev": 167,
+    "dev_fraction_of_measured": 0.010772,
+    "holdout": 140,
+    "holdout_fraction_of_measured": 0.008986
+  },
+  "instrumentation_proved_to_fire": {
+    "cases": [
+      {
+        "case": "legal set present, magnitude not in it",
+        "count_mode": true,
+        "disable_mode": false,
+        "shipped": true,
+        "tally": "window_accept_legal_miss"
+      },
+      {
+        "case": "legal set absent (pre_legal unavailable)",
+        "count_mode": true,
+        "disable_mode": false,
+        "shipped": true,
+        "tally": "window_accept_legal_none"
+      },
+      {
+        "case": "exact fan membership",
+        "count_mode": true,
+        "disable_mode": true,
+        "shipped": true,
+        "tally": null
+      },
+      {
+        "case": "exact equality",
+        "count_mode": true,
+        "disable_mode": true,
+        "shipped": true,
+        "tally": null
+      },
+      {
+        "case": "magnitude far outside the window",
+        "count_mode": false,
+        "disable_mode": false,
+        "shipped": false,
+        "tally": null
+      }
+    ],
+    "why": "Five constructed cases, run before either sweep, because an instrument that silently never fires would report zero and look like a clean result."
+  },
+  "method": "Both variants are produced by an AST rewrite of the SHIPPED source of `roll_components_agree`, obtained with `inspect.getsource`, so `scripts/engine_transition_differential.py` -- which is under a certification pin -- is never edited and the variants cannot drift from it. The rewrite asserts it finds EXACTLY ONE window test, matched structurally rather than by text, and the count-mode rewrite is checked to differ from the original by exactly the inserted tally. Reproducible via `scripts/c152_h8_window_census.py`.",
+  "reading": {
+    "scope": "Two 200-game windows, 31,082 measured boundaries, strict matcher, collapsed roll path, engine fingerprint bfdbe1c04876edcd. Says nothing about any other seed range and nothing about the enumeration oracle, where the fan is emitted per roll and the window has less to do.",
+    "the_cells_stated_mechanism_is_wrong": "H8's cell says the window 'applies whenever `pre_legal` is unavailable'. That door was taken ZERO times in 400 games: `window_accept_legal_none` is 0 in both windows, consistent with `strict:no_damage_rolls` being 0, which the cell already noted and read as a partial bound. It is not a partial bound -- it is the WHOLE of the door the cell names. Every one of the 190 dev / 181 holdout window accepts came through the other door: the fan WAS enumerated and the observed magnitude simply was not in it.",
+    "the_number_h8_asked_for": "Boundaries whose accept depended on the window: 167 dev (1.077 % of measured) and 140 holdout (0.899 %).",
+    "usage_is_not_dependence": "190 dev / 181 holdout component-level accepts against 167 dev / 140 holdout boundaries flipped. The tally is an upper bound because a boundary matches if ANY branch matches, so a window accept on a non-decisive branch costs nothing. Quote the difference, not the tally.",
+    "what_the_disabled_arm_turns_into": "The window-disabled arm's divergence classes, which say what the window is absorbing: dev 158 `roll_scaled_component`, 5 `limit:roll_divergent_lethality`, 4 component-level; holdout 129 `roll_scaled_component`, 9 `limit:roll_divergent_lethality`, 2 component-level."
+  },
+  "schema": "c152-h8-window-census/2",
+  "what": "H8's settling measurement: how much matched mass rides on the comparator's +/-9% fallback window in `roll_components_agree`. Two arms on one build -- the shipped comparator with a usage tally, and a variant with the window accept removed. The DIFFERENCE in `transitions_matched` is the number of boundaries whose accept depended on the window; the tally is a usage upper bound and is not that number.",
+  "window_accepts_by_door": {
+    "dev": {
+      "window_accept_legal_miss": 190,
+      "window_accept_legal_none": 0
+    },
+    "holdout": {
+      "window_accept_legal_miss": 181,
+      "window_accept_legal_none": 0
+    }
+  }
+}

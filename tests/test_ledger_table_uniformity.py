@@ -301,7 +301,8 @@ _EXPECTED_GAP_ROWS: tuple[tuple[str, ...], ...] = (
         "**G28**", "**G29**", "**G49**", "**G50**", "**G51**", "**G30**",
     ),
     (
-        "**G31**", "**G32**", "**G33**", "**G33b**", "**G34**", "**G35**", "**G36**",
+        "**G31**", "**G32**", "**G33**", "**G33b**", "**G33c**", "**G34**", "**G35**",
+        "**G36**",
         "**G37**", "**G37b**", "**G38**", "**G39**", "**G40**",
     ),
     (
@@ -634,6 +635,46 @@ class TheKnownGapsLedgerTests(unittest.TestCase):
                 expected_rows,
             )
 
+    def test_the_stated_unknown_count_matches_the_rows(self) -> None:
+        """§1.1 states how many rows carry an UNKNOWN verdict. Re-derive it.
+
+        Added 2026-08-08 (C152). That sentence has been wrong twice already by the
+        document's own account -- an earlier draft said six against three -- and it
+        is the sentence a reader uses to decide whether the ledger is terminal, so
+        it is the last place a transcribed number belongs. The count is taken from
+        the RENDERED `Reachability evidence` cell, at its rendered position, the
+        same way the pin above reads the pool check.
+
+        MUTATION CHECKED: putting `**UNKNOWN` back at the head of any one of the
+        H8 / H12 / H19 reachability cells, or changing the word in §1.1, turns this
+        red.
+        """
+        text = _ledger_text()
+        grouped = _tables_by_header(text)
+        unknown = [
+            row_cells(line)[0]
+            for table in grouped.get(_REACHABILITY_HEADER, [])
+            for _, line in table["rows"]
+            if re.match(r"\**UNKNOWN", row_cells(line)[_REACHABILITY_COLUMN])
+        ]
+        words = {
+            "ZERO": 0, "One": 1, "Two": 2, "Three": 3, "Four": 4,
+            "Five": 5, "Six": 6, "Seven": 7,
+        }
+        stated = re.search(
+            r"\*\*(" + "|".join(words) + r")\*\* rows below are UNKNOWN", text
+        )
+        self.assertIsNotNone(
+            stated,
+            "§1.1's UNKNOWN-count sentence is gone or reworded; this pin reads it "
+            "and must be updated with it rather than silently passing",
+        )
+        self.assertEqual(
+            words[stated.group(1)], len(unknown),
+            f"§1.1 states {stated.group(1)} UNKNOWN rows; the table carries "
+            f"{len(unknown)}: {unknown}",
+        )
+
     def test_the_gap_row_inventory_is_exactly_pinned(self) -> None:
         # Exact, and in document order. A gap added, removed or renumbered fails here,
         # which is the point: it forces the author through the column beside it.
@@ -643,7 +684,11 @@ class TheKnownGapsLedgerTests(unittest.TestCase):
             for table in grouped.get(_REACHABILITY_HEADER, [])
         )
         self.assertEqual(inventory, _EXPECTED_GAP_ROWS)
-        self.assertEqual(sum(len(rows) for rows in inventory), 80)
+        # 80 -> 81 (C152). G33c joined §3.2: the battle-end truncation strands the
+        # winner's order-10 DAMAGE bookings as well as its Leftovers heal slot, so
+        # C147's gate is inert wherever the winner also carries a residual status.
+        # Counted by running this selector, not by adding one to 80.
+        self.assertEqual(sum(len(rows) for rows in inventory), 81)
 
     def test_every_unreachable_candidate_row_records_its_measurement(self) -> None:
         grouped = _tables_by_header(_ledger_text())

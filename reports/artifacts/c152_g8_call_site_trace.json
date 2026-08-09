@@ -1,0 +1,120 @@
+{
+  "schema": "c152-g8-call-site-trace/1",
+  "what": "Every call to `residual_disjoint_bands` made while replaying the G8 row `19200244/115` from the committed C141 artifact, with its arguments and the filter's result. This is the direct re-verification of the claim that C149's per-roll split STRUCTURALLY cannot reach this row.",
+  "why_a_throwaway_build": "The trace needs an `eprintln!` inside the patched engine, which is not part of the patch stack. Same discipline as `reports/artifacts/c147_g33b_gate_reach.json`: the instrumented build is not committed, its fingerprint is not reproducible from any committed tree, and what is committed is the instrumentation source, the raw lines and the reading.",
+  "not_a_sweep": "This is a REPLAY of the states recorded in `reports/artifacts/c141_final_holdout_sweep.json`, via `scripts/c149_g8_row_replay.py --index 1`. No game was generated and no seed at or above 19,200,000 was executed. The `19,200,000`-`19,200,259` block is burned and `_reject_burned_final_holdout` refuses it unconditionally; a replay of a committed artifact does not go through that path and does not consume seeds.",
+  "instrumentation": [
+    "// third_party/poke-engine-src/src/gen3/generate_instructions.rs, inserted",
+    "// immediately before `if applicable_len == 0 { return None; }` inside",
+    "// `residual_disjoint_bands`, so the line is emitted on EVERY call whatever",
+    "// the filter decides:",
+    "if std::env::var(\"POKEZERO_C152_RDB\").is_ok() {",
+    "    eprintln!(",
+    "        \"C152_RDB max_damage={} min_roll={} thresholds={:?} ceiling={} above={} applicable={:?}\",",
+    "        max_damage, min_roll, thresholds, ceiling, rolls_at_or_above_ceiling,",
+    "        &applicable[..applicable_len]",
+    "    );",
+    "}"
+  ],
+  "builds": {
+    "head_uninstrumented": {
+      "engine_fingerprint": "bfdbe1c04876edcd1957e7a360c5086cfc7eae32ccf3ba0e71d137bd76df3990",
+      "patch_stack": 74,
+      "source_commit": "d20cf840c05f769baaf0b1cdf27474f2894d7892"
+    },
+    "instrumented_throwaway": {
+      "engine_fingerprint": "89797289f4a3b55561863fd61438ac4d1987e1dfd210b399debd2f337b5b3c53",
+      "patch_stack": 74,
+      "differs_from_head_by": "the eleven lines quoted above, in the engine only"
+    }
+  },
+  "the_four_call_sites_and_their_ceiling_arguments": {
+    "read_from_source_not_carried": "third_party/poke-engine-src/src/gen3/generate_instructions.rs, all four `residual_disjoint_bands(` call sites enumerated on the SHIPPING vendored tree at fingerprint bfdbe1c04876edcd, with each site's `ceiling` argument re-read at its line.",
+    "sites": [
+      {
+        "line": 4197,
+        "ceiling_argument": "defender_active.hp",
+        "split_enabled_by_c149": false,
+        "instrumented_build_line": 4208
+      },
+      {
+        "line": 4300,
+        "ceiling_argument": "i16::MAX",
+        "split_enabled_by_c149": true,
+        "instrumented_build_line": 4311
+      },
+      {
+        "line": 4406,
+        "ceiling_argument": "defender_active.hp",
+        "split_enabled_by_c149": false,
+        "instrumented_build_line": 4417
+      },
+      {
+        "line": 4456,
+        "ceiling_argument": "i16::MAX",
+        "split_enabled_by_c149": true,
+        "instrumented_build_line": 4467
+      }
+    ],
+    "line_numbers_are_the_shipping_trees": "CORRECTED IN REVIEW. The first revision recorded 4208/4311/4417/4467, which are the INSTRUMENTED build's -- shifted +11 by the eleven-line eprintln! block quoted above, inserted at ~2105, above all four sites. The values below are the shipping tree's and the +11 offset accounts for the difference exactly."
+  },
+  "observed_calls_on_19200244_115": [
+    {
+      "count": 42,
+      "max_damage": 159,
+      "min_roll": 135,
+      "thresholds": [
+        82
+      ],
+      "ceiling": 157,
+      "rolls_at_or_above_ceiling": 2,
+      "applicable": [],
+      "returns": "None"
+    },
+    {
+      "count": 38,
+      "max_damage": 99,
+      "min_roll": 84,
+      "thresholds": [],
+      "ceiling": 32767,
+      "rolls_at_or_above_ceiling": 0,
+      "applicable": [],
+      "returns": "None"
+    },
+    {
+      "count": 38,
+      "max_damage": 49,
+      "min_roll": 41,
+      "thresholds": [],
+      "ceiling": 32767,
+      "rolls_at_or_above_ceiling": 0,
+      "applicable": [],
+      "returns": "None"
+    }
+  ],
+  "reading": {
+    "the_audit_claim": "In `residual_disjoint_bands`, the filter `*threshold > 0 && *threshold < ceiling && max_damage >= *threshold && min_roll < *threshold` admits nothing when every residual threshold lies below the fan minimum, so `applicable_len == 0`, the function returns `None`, and the arm is priced at the survive representative.",
+    "verified": "CONFIRMED, and by direct instrumentation rather than by reading. The only call carrying a threshold at all is `(max_damage 159, min_roll 135, thresholds [82], ceiling 157)`. `min_roll < *threshold` is `135 < 82`, FALSE, so `applicable` is empty, `applicable_len == 0`, and the function returns `None`.",
+    "and_one_thing_the_audit_did_not_say": "The two call sites C149's split actually touches -- the ones whose `ceiling` argument is `i16::MAX` -- are reached on this boundary with an EMPTY threshold slice. So the split is unreachable here twice over: not merely filtered out, but with nothing to filter. The call that does carry a threshold is at `ceiling = defender_active.hp = 157`, which is one of the two sites C149 deliberately left alone.",
+    "band_and_representative": "`max_damage 159` with `ceiling 157` gives the 14-roll survive band the ledger records, and `sum(band) // len(band) = 145`, which is not a member of the exact integer fan `floor(159 * r / 100)`. Re-derived independently in `reports/artifacts/c152_g8_survive_representative_census.json`, whose model refuses to run unless it reproduces exactly this case."
+  },
+  "row_verdicts_at_head": {
+    "collapsed_path": {
+      "verdict": "diverged",
+      "branches": 9,
+      "misses": 9
+    },
+    "enumeration_oracle": {
+      "verdict": "matched",
+      "branches": 416,
+      "misses": 0,
+      "note": "POKEZERO_ENUMERATE_ROLLS=1; C137 made enumeration the oracle, and C147's G33b gate closure is re-derived here at the current head after both merges"
+    },
+    "the_other_c141_row_19200131_129": {
+      "verdict": "matched",
+      "branches": 4,
+      "misses": 0,
+      "path": "collapsed"
+    }
+  }
+}

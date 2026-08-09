@@ -625,8 +625,24 @@ class TheEngineFingerprintStaysARebuildTriggerTests(unittest.TestCase):
 #      removed (a group that silently shrinks is this pin's fail-open);
 #   3. set the values to the measured ones;
 #   4. confirm the pin is still LIVE by perturbing it and watching it fail.
-_EXPECTED_PROVENANCE_BLOBS = 82
-_EXPECTED_DISTINCT_FINGERPRINTS = 29
+# 82 -> 90 and 29 -> 31 (C152). RE-DERIVED by the four-step procedure above:
+# `_provenance_blobs()` executed in a worktree of `origin/main` at `d20cf840` returns 82
+# blobs / 29 fingerprints, and 90 / 31 here, with the set difference exactly C152's eight
+# sweep artifacts and NOTHING removed. The two new fingerprints are:
+#
+#   bfdbe1c04876edcd1957e7a360c5086cfc7eae32ccf3ba0e71d137bd76df3990  -- the SHIPPING build,
+#       74 patches at `d20cf840`. `reports/artifacts/c152_{head,h8_nowindow}_*` are the first
+#       committed sweeps taken at the fingerprint that ships; every earlier pair was taken at
+#       `8e912b45544034e6` or older.
+#   89797289f4a3b55561863fd61438ac4d1987e1dfd210b399debd2f337b5b3c53  -- a THROWAWAY
+#       INSTRUMENTED build, the shipping tree plus two `eprintln!` blocks (one in
+#       `residual_disjoint_bands`, one in `leftovers_slot_truncated`) and nothing else. It is
+#       recorded rather than hidden because `reports/artifacts/c152_wide_census_*_sweep.json`
+#       were taken with it, and a fingerprint that appears in a committed artifact must be
+#       explicable. It is NOT reproducible from any committed tree, by design, and no
+#       fidelity claim rests on it.
+_EXPECTED_PROVENANCE_BLOBS = 90
+_EXPECTED_DISTINCT_FINGERPRINTS = 31
 _KNOWN_MULTI_COMMIT_FINGERPRINTS = {
     "07a3290d11ca14ecfa8c70f89a82a99e5bdc5a47d24136f740d54c59ab3122b4": frozenset(
         {
@@ -672,14 +688,19 @@ _KNOWN_MULTI_COMMIT_FINGERPRINTS = {
     ),
 }
 
-# ZERO committed artifacts carry a `harness_digest` today, because nothing had ever
-# written one until this commit. This is a TRIPWIRE, not the assertion that carries
-# the weight -- that one is
+# ⚠ THE TRIPWIRE FIRED, 2026-08-08 (C152), which is what it was for. It read ZERO,
+# because nothing had ever written a `harness_digest` when #1196 added the field.
+# C152's eight sweeps are the first artifacts taken with it, and this is the review
+# moment the comment below asked for: each of the eight carries EXACTLY ONE distinct
+# harness digest, `e3459e1f2ce334848c2734ff8729627506032d204c72f0f1d3cf79256c9a7c85`,
+# which is the value `harness_digest.harness_digest()` returns at `d20cf840` over a
+# 73-file import closure -- re-derived, not copied from the artifacts it is checking.
+#
+# The original note, kept because it is the reason this number exists: this is a
+# TRIPWIRE, not the assertion that carries the weight -- that one is
 # `TheDifferentialStampsItTests::test_checkpoint_provenance_records_the_harness_digest`,
-# which pins the producer. This number goes red the first time a sweep taken with
-# the new provenance lands, which is the review moment where someone confirms the
-# field was actually written and is a single value per artifact.
-_EXPECTED_HARNESS_STAMPED_ARTIFACTS = 0
+# which pins the producer.
+_EXPECTED_HARNESS_STAMPED_ARTIFACTS = 8
 
 
 def _provenance_blobs() -> list[tuple[str, dict]]:

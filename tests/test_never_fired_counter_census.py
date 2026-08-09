@@ -143,7 +143,29 @@ _CORPUS_TREES = ("reports", "docs")
 # was MEASURED, not assumed -- `_sweep_reports()` itself was run over both trees and returned the
 # identical 95-member set, with an empty symmetric difference. The two corpora move independently,
 # as recorded above, and this is the case where one moves and the other does not.
-_EXPECTED_COUNTER_ARTIFACTS = 375
+# 375 -> 388 (C152, the ledger-terminal dispositions). RE-DERIVED by executing this
+# module's `counter_artifacts()` against a worktree of `origin/main` at `d20cf840` -- 375 --
+# against 388 here, with the set difference exactly the THIRTEEN
+# `reports/artifacts/c152_*.json` this branch adds and NOTHING removed. Not arithmetic on
+# 375, and confirmed still live at 387 and at 389. RE-DERIVED AFTER MERGING `9c2adc72`
+# (#1198): its new JSON lives under `tests/data/`, outside this corpus, so the base holds
+# at 375 -- measured on the merged tree rather than carried, because a base that moves is
+# how these figures go stale.
+#
+# Only FOUR of the thirteen enter `tests/test_boundary_verdict_partition.py`'s sweep corpus
+# (95 -> 99): the four wide-census shards carry a top-level `boundaries_measured` too, so
+# that corpus is 99 + 4 = 103 -- re-derived there, and stated here only to record that the
+# two figures were taken from two selectors rather than from each other. The remaining
+# members are censuses, a trace and a nested-scalar report.
+#
+# ONE OF THE THIRTEEN IS A MUTANT-COMPARATOR PAIR and must be read as one:
+# `c152_h8_nowindow_{dev,holdout}_sweep.json` are the shipped engine with
+# `roll_components_agree`'s +/-9 % accept removed. They are in this corpus because their
+# counters are real counters, and they are EXCLUDED from
+# `scripts/c152_h19_family_recensus.py`'s family history for the opposite reason -- their
+# divergent rows are an artefact of the mutation, and counting them inflated
+# `I2_matcher_accounting` from 85 to 113 on that script's first run.
+_EXPECTED_COUNTER_ARTIFACTS = 388
 
 # ---------------------------------------------------------------------------
 # The taxonomies, derived from source rather than transcribed.
@@ -198,11 +220,32 @@ _NEVER_FIRED_STATIC_COUNTERS = (
     "skip:no_action_candidates",
     "no_constructible_candidate",
     "no_damage_rolls",
-    "BranchLegalRollError",
     "engine_error",
     "world_prestate_mismatch:side_conditions",
     "mapper_lossy",
     "no_usable_branch",
+)
+
+# ⚠ SIX AND SEVEN. `BranchLegalRollError` and `rump_branch_set` were on the two
+# never-fired lists above until 2026-08-08 (C152), and both are FALSE -- the sixth
+# and seventh "never fired" claim in `reports/c138_known_gaps_ledger.md` to be
+# refuted, after the five C146 inventoried.
+#
+# What refuted them is the point. Neither was refuted by re-reading the existing
+# corpus, which is what C146 did and which this module already re-derives on every
+# run: over every artifact committed before C152 they really are 0. They were
+# refuted by MEASURING SOMEWHERE NEW -- a 1,000-game census on unregistered seeds
+# `1,000,000`-`1,000,999`, run for an unrelated purpose (ledger G33b's open arms)
+# on the same 74-patch engine. Both fire immediately outside the two 200-game
+# windows this program has iterated against for its whole history.
+#
+# So the standing rule "a negative claim carries its glob" needs its companion,
+# and C152 adds it to the ledger's §8: a negative measured only inside the two
+# permitted windows is a claim about those windows. Widening the CORPUS cannot
+# find this class of error; only widening the MEASUREMENT can.
+_FIRED_ONLY_OUTSIDE_THE_PERMITTED_WINDOWS = (
+    "BranchLegalRollError",
+    "rump_branch_set",
 )
 
 # NOT one of §3.5's nine, and kept separate so that list keeps meaning nine.
@@ -212,7 +255,10 @@ _NEVER_FIRED_STATIC_COUNTERS = (
 # It was asserted in §3.3 and held by no pin, which is exactly the class of claim this
 # module exists to close: a verified negative nothing re-derives is an asserted one waiting
 # to rot. Measured 0 across all 347.
-_NEVER_FIRED_VERDICT_IDENTITY_TERMS = ("rump_branch_set",)
+# ⚠ EMPTIED 2026-08-08 (C152). It held `("rump_branch_set",)` and that was false:
+# `skip:rump_branch_set` fires at 2 and at 1 in the C152 wide census. `engine_error`
+# remains the only never-exercised term of the shipped five-term verdict identity.
+_NEVER_FIRED_VERDICT_IDENTITY_TERMS: tuple[str, ...] = ()
 
 # §3.5's "7 of 8 unmappable_choice reasons unobserved", plus the eighth as the
 # anti-vacuity control on the same taxonomy.
@@ -534,13 +580,40 @@ class NeverFiredPartitionsTests(unittest.TestCase):
         # §3.5's nine, plus `skip:rump_branch_set` -- see its constant for why it is
         # tracked separately but asserted here.
         names = _NEVER_FIRED_STATIC_COUNTERS + _NEVER_FIRED_VERDICT_IDENTITY_TERMS
-        self.assertEqual(len(names), 10, "the never-fired static list changed shape")
+        self.assertEqual(len(names), 8, "the never-fired static list changed shape")
         found = scan(names)
         self.assertEqual(
             {name: found[name][:2] for name in found},
             {},
             "a never-fired static counter now has recorded evidence",
         )
+
+    def test_the_two_c152_refutations_are_pinned_as_fired(self) -> None:
+        """The other half of the correction: assert they DO fire, and where.
+
+        An absence list that merely drops a name records nothing. Both of these
+        were "never fired" until a measurement outside the two permitted windows
+        found them, so the pin is that the evidence is still there AND that it is
+        still outside those windows -- if a future dev/holdout sweep starts
+        emitting either, that is a different fact and should be noticed.
+        """
+        found = scan(list(_FIRED_ONLY_OUTSIDE_THE_PERMITTED_WINDOWS))
+        self.assertEqual(
+            sorted(found),
+            sorted(_FIRED_ONLY_OUTSIDE_THE_PERMITTED_WINDOWS),
+            "a counter C152 proved fires has lost its evidence; the ledger's §3.5 "
+            "correction is now unsupported",
+        )
+        for name, hits in found.items():
+            with self.subTest(counter=name):
+                artifacts = {artifact for artifact, _path, _value in hits}
+                self.assertTrue(
+                    all("c152_wide_census_" in a for a in artifacts),
+                    f"{name} now has evidence outside the C152 wide census: "
+                    f"{sorted(artifacts)}. That is a NEW fact -- it would mean the "
+                    "counter reaches the permitted windows too -- and needs its own "
+                    "ledger note rather than a silently widened pin.",
+                )
 
     def test_seven_of_the_eight_unmappable_choice_reasons_are_absent(self) -> None:
         found = scan(_NEVER_FIRED_UNMAPPABLE_CHOICE + _FIRED_UNMAPPABLE_CHOICE)
@@ -598,8 +671,21 @@ class TheMatchersThemselvesAreExercisedTests(unittest.TestCase):
         # `reports/c9_decomposition.json` and `c12_decomposition.json` inside a `"basis"`
         # narration next to a large unrelated number, and it is genuinely never-fired.
         # Admitting prose flipped it, and flipped `BranchLegalRollError` too.
-        found = scan(["no_usable_branch", "BranchLegalRollError"])
+        #
+        # ⚠ `BranchLegalRollError` LEFT THIS CONTROL on 2026-08-08 (C152). It now has
+        # real counter evidence in the wide census, so it can no longer distinguish
+        # "prose was admitted" from "the counter fired" -- keeping it here would have
+        # turned a genuine refutation into a red matcher pin and invited someone to
+        # loosen the matcher to make it green. `no_usable_branch` still has both
+        # properties (prose present, counter absent) and carries the control alone.
+        found = scan(["no_usable_branch"])
         self.assertEqual(found, {}, "prose mentions are being counted as evidence again")
+        # Anti-vacuity: the prose really is there, so a scanner that stopped reading
+        # `reports/` entirely would not pass this by accident.
+        self.assertIn(
+            "no_usable_branch",
+            (REPO / "reports" / "c9_decomposition.json").read_text(encoding="utf-8"),
+        )
 
 
 class H13sRefutationIsPinnedToTheWindowsTests(unittest.TestCase):
@@ -660,6 +746,192 @@ class H13sRefutationIsPinnedToTheWindowsTests(unittest.TestCase):
             - before["counters"]["limit:world_substitute_health_unknown"]
         )
         self.assertEqual(freed, 71, "the freed skips did not reappear as measured boundaries")
+
+
+
+# ---------------------------------------------------------------------------
+# C152 additions. Three pins for the three things C152 measured that a later
+# edit could silently invalidate, each verified to go red under a mutation
+# before it was committed (the mutation is named in each docstring).
+# ---------------------------------------------------------------------------
+
+
+class TheFamilyBucketAuditCanActuallyRunTests(unittest.TestCase):
+    """H19's named settling measurement crashed on every input until C152.
+
+    `scripts/family_bucket_audit.py:355` read `(ROOT / evidence).is_file()` and
+    `ROOT` was defined nowhere in the module. The line is reached
+    UNCONDITIONALLY -- all five `ESTABLISHED` families are members of the
+    registered set -- so `main()` did every re-read and then raised `NameError`.
+    `tests/test_family_bucket_audit.py` exercises `signatures()` and
+    `bucket_from_signatures()` and never `main()`, which is how it survived from
+    #1022 (2026-08-02) to C152.
+
+    This resolves every global NAME the module's own code references, which is
+    the class of defect rather than the instance. MUTATION CHECKED: renaming
+    `REPO_ROOT` back to `ROOT` at that line turns this red.
+    """
+
+    def _unresolved_globals(self, relative: str) -> set[str]:
+        import ast
+        import builtins
+
+        source = (REPO / relative).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        # Module dunders are bound by the import machinery, not by any statement
+        # in the file, so a name-resolution check that omits them reports every
+        # `Path(__file__)` as undefined. Found by running this against the four
+        # C152 scripts before committing it.
+        bound: set[str] = set(dir(builtins)) | {
+            "__file__", "__name__", "__doc__", "__package__", "__spec__", "__loader__",
+        }
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                bound.add(node.name)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                args = node.args
+                for arg in [
+                    *args.posonlyargs, *args.args, *args.kwonlyargs,
+                    args.vararg, args.kwarg,
+                ]:
+                    if arg is not None:
+                        bound.add(arg.arg)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    bound.add((alias.asname or alias.name).split(".")[0])
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                bound.add(node.id)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                bound.add(node.name)
+            elif isinstance(node, (ast.comprehension,)):
+                for name in ast.walk(node.target):
+                    if isinstance(name, ast.Name):
+                        bound.add(name.id)
+            elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+                for name in ast.walk(node.optional_vars):
+                    if isinstance(name, ast.Name):
+                        bound.add(name.id)
+            elif isinstance(node, ast.Global):
+                bound.update(node.names)
+
+        used = {
+            node.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+        }
+        return used - bound
+
+    def test_family_bucket_audit_references_no_undefined_global(self) -> None:
+        unresolved = self._unresolved_globals("scripts/family_bucket_audit.py")
+        self.assertEqual(
+            unresolved,
+            set(),
+            "scripts/family_bucket_audit.py references a name it never binds. This is "
+            "exactly the `ROOT` defect C152 fixed, and it made ledger row H19's named "
+            "settling measurement unrunnable for six days without any test noticing.",
+        )
+
+    def test_the_same_check_covers_the_c152_measurement_scripts(self) -> None:
+        # The three scripts C152's dispositions rest on. A NameError in any of
+        # them reproduces the H19 failure one measurement later.
+        for relative in (
+            "scripts/c152_g8_survive_representative_census.py",
+            "scripts/c152_g33b_open_arm_census.py",
+            "scripts/c152_h19_family_recensus.py",
+            "scripts/c152_h8_window_census.py",
+        ):
+            with self.subTest(script=relative):
+                self.assertEqual(self._unresolved_globals(relative), set())
+
+
+class C152CensusArtifactsAreInternallyClosedTests(unittest.TestCase):
+    """The committed C152 censuses must reconcile against themselves.
+
+    Every figure C152 quotes in the ledger comes out of these three files, and
+    the ledger's own standing rule is that a permanent cell may not cite a number
+    with no committed artifact. These pins check the artifacts' closure
+    identities rather than transcribing their headline numbers, so a re-run that
+    changes a count stays green while a re-run that breaks a partition goes red.
+
+    MUTATION CHECKED: flipping any one closure flag in a copy of the artifact, or
+    perturbing one addend, turns the matching assertion red.
+    """
+
+    def _load(self, name: str) -> dict:
+        return json.loads((REPO / "reports" / "artifacts" / name).read_text(encoding="utf-8"))
+
+    def test_the_g8_survive_representative_census_closes(self) -> None:
+        doc = self._load("c152_g8_survive_representative_census.json")
+        validation = doc["validation_against_19200244_115"]
+        self.assertTrue(
+            validation["ALL_PASS"],
+            "the census model no longer reproduces 19200244/115, so the plane it "
+            "measures is not the one G8 is about",
+        )
+        self.assertEqual(validation["survive_representative"], 145)
+        self.assertTrue(validation["representative_is_off_fan"])
+        census = doc["census"]
+        self.assertTrue(census["closure_identity_on_fan_plus_off_fan_equals_bands"])
+        self.assertEqual(
+            census["representative_is_a_fan_member"] + census["representative_is_OFF_fan"],
+            census["windows_with_a_survive_band"],
+        )
+        # An off-fan representative prices zero achievable rolls BY DEFINITION,
+        # so these two must move together or the census means something else.
+        self.assertEqual(
+            census["arms_pricing_zero_achievable_rolls"],
+            census["representative_is_OFF_fan"],
+        )
+
+    def test_the_g33b_open_arm_census_closes_and_still_reaches_the_weather_arm(self) -> None:
+        doc = self._load("c152_g33b_open_arm_census.json")
+        combined = doc["all_windows_combined"]
+        self.assertEqual(
+            sum(combined["by_order"].values()), combined["instructions_seen"]
+        )
+        self.assertEqual(sum(combined["by_arm"].values()), combined["instructions_seen"])
+        weather = combined["weather_arm"]
+        # The whole disposition of G33b's weather arm rests on this being
+        # NONZERO -- it is retired as measured-and-harmless, not as absent, and a
+        # future re-run that measured zero would be a different retirement.
+        self.assertGreater(
+            weather["of_those_not_gated_today"],
+            0,
+            "C152 retired G33b's weather arm as REACHED but harmless. A census "
+            "measuring zero reach would need a different disposition, not the same one.",
+        )
+        self.assertLessEqual(
+            weather["of_those_not_gated_today"],
+            weather["loser_dies_to_its_own_order_8_chip"],
+        )
+        # And on the winner emitting no heal it could mislabel.
+        self.assertEqual(
+            weather["winner_side_heals_before_the_truncation"],
+            0,
+            "a winner-side heal inside a weather-truncated segment is the one shape "
+            "that could make the un-gated arm mislabel; C152's retirement measured it "
+            "at zero and demonstrated that only a resolving Wish can produce it",
+        )
+
+    def test_the_h8_window_census_records_both_arms(self) -> None:
+        doc = self._load("c152_h8_window_census.json")
+        for arm in ("count", "disable"):
+            self.assertIn(arm, doc["arms"])
+        # The load-bearing figure is a DIFFERENCE between two sweeps, so both
+        # sides of it have to be present and taken on the same build.
+        self.assertEqual(
+            doc["arms"]["count"]["engine_fingerprint"],
+            doc["arms"]["disable"]["engine_fingerprint"],
+        )
+        for window in ("dev", "holdout"):
+            shipped = doc["arms"]["count"]["windows"][window]
+            without = doc["arms"]["disable"]["windows"][window]
+            self.assertEqual(shipped["boundaries_measured"], without["boundaries_measured"])
+            self.assertEqual(
+                shipped["transitions_matched"] - without["transitions_matched"],
+                doc["boundaries_whose_accept_depended_on_the_window"][window],
+            )
 
 
 if __name__ == "__main__":  # pragma: no cover

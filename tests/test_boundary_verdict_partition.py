@@ -184,7 +184,44 @@ _C141 = {
 # `boundaries_measured`. Eight files added, four corpus members -- which is again why the
 # directory count and the corpus count cannot check each other.
 # Confirmed still live at 94 and at 96.
-_EXPECTED_SWEEP_ARTIFACTS = 95
+#
+# 95 -> 103 (C152, the ledger-terminal dispositions). RE-DERIVED by the same two-tree
+# procedure -- `_sweep_reports()` executed in a worktree of `origin/main` at `d20cf840`
+# (95) and here (103), set difference exactly
+# `reports/artifacts/c152_{head_dev,head_holdout,h8_nowindow_dev,h8_nowindow_holdout}_sweep.json`
+# plus the four `c152_wide_census_*_sweep.json` shards, and NOTHING removed. Not arithmetic
+# on 95. Confirmed still live at 102 and at 104, RE-DERIVED AFTER MERGING `9c2adc72`
+# (#1198's mass-gate fixtures) rather than carried across the merge -- that commit adds
+# `tests/data/c152_pool_reachability_census.json`, which is under `tests/` and therefore
+# outside both selectors, so the base is still 95; re-run, not assumed.
+#
+# THE FOUR WIDE SHARDS ARE ON UNREGISTERED SEEDS `1,000,000`-`1,000,999`, deliberately, and
+# they are the reason two of this repo's "never fired" claims fell on the same day: they are
+# below `FIDELITY_SEED_FLOOR`, so `tests/test_seed_registry_coverage.py` does not see them,
+# and they are in no acceptance namespace. They exist because a negative measured only inside
+# the two 200-game permitted windows is a claim about those windows -- `skip:rump_branch_set`
+# and `strict:branch_event_legal_error:BranchLegalRollError` both fire here and in no
+# artifact committed before C152. They are NOT fidelity evidence and must never be quoted as
+# a coverage or divergence rate for the program.
+#
+# THE PAIRS ARE NOT A FIX BRANCH'S BASE/GATE PAIR, and reading them as one would misread
+# both. `c152_head_*` is the SHIPPED comparator on the shipped engine -- the first committed
+# sweeps at fingerprint `bfdbe1c04876edcd` / 74 patches, every earlier pair having been taken
+# at `8e912b45544034e6` or older. `c152_h8_nowindow_*` is a MUTANT COMPARATOR on the same
+# engine: `roll_components_agree`'s +/-9 % fallback window removed by an AST rewrite of the
+# shipped source, so the difference in `transitions_matched` (167 dev, 140 holdout) is ledger
+# row H8's settling measurement. Nothing in the mutant pair is evidence about the shipping
+# matcher except by subtraction.
+#
+# C152 adds four further artifacts deliberately OUTSIDE this corpus, verified by the set
+# difference above rather than reasoned about: `c152_g8_call_site_trace.json`,
+# `c152_g8_survive_representative_census.json`, `c152_g33b_open_arm_census.json` and
+# `c152_h19_family_recensus.json` carry no top-level `boundaries_measured` -- two are pure
+# censuses, one is an instrumentation trace and one nests its sweep scalars. Eight files
+# added, four corpus members, which is again why the directory count and the corpus count
+# cannot check each other. `c152_h8_window_census.json` nests its scalars under
+# `arms.*.windows.*` for the same reason.
+_EXPECTED_SWEEP_ARTIFACTS = 103
 #
 # 75 -> 79 (C142). MEASURED by step 2 below, and the measurement corrected an expectation:
 # the number was predicted as 78 on the belief that only three of C142's four sweep artifacts
