@@ -399,7 +399,7 @@ The two conventions that meet at the leaf are not the same convention:
   (SELF / OPPONENT token blocks) and the value head is **self-relative**;
 - the tree is **side-one-absolute** (terminal branches, `s1_stats`, one flip in
   `puct`);
-- `engine_world.py:534` pins `slot_sides = {"p1": "side_one", "p2": "side_two"}`,
+- `engine_world.py:562` pins `slot_sides = {"p1": "side_one", "p2": "side_two"}`,
   so the searching seat is side TWO exactly when PokeZero plays p2 — and
   `mcts_eval/scoring.py` plays **both seats of every team seed**.
 

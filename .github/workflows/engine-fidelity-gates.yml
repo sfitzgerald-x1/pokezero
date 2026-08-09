@@ -174,6 +174,10 @@ jobs:
             # closed. Listed so a PR that ONLY weakens the pin file still trips this
             # workflow -- and note the file was previously run by no step at all.
             tests/test_engine_world_encore_transform.py
+            # C153: the Taunt volatile pins, with a STEP below. Same reason as the
+            # line above -- `src/pokezero/**` covers `engine_world.py`, not the file
+            # that holds the counter's value and the engine-fidelity half.
+            tests/test_engine_world_taunt.py
             # The engine-search telemetry pins, with a STEP below. Listed for the reason
             # every other test file here is: a PR whose only change weakens these pins --
             # deleting the abort-path tests, or the cross-language attribute-name pin that
@@ -1071,6 +1075,38 @@ jobs:
           fi
           if grep -q 'skipped' /tmp/encoretransform.log; then
             echo "::error::an Encore-on-transform pin SKIPPED; they must never skip"
+            exit 1
+          fi
+
+      # C153: the Taunt volatile. `taunt` was tracked-but-unsupported, so a Taunt
+      # boundary refused with `volatile_unsupported` and no world was ever built.
+      # Half of what this file pins is engine fidelity -- that the vendored gen3
+      # wheel filters Status moves out of a TAUNTed side's options, and that the
+      # seeded counter of 1 expires the volatile after exactly ONE end-of-turn
+      # rather than two. Neither can be checked without a built engine, so the
+      # module imports `poke_engine` UNGUARDED and a skip here is an error, not a
+      # pass.
+      #
+      # The exact count is NOT a behavioural guard -- review is right that it restates
+      # the membership assertion M1 already kills. It is a DELETION guard, which is the
+      # reason the two steps above give and the one thing no local `unittest` run can
+      # see: it lives in YAML, so a PR that removes the fidelity half of this file trips
+      # here rather than reading as green.
+      - name: Taunt volatile world-construction and fidelity pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_engine_world_taunt -v 2>&1 \
+            | tee /tmp/taunt.log
+          if ! grep -qE 'Ran 13 tests' /tmp/taunt.log; then
+            echo "::error::expected 13 tests; the suite shrank or grew"
+            exit 1
+          fi
+          # Anchored, not a substring match over the whole verbose log: the bare
+          # `grep -q skipped` this replaced would fire on any test NAME or docstring
+          # containing the word, and would equally miss nothing -- it was a guard whose
+          # true and false cases were both unreliable.
+          if grep -qE '\bskipped=[1-9]|\.\.\. skipped' /tmp/taunt.log; then
+            echo "::error::a Taunt pin SKIPPED; they must never skip"
             exit 1
           fi
 

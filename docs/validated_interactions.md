@@ -116,7 +116,7 @@ path rather than duplicating them.
 | **Endeavor** | ACCEPTED-APPROX | fixed/callback damage (sets target HP to attacker's); carries no set info, excluded from CB by construction (like Seismic Toss) |
 | **Present** | ACCEPTED-APPROX / N/A-randbats | mixed damage/heal with empty-target `\|move\|...\|\|[still]`; Delibird is not on any gen3 randbats set → out of distribution; the move token parses (empty target tolerated) |
 | **Beat Up** | N/A-randbats | absent from the gen3 randbats pool (inventory-certified; no team-dependent powers) |
-| **Taunt / Disable / Torment / Imprison** | N/A-randbats | not on any gen3 randbats set (inventory-certified); the volatiles ARE in `TRACKED_VOLATILES` so they encode if they ever appear (customgame), and the engine-world allow-list fails closed |
+| **Taunt / Disable / Torment / Imprison** | N/A-randbats | not on any gen3 randbats set (re-counted 2026-08-09: `taunt` on 0 of 1682 variants); the volatiles ARE in `TRACKED_VOLATILES` so they encode if they ever appear (customgame). Disable/Torment/Imprison still fail closed in the engine-world allow-list; **Taunt no longer does** — the golden-corpus scenarios reach it, gen3's duration is a fixed 2 with no roll, and the vendored engine models the volatile + counter, so it is in `_SUPPORTED_VOLATILES` with the counter seeded at 1 tick elapsed — except at a mid-turn replacement boundary, where the deferred residual runs on the replacement ply and the correct seed depends on the Taunt's age, so it is withdrawn from the allow-list and fails closed (`test_engine_world_taunt.py`) |
 | **`\|tie\|`, `-notarget`, `-singleturn`, `-fieldactivate`, `-endability`** | ACCEPTED gaps | see `protocol_coverage_matrix.md` — benign / no functional state loss |
 
 ## Registry summary
