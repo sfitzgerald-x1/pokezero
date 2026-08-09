@@ -1290,6 +1290,21 @@ _WEATHER_REVEAL_ORDER = ("raindance", "sunnyday", "sandstorm", "hail")
 # Deterministic gen 3 timed effects: 5 turns for move weather and for these side conditions.
 _TIMED_CONDITION_DURATION = 5
 _TIMED_SIDE_CONDITIONS = ("reflect", "lightscreen", "safeguard", "mist")
+# Public events after which an action-phase Toxic zero (``toxic_stage_reset_ident``) can no
+# longer be vouched for. Split by ATTRIBUTION, not by handler:
+#
+#   * BOUNDARY events end a residual phase or the battle for BOTH seats.
+#   * OCCUPANCY events change one seat's active, so they retire that seat -- or both, when
+#     the line is too short or too malformed to name one.
+#
+# Retirement keys off the EVENT TYPE alone and runs before every canonical, ordering and
+# length gate in `_feed_line`. That is the whole point: the shapes that fail those gates
+# (`|turn` with no number, `|faint|p1a`, `|switch|p1a: Broken`, `|upkeep\r`) are exactly the
+# ones whose chronology cannot be reconstructed, and a proof that survives one of them
+# answers a later request with a concrete WRONG counter instead of refusing. Every sibling
+# latch in this subsystem already fails closed on them.
+_TOXIC_RESET_PROOF_BOUNDARY_EVENTS = frozenset({"upkeep", "turn", "win", "tie"})
+_TOXIC_RESET_PROOF_OCCUPANCY_EVENTS = frozenset({"switch", "drag", "replace", "faint"})
 # Revealed trap abilities whose holder threatens switches while alive on the bench.
 _TRAP_ABILITIES = frozenset({"shadowtag", "arenatrap", "magnetpull"})
 # Pinch berries for the HP-EV-trim variant condition (corrections item 1).
@@ -2411,6 +2426,25 @@ class _ReplayParser:
             self.toxic_faint_replacement_expected_ident[slot] = None
             self.toxic_faint_replacement_invalid[slot] = True
 
+    def _retire_toxic_stage_reset_proof(self, event_type: str, parts: Sequence[str]) -> None:
+        """Spend the action-phase Toxic zero at any boundary it cannot account for.
+
+        One arm for every such event, keyed on the event type before any gate, so a
+        marker too malformed to be folded as chronology still retires the proof. See
+        ``_TOXIC_RESET_PROOF_BOUNDARY_EVENTS`` for why that generalisation is the rule
+        rather than a list of repaired cases.
+        """
+
+        if event_type in _TOXIC_RESET_PROOF_BOUNDARY_EVENTS:
+            slots: tuple[str, ...] = ("p1", "p2")
+        elif event_type in _TOXIC_RESET_PROOF_OCCUPANCY_EVENTS:
+            named = _slot_from_ident(parts[2]) if len(parts) >= 3 else None
+            slots = (named,) if named in self.toxic_stage_reset_ident else ("p1", "p2")
+        else:
+            return
+        for slot in slots:
+            self.toxic_stage_reset_ident[slot] = None
+
     def _feed_line(self, raw_line: str) -> None:
         line = raw_line.strip()
         if not line:
@@ -2420,6 +2454,7 @@ class _ReplayParser:
         self._sanitize_toxic_replacement_provenance()
         parts = line.split("|")
         event_type = parts[1] if len(parts) > 1 else ""
+        self._retire_toxic_stage_reset_proof(event_type, parts)
         canonical_turn = _canonical_turn_number(raw_line) if event_type == "turn" else None
         canonical_upkeep = _canonical_upkeep_marker(raw_line)
         canonical_faint = _canonical_faint_marker(raw_line, parts)
@@ -2451,24 +2486,6 @@ class _ReplayParser:
             if showdown_slot in {"p1", "p2"}:
                 self.requests[showdown_slot] = payload
             return
-        if event_type in {"switch", "drag", "replace"}:
-            # Occupancy is changing hands. Retire the action-phase zero-counter proof
-            # for the affected seat BEFORE any parse and INDEPENDENTLY of whether the
-            # line carries enough fields to be folded into a Pokemon -- the block below
-            # needs four fields, and a three-field `|switch|p1a: Broken` would otherwise
-            # sail past it leaving the previous occupant's proof standing over a seat we
-            # can no longer name the occupant of. A proof belongs to exactly one mon; a
-            # line too short to say who arrived is precisely the case where we cannot
-            # claim the old one is still there. A line too short to name a SEAT retires
-            # both, since an unattributable occupancy change could be either.
-            vacating_slot = _slot_from_ident(parts[2]) if len(parts) >= 3 else None
-            vacated_slots = (
-                (vacating_slot,)
-                if vacating_slot in self.toxic_stage_reset_ident
-                else ("p1", "p2")
-            )
-            for slot in vacated_slots:
-                self.toxic_stage_reset_ident[slot] = None
         if event_type in {"switch", "drag", "replace"} and len(parts) >= 4:
             replacement_slot = _slot_from_ident(parts[2])
             pending_faint_replacement = (
@@ -2711,26 +2728,13 @@ class _ReplayParser:
             self.public_lines.append(line)
             return
         if event_type == "upkeep":
-            # This turn's residual phase is over, so an action-phase zero-counter
-            # proof has had its one residual opportunity. Whether the tick was
-            # observed (stage now >= 1), unobservable (`known` cleared) or absent
-            # from the prefix entirely, the proof is spent. Retiring it here is what
-            # keeps a stage-0 zero from outliving the residual that would contradict
-            # it -- the exact failure the post-upkeep proof's deadline guards against.
-            #
-            # Retired BEFORE the canonical gate, on the same reasoning as the |turn|
-            # arm below. `_canonical_upkeep_marker` reads the UNSTRIPPED raw line and
-            # demands exactly "|upkeep", while `event_type` here comes from the
-            # stripped one, so "|upkeep\r", "|upkeep ", "|upkeep\n" and
-            # "|upkeep|payload" all reach this branch and are then discarded as
-            # chronology -- correctly, since none of them may move
-            # `_post_upkeep_window`. But a marker too malformed to trust is still
-            # evidence that the prefix reached a residual boundary this proof cannot
-            # account for. Every other latch in this subsystem treats a malformed
-            # marker as in scope and fails closed; a stage-0 counter that outlived one
-            # would be the only value here that is positively WRONG rather than merely
-            # refused, and a wrong counter in a searched world is silent wrongness.
-            self.toxic_stage_reset_ident = {"p1": None, "p2": None}
+            # The action-phase Toxic proof was already spent by
+            # `_retire_toxic_stage_reset_proof` at the top of this method, before this
+            # gate: `_canonical_upkeep_marker` reads the UNSTRIPPED line and demands
+            # exactly "|upkeep", so "|upkeep\r", "|upkeep ", "|upkeep\n" and
+            # "|upkeep|payload" are discarded here as chronology -- correctly, none of
+            # them may move `_post_upkeep_window` -- while still being evidence that
+            # the prefix reached a residual boundary.
             if not canonical_upkeep:
                 return
             # Residuals for this turn are done; anything switching in from here until the
@@ -2738,12 +2742,10 @@ class _ReplayParser:
             self._post_upkeep_window = True
             self._settle_pending_rest_sleep_attempts()
         if event_type == "turn" and len(parts) >= 3:
-            # A turn marker is past the previous turn's residual opportunity, so the
-            # action-phase zero-counter proof is spent. Retired BEFORE the ordering
-            # gate below: an out-of-order marker is discarded as chronology, but it is
-            # still evidence that the prefix moved on, and a proof must never survive
-            # a boundary it cannot account for.
-            self.toxic_stage_reset_ident = {"p1": None, "p2": None}
+            # Same as `upkeep` above: the action-phase Toxic proof is spent at the top
+            # of this method, ahead of BOTH this length gate and the ordering gate
+            # below. A bare `|turn` never reaches this block at all, and an unordered
+            # marker is discarded below -- neither may leave the proof standing.
             next_turn = canonical_turn
             turn_is_ordered = bool(
                 isinstance(next_turn, int)

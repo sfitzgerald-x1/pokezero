@@ -1388,6 +1388,101 @@ class ActionPhaseToxicResetTest(unittest.TestCase):
                     self.assertIsNone(replay.toxic_stage_reset_ident[side])
                     self.assertIsNone(_materialization_toxic_stage(replay, side))
 
+    # Every boundary shape that a canonical/ordering/length gate REJECTS. Each one is a
+    # line the parser refuses to fold as chronology, and each is still evidence that the
+    # prefix passed a residual phase, changed a seat's occupant, or ended the battle.
+    # Retirement is keyed on the event TYPE ahead of all three gate kinds precisely so
+    # that this list is closed by a rule rather than case by case: `|turn` was missed on
+    # the first pass because the `|upkeep` gate got the treatment and the `|turn` length
+    # gate did not.
+    # `{side}` is substituted with the seat under test: occupancy events are
+    # seat-attributed, so a faint naming the OTHER seat must NOT retire this one --
+    # that separation is pinned by `test_the_faint_arm_retires_the_seat_the_line_names`.
+    UNFOLDABLE_BOUNDARIES = (
+        "|upkeep\r",
+        "|upkeep ",
+        "|upkeep\n",
+        "|upkeep|payload",
+        "|upkeep|",
+        "|turn",           # two fields: never reaches the `len(parts) >= 3` block
+        "|turn|",
+        "|turn|x",
+        "|turn|0",
+        "|faint",              # no ident at all: unattributable, retires both
+        "|faint|{side}a",      # malformed active ident
+        "|faint|{side}: Walrein",  # bench ident: `_update_toxic_stage` early-returns
+        "|win|Bot",
+        "|tie",
+    )
+
+    @classmethod
+    def _unfoldable(cls, side: str) -> tuple[str, ...]:
+        return tuple(marker.format(side=side) for marker in cls.UNFOLDABLE_BOUNDARIES)
+
+    def test_no_unfoldable_boundary_leaves_the_proof_standing(self) -> None:
+        """The generalisation, pinned as a rule over the whole shape family.
+
+        A proof that outlives one of these answers a later request with a concrete
+        WRONG counter rather than refusing, which is the one direction strictly worse
+        than the refusal this change removes.
+        """
+        for side in ("p1", "p2"):
+            for marker in self._unfoldable(side):
+                with self.subTest(side=side, marker=marker):
+                    parser = self._reentry_parser(side, marker)
+                    self.assertIsNone(parser.toxic_stage_reset_ident[side])
+                    replay = parser.snapshot()
+                    self.assertIsNone(replay.toxic_stage_reset_ident[side])
+                    self.assertIsNone(_materialization_toxic_stage(replay, side))
+
+    def test_the_faint_arm_retires_the_seat_the_line_names(self) -> None:
+        """Occupancy events are seat-attributed; only an unnameable seat retires both."""
+        for side in ("p1", "p2"):
+            other = "p2" if side == "p1" else "p1"
+            parser = self._reentry_parser(side)
+            # Arm the OTHER seat too, so over-retirement is visible.
+            parser.feed([f"|switch|{other}a: Swalot|Swalot, L80, M|200/250 tox"])
+            self.assertEqual(parser.toxic_stage_reset_ident[side], f"{side}a: Walrein")
+            self.assertEqual(parser.toxic_stage_reset_ident[other], f"{other}a: Swalot")
+            with self.subTest(side=side, line="named-seat"):
+                named = _ReplayParser.from_snapshot(parser.snapshot())
+                named.feed([f"|faint|{side}a: Walrein"])
+                self.assertIsNone(named.toxic_stage_reset_ident[side])
+                self.assertEqual(
+                    named.toxic_stage_reset_ident[other], f"{other}a: Swalot"
+                )
+            with self.subTest(side=side, line="unnameable-seat"):
+                both = _ReplayParser.from_snapshot(parser.snapshot())
+                both.feed(["|faint"])
+                self.assertIsNone(both.toxic_stage_reset_ident[side])
+                self.assertIsNone(both.toxic_stage_reset_ident[other])
+
+    def test_unfoldable_boundary_parity_with_the_post_upkeep_proof(self) -> None:
+        """Wherever the sibling latch refuses one of these, this proof refuses too."""
+        for side in ("p1", "p2"):
+            lead = "LeadOne" if side == "p1" else "LeadTwo"
+            for marker in self._unfoldable(side):
+                with self.subTest(side=side, marker=marker):
+                    sibling = _ReplayParser(
+                        f"toxic-unfoldable-sibling-{side}", complete_prefix=True
+                    )
+                    sibling.feed(
+                        [
+                            *self.LEADS,
+                            f"|faint|{side}a: {lead}",
+                            "|upkeep",
+                            f"|switch|{side}a: Walrein|Walrein, L80, M|288/307 tox",
+                            marker,
+                        ]
+                    )
+                    sibling_answer = _materialization_toxic_stage(sibling.snapshot(), side)
+                    action_phase = self._reentry_parser(side, marker).snapshot()
+                    if sibling_answer is None:
+                        self.assertIsNone(
+                            _materialization_toxic_stage(action_phase, side),
+                            "the sibling latch refuses this shape and this one must too",
+                        )
+
     def test_a_mutated_latch_is_normalized_before_the_next_line(self) -> None:
         """`_sanitize_toxic_replacement_provenance` owns this latch too.
 
