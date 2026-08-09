@@ -15,13 +15,26 @@ whose foe ability is a bystander -- the same decision names a different one on e
 because it is whichever ability the belief sample happened to draw.
 
 WHY A NEW PAYLOAD KEY RATHER THAN A `volatiles` ENTRY. The two lanes exist for a reason:
-`volatiles` is TRACKED_VOLATILES-gated, and that set is simultaneously (a) the observation
-encoder's `volatile:<id>` vocabulary, where this fact ALREADY lives as the v3 numeric column
-NUMERIC_MEANLOOK_TRAP, and (b) mirrored by the Node bridge's STATIC_PUBLIC_VOLATILES, which
-throws on anything else and could not rebuild the linked `trapper` volatile anyway. Adding
-`trapped` there would unfreeze v3 tensors and break `materialize`. A dedicated key is the
-established shape for a parser fact only the world lane consumes -- `truantPhase` and
-`stallCounter` are already exactly that.
+`volatiles` is TRACKED_VOLATILES-gated, and `randbat_vocab.GEN3_VOLATILES` is literally
+`tuple(sorted(TRACKED_VOLATILES))` -- so adding `trapped` MINTS a `volatile:trapped` vocab row
+and shifts the ids of every alphabetically-later volatile, unfreezing v3 tensors that already
+carry this fact as the numeric column NUMERIC_MEANLOOK_TRAP. Separately, the Node bridge's
+`applyPublicVolatiles` throws on any id outside STATIC_PUBLIC_VOLATILES (of which
+TRACKED_VOLATILES is a 6-of-38 subset, not a mirror) and could not rebuild the linked `trapper`
+volatile on the source mon anyway. A dedicated key is the established shape for a parser fact
+the WORLD lane needs its own copy of -- `truantPhase` and `stallCounter` are already exactly
+that. (They reach the observation too, by other routes; what makes them the right precedent is
+that the world lane reads them from the payload rather than from observation metadata.)
+
+SCOPE. This closes the move trap for the transcripts where the parser tracker is right, which is
+every one EXCEPT a Baton Pass: gen3 re-declares `trapped`/`trapper` with `noCopy: false`
+(`data/mods/gen4/conditions.ts`, inherited by gen3), so the trap rides a pass and the parser --
+which clears both slots on any switch -- reports False. 2 of 3 gen3 randbat Ariados sets carry
+Spider Web AND Baton Pass, so the hole is common rather than exotic. It is FAIL-CLOSED (the
+world carries no trap and the decision is refused exactly as before) and is tracked as a
+follow-up, because fixing it changes recorded v3/v4 observation VALUES for arms in flight --
+a different blast radius from this world-lane routing change. `test_a_baton_passed_trap_is_the
+_known_hole` below pins the current behaviour so the follow-up has a test to flip.
 
 The seam test below is the one that matters: it drives real protocol lines through the
 production parser, builds the payload with the production builder, and feeds THAT payload --
@@ -181,6 +194,41 @@ class MoveTrapReachesTheWorldBuilderTest(unittest.TestCase):
                 battle_spec_from_payload(payload, _override(), dex=self.dex)
         self.assertEqual(caught.exception.reason, "self_request_state_unsupported")
 
+    def test_a_baton_passed_trap_is_the_known_hole_and_still_fails_closed(self) -> None:
+        """The scope boundary, pinned so the follow-up has a test to FLIP rather than write.
+
+        gen3 re-declares BOTH `trapped` and `trapper` with `noCopy: false`
+        (`data/mods/gen4/conditions.ts`, inherited via `data/mods/gen3/scripts.ts`), so a trapper
+        that webs and then Baton Passes leaves its victim trapped until the RECEIVER switches out
+        -- the behaviour `third_party/poke-engine-gen3-move-trapping.patch` models as
+        `TRAPPED => baton_passing`, verified there against real gen3 Showdown. The PARSER does not
+        model it: `_update_meanlook_trap`'s switch/drag reset clears BOTH slots unconditionally,
+        on a justification ("the volatile is noCopy") this PR corrects in place as false.
+
+        So this transcript arrives with `meanlookTrap` False and the decision is refused exactly
+        as it was before the fix -- FAIL-CLOSED, a coverage hole and not a hazard. It is the
+        common hole rather than an exotic one: 2 of 3 gen3 randbat Ariados sets carry Spider Web
+        AND Baton Pass, and it is the established explanation for the residual records that show
+        `self_meanlook_trap: False` in late rounds of battles whose earlier rounds were True.
+
+        Not fixed here because the fix changes recorded v3/v4 observation VALUES
+        (NUMERIC_MEANLOOK_TRAP) for arms in flight -- a different blast radius from routing an
+        existing parser fact into the world payload.
+        """
+
+        produced = self._produced_payload(
+            "|move|p2a: Snorlax|Spider Web|p1a: Swampert",
+            "|-activate|p1a: Swampert|trapped",
+            "|move|p2a: Snorlax|Baton Pass|p2a: Snorlax",
+            "|switch|p2a: Starmie|Starmie, L79, M|100/100|[from] Baton Pass",
+        )
+        self.assertIs(
+            produced["sides"]["p1"]["meanlookTrap"],
+            False,
+            "parser behaviour changed -- if the Baton Pass carry is now modelled, this test "
+            "should be inverted and the scope notes updated, not deleted",
+        )
+
     def test_the_trap_follows_the_trapped_seat_and_not_the_trapper(self) -> None:
         """Non-vacuity for the per-slot read: `always set it on p1` would pass the tests above.
 
@@ -289,6 +337,102 @@ class StaleWheelIsAFallbackNotACrashTest(unittest.TestCase):
         self.assertEqual(
             policy.stats.world_failure_reasons,
             Counter({"move_trap_patch_unavailable": 1}),
+        )
+
+    def test_the_base_capability_error_is_attributed_too(self) -> None:
+        """The subclass handler is NOT sufficient, which review found and the first fix missed.
+
+        `_build_side_spec` calls `require_move_trap_support()` with no module, so it resolves the
+        engine through `require_poke_engine()` -- and when `probe_poke_engine()` is not ready
+        (importable but mis-built: a missing required `State` method, exactly the case these
+        buckets exist for) that raises the BASE `PokeEngineUnavailableError`, not the move-trap
+        subclass and not an `EngineWorldUnsupported`. Unhandled it escapes `_search` as a crash.
+
+        Pre-existing rather than introduced: `require_charge_state_support()` sits two lines away
+        with the identical shape and has been reachable since `solarbeam` became tracked. The
+        backstop is attributed by exception class so the ledger can tell "no usable engine at
+        all" from a specific missing patch.
+        """
+
+        import random
+        from collections import Counter
+        from unittest import mock
+
+        from pokezero.engine_search import EngineMctsConfig, EngineMctsPolicy
+        from pokezero.poke_engine_adapter import PokeEngineUnavailableError
+
+        from .test_engine_search import _FakeContext, _FakeObservation, _candidates
+
+        policy = EngineMctsPolicy(
+            dex=None,
+            set_source=None,
+            module=mock.Mock(),
+            config=EngineMctsConfig(worlds=1, sample_retry_factor=1),
+        )
+        mask = (True, False, False, False, False, False, False, False, False)
+        context = _FakeContext(_FakeObservation(mask, _candidates()))
+        with mock.patch(
+            "pokezero.engine_search._gen3_randbat_belief_start_override_result",
+            return_value=(object(), None),
+        ), mock.patch(
+            "pokezero.engine_search.world_battle_spec",
+            side_effect=PokeEngineUnavailableError("poke-engine is not importable"),
+        ):
+            decision = policy.select_action_with_context(context, rng=random.Random(0))
+
+        self.assertEqual(decision.metadata["engine_mcts"]["fallback"], "no_worlds_constructed")
+        self.assertEqual(
+            policy.stats.world_failure_reasons,
+            Counter({"engine_capability_unavailable: PokeEngineUnavailableError": 1}),
+        )
+
+    def test_the_specific_bucket_still_wins_over_the_backstop(self) -> None:
+        """Handler ORDER: the subclass must not be swallowed into the generic bucket.
+
+        `PokeEngineMoveTrapUnsupportedError` IS a `PokeEngineUnavailableError`, so putting the
+        backstop first would collapse the two into one reason code and lose the "rebuild with
+        the move-trapping patch" signal the specific bucket exists to carry. Asserted against
+        the real production `require_move_trap_support` raise, not a hand-thrown instance.
+        """
+
+        import random
+        from collections import Counter
+        from unittest import mock
+
+        from pokezero.engine_search import EngineMctsConfig, EngineMctsPolicy
+        from pokezero.poke_engine_adapter import (
+            PokeEngineMoveTrapUnsupportedError,
+            PokeEngineUnavailableError,
+        )
+
+        from .test_engine_search import _FakeContext, _FakeObservation, _candidates
+
+        self.assertTrue(
+            issubclass(PokeEngineMoveTrapUnsupportedError, PokeEngineUnavailableError),
+            "the ordering this test pins only matters while the subclass relation holds",
+        )
+
+        policy = EngineMctsPolicy(
+            dex=None,
+            set_source=None,
+            module=mock.Mock(),
+            config=EngineMctsConfig(worlds=1, sample_retry_factor=1),
+        )
+        mask = (True, False, False, False, False, False, False, False, False)
+        context = _FakeContext(_FakeObservation(mask, _candidates()))
+        with mock.patch(
+            "pokezero.engine_search._gen3_randbat_belief_start_override_result",
+            return_value=(object(), None),
+        ), mock.patch(
+            "pokezero.engine_search.world_battle_spec",
+            side_effect=PokeEngineMoveTrapUnsupportedError("no move-trapping.patch"),
+        ):
+            policy.select_action_with_context(context, rng=random.Random(0))
+
+        self.assertEqual(
+            policy.stats.world_failure_reasons,
+            Counter({"move_trap_patch_unavailable": 1}),
+            "the generic backstop swallowed the specific patch signal",
         )
 
 

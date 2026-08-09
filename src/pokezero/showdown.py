@@ -504,7 +504,9 @@ NUMERIC_GENDER_FEMALE = V3_LEGACY_NUMERIC_BASE + 9
 # partial-trap column (+7 — chip + can't switch, a DIFFERENT volatile) and from NUMERIC_TRAPPER_ALIVE
 # (ability traps Shadow Tag / Arena Trap / Magnet Pull, whose shape this mirrors). Gen3 Mean Look
 # (Misdreavus) / Spider Web (Ariados) run ``target.addVolatile('trapped', source, move, 'trapper')``:
-# the base ``trapped`` volatile is ``noCopy`` with NO onEnd, applied via ``|-activate|SLOT|trapped``
+# the base ``trapped`` volatile has NO onEnd and is applied via ``|-activate|SLOT|trapped``
+# (CORRECTED: this said ``noCopy``; gen3 re-declares ``trapped`` and ``trapper`` with
+# ``noCopy: false``, so a Baton Pass DOES carry the trap — see ShowdownReplayState.meanlook_trap)
 # (no ``[of]``), and is removed SILENTLY (no protocol line) when the source's linked ``trapper``
 # volatile drops. poke-engine does not model move-traps at all (its gen3 ``trapped()`` covers only
 # LockedMove / partiallytrapped / trap abilities), so this is a protocol-only signal. The trap ends
@@ -1375,10 +1377,23 @@ class ShowdownReplayState:
     # Mean Look / Spider Web move-trap per slot (spec v3 change 8, docs/observation_v3_spec.md): a
     # public 0/1 flag = the mon in this slot is switch-locked by an opposing Mean Look / Spider Web.
     # Set on ``|-activate|SLOT|trapped`` (the base ``trapped`` volatile's onStart); the trapper is the
-    # opposing active mon (singles). The ``trapped`` volatile is ``noCopy`` with NO onEnd, so no
-    # protocol line marks the end; the parser clears the flag when the trapped mon leaves its slot
-    # (switch/drag/faint) or the trapper leaves its slot (switch/drag/faint of the opposing slot —
-    # the linked source-side volatile is what actually drops the trap). Kept DISTINCT from
+    # opposing active mon (singles). The volatile has NO onEnd, so no protocol line marks the end;
+    # the parser clears the flag when the trapped mon leaves its slot (switch/drag/faint) or the
+    # trapper leaves its slot (switch/drag/faint of the opposing slot — the linked source-side
+    # volatile is what actually drops the trap).
+    #
+    # KNOWN GAP, corrected claim. This used to say the volatile is ``noCopy``, so it "never rides a
+    # Baton Pass". That is FALSE in gen3: ``data/mods/gen4/conditions.ts`` re-declares BOTH
+    # ``trapped`` and ``trapper`` with ``noCopy: false``, and gen3 inherits gen4
+    # (``data/mods/gen3/scripts.ts``). A trapper that webs and then Baton Passes leaves its victim
+    # trapped until the RECEIVER itself switches out — the behaviour
+    # ``third_party/poke-engine-gen3-move-trapping.patch`` models as ``TRAPPED => baton_passing``.
+    # The clear-both-slots rule below is therefore wrong on exactly that sequence, and it matters:
+    # 2 of 3 gen3 randbat Ariados sets carry Spider Web AND Baton Pass. It is FAIL-CLOSED for the
+    # search lane (the world simply carries no trap and the decision is refused as before) and
+    # one-sided-optimistic for the observation column. Fixing it changes recorded v3/v4 tensor
+    # VALUES on those turns, so it is deliberately not bundled with the world-lane routing change
+    # that made this tracker load-bearing. Kept DISTINCT from
     # partiallytrapped (Wrap) and from the trap-ability signal. Derived ONLY from public protocol
     # lines.
     meanlook_trap: Mapping[str, bool]
@@ -2513,11 +2528,21 @@ class _ReplayParser:
                 if "partiallytrapped" not in self.volatiles[pokemon.showdown_slot]:
                     self.wrap_trap_elapsed[pokemon.showdown_slot] = 0
                 # Mean Look / Spider Web move-trap (spec v3 change 8): a switch/drag of THIS slot
-                # ends both directions. If the mon leaving was the TARGET, its trap is over (the
-                # ``trapped`` volatile is noCopy, so it never rides a Baton Pass). If the mon leaving
-                # was the TRAPPER, the trap it held on the OPPOSING active mon ends too (the linked
-                # source-side volatile drops when the trapper leaves). Cleared unconditionally on
-                # both slots — in singles the trapper is always the opposing active mon.
+                # ends both directions. If the mon leaving was the TARGET, its trap is over. If the
+                # mon leaving was the TRAPPER, the trap it held on the OPPOSING active mon ends too
+                # (the linked source-side volatile drops when the trapper leaves). Cleared
+                # unconditionally on both slots — in singles the trapper is always the opposing
+                # active mon.
+                #
+                # WRONG FOR BATON PASS, and the justification that used to sit here ("the ``trapped``
+                # volatile is noCopy, so it never rides a Baton Pass") is false — see the corrected
+                # note on ``ShowdownReplayState.meanlook_trap``. gen3 re-declares both ``trapped``
+                # and ``trapper`` with ``noCopy: false``, so a Baton Pass carries the trap to the
+                # receiver on either side and this unconditional clear drops a live public fact.
+                # Fail-closed downstream; tracked as a follow-up rather than fixed here, because the
+                # fix changes recorded v3/v4 observation values (NUMERIC_MEANLOOK_TRAP) for arms in
+                # flight, a different blast radius from the world-lane routing this tracker now
+                # feeds.
                 self.meanlook_trap[pokemon.showdown_slot] = False
                 self.meanlook_trap[_OTHER_SLOT[pokemon.showdown_slot]] = False
                 # A live type override (Castform Forecast forme / Kecleon Color Change) belongs to
@@ -5141,8 +5166,10 @@ def _update_meanlook_trap(parts: Sequence[str], meanlook_trap: dict[str, bool]) 
 
     RESET on ``|faint|SLOT``: the trapped mon fainting clears its own flag, and the fainting mon was
     the trapper for the other seat (the linked source-side volatile drops when the trapper faints),
-    so BOTH seats clear. Switch/drag resets are handled in the parse loop (the ``trapped`` volatile
-    is ``noCopy``, so it never rides a Baton Pass). There is no ``-end`` line for this volatile (it
+    so BOTH seats clear. Switch/drag resets are handled in the parse loop, which clears BOTH seats
+    unconditionally — correct for an ordinary switch or drag, WRONG for a Baton Pass, which gen3
+    lets the trap ride (``noCopy: false`` on both ``trapped`` and ``trapper``); see the corrected
+    note on ``ShowdownReplayState.meanlook_trap``. There is no ``-end`` line for this volatile (it
     has no ``onEnd`` and the linked removal is silent), so faint + switch/drag are the only public
     end signals.
     """

@@ -53,6 +53,7 @@ from .randbat import canonical_gen3_randbat_species_id
 from .poke_engine_adapter import (
     PokeEngineAttractUnsupportedError,
     PokeEngineMoveTrapUnsupportedError,
+    PokeEngineUnavailableError,
     build_poke_engine_state,
 )
 from .policy import PolicyContext, PolicyDecision, legal_action_indices
@@ -975,43 +976,59 @@ def native_search_args(
 _RECHARGE_REQUEST_MOVE_ID = "recharge"
 
 
-def _self_request_forces_recharge(context: Any) -> bool:
-    """Whether OUR OWN request proves the active mon is spending a forced recharge turn.
+def self_recharge_from_action_candidates(observation_metadata: Any) -> bool:
+    """Whether the request's LEGAL CHOICE SET is exactly the recharge pseudo-move.
 
-    Showdown's ``Pokemon.getMoves(lockedMove)`` short-circuits to a single synthetic entry --
-    ``[{move: 'Recharge', id: 'recharge'}]`` -- when and only when ``lockedMove`` is the
-    ``mustrecharge`` volatile, and sets ``this.trapped = true`` on the same call
-    (``sim/pokemon.ts``). So a one-entry active moveset spelled ``recharge`` is not evidence
-    about the lock, it IS the lock, disclosed to the seat that has to act on it.
+    Showdown's ``Pokemon.getMoveRequestData`` sets ``this.trapped = true`` whenever
+    ``getLockedMove()`` returns anything, and ``getMoves(lockedMove)`` short-circuits to the
+    single synthetic entry ``[{move: 'Recharge', id: 'recharge'}]`` when and only when that
+    locked move is ``recharge`` (``sim/pokemon.ts:968``, ``:1084-1088``). ``mustrecharge`` is
+    gen3's only ``onLockMove: 'recharge'``, so a request offering nothing but ``recharge`` is
+    not evidence about the lock, it IS the lock, disclosed to the seat that has to act on it.
 
-    That makes it schema-independent, which is the point: ``self_must_recharge`` rides the v4
-    feature pack and is simply absent under v2.2/v3, where these decisions were refused as
-    ``self_request_state_unsupported`` instead of searched.
+    READ FROM ``action_candidates``, NOT THE RAW REQUEST. Three reasons, in order of weight:
 
-    Deliberately narrow. It requires EXACTLY one move and the exact id, so a Struggle-only or
-    Encore-locked request (one move, different id) and a partly-disabled moveset (several moves)
-    both read False. The synthetic entry also carries no ``pp``/``maxpp``, which is why
-    ``local_showdown._request_active_moves`` drops it and the payload's ``selfActiveMoves`` is
-    empty here -- an emptiness with several other causes, so the id is read directly.
+    1. ``action_candidates`` is published by ``_observation_metadata`` UNCONDITIONALLY, on every
+       schema, unlike the v4-gated ``self_must_recharge`` this backstops. The raw request would
+       also work, but only for callers holding a ``public_materialization_state``.
+    2. It is what a RECORDED ROW carries. ``scripts/fidelity_gate_events.py``'s
+       ``production_recharging_slots`` exists to be "``recharging_slots`` as production builds
+       it", and it is handed observation metadata, not a ``PolicyContext``. A request-based rule
+       would be UNMIRRORABLE there -- the payload's ``selfActiveMoves`` drops the synthetic entry
+       (it carries no ``pp``/``maxpp``, so ``_request_active_moves`` filters it out), so the
+       corpus row has no request-side trace of the lock at all. The gate would then seed worlds
+       without MUSTRECHARGE while production seeds them with it, and stop measuring this change.
+    3. It covers contexts that carry metadata but no materialization state -- ``fallback_replay``
+       records and cached rollouts.
+
+    This is the same fold ``fallback_replay._request_legal_choices`` applies to produce the
+    ``request offered: recharge`` line in the refusal records that diagnosed this bug; the
+    candidate's ``legal`` flag is ``bool(state.legal_action_mask[action_index])`` at the source
+    (``showdown.py:7530``), so no separate mask read is needed.
+
+    Deliberately narrow: the legal set must be EXACTLY one entry, a move, spelled ``recharge``.
+    An Encore lock, a Choice lock and a mid-charge Solar Beam all present one legal move too,
+    but under their real move id, and a partly-disabled moveset presents several. Seeding
+    MUSTRECHARGE for any of those would model a mon that cannot act when it can -- silently
+    wrong, which is worse than the refusal this removes.
     """
 
-    state = getattr(context, "public_materialization_state", None)
-    request = getattr(state, "self_request", None)
-    if not isinstance(request, Mapping):
+    if not isinstance(observation_metadata, Mapping):
         return False
-    active = request.get("active")
-    if not isinstance(active, Sequence) or isinstance(active, (str, bytes)) or not active:
+    candidates = observation_metadata.get("action_candidates")
+    if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
         return False
-    active_row = active[0]
-    if not isinstance(active_row, Mapping):
+    legal = [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, Mapping) and candidate.get("legal")
+    ]
+    if len(legal) != 1:
         return False
-    moves = active_row.get("moves")
-    if not isinstance(moves, Sequence) or isinstance(moves, (str, bytes)) or len(moves) != 1:
+    only = legal[0]
+    if only.get("kind") != "move":
         return False
-    move = moves[0]
-    if not isinstance(move, Mapping):
-        return False
-    return normalize_id(str(move.get("id") or move.get("move") or "")) == _RECHARGE_REQUEST_MOVE_ID
+    return normalize_id(str(only.get("move_id") or "")) == _RECHARGE_REQUEST_MOVE_ID
 
 
 def opponent_request_order(context, party_species) -> list[str] | None:
@@ -1239,6 +1256,30 @@ class EngineMctsPolicy:
                 # hand the trapped seat its switch options back, so declining is correct --
                 # but declining is a fallback, not a crashed run.
                 self.stats.world_failure_reasons["move_trap_patch_unavailable"] += 1
+                continue
+            except PokeEngineUnavailableError as error:
+                # BACKSTOP for the whole capability-probe family, because the specific handler
+                # above does NOT cover every raise from the branch it guards. `_build_side_spec`
+                # calls `require_move_trap_support()` with no module, so it resolves the engine
+                # through `require_poke_engine()`, which raises the BASE
+                # `PokeEngineUnavailableError` when `probe_poke_engine()` is not ready -- an
+                # importable but mis-built wheel missing a required `State` method, exactly the
+                # case these buckets exist for. That is neither the subclass above nor an
+                # `EngineWorldUnsupported`, so it escaped `_search` entirely.
+                #
+                # Not fixed by plumbing `self._module` into the gate instead: production
+                # constructs `EngineMctsPolicy` with `module=None`, so `build_poke_engine_state`
+                # resolves the same global module two lines below. The two paths already agree;
+                # what was missing was a handler.
+                #
+                # Pre-existing, not introduced here -- `require_charge_state_support()` sits two
+                # lines away with the identical shape and has been reachable since `solarbeam`
+                # became a tracked volatile. Attributed by exception class so the ledger
+                # distinguishes "no engine at all" from a specific missing patch rather than
+                # folding both into one bucket.
+                self.stats.world_failure_reasons[
+                    f"engine_capability_unavailable: {type(error).__name__}"
+                ] += 1
                 continue
             except EngineWorldUnsupported as error:
                 self.stats.world_failure_reasons[_world_failure_key(error)] += 1
@@ -2194,8 +2235,11 @@ class EngineMctsPolicy:
         ``self_request_state_unsupported``. The recharge turn was unsearchable on those schemas.
 
         The self side does have a second proof, and it is not a reconstruction:
-        ``_self_request_forces_recharge`` reads OUR OWN request. It is schema-independent, so it
-        closes the gap without republishing the pack.
+        ``self_recharge_from_action_candidates`` reads the request's own legal choice set off the
+        UNGATED ``action_candidates`` metadata. It is schema-independent, so it closes the gap
+        without republishing the pack, and it is mirrorable from a recorded corpus row -- see
+        ``scripts/fidelity_gate_events.py::production_recharging_slots``, which must stay a
+        faithful mirror of this function or the four fidelity gates stop measuring it.
 
         PREFERRED SOURCE: the parser's own ``must_recharge`` tracker, surfaced on the
         observation metadata as ``opponent_must_recharge`` (spec v4 pack A1). The parser reads
@@ -2241,19 +2285,20 @@ class EngineMctsPolicy:
         # row in the corpus) where seat X's `self_must_recharge` equals seat Y's
         # `opponent_must_recharge`, zero disagreements.
         #
-        # SECOND PROOF, unioned rather than preferred: our own request. Showdown's
-        # `getMoves(lockedMove)` returns the single pseudo-move `{move: 'Recharge', id:
-        # 'recharge'}` if and only if the mon holds `mustrecharge`, and sets `trapped: true` in
-        # the same breath. That is the SAME fact the tracker reports, disclosed directly to us,
-        # so it can only agree; a union is used instead of a fallback because it cannot lose a
-        # lock the tracker found, and there is no reading of "the request offers only recharge"
-        # under which the mon is free.
+        # SECOND PROOF, unioned rather than preferred: the request's own legal choice set, read
+        # off the UNGATED `action_candidates` metadata. `getMoveRequestData` sets `trapped: true`
+        # and `getMoves` collapses the moveset to the lone `recharge` pseudo-move exactly when
+        # `mustrecharge` is held, so "the request offers nothing but recharge" is the SAME fact
+        # the tracker reports, disclosed directly to us. A union rather than a fallback because
+        # it cannot lose a lock the tracker found, and there is no reading of that request under
+        # which the mon is free. See `self_recharge_from_action_candidates` for why the metadata
+        # lane and not the raw request -- the gate harness has to be able to mirror this.
         #
         # It is not the `opponent_must_recharge is False` case in reverse: that False is a
         # negative proof about a seat whose request we cannot see, and the weaker reconstruction
         # must not overrule it. Here both inputs are positive proofs about OUR seat.
         self_slot: tuple[str, ...] = ()
-        if _self_request_forces_recharge(context):
+        if self_recharge_from_action_candidates(observation_metadata):
             self_slot = (context.player_id,)
         if isinstance(observation_metadata, Mapping):
             if observation_metadata.get("self_must_recharge") is True:
