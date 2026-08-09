@@ -909,11 +909,17 @@ class CopiedMovesetLivePpTests(unittest.TestCase):
     def test_a_slot_the_request_does_not_name_keeps_the_transform_seed(self) -> None:
         """The donor is belief-SAMPLED, so it can carry a move the real one lacks.
 
-        That move is this world's own fiction and the request has nothing to say
-        about it. Measured live: five of eight sampled Suicune worlds gave the
-        Ditto a ``rest`` the real Suicune never had. Blanket-disabling those
-        slots would be inventing a fact, and would also make the struggle-only
-        assertion below pass for the wrong reason.
+        Measured live: five of eight sampled Suicune worlds gave the Ditto a
+        ``rest`` the real Suicune never had. The request PROVES that slot is not
+        in the real copy -- on our own seat it enumerates the whole moveset -- so
+        disabling it would remove a fiction rather than invent a fact. It is kept
+        usable anyway, so the fiction is proposed, misses, and is COUNTED in
+        ``unmapped_choices`` instead of being silently deleted from the world.
+        See ``_copied_move_spec`` for why that trade is the right way round.
+
+        It also keeps the struggle-only assertion below from passing for the
+        wrong reason: if unnamed slots were disabled here, that test could not
+        tell a struggle-only verdict from this rule firing.
         """
 
         payload = self._payload_unencored()
@@ -947,6 +953,39 @@ class CopiedMovesetLivePpTests(unittest.TestCase):
              ("wish", _TRANSFORM_MOVE_PP, True),
              ("protect", _TRANSFORM_MOVE_PP, True)],
         )
+
+    def test_the_struggle_only_verdict_is_cause_free(self) -> None:
+        """The marking says WHAT Showdown computed, never WHY, and that is the point.
+
+        Review asked whether a Struggle-only request arising from something other
+        than spent copied PP still refuses. It does not, and this row says so
+        rather than leaving it to be re-derived: the predicate reads
+        ``_apply_struggle_only_move_state``'s all-disabled marking, which
+        ``Pokemon.getMoves`` writes after folding EVERY unusability -- ``pp <= 0``,
+        Taunt, Torment, Disable, a choice lock -- into one ``disabled`` verdict per
+        slot. There is no cause left in it by the time it reaches here, so every
+        cause that reaches the same request gets the same world.
+
+        Not a claim that every such shape BUILDS: a cause that is itself an
+        unsupported volatile still fails closed earlier, on the volatile, as
+        ``no_worlds_constructed`` rather than ``choices_unmapped``. Disable is that
+        case and is asserted here so the two exits are not confused.
+        """
+
+        for volatiles in ([], ["Taunt"]):
+            with self.subTest(volatiles=volatiles or ["pp-exhaustion"]):
+                payload = self._payload_unencored()
+                payload["sides"]["p1"]["volatiles"] = list(volatiles)
+                self.assertEqual(
+                    self._copied(self._struggle_only(payload)),
+                    [(move, _TRANSFORM_MOVE_PP, True)
+                     for move in ("bodyslam", "healbell", "wish", "protect")],
+                )
+        payload = self._payload_unencored()
+        payload["sides"]["p1"]["volatiles"] = ["Disable"]
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            self._copied(self._struggle_only(payload))
+        self.assertEqual(caught.exception.reason, "volatile_unsupported")
 
     def test_an_empty_request_alone_is_not_the_struggle_branch(self) -> None:
         """The negative control, and the reason the marking is the second half.

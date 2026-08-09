@@ -846,12 +846,29 @@ def _copied_move_spec(
     ``_apply_struggle_only_move_state`` leaves it: the Struggle request carries
     no PP, and ``Pokemon::add_available_moves`` already refuses a disabled slot.
 
-    A slot the request does not name keeps ``_TRANSFORM_MOVE_PP``. Those exist:
-    the donor is read out of the belief-SAMPLED opposing party, so a sampled
-    variant can carry a move the real donor never had (``rest`` above, in five of
-    the eight worlds). That move is this world's own fiction and 5 is the right
-    seed for it -- the request has nothing to say about a move its Pokemon does
-    not have.
+    A slot the request does not name keeps ``_TRANSFORM_MOVE_PP``, and the reason
+    is NOT that the request has nothing to say about it. It says the opposite:
+    on our own seat the request enumerates the copy's ENTIRE moveset, so a slot
+    the sampled donor carries and the request does not name is PROVABLY not in
+    the real copy (``rest`` above, in five of the eight worlds -- the donor comes
+    from the belief-SAMPLED opposing party, which can carry a move the real
+    Suicune never had). Disabling it would remove a fiction, not invent a fact.
+
+    It is left usable so that the fiction stays COUNTABLE. An unusable slot is
+    silently absent from the engine's options; a usable one gets proposed, misses
+    the request, and lands in ``EngineSearchStats.unmapped_choices`` -- 16 on the
+    exemplar battle and 10 on the 60-game batch, which is the belief sampler's
+    moveset error made visible on a counter rather than swallowed by the world
+    builder. This class was found by that counter, and the burndown's stop
+    condition is read off it.
+
+    Note the asymmetry with the non-transformed self path, which does the other
+    thing: it refuses outright rather than invent PP for a slot with no
+    request-known snapshot (``self_pp_unknown``, :2490). The difference is who
+    owns the error. There the missing PP is OUR OWN Pokemon's and a guess would
+    be silently wrong; here the extra slot belongs to a sampled OPPONENT variant
+    that this world invented, and refusing every Transform world whose sampled
+    donor over-covers the real one would trade a counted miss for a refusal.
     """
 
     move_id = normalize_id(move.id)
