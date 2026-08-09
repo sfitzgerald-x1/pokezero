@@ -582,10 +582,14 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
     MEASURED against the `model.rs` seat/head-routing boundary that
     `rust/pokezero-search/src/priors.rs`'s header names as its surviving
     residue: nine one-line mutations, one `--features model` wheel rebuilt per
-    world, EIGHT KILLED and one MISSED. Do not weaken the oracle tests below
-    without re-running that battery; six of the eight kills come from them, and
-    the ninth (the opponent's branch ORDER-EVOLUTION prefix) is uncovered — see
-    that header before assuming this class covers a channel it does not.
+    world, EIGHT KILLED and one MISSED.
+
+    Where the kills come from, so a future edit knows what it is spending:
+    `test_a_root_whose_seats_sit_at_different_slots...` alone accounts for six
+    of the eight and is the ONLY test that reaches the root option swap;
+    `test_a_withheld_order...` adds the other two. The ninth — the opponent's
+    branch ORDER-EVOLUTION prefix — is uncovered by all of them; read that
+    header before assuming this class covers a channel it does not.
     """
 
     # Priors this close together are not required to order the visits; see
