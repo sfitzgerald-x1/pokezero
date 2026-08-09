@@ -1731,6 +1731,41 @@ jobs:
           # record what harness produced a sweep.
           python scripts/harness_digest.py --print
 
+      # A gate no job runs is not a gate. This workflow names test modules one by one,
+      # so a NEW module is invisible to CI by default -- #1212 had to add its own step
+      # for exactly this reason. Named here rather than left to a discovery run.
+      - name: Truth-injection differential instrument
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_truth_differential -v 2>&1 | tee /tmp/truthdiff.log
+          # EXACT, not a floor. A floor was the one fail-open in #1163's mutation
+          # battery, and this guard lives in YAML where no local run can see it.
+          if ! grep -qE 'Ran 20 tests' /tmp/truthdiff.log; then
+            echo "::error::expected 20 truth-differential tests; the suite shrank or grew"
+            exit 1
+          fi
+          # THE pins, named. `ForcedRefusalTests` is the reason the census number can be
+          # believed at all: an instrument that cannot report failure will report
+          # success, and this campaign has hit that repeatedly. These four run on a bare
+          # runner (no pokemon-showdown checkout), so unlike the plan/truth-source
+          # classes they must never skip.
+          for pin in \
+            test_a_forced_construction_refusal_is_counted_and_attributed \
+            test_forcing_the_truth_arm_leaves_the_production_arm_byte_identical \
+            test_every_predicate_on_a_decision_is_reported_not_the_first \
+            test_an_unavailable_truth_is_an_instrument_gap_not_an_acceptance ; do
+            # `-A2` because unittest -v puts a docstring's first line between the
+            # test name and its verdict.
+            if ! grep -A2 -E "^${pin} " /tmp/truthdiff.log | grep -qE '\.\.\. ok$'; then
+              echo "::error::instrument pin ${pin} did not run and pass"
+              exit 1
+            fi
+          done
+          if ! grep -qE '^OK( \(skipped=3\))?$' /tmp/truthdiff.log; then
+            echo "::error::truth-differential suite must be OK, with exactly the 3 showdown-gated skips"
+            exit 1
+          fi
+
   # THE REQUIRED CHECK. Runs on every pull request, whatever it touches, so it can
   # always report. It is the only job in this workflow that should ever be marked
   # required in branch protection -- requiring `mass-gate` directly would block any
