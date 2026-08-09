@@ -90,6 +90,7 @@ from pokezero.foulplay_bridge import (
     ControlledFoulPlayGameResult,
     RefusalRecorderHealth,
     _REFUSAL_RECORDS_PER_BATTLE,
+    _REFUSAL_RECORDS_PER_RUN,
     _config_from_args,
     _RefusalCapture,
     _run_controlled_foulplay_games,
@@ -1038,23 +1039,73 @@ class RefusalRecorderWiringTest(unittest.TestCase):
         self.assertEqual(header["records_per_battle_ceiling"], _REFUSAL_RECORDS_PER_BATTLE)
 
     def test_the_run_ceiling_bounds_the_document_across_games(self) -> None:
-        """The per-battle cap alone does not bound a 250-game run."""
-        policy = _EnginePolicyStub()
-        with patch("pokezero.foulplay_bridge._REFUSAL_RECORDS_PER_RUN", 5):
-            result, _ = self._play(
-                config=_config(), policy=policy, games=4, rounds=4, refuse_rounds=range(4)
-            )
-        header = result.to_dict()["refusal_recorder"]
+        """The per-battle cap alone does not bound a 250-game run.
 
+        Run at the SHIPPED ceiling, not a patched one. A patched-constant version of
+        this test survived raising `_REFUSAL_RECORDS_PER_RUN` to a million, which is
+        precisely the edit that puts the unbounded tail back.
+        """
+        policy = _EnginePolicyStub()
+        # FIXED, and guarded rather than derived. Deriving the game count from the
+        # ceiling makes the test's own cost proportional to it, so the mutant that
+        # raises the ceiling to a million does not fail the test -- it hangs the
+        # suite, which is not a kill. The guard fails fast instead, and also fires
+        # if someone raises the shipped ceiling past what this fixture can cross.
+        games = 34
+        self.assertGreater(
+            games * _REFUSAL_RECORDS_PER_BATTLE,
+            _REFUSAL_RECORDS_PER_RUN,
+            "fixture no longer crosses the shipped per-run ceiling",
+        )
+        result, _ = self._play(
+            config=_config(),
+            policy=policy,
+            games=games,
+            rounds=_REFUSAL_RECORDS_PER_BATTLE,
+            refuse_rounds=range(_REFUSAL_RECORDS_PER_BATTLE),
+        )
+        header = result.to_dict()["refusal_recorder"]
         emitted = [len(row.refusal_records) for row in result.games]
-        self.assertEqual(sum(emitted), 5)
-        # Front-loaded, not spread: the ceiling is a hard stop, and the games past it
+
+        self.assertEqual(header["emitted_refusals"], _REFUSAL_RECORDS_PER_RUN)
+        self.assertEqual(sum(emitted), _REFUSAL_RECORDS_PER_RUN)
+        # Front-loaded, not spread: the ceiling is a hard stop, so the games past it
         # emit nothing rather than each losing a little invisibly.
-        self.assertEqual(emitted, [4, 1, 0, 0])
-        self.assertEqual(header["recorded_refusals"], 16)
-        self.assertEqual(header["emitted_refusals"], 5)
-        self.assertEqual(header["records_dropped"], 11)
+        self.assertEqual(emitted[0], _REFUSAL_RECORDS_PER_BATTLE)
+        self.assertEqual(emitted[-1], 0)
+        self.assertEqual(header["recorded_refusals"], games * _REFUSAL_RECORDS_PER_BATTLE)
+        self.assertEqual(
+            header["records_dropped"],
+            header["recorded_refusals"] - _REFUSAL_RECORDS_PER_RUN,
+        )
         self.assertTrue(header["reconciled"])
+
+    def test_every_progress_write_reconciles_too(self) -> None:
+        """The header is re-serialized once per game; each one must add up.
+
+        Deferring the drop accounting to the end of the run leaves the RIGHT total
+        and a wrong number in every partial summary -- and a run killed mid-way
+        leaves only a partial summary. Deleting the per-battle `_dropped` increment
+        passes every end-of-run assertion; it fails here.
+        """
+        policy = _EnginePolicyStub()
+        _, progress = self._play(
+            config=_config(), policy=policy, games=3, rounds=12, refuse_rounds=range(12)
+        )
+
+        self.assertEqual(len(progress), 3)
+        for index, partial in enumerate(progress):
+            header = partial.to_dict()["refusal_recorder"]
+            with self.subTest(after_game=index + 1):
+                self.assertEqual(header["recorded_refusals"], 12 * (index + 1))
+                self.assertEqual(
+                    header["emitted_refusals"], _REFUSAL_RECORDS_PER_BATTLE * (index + 1)
+                )
+                self.assertEqual(
+                    header["records_dropped"],
+                    (12 - _REFUSAL_RECORDS_PER_BATTLE) * (index + 1),
+                )
+                self.assertTrue(header["reconciled"])
 
     def test_a_record_belonging_to_no_game_row_breaks_the_identity(self) -> None:
         """The silent-loss case the reconciliation exists for.
