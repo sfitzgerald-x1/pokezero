@@ -344,18 +344,43 @@ OPPONENT_JOURNAL_MODES = ("off", "addressed", "full")
 #      per game                   +236 B  (+8.8% of a 2,684 B row)
 #      8-game seat shard        +1,892 B on 37,270 B: +5.1%
 #
-#    Smaller than the journal's +15.7%, and for a reason worth stating rather than
-#    celebrating: a refusal record is EXPENSIVE (550 B, ~4x a journal entry) and
-#    refusals are RARE (0.43 per game against a journal's whole-battle prefix). A
-#    cell whose fallback rate is 10x cell D's would land near the journal's figure.
-#
 #    The O(games^2) axis, same per-game rate, cumulative bytes written:
 #
 #      --games 250   off 88.2 MB   refusals-on 95.6 MB   (+7.4 MB, +8.4%)
 #
-#    Not a bottleneck against a 250-game run that costs hours of search wall -- but
-#    "there is nothing to switch off" would be wrong for a high-refusal cell on a
-#    long run, so it is not claimed. `--no-refusal-records` exists for that case.
+#    THAT +5.1% IS A RATE-CONDITIONAL NUMBER AND IT DOES NOT BOUND ANYTHING. A
+#    refusal record is EXPENSIVE (550 B, ~4x a journal entry) and cell D's refusals
+#    are RARE (0.430 per game); the product is small, and the product is all the
+#    +5.1% is. Scale the rate and it scales linearly with no ceiling: at 4.3
+#    refusals per game the shard is +51%, and a 100% fallback rate -- which is a
+#    REAL state this very file documents (`--no-search-fallback` exists because a
+#    searcher can play uniform-legal on every decision) -- puts 43 records on every
+#    game row and the cumulative write into the hundreds of MB.
+#
+#    So the payload is CAPPED rather than argued about, the way the producer it
+#    mirrors caps (`_FALLBACK_SAMPLES_PER_CLASS = 3` plus one-address-per-battle,
+#    `engine_search.py:457`, `:2421`). See `_REFUSAL_RECORDS_PER_BATTLE` and
+#    `_REFUSAL_RECORDS_PER_RUN` below for the ceilings and the arithmetic that
+#    picked them. What the cap drops is COUNTED and published, because
+#    `fallback_sample_addresses_dropped` is right there as the example of a
+#    truncation nobody can see.
+#
+#    What the ceilings actually buy, same tool, `--refusals-per-game 43` (the 100%
+#    fallback rate), 250 games:
+#
+#                        off        on (capped)      if UNCAPPED
+#      cumulative     88.2 MB       120.5 MB          830.2 MB
+#      8-game shard        -          +94.4%          +963%
+#
+#    At cell D's real 0.430 they agree exactly (+7.4 MB either way): the cap cannot
+#    bite on the case the default was justified against, and removes the tail on the
+#    case it was not.
+#
+#    `--no-refusal-records` still exists, but it is NOT the answer to the size
+#    question and must not be sold as one: switching it off requires knowing in
+#    advance that you are in a high-refusal cell, which is the thing the recorder
+#    exists to discover. The cap is what makes the default safe; the flag is for a
+#    caller who wants the bytes back on a cell they have already read.
 #
 # HEALTH IS NEVER SILENT. `RefusalRecorder` deliberately does not raise into the
 # search -- an instrument that turns a handled refusal into a crash has changed the
@@ -375,6 +400,37 @@ OPPONENT_JOURNAL_MODES = ("off", "addressed", "full")
 # block can add neither a scope, nor an address, nor an occurrence count.
 # `RefusalRecordReaderInvariantTest` pins that against a real `scan_corpus`.
 REFUSAL_RECORDER_SCHEMA_VERSION = "pokezero.refusal-records.v1"
+
+# Ceilings on what reaches the DOCUMENT. Neither bounds the recorder, which is
+# #1180's object and keeps everything it captures in memory (250 records is ~140 KB
+# of Python objects; the problem was never RAM). They bound the summary, because
+# `_write_json` re-serializes the whole document once per game.
+#
+# PER BATTLE, and this one is read off real records rather than guessed. A refusal
+# cause typically closes worlds for the rest of the battle it appears in: measured on
+# a local d4/s1024/w4 batch, seed 600016 filed TEN consecutive `no_worlds_constructed`
+# refusals at rounds 7-16, every one of them `attempted=16 constructed=0` with the
+# same two world-failure classes and the same request legal set. Rounds 11-16 are six
+# more views of one incident. Eight is deliberately not one: unlike the address store,
+# whose job is a replay coordinate, a record's job is to be READ, and the first few
+# repeats are what shows the reader that it repeats -- the run of identical rounds is
+# itself the evidence that the ability in the message is a bystander. Eight keeps that
+# and drops the tail.
+_REFUSAL_RECORDS_PER_BATTLE = 8
+
+# PER RUN. 250 records x 550 B median = ~138 KB added to the document, so the
+# O(games^2) contribution over a 250-game run is bounded by 250 x 138 KB = ~34 MB
+# whatever the fallback rate does -- against ~978 MB uncapped at a 100% rate. It is
+# also comfortably above what an ordinary cell produces: cell D's measured 0.430
+# refusals per game reaches 108 over a full 250-game run, so the cap cannot bite on
+# the case the default was justified against.
+_REFUSAL_RECORDS_PER_RUN = 250
+
+# Instrument errors are uncapped on the recorder and one string per failed capture:
+# 500 degraded decisions produced a 47 KB header, re-serialized into every progress
+# write. The header keeps a sample and the TOTAL, so the number is never lost even
+# though the strings are.
+_INSTRUMENT_ERRORS_IN_HEADER = 20
 
 
 @dataclass(frozen=True)
@@ -729,6 +785,20 @@ class RefusalRecorderHealth:
         Records whose pre-decision baseline was lost, so their deltas may span more
         than one decision. Counted separately from errors because the record is
         still worth reading, just not as a per-decision measurement.
+    ``recorded_refusals`` / ``emitted_refusals`` / ``records_dropped``
+        What the instrument SAW, what the document CARRIES, and what the ceilings
+        threw away. Three numbers rather than one because they can disagree three
+        ways, and the reconciliation `recorded == emitted + dropped` is a conjunct
+        of :attr:`trustworthy`. That identity is not book-keeping for its own sake:
+        records are partitioned onto game rows by ``battle_id``, so a record whose
+        battle has no row is silently lost, and before the identity existed it was
+        lost while ``recorded_refusals`` still counted it and ``trustworthy`` still
+        said True. The journal's ``recorded`` vs ``emitted`` pair is the same idea
+        one feature earlier.
+    ``instrument_errors_total``
+        The full count. ``instrument_errors`` is a SAMPLE (`_INSTRUMENT_ERRORS_IN_HEADER`),
+        because the list is one string per failed capture, uncapped, and it is
+        re-serialized into every progress write.
     """
 
     enabled: bool = False
@@ -736,16 +806,33 @@ class RefusalRecorderHealth:
     attach_error: str | None = None
     health_reported: bool = False
     instrument_errors: tuple[str, ...] = ()
+    instrument_errors_total: int = 0
     degraded_records: int = 0
     recorded_refusals: int = 0
+    emitted_refusals: int = 0
+    records_dropped: int = 0
+
+    @property
+    def reconciled(self) -> bool:
+        """Every captured record was either written to a row or counted as dropped."""
+        return self.recorded_refusals == self.emitted_refusals + self.records_dropped
 
     @property
     def trustworthy(self) -> bool:
-        """True only when health was REPORTED, the recorder attached, and it was clean."""
+        """True only when health was REPORTED, the recorder ran, and it was clean.
+
+        ``enabled`` is a conjunct as well as ``attached``. They are not the same
+        claim and only one of them is currently implied by the other: a future
+        caller that constructs this object by hand can set ``attached`` without
+        ``enabled``, and "the recorder was switched off" must never be able to
+        render as a trustworthy measurement of anything.
+        """
         return (
-            self.health_reported
+            self.enabled
+            and self.health_reported
             and self.attached
-            and not self.instrument_errors
+            and self.reconciled
+            and not self.instrument_errors_total
             and self.degraded_records == 0
         )
 
@@ -762,8 +849,16 @@ class RefusalRecorderHealth:
             "attach_error": self.attach_error,
             "health_reported": self.health_reported,
             "instrument_errors": list(self.instrument_errors),
+            "instrument_errors_total": self.instrument_errors_total,
             "degraded_records": self.degraded_records,
             "recorded_refusals": self.recorded_refusals,
+            "emitted_refusals": self.emitted_refusals,
+            "records_dropped": self.records_dropped,
+            # The ceilings, published so a reader of a truncated shard can tell
+            # WHICH bound bit without reading this file.
+            "records_per_battle_ceiling": _REFUSAL_RECORDS_PER_BATTLE,
+            "records_per_run_ceiling": _REFUSAL_RECORDS_PER_RUN,
+            "reconciled": self.reconciled,
             "trustworthy": self.trustworthy,
         }
 
@@ -789,6 +884,13 @@ class _RefusalCapture:
         self.enabled = bool(enabled)
         self._recorder: Any = None
         self._attach_error: str | None = None
+        #: Emitted and dropped are decided HERE, at the moment a game row is built,
+        #: and remembered -- not recomputed from the recorder at `health()` time.
+        #: Recomputing would have to re-derive which records a previous row already
+        #: took, and getting that wrong is exactly the silent-truncation shape the
+        #: reconciliation exists to catch.
+        self._emitted = 0
+        self._dropped = 0
         if not self.enabled:
             return
         try:
@@ -797,11 +899,38 @@ class _RefusalCapture:
             self._attach_error = f"{type(error).__name__}: {error}"
 
     def records_for(self, battle_id: str) -> tuple[RefusalRecord, ...]:
+        """This battle's records, truncated to the ceilings, with the loss counted.
+
+        Called ONCE per game as its row is built. Everything the ceilings refuse is
+        added to ``_dropped``, so `recorded == emitted + dropped` holds over the run
+        and a record belonging to no row shows up as a broken identity rather than
+        as an absence.
+        """
         if self._recorder is None:
             return ()
-        return tuple(
+        mine = [
             record for record in self._recorder.records if record.battle_id == battle_id
-        )
+        ]
+        room = max(0, _REFUSAL_RECORDS_PER_RUN - self._emitted)
+        kept = tuple(mine[: min(_REFUSAL_RECORDS_PER_BATTLE, room)])
+        self._emitted += len(kept)
+        self._dropped += len(mine) - len(kept)
+        return kept
+
+    def account_for_unrowed_records(self) -> None:
+        """Count records whose battle never produced a row, at end of run.
+
+        A game that raised before its result was built takes its records with it.
+        Without this they are neither emitted nor dropped, the reconciliation
+        breaks, and `trustworthy` goes False -- which is the correct verdict but a
+        confusing one. Counting them as dropped keeps the identity true and leaves
+        the loss visible as a NUMBER, which is the whole point of the triple.
+        """
+        if self._recorder is None:
+            return
+        unaccounted = len(self._recorder.records) - self._emitted - self._dropped
+        if unaccounted > 0:
+            self._dropped += unaccounted
 
     def health(self) -> RefusalRecorderHealth:
         if self._recorder is None:
@@ -809,6 +938,7 @@ class _RefusalCapture:
                 enabled=self.enabled, attached=False, attach_error=self._attach_error
             )
         records = self._recorder.records
+        errors = tuple(self._recorder.errors)
         return RefusalRecorderHealth(
             enabled=self.enabled,
             attached=True,
@@ -816,9 +946,12 @@ class _RefusalCapture:
             # The recorder HAS an error channel and we are reading it, which is
             # exactly what this flag asserts.
             health_reported=True,
-            instrument_errors=tuple(self._recorder.errors),
+            instrument_errors=errors[:_INSTRUMENT_ERRORS_IN_HEADER],
+            instrument_errors_total=len(errors),
             degraded_records=sum(1 for record in records if record.degraded),
             recorded_refusals=len(records),
+            emitted_refusals=self._emitted,
+            records_dropped=self._dropped,
         )
 
     def detach(self) -> None:
@@ -2355,12 +2488,24 @@ async def _run_controlled_foulplay_games(
                     )
                 )
     finally:
-        await bridge.close()
-        await server.close()
-        # Detached before returning: the policy outlives this call in the comparison
-        # runner, and `_Hook` restores the bound methods only when the last
-        # subscriber leaves.
-        refusal_capture.detach()
+        # EACH teardown in its own `finally`, so one raising cannot skip the next.
+        # Flat statements here meant a `bridge.close()` that raised skipped BOTH
+        # `server.close()` and the detach below. Leaking the detach is the worse of
+        # the two and is invisible: `_Hook.remove` never empties `recorders`, so the
+        # wrappers stay installed on a policy that outlives this call -- the
+        # comparison runner's second arm, or a caller that reuses the policy -- and
+        # every later `_fallback` fans out to N orphaned recorders that accumulate
+        # for the life of the process while nothing reads them.
+        try:
+            await bridge.close()
+        finally:
+            try:
+                await server.close()
+            finally:
+                # Records that never reached a game row are counted before the
+                # health is read, so the reconciliation identity holds.
+                refusal_capture.account_for_unrowed_records()
+                refusal_capture.detach()
 
     return ControlledFoulPlayBenchmarkResult(
         config=config,

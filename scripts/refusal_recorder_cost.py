@@ -159,11 +159,21 @@ def main(argv: list[str] | None = None) -> int:
                         help="Prior measured median decision boundary on our side.")
     parser.add_argument("--records-json", type=Path, default=None,
                         help="A recorder dump; its `records` are used for the size half.")
+    # DEFAULTS ARE THE REAL era-64 cell-D PARAMETERS, measured off
+    # `fp-d-probe-*-p{1,2}.json` (16 seat shards, 128 games, 5,513 decisions, 55
+    # fallback decisions). They were the OPPONENT JOURNAL's parameters in the first
+    # revision, which made this tool print +163% while the PR justifying the default
+    # printed +5.1% -- two "measured" numbers whose whole difference was an assumed
+    # refusal rate nobody had stated. Change these on the command line, not here.
     parser.add_argument("--games", type=int, default=8)
-    parser.add_argument("--refusals-per-game", type=float, default=6.9)
-    parser.add_argument("--per-game-row-bytes", type=int, default=3383)
-    parser.add_argument("--base-summary-bytes", type=int, default=43921)
+    parser.add_argument("--refusals-per-game", type=float, default=0.430)
+    parser.add_argument("--per-game-row-bytes", type=int, default=2684)
+    parser.add_argument("--base-summary-bytes", type=int, default=37270)
     parser.add_argument("--long-run-games", type=int, default=250)
+    parser.add_argument("--records-per-battle", type=int, default=None,
+                        help="Per-game ceiling. Defaults to the bridge's own.")
+    parser.add_argument("--records-per-run", type=int, default=None,
+                        help="Per-run ceiling. Defaults to the bridge's own.")
     args = parser.parse_args(argv)
 
     clean = _time(args.decisions, refuse=False, record=False, repeats=args.repeats)
@@ -183,10 +193,25 @@ def main(argv: list[str] | None = None) -> int:
           f"({refusing / args.decision_boundary_seconds:.2e} of the boundary)")
     print(f"  blended at {args.fallback_rate:.2%} fallback rate  {blended * 1e6:8.2f} us")
 
+    from pokezero.foulplay_bridge import (  # noqa: PLC0415 - keeps the import light
+        _REFUSAL_RECORDS_PER_BATTLE,
+        _REFUSAL_RECORDS_PER_RUN,
+    )
+
+    per_battle = (
+        args.records_per_battle if args.records_per_battle is not None
+        else _REFUSAL_RECORDS_PER_BATTLE
+    )
+    per_run = (
+        args.records_per_run if args.records_per_run is not None
+        else _REFUSAL_RECORDS_PER_RUN
+    )
+
     records = _sample_records(args.records_json)
     sizes = [len(json.dumps(record, sort_keys=True).encode("utf-8")) for record in records]
     median_record = statistics.median(sizes)
-    per_game = median_record * args.refusals_per_game
+    kept_per_game = min(args.refusals_per_game, per_battle)
+    per_game = median_record * kept_per_game
     shard_delta = per_game * args.games
     base_shard = args.base_summary_bytes
 
@@ -196,26 +221,44 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  per refusal record     {median_record:8.0f} B median "
           f"(min {min(sizes)}, max {max(sizes)})")
     print(f"  per game               {per_game:8.0f} B at {args.refusals_per_game} refusals/game "
-          f"(+{per_game / args.per_game_row_bytes:.1%} of a {args.per_game_row_bytes} B row)")
+          f"(+{per_game / args.per_game_row_bytes:.1%} of a {args.per_game_row_bytes} B row)"
+          + ("" if kept_per_game == args.refusals_per_game
+             else f"  [capped at {per_battle}/battle]"))
     print(f"  {args.games}-game shard          {shard_delta:8.0f} B on a {base_shard} B summary: "
           f"+{shard_delta / base_shard:.1%}")
 
     # `_write_json` rewrites the whole document per game: cumulative bytes are the
-    # sum over games of the document size at that point.
-    def cumulative(records_on: bool) -> float:
+    # sum over games of the document size AT THAT POINT. The per-run ceiling is what
+    # makes this bounded -- past it the record payload stops growing, so the series
+    # goes from quadratic-in-records to linear.
+    def cumulative(*, records_on: bool, capped: bool) -> float:
         total = 0.0
+        emitted = 0.0
+        record_bytes = 0.0
         for games_done in range(1, args.long_run_games + 1):
-            row = args.per_game_row_bytes + (per_game if records_on else 0.0)
-            total += base_shard - args.per_game_row_bytes * args.games + row * games_done
+            if records_on:
+                want = kept_per_game if capped else args.refusals_per_game
+                room = max(0.0, per_run - emitted) if capped else want
+                took = min(want, room)
+                emitted += took
+                record_bytes += took * median_record
+            rows = args.per_game_row_bytes * games_done
+            total += base_shard - args.per_game_row_bytes * args.games + rows + record_bytes
         return total
 
-    off = cumulative(False)
-    on = cumulative(True)
+    off = cumulative(records_on=False, capped=False)
+    capped = cumulative(records_on=True, capped=True)
+    uncapped = cumulative(records_on=True, capped=False)
     print()
-    print(f"O(games^2) SERIALIZATION  (--summary-out, {args.long_run_games} games)")
-    print(f"  records off  {off / 1e6:8.1f} MB")
-    print(f"  records on   {on / 1e6:8.1f} MB   (+{(on - off) / 1e6:.1f} MB, "
-          f"+{(on - off) / off:.1%})")
+    print(f"O(games^2) SERIALIZATION  (--summary-out, {args.long_run_games} games, "
+          f"ceilings {per_battle}/battle {per_run}/run)")
+    print(f"  records off      {off / 1e6:8.1f} MB")
+    print(f"  records on       {capped / 1e6:8.1f} MB   (+{(capped - off) / 1e6:.1f} MB, "
+          f"+{(capped - off) / off:.1%})")
+    print(f"  ...if UNCAPPED   {uncapped / 1e6:8.1f} MB   (+{(uncapped - off) / 1e6:.1f} MB, "
+          f"+{(uncapped - off) / off:.1%})")
+    print("  (the two agree whenever the rate is below the ceilings; the gap IS the "
+          "unbounded tail the cap removes)")
     return 0
 
 

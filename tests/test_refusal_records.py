@@ -21,15 +21,35 @@ the edge is broken:
 * the health block dropped from the summary payload
   -> ``test_the_summary_always_carries_the_health_header``,
      ``test_instrument_errors_reach_the_summary``,
-     ``test_a_partial_progress_summary_reports_health_too``.
+     ``test_a_partial_progress_summary_reports_health_too``;
+* the detach removed from the run's teardown
+  -> ``test_the_run_uninstalls_the_recorder_from_the_policy``.
 
 Tests that are easy to write so that they cannot fail, and what is done about it:
 
-* ``test_stats_are_identical_with_and_without_the_recorder`` asserts two runs are
-  equal, which is trivially true if neither run records. It therefore also asserts
-  the two runs DID differ in the intended way, and it compares the WHOLE
-  ``EngineMctsStats.to_dict()`` (69 keys on this tree), not a chosen subset --
-  ``#1180``'s own end-to-end comparison covers 7.
+* ``test_stats_are_identical_with_and_without_the_recorder``. Two failure modes,
+  both real, both found by review of the first revision:
+
+  1. It asserts two runs are equal, which is trivially true if neither run records
+     -- so it also asserts the two runs DID differ in the intended way.
+  2. The FIRST revision claimed "all 69 keys of ``to_dict()``". That number was
+     wrong and the claim was hollow. Measured: 46 dataclass fields, **48 keys** on a
+     fresh stats object, and only **13** hold a non-default value under this
+     fixture. The other 35 comparisons are ``0``/``{}``/``None`` on both sides,
+     including every wall-clock key, which could not be bit-identical on a real
+     policy anyway. The full-dict equality is still asserted, but the claim now
+     rests on ``_STATS_KEYS_EXERCISED``, pinned BY NAME so a fixture that stops
+     moving a counter fails instead of quietly shrinking the comparison.
+
+* THE COUNTERS ARE NOT THE WHOLE CLAIM. The first revision's stub called
+  ``select_action_with_context(context, rng=None)``, so the policy never touched an
+  RNG, and three mutants that make the recorder ACTIVELY PERTURB the live decision
+  path -- consume a draw before the fan-out, substitute ``random.Random(0)`` into
+  the search, substitute ``dict(aggregated)`` into ``_map_choices`` -- passed all
+  237 tests. Every counter still matched, because a different world sample produces
+  the same COUNTS in a stub. ``test_the_recorder_consumes_no_draw_from_the_decision_rng``
+  and ``test_the_policy_receives_the_caller_s_own_rng_and_aggregate`` are that layer.
+
 * ``test_records_change_no_address_and_no_occurrence_count`` scans a document that
   really contains ``fallback_samples``, mirrored under two paths as production
   shards are, and asserts the baseline is NON-EMPTY before comparing. Against a
@@ -37,7 +57,13 @@ Tests that are easy to write so that they cannot fail, and what is done about it
 * ``test_health_is_not_trustworthy_when_it_was_never_reported`` is the null-world
   test for the health block: the wrong implementation is ``trustworthy = not
   errors``, which is True for a run that never attached, never ran, and never had
-  an error channel. Every conjunct is therefore falsified on its own.
+  an error channel. Every conjunct is therefore falsified on its own, in a loop, so
+  adding a conjunct without a case for it is visible.
+* ``test_two_runs_over_one_policy_do_not_leak_records`` CANNOT see the detach
+  wiring -- each run builds a fresh capture, so arm two is clean either way, and
+  deleting the detach left the suite green. The leak is the ORPHANED recorder still
+  subscribed to a policy that outlives the call, which is only visible on
+  ``policy.__dict__``. That is what the test above it looks at.
 """
 
 from __future__ import annotations
@@ -63,6 +89,7 @@ from pokezero.foulplay_bridge import (
     ControlledFoulPlayConfig,
     ControlledFoulPlayGameResult,
     RefusalRecorderHealth,
+    _REFUSAL_RECORDS_PER_BATTLE,
     _config_from_args,
     _RefusalCapture,
     _run_controlled_foulplay_games,
@@ -129,14 +156,29 @@ class _EnginePolicyStub:
     def __init__(self) -> None:
         self.stats = EngineMctsStats()
         self.policy_id = "engine-mcts-stub"
+        # What the BASE methods actually received. The recorder's contract is that
+        # it forwards these untouched; nothing else in this file can see that.
+        self.seen_rng: list = []
+        self.seen_aggregated: list = []
+        self.seen_fallback_rng: list = []
+        self.draws: list[int] = []
 
     def select_action_with_context(self, context, *, rng):
+        # RECORDED, and the draw is TAKEN. Without this the policy never touches the
+        # decision RNG and three mutants that make the recorder actively perturb the
+        # live decision path -- consuming a draw, substituting a different Random,
+        # substituting a copied aggregate -- all pass the whole suite.
+        self.seen_rng.append(rng)
+        if rng is not None:
+            self.draws.append(rng.getrandbits(63))
         return None
 
     def _map_choices(self, context, aggregated):
+        self.seen_aggregated.append(aggregated)
         return None
 
     def _fallback(self, context, rng, reason):
+        self.seen_fallback_rng.append(rng)
         self.stats.fallback_decisions += 1
         self.stats.fallback_reasons[reason] += 1
         self.stats.fallback_samples.setdefault(f"fallback:{reason}", []).append(
@@ -160,8 +202,9 @@ class _EnginePolicyStub:
         worlds: tuple[int, int, int] = (16, 0, 0),
         aggregated: dict | None = None,
         unmapped: dict | None = None,
+        rng=None,
     ) -> None:
-        self.select_action_with_context(context, rng=None)
+        self.select_action_with_context(context, rng=rng)
         for key, count in (world_failures or {TRAPPED_KEY: 16}).items():
             self.stats.world_failure_reasons[key] += count
         attempted, constructed, searched = worlds
@@ -174,8 +217,8 @@ class _EnginePolicyStub:
             self.stats.unmapped_choices[key] += count
         self._fallback(context, None, reason)
 
-    def succeed(self, context) -> None:
-        self.select_action_with_context(context, rng=None)
+    def succeed(self, context, *, rng=None) -> None:
+        self.select_action_with_context(context, rng=rng)
         self.stats.decisions += 1
         self.stats.worlds_attempted += 4
         self.stats.worlds_constructed += 4
@@ -192,25 +235,57 @@ class RefusalRecorderHealthTest(unittest.TestCase):
         self.assertFalse(RefusalRecorderHealth(enabled=True).trustworthy)
 
     def test_every_conjunct_of_trustworthy_is_load_bearing(self) -> None:
-        good = RefusalRecorderHealth(enabled=True, attached=True, health_reported=True)
-        self.assertTrue(good.trustworthy)
+        base = dict(enabled=True, attached=True, health_reported=True)
+        self.assertTrue(RefusalRecorderHealth(**base).trustworthy)
         # ...and each one, alone, takes it away.
-        self.assertFalse(
-            RefusalRecorderHealth(enabled=True, attached=False, health_reported=True).trustworthy
+        for name, broken in (
+            ("enabled", dict(base, enabled=False)),
+            ("attached", dict(base, attached=False)),
+            ("health_reported", dict(base, health_reported=False)),
+            ("instrument_errors", dict(base, instrument_errors=("boom",),
+                                       instrument_errors_total=1)),
+            ("degraded_records", dict(base, degraded_records=1)),
+            # The reconciliation: a record that reached no game row is neither
+            # emitted nor dropped, and before this conjunct existed it vanished
+            # while `recorded_refusals` still counted it and this still said True.
+            ("reconciled", dict(base, recorded_refusals=3, emitted_refusals=1,
+                                records_dropped=1)),
+        ):
+            with self.subTest(conjunct=name):
+                self.assertFalse(RefusalRecorderHealth(**broken).trustworthy)
+
+    def test_a_truncated_run_is_reconciled_but_says_it_truncated(self) -> None:
+        """Dropping to a ceiling is honest; dropping silently is not."""
+        health = RefusalRecorderHealth(
+            enabled=True, attached=True, health_reported=True,
+            recorded_refusals=40, emitted_refusals=8, records_dropped=32,
         )
-        self.assertFalse(
-            RefusalRecorderHealth(enabled=True, attached=True, health_reported=False).trustworthy
-        )
-        self.assertFalse(
-            RefusalRecorderHealth(
-                enabled=True, attached=True, health_reported=True, instrument_errors=("boom",)
-            ).trustworthy
-        )
-        self.assertFalse(
-            RefusalRecorderHealth(
-                enabled=True, attached=True, health_reported=True, degraded_records=1
-            ).trustworthy
-        )
+        self.assertTrue(health.reconciled)
+        self.assertTrue(health.trustworthy)
+        self.assertEqual(health.to_dict()["records_dropped"], 32)
+
+    def test_instrument_errors_are_sampled_but_the_count_is_not(self) -> None:
+        """The list is one string per failed capture and it is uncapped upstream."""
+        policy = _EnginePolicyStub()
+        capture = _RefusalCapture(policy, enabled=True)
+        try:
+            for round_index in range(60):
+                # No `select_action_with_context`, so every capture files an error.
+                policy._fallback(_Context("battle-7", round_index, "p1"), None, "r")
+            health = capture.health()
+        finally:
+            capture.detach()
+
+        self.assertEqual(health.instrument_errors_total, 60)
+        self.assertEqual(len(health.instrument_errors), 20)
+        self.assertFalse(health.trustworthy)
+
+    def test_an_unattached_capture_cannot_claim_to_have_reported_health(self) -> None:
+        """`health_reported` asserts an error CHANNEL, and there is none here."""
+        health = _RefusalCapture(SimpleNamespace(), enabled=True).health()
+        self.assertFalse(health.health_reported)
+        self.assertEqual(health.instrument_errors_total, 0)
+        self.assertFalse(health.trustworthy)
 
     def test_a_failed_attach_says_why(self) -> None:
         """A bare False sends the reader to the source; the message does not."""
@@ -453,39 +528,82 @@ class RefusalRecordReaderInvariantTest(unittest.TestCase):
         self.assertNotIn("refusal_recorder", keys)
 
 
+#: The `EngineMctsStats.to_dict()` keys the fixture below actually MOVES off their
+#: default. Named rather than counted, because the count is what made the first
+#: version of this file overclaim: `to_dict()` emits 48 keys on a fresh stats object
+#: and 38 of them are `0`/`{}`/`None` in BOTH arms of the comparison, so "all 48 keys
+#: are equal" is 38 assertions that two zeros are equal. Thirteen of the 38 are
+#: wall-clock fields that could not be bit-identical on a real policy anyway.
+#:
+#: The full-dict equality below is still asserted -- a recorder that INVENTED a value
+#: in one of the 38 must fail -- but this set is what carries the claim, and pinning
+#: it by name means a fixture that stops exercising a counter fails loudly instead of
+#: quietly shrinking the real comparison.
+_STATS_KEYS_EXERCISED = {
+    "belief_sample_rejection_rate",
+    "decisions",
+    "fallback_decisions",
+    "fallback_rate",
+    "fallback_reasons",
+    "fallback_samples",
+    "unmapped_choices",
+    "world_failure_reasons",
+    "worlds_attempted",
+    "worlds_constructed",
+    "worlds_searched",
+    # Derived, and they move because their inputs did: `wall_per_decision` is
+    # wall/decisions (None -> 0.0 once `decisions` is non-zero) and
+    # `world_search_abort_rate` is a ratio over `worlds_attempted`.
+    "wall_per_decision",
+    "world_search_abort_rate",
+}
+
+
 class SearchBehaviourUnchangedTest(unittest.TestCase):
     """Recorder attached and detached must produce the same run.
 
-    ``#1180``'s own end-to-end check compares SEVEN keys of
-    ``EngineMctsStats.to_dict()``. This compares ALL of them, and additionally the
-    arguments the policy saw and the RNG draws it took -- because "the counters
-    match" and "the search did the same thing" are different claims and only the
-    second is the one being made.
+    Three separate claims, and the first version of this class only established one
+    of them:
+
+    1. the COUNTERS agree -- full `EngineMctsStats.to_dict()`, plus the named subset
+       above that actually moves;
+    2. the policy receives the SAME OBJECTS -- the same `Random`, the same
+       `aggregated` mapping. A recorder that substitutes a copy has changed the
+       search's inputs even though every counter still matches;
+    3. the policy receives them in the SAME RNG STATE -- the recorder consumes no
+       draw. This is the one that matters most for a default-on change, because a
+       single `getrandbits` inside the wrapper silently reseeds every world in the
+       decision.
+
+    Claims 2 and 3 were true in both worlds before, for a dull reason: the fixture
+    called `select_action_with_context(context, rng=None)`, so the policy never
+    touched an RNG and three mutants that make the recorder actively perturb the live
+    decision path all passed the suite. The stub now takes the draw.
     """
 
     def _run(self, *, record: bool) -> dict:
         policy = _EnginePolicyStub()
-        seen: list[tuple] = []
         capture = _RefusalCapture(policy, enabled=record)
         try:
             for round_index in range(6):
                 context = _Context("battle-7", round_index, "p1")
-                # A real seeded draw, positioned exactly where the searcher's is.
+                # The bridge's own per-decision seeding rule (`foulplay_bridge`
+                # `_select_policy_decision`), so the RNG is positioned exactly where
+                # the searcher's is and the draws below are the draws it would take.
                 rng = random.Random(f"{context.seed}:{context.player_id}:{round_index}")
-                draw = rng.getrandbits(63)
-                seen.append((round_index, context.player_id, draw))
                 if round_index % 2:
                     policy.refuse(
                         context,
                         world_failures={TRAPPED_KEY: 8 + round_index},
                         aggregated={"substitute": 0.9},
                         unmapped={"substitute": 1},
+                        rng=rng,
                     )
                 else:
-                    policy.succeed(context)
+                    policy.succeed(context, rng=rng)
             return {
                 "stats": policy.stats.to_dict(),
-                "policy_calls": seen,
+                "draws": list(policy.draws),
                 "records": [r.to_dict() for r in capture.records_for("battle-7")],
             }
         finally:
@@ -495,15 +613,77 @@ class SearchBehaviourUnchangedTest(unittest.TestCase):
         detached = self._run(record=False)
         attached = self._run(record=True)
 
-        # ALL keys, named in the failure message so a divergence says which one.
         self.assertEqual(set(detached["stats"]), set(attached["stats"]))
-        self.assertGreater(len(detached["stats"]), 40)
         self.assertEqual(detached["stats"], attached["stats"])
-        self.assertEqual(detached["policy_calls"], attached["policy_calls"])
+        # The comparison is not 48 assertions that zero equals zero: these keys hold
+        # a value that this fixture moved, in both arms.
+        empty = EngineMctsStats().to_dict()
+        moved = {
+            key for key, value in detached["stats"].items() if value != empty.get(key)
+        }
+        self.assertEqual(moved, _STATS_KEYS_EXERCISED)
         # ...and the two runs really did differ in the one intended way. Without
         # this the equalities above are asserted about two identical no-ops.
         self.assertEqual(detached["records"], [])
         self.assertEqual(len(attached["records"]), 3)
+
+    def test_the_recorder_consumes_no_draw_from_the_decision_rng(self) -> None:
+        """Every world seed in the decision comes off this RNG.
+
+        A single `getrandbits` inside the wrapper shifts the whole stream, so the
+        search samples different worlds while every counter in the test above still
+        matches. Six decisions, bit-identical draw sequence.
+        """
+        detached = self._run(record=False)
+        attached = self._run(record=True)
+
+        self.assertEqual(len(detached["draws"]), 6)
+        self.assertEqual(detached["draws"], attached["draws"])
+
+    def test_the_policy_receives_the_caller_s_own_rng_and_aggregate(self) -> None:
+        """Identity, not equality.
+
+        A recorder that hands the search a fresh `Random(0)`, or a `dict(aggregated)`
+        copy, produces a run whose counters are unchanged and whose inputs are not.
+        Equality cannot see either; `assertIs` can.
+        """
+        policy = _EnginePolicyStub()
+        capture = _RefusalCapture(policy, enabled=True)
+        try:
+            rng = random.Random("600016:p1:7")
+            aggregated = {"substitute": 0.9, "thunderbolt": 0.1}
+            context = _Context("battle-7", 7, "p1")
+            policy.refuse(context, aggregated=aggregated, rng=rng)
+
+            self.assertIs(policy.seen_rng[0], rng)
+            self.assertIs(policy.seen_aggregated[0], aggregated)
+            self.assertIsNot(policy.seen_aggregated[0], None)
+            # ...while the RECORD holds a snapshot rather than the live object, so
+            # the identity above cannot be satisfied by simply not copying anywhere.
+            # `aggregated` is a Counter the search keeps mutating after this call.
+            record = capture.records_for("battle-7")[0]
+            aggregated["substitute"] = 99.0
+            self.assertEqual(record.map_choices_calls[0]["substitute"], 0.9)
+        finally:
+            capture.detach()
+
+    def test_the_recorder_leaves_the_policy_exactly_as_it_found_it(self) -> None:
+        """Detach restores the instance dict, and does not freeze bound copies on it.
+
+        `_Hook` saves `_ABSENT` for a name that was a CLASS method precisely so
+        `setattr` does not park a self-referential bound copy on the instance. That
+        is unobservable through behaviour and very observable through `__dict__`.
+        """
+        policy = _EnginePolicyStub()
+        before = set(policy.__dict__)
+
+        capture = _RefusalCapture(policy, enabled=True)
+        self.assertTrue({"select_action_with_context", "_map_choices", "_fallback"}
+                        <= set(policy.__dict__))
+        capture.detach()
+
+        self.assertEqual(set(policy.__dict__), before)
+        self.assertNotIn("_pz_refusal_hook", policy.__dict__)
 
     def test_the_records_are_per_decision_deltas_not_running_totals(self) -> None:
         """The null-world test for the capture, run through the bridge's own owner.
@@ -537,12 +717,22 @@ class RefusalRecorderWiringTest(unittest.TestCase):
         self.assertTrue(default.record_refusals)
         self.assertFalse(disabled.record_refusals)
 
-    def _play(self, *, config, policy, games: int = 2, refuse_rounds=(1,), boundary=None):
+    def _play(
+        self,
+        *,
+        config,
+        policy,
+        games: int = 2,
+        rounds: int = 4,
+        refuse_rounds=(1,),
+        boundary=None,
+        failing_close: str | None = None,
+    ):
         """Drive the REAL `_run_controlled_foulplay_games` over stubbed collaborators.
 
         `_run_single_game` is real too, so the whole attach -> record -> partition ->
-        serialize path runs; only the websocket server, the bridge process and the
-        decision boundary are stubbed.
+        cap -> serialize path runs; only the websocket server, the bridge process and
+        the decision boundary are stubbed.
         """
         config = replace(config, games=games)
         seeds = [config.seed_start + offset for offset in range(games)]
@@ -551,8 +741,11 @@ class RefusalRecorderWiringTest(unittest.TestCase):
             battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
             pending[battle_id] = [
                 {"battleId": battle_id, "type": "ready", "requested": ["p1", "p2"]}
-                for _ in range(4)
+                for _ in range(rounds)
             ] + [{"battleId": battle_id, "type": "terminal"}]
+
+        self._server_closed = False
+        outer = self
 
         class Server:
             def __init__(self, **_kwargs) -> None:
@@ -562,7 +755,9 @@ class RefusalRecorderWiringTest(unittest.TestCase):
                 return None
 
             async def close(self) -> None:
-                return None
+                outer._server_closed = True
+                if failing_close == "server":
+                    raise RuntimeError("server close failed")
 
             async def send_room_lines(self, *_a, **_k) -> None:
                 return None
@@ -577,7 +772,8 @@ class RefusalRecorderWiringTest(unittest.TestCase):
                 return None
 
             async def close(self) -> None:
-                return None
+                if failing_close == "bridge":
+                    raise RuntimeError("bridge close failed")
 
             async def send(self, payload: dict) -> None:
                 if payload.get("type") == "start":
@@ -783,6 +979,106 @@ class RefusalRecorderWiringTest(unittest.TestCase):
             [row.refusal_records[0].battle_id for row in second.games],
             [f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}" for seed in (100, 101)],
         )
+
+    def test_the_run_uninstalls_the_recorder_from_the_policy(self) -> None:
+        """The DETACH WIRING, which the test above cannot see.
+
+        Each run builds a fresh `_RefusalCapture`, so arm two is clean whether or not
+        arm one detached -- deleting `refusal_capture.detach()` left the whole suite
+        green. What leaks is the ORPHANED recorder: `_Hook.remove` never empties
+        `recorders`, the three wrappers stay installed on a policy that outlives this
+        call, and every later `_fallback` fans out to N accumulating subscribers for
+        the life of the process. Nothing observes that through behaviour, so this
+        looks at the policy itself.
+        """
+        policy = _EnginePolicyStub()
+        clean = set(policy.__dict__)
+
+        self._play(config=_config(), policy=policy)
+
+        self.assertNotIn("_pz_refusal_hook", policy.__dict__)
+        self.assertEqual(set(policy.__dict__), clean)
+        # And the orphan is really gone: a later refusal grows nobody's record list.
+        _, progress = self._play(config=_config(seed_start=50), policy=policy)
+        policy.refuse(_Context("battle-after", 0, "p1"))
+        self.assertEqual(progress[-1].to_dict()["refusal_recorder"]["recorded_refusals"], 2)
+
+    def test_a_teardown_failure_cannot_skip_the_detach(self) -> None:
+        """`bridge.close()` raising used to skip `server.close()` AND the detach."""
+        policy = _EnginePolicyStub()
+
+        with self.assertRaises(RuntimeError):
+            self._play(config=_config(), policy=policy, failing_close="bridge")
+
+        self.assertNotIn("_pz_refusal_hook", policy.__dict__)
+        self.assertTrue(self._server_closed)
+
+    def test_records_are_capped_per_battle_and_the_loss_is_a_number(self) -> None:
+        """A cause closes worlds for the rest of its battle; the tail is repeats.
+
+        Measured on a real d4/s1024/w4 batch: one seed filed TEN consecutive
+        identical `no_worlds_constructed` refusals. Uncapped, a high-refusal cell
+        puts every one of them on the row and `_write_json` re-serializes the lot
+        once per game.
+        """
+        policy = _EnginePolicyStub()
+        result, _ = self._play(
+            config=_config(), policy=policy, games=1, rounds=14, refuse_rounds=range(14)
+        )
+        header = result.to_dict()["refusal_recorder"]
+
+        self.assertEqual(len(result.games[0].refusal_records), _REFUSAL_RECORDS_PER_BATTLE)
+        self.assertEqual(header["recorded_refusals"], 14)
+        self.assertEqual(header["emitted_refusals"], _REFUSAL_RECORDS_PER_BATTLE)
+        self.assertEqual(header["records_dropped"], 14 - _REFUSAL_RECORDS_PER_BATTLE)
+        # Truncation is not corruption: the identity still holds and the ceiling is
+        # published so a reader can tell WHICH bound bit.
+        self.assertTrue(header["reconciled"])
+        self.assertTrue(header["trustworthy"])
+        self.assertEqual(header["records_per_battle_ceiling"], _REFUSAL_RECORDS_PER_BATTLE)
+
+    def test_the_run_ceiling_bounds_the_document_across_games(self) -> None:
+        """The per-battle cap alone does not bound a 250-game run."""
+        policy = _EnginePolicyStub()
+        with patch("pokezero.foulplay_bridge._REFUSAL_RECORDS_PER_RUN", 5):
+            result, _ = self._play(
+                config=_config(), policy=policy, games=4, rounds=4, refuse_rounds=range(4)
+            )
+        header = result.to_dict()["refusal_recorder"]
+
+        emitted = [len(row.refusal_records) for row in result.games]
+        self.assertEqual(sum(emitted), 5)
+        # Front-loaded, not spread: the ceiling is a hard stop, and the games past it
+        # emit nothing rather than each losing a little invisibly.
+        self.assertEqual(emitted, [4, 1, 0, 0])
+        self.assertEqual(header["recorded_refusals"], 16)
+        self.assertEqual(header["emitted_refusals"], 5)
+        self.assertEqual(header["records_dropped"], 11)
+        self.assertTrue(header["reconciled"])
+
+    def test_a_record_belonging_to_no_game_row_breaks_the_identity(self) -> None:
+        """The silent-loss case the reconciliation exists for.
+
+        A refusal filed under a battle id that never produces a row -- a game that
+        raised after refusing, or a battle_id filter that drifted -- is dropped from
+        the document while the recorder still counted it. `records_dropped` catches
+        it as a NUMBER, which is the only form in which a missing record is visible.
+        """
+        policy = _EnginePolicyStub()
+
+        async def boundary(*, state, decision_round, **_kwargs):
+            # Refuse under a battle the loop will never build a row for.
+            policy.refuse(_Context("battle-nowhere", decision_round, "p1"))
+            return None
+
+        result, _ = self._play(config=_config(), policy=policy, boundary=boundary)
+        header = result.to_dict()["refusal_recorder"]
+
+        self.assertEqual(header["recorded_refusals"], 8)
+        self.assertEqual(header["emitted_refusals"], 0)
+        # Counted at end of run rather than silently absent.
+        self.assertEqual(header["records_dropped"], 8)
+        self.assertTrue(header["reconciled"])
 
 
 class _proc:

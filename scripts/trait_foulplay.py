@@ -135,6 +135,14 @@ def main():
         device=args.device,
         belief_set_source=True if args.belief_set_source else None,
         pokezero_player="p1",
+        # OFF here, explicitly. This driver takes a `trajectory_callback` and never
+        # writes a benchmark summary, so every refusal record the recorder captured
+        # would be built and then discarded -- pure cost with no artifact. It is also
+        # a raw-policy path by default, where the recorder cannot attach at all. The
+        # bridge default stays ON; this is the one caller that provably has nowhere
+        # to put the output, and saying so at the construction site is better than a
+        # reader wondering whether the omission was an oversight.
+        record_refusals=False,
     )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
