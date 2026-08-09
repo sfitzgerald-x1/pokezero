@@ -103,6 +103,40 @@ class EngineSearchFoldMismatchWarning(UserWarning):
 _fold_logger = logging.getLogger("pokezero.engine_search.fold")
 
 
+def _root_toxic_action_phase_reset(replay: object, slot: str) -> bool:
+    """Whether ``slot``'s active holds the action-phase Toxic reset proof.
+
+    Same public fact as the second zero in
+    ``local_showdown._materialization_toxic_stage``: this active entered badly
+    poisoned during the current turn's ACTION phase, so Showdown's
+    ``tox.onSwitchIn`` has zeroed ``statusState.stage`` and no residual has been
+    charged since.
+
+    The Rust leaf spends that fact on a different job — ``toxic_reentry_pending``
+    is what lets a rounded ``/100`` residual be priced as stage one — so the two
+    lanes have to agree. If only the materialization lane learned it, a world this
+    change newly constructs would render a Toxic stint whose counter never leaves
+    zero, which is a world that stopped refusing without starting to count.
+    """
+
+    def slot_value(name: str) -> Any:
+        values = getattr(replay, name, None)
+        return values.get(slot) if isinstance(values, Mapping) else None
+
+    ident = slot_value("toxic_stage_reset_ident")
+    active = slot_value("public_active")
+    stage = slot_value("toxic_stage")
+    return (
+        isinstance(ident, str)
+        and ident.startswith(f"{slot}a: ")
+        and getattr(active, "ident", None) == ident
+        and slot_value("toxic_stage_known") is True
+        and type(stage) is int
+        and stage == 0
+        and getattr(replay, "post_upkeep_window", None) is False
+    )
+
+
 def _root_toxic_zero_after_upkeep_attestation(replay: object) -> dict[str, dict[str, bool | None]]:
     """Serialize only exact proof booleans for the Rust root handoff.
 
@@ -116,13 +150,23 @@ def _root_toxic_zero_after_upkeep_attestation(replay: object) -> dict[str, dict[
         value = values.get(slot) if isinstance(values, Mapping) else None
         return value if type(value) is bool else None
 
+    def zero_counter_proof(slot: str) -> bool | None:
+        # A malformed post-upkeep field still serializes as ``None`` so the leaf
+        # decoder keeps failing closed; only an exact ``False`` — "no post-upkeep
+        # replacement proof here" — is allowed to be answered by the action-phase
+        # reset proof instead.
+        after_upkeep = exact_bool_field("toxic_stage_zero_after_upkeep", slot)
+        if after_upkeep is not False:
+            return after_upkeep
+        return _root_toxic_action_phase_reset(replay, slot)
+
     post_upkeep_window = getattr(replay, "post_upkeep_window", None)
     exact_post_upkeep_window = (
         post_upkeep_window if type(post_upkeep_window) is bool else None
     )
     return {
         slot: {
-            "proof": exact_bool_field("toxic_stage_zero_after_upkeep", slot),
+            "proof": zero_counter_proof(slot),
             "pending": exact_bool_field("toxic_faint_replacement_pending", slot),
             "invalid": exact_bool_field("toxic_faint_replacement_invalid", slot),
             "post_upkeep_window": exact_post_upkeep_window,
