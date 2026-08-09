@@ -94,6 +94,39 @@ jobs:
             tests/test_never_fired_counter_census.py
             reports/c32_fail_diagnosis.json
             reports/c43_coverage_shortfall_diagnosis.json
+            # ⚠ C152's THIRTEEN artifacts were never listed here, and that is a live gap
+            # rather than a tidy-up. They are members of the exact-count pins in BOTH
+            # `tests/test_boundary_verdict_partition.py` (103) and
+            # `tests/test_never_fired_counter_census.py` (401), and `mass-gate` is the only
+            # job that runs either -- so a PR whose only change is deleting one of them
+            # matches no filter, skips this job entirely and goes green. `seed-registry`
+            # cannot cover it: the wide-census shards sit below `FIDELITY_SEED_FLOOR` and
+            # that module does not see them at all. This is the exact failure mode the
+            # C147 block above is annotated against, one revision later, in the PR that
+            # added the standing rule about instruments.
+            reports/artifacts/c152_*.json
+            # C153's wide-seed negative census: the instrument behind §8's "a negative
+            # measured only inside the two permitted windows is a claim about those
+            # windows". Its twelve sweep shards are corpus members of the same two exact
+            # counts, and its derived census artifact plus generator plus pin are listed
+            # for the reason every pin file here is listed -- a PR whose only change
+            # weakens or deletes one of them must not be able to go green without running
+            # this job.
+            reports/artifacts/c153_*.json
+            scripts/c153_wide_negative_census.py
+            tests/test_wide_seed_negative_census.py
+            # ⚠ THE LEDGER ITSELF AND ITS UNIFORMITY PIN MATCHED NOTHING across all 74
+            # patterns above, and `mass-gate` is the only job that runs the uniformity
+            # step. That module holds an EXACT §3 row inventory and, as of C153, the
+            # header sentence's row count too -- so a PR whose only change is deleting a
+            # gap row from `reports/c138_known_gaps_ledger.md` matched no filter, skipped
+            # this job and went green. Found by widening C153's own path-filter audit
+            # after it had already caught the C152 block above and stopped one file short
+            # of the file it was itself editing. `reports/c150_...` is the same class: an
+            # artifact a permanent ledger cell cites, with no filter entry.
+            reports/c138_known_gaps_ledger.md
+            tests/test_ledger_table_uniformity.py
+            reports/artifacts/c150_band_split_trade_census.json
             # The coverage-bound pins' ENTIRE input. Without these listed, a PR whose
             # only change is deleting one of them skips mass-gate and goes green.
             reports/artifacts/c131_leechseed_main_dev_sweep.json
@@ -747,6 +780,33 @@ jobs:
             exit 1
           fi
 
+      # C153. The census step above is the CORPUS instrument, and §8's newest standing
+      # rule says in its own sentence that a corpus instrument cannot catch this class of
+      # error: `strict:branch_event_legal_error:BranchLegalRollError` and
+      # `skip:rump_branch_set` are 0 in every artifact committed before C152 and fire
+      # immediately on unregistered seeds. The rule landed with no instrument. This step is
+      # it -- a MEASUREMENT taken somewhere new, pinned as a fired/not-observed partition
+      # over 10,000 games on unregistered seeds `1,001,000`-`1,010,999`, with the scope
+      # written into every verdict. Its own module so the census above keeps its
+      # `Ran 22 tests` guard untouched, per C150's precedent. Exact count, not a floor.
+      - name: Wide-seed negative census
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_wide_seed_negative_census -v 2>&1 \
+            | tee /tmp/widecensus.log
+          if ! grep -qE 'Ran 36 tests' /tmp/widecensus.log; then
+            echo "::error::expected 36 wide-seed census pins; the suite shrank or grew"
+            exit 1
+          fi
+          # A clean OK with no skips. TheAbsencePinsAreNotVacuousTests is the only reason
+          # the fired/not-observed partition means anything -- every absence in it is a
+          # loop over the same twelve shards, and a loop over a shard set that stopped
+          # being read passes. Skipping it turns the whole module vacuous.
+          if ! grep -qE '^OK$' /tmp/widecensus.log; then
+            echo "::error::wide-seed census pins did not report a clean OK"
+            exit 1
+          fi
+
       # C150. C116 item 14 requires a pool-reachability check recorded next to every
       # known-gaps entry, and the ledger records it in a COLUMN -- so a row that gains a
       # cell delimiter has that check DROPPED by GFM while it stays in the bytes. That
@@ -754,7 +814,7 @@ jobs:
       # header both rendered with an EMPTY Reachability cell. #1166 fixed them and the file
       # has been clean at every commit since; what it did not leave was a control, and its
       # own note says so ("not pinned ... filed as a follow-up"). This step is that
-      # follow-up, as its own module so the census above keeps its `Ran 16 tests` guard
+      # follow-up, as its own module so the census above keeps its `Ran 22 tests` guard
       # untouched. Note the escape rule here is GFM's real one -- a pipe preceded by ANY
       # backslash is escaped, verified against cmarkgfm and GitHub's /markdown API -- after
       # a first revision of this module used a parity rule and falsely condemned two rows.
@@ -765,8 +825,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_ledger_table_uniformity -v 2>&1 \
             | tee /tmp/ledgertables.log
-          if ! grep -qE 'Ran 18 tests' /tmp/ledgertables.log; then
-            echo "::error::expected 18 ledger-table pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 19 tests' /tmp/ledgertables.log; then
+            echo "::error::expected 19 ledger-table pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. TheHistoricalDropIsCaughtTests feeds the checker the
