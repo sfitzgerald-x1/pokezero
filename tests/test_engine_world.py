@@ -394,9 +394,12 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertEqual(world.spec.side_two.pokemon[0].status, "toxic")
 
     def test_toxic_stage_zero_is_a_valid_first_residual_counter(self) -> None:
-        # The replay/materialization seam admits this only for a post-upkeep
-        # poisoned replacement. Once admitted, the Rust world convention is
-        # the same: no stored count means the next residual is Toxic stage 1.
+        # The replay/materialization seam admits this for the two public zeros:
+        # a post-upkeep poisoned replacement, and an action-phase re-entry that
+        # has not reached its residual phase yet (both in
+        # `test_world_trace_and_toxic_seeding`). Once admitted, the Rust world
+        # convention is the same: no stored count means the next residual is
+        # Toxic stage 1.
         payload = _payload(self.dex)
         payload["sides"]["p2"]["toxicStage"] = 0
         payload["sides"]["p2"]["pokemon"][0]["condition"] = "73/100 tox"
