@@ -42,8 +42,8 @@ the k0 checkpoint with no relaxation and no local patch. Schema
 `transition_token_budget` 0.
 
 The crate handles the zero budget correctly by construction, not by accident:
-`budget = 0` makes `tokens[start..]` empty (`encoder.rs:2323`), so no transition
-row is written, and `filled = 0` (`encoder.rs:761`) clears every transition
+`budget = 0` makes `tokens[start..]` empty (`encoder.rs:2344`), so no transition
+row is written, and `filled = 0` (`encoder.rs:782`) clears every transition
 attention bit.
 
 **The k0 deployment path is validated for engine search.**
