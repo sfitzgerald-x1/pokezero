@@ -514,6 +514,12 @@ class PublicBattleBeliefEngine:
         # narrowing that eliminates the true variant is unrecoverable and corrupts every
         # downstream derived feature and search world, so the conflict path never widens.
         self._variant_pin_conflicts: dict[str, int] = {}
+        # Diagnostic only: ``"<ident spelling>-><tracked forme>"`` -> how many times a
+        # ``-transform`` ident's base-species NICKNAME was upgraded to the forme the belief
+        # actually tracks (``Deoxys->Deoxys-Defense``). Counted so the fix has a positive
+        # signal of its own: a `transform_unexpressible` refusal that stops firing does not
+        # by itself say the resolution path ever ran.
+        self._transform_forme_corrections: dict[str, int] = {}
 
     @classmethod
     def from_events(
@@ -579,7 +585,19 @@ class PublicBattleBeliefEngine:
             # the copied identity so consumers read stats/types from it; moves used while
             # transformed are suppressed below (they are the target's, not the actor's set).
             species = self._active_species(actor_slot) or _species_from_ident(actor_ident)
-            target_species = _species_from_ident(primary)
+            # The TARGET's species is read the same way the ACTOR's is, one line up: from the
+            # tracked belief first, the ident only as the fallback. Reading it straight off the
+            # ident is not equivalent, because a Showdown ident carries the NICKNAME, and a
+            # randbats forme is nicknamed after its BASE species
+            # (`data/random-battles/gen3/teams.ts:619`, `name: species.baseSpecies`), while the
+            # switch DETAILS the belief is built from carry the real forme. So a
+            # ``Deoxys-Defense`` announces itself as ``|-transform|p2a: Ditto|p1a: Deoxys`` and
+            # the ident-only read recorded ``Deoxys`` — a species that is not in anyone's party.
+            # `engine_world._apply_transform` then found no donor and refused the world
+            # (`transform_unexpressible`), which is where this surfaced: 24 truth-rejected
+            # decisions on the census control block.
+            target_belief = self._active_belief(_slot_from_ident(primary) or "")
+            target_species = self._resolve_transform_target_species(primary, target_belief)
             if species and target_species:
                 belief = self._upsert(showdown_slot=actor_slot, species=species)
                 # Transform copies the target's ABILITY as well as its stats/moves
@@ -588,7 +606,6 @@ class PublicBattleBeliefEngine:
                 # in the gen3 -> gen4 -> ... chain overrides `transformInto`). So a Ditto that
                 # copies a Pressure mon pressures for real. Second producer of a running ability
                 # after Trace; missing it cost Ho-Oh's Sacred Fire a double-charge.
-                target_belief = self._active_belief(_slot_from_ident(primary) or "")
                 if target_belief is not None:
                     # The target's RUNNING ability, not its revealed one: transforming into a mon
                     # that has itself Traced copies what it is running now.
@@ -1240,6 +1257,15 @@ class PublicBattleBeliefEngine:
 
         return dict(self._variant_pin_conflicts)
 
+    @property
+    def transform_forme_corrections(self) -> Mapping[str, int]:
+        """Per-spelling count of ``-transform`` idents resolved to the tracked forme.
+
+        Non-empty means the base-name nickname seam is live in this battle — the number the
+        `transform_unexpressible` refusal used to stand in for."""
+
+        return dict(self._transform_forme_corrections)
+
     def _apply_variant_pin(
         self, key: str, summary_fields: dict[str, Any]
     ) -> dict[str, Any]:
@@ -1317,6 +1343,7 @@ class PublicBattleBeliefEngine:
         # them would re-admit variants the strikes already excluded.
         twin._variant_pins = dict(self._variant_pins)
         twin._variant_pin_conflicts = dict(self._variant_pin_conflicts)
+        twin._transform_forme_corrections = dict(self._transform_forme_corrections)
         return twin
 
     def snapshot(self) -> BattleBeliefSnapshot:
@@ -1386,6 +1413,43 @@ class PublicBattleBeliefEngine:
 
     def _active_belief(self, showdown_slot: str) -> RevealedPokemonBelief | None:
         return next((pokemon for pokemon in self._sides.get(showdown_slot, []) if pokemon.active), None)
+
+    def _resolve_transform_target_species(
+        self,
+        target_ident: Optional[str],
+        target_belief: RevealedPokemonBelief | None,
+    ) -> Optional[str]:
+        """The species a Transform copied: the tracked forme, or the ident when it cannot be one.
+
+        The ident is a NICKNAME. gen3 randbats nickname a forme after its base species
+        (`data/random-battles/gen3/teams.ts:619`), so the ident says ``Deoxys`` for a
+        ``Deoxys-Defense``. The belief is built from the switch DETAILS and carries the forme.
+
+        The upgrade is DELIBERATELY NARROW: the tracked species is taken only when it is the
+        same BASE species as the ident, i.e. only where the ident could be the base-name
+        spelling of exactly that mon. That bound is what keeps the guard downstream honest.
+        A belief that disagrees with the protocol at base level is a desynchronised belief,
+        not a forme spelling, and substituting it would put a species nobody named into a
+        searched world — silently wrong, which is worse than the refusal it would remove.
+        In that case the ident is kept and ``engine_world._apply_transform`` still fails
+        closed, exactly as before this method existed.
+
+        Corrections are COUNTED (``transform_forme_corrections``) rather than merely applied:
+        a refusal that stops firing tells you nothing about whether the path that replaced it
+        ever runs.
+        """
+        ident_species = _species_from_ident(target_ident)
+        if target_belief is None or ident_species is None:
+            return ident_species
+        tracked = target_belief.species
+        if not tracked or tracked == ident_species:
+            return ident_species
+        if _base_species_id(tracked) != _base_species_id(ident_species):
+            return ident_species
+        self._transform_forme_corrections[f"{ident_species}->{tracked}"] = (
+            self._transform_forme_corrections.get(f"{ident_species}->{tracked}", 0) + 1
+        )
+        return tracked
 
     def _target_belief(
         self,
