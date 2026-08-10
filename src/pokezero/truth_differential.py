@@ -26,10 +26,14 @@ all of it, and this module deliberately does not:
   the whole per-decision delta of ``world_failure_reasons``,
   ``fallback_reasons``, ``choices_unmapped_causes`` and ``unmapped_choices``, so
   a decision that trips three predicates reports three.
-* **ONE stage downstream of a refusal is still attempted:** choice mapping.
-  :func:`probe_choice_mapping` calls ``_map_choices`` even when no world survived,
-  under its own ``probe:choices_unmapped:*`` key. Nothing else is: with no
-  constructed state there is no search to run.
+* **ONE stage downstream of a refusal is still attempted:** choice mapping, and
+  only as a *consistency cross-check*. :func:`probe_choice_mapping` calls
+  ``_map_choices`` even when no world survived, under its own
+  ``probe:choices_unmapped:*`` key -- but it is **silent by construction on a healthy
+  chain** and **blind to engine-proposed-choice mismatch** (Q4/Transform, PP
+  exhaustion, Encore/Disable). Read its docstring before quoting a zero from it, and
+  do NOT use it to discharge PLAN section 5's ``choices_unmapped = 0`` trigger.
+  Nothing else is attempted: with no constructed state there is no search to run.
 * **The pre-abort render inventory is kept.** ``_absorb_aborted_lossy_subcases``
   already recovers every lossy subcase a world observed *before* it aborted, and
   those land in ``lossy_subcase_renders``.
@@ -699,15 +703,36 @@ def _request_legal_choices(context: PolicyContext) -> tuple[str, ...]:
 
 
 def probe_choice_mapping(policy: Any, context: PolicyContext, aggregated: Any) -> str | None:
-    """Ask ``_map_choices`` whether the REQUEST is mappable, independently of search.
+    """Cross-check that the REQUEST's admitted legal set is mappable.
 
-    This is the one cross-stage de-censoring the chain actually permits. Production
-    reaches ``_map_choices`` only when at least one world survived, so a decision
-    that refuses at construction or at the crate abort reports nothing about choice
-    mapping -- the stage is not clean, it is *unobserved*. The probe calls it anyway,
-    with whatever the truth arm aggregated (empty when nothing survived), and files
-    the cause under a distinct key so it can never be confused with a production
-    ``choices_unmapped``.
+    **What this measures, stated at the strength it supports.** It offers
+    ``_map_choices`` the request's own legal choices and reports whether the mapper
+    accepts them. On a healthy chain it is **silent by construction**: it feeds
+    ``fallback_replay._request_legal_choices``, whose docstring says it *"mirrors
+    `_map_choices`'s admission rule exactly"*, into ``_map_choices``, which builds its
+    index map from the same ``action_candidates``. Independent review instrumented it
+    per choice over 4 games -- ``decisions=306, offered_total=1876,
+    offered_that_map_individually=1876, decisions_where_ALL_offered_choices_map=306,
+    min ratio 1.000``: **no observed degree of freedom.** A zero from this probe
+    across a census therefore restates that two functions implement one admission
+    rule; it is a consistency cross-check, not a measurement of the class.
+
+    **BLIND to the production shape of the class.** Production's ``choices_unmapped``
+    fires when the choice the ENGINE searched cannot be mapped -- Q4/Transform, PP
+    exhaustion, an Encore/Disable legality mismatch. This probe only ever offers the
+    request's own choices, so it cannot see any of them. Demonstrated: a search-side
+    mapping failure produces **39 ``fallback:choices_unmapped`` and 0 probe keys**,
+    the probe silent throughout.
+
+    **Therefore it does NOT discharge PLAN section 5's ``choices_unmapped = 0``
+    era-launch trigger.** That trigger is measured by the PRODUCTION path's
+    ``fallback_reasons["choices_unmapped"]`` and ``choices_unmapped_causes`` only.
+    Reading it off this probe would be wrong in exactly the Q4 shape.
+
+    What it does add: production reaches ``_map_choices`` only when a world survived,
+    so a decision refusing upstream previously reported nothing here at all. The probe
+    asks anyway, under a distinct ``probe:choices_unmapped:*`` key so it can never be
+    confused with a production ``choices_unmapped``.
 
     Returns the ``_CHOICES_UNMAPPED_CAUSES`` token when the request could not be
     mapped, else None. Side-effect-free with respect to the decision: nothing here

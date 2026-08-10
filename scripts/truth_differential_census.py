@@ -354,6 +354,17 @@ class _BrokenNative:
         raise RuntimeError("forced_instrument_test: crate search refused")
 
 
+def install_forcings(truth_policy: Any, spec: str) -> None:
+    """Apply a comma-separated forcing spec, in order.
+
+    Compound forcings are how the cross-stage seam is measured at all -- a single
+    mode cannot show that stage B goes unreported when stage A refuses.
+    """
+
+    for mode in [part.strip() for part in str(spec).split(",") if part.strip()]:
+        install_forcing(truth_policy, mode)
+
+
 def install_forcing(truth_policy: Any, mode: str) -> None:
     """Force a truth rejection, scoped to the TRUTH arm only.
 
@@ -414,6 +425,22 @@ def install_forcing(truth_policy: Any, mode: str) -> None:
                 return original(context, rng=rng)
             finally:
                 truth_policy._map_choices = original_map
+
+    elif mode == "unmapped-persistent":
+        # SPANS the probe, which `unmapped` does not. `unmapped` restores
+        # `_map_choices` in its `finally` around `select_action_with_context`, and
+        # `probe_choice_mapping` runs AFTER that call returns -- so the forcing and
+        # the probe never coexist, and a compound `--force construct,unmapped`
+        # reproduces the pre-probe result exactly. Independent review measured that:
+        # `construct,unmapped` -> construction + literal, no probe key.
+        #
+        # This mode installs the failure for the whole run instead, so the
+        # compound-forcing table can be regenerated against the shipped probe.
+        # Kept SEPARATE from `unmapped` rather than moving that restore: the
+        # existing arm's numbers are published, and silently changing what it forces
+        # would re-point a figure without renaming it.
+        truth_policy._map_choices = lambda *a, **k: None
+        return
 
     else:
         raise SystemExit(f"unknown --force mode {mode!r}")
@@ -569,7 +596,7 @@ def run_shard(args: argparse.Namespace) -> int:
     for seat in ("p1", "p2"):
         driver = make(driver_config, f"tdc-driver-{seat}")
         truth = make(truth_config, f"tdc-truth-{seat}")
-        install_forcing(truth, args.force)
+        install_forcings(truth, args.force)
         driver_policies[seat] = driver
         truth_policies[seat] = truth
         probes[seat] = TruthDifferentialProbe(
@@ -933,8 +960,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--truth-batch", type=int, default=16)
     parser.add_argument("--truth-depth", type=int, default=4)
     parser.add_argument("--truth-repeats", type=int, default=1)
+    # A free-form comma-separated spec, not a `choices=` list: compound forcings
+    # (`construct,unmapped-persistent`) are the only way to measure the cross-stage
+    # seam. `install_forcing` rejects an unknown token, so typos still fail loudly.
     parser.add_argument("--force", default="none",
-                        choices=("none", "construct", "abort", "unmapped"))
+                        help="comma-separated: none|construct|abort|unmapped|unmapped-persistent")
     # report / queue
     parser.add_argument("--shards", nargs="*", default=[])
     parser.add_argument("--summary", help="a --mode report output, for --mode queue")

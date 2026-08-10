@@ -881,5 +881,72 @@ class CrossStageCensoringTests(unittest.TestCase):
         # The sticky-fold seam, which the first revision omitted entirely.
         self.assertIn("_fold_broken`` is STICKY", source)
 
+class ForcingCompositionTests(unittest.TestCase):
+    """`--force unmapped` does not span the probe; `unmapped-persistent` does.
+
+    Independent review found the shipped forcing and the shipped probe could not
+    coexist: `unmapped` restores `_map_choices` in its `finally` around
+    `select_action_with_context`, and `probe_choice_mapping` runs after that call
+    returns. So the compound-forcing table could not be regenerated against the
+    probe, and post-fix compounds reproduced the pre-fix result exactly.
+    """
+
+    def test_unmapped_is_restored_before_the_probe_would_see_it(self) -> None:
+        from truth_differential_census import install_forcing
+
+        policy = ForcingApparatusTests._Policy()
+        install_forcing(policy, "unmapped")
+        policy.select_action_with_context(_Context(), rng=random.Random(0))
+        # Restored the moment the decision returns -- which is BEFORE the probe runs.
+        self.assertEqual(policy._map_choices(_Context(), None), 7)
+
+    def test_unmapped_persistent_still_forces_after_the_decision_returns(self) -> None:
+        from truth_differential_census import install_forcing
+
+        policy = ForcingApparatusTests._Policy()
+        install_forcing(policy, "unmapped-persistent")
+        policy.select_action_with_context(_Context(), rng=random.Random(0))
+        self.assertIsNone(
+            policy._map_choices(_Context(), None),
+            "the persistent forcing must still be installed when the probe runs",
+        )
+
+    def test_a_compound_spec_applies_every_mode_in_order(self) -> None:
+        from pokezero.engine_world import EngineWorldUnsupported
+        from truth_differential_census import install_forcings
+        import pokezero.engine_search as ES
+
+        policy = ForcingApparatusTests._Policy()
+        install_forcings(policy, "construct,unmapped-persistent")
+        self.assertIsNone(policy._map_choices(_Context(), None))
+        policy.select_action_with_context(_Context(), rng=random.Random(0))
+        with self.assertRaises(EngineWorldUnsupported):
+            dict(policy.seen)["world"]()
+        self.assertIsNot(ES.world_battle_spec, dict(policy.seen)["world"])
+
+    def test_an_unknown_token_in_a_compound_spec_is_refused(self) -> None:
+        from truth_differential_census import install_forcings
+
+        with self.assertRaises(SystemExit):
+            install_forcings(ForcingApparatusTests._Policy(), "construct,wobble")
+
+
+class ProbeScopeTests(unittest.TestCase):
+    """(iii) The probe must not be readable as PLAN section 5's trigger."""
+
+    def test_the_docstring_disclaims_the_era_launch_trigger(self) -> None:
+        from pokezero.truth_differential import probe_choice_mapping
+
+        doc = probe_choice_mapping.__doc__ or ""
+        self.assertIn("BLIND", doc)
+        self.assertIn("section 5", doc)
+        self.assertIn("silent by construction", doc)
+        # And the discredited phrasing must not come back.
+        module_source = Path(
+            __import__("pokezero.truth_differential", fromlist=["x"]).__file__
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("clean, not merely unobserved", module_source)
+
+
 if __name__ == "__main__":
     unittest.main()
