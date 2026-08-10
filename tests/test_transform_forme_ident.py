@@ -67,7 +67,7 @@ from pokezero.gen3_damage import gen3_hp_stat  # noqa: E402
 from pokezero.showdown import _public_event_from_line  # noqa: E402
 from pokezero.showdown_fixture import FixturePokemon, pack_team  # noqa: E402
 
-from ._showdown_root import requires_showdown, showdown_root, showdown_root_str  # noqa: E402
+from _showdown_root import requires_showdown, showdown_root, showdown_root_str  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +173,33 @@ def _active_spec(world, slot: str):
     """The active ``PokemonSpec`` on ``slot`` of a built world."""
     side = getattr(world.spec, world.slot_sides[slot])
     return side.pokemon[side.active_index]
+
+
+def _payload_donor_benched(dex: ShowdownDex, donor: FixturePokemon):
+    """The donor has SWITCHED OUT since the copy. Transform outlives it.
+
+    The engine still needs the donor's stats to express the transformed active, and the
+    donor is still in the sampled party -- just not on the field. A donor lookup narrowed
+    to the opposing ACTIVE would refuse this world, which is why it is pinned.
+    """
+    payload = _payload(dex, donor)
+    p1 = payload["sides"]["p1"]
+    swampert_hp = _maxhp(_SWAMPERT, dex)
+    # Swampert leads; the donor is alive on the bench behind it.
+    p1["pokemon"] = [
+        {
+            "species": "Swampert",
+            "condition": f"{swampert_hp}/{swampert_hp}",
+            "active": True,
+            "moves": [
+                {"id": "earthquake", "pp": 10, "maxpp": 16, "disabled": False},
+                {"id": "surf", "pp": 15, "maxpp": 24, "disabled": False},
+            ],
+        },
+        dict(p1["pokemon"][0], active=False),
+    ]
+    p1["lastUsedMove"] = "earthquake"
+    return payload
 
 
 def _maxhp(mon: FixturePokemon, dex: ShowdownDex) -> int:
@@ -547,6 +574,26 @@ class TheFormeDonorIsFoundAndCopiedTests(unittest.TestCase):
         )
         self.assertNotEqual(ditto.attack, other.attack)
         self.assertNotEqual(ditto.defense, other.defense)
+
+    def test_a_benched_donor_is_still_a_donor(self) -> None:
+        """The copy outlives the donor switching out.
+
+        Found by a SAFER-direction mutant: narrowing the donor lookup to the opposing
+        ACTIVE survived the whole battery, meaning nothing pinned this. It does now.
+        """
+        donor = _deoxys("Deoxys-Defense")
+        world = battle_spec_from_payload(
+            _payload_donor_benched(self.dex, donor),
+            _override(donor),
+            dex=self.dex,
+            transformed_slots={"p2": "Deoxys-Defense"},
+        )
+        donor_side = getattr(world.spec, world.slot_sides["p1"])
+        self.assertNotEqual(
+            donor_side.pokemon[donor_side.active_index].id, "deoxysdefense",
+            "fixture guard: the donor must actually be OFF the field for this to pin anything",
+        )
+        self.assertEqual(_active_spec(world, "p2").id, "deoxysdefense")
 
     def test_the_transformer_keeps_its_own_base_identity(self) -> None:
         """Unchanged behaviour, re-pinned on the forme path."""
