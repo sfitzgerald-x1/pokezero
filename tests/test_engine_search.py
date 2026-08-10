@@ -1646,18 +1646,38 @@ class _CumulativeAnnotationSource:
         return dict(self.overlay)
 
 
-class _WindowedAnnotationSource(_CumulativeAnnotationSource):
+class _WindowedAnnotationSource:
     """A hypothetical source that offers only what the fold can still identify.
 
     Not a real shape -- the control arm for the no-op proof. Against it the
     adapter never re-seats anything, so any state difference from the
     cumulative arm is caused by re-seating.
+
+    Deliberately NOT a subclass of `_CumulativeAnnotationSource`:
+    `test_unreachable_readjudication.EveryWorkflowTestCountGuardMatchesItsModuleTests`
+    forbids same-module inheritance here, because it would break the AST
+    derivation behind this module's exact test-count pin.
     """
 
     fold = None
 
+    def __init__(self):
+        self.overlay: dict[int, tuple] = {}
+        self.enabled = True
+        self.calls = 0
+
+    def offer(self, index, values):
+        self.overlay[index] = values
+
+    def active(self):
+        return self.enabled
+
+    def boundary_state(self, player_id):  # pragma: no cover - cross-check only
+        raise NotImplementedError
+
     def overlay_for(self, player_id):
-        overlay = super().overlay_for(player_id)
+        self.calls += 1
+        overlay = dict(self.overlay)
         if self.fold is None:
             return overlay
         tail_start = self.fold.action_total - len(self.fold.action_tail)
