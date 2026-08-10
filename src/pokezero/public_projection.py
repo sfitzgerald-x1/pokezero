@@ -60,7 +60,9 @@ naming an axis for #1212 that does not exist.
 * #1210 (Transform PP overlay) -> ``self_move_pp``: the request publishes the
   copy's live PP every round, so a wrong overlay is a numeric disagreement.
   **COVERED-MEASURED** -- reverting ``_copied_move_spec``'s overlay takes this
-  axis from 0 to 2,219 WORLDS on the census block.
+  axis from zero to a large positive WORLDS count on the census block. The
+  figure and its command live in the direction-2 report, not here; see the note
+  at the end of this section.
 * #1209 (toxic stage: demand a weaker proof) -> ``toxic_count``, whose observed
   side is ``observed_toxic_multiplier``: the multiplier the log shows was
   actually PAID, recovered from raw ``|-damage|...|[from] psn`` damage.
@@ -96,9 +98,16 @@ about a zero here is evidence of power.
 ``local_showdown._materialization_toxic_stage`` from
 ``min(14, max(0, tracked_stage - 1))`` to ``min(14, max(0, tracked_stage))`` --
 an over-broad #1209 crediting every world one extra tick -- takes this axis
-from 0 to **11,568 WORLDS / 1,320 DECISIONS** on the 731-battle block
-(mismatched worlds 406 -> 10,962). So #1209's over-credit shape is
-COVERED-MEASURED. Command and per-arm source sha256 in the direction-2 report.
+**from zero to a four-figure WORLDS count over four-figure DECISIONS** on the
+731-battle block. So #1209's over-credit shape is COVERED-MEASURED.
+
+NO CENSUS MAGNITUDE IS WRITTEN IN THIS FILE, deliberately. The exact figures,
+their commands and the per-arm source sha256 live in the direction-2 report
+(section 3.1), because a number copied into tracked source goes stale on the
+next census with nothing able to notice -- report 4 section 4.8's shape, and a
+mutant that rewrote the figures here to nonsense passed the whole suite. What
+IS pinned here is the direction and the verdict, which is what a reader needs
+and what a test can check.
 
 **And one arm of #1209 is unreachable here, which is the honest reason its
 literal site is not covered.** A producer mutant at #1209's own site --
@@ -1063,6 +1072,12 @@ def _axis_boosts(
 #: constructor's input, and independence is the whole point -- see below.
 _TOXIC_DENOMINATOR = 16
 
+#: Every protocol tag that ends the Toxic ramp the last observed tick was priced
+#: from, BEYOND the switch family handled separately. Mirrors the arms of
+#: `showdown._reseed_toxic_stage_from_residual`; a named constant so deleting an
+#: entry is a killable mutation rather than a silent narrowing.
+_TOXIC_RAMP_RESET_TAGS = frozenset({"faint", "-status", "-curestatus", "-cureteam"})
+
 
 def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
     """The last Toxic multiplier each side actually PAID, read from raw damage.
@@ -1088,14 +1103,37 @@ def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
     ``floor(maxhp / 16) * stage``, so ``stage = damage / floor(maxhp / 16)``, and
     that arithmetic passes through none of the parser's toxic trackers.
 
-    Returns ``{slot: multiplier or None}``. ``None`` means *not determined* --
-    no tick observed since the current active came in, a non-integral quotient,
-    a percentage-mod HP grid too coarse to divide, or **a tick whose own
-    condition token is plain ``psn`` rather than ``tox``**. An axis never fires
-    on an undetermined value.
+    EVERY EVENT THAT RESETS THE PARSER'S RAMP INVALIDATES WHAT WAS PAID, and
+    getting that list wrong is a FALSE POSITIVE ON A CORRECT WORLD, which is the
+    loud direction but still an anti-instrument. This function used to reset only
+    on ``switch``/``drag``/``replace`` while
+    ``showdown._reseed_toxic_stage_from_residual`` resets on four more, and its
+    own comment names the reachable case: Rest. Measured before the fix --
+    ``|-damage|...|tox|[from] psn`` paying 5, then
+    ``|-status|...|slp|[from] move: Rest``, then ``|-curestatus|``, then
+    ``|-status|...|tox`` -- this still returned **5** while Showdown's ramp had
+    restarted, and `_axis_toxic_count` fired ``last tick paid multiplier 5, world
+    pre-tick counter 0`` against a world the parser had correctly licensed. The
+    reset tags below mirror the parser's arms exactly, including its
+    active-ident rule (a bench ``|-curestatus|p1: Name|`` cannot touch the
+    active's ramp) and its ``-cureteam`` exemption from that rule.
+
+    Returns ``{slot: multiplier or None}``. ``None`` means *not determined*, and
+    this list is CLOSED -- every way the value can be unknown is here:
+
+    * no tick observed since the current active came in;
+    * a non-integral quotient, or a percentage-mod HP grid too coarse to divide;
+    * a tick whose own condition token is plain ``psn`` rather than ``tox``;
+    * **anything that reset the ramp since the last tick**: ``switch``/``drag``/
+      ``replace``, ``faint``, any ``-status`` (Rest, or a re-``tox`` that
+      restarts the ramp at 1 with nothing yet paid at it), ``-curestatus``,
+      ``-cureteam``.
+
+    An axis never fires on an undetermined value.
     """
 
     from .engine_fidelity import _parse_condition  # noqa: PLC0415
+    from .showdown import _is_active_protocol_ident  # noqa: PLC0415
 
     last_hp: dict[str, int] = {}
     maxhp: dict[str, int] = {}
@@ -1115,6 +1153,22 @@ def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
             # A gen 3 switch-out RESETS the counter, so nothing observed before
             # this line says anything about the mon now standing there.
             multiplier[slot] = None
+            continue
+        if tag in _TOXIC_RAMP_RESET_TAGS:
+            # The parser's OTHER reset arms, mirrored. `Pokemon.setStatus`
+            # replaces `statusState` wholesale, so any `-status` -- Rest most
+            # reachably, and a re-`tox` which restarts at stage 1 -- ends the ramp
+            # the last tick was priced from. `faint`, `-curestatus` and
+            # `-cureteam` end it too. In every case what was PAID no longer
+            # describes what the engine's counter should now hold, and reporting
+            # it is a false positive against a correct world.
+            #
+            # The active-ident rule is the parser's, for the parser's reason: a
+            # bench cure (`|-curestatus|p1: Name|...`, no `a`) cannot touch the
+            # active's ramp. `-cureteam` is exempt because its ident IS the
+            # active source and it cures the whole team.
+            if tag == "-cureteam" or _is_active_protocol_ident(parts[2]):
+                multiplier[slot] = None
             continue
         if tag not in ("-damage", "-heal", "-sethp") or len(parts) < 4:
             continue
@@ -1751,8 +1805,10 @@ def _render_mismatch_reasons(
     carries the representative damage roll while Showdown sampled one of sixteen.
 
     THE BAND'S WIDTH IS THE DOMINANT DETERMINANT OF THE LARGEST RENDER FIGURE --
-    HP is 159 of the 206 `render_unmatched_transition` reasons -- and it was
-    pinned by nothing. Measured: `_DAMAGE_TOLERANCE` could be widened 0.16 ->
+    HP is the majority of `render_unmatched_transition`'s reasons on the census
+    block (figure in the direction-2 report section 2.2, not copied here) -- and
+    it was pinned by nothing. Measured on THIS TREE, so it is reproducible from
+    the tree alone: `_DAMAGE_TOLERANCE` could be widened 0.16 ->
     0.75 (4.7x) and `_MIN_TOLERANCE_HP` 5 -> 40 (8x) with the whole module green,
     and TIGHTENED to 0 with the whole module green too, so the boundary was open
     in both directions. `RenderBandWidthTests` now pins both constants from both

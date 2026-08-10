@@ -547,10 +547,32 @@ class AxisFiresTests(unittest.TestCase):
         # not. Every paragraph that raises one must also say which way it is
         # being talked about. This is what would have caught the shipped header,
         # whose #1209 and #1212 bullets carried no marker at all.
+        # #1212's CLAIM is held to the strict form of that rule, because the
+        # loose form did not implement it. Asking only that the paragraph
+        # containing the phrase also contain the word `RETRACTED` let the claim
+        # be re-asserted as live INSIDE the retraction paragraph -- the marker
+        # was already there for the quotation, so the mutant walked in under it
+        # and all 87 tests passed. The phrase may therefore occur ONLY as the
+        # quoted object of the retraction sentence, and every occurrence is
+        # accounted for by counting.
+        claim = "the axis that makes the relaxation falsifiable at all"
+        retraction = (
+            'RETRACTED: the claim that ``self_move_disabled`` is '
+            f'"{claim}"'
+        )
+        self.assertEqual(1, flat.count(retraction), "the in-place retraction is gone")
+        self.assertEqual(
+            flat.count(retraction),
+            flat.count(claim),
+            "the module header states #1212's retracted claim somewhere OTHER than "
+            "as the quoted object of its retraction -- which is how it would be "
+            "re-asserted as live while still passing a marker check",
+        )
+
         scoped = {
-            # #1212's claim may be quoted, but only to retract it.
-            "the axis that makes the relaxation falsifiable at all": ("RETRACTED",),
-            # The parser's tracker may be named to explain its absence.
+            # The parser's tracker may be NAMED to explain its absence; it is a
+            # symbol, not a claim, so the paragraph-marker rule is the right
+            # strength for it.
             "toxic_stage": ("RETRACTED", "NULL MUTANT", "not independent", "producer mutant"),
         }
         marked = 0
@@ -566,10 +588,36 @@ class AxisFiresTests(unittest.TestCase):
                     "one:\n" + paragraph[:300],
                 )
                 marked += 1
-        # Anti-vacuity: a header that stopped discussing either would pass the
-        # loop trivially, and the retraction is the useful part of this docstring.
+        # Anti-vacuity: a header that stopped discussing it would pass the loop
+        # trivially, and the retraction is the useful part of this docstring.
         self.assertGreaterEqual(
-            marked, 2, "the module header no longer discusses either retracted claim"
+            marked, 2, "the module header no longer discusses the retracted axis"
+        )
+
+        # UNDER-CLAIMING, WHICH IS THE DIRECTION THAT ACTUALLY WENT WRONG.
+        # Everything above catches the header saying MORE than was measured.
+        # Nothing caught it saying LESS -- and #1209 shipped as UNCOVERED for a
+        # whole revision when a four-minute producer mutant showed the axis
+        # fires. Flipping this bullet back to "UNCOVERED, and the producer mutant
+        # was not run" was green. Same shape as the HP band being green when
+        # TIGHTENED to zero: a boundary pinned on one side only.
+        bullet = flat.split("#1209 (toxic stage")[1].split("* #1212")[0]
+        self.assertIn(
+            "COVERED-MEASURED",
+            bullet,
+            "the #1209 bullet no longer records that the producer mutant fires",
+        )
+        self.assertNotIn(
+            "UNCOVERED",
+            bullet,
+            "the #1209 bullet calls the axis uncovered; the producer mutant fires",
+        )
+        # And "the mutant was not run" may appear ONLY as the quoted thing being
+        # denied, by the same counting rule as the claim above.
+        self.assertEqual(
+            flat.count('That is not "the mutant was not run"'),
+            flat.count("the mutant was not run"),
+            "the module header says the producer mutant was not run; it was",
         )
         # AND THE RETRACTION IS IN PLACE, not deleted. This repo's convention is
         # that a wrong claim stays, quoted, with what replaces it beside it --
@@ -636,6 +684,81 @@ class AxisFiresTests(unittest.TestCase):
             observed_toxic_multiplier(nicknamed)["p2"],
             "a nickname containing `tox` was read as the status token",
         )
+        # NOT PINNED, AND SAID SO: `"tox" not in parts[3]` (substring on the
+        # condition field rather than on its whitespace-split tokens) is an
+        # EQUIVALENT mutant, not a hole. No gen 3 condition token contains `tox`
+        # as a proper substring -- the set is {brn, par, slp, frz, psn, tox, fnt}
+        # -- so nothing can distinguish the two, and no fixture should be
+        # invented to pretend otherwise. Recorded so it is not miscounted as an
+        # uncaught mutant later.
+
+        # AN UNPRICEABLE TICK INVALIDATES WHAT WAS PAID; it does not merely fail
+        # to add to it. Deleting the `multiplier[slot] = None` and leaving the
+        # bare `continue` keeps the earlier, now-wrong multiplier standing, and
+        # every assertion above still passes -- they all start from a slot with
+        # nothing recorded.
+        stale = [
+            "|switch|p2a: Squirtle|Squirtle, L100, M|256/256 tox",
+            "|-damage|p2a: Squirtle|208/256 tox|[from] psn",  # 48 = 3 units -> paid 3
+            "|-damage|p2a: Squirtle|176/256 psn|[from] psn",  # no longer tox: unpriceable
+        ]
+        self.assertEqual(3, observed_toxic_multiplier(stale[:2])["p2"])
+        self.assertIsNone(
+            observed_toxic_multiplier(stale)["p2"],
+            "an unpriceable tick left the previous multiplier standing",
+        )
+
+    def test_every_event_that_resets_the_parsers_ramp_invalidates_what_was_paid(self):
+        """A LIVE DEFECT, and the loud direction: a FALSE POSITIVE on a CORRECT world.
+
+        This function reset only on `switch`/`drag`/`replace`. The parser resets
+        on four more, and `showdown._reseed_toxic_stage_from_residual`'s own
+        comment names the reachable one: `Pokemon.setStatus` replaces
+        `statusState` wholesale, so **Rest on an already-toxed mon ends the ramp**
+        -- *"a LATER re-tox in the same stint was priced from a stage that no
+        longer existed."*
+
+        Measured before the fix, on exactly the sequence below: this returned
+        **5**, and `_axis_toxic_count` fired
+        `last tick paid multiplier 5, world pre-tick counter 0` against a world
+        the parser had correctly licensed. Item 5's whole argument was "the
+        parser applies this gate explicitly and this one did not" -- which was
+        true of four more gates than the one it fixed.
+        """
+
+        from pokezero.public_projection import observed_toxic_multiplier
+
+        paid = [
+            "|switch|p2a: Squirtle|Squirtle, L100, M|256/256 tox",
+            "|-damage|p2a: Squirtle|176/256 tox|[from] psn",  # 80 = 5 units
+        ]
+        self.assertEqual(5, observed_toxic_multiplier(paid)["p2"], "the fixture must pay 5")
+
+        for label, tail in (
+            ("Rest, cured, re-toxed", [
+                "|-status|p2a: Squirtle|slp|[from] move: Rest",
+                "|-curestatus|p2a: Squirtle|slp",
+                "|-status|p2a: Squirtle|tox",
+            ]),
+            ("faint", ["|faint|p2a: Squirtle"]),
+            ("-curestatus", ["|-curestatus|p2a: Squirtle|tox"]),
+            ("-cureteam", ["|-cureteam|p2a: Squirtle|Aromatherapy"]),
+            # A re-tox alone restarts Showdown's ramp at stage 1. Nothing has
+            # been PAID at that ramp yet, so the answer is "not determined",
+            # not "1" and certainly not the pre-Rest 5.
+            ("re-tox alone", ["|-status|p2a: Squirtle|tox"]),
+        ):
+            with self.subTest(reset=label):
+                self.assertIsNone(observed_toxic_multiplier(paid + tail)["p2"])
+
+        # THE OTHER DIRECTION, and it is the parser's own rule rather than a
+        # convenience: a cure naming a BENCHED mon (`p1: Name`, no `a`) cannot
+        # touch the active's ramp, so it must NOT invalidate. Resetting on every
+        # same-side cure is exactly the corruption
+        # `_is_active_protocol_ident` exists to prevent.
+        for bench in ("|-curestatus|p2: Benched|tox", "|-curestatus|p1: Benched|tox"):
+            with self.subTest(bench=bench):
+                self.assertEqual(5, observed_toxic_multiplier(paid + [bench])["p2"])
 
         # And a mon that switches in poisoned, ticks plain, then is re-Toxiced
         # must not carry the plain tick's fiction forward.
@@ -1187,8 +1310,9 @@ class RenderBandWidthTests(unittest.TestCase):
 
     Each test below sits ONE HP off the boundary, on opposite sides of it, at the
     two anchors where the floor and the proportional term each dominate. That
-    pins `_DAMAGE_TOLERANCE` to [0.16, 0.164) and `_MIN_TOLERANCE_HP` to exactly
-    5 -- not to within 2.5-6x.
+    pins `_DAMAGE_TOLERANCE` to **[0.16, 49/300)** -- that is `[0.16, 0.16333...)`,
+    since the anchor fires iff `int(300 * T) + 1 < 50` -- and `_MIN_TOLERANCE_HP`
+    to exactly 5. Not to within 2.5-6x.
     """
 
     #: The proportional anchor. 1000 HP so `int(moved * 0.16) + 1` is far above
@@ -1257,9 +1381,10 @@ class RenderBandWidthTests(unittest.TestCase):
         """The TOLERANT half, and the one the reviewer's 16% -> 40% walk found.
 
         Same `moved` = 300 and the same band of 49, one HP further out. WIDEN
-        `_DAMAGE_TOLERANCE` to anything from 0.164 up and this stops firing: at
-        0.17 the band is 52 and swallows the 50 HP gap. 0.20, 0.30, 0.40 and 0.75
-        all swallow it, and all of those used to be green.
+        `_DAMAGE_TOLERANCE` to **49/300 = 0.16333... or above** and this stops
+        firing -- 0.164 already does, and at 0.17 the band is 52 and swallows the
+        50 HP gap outright. 0.20, 0.30, 0.40 and 0.75 all swallow it, and all of
+        those used to be green.
         """
 
         self.assertEqual(
