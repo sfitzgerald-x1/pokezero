@@ -461,10 +461,15 @@ impl Tables {
         // `RawVec::NEW`, no malloc (measured: 0 allocs / 1000 calls on `""`). What is saved is
         // the call, the `trim` scan, and the String construct/drop: ~2.2 ns per empty cell.
         //
-        // The win therefore scales with cell count, and differs sharply by schema:
-        //   v2.2  151 x 51 = 7701 cells
-        //   v3     87 x 51 = 4437 cells (4300 empty) -> ~10.1 us/leaf, median -8.5%
-        //   v4     23 x 41 =  943 cells ( 828 empty) -> ~1.8 us/leaf,  median -2.0%
+        // The win therefore scales with cell count, and differs sharply by schema. Per-cell
+        // costs are measured per schema and are not identical, so they are quoted separately
+        // rather than folded into one average:
+        //   v2.2  151 x 51 = 7701 cells                              unmeasured
+        //   v3     87 x 51 = 4437 cells (4300 empty @ 2.35 ns) -> 10.1 us/leaf, median -8.5%
+        //   v4     23 x 41 =  943 cells ( 828 empty @ 2.17 ns) ->  1.8 us/leaf, median -2.0%
+        //
+        // At v4 that is inside the harness noise floor (placebo arm: -0.87%), so the v4 figure
+        // is "not resolvable", not "a small win".
         //
         // Byte-identical by construction: the guard fires only for `""`, the one `&str` that is
         // `is_empty()`, and `normalize_category("")` is `""`, which the emptiness check below
