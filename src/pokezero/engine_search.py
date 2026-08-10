@@ -822,6 +822,12 @@ class EngineMctsStats:
     # Tier-2 overlay telemetry (zero without an annotation source).
     fold_annotations_applied: int = 0
     fold_annotation_boundaries: int = 0
+    # Conclusions the fold had already applied and has since PRUNED (they left the
+    # identifiable window), re-seated so the cumulative source can keep offering
+    # them. Counted, not silent: this is the path that used to break the fold, and
+    # a class that stops refusing must not stop being visible.
+    fold_annotations_resettled: int = 0
+    fold_annotation_resettle_boundaries: int = 0
     # Depth-reached instrumentation (hp_fraction_crate mode). The crate counts
     # the deepest decision node any traversal actually opened; the depth CAP is
     # only a real knob where these numbers sit at it. Recorded per SEARCHED
@@ -939,6 +945,8 @@ class EngineMctsStats:
             "fold_cross_check_failures": self.fold_cross_check_failures,
             "fold_annotations_applied": self.fold_annotations_applied,
             "fold_annotation_boundaries": self.fold_annotation_boundaries,
+            "fold_annotations_resettled": self.fold_annotations_resettled,
+            "fold_annotation_resettle_boundaries": self.fold_annotation_resettle_boundaries,
             "depth_reached_samples": self.depth_reached_samples,
             "depth_reached_max": self.depth_reached_max,
             "depth_reached_histogram": {
@@ -1192,6 +1200,12 @@ class EngineMctsPolicy:
         self._live_folds: dict[tuple[str, str], Any] = {}
         self._fold_consumed: dict[tuple[str, str], int] = {}
         self._fold_broken: set[tuple[str, str]] = set()
+        # Every Tier-2 conclusion already applied to this (battle, seat) fold, kept
+        # after FoldState._prune_annotations drops it. The annotation SOURCE is
+        # cumulative from battle start while the fold's annotation map is a WINDOW;
+        # without this record the adapter cannot tell an already-applied conclusion
+        # the fold has since pruned from one that is arriving late.
+        self._fold_annotations_seen: dict[tuple[str, str], dict[int, tuple]] = {}
         self._tables_json: str | None = None
         self._model_config: Any | None = None
         self._native_model: Any | None = None
@@ -1533,6 +1547,10 @@ class EngineMctsPolicy:
         consumed = self._fold_consumed.get(key, 0)
         if fold is None:
             self._drop_stale_folds(key[0])
+            # A fresh fold has applied nothing, so the applied-conclusion record
+            # must start empty: re-seating another battle's index into a new fold
+            # is the fail-open this reset forecloses.
+            self._fold_annotations_seen.pop(key, None)
             fold = FoldState.initial(perspective_slot=context.player_id)
             consumed = 0
         if len(events) < consumed:
@@ -1560,16 +1578,33 @@ class EngineMctsPolicy:
     ) -> bool:
         """Apply the env trackers' conclusions to the live fold (True = ok).
 
-        The source's overlay is CUMULATIVE from battle start; per-boundary
-        application keeps every index identifiable (within the action tail or
-        the open window — ``FoldState._token_identity``'s contract). Already-
-        applied indices are equality-checked by ``apply_annotations_in_place``
-        (per-index immutability: a changed tracker conclusion is a real
-        regression and breaks the fold loudly). A NEW annotation whose index
-        already left the identifiable range would silently desynchronize the
-        encoder-visible surface, so it breaks the fold loudly too (cannot
-        happen in per-boundary operation — conclusions land at the first
-        boundary after their strike).
+        The source's overlay is CUMULATIVE from battle start; the fold's
+        ``annotations`` map is a WINDOW — ``FoldState._prune_annotations``
+        drops every index that has left both the action tail and the merged
+        tail's representative set. This adapter reconciles the two, so
+        ``index not in fold.annotations`` means "not currently held", NEVER
+        "never applied": ``self._fold_annotations_seen`` is the record of what
+        this fold has actually been given.
+
+        Three cases, per overlay index:
+
+        * currently held, or still identifiable (inside the action tail or the
+          open window — ``FoldState._token_identity``'s contract): goes through
+          unchanged. Already-applied indices are equality-checked by
+          ``apply_annotations_in_place`` (per-index immutability: a changed
+          tracker conclusion is a real regression and breaks the fold loudly).
+        * applied earlier and since pruned: re-seated from the record before
+          the apply, so the fold's OWN immutability check adjudicates it and
+          its own pruning drops it again. A no-op on every product — the index
+          has no token in the per-action tail and no representative in the
+          merged tail, and its contribution to the unpruned full-stream
+          reductions (``cb_pinned``, ``investment_pinned_state``) was banked at
+          first application. ``tail_start`` never decreases and
+          ``rep_index_map`` never regains a dropped index, so a re-seated entry
+          is always pruned again and the post-apply state is byte-identical.
+        * never applied and no longer identifiable: a genuinely late conclusion
+          that would silently desynchronize the encoder-visible surface. Still
+          breaks the fold loudly — this is the case the guard was written for.
         """
         source = self._annotation_source
         if source is None or not source.active():
@@ -1577,20 +1612,30 @@ class EngineMctsPolicy:
         try:
             overlay = source.overlay_for(context.player_id)
             if overlay:
+                before = len(fold.annotations)
                 tail_start = fold.action_total - len(fold.action_tail)
-                stale = [
-                    index
-                    for index in overlay
-                    if index not in fold.annotations
-                    and not tail_start <= index <= fold.action_total
-                ]
+                seen = self._fold_annotations_seen.get(key) or {}
+                resettle: dict[int, tuple] = {}
+                stale: list[int] = []
+                for index in overlay:
+                    if index in fold.annotations:
+                        continue
+                    if tail_start <= index <= fold.action_total:
+                        continue
+                    if index in seen:
+                        resettle[index] = seen[index]
+                    else:
+                        stale.append(index)
                 if stale:
                     raise ValueError(
                         f"tracker annotations for indices {sorted(stale)[:8]} arrived "
                         f"outside the identifiable range [{tail_start}, "
                         f"{fold.action_total}] — encoder-visible surface would desync."
                     )
-                before = len(fold.annotations)
+                if resettle:
+                    fold.annotations.update(resettle)
+                    self.stats.fold_annotations_resettled += len(resettle)
+                    self.stats.fold_annotation_resettle_boundaries += 1
                 # The FULL cumulative overlay goes through: already-applied
                 # indices are equality-checked inside (per-index immutability
                 # — a changed tracker conclusion raises and breaks the fold).
@@ -1599,6 +1644,9 @@ class EngineMctsPolicy:
                 if applied:
                     self.stats.fold_annotations_applied += applied
                     self.stats.fold_annotation_boundaries += 1
+                record = self._fold_annotations_seen.setdefault(key, {})
+                for index, values in fold.annotations.items():
+                    record.setdefault(index, values)
         except Exception as error:  # noqa: BLE001 — loud, then fail closed
             self._mark_fold_broken(
                 context, key, f"tier2 overlay failed: {type(error).__name__}: {error}"
@@ -1613,6 +1661,8 @@ class EngineMctsPolicy:
             self._live_folds.pop(key, None)
             self._fold_consumed.pop(key, None)
         self._fold_broken = {k for k in self._fold_broken if k[0] == battle_id}
+        for key in [k for k in self._fold_annotations_seen if k[0] != battle_id]:
+            self._fold_annotations_seen.pop(key, None)
 
     def _mark_fold_broken(
         self, context: PolicyContext, key: tuple[str, str], reason: str
