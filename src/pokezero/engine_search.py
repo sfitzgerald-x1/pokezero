@@ -1155,6 +1155,16 @@ class EngineMctsPolicy:
     # passes None and every decision degrades to uniform-legal fallback.
     requires_public_materialization_state = True
 
+    #: CLASS-LEVEL DEFAULT, load-bearing. `tests/test_engine_search.py::_policy()`
+    #: builds this class through `object.__new__` to enter `_search_model`
+    #: directly, so `__init__` never runs and an instance attribute alone leaves
+    #: the construction loop raising `AttributeError` on a purely observational
+    #: hook. Measured: the full tree caught exactly that in
+    #: `WorldAbortRateTests.test_the_increment_is_reached_on_the_model_path_the_
+    #: campaign_runs`. An instrument that crashes the search it was only supposed
+    #: to watch is worse than no instrument.
+    _world_observer: Any | None = None
+
     def __init__(
         self,
         *,
