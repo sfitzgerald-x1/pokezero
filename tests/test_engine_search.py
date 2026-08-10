@@ -1689,6 +1689,41 @@ class _WindowedAnnotationSource:
         }
 
 
+class _PerSeatAnnotationSource:
+    """`EnvTier2AnnotationSource`-shaped stub whose overlay is PER SEAT.
+
+    The real `overlay_for` takes `player_id` and reads that seat's own tracker
+    state, so the two seats of one battle can hold different conclusions at
+    different indices. `_CumulativeAnnotationSource` is deliberately seat-blind
+    (the adversarial shape for the READ side of the per-seat record); this is the
+    honest shape, and it is what the WRITE side needs -- a mutant that writes
+    every seat's conclusions under one key is invisible unless both seats
+    actually apply something.
+
+    Deliberately NOT a subclass of `_CumulativeAnnotationSource`, for the reason
+    given on `_WindowedAnnotationSource`: the AST derivation behind this module's
+    exact test-count pin forbids same-module inheritance here.
+    """
+
+    def __init__(self):
+        self.overlays: dict[str, dict[int, tuple]] = {}
+        self.enabled = True
+        self.calls = 0
+
+    def offer(self, player_id, index, values):
+        self.overlays.setdefault(player_id, {})[index] = values
+
+    def active(self):
+        return self.enabled
+
+    def boundary_state(self, player_id):  # pragma: no cover - cross-check only
+        raise NotImplementedError
+
+    def overlay_for(self, player_id):
+        self.calls += 1
+        return dict(self.overlays.get(player_id, {}))
+
+
 class Tier2PrunedConclusionTests(unittest.TestCase):
     """The cumulative source vs. the windowed fold: `fallback:live_fold_broken`.
 
@@ -2199,6 +2234,132 @@ class Tier2PrunedConclusionTests(unittest.TestCase):
         self.assertEqual(
             policy._fold_annotations_seen[key][self.ANNOTATED_INDEX], self.VALUES
         )
+
+    def test_two_conclusions_with_DIFFERENT_values_both_land_in_the_record(self):
+        """The CARDINALITY axis. Every other test in this class offers exactly
+        one index, so no test ever put a second entry in the record -- and three
+        mutants of that axis survive all 139, one of them a plausible typo on a
+        line this PR introduces.
+
+        The blocking one is `previous = record.get(index)` ->
+        `previous = next(iter(record.values()), None)`: a wrong-index lookup that
+        compares the NEW index's value against some OTHER index's recorded value.
+        With two differing conclusions it raises on a completely benign path and
+        breaks the seat for the rest of the battle -- the same failure mode as
+        the safer-direction mutant that produced
+        `test_a_held_index_is_re_recorded_across_boundaries_without_complaint`,
+        one index over. Its blast radius is every battle where two Tier-2
+        conclusions differ, i.e. the normal case. The other is
+        `fold.annotations.items()` -> `[:1]`, which records only the first held
+        index and so re-opens #1216's bug for every index after it.
+
+        Tail 64, so nothing is pruned and nothing is re-seated: this is purely
+        about the record holding more than one thing at a time.
+        """
+        second_index, second_values = 5, (0.5, True, True, 0.25)
+        # The premise: the two values must DIFFER, or a cross-index comparison
+        # would be satisfied by accident and this test would pass vacuously.
+        self.assertNotEqual(second_values, self.VALUES)
+
+        source = _CumulativeAnnotationSource()
+        policy, key = self._policy_with_small_tail(
+            source, battle_id="two-indices", action_tail=64
+        )
+        lines = list(self.LEAD)
+        folds = []
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            for boundary in range(8):
+                if boundary:
+                    lines = lines + self._round(boundary)
+                fold = policy._advance_live_fold(
+                    self._context(lines, battle_id="two-indices", round_index=boundary)
+                )
+                folds.append(fold)
+                if fold is None:
+                    break
+                if boundary >= 1:
+                    source.offer(self.ANNOTATED_INDEX, self.VALUES)
+                if boundary >= 2:
+                    # Offered a boundary later, so it is applied a boundary later
+                    # and the record already holds index 2 when it arrives.
+                    source.offer(second_index, second_values)
+        self._caught = list(caught)
+        self._assert_no_fold_break(folds)
+
+        fold = policy._live_folds[key]
+        # Premises, so the assertions below cannot pass for the wrong reason.
+        self.assertEqual(fold.action_total - len(fold.action_tail), 0)
+        self.assertEqual(policy.stats.fold_annotations_resettled, 0)
+        self.assertEqual(
+            sorted(fold.annotations), [self.ANNOTATED_INDEX, second_index]
+        )
+        # BOTH, with their OWN values. Exact dict, not two `assertIn`s: a mutant
+        # that drops the second entry has to fail here.
+        self.assertEqual(
+            policy._fold_annotations_seen[key],
+            {self.ANNOTATED_INDEX: self.VALUES, second_index: second_values},
+        )
+        self.assertEqual(policy.stats.fold_annotations_applied, 2)
+        self.assertNotIn(key, policy._fold_broken)
+
+    def test_each_seats_conclusions_are_WRITTEN_under_its_own_key(self):
+        """The WRITE half of the per-seat record.
+
+        `test_the_applied_record_is_not_shared_across_SEATS` pins the READ half
+        only, and review measured the gap: collapsing the write key to a constant
+        seat SURVIVES it, because there the p2 record is legitimately empty, so
+        "absent" and "correctly isolated" are indistinguishable. The write key is
+        only observable when BOTH seats apply something, which needs a seat-aware
+        source -- the real `overlay_for(player_id)` shape.
+
+        Disjoint indices with different values, tail 64 so nothing prunes: each
+        seat's record must hold exactly its own conclusion.
+        """
+        source = _PerSeatAnnotationSource()
+        policy, key_p1 = self._policy_with_small_tail(
+            source, battle_id="write-key", action_tail=64
+        )
+        key_p2 = self._seat_fold(policy, "write-key", "p2", action_tail=64)
+        p1_values = self.VALUES
+        p2_index, p2_values = 5, (0.5, True, True, 0.25)
+        self.assertNotEqual(p2_values, p1_values)
+
+        lines = list(self.LEAD)
+        folds = []
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            for boundary in range(6):
+                if boundary:
+                    lines = lines + self._round(boundary)
+                for seat in ("p1", "p2"):
+                    context = self._context(
+                        lines, battle_id="write-key", round_index=boundary
+                    )
+                    context.player_id = seat
+                    folds.append(policy._advance_live_fold(context))
+                if boundary >= 1:
+                    source.offer("p1", self.ANNOTATED_INDEX, p1_values)
+                if boundary >= 2:
+                    source.offer("p2", p2_index, p2_values)
+        self._caught = list(caught)
+        self._assert_no_fold_break(folds)
+
+        # Each seat applied its own and only its own.
+        self.assertEqual(
+            policy._fold_annotations_seen[key_p1], {self.ANNOTATED_INDEX: p1_values}
+        )
+        self.assertEqual(policy._fold_annotations_seen[key_p2], {p2_index: p2_values})
+        self.assertEqual(
+            sorted(policy._fold_annotations_seen), sorted([key_p1, key_p2])
+        )
+        # And the folds themselves stayed apart, so the records are not agreeing
+        # by way of both seats having been given everything.
+        self.assertEqual(
+            sorted(policy._live_folds[key_p1].annotations), [self.ANNOTATED_INDEX]
+        )
+        self.assertEqual(sorted(policy._live_folds[key_p2].annotations), [p2_index])
+        self.assertEqual(policy.stats.fold_annotations_applied, 2)
 
 
 class FallbackAlertTests(unittest.TestCase):

@@ -1715,11 +1715,36 @@ class EngineMctsPolicy:
           key never advances again). ``_drop_stale_folds`` drops other battles'
           records, and the per-seat key keeps seats apart.
 
-        That is a real dependency rather than a restatement of immutability: a
-        dynamic or growable ``action_tail_limit``, or any new fold-rebuild path
-        that does not reset the record, breaks it while per-index immutability
-        still holds exactly as written. So the record refresh below ASSERTS the
-        invariant instead of assuming it.
+        Stronger still, and worth writing down because it bounds the assertion's
+        blast radius: in correct operation the record is never even RE-VISITED
+        with a second value for one index. ``apply_annotations_in_place`` ends
+        with ``self._prune_annotations()`` at ``transitions_fold.py:362``, at
+        METHOD level rather than inside its loop, so it runs on every call — and
+        a re-seated index is by construction ``< tail_start`` with no merged-tail
+        representative, so it is dropped again before control returns here. A
+        resettled index is therefore never re-recorded at all. And a still-HELD
+        index cannot have changed value, because ``transitions_fold.py:338``
+        writes ``self.annotations[index]`` only on the ``existing is None`` path
+        (``:329`` returns early otherwise). Both halves of the loop below are
+        thus benign in correct operation; the raise is unreachable.
+
+        That is a real dependency rather than a restatement of immutability, and
+        the thing that would actually break it is REPOPULATING ``action_tail``
+        from a longer history than the live fold's — ``_clone``
+        (``transitions_fold.py:1102``) and ``from_payload``
+        (``transitions_fold.py:1280-1281``) are the only writers of the whole
+        deque, and a fold rebuilt through either with a record carried across
+        would lower ``tail_start`` while per-index immutability still held
+        exactly as written. (⚠ An earlier revision of this paragraph offered a
+        dynamic or growable ``action_tail_limit`` as the example. That is WRONG
+        and review caught it: ``_close_window`` appends exactly one token per
+        ``action_total`` increment, so raising the limit only stops a
+        ``popleft`` — ``tail_start`` stays put — and lowering it pops more, which
+        RAISES ``tail_start``. Neither direction can regress it. The wrong
+        example is recorded rather than deleted because it was the one
+        load-bearing reason offered for why this section is not a wording
+        change.) So the record refresh below ASSERTS the invariant instead of
+        assuming it.
         """
         source = self._annotation_source
         if source is None or not source.active():
