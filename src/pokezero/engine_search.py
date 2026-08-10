@@ -1163,6 +1163,16 @@ class EngineMctsPolicy:
     # passes None and every decision degrades to uniform-legal fallback.
     requires_public_materialization_state = True
 
+    #: CLASS-LEVEL DEFAULT, load-bearing. `tests/test_engine_search.py::_policy()`
+    #: builds this class through `object.__new__` to enter `_search_model`
+    #: directly, so `__init__` never runs and an instance attribute alone leaves
+    #: the construction loop raising `AttributeError` on a purely observational
+    #: hook. Measured: the full tree caught exactly that in
+    #: `WorldAbortRateTests.test_the_increment_is_reached_on_the_model_path_the_
+    #: campaign_runs`. An instrument that crashes the search it was only supposed
+    #: to watch is worse than no instrument.
+    _world_observer: Any | None = None
+
     def __init__(
         self,
         *,
@@ -1173,6 +1183,7 @@ class EngineMctsPolicy:
         policy_id: str = "engine-mcts",
         fixed_override: Any | None = None,
         annotation_source: Any | None = None,
+        world_observer: Any | None = None,
     ) -> None:
         if module is None:
             import poke_engine as module  # noqa: PLC0415 — optional native dependency
@@ -1181,6 +1192,19 @@ class EngineMctsPolicy:
         # Test/scenario hook: bypass belief sampling and use this override as
         # every world (custom-game sweeps where the catalog cannot sample).
         self._fixed_override = fixed_override
+        # Measurement hook (fallback burndown plan 4 §3, direction 2): called
+        # once per SUCCESSFULLY CONSTRUCTED world with the exact
+        # `(context, EngineWorld, poke_engine.State)` triple search is about to
+        # receive, so an oracle can project that world back into public protocol
+        # facts and compare it with the observed log.
+        #
+        # A HOOK RATHER THAN A RE-SAMPLE, deliberately. A probe that re-sampled
+        # its own worlds would be measuring a different draw than the one
+        # searched, which is report 4 §4.2's failure shape ("the harness reported
+        # success while measuring one thing twice") wearing a new badge. `None`
+        # by default: production constructs this policy without it and the call
+        # site is a single `is not None` test.
+        self._world_observer = world_observer
         # Tier-2 overlay source (EnvTier2AnnotationSource protocol): when the
         # env runs with active Tier-2 trackers, the live fold must carry the
         # trackers' conclusions or every fold-derived annotated surface at
@@ -1244,6 +1268,37 @@ class EngineMctsPolicy:
         return decision
 
     # -----------------------------------------------------------------------------------------
+
+    def _notify_world_observer(
+        self, context: PolicyContext, world: EngineWorld, state: Any
+    ) -> None:
+        """Hand one constructed world to the measurement hook, if any.
+
+        A NAMED METHOD, not an inline `if`, so that deleting it is a mutation a
+        battery can kill. Report 4 §4.4's third failure mode is a mutant that
+        dies of the wrong cause; its mirror is a mutant that cannot be applied at
+        all, and an inline guard buried in a 140-line method is the shape that
+        survives. Direction 1's independent review found exactly this: mutant M20
+        deleted an inline gate and survived the whole suite until the gate was
+        extracted.
+
+        Never allowed to break a search. An observer is telemetry; a raising one
+        must not turn a measured run into a crashed one, and it must not silently
+        change which worlds get searched either -- so the exception is swallowed
+        HERE, after the world is already appended.
+        """
+
+        observer = self._world_observer
+        if observer is None:
+            return
+        try:
+            observer(context, world, state)
+        except Exception as error:  # noqa: BLE001 — telemetry never breaks a run
+            warnings.warn(
+                f"world_observer raised: {type(error).__name__}: {error}",
+                EngineSearchFallbackWarning,
+                stacklevel=3,
+            )
 
     def _search(self, context: PolicyContext, *, rng: random.Random) -> PolicyDecision:
         self._world_failures_before = dict(self.stats.world_failure_reasons)
@@ -1351,6 +1406,7 @@ class EngineMctsPolicy:
                 self.stats.world_failure_reasons[_world_failure_key(error)] += 1
                 continue
             worlds.append((world, state))
+            self._notify_world_observer(context, world, state)
 
         if not worlds:
             return self._fallback(context, rng, "no_worlds_constructed")
