@@ -268,10 +268,17 @@ class TruthDecisionRecord:
 class TruthWorldBuilder:
     """Build the TRUE ``BattleStartOverride`` for a battle, once per battle.
 
-    Only the OPPONENT half is substituted. Production already knows its own team
-    exactly (``_root_self_team_payload`` reads it off the seat's own request), so
-    replacing it would measure nothing; substituting only the hidden half makes
-    every refusal a refusal of the hidden half's truth.
+    BOTH halves are rebuilt from the battle-opening requests, but the self half is
+    by construction the content production already uses: production's own
+    ``_root_self_team_payload`` reads the same opening snapshot through the same
+    ``_self_team_from_metadata_result``. So the only CONTENT difference from a
+    belief sample is the hidden half, which is what makes every refusal a refusal
+    of the hidden half's truth.
+
+    That equality is MEASURED, not asserted -- 233/233 decisions across 3 battles
+    byte-identical; see ``selfhalf_check.py`` in the census run directory. An
+    earlier revision of this docstring claimed the builder substituted "only the
+    opponent half", which described the intent and not the code.
 
     The rows come from ``LocalShowdownEnv._first_requests`` -- the BATTLE-OPENING
     request per seat -- not from a live observation. Showdown reorders
