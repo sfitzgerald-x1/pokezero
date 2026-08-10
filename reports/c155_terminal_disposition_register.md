@@ -127,22 +127,26 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`028a4c52a4ad9fe7…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`2ec5bfd1c7292ed6…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
-legitimate, and it has now happened **three times**. Restricting `git log 7fcd9e19..HEAD` to **all** of
+legitimate, and it has now happened **four times**. Restricting `git log 7fcd9e19..HEAD` to **all** of
 the fingerprint's inputs — the 74 gen3 patches, `poke-engine-gen3-patches.txt`,
 `poke-engine-base-source.json`, the 11 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
-exactly three commits. ⚠ **The `input` column is DERIVED, and the third row was wrong on
+exactly four commits. ⚠ **The `input` column is DERIVED, and the third row was wrong on
 first write** — it carried `+403 −74`, which was neither this file's numstat nor any other
 figure in the tree. `git diff --numstat <base> <head> -- rust/pokezero-search/src/events.rs`
 is the derivation, and it returns the same pair against `83efbede`, `a6249971` and the
-merge-base alike. ⚠ Note also what moved the row's FINGERPRINT last: a `#[cfg(test)]`-only
+merge-base alike. ⚠ Note what moved the **#1211** row's FINGERPRINT: a `#[cfg(test)]`-only
 addition. `compute_fingerprint` hashes crate SOURCES, so `t1.head_fingerprint` moved while
 the shipped `.so` stayed byte-identical at `dd3658e4b52bd49e` — the stamp tracks the source
 tree, not the artifact, and a reader must not infer a rebuilt binary from a moved stamp.
+**#1221 is the contrasting case, and the pair is why the stamp cannot be read either way:**
+23 of its 26 lines are comment, but the other 3 are a live guard in `vocab_encode`, so there
+the `.so` really did change. A moved stamp implies a moved source tree and nothing more; to
+learn whether the artifact moved, hash the artifact.
 The column is NOT pinned by
 `tests/test_terminal_disposition_register.py`; pinning it needs a stable base, which
 `git show --numstat <commit> -- <path>` gives once a row's commit has landed, and that is
@@ -154,6 +158,7 @@ above.
 | `21f484d4` (#1197) | `rust/pokezero-search/src/leaf.rs`, +31 lines | `9517aab98d56a9ba…` |
 | `578287e7` (#1207) | `rust/pokezero-search/src/priors.rs`, +91 −4 | `236d1cac8a784898…` |
 | #1211 | `rust/pokezero-search/src/events.rs`, +420 −50 | `028a4c52a4ad9fe7…` |
+| #1221 | `rust/pokezero-search/src/encoder.rs`, +26 −0 | `2ec5bfd1c7292ed6…` |
 
 ⚠ **And the second landed while this register was in review**, three days after C153's build. That
 is not an aside: it is T1's argument, live. C151 §3 deferred the terminal sweep precisely because
@@ -482,8 +487,9 @@ defect did not exist on either of their trees.** A typed `25` would have shipped
 Where CI gates on the merge, **local green and CI green are different measurements**; §6 declares
 that coupling and the assertion carries the fix in its own failure message.
 
-**Every measurement behind T2–T6 predates the head build**, and none is at `028a4c52a4ad9fe7` —
-nor at `9517aab98d56a9ba`, the build this document was reconciled against two merges ago. Read the
+**Every measurement behind T2–T6 predates the head build**, and none is at `2ec5bfd1c7292ed6` —
+nor at `028a4c52a4ad9fe7` or `9517aab98d56a9ba`, the builds this document was reconciled against
+at the two preceding merges. Read the
 table in T1 before quoting that as a re-sweep scope: T3, T4 and T5 rest on an engine build; **T2 and
 T6 build no engine at all** and carry no `engine_fingerprint`.
 
@@ -698,7 +704,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.head_fingerprint` | 028a4c52a4ad9fe7 |
+| `t1.head_fingerprint` | 2ec5bfd1c7292ed6 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
