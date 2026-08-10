@@ -26,30 +26,46 @@ all of it, and this module deliberately does not:
   the whole per-decision delta of ``world_failure_reasons``,
   ``fallback_reasons``, ``choices_unmapped_causes`` and ``unmapped_choices``, so
   a decision that trips three predicates reports three.
-* **Stages downstream of a refusal are still attempted where they can be.** A
-  crate abort does not stop the choice-mapping probe: ``probe_choice_mapping``
-  re-runs ``_map_choices`` against the request even when no world survived, so
-  ``choices_unmapped`` is measured independently of whether search succeeded.
+* **ONE stage downstream of a refusal is still attempted:** choice mapping.
+  :func:`probe_choice_mapping` calls ``_map_choices`` even when no world survived,
+  under its own ``probe:choices_unmapped:*`` key. Nothing else is: with no
+  constructed state there is no search to run.
 * **The pre-abort render inventory is kept.** ``_absorb_aborted_lossy_subcases``
   already recovers every lossy subcase a world observed *before* it aborted, and
   those land in ``lossy_subcase_renders``.
 * **Multi-seed repeats widen the abort channel.** ``repeats`` re-runs the same
   truth world with different search seeds, which explores different chance
-  branches; the union of abort labels is reported.
+  branches; the union of abort labels is reported. UNTESTED and unused: every
+  published run is ``repeats=1``.
 
-Two censoring seams remain and are stated rather than papered over:
+**FOUR censoring seams remain.** An earlier revision of this docstring listed two
+and asserted a ``probe_choice_mapping`` that did not exist -- one grep hit, the
+docstring itself. The function is real as of this revision; the seam list below is
+the corrected one. Independent review measured the gap with compound forcings on the
+real runner, 39 decisions each: ``--force construct,unmapped`` and
+``--force abort,unmapped`` each reported exactly ONE substantive predicate and no
+``choices_unmapped``, and ``--force construct,abort`` reported only the construction
+one. Production's first-refuser structure was intact ACROSS STAGES.
 
-1. Within ONE ``world_battle_spec`` call the first ``EngineWorldUnsupported``
-   raise still hides any later construction blocker for that world. Removing it
-   would require editing the 68 raise sites; external instrumentation cannot
-   turn a ``raise`` into a continue.
-2. Within ONE native search the crate aborts the world at its first unsafe
+1. **Construction hides the search stages.** With no constructed state there is no
+   world to search. Not removable by instrumentation; it is the shape of the chain.
+2. **Within ONE ``world_battle_spec`` call** the first ``EngineWorldUnsupported``
+   still hides any later construction blocker for that world. Removing it requires
+   editing the 68 raise sites; external instrumentation cannot turn a ``raise``
+   into a continue.
+3. **Within ONE native search** the crate aborts the world at its first unsafe
    branch. ``repeats`` mitigates, it does not eliminate.
+4. **``_fold_broken`` is STICKY per ``(battle, seat)``.** One live-fold break blinds
+   the truth arm for the rest of that battle: later decisions refuse at
+   ``live_fold_broken`` before construction is attempted. Measured on the control
+   block, where 4 refused decisions are 2 root events.
 
-Both are per-DECISION seams. The census INVENTORY -- the union over ~10^5
-decisions -- is not censored by them in the way production's queue was, because
-a predicate hidden behind another at one decision is the first refuser at
-another. That is the claim this module supports, and it is the only one it makes.
+What survives of the de-censoring claim, at the strength the measurements support:
+the probe reports the whole per-decision delta of every counter it reads AND adds an
+independent choice-mapping reading, so it is strictly less censored than production
+-- but it is **not total per decision**. The damage is bounded and measurable: on the
+published census, 12 refusals in 52,140 decisions, so at most 12 decisions can hide a
+second predicate. The inventory is total **up to at most 12 masked predicates**.
 
 Units, kept apart on purpose (report 4 section 9.2 / plan 4 reporting rules)
 ---------------------------------------------------------------------------
@@ -493,7 +509,13 @@ class TruthDifferentialProbe:
             battle_id=str(getattr(context, "battle_id", "?")),
             seed=self.seed,
             seat=str(getattr(context, "player_id", "?")),
-            round=int(getattr(context, "decision_round_index", -1) or -1),
+            # `or -1` is WRONG here and shipped: `0 or -1` is -1, so every round-0
+            # decision was filed at round -1. Measured on the published census:
+            # 1,462 of 52,140 records (2.8%) carried -1 and NONE carried 0. Exemplars
+            # are advertised as replayable from `(seed, seat, round)`, and -1 is not an
+            # address. Explicit None test, pinned by
+            # `RoundIndexTests.test_round_zero_is_recorded_as_zero`.
+            round=_round_index(context),
             turn=int(getattr(replay, "turn_number", 0) or 0),
             truth_repeats=self.repeats,
         )
@@ -555,6 +577,14 @@ class TruthDifferentialProbe:
                 before["lossy_subcase_renders"], after["lossy_subcase_renders"]
             ).items():
                 lossy[key] = max(lossy[key], count)
+
+        # CROSS-STAGE: ask the mapping stage even when nothing survived to map.
+        # Without this a decision that refused upstream reports nothing about choice
+        # mapping, and "0 choices_unmapped" then means "not observed" for exactly the
+        # decisions most likely to have a second defect.
+        mapping_cause = probe_choice_mapping(self.truth_policy, context, None)
+        if mapping_cause is not None:
+            refusals[("choice_mapping", f"probe:choices_unmapped:{mapping_cause}")] = 1
 
         record.truth_rejected = rejected
         record.truth_fallback_reason = fallback_reason
@@ -644,6 +674,51 @@ class TruthDifferentialProbe:
         for predicate in novel:
             self.exemplar_store[predicate] = payload
         return payload
+
+
+def _round_index(context: Any) -> int:
+    """The decision round, with 0 preserved. See the call site for what `or` cost."""
+
+    value = getattr(context, "decision_round_index", None)
+    return -1 if value is None else int(value)
+
+
+def probe_choice_mapping(policy: Any, context: PolicyContext, aggregated: Any) -> str | None:
+    """Ask ``_map_choices`` whether the REQUEST is mappable, independently of search.
+
+    This is the one cross-stage de-censoring the chain actually permits. Production
+    reaches ``_map_choices`` only when at least one world survived, so a decision
+    that refuses at construction or at the crate abort reports nothing about choice
+    mapping -- the stage is not clean, it is *unobserved*. The probe calls it anyway,
+    with whatever the truth arm aggregated (empty when nothing survived), and files
+    the cause under a distinct key so it can never be confused with a production
+    ``choices_unmapped``.
+
+    Returns the ``_CHOICES_UNMAPPED_CAUSES`` token when the request could not be
+    mapped, else None. Side-effect-free with respect to the decision: nothing here
+    feeds an action.
+
+    NOT a full de-censoring, and the module docstring says so. Construction failure
+    still hides the crate stage (there is no state to search), and the crate still
+    aborts a world at its first unsafe branch.
+    """
+
+    from collections import Counter as _Counter
+
+    before = dict(policy.stats.choices_unmapped_causes)
+    try:
+        mapped = policy._map_choices(context, aggregated or _Counter())  # noqa: SLF001
+    except Exception as error:  # noqa: BLE001 - a probe must never break the run
+        return f"probe_raised:{type(error).__name__}"
+    after = dict(policy.stats.choices_unmapped_causes)
+    if mapped is not None:
+        return None
+    new = _counter_delta(before, after)
+    return next(iter(new), _CAUSE_UNCLASSIFIED_PROBE)
+
+
+#: Emitted when `_map_choices` returned None but registered no cause token.
+_CAUSE_UNCLASSIFIED_PROBE = "probe_unclassified_cause"
 
 
 def _active_summary(team: Any) -> dict[str, Any] | None:

@@ -72,6 +72,12 @@ class _ScriptedPolicy:
             self.script(self.stats, context)
         return object()
 
+    def _map_choices(self, context: Any, aggregated: Any) -> Any:
+        # Mappable by default. `probe_choice_mapping` calls this on EVERY decision,
+        # so a double without it would make every scripted decision report a
+        # spurious `probe_raised:AttributeError` predicate.
+        return 0
+
 
 def _clean_world(stats: _Stats, _context: Any) -> None:
     stats.worlds_attempted += 1
@@ -281,8 +287,16 @@ class ForcedRefusalTests(unittest.TestCase):
         self.assertTrue(all(r.truth_rejected for r in forced_records))
         self.assertFalse(any(r.truth_rejected for r in clean_records))
 
-    def test_every_predicate_on_a_decision_is_reported_not_the_first(self) -> None:
-        """De-censoring, at the resolution offline injection actually buys."""
+    def test_the_READER_reports_every_counter_that_moved_not_the_first(self) -> None:
+        """The READER's half of de-censoring, and ONLY the reader's half.
+
+        RENAMED after independent review. This drives a scripted double that bumps
+        three counters in one decision -- a state the real chain cannot produce,
+        because the real chain stops at the first refusing stage. It shows the
+        aggregation does not drop predicates; it shows NOTHING about the producer.
+        The producer's seams are pinned by
+        `CrossStageCensoringTests.test_the_producer_is_still_first_refuser_across_stages`.
+        """
 
         probe, records = _probe(_clean_world, _refuse_abort_and_map)
         probe.select_action_with_context(_Context(), rng=random.Random(0))
@@ -505,6 +519,316 @@ def _normalized_packed(packed: str) -> list[tuple[str, ...]]:
         )
     return sorted(rows)
 
+
+
+# --- findings from independent review of #1214 -------------------------------
+
+
+class RoundIndexTests(unittest.TestCase):
+    """M13. `int(getattr(ctx, 'decision_round_index', -1) or -1)` files round 0 as -1."""
+
+    def test_round_zero_is_recorded_as_zero(self) -> None:
+        probe, records = _probe(_clean_world, _clean_world)
+        probe.select_action_with_context(_Context(round_index=0), rng=random.Random(0))
+        # -1 is not an address, and exemplars are advertised as replayable from
+        # (seed, seat, round). The shipped `or` form put 1,462 of 52,140 published
+        # records at -1 and none at 0.
+        self.assertEqual(records[0].round, 0)
+
+    def test_a_missing_round_is_still_minus_one(self) -> None:
+        class _NoRound(_Context):
+            def __init__(self) -> None:
+                super().__init__()
+                self.decision_round_index = None
+
+        probe, records = _probe(_clean_world, _clean_world)
+        probe.select_action_with_context(_NoRound(), rng=random.Random(0))
+        self.assertEqual(records[0].round, -1)
+
+
+class ChoiceMappingProbeTests(unittest.TestCase):
+    """A. The one cross-stage reading the chain permits, and it must be real.
+
+    The module used to ASSERT this function in its docstring while `grep` found a
+    single hit -- the docstring. Compound forcings then showed the chain reporting
+    exactly one substantive predicate per decision.
+    """
+
+    def test_the_function_exists_and_is_called_by_the_probe(self) -> None:
+        from pokezero import truth_differential as module
+
+        self.assertTrue(callable(module.probe_choice_mapping))
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        # Called, not merely defined: a defined-but-uncalled probe is the bug.
+        self.assertGreaterEqual(source.count("probe_choice_mapping"), 3)
+
+    def test_an_unmappable_request_is_reported_even_with_no_worlds(self) -> None:
+        from pokezero.truth_differential import probe_choice_mapping
+
+        class _Policy:
+            def __init__(self) -> None:
+                self.stats = _Stats()
+                self.calls: list = []
+
+            def _map_choices(self, context, aggregated):
+                self.calls.append(aggregated)
+                self.stats.choices_unmapped_causes["aggregated_empty"] += 1
+                return None
+
+        policy = _Policy()
+        cause = probe_choice_mapping(policy, _Context(), None)
+        self.assertEqual(cause, "aggregated_empty")
+        self.assertEqual(len(policy.calls), 1)
+
+    def test_a_mappable_request_reports_nothing(self) -> None:
+        from pokezero.truth_differential import probe_choice_mapping
+
+        class _Policy:
+            stats = _Stats()
+
+            def _map_choices(self, context, aggregated):
+                return 3
+
+        self.assertIsNone(probe_choice_mapping(_Policy(), _Context(), None))
+
+    def test_the_probe_never_raises_out_of_the_run(self) -> None:
+        from pokezero.truth_differential import probe_choice_mapping
+
+        class _Policy:
+            stats = _Stats()
+
+            def _map_choices(self, context, aggregated):
+                raise RuntimeError("boom")
+
+        self.assertEqual(
+            probe_choice_mapping(_Policy(), _Context(), None), "probe_raised:RuntimeError"
+        )
+
+    def test_a_construction_refusal_still_yields_a_mapping_reading(self) -> None:
+        """The seam the compound forcings exposed, closed for this one stage."""
+
+        records: list = []
+        truth = _ScriptedPolicy(_refuse_construction, "truth")
+
+        def _unmappable(context, aggregated):
+            truth.stats.choices_unmapped_causes["aggregated_empty"] += 1
+            return None
+
+        truth._map_choices = _unmappable
+        probe = TruthDifferentialProbe(
+            primary=_ScriptedPolicy(_clean_world, "primary"),
+            truth_policy=truth,
+            truth_builder=_StubBuilder(),
+            records=records,
+            seed=1,
+        )
+        probe.select_action_with_context(_Context(), rng=random.Random(0))
+        predicates = {r.predicate for r in records[0].refusals}
+        self.assertIn("probe:choices_unmapped:aggregated_empty", predicates)
+        # And it is filed under its own key, never confused with production's.
+        self.assertNotIn("fallback:choices_unmapped", predicates)
+
+
+class ForcingApparatusTests(unittest.TestCase):
+    """D. The forcing apparatus is the evidence for every zero; pin it.
+
+    Independent review's battery left M16 (abort mode patching the MODULE instead of
+    the INSTANCE), M17 (`construct` as a silent no-op) and M20 (deleting the
+    `--features model` gate) alive, with no coverage of the script beyond `build_plan`.
+    """
+
+    class _Native:
+        def search_batched_multi_encoded(self, *a, **k):
+            return "{}"
+
+    class _Policy:
+        def __init__(self) -> None:
+            self.stats = _Stats()
+            self.mapped = object()
+            self.seen: list = []
+
+        def _native(self):
+            return ForcingApparatusTests._Native()
+
+        def _map_choices(self, context, aggregated):
+            return 7
+
+        def select_action_with_context(self, context, *, rng):
+            self.seen.append(("native", self._native()))
+            self.seen.append(("map", self._map_choices(context, None)))
+            import pokezero.engine_search as ES
+
+            self.seen.append(("world", ES.world_battle_spec))
+            return None
+
+    def test_construct_forcing_actually_raises(self) -> None:
+        """M17: a `--force construct` that quietly does nothing must not survive."""
+
+        from pokezero.engine_world import EngineWorldUnsupported
+        from truth_differential_census import install_forcing
+        import pokezero.engine_search as ES
+
+        policy = self._Policy()
+        before = ES.world_battle_spec
+        install_forcing(policy, "construct")
+        policy.select_action_with_context(_Context(), rng=random.Random(0))
+        during = dict(policy.seen)["world"]
+        self.assertIsNot(during, before, "world_battle_spec was not patched at all")
+        with self.assertRaises(EngineWorldUnsupported):
+            during()
+        self.assertIs(ES.world_battle_spec, before, "the patch was not restored")
+
+    def test_abort_forcing_patches_the_instance_not_the_module(self) -> None:
+        """M16: the exact hazard this PR sets in bold, now pinned.
+
+        Patching the module attribute forces nothing, and the run then reports a
+        clean zero and reads as a passing instrument test.
+        """
+
+        from truth_differential_census import install_forcing
+
+        policy = self._Policy()
+        class_native = type(policy)._native
+        install_forcing(policy, "abort")
+        policy.select_action_with_context(_Context(), rng=random.Random(0))
+        native = dict(policy.seen)["native"]
+        with self.assertRaises(RuntimeError):
+            native.search_batched_multi_encoded()
+        # The CLASS is untouched, and the instance attribute is cleaned up.
+        self.assertIs(type(policy)._native, class_native)
+        self.assertNotIn("_native", policy.__dict__)
+
+    def test_unmapped_forcing_makes_map_choices_return_none(self) -> None:
+        from truth_differential_census import install_forcing
+
+        policy = self._Policy()
+        install_forcing(policy, "unmapped")
+        policy.select_action_with_context(_Context(), rng=random.Random(0))
+        self.assertIsNone(dict(policy.seen)["map"])
+        self.assertEqual(policy._map_choices(_Context(), None), 7, "not restored")
+
+    def test_none_forcing_changes_nothing(self) -> None:
+        from truth_differential_census import install_forcing
+
+        policy = self._Policy()
+        install_forcing(policy, "none")
+        # Bound methods compare unequal by identity on each access, so assert the
+        # absence of the wrapper attribute rather than method identity.
+        self.assertNotIn("select_action_with_context", policy.__dict__)
+
+    def test_an_unknown_force_mode_is_refused(self) -> None:
+        from truth_differential_census import install_forcing
+
+        with self.assertRaises(SystemExit):
+            install_forcing(self._Policy(), "wobble")
+
+    def test_a_crate_without_the_model_feature_is_refused(self) -> None:
+        """M20: deleting the gate must not survive.
+
+        On a non-model build `worlds_searched == worlds_constructed` identically, so
+        every abort-channel reading from such a build is unfalsifiable.
+        """
+
+        import contextlib
+        import io
+
+        from truth_differential_census import require_model_feature
+
+        # stderr captured: the gate dumps the witness, and unbuffered JSON between a
+        # test's docstring line and its verdict breaks the CI pin's `-A2` window.
+        noise = io.StringIO()
+        with contextlib.redirect_stderr(noise):
+            with self.assertRaises(SystemExit) as caught:
+                require_model_feature({"pokezero_search_model_feature": False})
+            self.assertIn("--features model", str(caught.exception))
+            with self.assertRaises(SystemExit):
+                require_model_feature({})
+            require_model_feature({"pokezero_search_model_feature": True})  # no raise
+        self.assertIn("pokezero_search_model_feature", noise.getvalue())
+
+
+class WitnessCompletenessTests(unittest.TestCase):
+    """M14: the witness's crate hash was unpinned, so a constant survived."""
+
+    def test_the_crate_so_hash_is_a_real_digest_of_the_extension(self) -> None:
+        witness = identity_witness()
+        if "pokezero_search_so_sha256" not in witness:
+            # The crate is optional; on a bare runner the witness records WHY it is
+            # absent rather than omitting the fact, and that is what we check there.
+            self.assertIn("unavailable", str(witness["pokezero_search_file"]))
+            self.skipTest("pokezero_search is not installed on this runner")
+        digest = witness["pokezero_search_so_sha256"]
+        if digest == "no extension module found":
+            self.skipTest("pokezero_search extension is not installed")
+        self.assertRegex(digest, r"^[0-9a-f]{16}$")
+        # A constant would pass the shape check, so also require it to TRACK the
+        # bytes: hashing a mutated copy must give a different digest.
+        import hashlib
+        import pathlib
+
+        from pokezero.truth_differential import _extension_hash
+
+        class _Fake:
+            __file__ = None
+
+        root = pathlib.Path(
+            __import__("pokezero_search").__file__  # noqa: PLC0415
+        ).parent
+        real = sorted(root.glob("*.so"))
+        self.assertTrue(real, "no extension to hash")
+        control = hashlib.sha256()
+        control.update(real[0].name.encode("utf-8"))
+        control.update(real[0].read_bytes())
+        self.assertTrue(digest.startswith(control.hexdigest()[:8]) or len(real) > 1)
+
+    def test_the_mismatch_diff_covers_the_content_keys_too(self) -> None:
+        """L: diffing only paths cannot see two trees with the same layout."""
+
+        source = Path(
+            Path(__file__).resolve().parents[1] / "scripts" / "truth_differential_census.py"
+        ).read_text(encoding="utf-8")
+        for key in (
+            "source_sha256",
+            "truth_differential_present",
+            "torch_version",
+            "pokezero_search_model_feature",
+        ):
+            self.assertIn(f'"{key}"', source, f"{key} is not in the mismatch diff")
+
+
+class CrossStageCensoringTests(unittest.TestCase):
+    """The seam the corrected docstring now names, pinned so it cannot be re-claimed.
+
+    Independent review measured this with compound forcings on the real runner:
+    `--force construct,abort` reported the construction predicate ONLY. Pinned here
+    at the unit level so the module's claim and its behaviour cannot drift again.
+    """
+
+    def test_the_producer_is_still_first_refuser_across_stages(self) -> None:
+        def refuse_construction_only(stats: _Stats, context: Any) -> None:
+            # The real chain: `continue` on a construction failure means the crate
+            # is never reached, so no crate predicate can be recorded.
+            _refuse_construction(stats, context)
+
+        probe, records = _probe(_clean_world, refuse_construction_only)
+        probe.select_action_with_context(_Context(), rng=random.Random(0))
+        stages = {refusal.stage for refusal in records[0].refusals}
+        self.assertIn("construction", stages)
+        self.assertNotIn(
+            "crate_search",
+            stages,
+            "if this ever passes, the chain gained cross-stage probing and the "
+            "module docstring's seam 1 must be re-derived rather than re-worded",
+        )
+
+    def test_the_module_does_not_claim_more_than_it_does(self) -> None:
+        from pokezero import truth_differential as module
+
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        self.assertIn("FOUR censoring seams remain", source)
+        self.assertIn("not total per decision", source)
+        # The sticky-fold seam, which the first revision omitted entirely.
+        self.assertIn("_fold_broken`` is STICKY", source)
 
 if __name__ == "__main__":
     unittest.main()

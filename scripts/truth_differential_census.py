@@ -421,6 +421,29 @@ def install_forcing(truth_policy: Any, mode: str) -> None:
     truth_policy.select_action_with_context = wrapped
 
 
+def require_model_feature(witness: Mapping[str, Any]) -> None:
+    """Refuse the truth arm on a crate built without ``--features model``.
+
+    Without it the abort gate at ``rust/pokezero-search/src/tree.rs`` is
+    ``allow(dead_code)``, ``worlds_searched == worlds_constructed`` identically, and
+    the abort channel is structurally invisible -- so a clean zero from such a build
+    is unfalsifiable rather than evidence (report 4 section 4.1).
+
+    A separate function, and not an inline ``if``, so that deleting it is a KILLABLE
+    mutation. Independent review's mutant M20 deleted the inline gate and survived
+    the whole suite.
+    """
+
+    if not witness.get("pokezero_search_model_feature"):
+        print(json.dumps(dict(witness), indent=2, sort_keys=True), file=sys.stderr)
+        raise SystemExit(
+            "REFUSING TO RUN: pokezero_search was built WITHOUT --features model. "
+            "The tree.rs attribution-unsafe abort gate is allow(dead_code) on such a "
+            "build, so worlds_searched == worlds_constructed identically and the abort "
+            "channel is invisible. Rebuild with scripts/build_search_crate_model.sh."
+        )
+
+
 def run_shard(args: argparse.Namespace) -> int:
     from pokezero.collection import policy_from_spec  # noqa: F401 - parity with prod harnesses
     from pokezero.dex import load_showdown_dex_cached
@@ -456,18 +479,26 @@ def run_shard(args: argparse.Namespace) -> int:
 
     witness = identity_witness()
     child_witness = _neutral_cwd_witness(os.environ)
-    if not witness.get("pokezero_search_model_feature"):
-        print(json.dumps(witness, indent=2, sort_keys=True), file=sys.stderr)
-        raise SystemExit(
-            "REFUSING TO RUN: pokezero_search was built WITHOUT --features model. "
-            "The tree.rs attribution-unsafe abort gate is allow(dead_code) on such a "
-            "build, so worlds_searched == worlds_constructed identically and the abort "
-            "channel is invisible. Rebuild with scripts/build_search_crate_model.sh."
-        )
+    require_model_feature(witness)
+    # CONTENT keys as well as paths. Diffing only paths cannot separate two trees
+    # with the same layout, which is the hazard the witness exists for; independent
+    # review flagged that `source_sha256`, `truth_differential_present`,
+    # `torch_version` and `pokezero_search_model_feature` were all omitted.
+    _WITNESS_DIFF_KEYS = (
+        "pokezero_file",
+        "engine_search_file",
+        "truth_differential_file",
+        "pokezero_search_file",
+        "pokezero_search_so_sha256",
+        "pokezero_search_model_feature",
+        "truth_differential_present",
+        "engine_search_fixed_override_hook",
+        "source_sha256",
+        "torch_version",
+    )
     mismatches = {
         key: [witness.get(key), child_witness.get(key)]
-        for key in ("pokezero_file", "engine_search_file", "truth_differential_file",
-                    "pokezero_search_so_sha256")
+        for key in _WITNESS_DIFF_KEYS
         if witness.get(key) != child_witness.get(key)
     }
 
