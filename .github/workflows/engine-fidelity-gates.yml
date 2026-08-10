@@ -183,6 +183,12 @@ jobs:
             # closed. Listed so a PR that ONLY weakens the pin file still trips this
             # workflow -- and note the file was previously run by no step at all.
             tests/test_engine_world_encore_transform.py
+            # Q2: the NON-transformed Encore branch's third id source (the public
+            # `lastUsedMove` latch), with a STEP below. Same reason as the line above,
+            # and the same hole it was closing: before its step existed the file would
+            # have been run by NO workflow, because CI names modules one by one and
+            # never discovers `tests/`.
+            tests/test_engine_world_encore_last_used.py
             # C153: the Taunt volatile pins, with a STEP below. Same reason as the
             # line above -- `src/pokezero/**` covers `engine_world.py`, not the file
             # that holds the counter's value and the engine-fidelity half.
@@ -1158,6 +1164,52 @@ jobs:
           fi
           if grep -q 'skipped' /tmp/encoretransform.log; then
             echo "::error::an Encore-on-transform pin SKIPPED; they must never skip"
+            exit 1
+          fi
+
+      # Q2 (`encore_move_unknown`, opponent seat): the sibling of the step above, on the
+      # NON-transformed Encore branch. The transformed branch has consulted
+      # `sides[slot]["lastUsedMove"]` since C145; the non-transformed one did not, so an
+      # Encored mon that had been immobilised past the 24-line `recent_public_events`
+      # window refused every world. 95/1682 gen3 randbat variants, 91.30% of the
+      # world-failure census in the 2026-08-09 capture run.
+      #
+      # WHY THIS STEP EXISTS AT ALL, and it is the same hole the note above records: this
+      # workflow names modules one by one and nothing in CI discovers `tests/`. Without a
+      # step the whole battery would be run by NO job -- a fix whose tests CI never
+      # executes. The count guard lives in YAML for the reason the rest of this file
+      # gives: no local `unittest` or `pytest` run can see it, so a battery that shrinks
+      # is red here rather than quietly green.
+      #
+      # READ THIS BEFORE TRUSTING A GREEN. 16 of the 21 tests execute here; 5 SKIP.
+      # The 16 need no engine and no Showdown checkout -- `battle_spec_from_payload` is
+      # pure construction over a payload literal -- and those are the behavioural pins.
+      # The 5 that skip are `PoolCannotReachTheLockedMoveDivergenceTests`, which scans
+      # the real gen3 set pool and `data/moves.ts` to bound at ZERO the one shape where
+      # the `lastUsedMove` latch and the Encore event scan disagree (a `[from] lockedmove`
+      # continuation, which advances Showdown's `lastMove` but not the latch). CI builds
+      # no Showdown, so they cannot run here -- the same honest gap the spread-gate step
+      # above documents. What DOES run in their place is
+      # `TheReachabilityClaimIsTiedToAMeasuredPoolTests`, a staleness alarm holding the
+      # committed pool census to the shape that scan was measured against, so a
+      # regenerated pool reddens here rather than leaving the zero silently stale.
+      #
+      # The skip count is pinned EXACTLY, not forbidden: `skipped=5` and no more. A sixth
+      # skip means a behavioural pin quietly acquired a Showdown dependency, which is how
+      # a battery goes vacuous while still reporting OK. Per-METHOD skip decorators keep
+      # the reported count at 21 in both environments; a class-level skip would collapse
+      # to one entry and drop the count to 16, defeating the count guard.
+      - name: Encore public-lastUsedMove world-construction pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_engine_world_encore_last_used -v 2>&1 \
+            | tee /tmp/encorelastused.log
+          if ! grep -qE 'Ran 21 tests' /tmp/encorelastused.log; then
+            echo "::error::expected 21 tests; the suite shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE 'OK \(skipped=5\)' /tmp/encorelastused.log; then
+            echo "::error::expected EXACTLY 5 skips (the pool scan, which needs a Showdown checkout CI does not build). More means a behavioural pin gained a Showdown dependency; fewer means the pool scan was deleted"
             exit 1
           fi
 

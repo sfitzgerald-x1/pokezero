@@ -221,6 +221,61 @@ class ParserTruthTableTest(unittest.TestCase):
         ])
         self.assertEqual(p.last_used_move["p1"], "sleeptalk")
 
+    def test_a_lockedmove_continuation_does_NOT_advance_the_latch(self) -> None:
+        """The ONE place this latch knowingly disagrees with Showdown's ``lastMove``.
+
+        ``runMove`` (``sim/battle-actions.ts``) takes the ``getLockedMove()`` branch,
+        sets ``sourceEffect = lockedmove``, and then STILL calls
+        ``pokemon.moveUsed(move, targetLoc)`` -- so a locked continuation DOES advance
+        ``lastMove``. It also emits ``|[from] lockedmove`` (``if (sourceEffect) attrs +=
+        ...``). This parser rejects EVERY ``[from]``, so on that line the latch keeps
+        the CALLER and Showdown has already moved on to the callee.
+
+        The divergence is conservative in the only direction that matters here -- the
+        latch lags, it does not invent -- and it is pinned rather than fixed, because
+        the two consumers want different rules: this latch feeds
+        ``LastUsedMove`` seeding, while ``determinization._called_move_line``
+        deliberately TOLERATES ``lockedmove`` (``if "lockedmove" in normalized:
+        continue``) so the Encore event scan reports the faithful value.
+
+        Sleep Talk calling a locking move is the shape that separates them, and it is
+        the sharpest case available: the callee's line is BOTH ``[from]``-tagged and a
+        real ``moveUsed``. See ``PoolCannotReachTheLockedMoveDivergenceTests`` in
+        ``tests/test_engine_world_encore_last_used.py`` for why no gen3 randbats set can
+        produce it, and why precedence would cover it even if one could.
+        """
+
+        p = self._parse([
+            "|move|p1a: Skarmory|Sleep Talk|p1a: Skarmory",
+            "|move|p1a: Skarmory|Thrash|p2a: Illumise|[from]lockedmove",
+        ])
+        self.assertEqual(p.last_used_move["p1"], "sleeptalk")
+
+        # The OTHER half, and the reason this is a divergence rather than a quirk: the
+        # Encore event scan reads the very same line and returns Thrash. Asserting only
+        # the parser side would pin agreement that does not exist.
+        from pokezero.determinization import _move_from_public_event_line
+
+        self.assertEqual(
+            _move_from_public_event_line(
+                "|move|p1a: Skarmory|Thrash|p2a: Illumise|[from]lockedmove",
+                opponent_slot="p1",
+                self_slot="p2",
+                species="Skarmory",
+            ),
+            "Thrash",
+        )
+        # Control: the two rules AGREE on an ordinary called move, so the assertion
+        # above isolates `lockedmove` and not `[from]` in general.
+        self.assertIsNone(
+            _move_from_public_event_line(
+                "|move|p1a: Skarmory|Drill Peck|p2a: Illumise|[from]Sleep Talk",
+                opponent_slot="p1",
+                self_slot="p2",
+                species="Skarmory",
+            )
+        )
+
     def test_switching_out_clears_to_the_switch_sentinel(self) -> None:
         p = self._parse([
             "|move|p1a: Skarmory|Drill Peck|p2a: Illumise",

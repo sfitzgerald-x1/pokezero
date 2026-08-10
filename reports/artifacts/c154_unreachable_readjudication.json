@@ -1024,7 +1024,7 @@
       ]
     }
   },
-  "source_commit": "6a4f9833f4cb19950f1fb2594029704fbed27e6d",
+  "source_commit": "df0c2a091263b40dd23754f2670e57d9d3cc0902",
   "verdicts": {
     "R1": {
       "candidate": "Future Sight / Doom Desire -- residual order 11 and the `future_sight_pending` refusal",
@@ -1986,7 +1986,7 @@
           }
         ]
       },
-      "demonstration": "`_build_pokemon_spec` raises at `src/pokezero/engine_world.py:2031` when `normalize_id(mon.nature)` (read at `:2029`) is outside `_NEUTRAL_NATURES` (`:54`). `mon` is a `FixturePokemon` and the production path builds it in `unpack_pokemon` from field 6 of the PACKED TEAM STRING at `src/pokezero/engine_world.py:331` -- the differential's own `scripts/engine_transition_differential.py:2396` hands it `true_teams[slot]['packed']` from the bridge snapshot. Natures are unset on 24,000 of 24,000 generated Pokemon, so field 6 is empty and `nature` is `\"\"`.",
+      "demonstration": "`_build_pokemon_spec` raises at `src/pokezero/engine_world.py:2132` when `normalize_id(mon.nature)` (read at `:2130`) is outside `_NEUTRAL_NATURES` (`:54`). `mon` is a `FixturePokemon` and the production path builds it in `unpack_pokemon` from field 6 of the PACKED TEAM STRING at `src/pokezero/engine_world.py:331` -- the differential's own `scripts/engine_transition_differential.py:2396` hands it `true_teams[slot]['packed']` from the bridge snapshot. Natures are unset on 24,000 of 24,000 generated Pokemon, so field 6 is empty and `nature` is `\"\"`.",
       "foreclosure": "ALL_CALLERS",
       "foreclosure_note": null,
       "instruments": [

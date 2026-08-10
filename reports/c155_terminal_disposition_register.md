@@ -565,9 +565,9 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 42 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure. The workflow holds **27** lines containing the unittest
-invocation, of which **one is a comment**, so there are **26 executable** invocation sites at this
-head; the scan resolves **26** of them and leaves **none** unresolved. **This step is among the
+rather than inherited from #1205's figure. The workflow holds **28** lines containing the unittest
+invocation, of which **one is a comment**, so there are **27 executable** invocation sites at this
+head; the scan resolves **27** of them and leaves **none** unresolved. **This step is among the
 resolved ones** — the number is not restated here, because a fourth copy of it is a fourth thing to
 go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 42 from the module's AST
 and matches the guard. All three numbers are **re-derived by the pin** rather than typed.
