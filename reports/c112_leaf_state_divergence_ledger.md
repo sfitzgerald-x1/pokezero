@@ -270,8 +270,8 @@ These seven columns read md keys that `rust/` never writes:
 
 | column | md key it reads | written anywhere in `rust/`? |
 |---|---|---|
-| `NUMERIC_SELF_WISH_TURNS` / `_OPP_` | `self_wish_turns` / `opponent_wish_turns` | no — `encoder.rs:1310,1297` read only |
-| `NUMERIC_SLEEP_CLAUSE_BLOCKS_*` | `*_sleep_clause_blocks` | no — `encoder.rs:1296,1282` read only |
+| `NUMERIC_SELF_WISH_TURNS` / `_OPP_` | `self_wish_turns` / `opponent_wish_turns` | no — `encoder.rs:1310,1318` read only |
+| `NUMERIC_SLEEP_CLAUSE_BLOCKS_*` | `*_sleep_clause_blocks` | no — `encoder.rs:1296,1303` read only |
 | `NUMERIC_STALL_COUNTER` | `{prefix}_stall_counter` | no — `encoder.rs:2181` read only |
 | `NUMERIC_ENCORE_TURNS` | `{prefix}_encore_elapsed` | no — `encoder.rs:2183` read only |
 
@@ -528,7 +528,7 @@ the status arm rides `CATEGORY_SECONDARY` (`encoder.rs:2279-2283`), which for se
 the engine's own field since `belief` is `None` for `Role::SelfTeam` (`encoder.rs:2013-2015`).
 
 **[CORRECTION]** An earlier revision cited `NUMERIC_PRESENT` and the self-side `attention_mask` as
-the liveness instruments. Both are **constants** (`encoder.rs:2307`, `:1110-1112`) and can never
+the liveness instruments. Both are **constants** (`encoder.rs:2307`, `:1131-1133`) and can never
 diverge, so reading their absence measured nothing.
 
 **Scope of the absence argument, restored — a rewrite deleted it while keeping the argument that
