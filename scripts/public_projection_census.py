@@ -57,10 +57,44 @@ if str(_HERE) not in sys.path:
 # hold" is only meaningful on one.
 from truth_differential_census import (  # noqa: E402
     _default_showdown_root,
-    _neutral_cwd_witness,
     _shard_games,
     require_model_feature,
 )
+
+
+def _neutral_cwd_witness(env: Mapping[str, str]) -> dict[str, Any]:
+    """Re-resolve THIS module's identity witness in a child spawned from `/`.
+
+    Direction 1's `_neutral_cwd_witness` runs `python -m pokezero.truth_differential`,
+    which witnesses ITS module and knows nothing about this one. Borrowing it made
+    every shard report four permanent "mismatches" -- `public_projection_file`,
+    `public_projection_present`, `public_projection_axis_count` and the
+    `source_sha256` map -- against a child that had simply never been asked. A
+    witness that always reports a mismatch trains its reader to ignore it, which
+    is worse than not having one. Same shape, same neutral cwd, same environment;
+    only the entrypoint differs.
+    """
+
+    import subprocess  # noqa: PLC0415
+
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-B", "-m", "pokezero.public_projection"],
+            cwd="/",
+            env=dict(env),
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+    except Exception as error:  # noqa: BLE001
+        return {"error": f"{type(error).__name__}: {error}"}
+    if completed.returncode != 0:
+        return {"error": f"exit {completed.returncode}", "stderr": completed.stderr[-2000:]}
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        return {"error": f"unparseable witness: {error}", "stdout": completed.stdout[-2000:]}
 
 OBSERVATION_FORMAT_ID = "gen3randombattle"
 
@@ -431,7 +465,10 @@ class RenderArm:
             packed = override.player_teams.get(slot)
             party_display[slot] = [str(mon.species) for mon in unpack_team(packed)]
 
-        from pokezero.public_projection import _engine_turn_features  # noqa: PLC0415
+        from pokezero.public_projection import (  # noqa: PLC0415
+            _engine_turn_features,
+            pre_state_summary,
+        )
 
         self._pending[str(getattr(context, "battle_id", "?"))] = {
             "key": key,
@@ -442,6 +479,7 @@ class RenderArm:
             "choices": choices,
             "consumed": len(replay.public_events),
             "pre_features": _engine_turn_features(state, world.slot_sides),
+            "pre_summary": pre_state_summary(state, world.slot_sides),
         }
         self.counts["prepared"] += 1
 
@@ -482,6 +520,7 @@ class RenderArm:
                 choices=pending["choices"],
                 observed_lines=step_lines,
                 pre_features=pending["pre_features"],
+                pre_summary=pending["pre_summary"],
             )
         except Exception as error:  # noqa: BLE001
             self.counts[f"error:{type(error).__name__}"] += 1

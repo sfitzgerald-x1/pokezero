@@ -20,6 +20,7 @@ losing the property under test.
 
 from __future__ import annotations
 
+import inspect
 import types
 import unittest
 
@@ -32,6 +33,7 @@ from pokezero.poke_engine_adapter import (
 )
 from pokezero.public_projection import (
     AXES,
+    ObservedPublicView,
     ProjectionMismatch,
     WorldObserver,
     aggregate_projection_records,
@@ -300,53 +302,131 @@ class AxisFiresTests(unittest.TestCase):
         self.assertEqual("boosts:atk", found[0].predicate)
 
     def test_toxic_count(self):
-        """#1209's axis, and the one a real six-game shard did NOT reach.
+        """#1209's axis, on an observed side the constructor cannot have written.
 
-        The census forcing `--force state-toxic` fired zero on six games because
-        no active was Toxic-statused in them. That is exactly the situation where
-        an axis is presumed working and is not, so it is pinned here instead of
-        left to a game to reach.
+        THE FIRST VERSION OF THIS TEST PINNED THE WRONG CONVENTION. It compared
+        `replay.toxic_stage` against `side_conditions.toxic_count` and asserted
+        they must be EQUAL -- but `_materialization_toxic_stage` computes the
+        latter FROM the former as `tracked_stage - 1`, so the test asserted the
+        opposite of the shipped convention and a mutant that corrected the axis
+        would have turned this suite red. The observed side is now the multiplier
+        the log shows was actually PAID, recovered from raw damage.
+
+        maxhp 256 -> unit 16. A tick of 48 is multiplier 3, so the engine's
+        pre-tick counter must be 3; 1 is a mismatch.
         """
 
         spec = _spec(
             side_two=SideSpec(
-                pokemon=(_mon("squirtle", status="toxic"), _mon("dodrio")),
+                pokemon=(_mon("squirtle", hp=100, maxhp=256, status="toxic"), _mon("dodrio")),
+                active_index=0,
+                side_conditions={"toxic_count": 1},
+            )
+        )
+        lines = (
+            "|start",
+            "|switch|p1a: Pikachu|Pikachu, L100, M|200/200",
+            "|switch|p2a: Squirtle|Squirtle, L100, M|148/256 tox",
+            "|-damage|p2a: Squirtle|100/256 tox|[from] psn",
+            "|turn|2",
+        )
+        found = self._fire(world_spec=spec, lines=lines)
+        self.assertEqual(["toxic_count"], _axes(found))
+        self.assertIn("paid multiplier 3", found[0].detail)
+
+    def test_toxic_count_is_silent_when_the_counter_matches_the_paid_multiplier(self):
+        spec = _spec(
+            side_two=SideSpec(
+                pokemon=(_mon("squirtle", hp=100, maxhp=256, status="toxic"), _mon("dodrio")),
                 active_index=0,
                 side_conditions={"toxic_count": 3},
             )
         )
-        lines = BASE_LINES + ("|-status|p2a: Squirtle|tox",)
-        found = self._fire(world_spec=spec, lines=lines, toxic_stage={"p2": 5})
-        self.assertEqual(["toxic_count"], _axes(found))
-        self.assertIn("observed stage 5 != world 3", found[0].detail)
-
-    def test_toxic_count_is_silent_when_the_stage_agrees(self):
-        spec = _spec(
-            side_two=SideSpec(
-                pokemon=(_mon("squirtle", status="toxic"), _mon("dodrio")),
-                active_index=0,
-                side_conditions={"toxic_count": 5},
-            )
+        lines = (
+            "|start",
+            "|switch|p1a: Pikachu|Pikachu, L100, M|200/200",
+            "|switch|p2a: Squirtle|Squirtle, L100, M|148/256 tox",
+            "|-damage|p2a: Squirtle|100/256 tox|[from] psn",
+            "|turn|2",
         )
-        lines = BASE_LINES + ("|-status|p2a: Squirtle|tox",)
-        found = self._fire(world_spec=spec, lines=lines, toxic_stage={"p2": 5})
-        self.assertEqual([], _axes(found))
+        self.assertEqual([], _axes(self._fire(world_spec=spec, lines=lines)))
 
-    def test_toxic_count_is_silent_at_the_saturation_sentinel(self):
-        """`replay.toxic_stage == 16` is the parser saying "already capped and I
-        cannot tell you the exact value", not a stage. Comparing against it would
-        manufacture a mismatch out of the parser's own uncertainty."""
+    def test_toxic_count_is_silent_before_any_tick_has_been_observed(self):
+        """No tick since this active came in means no multiplier was determined,
+        and an axis must never fire on an undetermined value."""
 
         spec = _spec(
             side_two=SideSpec(
                 pokemon=(_mon("squirtle", status="toxic"), _mon("dodrio")),
                 active_index=0,
-                side_conditions={"toxic_count": 15},
+                side_conditions={"toxic_count": 7},
             )
         )
         lines = BASE_LINES + ("|-status|p2a: Squirtle|tox",)
-        found = self._fire(world_spec=spec, lines=lines, toxic_stage={"p2": 16})
-        self.assertEqual([], _axes(found))
+        self.assertEqual([], _axes(self._fire(world_spec=spec, lines=lines)))
+
+    def test_a_switch_out_resets_what_the_log_can_prove(self):
+        """Gen 3 clears the counter on switch-out, so ticks paid by the mon that
+        left say nothing about the one standing there now."""
+
+        spec = _spec(
+            side_two=SideSpec(
+                pokemon=(_mon("squirtle", hp=100, maxhp=256, status="toxic"), _mon("dodrio", status="toxic")),
+                active_index=1,
+                side_conditions={"toxic_count": 0},
+            )
+        )
+        lines = (
+            "|start",
+            "|switch|p1a: Pikachu|Pikachu, L100, M|200/200",
+            "|switch|p2a: Squirtle|Squirtle, L100, M|148/256 tox",
+            "|-damage|p2a: Squirtle|100/256 tox|[from] psn",
+            "|switch|p2a: Dodrio|Dodrio, L100, M|200/200 tox",
+            "|turn|2",
+        )
+        self.assertEqual([], _axes(self._fire(world_spec=spec, lines=lines)))
+
+    def test_a_non_integral_tick_is_not_turned_into_a_stage(self):
+        """A percentage-mod grid, or a tick that hit the HP floor, cannot be
+        divided cleanly. Silence beats a fabricated multiplier."""
+
+        spec = _spec(
+            side_two=SideSpec(
+                pokemon=(_mon("squirtle", hp=100, maxhp=256, status="toxic"), _mon("dodrio")),
+                active_index=0,
+                side_conditions={"toxic_count": 1},
+            )
+        )
+        lines = (
+            "|start",
+            "|switch|p1a: Pikachu|Pikachu, L100, M|200/200",
+            "|switch|p2a: Squirtle|Squirtle, L100, M|141/256 tox",
+            "|-damage|p2a: Squirtle|100/256 tox|[from] psn",
+            "|turn|2",
+        )
+        self.assertEqual([], _axes(self._fire(world_spec=spec, lines=lines)))
+
+    def test_the_observed_side_does_not_read_the_parsers_toxic_tracker(self):
+        """The structural pin behind all of the above.
+
+        `replay.toxic_stage` is what the constructor's own input is computed
+        from, so reading it here made the axis compare `x` to `f(x)`. The observed
+        side must be derivable with that field absent entirely.
+        """
+
+        from pokezero.public_projection import observed_toxic_multiplier
+
+        lines = [
+            "|switch|p2a: Squirtle|Squirtle, L100, M|148/256 tox",
+            "|-damage|p2a: Squirtle|100/256 tox|[from] psn",
+        ]
+        self.assertEqual(3, observed_toxic_multiplier(lines)["p2"])
+        # The CODE, with the docstring stripped -- the docstring necessarily
+        # names the field it exists to explain the absence of.
+        body = inspect.getsource(observed_toxic_multiplier)
+        body = body.replace(observed_toxic_multiplier.__doc__ or "", "")
+        self.assertNotIn("toxic_stage", body)
+        self.assertNotIn("toxic_multiplier", ObservedPublicView.__doc__ or "x")
 
 
 class KnownProducerExclusionTests(unittest.TestCase):
@@ -452,6 +532,109 @@ class KnownProducerExclusionTests(unittest.TestCase):
             context, _World(spec), build_poke_engine_state(spec)
         )
         self.assertEqual(["opponent_revealed_moves"], _axes(found))
+
+    def test_a_lock_restricted_request_is_not_a_wrong_moveset(self):
+        """A charge lock / recharge / Choice lock restricts the request to one
+        move while the world legitimately keeps all four. 304 of 710 firings on
+        the first census were this."""
+
+        request = _request()
+        request["active"][0]["moves"] = [
+            {"id": "splash", "move": "Splash", "pp": 40, "maxpp": 40, "disabled": False}
+        ]
+        self.assertEqual([], _axes(self._run(_spec(), request)))
+
+    def test_a_transformed_active_keeps_slots_the_request_does_not_name(self):
+        """`_copied_move_spec` leaves an unnamed donor slot usable ON PURPOSE, so
+        the sampler's moveset fiction stays COUNTABLE in `unmapped_choices`. The
+        published exemplar of this PR's first revision was exactly this shape --
+        a Ditto transformed into Cradily -- and calling it a candidate defect was
+        wrong."""
+
+        copy = _mon(
+            "cradily",
+            pre_transform=_mon("ditto"),
+            moves=(MoveSpec(id="earthquake", pp=5), MoveSpec(id="toxic", pp=5),
+                   MoveSpec(id="recover", pp=5), MoveSpec(id="rockslide", pp=5)),
+        )
+        spec = _spec(side_one=SideSpec(pokemon=(copy, _mon("pikachu")), active_index=0))
+        request = _request()
+        request["side"]["pokemon"][0]["details"] = "Ditto, L100"
+        request["side"]["pokemon"][1]["details"] = "Pikachu, L100, M"
+        request["active"][0]["moves"] = [
+            {"id": "earthquake", "pp": 5, "disabled": False},
+            {"id": "recover", "pp": 5, "disabled": False},
+            {"id": "rockslide", "pp": 5, "disabled": False},
+        ]
+        self.assertEqual([], _axes(self._run(spec, request)))
+
+    def test_a_recharge_pseudo_move_is_not_a_missing_move(self):
+        """`recharge` is not a move any engine moveset carries -- a recharging
+        seat holds MUSTRECHARGE and the engine offers only "No Move". Measured
+        firing 32 times on a 40-game slice before it was excluded."""
+
+        request = _request()
+        request["active"][0]["moves"] = [
+            {"id": "recharge", "move": "Recharge", "pp": 0, "disabled": False}
+        ]
+        self.assertEqual([], _axes(self._run(_spec(), request)))
+
+    def test_a_request_move_absent_from_the_world_still_fires(self):
+        """The safer-direction pin on both narrowings above. Every move the
+        request says this seat may pick MUST exist in the searched world."""
+
+        request = _request()
+        request["active"][0]["moves"] = [
+            {"id": "thunderbolt", "pp": 24, "disabled": False}
+        ]
+        found = self._run(_spec(), request)
+        self.assertEqual(["self_move_set"], _axes(found))
+        self.assertEqual(
+            "self_move_set:request_move_absent_from_world", found[0].predicate
+        )
+
+    def test_a_transform_copys_missing_move_is_a_DIFFERENT_predicate(self):
+        """Different producer, different owner, different queue row. A
+        non-transformed self active takes its moveset from the request rows, so a
+        missing move there would be a self-team construction bug; on a Transform
+        copy it is the belief sampler having drawn a donor variant the real copy
+        is not."""
+
+        copy = _mon(
+            "cradily",
+            pre_transform=_mon("ditto"),
+            moves=(MoveSpec(id="earthquake", pp=5), MoveSpec(id="toxic", pp=5)),
+        )
+        spec = _spec(side_one=SideSpec(pokemon=(copy, _mon("pikachu")), active_index=0))
+        request = _request()
+        request["side"]["pokemon"][0]["details"] = "Ditto, L100"
+        request["side"]["pokemon"][1]["details"] = "Pikachu, L100, M"
+        request["active"][0]["moves"] = [{"id": "recover", "pp": 5, "disabled": False}]
+        found = self._run(spec, request)
+        self.assertEqual(
+            ["self_move_set:request_move_absent_from_transformed_copy"],
+            [m.predicate for m in found],
+        )
+
+    def test_pp_is_still_compared_on_a_transformed_active(self):
+        """#1210's axis, and the ONLY place `self_move_pp` is not a tautology:
+        `_copied_move_spec` is the one producer of a copied slot's PP that is not
+        read straight from the request rows."""
+
+        copy = _mon(
+            "cradily",
+            pre_transform=_mon("ditto"),
+            moves=(MoveSpec(id="earthquake", pp=5), MoveSpec(id="recover", pp=5)),
+        )
+        spec = _spec(side_one=SideSpec(pokemon=(copy, _mon("pikachu")), active_index=0))
+        request = _request()
+        request["side"]["pokemon"][0]["details"] = "Ditto, L100"
+        request["side"]["pokemon"][1]["details"] = "Pikachu, L100, M"
+        request["active"][0]["moves"] = [{"id": "earthquake", "pp": 0, "disabled": True}]
+        found = self._run(spec, request)
+        self.assertEqual(
+            ["self_move_disabled", "self_move_pp"], sorted(_axes(found))
+        )
 
     def test_the_transform_exclusion_does_not_blind_the_species_axis(self):
         """The safer-direction check on the exclusion above: an UNtransformed
@@ -717,6 +900,38 @@ class RenderProjectionTests(unittest.TestCase):
         self.assertEqual(0, diagnostics["usable_branches"])
         self.assertEqual(["render_no_usable_branch"], _axes(found))
 
+    def test_every_reason_is_reported_not_only_the_first(self):
+        """The first revision returned the FIRST reason and tested status before
+        HP and side conditions, so on the ~28% of boundaries where a status
+        difference fired the HP and side-condition checks never ran. Measured by
+        review as ~14 masked boundaries in 434."""
+
+        observed = [
+            "|-damage|p2a: Squirtle|10/200",
+            "|-status|p2a: Squirtle|brn",
+            "|-sidestart|p2: Squirtle|Spikes",
+            "|turn|4",
+        ]
+        rendered = ["|-damage|p2a: Squirtle|190/200", "|turn|4"]
+        branches = [{"events": rendered, "lossy": [], "attribution_unsafe": False}]
+        _found, diagnostics = self._run(branches, observed)
+        reasons = " | ".join(diagnostics["reasons"])
+        self.assertIn("hp", reasons)
+        self.assertIn("side conditions", reasons)
+        self.assertIn("status", reasons)
+
+    def test_an_ordinary_damage_line_does_not_wipe_the_folded_status(self):
+        """`_STATUS_TO_ENGINE` carries "" as a KEY, so the obvious
+        `.get(token, current)` never defaults and a bare `|-damage|` erased the
+        status on both sides of the comparison. That erasure produced 830 of the
+        969 "mismatched" boundaries in this PR's first census."""
+
+        from pokezero.public_projection import fold_step_lines
+
+        pre = types.SimpleNamespace(p1_hp=200, p2_hp=200, p1_status="NONE", p2_status="SLEEP")
+        folded = fold_step_lines(["|-damage|p2a: X|150/200"], pre)
+        self.assertEqual("SLEEP", folded.status["p2"])
+
     def test_the_band_does_not_swallow_a_wrong_mechanic(self):
         """The HP band is scoped to a roll, not to a mechanic. A heal rendered as
         a no-op moves HP by 25% of max, which is far outside it."""
@@ -732,69 +947,204 @@ class RenderSelfConsistencyTests(unittest.TestCase):
     """Every searched branch's render vs that branch's OWN post-state.
 
     The transition comparator only ever sees the one branch the game took. This
-    one sees all of them, needs no log, and is the arm that catches #1211's
-    over-broad direction: a Protect marker rendered over a real heal leaves the
-    rendered HP where it started while the branch's post-state has moved.
+    one sees all of them, needs no log, and is the arm that catches a
+    renderer-side relaxation.
+
+    It compares EVERY field `post_state_summary` publishes. The first revision
+    compared `post["active_hp"]` and nothing else; independent review probed nine
+    synthetic branches and found five silent regions -- status in both
+    directions, boosts, a benched mon, and switch/active_index -- all using facts
+    already in the payload. One test per region, so a re-narrowing is a red suite.
     """
 
-    PRE = types.SimpleNamespace(p1_hp=200, p2_hp=192, p1_status="NONE", p2_status="NONE")
+    PRE = {
+        "p1": {
+            "active_index": 0,
+            "active_hp": 200,
+            "active_status": "none",
+            "boosts": {k: 0 for k in ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")},
+            "pokemon": [{"hp": 200, "status": "none"}, {"hp": 180, "status": "none"}],
+            "species": ["pikachu", "dugtrio"],
+        },
+        "p2": {
+            "active_index": 0,
+            "active_hp": 192,
+            "active_status": "none",
+            "boosts": {k: 0 for k in ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")},
+            "pokemon": [{"hp": 192, "status": "none"}, {"hp": 150, "status": "none"}],
+            "species": ["mantine", "dodrio"],
+        },
+    }
 
     def _run(self, branches):
         return render_self_consistency_mismatches(
-            branches, slot_sides=SLOT_SIDES, pre_features=self.PRE
+            branches, slot_sides=SLOT_SIDES, pre_summary=self.PRE
         )
 
-    def _branch(self, events, post_p2_hp, **overrides):
+    def _branch(self, events, post_p2=None, post_p1=None, **overrides):
+        def side(active_index=0, hp=192, status="none", boosts=None, party=None):
+            return {
+                "active_index": active_index,
+                "active_hp": hp,
+                "active_status": status,
+                "boosts": {**{k: 0 for k in ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")},
+                           **(boosts or {})},
+                "pokemon": party or [{"hp": hp, "status": status}, {"hp": 150, "status": "none"}],
+            }
+
         base = {
             "events": events,
             "lossy": [],
             "attribution_unsafe": False,
             "post": {
-                "p1": {"active_hp": 200},
-                "p2": {"active_hp": post_p2_hp},
+                "p1": post_p1 or side(hp=200, party=[{"hp": 200, "status": "none"},
+                                                     {"hp": 180, "status": "none"}]),
+                "p2": post_p2 or side(),
             },
         }
         base.update(overrides)
         return base
 
+    def _predicates(self, found):
+        return sorted({m.predicate for m in found})
+
+    # -- silence -------------------------------------------------------------
+
     def test_a_render_that_matches_its_own_post_state_is_silent(self):
         events = ["|-heal|p2a: Mantine|252/252", "|turn|2"]
-        self.assertEqual([], self._run([self._branch(events, 252)]))
-
-    def test_a_protect_marker_over_a_real_heal_is_caught(self):
-        """#1211's over-broad shape, exactly: the marker renders, the heal does
-        not, and the branch's own post-state says the defender healed."""
-
-        events = ["|-activate|p2a: Mantine|Protect", "|turn|2"]
-        found = self._run([self._branch(events, 252)])
-        self.assertEqual(["render_post_state_disagreement"], _axes(found))
-        self.assertIn("render says hp 192", found[0].detail)
-        self.assertIn("post-state says 252", found[0].detail)
+        post = {"active_index": 0, "active_hp": 252, "active_status": "none",
+                "boosts": {k: 0 for k in ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")},
+                "pokemon": [{"hp": 252, "status": "none"}, {"hp": 150, "status": "none"}]}
+        self.assertEqual([], self._run([self._branch(events, post_p2=post)]))
 
     def test_a_refused_branch_is_not_compared(self):
-        """An attribution-unsafe branch never reaches the fold/encoder path, so
-        holding its render to account would charge the abort channel twice --
-        once to direction 1 as a refusal and again here as a wrong render."""
-
         events = ["|-activate|p2a: Mantine|Protect", "|turn|2"]
-        branch = self._branch(events, 252, attribution_unsafe=True)
+        post = {"active_index": 0, "active_hp": 252, "active_status": "none",
+                "boosts": {k: 0 for k in ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")},
+                "pokemon": [{"hp": 252, "status": "none"}, {"hp": 150, "status": "none"}]}
+        branch = self._branch(events, post_p2=post, attribution_unsafe=True)
         self.assertEqual([], self._run([branch]))
 
-    def test_a_zero_amount_marker_is_INVISIBLE_and_that_is_disclosed(self):
-        """The documented blind spot, pinned so it cannot be quietly claimed.
+    def test_a_branch_with_no_post_state_is_skipped_rather_than_guessed(self):
+        self.assertEqual(
+            [], self._run([{"events": [], "lossy": [], "attribution_unsafe": False}])
+        )
 
-        A full-HP absorber's no-op and Protect's no-op have the SAME post-state,
-        which is precisely why the two are ambiguous. No state comparator can
-        separate them; only the per-source line decomposition in
-        `scripts/engine_transition_differential.py` can.
+    # -- the five regions review measured silent ------------------------------
+
+    def test_active_hp_the_1211_shape(self):
+        events = ["|-activate|p2a: Mantine|Protect", "|turn|2"]
+        post = {"active_index": 0, "active_hp": 252, "active_status": "none",
+                "boosts": {k: 0 for k in ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")},
+                "pokemon": [{"hp": 252, "status": "none"}, {"hp": 150, "status": "none"}]}
+        found = self._run([self._branch(events, post_p2=post)])
+        self.assertIn("render_post_state_disagreement:active_hp", self._predicates(found))
+
+    def test_post_says_burn_and_the_render_never_said_so(self):
+        events = ["|turn|2"]
+        post = {"active_index": 0, "active_hp": 192, "active_status": "burn",
+                "boosts": {k: 0 for k in ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")},
+                "pokemon": [{"hp": 192, "status": "burn"}, {"hp": 150, "status": "none"}]}
+        found = self._run([self._branch(events, post_p2=post)])
+        self.assertIn("render_post_state_disagreement:active_status", self._predicates(found))
+
+    def test_the_render_asserts_a_status_the_post_state_denies(self):
+        events = ["|-status|p2a: Mantine|brn", "|turn|2"]
+        found = self._run([self._branch(events)])
+        self.assertIn("render_post_state_disagreement:active_status", self._predicates(found))
+
+    def test_a_boost_the_post_state_does_not_carry(self):
+        events = ["|-boost|p2a: Mantine|atk|2", "|turn|2"]
+        found = self._run([self._branch(events)])
+        self.assertIn("render_post_state_disagreement:boost:atk", self._predicates(found))
+
+    def test_a_benched_mon_the_render_never_mentions(self):
+        events = ["|turn|2"]
+        post = {"active_index": 0, "active_hp": 192, "active_status": "none",
+                "boosts": {k: 0 for k in ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")},
+                "pokemon": [{"hp": 192, "status": "none"}, {"hp": 0, "status": "none"}]}
+        found = self._run([self._branch(events, post_p2=post)])
+        self.assertIn("render_post_state_disagreement:party_hp", self._predicates(found))
+
+    def test_a_switch_the_post_state_does_not_agree_with(self):
+        events = ["|switch|p2a: Dodrio|Dodrio, L100, M|150/150", "|turn|2"]
+        found = self._run([self._branch(events)])
+        self.assertIn("render_post_state_disagreement:active_index", self._predicates(found))
+
+    def test_a_switch_the_post_state_DOES_agree_with_is_silent(self):
+        """The safer-direction pin on the axis above: an ordinary rendered switch
+        must not fire, or every switch turn becomes a defect."""
+
+        events = ["|switch|p2a: Dodrio|Dodrio, L100, M|150/150", "|turn|2"]
+        post = {"active_index": 1, "active_hp": 150, "active_status": "none",
+                "boosts": {k: 0 for k in ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")},
+                "pokemon": [{"hp": 192, "status": "none"}, {"hp": 150, "status": "none"}]}
+        self.assertEqual([], self._run([self._branch(events, post_p2=post)]))
+
+    def test_a_switch_clears_boosts_with_no_protocol_echo(self):
+        """Showdown emits nothing for it; the engine emits reset_boosts. Folding
+        the boosts forward across a switch would fire on every switch after a
+        Swords Dance."""
+
+        pre = {slot: dict(value) for slot, value in self.PRE.items()}
+        pre["p2"] = dict(pre["p2"], boosts={**pre["p2"]["boosts"], "atk": 2})
+        events = ["|switch|p2a: Dodrio|Dodrio, L100, M|150/150", "|turn|2"]
+        post = {"active_index": 1, "active_hp": 150, "active_status": "none",
+                "boosts": {k: 0 for k in ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")},
+                "pokemon": [{"hp": 192, "status": "none"}, {"hp": 150, "status": "none"}]}
+        found = render_self_consistency_mismatches(
+            [self._branch(events, post_p2=post)], slot_sides=SLOT_SIDES, pre_summary=pre
+        )
+        self.assertEqual([], found)
+
+    def test_a_cured_status_is_not_charged_to_the_renderer(self):
+        """`|-curestatus|` is on `events.rs`'s documented never-rendered list, so
+        a branch in which the sleeper woke shows `post.status == none` while the
+        render still says sleep. Found on the FIRST run of the extended axis,
+        firing twice on the base crate in the #1211 fixture's wake-up branch."""
+
+        pre = {slot: dict(value) for slot, value in self.PRE.items()}
+        pre["p2"] = dict(
+            pre["p2"],
+            active_status="sleep",
+            pokemon=[{"hp": 192, "status": "sleep"}, {"hp": 150, "status": "none"}],
+        )
+        events = ["|turn|2"]
+        found = render_self_consistency_mismatches(
+            [self._branch(events)], slot_sides=SLOT_SIDES, pre_summary=pre
+        )
+        self.assertEqual([], found)
+
+    def test_the_cure_carve_out_does_not_admit_a_fabricated_status(self):
+        """Safer-direction pin. The carve-out is only `post says none AND the
+        render is still showing what the world came in with`; a render asserting
+        a status `post` denies must still fire."""
+
+        pre = {slot: dict(value) for slot, value in self.PRE.items()}
+        pre["p2"] = dict(
+            pre["p2"],
+            active_status="sleep",
+            pokemon=[{"hp": 192, "status": "sleep"}, {"hp": 150, "status": "none"}],
+        )
+        events = ["|-status|p2a: Mantine|brn", "|turn|2"]
+        found = render_self_consistency_mismatches(
+            [self._branch(events)], slot_sides=SLOT_SIDES, pre_summary=pre
+        )
+        self.assertIn(
+            "render_post_state_disagreement:active_status", self._predicates(found)
+        )
+
+    def test_a_zero_amount_marker_is_INVISIBLE_and_that_is_disclosed(self):
+        """The documented blind spot, pinned so it cannot be quietly reclaimed.
+
+        A full-HP absorber's no-op and Protect's no-op have the SAME post-state on
+        EVERY published field, which is precisely why the two are ambiguous. Only
+        the per-source line decomposition in
+        `scripts/engine_transition_differential.py` can separate them.
         """
 
         events = ["|-activate|p2a: Mantine|Protect", "|turn|2"]
-        self.assertEqual([], self._run([self._branch(events, 192)]))
-
-    def test_a_branch_with_no_post_state_is_skipped_rather_than_guessed(self):
-        branch = {"events": [], "lossy": [], "attribution_unsafe": False}
-        self.assertEqual([], self._run([branch]))
+        self.assertEqual([], self._run([self._branch(events)]))
 
 
 class AggregationTests(unittest.TestCase):

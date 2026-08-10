@@ -98,6 +98,7 @@ __all__ = [
     "PublicProjectionProbe",
     "aggregate_projection_records",
     "observed_public_view",
+    "observed_toxic_multiplier",
     "render_projection_mismatch",
     "render_self_consistency_mismatches",
     "state_projection_mismatches",
@@ -153,10 +154,14 @@ _SELF_AXES = frozenset(
 
 _DETAIL_LIMIT = 160
 
+#: Tokens a Showdown request can offer that are not moves any engine moveset
+#: carries. Kept as a named constant so deleting it is a killable mutation.
+_REQUEST_PSEUDO_MOVES = frozenset({"struggle", "recharge"})
 
-def _bounded(text: str) -> str:
+
+def _bounded(text: str, limit: int = _DETAIL_LIMIT) -> str:
     text = str(text)
-    return text if len(text) <= _DETAIL_LIMIT else text[: _DETAIL_LIMIT - 3] + "..."
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def _norm(value: Any) -> str:
@@ -212,8 +217,10 @@ class ObservedPublicView:
     self_request: Mapping[str, Any]
     #: `{slot: {stat: stage}}` from the parser's public boost tracker.
     boosts: Mapping[str, Mapping[str, int]]
-    #: `{slot: stage}` public Toxic chronology; missing/None = not determined.
-    toxic_stage: Mapping[str, int]
+    #: `{slot: multiplier or None}` DERIVED FROM RAW DAMAGE, not from the
+    #: parser's toxic tracker -- see `observed_toxic_multiplier` for why the
+    #: tracker cannot be used here.
+    toxic_multiplier: Mapping[str, int | None]
     #: The parser's public opponent record.
     opponent_revealed: Sequence[Any]
 
@@ -236,7 +243,7 @@ def observed_public_view(context: Any) -> ObservedPublicView | None:
         boosts={
             key: dict(value) for key, value in (getattr(replay, "boosts", {}) or {}).items()
         },
-        toxic_stage=dict(getattr(replay, "toxic_stage", {}) or {}),
+        toxic_multiplier=observed_toxic_multiplier(lines),
         opponent_revealed=tuple(
             (getattr(replay, "public_revealed", {}) or {}).get(opponent, ())
         ),
@@ -306,11 +313,21 @@ def fold_step_lines(lines: Sequence[str], pre: Any) -> StepProjection:
         if tag in _HP_TAGS_FIELD3 and side and len(parts) >= 4:
             value, token = _parse_condition(parts[3])
             hp[side] = value
-            status[side] = _STATUS_TO_ENGINE.get(token, status[side])
+            # `if token` IS LOAD-BEARING. `_STATUS_TO_ENGINE` carries "" as a KEY
+            # mapping to "NONE", so `.get(token, status[side])` never reaches its
+            # default and an ordinary `|-damage|p2a: X|253/335` WIPED the folded
+            # status to NONE. Independent review measured the cost: 969 of 3,078
+            # render boundaries "mismatched", 830 of them on `status X != NONE`,
+            # and only 31 of the 969 contained any switch line -- so the
+            # mechanism this PR first published for that number was wrong.
+            if token:
+                status[side] = _STATUS_TO_ENGINE.get(token, status[side])
         elif tag in _HP_TAGS_FIELD4 and side and len(parts) >= 5:
             value, token = _parse_condition(parts[4])
             hp[side] = value
-            status[side] = _STATUS_TO_ENGINE.get(token, "NONE")
+            # A switch DOES restate the incoming mon's status absolutely, so an
+            # empty token here really does mean "no status".
+            status[side] = _STATUS_TO_ENGINE.get(token, "NONE") if token else "NONE"
             fainted.discard(side)
         elif tag == "-status" and side and len(parts) >= 4:
             status[side] = _STATUS_TO_ENGINE.get(parts[3].strip(), status[side])
@@ -546,19 +563,36 @@ def _axis_self_moves(
 ) -> list[ProjectionMismatch]:
     """The request's own move rows vs the world's active moveset.
 
-    THE REQUEST IS NOT A BELIEF. ``active[0].moves[]`` is what Showdown told this
-    seat it may pick, with the id, the remaining PP and the disabled flag of each.
-    A searched world whose active carries a different move id, a different PP or a
-    different disabled set is a world this seat can already see is wrong.
+    THE RULE, restated after review: **every move the request says this seat may
+    pick must exist in the searched world, with the PP and the disabled flag the
+    request states.** Matched BY ID, not positionally, and the world is allowed
+    to carry moves the request does not name.
 
-    Three axes and not one, because they fail for different reasons and a merged
-    key would rank them together: a wrong move id is a construction/sampling
-    defect, a wrong PP is an overlay defect (#1210's shape), a wrong disabled set
-    is a lock-resolution defect (#1212's shape).
+    The first revision compared positionally and required equal length, and it
+    was wrong in two documented ways at once.
 
-    A ``Struggle``-only request (no usable move) and a force-switch request carry
-    no comparable move rows and are skipped -- the world's moveset is then not
-    what the request is describing.
+    * A LOCK -- a two-turn charge, a recharge, a Choice lock -- restricts the
+      request to one move while the world legitimately keeps all four. 304 of
+      710 firings on the first census were this.
+    * A TRANSFORMED active carries the belief-sampled DONOR's moveset, and
+      ``_copied_move_spec`` (#1210's own fix) says in terms that a slot the
+      request does not name is *left usable so that the fiction stays
+      COUNTABLE* -- it is deliberately routed to ``unmapped_choices``, which is
+      how the class is measured. The remaining 406 firings were this: the
+      published exemplar was a Ditto transformed into Cradily, i.e. the FOURTH
+      instance of a Transform artifact already excluded on three other axes.
+      Independent review classified all 8 shards: 66 transformed, 32 locks,
+      **zero residue.**
+
+    WHAT SURVIVES THIS NARROWING, and it is the part with real power. ``pp`` and
+    ``disabled`` are still compared for every move the request DOES name,
+    including on a transformed active -- and that is exactly where #1210 lives.
+    ``_copied_move_spec`` is the only producer of those values that is not a
+    copy of the request rows (``_move_specs`` reads ``known_pp`` straight from
+    the request for every other case), so **``self_move_pp`` is tautological
+    everywhere except the Transform overlay, where it is the one axis in this
+    module with measured power over one of the four relaxations.** See the
+    ``M1210`` mutant in the battery.
     """
 
     rows = _request_active_moves(observed.self_request)
@@ -569,59 +603,90 @@ def _axis_self_moves(
     active = side.pokemon[int(str(side.active_index))]
     world_moves = [move for move in active.moves if str(move.id).lower() != "none"]
     observed_ids = [_norm(row.get("id") or row.get("move")) for row in rows]
-    world_ids = [_norm(move.id) for move in world_moves]
     if observed_ids == ["struggle"]:
+        # Struggle is the ENGINE's substitution, not a moveset claim.
+        return []
+    # REQUEST PSEUDO-MOVES. `recharge` is not a move the engine's moveset can
+    # carry -- a recharging seat holds MUSTRECHARGE and the engine's own option
+    # surface offers only "No Move", which is why
+    # `engine_transition_differential.engine_choice_for_action` translates it
+    # rather than looking it up. Measured firing 32 times on a 40-game slice
+    # before it was excluded; it says nothing about any world.
+    observed_ids = [token for token in observed_ids if token not in _REQUEST_PSEUDO_MOVES]
+    rows = [
+        row
+        for row in rows
+        if _norm(row.get("id") or row.get("move")) not in _REQUEST_PSEUDO_MOVES
+    ]
+    if not rows:
         return []
 
+    by_id: dict[str, Any] = {}
+    for move in world_moves:
+        by_id.setdefault(_norm(move.id), move)
+
+    def _lookup(observed_id: str) -> Any | None:
+        if observed_id in by_id:
+            return by_id[observed_id]
+        if observed_id == "hiddenpower":
+            # The request says `hiddenpower`; the engine carries the typed+BP id.
+            typed = [key for key in by_id if key.startswith("hiddenpower")]
+            if len(typed) == 1:
+                return by_id[typed[0]]
+        return None
+
     out: list[ProjectionMismatch] = []
-    # Hidden Power is the one id the engine deliberately spells differently: the
-    # request says `hiddenpower` and the engine carries the typed+BP id
-    # (`hiddenpowerice60`). Compare on the request's own prefix rule rather than
-    # excluding the move, which would blind the PP axis on it too.
-    def _same_move(observed_id: str, world_id: str) -> bool:
-        if observed_id == world_id:
-            return True
-        return observed_id == "hiddenpower" and world_id.startswith("hiddenpower")
-
-    if len(observed_ids) != len(world_ids) or not all(
-        _same_move(a, b) for a, b in zip(observed_ids, world_ids)
-    ):
-        out.append(
-            ProjectionMismatch(
-                axis="self_move_set",
-                slot=observed.slot,
-                predicate="self_move_set",
-                detail=_bounded(f"request {observed_ids} != world {world_ids}"),
+    # SPLIT BY PRODUCER, so the queue classifies itself instead of needing a
+    # human pass. A non-transformed self active takes its moveset from the
+    # request rows themselves (`_move_specs` + `known_pp`), so a request-offered
+    # move can only be missing when the active is a Transform copy whose
+    # belief-SAMPLED donor lacks it. The two are different defects with different
+    # owners -- one is the sampler drawing the wrong donor variant, the other
+    # would be a self-team construction bug -- and one predicate would rank them
+    # together.
+    transformed = _is_transformed(active)
+    for observed_id, row in zip(observed_ids, rows):
+        move = _lookup(observed_id)
+        if move is None:
+            out.append(
+                ProjectionMismatch(
+                    axis="self_move_set",
+                    slot=observed.slot,
+                    predicate=(
+                        "self_move_set:request_move_absent_from_transformed_copy"
+                        if transformed
+                        else "self_move_set:request_move_absent_from_world"
+                    ),
+                    detail=_bounded(
+                        f"request offers {observed_id}, world moveset "
+                        f"{sorted(by_id)}"
+                        + (" (active is a Transform copy)" if transformed else "")
+                    ),
+                )
             )
-        )
-        # PP and disabled are per-INDEX comparisons; without an aligned moveset
-        # they would report noise attributed to the wrong axis.
-        return out
-
-    for index, row in enumerate(rows):
+            continue
         pp = row.get("pp")
-        if isinstance(pp, int) and int(world_moves[index].pp) != pp:
+        if isinstance(pp, int) and int(move.pp) != pp:
             out.append(
                 ProjectionMismatch(
                     axis="self_move_pp",
                     slot=observed.slot,
-                    predicate=f"self_move_pp:{world_ids[index]}",
+                    predicate=f"self_move_pp:{_norm(move.id)}",
                     detail=_bounded(
-                        f"{world_ids[index]}: request pp {pp} != world "
-                        f"{int(world_moves[index].pp)}"
+                        f"{_norm(move.id)}: request pp {pp} != world {int(move.pp)}"
                     ),
                 )
             )
         disabled = bool(row.get("disabled"))
-        if bool(world_moves[index].disabled) != disabled:
+        if bool(move.disabled) != disabled:
             out.append(
                 ProjectionMismatch(
                     axis="self_move_disabled",
                     slot=observed.slot,
-                    predicate=f"self_move_disabled:{world_ids[index]}",
+                    predicate=f"self_move_disabled:{_norm(move.id)}",
                     detail=_bounded(
-                        f"{world_ids[index]}: request disabled={disabled} != world "
-                        f"{bool(world_moves[index].disabled)}"
+                        f"{_norm(move.id)}: request disabled={disabled} != world "
+                        f"{bool(move.disabled)}"
                     ),
                 )
             )
@@ -903,39 +968,127 @@ def _axis_boosts(
     return out
 
 
-#: Showdown's own cap. `replay.toxic_stage` uses 16 as an internal saturation
-#: sentinel meaning "already capped at 15 at an ordinary request", which is a
-#: statement about the PARSER's certainty and not a stage the engine can hold.
-_TOXIC_SATURATION_SENTINEL = 16
+#: Gen 3 Toxic charges ``floor(maxhp / 16) * stage`` at each residual, so the
+#: multiplier is recoverable from the DAMAGE the protocol printed. That is the
+#: only route to an observed side for this axis that is independent of the
+#: constructor's input, and independence is the whole point -- see below.
+_TOXIC_DENOMINATOR = 16
+
+
+def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
+    """The last Toxic multiplier each side actually PAID, read from raw damage.
+
+    WHY THIS EXISTS, and what the first version of this axis got wrong.
+    ------------------------------------------------------------------
+    The first revision compared ``replay.toxic_stage[slot]`` against the engine's
+    ``side_conditions.toxic_count``. **That was a tautology**, and independent
+    review is what established it: ``local_showdown._materialization_toxic_stage``
+    RETURNS ``min(14, max(0, tracked_stage - 1))`` where ``tracked_stage`` IS
+    ``replay.toxic_stage[player]``, and ``engine_world`` writes that straight into
+    ``side_conditions["toxic_count"]``. The comparison was ``x`` against ``f(x)``,
+    the uniform +1 delta over 12,416 of 12,416 worlds was the forced output of
+    that identity, and the axis had **zero power over #1209**.
+
+    It was worse than powerless. Corrected to the documented convention it is
+    silent by construction, so an over-broad #1209 -- one that credits every world
+    an extra tick -- makes the oracle read *cleaner*, not dirtier. An axis whose
+    response to a defect is to stop firing is an anti-instrument.
+
+    So the observed side is rebuilt from a source the constructor never touches:
+    the raw ``|-damage|SLOT|hp/max|[from] psn`` line. Gen 3 charges
+    ``floor(maxhp / 16) * stage``, so ``stage = damage / floor(maxhp / 16)``, and
+    that arithmetic passes through none of the parser's toxic trackers.
+
+    Returns ``{slot: multiplier or None}``. ``None`` means *not determined* --
+    no tick observed since the current active came in, a non-integral quotient,
+    or a percentage-mod HP grid too coarse to divide. An axis never fires on an
+    undetermined value.
+    """
+
+    from .engine_fidelity import _parse_condition  # noqa: PLC0415
+
+    last_hp: dict[str, int] = {}
+    maxhp: dict[str, int] = {}
+    multiplier: dict[str, int | None] = {"p1": None, "p2": None}
+    for line in lines:
+        parts = line.split("|")
+        if len(parts) < 3:
+            continue
+        tag = parts[1]
+        slot = parts[2].split(":", 1)[0].strip()[:2]
+        if slot not in ("p1", "p2"):
+            continue
+        if tag in ("switch", "drag", "replace") and len(parts) >= 5:
+            value, _token = _parse_condition(parts[4])
+            last_hp[slot] = value
+            maxhp[slot] = _condition_maxhp(parts[4]) or maxhp.get(slot, 0)
+            # A gen 3 switch-out RESETS the counter, so nothing observed before
+            # this line says anything about the mon now standing there.
+            multiplier[slot] = None
+            continue
+        if tag not in ("-damage", "-heal", "-sethp") or len(parts) < 4:
+            continue
+        value, _token = _parse_condition(parts[3])
+        maxhp[slot] = _condition_maxhp(parts[3]) or maxhp.get(slot, 0)
+        previous = last_hp.get(slot)
+        last_hp[slot] = value
+        if tag != "-damage" or previous is None:
+            continue
+        if "[from] psn" not in line:
+            continue
+        unit = maxhp.get(slot, 0) // _TOXIC_DENOMINATOR
+        damage = previous - value
+        if unit <= 0 or damage <= 0 or damage % unit:
+            # Non-integral: a percentage grid, or a tick that hit the HP floor.
+            # Silence beats a fabricated stage.
+            multiplier[slot] = None
+            continue
+        multiplier[slot] = damage // unit
+    return multiplier
+
+
+def _condition_maxhp(condition: str) -> int:
+    head = str(condition or "").split(" ", 1)[0]
+    if "/" not in head:
+        return 0
+    try:
+        return int(head.split("/", 1)[1])
+    except ValueError:
+        return 0
 
 
 def _axis_toxic_count(
     observed: ObservedPublicView, sides: Mapping[str, Any], engine: Any
 ) -> list[ProjectionMismatch]:
-    """The public Toxic ramp vs the engine's counter -- #1209's axis.
+    """#1209's axis, with an observed side the constructor cannot have written.
 
-    Fires only when the stage is publicly KNOWN and the active is actually
-    Toxic-statused. #1209 relaxed the proof this counter is allowed to be built
-    from; if that proof is now too weak, the world carries a counter the log does
-    not support and this is where it shows.
+    The engine's counter is PRE-tick and the engine charges ``toxic_count + 1``
+    (``engine_world.py`` says so at the write site: *"a bridge-only pre-tick
+    counter, not the public multiplier"*), so a mon that has just paid multiplier
+    ``m`` must be holding counter ``m``. Compared only when a multiplier was
+    actually recovered from a tick since this active came in, and only when the
+    engine agrees the active is Toxic-statused.
     """
 
     out: list[ProjectionMismatch] = []
     for slot, side in sides.items():
-        stage = observed.toxic_stage.get(slot)
-        if stage is None or int(stage) >= _TOXIC_SATURATION_SENTINEL:
+        paid = observed.toxic_multiplier.get(slot)
+        if paid is None:
             continue
         status = engine.p1_status if slot == "p1" else engine.p2_status
         if status != "TOXIC":
             continue
         got = int(getattr(side.side_conditions, "toxic_count", 0) or 0)
-        if got != int(stage):
+        if got != int(paid):
             out.append(
                 ProjectionMismatch(
                     axis="toxic_count",
                     slot=slot,
                     predicate="toxic_count",
-                    detail=_bounded(f"observed stage {int(stage)} != world {got}"),
+                    detail=_bounded(
+                        f"last tick paid multiplier {int(paid)}, world pre-tick "
+                        f"counter {got}"
+                    ),
                 )
             )
     return out
@@ -1000,6 +1153,7 @@ def render_projection_mismatch(
     choices: Mapping[str, str],
     observed_lines: Sequence[str],
     pre_features: Any,
+    pre_summary: Mapping[str, Any] | None = None,
     module: Any | None = None,
 ) -> tuple[list[ProjectionMismatch], dict[str, Any]]:
     """Does the transition Showdown took lie in the RENDERED branch support?
@@ -1058,12 +1212,19 @@ def render_projection_mismatch(
     # It needs no log and rides the same `branch_events` call, so leaving it out
     # would discard the counterfactual branches entirely -- and those are most of
     # the tree.
-    self_consistency = render_self_consistency_mismatches(
-        branches, slot_sides=slot_sides, pre_features=pre_features
+    self_consistency = (
+        render_self_consistency_mismatches(
+            branches, slot_sides=slot_sides, pre_summary=pre_summary
+        )
+        if pre_summary is not None
+        else []
     )
     usable = 0
     unusable_markers: Counter[str] = Counter()
     reasons: list[str] = []
+    #: The reason set of the CLOSEST branch -- fewest disagreements -- which is
+    #: the informative one when nothing matched.
+    best: list[str] = []
     for branch in branches:
         lossy = list(branch.get("lossy") or [])
         if branch.get("attribution_unsafe") or not render_branch_is_usable(lossy):
@@ -1075,23 +1236,41 @@ def render_projection_mismatch(
             [line for line in (branch.get("events") or []) if line and line != "|"],
             pre_features,
         )
-        reason = _render_mismatch_reason(observed, rendered, pre_features)
-        if reason is None:
+        branch_reasons = _render_mismatch_reasons(observed, rendered, pre_features)
+        if not branch_reasons:
             return self_consistency, {
                 "branches": len(branches),
                 "usable_branches": usable,
+                "self_consistency_branches": len(
+                    [b for b in branches
+                     if isinstance(b.get("post"), Mapping)
+                     and not b.get("attribution_unsafe")
+                     and render_branch_is_usable(list(b.get("lossy") or []))]
+                ),
                 "matched": True,
                 "self_consistency": len(self_consistency),
             }
-        reasons.append(reason)
+        # ALL of them, not the first. The first revision returned on the first
+        # difference and checked status BEFORE hp and side conditions, so on the
+        # ~28% of boundaries where a status difference fired, the hp and
+        # side-condition checks never ran at all -- masking, measured by review.
+        best = min(best, branch_reasons, key=len) if best else branch_reasons
+        reasons.extend(branch_reasons)
 
     diagnostics = {
         "branches": len(branches),
         "usable_branches": usable,
         "matched": False,
         "unusable_markers": dict(unusable_markers),
-        "reasons": [_bounded(reason) for reason in reasons[:4]],
+        "reasons": [_bounded(reason) for reason in best[:6]],
+        "all_reasons": len(reasons),
         "self_consistency": len(self_consistency),
+        "self_consistency_branches": len(
+            [b for b in branches
+             if isinstance(b.get("post"), Mapping)
+             and not b.get("attribution_unsafe")
+             and render_branch_is_usable(list(b.get("lossy") or []))]
+        ),
     }
     if usable == 0:
         # NOT a mismatch verdict on the renderer's content: the renderer told us
@@ -1111,42 +1290,203 @@ def render_projection_mismatch(
             axis="render_unmatched_transition",
             slot="both",
             predicate="render_unmatched_transition",
-            detail=_bounded(f"{usable} usable branches, first reason: {reasons[0]}"),
+            detail=_bounded(
+                f"{usable} usable branches, closest branch disagreed on: {best}"
+            ),
         )
     ], diagnostics
+
+
+#: Every field `events.rs::post_state_summary` publishes per side. The
+#: self-consistency arm compares ALL of them. The first revision compared
+#: `active_hp` and nothing else, and independent review measured what that cost:
+#: over a nine-branch probe, an `active_hp` disagreement and a faint were caught
+#: while a status in `post` with no status line, a `-status brn` with no status
+#: in `post`, a `-boost atk 2` against `post` 0, a benched mon at 0 hp and a
+#: `|switch|` against `active_index 0` were ALL SILENT -- using facts already in
+#: the payload being read, at zero extra cost.
+#:
+#: `force_switch` is the one published field still not compared, and the reason
+#: is that the protocol has no line for it: it is a request-level fact the
+#: renderer never emits, so there is nothing to fold against it. Side conditions
+#: are not compared either because `post_state_summary` does not publish them --
+#: the TRANSITION arm covers those against the log.
+_BOOST_KEYS = ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")
+
+_ENGINE_BOOST_ATTR = {
+    "atk": "attack_boost",
+    "def": "defense_boost",
+    "spa": "special_attack_boost",
+    "spd": "special_defense_boost",
+    "spe": "speed_boost",
+    "accuracy": "accuracy_boost",
+    "evasion": "evasion_boost",
+}
+
+_BOOST_ALIAS = {"atk": "atk", "def": "def", "spa": "spa", "spd": "spd",
+                "spe": "spe", "accuracy": "accuracy", "evasion": "evasion"}
+
+
+def pre_state_summary(state: Any, slot_sides: Mapping[str, str]) -> dict[str, Any]:
+    """The world's pre-branch state in exactly `post_state_summary`'s shape.
+
+    Keyed by PLAYER SLOT. Built so the rendered lines can be folded ONTO it and
+    the result compared field-for-field with the branch's own post-state; that
+    is a much stronger and much simpler contract than comparing two independently
+    derived summaries.
+    """
+
+    sides = _sides_by_slot(state, slot_sides)
+    summary: dict[str, Any] = {}
+    for slot, side in sides.items():
+        party = _live_party(side)
+        active_index = int(str(side.active_index))
+        summary[slot] = {
+            "active_index": active_index,
+            "active_hp": int(side.pokemon[active_index].hp),
+            "active_status": str(side.pokemon[active_index].status).lower(),
+            "boosts": {
+                key: int(getattr(side, _ENGINE_BOOST_ATTR[key], 0) or 0)
+                for key in _BOOST_KEYS
+            },
+            "pokemon": [
+                {"hp": int(mon.hp), "status": str(mon.status).lower()} for mon in party
+            ],
+            "species": [_norm(mon.id) for mon in party],
+        }
+    return summary
+
+
+def fold_lines_onto_summary(
+    summary: Mapping[str, Any], lines: Sequence[str]
+) -> dict[str, Any]:
+    """Apply one branch's rendered protocol lines to a pre-state summary."""
+
+    import copy  # noqa: PLC0415
+
+    from .engine_fidelity import _parse_condition  # noqa: PLC0415
+
+    out = copy.deepcopy(dict(summary))
+
+    def _write_active(slot: str, hp: int | None, status: str | None) -> None:
+        side = out[slot]
+        index = side["active_index"]
+        if hp is not None:
+            side["active_hp"] = hp
+            if 0 <= index < len(side["pokemon"]):
+                side["pokemon"][index]["hp"] = hp
+        if status is not None:
+            side["active_status"] = status
+            if 0 <= index < len(side["pokemon"]):
+                side["pokemon"][index]["status"] = status
+
+    for line in lines:
+        parts = line.split("|")
+        if len(parts) < 3:
+            continue
+        tag = parts[1]
+        slot = parts[2].split(":", 1)[0].strip()[:2]
+        if slot not in out:
+            continue
+        if tag in ("switch", "drag", "replace") and len(parts) >= 5:
+            species = _norm(str(parts[3]).split(",", 1)[0])
+            candidates = [
+                index for index, name in enumerate(out[slot]["species"]) if name == species
+            ]
+            if candidates:
+                out[slot]["active_index"] = candidates[0]
+            value, token = _parse_condition(parts[4])
+            # A regular switch clears stat stages with NO protocol echo; the
+            # engine emits reset_boosts instructions for it.
+            out[slot]["boosts"] = {key: 0 for key in _BOOST_KEYS}
+            _write_active(slot, value, _ENGINE_STATUS.get(token, "none"))
+        elif tag in ("-damage", "-heal", "-sethp") and len(parts) >= 4:
+            value, token = _parse_condition(parts[3])
+            _write_active(slot, value, _ENGINE_STATUS.get(token) if token else None)
+        elif tag == "-status" and len(parts) >= 4:
+            _write_active(slot, None, _ENGINE_STATUS.get(parts[3].strip(), "none"))
+        elif tag == "-curestatus":
+            _write_active(slot, None, "none")
+        elif tag == "faint":
+            _write_active(slot, 0, None)
+        elif tag in ("-boost", "-unboost", "-setboost") and len(parts) >= 5:
+            key = _BOOST_ALIAS.get(parts[3].strip())
+            if key is None:
+                continue
+            try:
+                amount = int(parts[4])
+            except ValueError:
+                continue
+            current = out[slot]["boosts"][key]
+            if tag == "-setboost":
+                out[slot]["boosts"][key] = amount
+            else:
+                delta = amount if tag == "-boost" else -amount
+                out[slot]["boosts"][key] = max(-6, min(6, current + delta))
+        elif tag in ("-clearboost", "-clearnegativeboost", "-invertboost"):
+            out[slot]["boosts"] = {key: 0 for key in _BOOST_KEYS}
+        elif tag == "-clearallboost":
+            for other in out:
+                out[other]["boosts"] = {key: 0 for key in _BOOST_KEYS}
+    return out
+
+
+#: Showdown status token -> the engine's lowercase spelling, which is what
+#: `post_state_summary` prints.
+_ENGINE_STATUS = {
+    "": "none",
+    "par": "paralyze",
+    "brn": "burn",
+    "psn": "poison",
+    "tox": "toxic",
+    "slp": "sleep",
+    "frz": "freeze",
+}
 
 
 def render_self_consistency_mismatches(
     branches: Sequence[Mapping[str, Any]],
     *,
     slot_sides: Mapping[str, str],
-    pre_features: Any,
+    pre_summary: Mapping[str, Any],
 ) -> list[ProjectionMismatch]:
     """Does each branch's RENDER describe that branch's own outcome?
 
-    The transition comparator above needs the log, so it only ever sees the ONE
-    branch the game actually took. Every other branch search spent budget on --
-    the counterfactuals the tree is made of -- is never compared to anything.
-    This closes that: `branch_events` already returns each branch's post-state
-    summary alongside its rendered lines, so the render can be held against the
-    engine's own outcome for the SAME branch, at zero extra cost and with no log
-    required.
+    The transition comparator needs the log, so it only ever sees the ONE branch
+    the game took. Every other branch search spent budget on -- the
+    counterfactuals the tree is made of -- is never compared to anything. This
+    closes that: `branch_events` already returns each branch's post-state summary
+    beside its rendered lines, so the render can be held against the engine's own
+    outcome for the SAME branch, at zero extra cost and with no log required.
 
-    This is the arm that sees #1211's over-broad direction. Render
+    This is the arm that sees a renderer-side relaxation. Render
     ``|-activate|...|Protect`` over an instruction the engine emitted as a real
-    heal and the rendered lines say the defender's HP did not move while the
-    branch's own post-state says it did.
+    heal and the rendered lines leave HP where it started while the branch's own
+    post-state has moved.
 
-    WHAT IT CANNOT SEE, stated here rather than in a report: an over-broad
-    marker over a ZERO-amount heal. A full-HP absorber's no-op and Protect's
-    no-op have the same post-state by construction -- that is what makes them
-    ambiguous in the first place -- so no state-based comparator can separate
-    them. Separating those two needs the per-source LINE decomposition in
-    ``scripts/engine_transition_differential.py``, and this arm does not claim
-    to replace it.
+    NOW COMPARES EVERY FIELD ``post`` PUBLISHES -- active index, active HP,
+    active status, all seven boosts, and per-mon HP and status for the whole
+    party -- because the first revision compared one scalar per side and review
+    demonstrated five distinct silent regions using facts already in the payload.
+
+    WHAT IT STILL CANNOT SEE, disclosed rather than discovered later:
+
+    * ``force_switch``: a request-level fact with no protocol line to fold.
+    * side conditions: ``post_state_summary`` does not publish them. The
+      TRANSITION arm compares those against the log.
+    * an over-broad marker over a ZERO-amount heal. A full-HP absorber's no-op
+      and Protect's no-op have the SAME post-state on every published field --
+      that identity is what makes them ambiguous in the first place. No
+      state-based comparator can separate them; only the per-source LINE
+      decomposition in ``scripts/engine_transition_differential.py`` can.
     """
 
     out: list[ProjectionMismatch] = []
+    #: The rendered lines of the first disagreeing branch, attached to the
+    #: mismatch detail. An inventory row that cannot be adjudicated without
+    #: re-running the census is a row nobody adjudicates -- report 4 section 2.1
+    #: is four mechanisms that were all wrong until someone dumped the inputs.
+    witness_lines: list[str] = []
     engine_label = {
         slot: ("p1" if slot_sides[slot] == "side_one" else "p2") for slot in ("p1", "p2")
     }
@@ -1158,64 +1498,161 @@ def render_self_consistency_mismatches(
             list(branch.get("lossy") or [])
         ):
             continue
-        rendered = fold_step_lines(
-            [line for line in (branch.get("events") or []) if line and line != "|"],
-            pre_features,
-        )
+        branch_lines = [
+            line for line in (branch.get("events") or []) if line and line != "|"
+        ]
+        rendered = fold_lines_onto_summary(pre_summary, branch_lines)
+        before = len(out)
         for slot in ("p1", "p2"):
-            side_post = post.get(engine_label[slot]) or {}
-            want_hp = side_post.get("active_hp")
-            if want_hp is None:
+            side_post = post.get(engine_label[slot])
+            if not isinstance(side_post, Mapping):
                 continue
-            got_hp = rendered.hp[slot]
-            if got_hp < 0 or int(want_hp) == int(got_hp):
-                continue
-            out.append(
-                ProjectionMismatch(
-                    axis="render_post_state_disagreement",
-                    slot=slot,
-                    predicate="render_post_state_disagreement:active_hp",
-                    detail=_bounded(
-                        f"branch {index}: render says hp {got_hp}, the branch's own "
-                        f"post-state says {int(want_hp)}"
-                    ),
+            got = rendered[slot]
+            for field in ("active_index", "active_hp", "active_status"):
+                want = side_post.get(field)
+                if want is None:
+                    continue
+                if _same_field(field, want, got[field]):
+                    continue
+                if field == "active_status" and _is_unrendered_cure(
+                    want, got[field], pre_summary[slot]["active_status"]
+                ):
+                    continue
+                out.append(
+                    _render_disagreement(index, slot, field, want, got[field])
                 )
-            )
+            want_boosts = side_post.get("boosts") or {}
+            for key in _BOOST_KEYS:
+                if key not in want_boosts:
+                    continue
+                if int(want_boosts[key]) == int(got["boosts"][key]):
+                    continue
+                out.append(
+                    _render_disagreement(
+                        index, slot, f"boost:{key}", want_boosts[key], got["boosts"][key]
+                    )
+                )
+            want_party = side_post.get("pokemon") or []
+            if len(want_party) != len(got["pokemon"]):
+                continue
+            for party_index, (want_mon, got_mon) in enumerate(
+                zip(want_party, got["pokemon"])
+            ):
+                pre_party = pre_summary[slot]["pokemon"]
+                for field in ("hp", "status"):
+                    if want_mon.get(field) is None:
+                        continue
+                    if _same_field(field, want_mon[field], got_mon[field]):
+                        continue
+                    if field == "status" and party_index < len(pre_party) and (
+                        _is_unrendered_cure(
+                            want_mon[field],
+                            got_mon[field],
+                            pre_party[party_index]["status"],
+                        )
+                    ):
+                        continue
+                    out.append(
+                        _render_disagreement(
+                            index,
+                            slot,
+                            f"party_{field}",
+                            want_mon[field],
+                            got_mon[field],
+                            extra=f"party slot {party_index}",
+                        )
+                    )
+        if len(out) > before and not witness_lines:
+            witness_lines = branch_lines[:16]
+    if witness_lines and out:
+        # Carried in the FIRST row's detail rather than as a row of its own: a
+        # witness that is itself counted would inflate every figure it explains.
+        first = out[0]
+        out[0] = ProjectionMismatch(
+            axis=first.axis,
+            slot=first.slot,
+            predicate=first.predicate,
+            detail=first.detail + " || rendered: " + " ".join(witness_lines)[:400],
+        )
     return out
 
 
-def _render_mismatch_reason(
+def _is_unrendered_cure(want: Any, got: Any, pre_status: Any) -> bool:
+    """A status the branch CLEARED, which the renderer deliberately does not say.
+
+    ``events.rs``'s own header lists the lines the fold provably ignores and that
+    are therefore never emitted: ``|-singleturn|``, **``|-curestatus|``**,
+    ``|-fail|``, ``|-ability|``, ``|-enditem|``, ``|-mustrecharge|``,
+    ``|-start|`` (except absorb signatures), ``|-anim|``, ``|debug|``. So a
+    branch in which the sleeper WOKE has ``post.status == "none"`` while the
+    render still shows the pre-state's sleep, and that is a documented omission,
+    not a fabricated fact.
+
+    Measured the moment the status axis was added: the very first run of the
+    #1211 fixture fired twice on exactly this, on the BASE crate, in the wake-up
+    branch.
+
+    NARROW BY CONSTRUCTION, and the narrowness is the point. It excludes only
+    ``post`` says NONE **and** the render is still showing the status the world
+    came in with. A render that ASSERTS a status ``post`` denies, or omits one
+    ``post`` gained, is untouched -- and those are the two directions a
+    fabricating renderer would move in.
+    """
+
+    return (
+        str(want).lower() == "none"
+        and str(got).lower() != "none"
+        and str(got).lower() == str(pre_status).lower()
+    )
+
+
+def _same_field(field: str, want: Any, got: Any) -> bool:
+    if field.endswith("status"):
+        return str(want).lower() == str(got).lower()
+    return int(want) == int(got)
+
+
+def _render_disagreement(
+    branch_index: int, slot: str, field: str, want: Any, got: Any, extra: str = ""
+) -> ProjectionMismatch:
+    tail = f" ({extra})" if extra else ""
+    return ProjectionMismatch(
+        axis="render_post_state_disagreement",
+        slot=slot,
+        predicate=f"render_post_state_disagreement:{field}",
+        detail=_bounded(
+            f"branch {branch_index}{tail}: render says {field}={got}, the branch's "
+            f"own post-state says {want}"
+        ),
+    )
+
+
+def _render_mismatch_reasons(
     observed: StepProjection, rendered: StepProjection, pre: Any
-) -> str | None:
-    """Exact on everything deterministic; banded on HP only.
+) -> list[str]:
+    """EVERY way this branch's render disagrees with the observed step.
 
-    The band is anchored on THIS step's HP movement, as `engine_fidelity` anchors
-    it: an engine branch carries the representative damage roll while Showdown
-    sampled one of sixteen, so a same-mechanic hit differs by up to ~16%.
-    Everything else -- status, faint set, side conditions -- is exact, because
-    none of it is roll-scaled.
+    Returns a list, and an empty list means match. The first revision returned
+    the FIRST reason and tested status before HP and side conditions, which
+    masked both on every boundary where a status difference fired -- and, given
+    the `fold_step_lines` status bug that has now been fixed, that was ~28% of
+    them.
 
-    WEATHER IS NOT COMPARED, deliberately. Both sides fold ONE step, an absent
-    `|-weather|` is indistinguishable from "unchanged", and the axis would then
-    only ever fire on an upkeep-line rendering convention. The STATE comparator
-    does compare weather, against the whole-log fold, where it is well defined.
+    Exact on everything deterministic; banded on HP only. The band is anchored on
+    this step's HP movement, as `engine_fidelity` anchors it: an engine branch
+    carries the representative damage roll while Showdown sampled one of sixteen.
+
+    WEATHER IS NOT COMPARED. Both sides fold ONE step, an absent `|-weather|` is
+    indistinguishable from "unchanged", and the axis would only ever fire on an
+    upkeep-line rendering convention. The STATE comparator does compare weather,
+    against the whole-log fold, where it is well defined.
     """
 
     from .engine_fidelity import _DAMAGE_TOLERANCE, _MIN_TOLERANCE_HP  # noqa: PLC0415
 
+    out: list[str] = []
     if observed.fainted != rendered.fainted:
-        return f"fainted {sorted(observed.fainted)} != {sorted(rendered.fainted)}"
-    for slot in ("p1", "p2"):
-        if slot in observed.fainted:
-            continue
-        obs, ren = observed.status[slot], rendered.status[slot]
-        if obs.startswith("?") or obs == ren:
-            continue
-        return f"{slot} status {obs} != {ren}"
-    if observed.side_conditions != rendered.side_conditions:
-        return (
-            f"side conditions {observed.side_conditions} != {rendered.side_conditions}"
-        )
+        out.append(f"fainted {sorted(observed.fainted)} != {sorted(rendered.fainted)}")
     for slot, start_hp in (("p1", pre.p1_hp), ("p2", pre.p2_hp)):
         obs, ren = observed.hp[slot], rendered.hp[slot]
         if obs < 0 or ren < 0 or obs == ren:
@@ -1223,8 +1660,19 @@ def _render_mismatch_reason(
         moved = max(abs(int(start_hp) - obs), abs(int(start_hp) - ren))
         tolerance = max(_MIN_TOLERANCE_HP, int(moved * _DAMAGE_TOLERANCE) + 1)
         if abs(obs - ren) > tolerance:
-            return f"{slot} hp {obs} != {ren} (moved {moved}, tolerance {tolerance})"
-    return None
+            out.append(f"{slot} hp {obs} != {ren} (moved {moved}, tolerance {tolerance})")
+    if observed.side_conditions != rendered.side_conditions:
+        out.append(
+            f"side conditions {observed.side_conditions} != {rendered.side_conditions}"
+        )
+    for slot in ("p1", "p2"):
+        if slot in observed.fainted:
+            continue
+        obs, ren = observed.status[slot], rendered.status[slot]
+        if obs.startswith("?") or obs == ren:
+            continue
+        out.append(f"{slot} status {obs} != {ren}")
+    return out
 
 
 # --- records and the probe ----------------------------------------------------
