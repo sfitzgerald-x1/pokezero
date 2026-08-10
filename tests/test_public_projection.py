@@ -207,6 +207,35 @@ PUBLIC_BOOST_KEYS = ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")
 #: the census's one open predicate.
 REAL_REQUEST_MOVES = ("rest", "recover", "sleeptalk", "protect", "toxic", "earthquake")
 
+#: `AXES`, WRITTEN OUT, for the same reason as `PUBLIC_BOOST_KEYS` and found the
+#: same way: `AxisClosureTests.test_every_axis_in_the_closed_set_is_pinned_by_a_test`
+#: iterated `AXES` itself, so dropping an axis shrank the loop instead of failing
+#: it. Measured per element on `424e1679`: all 20 single-axis deletions were green.
+#: An axis deleted from the taxonomy is a queue row that silently stops existing,
+#: which is worse than one that always reads zero.
+CLOSED_AXES = (
+    "active_hp",
+    "active_status",
+    "weather",
+    "side_conditions",
+    "self_move_set",
+    "self_move_pp",
+    "self_move_disabled",
+    "self_party_species",
+    "self_party_hp",
+    "self_item",
+    "self_ability",
+    "opponent_revealed_species",
+    "opponent_revealed_moves",
+    "opponent_revealed_item",
+    "opponent_revealed_ability",
+    "boosts",
+    "toxic_count",
+    "render_unmatched_transition",
+    "render_no_usable_branch",
+    "render_post_state_disagreement",
+)
+
 #: The seat-scoped axes, written out for the same reason as `PUBLIC_BOOST_KEYS`.
 SEAT_SCOPED_AXES = frozenset(
     {
@@ -1345,14 +1374,30 @@ class AxisClosureTests(unittest.TestCase):
         Enumerated from the tests in this file rather than asserted, so adding an
         axis without a pin fails here instead of shipping a permanently-empty
         queue row.
+
+        THE LOOP SOURCE IS A WRITTEN-OUT LITERAL, not `AXES`. Iterating the
+        constant under test is the shrinking-loop null world this file's own
+        `PUBLIC_BOOST_KEYS` comment names: measured on `424e1679`, deleting any one
+        of the 20 axes left this test green, 10 of them still green even with the
+        rest of this PR applied (the 7 self axes are caught only as a side effect
+        of `_SELF_AXES <= AXES`, the 3 render axes by another literal). So `AXES`
+        is pinned against `CLOSED_AXES` first, ORDER INCLUDED -- the tuple is what
+        a report's column order comes from -- and everything else iterates the
+        literal.
         """
 
+        self.assertEqual(
+            list(CLOSED_AXES),
+            list(AXES),
+            "`AXES` no longer matches the written-out taxonomy; an axis was added, "
+            "removed or reordered",
+        )
         pinned = {
             name[len("test_") :]
             for name in dir(AxisFiresTests)
             if name.startswith("test_")
         }
-        state_axes = {axis for axis in AXES if not axis.startswith("render_")}
+        state_axes = {axis for axis in CLOSED_AXES if not axis.startswith("render_")}
         missing = {
             axis
             for axis in state_axes
@@ -1367,7 +1412,7 @@ class AxisClosureTests(unittest.TestCase):
                 "render_no_usable_branch",
                 "render_post_state_disagreement",
             },
-            {axis for axis in AXES if axis.startswith("render_")},
+            {axis for axis in CLOSED_AXES if axis.startswith("render_")},
         )
 
 
@@ -1381,21 +1426,50 @@ class SetClosureTests(unittest.TestCase):
       `self_move_set` comparison, so one real move id blinds that axis for that
       move on every world of every census, permanently and silently. `rest` occurs
       111 times in the gen3 randbat source, and `self_move_set` carries the
-      census's ONLY open predicate. **One token here takes the direction-2
-      headline to a clean zero with nothing red anywhere** -- the exact
-      anti-instrument shape this module's own docstring warns about, on the one
-      axis that still has something to report.
+      census's ONLY open predicate.
+
+      MEASURED, on `424e1679`, because the first version of this docstring
+      overstated it and the overstatement is the thing that outlives the PR body.
+      `PYTHONPATH=<base>/src .venv/bin/python -B -m unittest
+      tests.test_public_projection` with one token added:
+
+          + "rest"     Ran 90 tests ... OK        -- blinds `self_move_set` for a
+                                                     real move, nothing red
+          + "recover"  Ran 90 tests ... FAILED (failures=1)
+                       test_a_transform_copys_missing_move_is_a_DIFFERENT_predicate
+
+      So: **four sets survived a one-token mutation, and `rest` here blinds the
+      axis to a real move with nothing red.** RETRACTED, as unmeasured: that one
+      token takes the direction-2 headline to a clean zero with nothing red. It
+      does not. The census's open predicate is on `recover`, and `recover` is
+      caught -- by the fixture choice of an unrelated test, which is a defence
+      nobody chose and the next fixture edit removes. That accident is what
+      `test_a_real_move_the_request_offers_and_the_world_lacks_always_fires`
+      replaces with something deliberate.
     * `_BOOST_KEYS` - `"evasion"`. Silences that boost in BOTH render arms and
       falsifies `render_self_consistency_mismatches`'s published claim to compare
       "all seven boosts".
-    * `_CURE_TAGS` + `"-heal"`. Every member writes `status = NONE`
-      unconditionally at all three fold sites, so this re-creates the
-      fold-wipes-status defect whose measured cost was the render figure reading
-      969 of 3,078 boundaries instead of 206. Loud once it fires, but nothing
-      pinned it.
+    * `_CURE_TAGS` + `"-heal"`. Nothing pinned it. Note the CORRECTED mechanism:
+      on the form Showdown actually emits this is an equivalent mutant, because
+      all three folds test the HP tag families first -- see
+      `test_both_cure_tags_clear_a_status_at_each_of_the_three_fold_sites`. What
+      closes the set is the `-cure*` namespace assertion, and the shadowing is why
+      it has to be a lexical assertion rather than a behavioural one.
     * `_SELF_AXES` - `"self_move_set"`. Survives because the constant had no
       consumer anywhere in `src/`, `scripts/` or `tests/` while the module header
       cites it as defining what the self axes evaluate.
+    * `RENDER_TELEMETRY_ONLY_LOSSY`, found by independent review of this PR after
+      the sweep above missed it -- so the sweep was NOT exhaustive over this
+      module's membership sets, and this list is not evidence that it now is. Its
+      own comment says it "Mirrors
+      `engine_transition_differential._TELEMETRY_ONLY_LOSSY_MARKERS`", which is
+      the hand-maintained-mirror construct #1222 exists to have replaced, and it
+      had no reference in `tests/` or `scripts/`. Widening it is FAIL-OPEN on the
+      render arm: `render_branch_is_usable` returns True, the branch becomes
+      eligible to match, and `render_unmatched_transition` /
+      `render_no_usable_branch` are suppressed while the published coverage floors
+      go UP. That is direction 2's own silent-wrongness mode, inside direction 2.
+      Derived here, like `_REQUEST_PSEUDO_MOVES`.
 
     THE METHOD, unchanged from #1222's `_TOXIC_RAMP_RESET_TAGS`: where the set has
     a real source of truth, DERIVE it and assert set equality in both directions
@@ -1427,6 +1501,18 @@ class SetClosureTests(unittest.TestCase):
         Both directions. A pseudo-move the mapper stopped translating fails; a
         REAL move added here fails, because the mapper resolves it and never names
         it.
+
+        ONE PROPERTY OF THIS DERIVATION IS WORTH STATING, because it is an
+        invitation to make things worse. It goes red whenever the mapper compares
+        `move_id` to ANY new string literal -- including a dead
+        `if move_id == "rest" and False:` -- and the obvious way to "fix" a red
+        derivation is to add that id to the constant. That specific repair is
+        caught by
+        `test_a_real_move_the_request_offers_and_the_world_lacks_always_fires`, but
+        only for the ids in `REAL_REQUEST_MOVES`. So the two tests are mutually
+        protective for those six ids and loud for them; for a seventh real move
+        they are not, and the reviewer of a mapper change that adds a `move_id`
+        comparison has to decide whether the id is genuinely unresolvable.
         """
 
         import ast
@@ -1666,39 +1752,56 @@ class SetClosureTests(unittest.TestCase):
             "a non-`-cure` tag in `_CURE_TAGS` wipes status at all three fold sites",
         )
 
-    def test_a_heal_never_clears_a_status_at_any_of_the_three_fold_sites(self):
-        """The must-not-contain direction, behaviourally, at every consumer.
+    def test_both_cure_tags_clear_a_status_at_each_of_the_three_fold_sites(self):
+        """The behavioural half, and A CORRECTION TO WHAT IT CAN CLAIM.
 
-        `_CURE_TAGS` is read in three places and all three write `NONE`
-        unconditionally, so the mutation has to be pinned three times or two of
-        the three stay open. Leftovers puts a `-heal` between almost every pair of
-        lines, which is why this particular widening is the expensive one: the
-        measured cost of status being wiped by an ordinary heal was 969 of 3,078
-        render boundaries "mismatched" instead of 206.
+        The first version of this test was titled "a heal never clears a status at
+        any of the three fold sites" and was a NULL-WORLD TEST under a title
+        asserting the opposite: independent review measured it GREEN with `-heal`
+        added to `_CURE_TAGS`. Re-measured here, per site, before rewriting it:
 
-        The `-curestatus` leg of each pair is the positive control: without it
-        this test would also pass on an EMPTIED `_CURE_TAGS`.
+            `.venv/bin/python -B` over the three folds with `_CURE_TAGS` patched
+            to `("-curestatus", "-cureteam", "-heal")`:
+              `|-heal|p2a: Squirtle|200/256 tox|[from] item: Leftovers`
+                  base ('TOXIC', 'TOXIC', 'toxic')  mut (same)   -- SAME
+              `|-heal|p2a: Squirtle`
+                  base ('TOXIC', 'TOXIC', 'toxic')  mut ('NONE', 'NONE', 'none')
+
+        The mechanism is branch ORDER, not the cure branch: all three folds test
+        `_HP_TAGS_FIELD3` (`-damage`, `-heal`, `-sethp`) BEFORE `_CURE_TAGS`, so a
+        `-heal` carrying a condition field is claimed first and never reaches the
+        cure branch. On the only form Showdown emits, `-heal` in `_CURE_TAGS` is an
+        EQUIVALENT MUTANT with zero behavioural effect. **What closes `-heal` is
+        the `-cure*` namespace assertion in the derivation test above, not
+        anything here** -- and the corollary is worth keeping in mind: a fold test
+        is structurally blind to any tag the HP branches claim first, so no green
+        fold test licenses an addition to `_CURE_TAGS`.
+
+        What this test therefore claims, and no more:
+
+        1. both cure tags DO clear a status at all three sites -- the positive
+           control, which is what an emptied or shortened `_CURE_TAGS` fails;
+        2. the three-field `|-heal|<ident>` form, the ONE form that reaches the
+           cure branch, still preserves status -- a real behavioural kill of the
+           `-heal` mutant, recorded as reached-only-by-an-unemitted-line so nobody
+           mistakes it for the Leftovers case;
+        3. `_CURE_TAGS` is disjoint from the HP tag families, which is the
+           structural statement of the shadowing above.
         """
 
         from pokezero.public_projection import (
+            _CURE_TAGS,
+            _HP_TAGS_FIELD3,
+            _HP_TAGS_FIELD4,
             _fold_public_lines,
             fold_lines_onto_summary,
             fold_step_lines,
         )
 
         entry = "|switch|p2a: Squirtle|Squirtle, L100, M|256/256 tox"
-        heal = "|-heal|p2a: Squirtle|200/256 tox|[from] item: Leftovers"
-        cure = "|-curestatus|p2a: Squirtle|tox"
-
-        with self.subTest(site="_fold_public_lines"):
-            self.assertEqual("TOXIC", _fold_public_lines([entry, heal]).p2_status)
-            self.assertEqual("NONE", _fold_public_lines([entry, cure]).p2_status)
-
-        pre = _fold_public_lines([entry])
-        with self.subTest(site="fold_step_lines"):
-            self.assertEqual("TOXIC", fold_step_lines([heal], pre).status["p2"])
-            self.assertEqual("NONE", fold_step_lines([cure], pre).status["p2"])
-
+        # Showdown never emits this: a `-heal` always carries its condition. It is
+        # the only `-heal` shape that falls through to the cure branch.
+        unemitted_heal = "|-heal|p2a: Squirtle"
         summary = {
             "p2": {
                 "active_index": 0,
@@ -1709,12 +1812,38 @@ class SetClosureTests(unittest.TestCase):
                 "species": ["squirtle"],
             }
         }
-        with self.subTest(site="fold_lines_onto_summary"):
-            self.assertEqual(
-                "toxic", fold_lines_onto_summary(summary, [heal])["p2"]["active_status"]
+        pre = _fold_public_lines([entry])
+
+        def folded(line):
+            """(whole-log fold, step fold, summary fold) status for one line."""
+
+            return (
+                _fold_public_lines([entry, line]).p2_status,
+                fold_step_lines([line], pre).status["p2"],
+                fold_lines_onto_summary(summary, [line])["p2"]["active_status"],
             )
+
+        # 1. the positive control, on BOTH members, at all three sites.
+        for tag, line in (
+            ("-curestatus", "|-curestatus|p2a: Squirtle|tox"),
+            ("-cureteam", "|-cureteam|p2a: Squirtle|[from] move: Aromatherapy"),
+        ):
+            with self.subTest(clears=tag):
+                self.assertIn(tag, _CURE_TAGS)
+                self.assertEqual(("NONE", "NONE", "none"), folded(line))
+
+        # 2. the one form that reaches the cure branch.
+        with self.subTest(preserves="the unemitted three-field heal"):
+            self.assertEqual(("TOXIC", "TOXIC", "toxic"), folded(unemitted_heal))
+
+        # 3. the shadowing, stated structurally.
+        with self.subTest(structure="disjoint from the HP tag families"):
             self.assertEqual(
-                "none", fold_lines_onto_summary(summary, [cure])["p2"]["active_status"]
+                set(),
+                set(_CURE_TAGS)
+                & (set(_HP_TAGS_FIELD3) | set(_HP_TAGS_FIELD4) | {"-status", "faint"}),
+                "a cure tag that an earlier fold branch already claims is dead "
+                "code at all three sites, so its membership means nothing",
             )
 
     # -- 4. `_SELF_AXES` ------------------------------------------------------
@@ -1762,6 +1891,128 @@ class SetClosureTests(unittest.TestCase):
         self.assertTrue(
             set(_SELF_AXES) <= set(AXES),
             "`_SELF_AXES` names an axis outside the closed `AXES` taxonomy",
+        )
+
+    # -- 5. `RENDER_TELEMETRY_ONLY_LOSSY` ------------------------------------
+
+    def test_the_render_lossy_allowlist_is_derived_from_the_mapper(self):
+        """The fifth set, and the one the original sweep MISSED.
+
+        Found by independent review of this PR, which is the honest reason it is
+        here: the sweep that found the other four was not exhaustive over this
+        module's membership sets, so nothing about this list should be read as
+        proof that it now is.
+
+        It is the worst-shaped of the five. Its own comment says it "Mirrors
+        `engine_transition_differential._TELEMETRY_ONLY_LOSSY_MARKERS`" -- a
+        hand-maintained mirror, which is the construct #1222 replaced with a
+        derivation -- and it had no reference in `tests/` or `scripts/`. And unlike
+        the other four, widening it FAILS OPEN on the oracle itself:
+        `render_branch_is_usable` returns True for the extra marker, the branch
+        counts toward `usable`, it becomes eligible to report `matched: True`, and
+        so `render_unmatched_transition` and `render_no_usable_branch` are
+        suppressed while the published `usable_branches` /
+        `self_consistency_branches` coverage floors go UP. A relaxation that raises
+        the coverage figure while lowering the mismatch figure is the single most
+        expensive shape this module exists to catch, and it was sitting inside it.
+
+        Both directions, against the mapper's own allowlist, plus the fail-open
+        direction pinned behaviourally on a real `mark_attribution_unsafe` marker.
+        """
+
+        import importlib.util
+        import sys
+
+        from pathlib import Path
+
+        from pokezero import public_projection
+        from pokezero.public_projection import (
+            RENDER_TELEMETRY_ONLY_LOSSY,
+            render_branch_is_usable,
+        )
+
+        # From the LOADED module -- see the class docstring on arm hygiene.
+        source = (
+            Path(public_projection.__file__).resolve().parents[2]
+            / "scripts"
+            / "engine_transition_differential.py"
+        )
+        self.assertTrue(
+            source.is_file(),
+            f"the derivation source is missing, so this pin cannot run: {source}",
+        )
+        spec = importlib.util.spec_from_file_location(
+            "_setclosure_engine_transition_differential", source
+        )
+        mapper = importlib.util.module_from_spec(spec)
+        # Registered before exec: the module defines frozen dataclasses, and
+        # `dataclasses._is_type` resolves `cls.__module__` through `sys.modules`,
+        # so an unregistered module dies with `AttributeError: 'NoneType'`.
+        sys.modules[spec.name] = mapper
+        spec.loader.exec_module(mapper)
+        derived = frozenset(mapper._TELEMETRY_ONLY_LOSSY_MARKERS)
+
+        # Anti-vacuity, able to fire alone: an empty allowlist upstream would make
+        # the equality satisfiable by emptying this module's copy, and an empty
+        # copy is the fail-CLOSED direction that hides itself as "no mismatches".
+        self.assertGreaterEqual(
+            len(derived),
+            2,
+            "the mapper's telemetry-only allowlist is empty; the derivation is blind",
+        )
+        self.assertEqual(
+            derived,
+            frozenset(RENDER_TELEMETRY_ONLY_LOSSY),
+            "`RENDER_TELEMETRY_ONLY_LOSSY` no longer mirrors "
+            "`engine_transition_differential._TELEMETRY_ONLY_LOSSY_MARKERS`",
+        )
+
+        # And the fail-open direction, behaviourally. `unattributed_self_damage` is
+        # a real marker the renderer emits and it is NOT telemetry-only, so a
+        # branch carrying it must stay unusable no matter what this set holds.
+        self.assertTrue(render_branch_is_usable([]))
+        for marker in sorted(derived):
+            with self.subTest(usable=marker):
+                self.assertTrue(render_branch_is_usable([marker]))
+        for marker in ("unattributed_self_damage", "empty_instruction_list"):
+            with self.subTest(refused=marker):
+                self.assertFalse(
+                    render_branch_is_usable([marker]),
+                    f"{marker} is not telemetry-only; admitting it suppresses "
+                    "render mismatches AND raises the published coverage floor",
+                )
+
+    # -- the remaining fold maps ----------------------------------------------
+
+    def test_the_render_folds_status_and_boost_alias_maps_are_derived(self):
+        """Two more maps in this module that nothing read, both raised in review.
+
+        `_ENGINE_STATUS` is the lowercase spelling of `engine_fidelity`'s
+        `_STATUS_TO_ENGINE`, which is the parser-side source of truth, so it is
+        derivable outright. Dropping `"tox"` from it was green: fold site 3 then
+        silently stops writing a toxic status at all, which is the quiet direction.
+
+        `_BOOST_ALIAS` is the identity on the seven public boost keys. A spurious
+        alias was green, and an alias is how a protocol key gets folded onto the
+        WRONG stage -- so it is pinned as exactly the identity map.
+        """
+
+        from pokezero.engine_fidelity import _STATUS_TO_ENGINE
+        from pokezero.public_projection import _BOOST_ALIAS, _ENGINE_STATUS
+
+        self.assertGreaterEqual(
+            len(_STATUS_TO_ENGINE), 7, "the parser status map is empty; derivation blind"
+        )
+        self.assertEqual(
+            {token: spelling.lower() for token, spelling in _STATUS_TO_ENGINE.items()},
+            _ENGINE_STATUS,
+            "`_ENGINE_STATUS` is no longer the lowercase spelling of the parser's "
+            "`_STATUS_TO_ENGINE`",
+        )
+        self.assertEqual(
+            {key: key for key in PUBLIC_BOOST_KEYS},
+            _BOOST_ALIAS,
+            "`_BOOST_ALIAS` is not the identity on the seven public boost keys",
         )
 
     # -- the scan the derivations share ---------------------------------------

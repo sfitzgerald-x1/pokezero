@@ -398,17 +398,28 @@ def _fold_public_lines(lines: Sequence[str]) -> Any:
 #: `|-cureteam|p2a: Blissey|[from] move: Aromatherapy`, observed TOXIC, world
 #: NONE, and the WORLD was right.
 #:
-#: PINNED IN BOTH DIRECTIONS, because widening it is silent-ish and was free.
-#: Every tag here writes `status[slot] = "NONE"` unconditionally at all THREE fold
-#: sites (`_fold_public_lines`, `fold_step_lines`, `fold_lines_onto_summary`), so
-#: adding `-heal` re-creates the defect the `if token` guard in `fold_step_lines`
-#: was added to fix -- Leftovers ticks every turn, and that defect measured 969 of
-#: 3,078 render boundaries instead of 206. There is no single upstream that spells
-#: out "tags that clear a status", so the closure is: (a) set equality against the
-#: `-cure*` tags the parser's own public-condition dispatch handles, (b) every
-#: member must be in the `-cure*` namespace, and (c) a `-heal` carrying a status
-#: token must PRESERVE that status at each of the three sites. All three in
-#: `test_public_projection.SetClosureTests`.
+#: PINNED IN BOTH DIRECTIONS, because widening it was free. There is no single
+#: upstream that spells out "tags that clear a status", so the closure is
+#: assembled: (a) set equality against the `-cure*` tags the parser's own
+#: public-condition dispatch handles, and (b) every member must be IN the `-cure*`
+#: namespace. **(b) is what actually closes this set** -- it is the assertion that
+#: rejects `-heal`, `-damage`, `-sethp`, `faint` and `-status`, and it is stated
+#: here rather than left to (a) because (a) alone cannot see them.
+#:
+#: THE SHADOWING IS THE INTERESTING FACT, and it is why (b) has to carry the
+#: weight. All three fold sites (`_fold_public_lines`, `fold_step_lines`,
+#: `fold_lines_onto_summary`) test the HP tag families BEFORE this one, so a tag
+#: that is already in `_HP_TAGS_FIELD3`/`_HP_TAGS_FIELD4` never reaches the cure
+#: branch at all. Measured: adding `-heal` here changes NOTHING at any of the
+#: three sites for `|-heal|<ident>|<condition>|...`, the only form Showdown
+#: emits -- an equivalent mutant, not a defect. It becomes live only on a
+#: three-field `|-heal|<ident>`, which the protocol never produces. So do NOT read
+#: an addition here as harmless because a fold test stayed green: the fold tests
+#: are structurally blind to any tag the HP branches claim first.
+#:
+#: (Do not confuse the above with the 969-of-3,078 render figure. That belonged to
+#: the missing `if token` guard on the `_HP_TAGS_FIELD3` branch -- see the comment
+#: inside `fold_step_lines` -- not to this set.)
 _CURE_TAGS = ("-curestatus", "-cureteam")
 
 _HP_TAGS_FIELD3 = ("-damage", "-heal", "-sethp")
