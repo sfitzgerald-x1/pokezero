@@ -55,7 +55,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from pokezero.belief import PublicBattleBeliefEngine  # noqa: E402
+from pokezero.belief import PublicBattleBeliefEngine, _base_species_id  # noqa: E402
 from pokezero.dex import MoveInfo, ShowdownDex, SpeciesInfo, normalize_id  # noqa: E402
 from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
@@ -392,9 +392,19 @@ class TheIdentSeamIsRealTests(unittest.TestCase):
         """The claim that made the old message self-disproving."""
         self.assertIn("Deoxys-Defense", CAPTURED_P1_PARTY)
         self.assertIn("Ditto", CAPTURED_P2_PARTY)
+        # Species Clause on BASE species, which is the claim that distinguishes this from
+        # the known precedent artifact (four Deoxys FORMES on one team, whose idents
+        # Showdown collapsed). Exactly one Deoxys forme exists in the whole battle, and it
+        # is on the OPPOSING side -- so no base match could have been ambiguous here, and
+        # the refusal was not the sampler producing an impossible party.
         self.assertEqual(
-            len({normalize_id(s).rstrip("0123456789") for s in CAPTURED_P1_PARTY}), 6,
-            "Species Clause holds on the captured party; this is not the four-forme artifact",
+            len({_base_species_id(s) for s in CAPTURED_P1_PARTY}), 6,
+            "the captured p1 party is six distinct BASE species",
+        )
+        self.assertEqual(
+            [s for s in CAPTURED_P1_PARTY + CAPTURED_P2_PARTY if _base_species_id(s) == "deoxys"],
+            ["Deoxys-Defense"],
+            "exactly one Deoxys forme in the whole battle; not the four-forme artifact",
         )
 
 
