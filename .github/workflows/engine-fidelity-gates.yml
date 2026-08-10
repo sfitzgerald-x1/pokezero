@@ -1783,6 +1783,55 @@ jobs:
           # record what harness produced a sweep.
           python scripts/harness_digest.py --print
 
+      # A gate no job runs is not a gate. This workflow names test modules one by one,
+      # so a NEW module is invisible to CI by default -- #1212 had to add its own step
+      # for exactly this reason. Named here rather than left to a discovery run.
+      - name: Truth-injection differential instrument
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_truth_differential -v 2>&1 | tee /tmp/truthdiff.log
+          # EXACT, not a floor. A floor was the one fail-open in #1163's mutation
+          # battery, and this guard lives in YAML where no local run can see it.
+          if ! grep -qE 'Ran 44 tests' /tmp/truthdiff.log; then
+            echo "::error::expected 44 truth-differential tests; the suite shrank or grew"
+            exit 1
+          fi
+          # THE pins, named. `ForcedRefusalTests` is the reason the census number can be
+          # believed at all: an instrument that cannot report failure will report
+          # success, and this campaign has hit that repeatedly. These four run on a bare
+          # runner (no Showdown checkout), so unlike the plan/truth-source classes
+          # they must never skip. The spelling here is deliberate: the register's
+          # `test_the_workflow_scan_sees_the_comment_it_excludes` counts lines in this
+          # file containing the hyphenated checkout name and requires exactly one, so a
+          # second mention here would turn a control into a failure.
+          for pin in \
+            test_a_forced_construction_refusal_is_counted_and_attributed \
+            test_forcing_the_truth_arm_leaves_the_production_arm_byte_identical \
+            test_the_READER_reports_every_counter_that_moved_not_the_first \
+            test_an_unavailable_truth_is_an_instrument_gap_not_an_acceptance \
+            test_the_producer_is_still_first_refuser_across_stages \
+            test_the_module_does_not_claim_more_than_it_does \
+            test_construct_forcing_actually_raises \
+            test_abort_forcing_patches_the_instance_not_the_module \
+            test_a_crate_without_the_model_feature_is_refused \
+            test_round_zero_is_recorded_as_zero \
+            test_a_construction_refusal_still_yields_a_mapping_reading \
+            test_the_probe_is_not_vacuous_on_an_ordinary_request \
+            test_a_request_with_no_legal_candidates_is_silent_not_a_finding \
+            test_unmapped_persistent_still_forces_after_the_decision_returns \
+            test_the_docstring_disclaims_the_era_launch_trigger ; do
+            # `-A2` because unittest -v puts a docstring's first line between the
+            # test name and its verdict.
+            if ! grep -A2 -E "^${pin} " /tmp/truthdiff.log | grep -qE '\.\.\. ok$'; then
+              echo "::error::instrument pin ${pin} did not run and pass"
+              exit 1
+            fi
+          done
+          if ! grep -qE "^OK( \(skipped=[34]\))?$" /tmp/truthdiff.log; then
+            echo "::error::truth-differential suite must be OK, with only environment-gated skips"
+            exit 1
+          fi
+
   # THE REQUIRED CHECK. Runs on every pull request, whatever it touches, so it can
   # always report. It is the only job in this workflow that should ever be marked
   # required in branch protection -- requiring `mass-gate` directly would block any
