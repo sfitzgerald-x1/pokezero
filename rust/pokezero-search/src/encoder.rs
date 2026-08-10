@@ -2137,8 +2137,15 @@ fn encode_pokemon_tokens(
             // no v3 vocabulary row and would hash into the OOV band there.
             let mut bag = volatiles.clone();
             if layout.is_v4() {
-                let prefix = if role == Role::SelfTeam { "self" } else { "opponent" };
-                if as_bool(get(md, &format!("{prefix}_must_recharge"))) {
+                // `&'static str` per role, not a per-call `format!`. The key set is closed and
+                // `Role` has two variants, so the string is a literal either way -- byte-identical
+                // by construction, one fewer heap allocation per leaf per role.
+                let key = if role == Role::SelfTeam {
+                    "self_must_recharge"
+                } else {
+                    "opponent_must_recharge"
+                };
+                if as_bool(get(md, key)) {
                     bag.push("mustrecharge".to_string());
                 }
             }
@@ -2171,7 +2178,11 @@ fn encode_pokemon_tokens(
                         );
                     }
                 }
-                if as_bool(get(md, &format!("{prefix}_meanlook_trap"))) {
+                if as_bool(get(md, if role == Role::SelfTeam {
+                    "self_meanlook_trap"
+                } else {
+                    "opponent_meanlook_trap"
+                })) {
                     grid.set_num(token, layout.num_col("NUMERIC_MEANLOOK_TRAP")?, 1.0);
                 }
             }
@@ -2197,10 +2208,18 @@ fn encode_pokemon_tokens(
                 }
                 // A2: three arrival/identity states. The switch and Baton-Pass sentinels are
                 // positive facts, not padding — see the Python write site.
-                let last_move = str_or_empty(get(md, &format!("{prefix}_last_used_move")));
+                let last_move = str_or_empty(get(md, if role == Role::SelfTeam {
+                    "self_last_used_move"
+                } else {
+                    "opponent_last_used_move"
+                }));
                 if !last_move.is_empty() && layout.feature_pack_last_move {
                     let label = if normalize_identifier(&last_move) == "switch" {
-                        if as_bool(get(md, &format!("{prefix}_arrived_by_baton_pass"))) {
+                        if as_bool(get(md, if role == Role::SelfTeam {
+                            "self_arrived_by_baton_pass"
+                        } else {
+                            "opponent_arrived_by_baton_pass"
+                        })) {
                             "lastmove:batonpass".to_string()
                         } else {
                             "lastmove:switch".to_string()
@@ -2212,7 +2231,11 @@ fn encode_pokemon_tokens(
                 }
                 // A4: the CURRENT Trace copy, cleared on switch-out. Never the belief's
                 // persistent revealed-ability channel, which holds the last-ever-traced one.
-                let traced = str_or_empty(get(md, &format!("{prefix}_traced_ability")));
+                let traced = str_or_empty(get(md, if role == Role::SelfTeam {
+                    "self_traced_ability"
+                } else {
+                    "opponent_traced_ability"
+                }));
                 if !traced.is_empty() {
                     grid.set_cat(
                         token,
