@@ -1119,7 +1119,14 @@ def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
     active's ramp) and its ``-cureteam`` exemption from that rule.
 
     Returns ``{slot: multiplier or None}``. ``None`` means *not determined*, and
-    this list is CLOSED -- every way the value can be unknown is here:
+    this list is CLOSED **in the only sense worth claiming: the reset half of it
+    is DERIVED from the parser, not maintained beside it.**
+    ``test_the_reset_tag_set_is_derived_from_the_parser_not_maintained_by_hand``
+    reads the tags ``showdown._update_toxic_stage`` dispatches on out of its AST
+    and asserts set equality with ``_TOXIC_RAMP_RESET_TAGS``, both directions. A
+    hand-maintained completeness claim is what let the four resets below go
+    missing in the first place, and writing "this list is closed" underneath one
+    is the same defect one level up. Every way the value can be unknown:
 
     * no tick observed since the current active came in;
     * a non-integral quotient, or a percentage-mod HP grid too coarse to divide;

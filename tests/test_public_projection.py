@@ -16,6 +16,31 @@ The fixtures are REAL ``poke_engine`` states built through the production
 adapter, not doubles. The observed side is a hand-built protocol log and a
 hand-built request, which is the only part that can be synthesised without
 losing the property under test.
+
+THE ONE-DIRECTIONAL PIN: the defect class this file keeps producing
+-------------------------------------------------------------------
+Named because it has now recurred **three times in one review thread**, each
+time in a different mechanism, and each time the same way: a boundary was pinned
+on the side that had *already* failed, and left open on the side that had not.
+
+* the render HP band was pinned against WIDENING and was green when TIGHTENED
+  to zero;
+* the module header was pinned against OVER-claiming coverage and was green when
+  flipped back to UNDER-claiming -- which is the direction #1209 actually
+  shipped wrong;
+* ``_TOXIC_RAMP_RESET_TAGS`` was pinned against MISSING a reset and was green
+  when given an extra one (``-heal``), which silences the axis permanently while
+  every downstream number keeps reading exactly as it does today.
+
+The asymmetry is not an accident of care. The failure you just fixed is vivid
+and you write the test facing it; the opposite failure has never happened yet,
+so nothing prompts the second assertion. **Whenever a pin is added here, write
+the mutant that moves the boundary the OTHER way and confirm it dies** -- the
+`safer=True` rows in the battery exist for exactly this and have caught every
+one of the three above. Where the boundary is a SET rather than a scalar, prefer
+deriving it from its source (see
+``test_the_reset_tag_set_is_derived_from_the_parser_not_maintained_by_hand``),
+because set equality closes both directions at once and cannot go stale by hand.
 """
 
 from __future__ import annotations
@@ -601,6 +626,11 @@ class AxisFiresTests(unittest.TestCase):
         # fires. Flipping this bullet back to "UNCOVERED, and the producer mutant
         # was not run" was green. Same shape as the HP band being green when
         # TIGHTENED to zero: a boundary pinned on one side only.
+        # Anchored defensively: a bare `split(...)[1]` dies of `IndexError` if
+        # the anchor is edited, and an IndexError is a FAKE KILL -- it says the
+        # test broke, not that the claim is wrong. Item 6's whole point.
+        self.assertIn("#1209 (toxic stage", flat, "the #1209 bullet's anchor is gone")
+        self.assertIn("* #1212", flat, "the #1212 bullet's anchor is gone")
         bullet = flat.split("#1209 (toxic stage")[1].split("* #1212")[0]
         self.assertIn(
             "COVERED-MEASURED",
@@ -759,6 +789,117 @@ class AxisFiresTests(unittest.TestCase):
         for bench in ("|-curestatus|p2: Benched|tox", "|-curestatus|p1: Benched|tox"):
             with self.subTest(bench=bench):
                 self.assertEqual(5, observed_toxic_multiplier(paid + [bench])["p2"])
+
+        # AND `-cureteam` IS EXEMPT FROM THAT RULE, which is the half no fixture
+        # covered. The parser's `elif not active_target and event_type !=
+        # "-cureteam"` lets a team-wide cure through with a BENCH ident, because
+        # Aromatherapy cures the active too. Dropping the `tag == "-cureteam" or`
+        # disjunct leaves every active-ident case passing, so this line is the
+        # only thing standing between the docstring's "mirrors the parser" and a
+        # rule it does not mirror.
+        self.assertIsNone(
+            observed_toxic_multiplier(paid + ["|-cureteam|p2: Benched|Aromatherapy"])["p2"],
+            "`-cureteam` with a bench ident must still invalidate; the parser "
+            "exempts it from the active-ident rule",
+        )
+
+    def test_the_reset_tag_set_is_derived_from_the_parser_not_maintained_by_hand(self):
+        """The completeness claim, CHECKED rather than asserted.
+
+        `observed_toxic_multiplier`'s docstring says its `None` list is CLOSED.
+        That is a completeness claim held true by hand -- which is one level up
+        the same defect this whole PR was opened to fix, and it is exactly how
+        the four missing resets survived in the first place. If the parser grows
+        a fifth reset, nothing else here notices.
+
+        So the set is DERIVED. `showdown._update_toxic_stage` is called
+        unconditionally from the parse loop and is the whole protocol reset
+        surface outside the switch family, so the tags it dispatches on ARE the
+        tags this module must mirror. Set equality, both directions: a parser
+        reset we do not mirror fails, and a tag we invalidate on that the parser
+        does not fails too.
+
+        The second direction is the one that matters most and was completely
+        unpinned. Adding `-heal` to the set silences the multiplier after any
+        heal -- and Leftovers ticks every turn -- so the axis would go
+        permanently quiet, the census would still read `toxic_count: 0`, and
+        NEITHER the battery NOR a full 731-game census could tell that apart from
+        a healthy instrument. That is the anti-instrument shape this module's own
+        docstring warns about in capitals, sitting on the only coverage #1209
+        has.
+        """
+
+        import ast
+        import textwrap
+
+        from pokezero import showdown
+        from pokezero.public_projection import _TOXIC_RAMP_RESET_TAGS
+
+        tree = ast.parse(textwrap.dedent(inspect.getsource(showdown._update_toxic_stage)))
+        dispatched: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare):
+                continue
+            if not (isinstance(node.left, ast.Name) and node.left.id == "event_type"):
+                continue
+            for comparator in node.comparators:
+                if isinstance(comparator, ast.Constant) and isinstance(comparator.value, str):
+                    dispatched.add(comparator.value)
+                elif isinstance(comparator, (ast.Set, ast.Tuple, ast.List)):
+                    for element in comparator.elts:
+                        if isinstance(element, ast.Constant) and isinstance(element.value, str):
+                            dispatched.add(element.value)
+
+        # Anti-vacuity: an empty derivation would make the equality trivially
+        # satisfiable by emptying the constant, and a walk that silently stops
+        # finding anything is the failure mode of every AST pin.
+        self.assertGreaterEqual(len(dispatched), 4, "the AST walk found no dispatch tags")
+        self.assertEqual(
+            dispatched,
+            set(_TOXIC_RAMP_RESET_TAGS),
+            "`_TOXIC_RAMP_RESET_TAGS` no longer mirrors the tags "
+            "`showdown._update_toxic_stage` dispatches on",
+        )
+
+    def test_ordinary_events_between_the_tick_and_the_read_do_not_invalidate_it(self):
+        """OVER-invalidation, which is the direction that silences the axis.
+
+        Every other reset assertion says "this event MUST invalidate". Nothing
+        said "this event must NOT", and the only must-survive anchors were two
+        bench cures -- so widening the reset set was free. Measured: adding
+        `-heal` to `_TOXIC_RAMP_RESET_TAGS` passed all 88 tests.
+
+        A silenced axis is invisible to everything downstream: the census reads
+        `toxic_count: 0` either way, so no amount of census evidence can
+        distinguish it. The failure has to be caught here or not at all.
+
+        `|turn|` and `|upkeep|` are pinned alongside for a different reason --
+        see the note below.
+        """
+
+        from pokezero.public_projection import observed_toxic_multiplier
+
+        paid = [
+            "|switch|p2a: Squirtle|Squirtle, L100, M|256/256 tox",
+            "|-damage|p2a: Squirtle|176/256 tox|[from] psn",
+        ]
+        for label, tail in (
+            # The real hole. Leftovers alone puts one of these between almost
+            # every tick and every read.
+            ("-heal", ["|-heal|p2a: Squirtle|200/256 tox|[from] item: Leftovers"]),
+            # These two are pinned as BEHAVIOUR, but note that adding either tag
+            # to the reset set is an EQUIVALENT mutant, not a caught one: their
+            # `parts[2]` is `45`/`` and the slot filter drops them before the tag
+            # check ever runs. Recorded so a later reader does not count them as
+            # kills, and so the slot filter itself is pinned.
+            ("|turn|", ["|turn|45"]),
+            ("|upkeep|", ["|upkeep|"]),
+            # A tick on the OTHER side must not disturb this one.
+            ("opponent tick", ["|-damage|p1a: Pikachu|100/200 tox|[from] psn"]),
+            ("opponent cure", ["|-curestatus|p1a: Pikachu|tox"]),
+        ):
+            with self.subTest(survives=label):
+                self.assertEqual(5, observed_toxic_multiplier(paid + tail)["p2"])
 
         # And a mon that switches in poisoned, ticks plain, then is re-Toxiced
         # must not carry the plain tick's fiction forward.
