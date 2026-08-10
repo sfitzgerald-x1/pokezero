@@ -467,12 +467,185 @@ class AxisFiresTests(unittest.TestCase):
             "|-damage|p2a: Squirtle|100/256 tox|[from] psn",
         ]
         self.assertEqual(3, observed_toxic_multiplier(lines)["p2"])
-        # The CODE, with the docstring stripped -- the docstring necessarily
-        # names the field it exists to explain the absence of.
-        body = inspect.getsource(observed_toxic_multiplier)
-        body = body.replace(observed_toxic_multiplier.__doc__ or "", "")
-        self.assertNotIn("toxic_stage", body)
+
+        # THE CODE, VIA ITS AST -- not via its source text. The previous form of
+        # this pin stripped the docstring and then ran `assertNotIn` over what
+        # was left, which still included every COMMENT, so it fired the moment a
+        # comment named `showdown._reseed_toxic_stage_from_residual` to explain
+        # which gate this function mirrors. That is report 4 section 4.8's
+        # landmine exactly: a guard that fires on its own explanation, and a
+        # source-text scan calling itself structural. Names, attributes and
+        # string literals are what "reads the tracker" means; prose is not.
+        import ast
+        import textwrap
+
+        tree = ast.parse(textwrap.dedent(inspect.getsource(observed_toxic_multiplier)))
+        function = tree.body[0]
+        if (
+            isinstance(function.body[0], ast.Expr)
+            and isinstance(function.body[0].value, ast.Constant)
+            and isinstance(function.body[0].value.value, str)
+        ):
+            function.body = function.body[1:]  # its own docstring, which must discuss it
+        touched = set()
+        for node in ast.walk(function):
+            if isinstance(node, ast.Name):
+                touched.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                touched.add(node.attr)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                touched.add(node.value)
+        self.assertEqual(
+            [],
+            sorted(name for name in touched if "toxic_stage" in name),
+            "the observed side reads the parser's toxic tracker in CODE, which is "
+            "what made this axis compare `x` to `f(x)`",
+        )
+        # And the pin is not vacuous: the walk really does see this function's
+        # identifiers, so an added read would land in `touched`.
+        self.assertIn("multiplier", touched)
+        self.assertIn("_TOXIC_DENOMINATOR", touched)
+
         self.assertNotIn("toxic_multiplier", ObservedPublicView.__doc__ or "x")
+
+        # --- AND THE MODULE HEADER, which is where this pin could not see. ---
+        # The function-level docstrings were corrected when the tautology was
+        # retracted; the module header was not, and the header is the module's
+        # OWN COVERAGE CONTRACT -- the first thing a reader is told about what
+        # this oracle can and cannot falsify. It went on asserting both
+        # retracted claims for a whole revision because every structural pin
+        # stopped at a function body.
+        from pokezero import public_projection
+
+        header = public_projection.__doc__ or ""
+        # WHITESPACE-NORMALISED, because a docstring is REFLOWED every time it is
+        # edited. Matching the raw text made every phrase check below vacuous: a
+        # mutant that re-asserted #1212's claim with the line break one word
+        # further along SURVIVED, since the literal substring was no longer
+        # contiguous. A pin on prose that any reflow defeats is not a pin.
+        flat = " ".join(header.split())
+
+        # TWO OF THE FOUR CHECKS ARE ABSOLUTE. These two phrasings only ever
+        # existed as live assertions, so their presence anywhere is the defect:
+        #  - #1209's TAUTOLOGY, named as the live comparison. The header said
+        #    `side_conditions.toxic_count` "must equal the parser's public
+        #    `replay.toxic_stage`", which is `x` against `f(x)`.
+        #  - the miscount that followed from inventing an axis for #1212.
+        self.assertNotIn("must equal the parser's public", flat)
+        self.assertNotIn("three of which are visible to the state comparator", flat)
+
+        # AND TWO ARE SCOPED, because the scoping is the whole point -- report 4
+        # section 4.8's landmine is a guard that fires on its own explanation,
+        # and this repo's retraction convention is to keep a wrong claim IN
+        # PLACE, quoted, rather than to delete it. So a bare `assertNotIn` here
+        # would forbid the CORRECTED header: it has to quote #1212's claim to
+        # retract it, name `_materialization_toxic_stage` to say what the
+        # producer mutant mutates, and name `_reseed_toxic_stage_from_residual`
+        # to say why the two sides are not independent.
+        #
+        # The rule: MENTIONING either is allowed, making an UNMARKED claim is
+        # not. Every paragraph that raises one must also say which way it is
+        # being talked about. This is what would have caught the shipped header,
+        # whose #1209 and #1212 bullets carried no marker at all.
+        scoped = {
+            # #1212's claim may be quoted, but only to retract it.
+            "the axis that makes the relaxation falsifiable at all": ("RETRACTED",),
+            # The parser's tracker may be named to explain its absence.
+            "toxic_stage": ("RETRACTED", "NULL MUTANT", "not independent", "producer mutant"),
+        }
+        marked = 0
+        for raw in header.split("\n\n"):
+            paragraph = " ".join(raw.split())
+            for phrase, markers in scoped.items():
+                if phrase not in paragraph:
+                    continue
+                self.assertTrue(
+                    any(marker in paragraph for marker in markers),
+                    f"the module header raises {phrase!r} in a paragraph that does "
+                    "not mark whether it is the live comparison or the retracted "
+                    "one:\n" + paragraph[:300],
+                )
+                marked += 1
+        # Anti-vacuity: a header that stopped discussing either would pass the
+        # loop trivially, and the retraction is the useful part of this docstring.
+        self.assertGreaterEqual(
+            marked, 2, "the module header no longer discusses either retracted claim"
+        )
+        # AND THE RETRACTION IS IN PLACE, not deleted. This repo's convention is
+        # that a wrong claim stays, quoted, with what replaces it beside it --
+        # #1210's history is three commits doing exactly that. Deleting the claim
+        # would satisfy every check above while destroying the record, so the
+        # in-place form is pinned directly.
+        self.assertIn("RETRACTED: the claim that", flat)
+
+    def test_a_plain_poison_tick_is_not_priced_as_a_toxic_multiplier(self):
+        """PLAIN POISON IS NOT TOXIC, and this side used to say it was.
+
+        Gen 3 plain poison charges `maxhp / 8`, which is exactly
+        `2 * (maxhp // 16)`. So a plain `|-damage|...|[from] psn` tick divided
+        cleanly by the toxic unit and came back as TOXIC STAGE 2 -- a fabricated
+        value on the side of the comparison whose whole job is to be observed.
+
+        The PARSER applies the gate that prevents this explicitly, and this side
+        omitted it: `showdown._reseed_toxic_stage_from_residual` opens with
+        `if "tox" not in new_condition.split(): return`.
+
+        WHY IT MATTERED even though `_axis_toxic_count` also gates on the
+        engine's status: that engine-status gate was the ONLY thing standing
+        between a fabricated 2 and a firing, and it was itself untested. Worse,
+        where the engine DOES say TOXIC the fabricated 2 can MATCH a pre-tick
+        counter of 2 and silently absorb a real status disagreement -- a defect
+        that makes the oracle read CLEANER, which is the exact anti-instrument
+        shape this axis was rebuilt once to escape.
+        """
+
+        from pokezero.public_projection import observed_toxic_multiplier
+
+        # 256 // 16 == 16 is the toxic unit; plain poison charges 256 // 8 == 32,
+        # a clean multiple of it, which is why the quotient guard cannot see this.
+        plain = [
+            "|switch|p2a: Squirtle|Squirtle, L100, M|256/256 psn",
+            "|-damage|p2a: Squirtle|224/256 psn|[from] psn",
+        ]
+        self.assertEqual(32, 256 // 8, "plain poison is maxhp/8 in gen 3")
+        self.assertEqual(2, 32 // (256 // 16), "and that is exactly 2 toxic units")
+        self.assertIsNone(
+            observed_toxic_multiplier(plain)["p2"],
+            "a plain-poison tick was priced as toxic stage 2",
+        )
+
+        # THE OTHER DIRECTION, so this is a gate and not a mute button: the same
+        # arithmetic on a `tox`-conditioned tick must still resolve.
+        toxic = [
+            "|switch|p2a: Squirtle|Squirtle, L100, M|148/256 tox",
+            "|-damage|p2a: Squirtle|100/256 tox|[from] psn",
+        ]
+        self.assertEqual(3, observed_toxic_multiplier(toxic)["p2"])
+
+        # THE GATE IS ON THE CONDITION TOKEN, NOT ON THE LINE. `"tox" in line`
+        # reads the same on the fixture above and is wrong: a NICKNAME is
+        # arbitrary text the opponent chose, and it sits on the very line the
+        # multiplier is read from. This mon is plain-poisoned and nicknamed
+        # `toxo`, so a substring gate admits it and prices it as stage 2 again.
+        nicknamed = [
+            "|switch|p2a: toxo|Squirtle, L100, M|256/256 psn",
+            "|-damage|p2a: toxo|224/256 psn|[from] psn",
+        ]
+        self.assertIn("tox", nicknamed[1], "the fixture must trip a substring gate")
+        self.assertIsNone(
+            observed_toxic_multiplier(nicknamed)["p2"],
+            "a nickname containing `tox` was read as the status token",
+        )
+
+        # And a mon that switches in poisoned, ticks plain, then is re-Toxiced
+        # must not carry the plain tick's fiction forward.
+        mixed = [
+            "|switch|p2a: Squirtle|Squirtle, L100, M|256/256 psn",
+            "|-damage|p2a: Squirtle|224/256 psn|[from] psn",
+            "|-status|p2a: Squirtle|tox",
+            "|-damage|p2a: Squirtle|208/256 tox|[from] psn",
+        ]
+        self.assertEqual(1, observed_toxic_multiplier(mixed)["p2"])
 
 
 class KnownProducerExclusionTests(unittest.TestCase):
@@ -989,6 +1162,152 @@ class RenderProjectionTests(unittest.TestCase):
         self.assertEqual(["render_unmatched_transition"], _axes(found))
 
 
+class RenderBandWidthTests(unittest.TestCase):
+    """THE WIDTH OF THE HP BAND, pinned from BOTH sides. It was pinned by nothing.
+
+    `_render_mismatch_reasons` is exact on everything deterministic and BANDED on
+    HP, and the band is the dominant determinant of the largest figure the render
+    arm publishes: HP is **159 of the 206** `render_unmatched_transition`
+    reasons. So the band's width is very nearly the render number, and until this
+    class existed the whole 80-test module passed with the band set anywhere
+    across a range wider than the figure it produces.
+
+    MEASURED, on the shipped tree, by mutating the two constants and re-running
+    the module:
+
+    * `_DAMAGE_TOLERANCE` 0.16 -> 0.20, 0.30, 0.40, 0.50, **0.75**: all green.
+      First failure at 1.00. So the loose side was open to **4.7x**.
+    * `_MIN_TOLERANCE_HP` 5 -> 20, **40**: all green. First failure at 80. So the
+      loose side of the floor was open to **8x**.
+    * AND THE SAFER DIRECTION, which is the half that says the suite was silent
+      rather than lenient: `_MIN_TOLERANCE_HP` -> **1** and -> **0** are both
+      green. A strictly-more-conservative variant surviving is report 4 section
+      4.4's rule firing -- the boundary was unpinned in both directions, so a
+      too-permissive bound and a too-strict one were equally invisible.
+
+    Each test below sits ONE HP off the boundary, on opposite sides of it, at the
+    two anchors where the floor and the proportional term each dominate. That
+    pins `_DAMAGE_TOLERANCE` to [0.16, 0.164) and `_MIN_TOLERANCE_HP` to exactly
+    5 -- not to within 2.5-6x.
+    """
+
+    #: The proportional anchor. 1000 HP so `int(moved * 0.16) + 1` is far above
+    #: the 5 HP floor and the floor cannot mask the term under test.
+    WIDE = types.SimpleNamespace(
+        p1_hp=1000,
+        p2_hp=1000,
+        p1_status="NONE",
+        p2_status="NONE",
+        fainted=frozenset(),
+        weather="NONE",
+        side_conditions={},
+        presence=lambda: {},
+    )
+    #: The floor anchor. `moved` = 10, so `int(10 * 0.16) + 1 == 2` and the 5 HP
+    #: floor is what is actually being compared against.
+    NARROW = types.SimpleNamespace(
+        p1_hp=100,
+        p2_hp=100,
+        p1_status="NONE",
+        p2_status="NONE",
+        fainted=frozenset(),
+        weather="NONE",
+        side_conditions={},
+        presence=lambda: {},
+    )
+
+    def _verdict(self, pre, maxhp, observed_hp, rendered_hp):
+        """Axes for one boundary whose only disagreement is p2's HP.
+
+        p1 is left unstated on both sides, so it resolves to the pre-state HP on
+        both and is skipped -- the fixture isolates one banded comparison.
+        """
+
+        observed = [f"|-damage|p2a: Squirtle|{observed_hp}/{maxhp}", "|turn|4"]
+        rendered = [f"|-damage|p2a: Squirtle|{rendered_hp}/{maxhp}", "|turn|4"]
+        found, _ = render_projection_mismatch(
+            state_string="<state>",
+            slot_sides=SLOT_SIDES,
+            party_display={"p1": ["Pikachu"], "p2": ["Squirtle"]},
+            turn=3,
+            choices={"p1": "tackle", "p2": "surf"},
+            observed_lines=observed,
+            pre_features=pre,
+            module=_FakeCrate(
+                [{"events": rendered, "lossy": [], "attribution_unsafe": False}]
+            ),
+        )
+        return _axes(found)
+
+    # --- the proportional term: `int(moved * _DAMAGE_TOLERANCE) + 1` ----------
+
+    def test_an_hp_gap_one_inside_the_proportional_band_is_silent(self):
+        """The SAFER-DIRECTION half. `moved` = 300, so the band is
+        `int(300 * 0.16) + 1` = 49, and a 49 HP gap is the widest the band admits.
+
+        TIGHTEN `_DAMAGE_TOLERANCE` below 0.16 and this fires: at 0.15 the band
+        is 46 and 49 no longer fits. That is what makes the constant a floor and
+        not just a ceiling -- a systematically over-strict band would inflate the
+        render figure, and nothing else here would notice.
+        """
+
+        self.assertEqual([], self._verdict(self.WIDE, 1000, 700, 749))
+
+    def test_an_hp_gap_one_outside_the_proportional_band_fires(self):
+        """The TOLERANT half, and the one the reviewer's 16% -> 40% walk found.
+
+        Same `moved` = 300 and the same band of 49, one HP further out. WIDEN
+        `_DAMAGE_TOLERANCE` to anything from 0.164 up and this stops firing: at
+        0.17 the band is 52 and swallows the 50 HP gap. 0.20, 0.30, 0.40 and 0.75
+        all swallow it, and all of those used to be green.
+        """
+
+        self.assertEqual(
+            ["render_unmatched_transition"], self._verdict(self.WIDE, 1000, 700, 750)
+        )
+
+    # --- the floor: `max(_MIN_TOLERANCE_HP, ...)` -----------------------------
+
+    def test_an_hp_gap_at_the_floor_is_silent(self):
+        """`moved` = 10, so the proportional term is 2 and the 5 HP FLOOR governs.
+
+        TIGHTEN `_MIN_TOLERANCE_HP` and this fires: at 4 the band is 4 and the
+        5 HP gap no longer fits, and at 0 or 1 -- both green before this test --
+        every rounding difference on a small trade becomes a render mismatch.
+        """
+
+        self.assertEqual([], self._verdict(self.NARROW, 100, 90, 95))
+
+    def test_an_hp_gap_one_outside_the_floor_fires(self):
+        """`moved` = 10 again, one HP further out.
+
+        WIDEN `_MIN_TOLERANCE_HP` to 6 and this stops firing; so does widening
+        `_DAMAGE_TOLERANCE` far enough for the proportional term to overtake the
+        floor at `moved` = 10, which is what 0.75 does (`int(7.5) + 1` = 8). This
+        one test therefore closes the loose side of BOTH constants at this anchor.
+        """
+
+        self.assertEqual(
+            ["render_unmatched_transition"], self._verdict(self.NARROW, 100, 90, 96)
+        )
+
+    def test_the_band_is_anchored_on_movement_and_not_on_max_hp(self):
+        """A percentage of MAX HP would be a different instrument, and a wrong one.
+
+        The same 50 HP gap that fires at `moved` = 300 must be SILENT when the
+        step moved far more, because a bigger roll spread genuinely admits a
+        bigger disagreement. Replace `moved` with a constant or with `maxhp` and
+        one of these two directions breaks.
+        """
+
+        # moved = 900: band is int(900 * 0.16) + 1 = 145, so 50 fits.
+        self.assertEqual([], self._verdict(self.WIDE, 1000, 100, 150))
+        # moved = 300: band is 49, so the same 50 does not.
+        self.assertEqual(
+            ["render_unmatched_transition"], self._verdict(self.WIDE, 1000, 700, 750)
+        )
+
+
 class RenderSelfConsistencyTests(unittest.TestCase):
     """Every searched branch's render vs that branch's OWN post-state.
 
@@ -1258,6 +1577,56 @@ class AggregationTests(unittest.TestCase):
         self.assertEqual(1, summary["render_mismatched_boundaries"])
         # And it is NOT folded into the world/decision numbers.
         self.assertEqual(0, summary["projection_mismatched_worlds"])
+
+    def test_render_rows_and_render_boundaries_are_two_more_distinct_units(self):
+        """`render_axis_boundaries` counts BOUNDARIES, and it used to count ROWS.
+
+        `render_post_state_disagreement` emits one row per (branch, slot, field),
+        so one boundary routinely carries several. The aggregate incremented once
+        per ROW and published the total under a `_boundaries` key, and every
+        surface downstream then labelled it BOUNDARIES: on the published census
+        the figure is **80 rows over 23 boundaries**, so the artifact that plan 4
+        section 2 designates as the deliverable overstated it by **3.5x**, in a
+        table where the neighbouring `mismatched = 206` really is boundaries.
+
+        The two units are now published side by side, because both are wanted and
+        neither substitutes for the other: rows are the honest size of the arm's
+        output, boundaries are the figure comparable with
+        `render_boundaries_compared`.
+        """
+
+        def boundary(axes):
+            return {"battle_id": "b", "arm": "driver", "worlds": [], "render": {"axes": axes}}
+
+        rows = [
+            # One boundary, four rows: two fields x two slots, the real shape.
+            boundary(["render_post_state_disagreement"] * 4),
+            # A second boundary carrying both axes; two rows, one of each.
+            boundary(["render_post_state_disagreement", "render_unmatched_transition"]),
+            boundary([]),
+        ]
+        summary = aggregate_projection_records(rows)
+
+        self.assertEqual(3, summary["render_boundaries_compared"])
+        self.assertEqual(2, summary["render_mismatched_boundaries"])
+        # BOUNDARIES: the disagreement axis fired on two distinct boundaries.
+        self.assertEqual(
+            {"render_post_state_disagreement": 2, "render_unmatched_transition": 1},
+            summary["render_axis_boundaries"],
+        )
+        # ROWS: five rows in total, and the key that says ROWS is the one that
+        # carries the bigger number.
+        self.assertEqual(
+            {"render_post_state_disagreement": 5, "render_unmatched_transition": 1},
+            summary["render_axis_rows"],
+        )
+        # A per-axis BOUNDARY count can never exceed the boundaries compared,
+        # which is the invariant the row count silently violated: labelled
+        # BOUNDARIES, 80 of 3,078 was reported where the truth was 23.
+        for axis, count in summary["render_axis_boundaries"].items():
+            self.assertLessEqual(
+                count, summary["render_mismatched_boundaries"], f"{axis} exceeds boundaries"
+            )
 
 
 class ObserverTests(unittest.TestCase):

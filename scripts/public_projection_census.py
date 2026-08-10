@@ -920,12 +920,36 @@ def render_queue(summary: Mapping[str, Any], *, commands: Sequence[str], title: 
     )
     for axis, count in (summary.get("render_axis_boundaries") or {}).items():
         lines.append(f"| `{axis}` | BOUNDARIES | {count} |")
+    # ROWS, in their own block and under their own unit. Emitting one figure per
+    # axis and labelling it BOUNDARIES is what overstated
+    # `render_post_state_disagreement` by 3.5x: it emits one row per (branch,
+    # slot, field), so 80 rows sat in a BOUNDARIES column over 23 boundaries.
+    rows_by_axis = summary.get("render_axis_rows") or {}
+    for axis, count in rows_by_axis.items():
+        lines.append(f"| `{axis}` | ROWS | {count} |")
+    if rows_by_axis:
+        lines.append("")
+        lines.append(
+            "ROWS and BOUNDARIES above are DIFFERENT UNITS and neither is a "
+            "renderer defect rate. One boundary carries one "
+            "`render_unmatched_transition` row but as many "
+            "`render_post_state_disagreement` rows as it has disagreeing "
+            "(branch, slot, field) triples, so only the BOUNDARIES column is "
+            "comparable with `boundaries compared`."
+        )
     lines.append("")
     lines.append("### Render-arm disposition (why a boundary was not compared)")
     lines.append("")
     lines.append("| bucket | BOUNDARIES |")
     lines.append("|---|---|")
     for key, count in (summary.get("render_counts") or {}).items():
+        # `axis:*` are per-ROW shard counters, not dispositions, and this table's
+        # header says BOUNDARIES. Carrying them here is the second place the same
+        # 80 was labelled BOUNDARIES. The axis figures are published above, in
+        # both units, from the per-boundary records rather than from a
+        # pre-aggregated counter that cannot distinguish them.
+        if str(key).startswith("axis:"):
+            continue
         lines.append(f"| `{key}` | {count} |")
     if not summary.get("render_counts"):
         lines.append("| *(render arm not run)* | 0 |")

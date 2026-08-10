@@ -199,6 +199,12 @@ jobs:
             # is the sole guard against the Rust and Python spellings drifting -- must still
             # trip the gate. `src/pokezero/**` covers the module they pin but not the pins.
             tests/test_engine_search.py
+            # Direction 2 of the oracle, with a STEP below. Same reason as every
+            # other test file here: `src/pokezero/**` covers `public_projection.py`
+            # but not the pins on it, and a PR whose only change widens the render
+            # HP band's pins or drops the plain-poison fixture must still trip the
+            # gate. #1215 shipped this file with no entry and no step at all.
+            tests/test_public_projection.py
             tests/test_sleep_talk_phaze_drag.py
             tests/test_instruction_event_mapping.py
             # This PR pins `Ran 8 tests` on crit-kill-split, so its own edits must trigger.
@@ -384,6 +390,33 @@ jobs:
 
       - name: Build and install the gen3 engine and the search crate
         run: bash scripts/build_search_crate_engine.sh
+
+      # Direction 2 of the oracle. #1215 shipped this module and no job ran it,
+      # which is report 4 section 4.7's named hazard verbatim: a new test module is
+      # invisible here by default because the workflow names modules one at a time,
+      # and a gate no job runs is not a gate. It went a whole PR unenforced, and
+      # the follow-up that found the module header still asserting two retracted
+      # coverage claims found them in a file CI never loaded.
+      # Exact count, not a floor: this module's pins are the band width of the HP
+      # comparator and the two units of the render arm, and both are the kind of
+      # thing a silently-shrinking suite stops noticing.
+      - name: Public projection oracle (direction 2)
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_public_projection -v 2>&1 \
+            | tee /tmp/pubproj.log
+          if ! grep -qE 'Ran 87 tests' /tmp/pubproj.log; then
+            echo "::error::expected 87 public-projection pins; the suite shrank or grew"
+            exit 1
+          fi
+          # A clean OK with no skips. RenderBandWidthTests is the only thing pinning
+          # the HP band, which is the dominant determinant of the largest figure the
+          # render arm publishes, and a skipIf on it would turn that figure back
+          # into an unverified one.
+          if ! grep -qE '^OK$' /tmp/pubproj.log; then
+            echo "::error::public-projection pins did not report a clean OK"
+            exit 1
+          fi
 
       # Behaviour is the only thing a stale .so cannot fake: --check validates the
       # patch set against the stamp, but a restamp without a rebuild leaves a stale

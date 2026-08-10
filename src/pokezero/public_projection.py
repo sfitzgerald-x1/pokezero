@@ -52,21 +52,60 @@ payload:
 * the parser's public opponent record (``replay.public_revealed``), which is the
   definition of "what the protocol revealed" and has no upstream.
 
-That matters for the four guards relaxed on 2026-08-09, three of which are
-visible to the state comparator precisely because the request states the fact
-the guard now infers:
+That matters for the four guards relaxed on 2026-08-09, **two** of which are
+visible to the state comparator. The count is MEASURED, not counted off the
+list below: the first revision of this header said *three* and reached three by
+naming an axis for #1212 that does not exist.
 
 * #1210 (Transform PP overlay) -> ``self_move_pp``: the request publishes the
   copy's live PP every round, so a wrong overlay is a numeric disagreement.
-* #1212 (a third Encore resolution source) -> ``self_move_disabled``: under
-  Encore the request disables every move but the encored one, so resolving the
-  WRONG move produces a different disabled set. This is the axis that makes the
-  relaxation falsifiable at all -- ``encore_move_unknown`` used to refuse.
-* #1209 (toxic stage: demand a weaker proof) -> ``toxic_count``: the engine's
-  ``side_conditions.toxic_count`` must equal the parser's public
-  ``replay.toxic_stage`` whenever that stage is known.
+  **COVERED-MEASURED** -- reverting ``_copied_move_spec``'s overlay takes this
+  axis from 0 to 2,219 WORLDS on the census block.
+* #1209 (toxic stage: demand a weaker proof) -> ``toxic_count``, whose observed
+  side is ``observed_toxic_multiplier``: the multiplier the log shows was
+  actually PAID, recovered from raw ``|-damage|...|[from] psn`` damage.
+  **COVERED-MEASURED, by a PRODUCER mutant and not by the census reading zero**
+  -- see ``_axis_toxic_count`` and the two paragraphs below, which are the whole
+  reason a zero on this axis must not be read as coverage.
+* #1212 (a third Encore resolution source) -> **NO AXIS. NOT COVERED, BY
+  CONSTRUCTION**, and this is where the first revision of this header was
+  simply wrong. ``_apply_encore_locks`` writes only
+  ``last_used_move=f"move:{index}"`` and never touches ``disabled``; the
+  per-move ``disabled`` flag comes from ``_move_specs`` via ``known_pp``, built
+  from the request's own rows -- so ``self_move_disabled`` compares the
+  request's flag against the request's flag. Separately, #1212's class is the
+  OPPONENT seat, and every ``_SELF_AXES`` member is evaluated only for
+  ``context.player_id``. RETRACTED: the claim that ``self_move_disabled`` is
+  "the axis that makes the relaxation falsifiable at all". It is not an axis on
+  this relaxation at all, and no axis here is.
 * #1211 (absorb guard narrowed to HP headroom) is NOT visible here. It is a
   renderer branch, and it is why ``render_projection_mismatch`` exists.
+  COVERED-MEASURED there, on a separately built crate.
+
+Two things about #1209's axis that a zero must NOT be read as
+-------------------------------------------------------------
+**The two sides are not independent DERIVATIONS.** They are two
+implementations of the same arithmetic over the same ``[from] psn`` line:
+``showdown._reseed_toxic_stage_from_residual`` and
+``observed_toxic_multiplier`` both compute ``damage // (maxhp // 16)`` and both
+refuse on a non-integral quotient. So zero variance across a whole census block
+is that IDENTITY restating itself, not agreement between two witnesses. Nothing
+about a zero here is evidence of power.
+
+**What establishes the power is a producer mutant, and it fires.** Widening
+``local_showdown._materialization_toxic_stage`` from
+``min(14, max(0, tracked_stage - 1))`` to ``min(14, max(0, tracked_stage))`` --
+an over-broad #1209 crediting every world one extra tick -- takes this axis
+from 0 to **11,568 WORLDS / 1,320 DECISIONS** on the 731-battle block
+(mismatched worlds 406 -> 10,962). So #1209's over-credit shape is
+COVERED-MEASURED. Command and per-arm source sha256 in the direction-2 report.
+
+**And one arm of #1209 is unreachable here, which is the honest reason its
+literal site is not covered.** A producer mutant at #1209's own site --
+``if tracked_stage == 0:`` returning 0 immediately, dropping every proof
+requirement -- is a NULL MUTANT: the census records are **bit-identical** on
+both arms. That is not "the mutant was not run". It was run; this block does
+not reach that arm, and reachability is the limit, not the instrument.
 
 Units, kept apart (plan 4 reporting rules, report 4 section 9.2)
 ----------------------------------------------------------------
@@ -1051,8 +1090,9 @@ def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
 
     Returns ``{slot: multiplier or None}``. ``None`` means *not determined* --
     no tick observed since the current active came in, a non-integral quotient,
-    or a percentage-mod HP grid too coarse to divide. An axis never fires on an
-    undetermined value.
+    a percentage-mod HP grid too coarse to divide, or **a tick whose own
+    condition token is plain ``psn`` rather than ``tox``**. An axis never fires
+    on an undetermined value.
     """
 
     from .engine_fidelity import _parse_condition  # noqa: PLC0415
@@ -1085,6 +1125,21 @@ def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
         if tag != "-damage" or previous is None:
             continue
         if "[from] psn" not in line:
+            continue
+        # PLAIN POISON IS NOT TOXIC, and this side used to price it as though it
+        # were. The PARSER applies this gate explicitly and this one did not --
+        # `showdown._reseed_toxic_stage_from_residual` opens with
+        # `if "tox" not in new_condition.split(): return`. Gen 3 plain poison
+        # charges `maxhp / 8`, which is exactly `2 * (maxhp // 16)`, so a plain
+        # `psn` tick divided cleanly and came back as TOXIC STAGE 2: a
+        # fabricated value on the side of the comparison whose entire job is to
+        # be observed. Only `_axis_toxic_count`'s engine-status gate stood
+        # between that and a firing, and where the engine DOES say TOXIC the
+        # fabricated 2 can MATCH a pre-tick counter of 2 and silently absorb a
+        # real status disagreement -- the anti-instrument shape (a defect making
+        # the oracle read cleaner) that this axis was rebuilt once to escape.
+        if "tox" not in parts[3].split():
+            multiplier[slot] = None
             continue
         unit = maxhp.get(slot, 0) // _TOXIC_DENOMINATOR
         damage = previous - value
@@ -1695,6 +1750,15 @@ def _render_mismatch_reasons(
     this step's HP movement, as `engine_fidelity` anchors it: an engine branch
     carries the representative damage roll while Showdown sampled one of sixteen.
 
+    THE BAND'S WIDTH IS THE DOMINANT DETERMINANT OF THE LARGEST RENDER FIGURE --
+    HP is 159 of the 206 `render_unmatched_transition` reasons -- and it was
+    pinned by nothing. Measured: `_DAMAGE_TOLERANCE` could be widened 0.16 ->
+    0.75 (4.7x) and `_MIN_TOLERANCE_HP` 5 -> 40 (8x) with the whole module green,
+    and TIGHTENED to 0 with the whole module green too, so the boundary was open
+    in both directions. `RenderBandWidthTests` now pins both constants from both
+    sides at the two anchors where the floor and the proportional term each
+    dominate; widen or tighten either and a named test fails.
+
     WEATHER IS NOT COMPARED. Both sides fold ONE step, an absent `|-weather|` is
     indistinguishable from "unchanged", and the axis would only ever fire on an
     upkeep-line rendering convention. The STATE comparator does compare weather,
@@ -1937,7 +2001,13 @@ def aggregate_projection_records(
     battles: set[str] = set()
     render_boundaries = 0
     render_mismatched = 0
+    #: BOUNDARIES per axis -- a boundary is counted ONCE however many rows it
+    #: carried. See `render_axis_rows` for the other unit and why they differ.
     render_axis: Counter[str] = Counter()
+    #: ROWS per axis: one per `ProjectionMismatch`. `render_post_state_disagreement`
+    #: emits one row per (branch, slot, field), so this is several times the
+    #: boundary count and is NOT a boundary figure.
+    render_axis_rows: Counter[str] = Counter()
     render_errors: Counter[str] = Counter()
 
     for row in rows:
@@ -1976,8 +2046,15 @@ def aggregate_projection_records(
             axes = render.get("axes") or []
             if axes:
                 render_mismatched += 1
+                # Two different units off one list, kept apart at the source.
+                # Incrementing ONE counter per row and publishing it under a
+                # `_boundaries` name is the bug this replaces: it labelled 80
+                # rows as 80 boundaries, over 23 boundaries -- a 3.5x
+                # overstatement in the artifact the plan calls the deliverable.
                 for axis in axes:
-                    render_axis[str(axis)] += 1
+                    render_axis_rows[str(axis)] += 1
+                for axis in set(str(axis) for axis in axes):
+                    render_axis[axis] += 1
 
     return {
         "decisions_seen": decisions,
@@ -2010,7 +2087,13 @@ def aggregate_projection_records(
         "render_mismatch_rate": (
             (render_mismatched / render_boundaries) if render_boundaries else None
         ),
+        # BOUNDARIES per axis: distinct boundaries, so the key's own name is true.
         "render_axis_boundaries": dict(render_axis.most_common()),
+        # ROWS per axis: one per mismatch row. A DIFFERENT UNIT, published beside
+        # the boundary count rather than instead of it, because the row count is
+        # the honest size of the render arm's output and the boundary count is
+        # the honest denominator-comparable figure.
+        "render_axis_rows": dict(render_axis_rows.most_common()),
         "render_errors": dict(render_errors.most_common(10)),
     }
 
