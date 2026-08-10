@@ -188,6 +188,17 @@ AXES = (
 
 #: Axes whose observed side comes from the acting seat's own request. Only
 #: meaningful for `context.player_id`; the opponent's request is not ours to see.
+#:
+#: THIS CONSTANT HAS NO RUNTIME CONSUMER, deliberately and disclosed: the seat
+#: scoping is structural (`state_projection_mismatches` passes
+#: `sides[observed.slot]` and `observed.self_request` to the two producers below),
+#: not a lookup against this set. It is documentation the module header cites --
+#: which is exactly the shape that drifts silently, because prose pointing at a
+#: constant nothing reads cannot go stale loudly. Its READER is therefore a test:
+#: `test_public_projection.SetClosureTests.test_the_self_axis_set_is_derived_from
+#: _its_two_producers` DERIVES it from the `axis=` literals of `_axis_self_moves`
+#: and `_axis_self_party` and asserts set equality both ways. Dropping a member
+#: here is a killed mutation, not a silent edit.
 _SELF_AXES = frozenset(
     {
         "self_move_set",
@@ -204,6 +215,18 @@ _DETAIL_LIMIT = 160
 
 #: Tokens a Showdown request can offer that are not moves any engine moveset
 #: carries. Kept as a named constant so deleting it is a killable mutation.
+#:
+#: ADDING to it is the dangerous direction and it was the unpinned one. Every id
+#: named here is filtered OUT of the `self_move_set` comparison, so a single real
+#: move added here blinds the axis for that move permanently while every census
+#: figure keeps reading exactly as it does today -- `rest` alone is #1212's
+#: exemplar move and occurs on a third of the gen3 randbat pool. So the set is
+#: DERIVED, not curated: `engine_transition_differential.engine_choice_for_action`
+#: is the one place that decides which request ids cannot be resolved on the
+#: engine's own move list (it tests `move_id in engine_moves` FIRST and only then
+#: special-cases), and the ids it special-cases after that lookup ARE this set.
+#: Set equality both ways, with an anti-vacuity floor, in
+#: `test_public_projection.SetClosureTests`.
 _REQUEST_PSEUDO_MOVES = frozenset({"struggle", "recharge"})
 
 
@@ -374,6 +397,29 @@ def _fold_public_lines(lines: Sequence[str]) -> Any:
 #: held none. Exemplar `ppc-s1-10100064` p1 round 75:
 #: `|-cureteam|p2a: Blissey|[from] move: Aromatherapy`, observed TOXIC, world
 #: NONE, and the WORLD was right.
+#:
+#: PINNED IN BOTH DIRECTIONS, because widening it was free. There is no single
+#: upstream that spells out "tags that clear a status", so the closure is
+#: assembled: (a) set equality against the `-cure*` tags the parser's own
+#: public-condition dispatch handles, and (b) every member must be IN the `-cure*`
+#: namespace. **(b) is what actually closes this set** -- it is the assertion that
+#: rejects `-heal`, `-damage`, `-sethp`, `faint` and `-status`, and it is stated
+#: here rather than left to (a) because (a) alone cannot see them.
+#:
+#: THE SHADOWING IS THE INTERESTING FACT, and it is why (b) has to carry the
+#: weight. All three fold sites (`_fold_public_lines`, `fold_step_lines`,
+#: `fold_lines_onto_summary`) test the HP tag families BEFORE this one, so a tag
+#: that is already in `_HP_TAGS_FIELD3`/`_HP_TAGS_FIELD4` never reaches the cure
+#: branch at all. Measured: adding `-heal` here changes NOTHING at any of the
+#: three sites for `|-heal|<ident>|<condition>|...`, the only form Showdown
+#: emits -- an equivalent mutant, not a defect. It becomes live only on a
+#: three-field `|-heal|<ident>`, which the protocol never produces. So do NOT read
+#: an addition here as harmless because a fold test stayed green: the fold tests
+#: are structurally blind to any tag the HP branches claim first.
+#:
+#: (Do not confuse the above with the 969-of-3,078 render figure. That belonged to
+#: the missing `if token` guard on the `_HP_TAGS_FIELD3` branch -- see the comment
+#: inside `fold_step_lines` -- not to this set.)
 _CURE_TAGS = ("-curestatus", "-cureteam")
 
 _HP_TAGS_FIELD3 = ("-damage", "-heal", "-sethp")
@@ -1032,6 +1078,13 @@ def _axis_opponent_revealed(
     return out
 
 
+#: Showdown boost key -> the `poke_engine` Side attribute that holds its stage.
+#: DERIVED, not curated: the engine's Side exposes exactly seven `*_boost`
+#: attributes and those seven ARE the public stat stages, so
+#: `test_public_projection.SetClosureTests` asserts this map's values equal that
+#: attribute set and its keys equal `_BOOST_KEYS`. Dropping a key silences that
+#: boost on the state comparator in BOTH the observed and world directions at
+#: once, which is why a `len(...) == 7` floor is asserted alongside.
 _ENGINE_BOOST_FIELD = {
     "atk": "attack_boost",
     "def": "defense_boost",
@@ -1477,8 +1530,18 @@ def render_projection_mismatch(
 #: renderer never emits, so there is nothing to fold against it. Side conditions
 #: are not compared either because `post_state_summary` does not publish them --
 #: the TRANSITION arm covers those against the log.
+#:
+#: The seven public stat stages, and `render_self_consistency_mismatches`'s
+#: docstring claims it compares "all seven boosts" -- a claim that was true and
+#: unpinned, so DROPPING a key from this tuple silenced that boost in BOTH render
+#: arms and falsified the published claim with nothing red. Derived against the
+#: engine's own `*_boost` Side attributes with a `== 7` floor, and every key is
+#: separately shown to FIRE on both arms, in
+#: `test_public_projection.SetClosureTests`.
 _BOOST_KEYS = ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")
 
+#: Field-for-field `_ENGINE_BOOST_FIELD`; the closure test asserts the two are
+#: equal so the duplicate cannot drift.
 _ENGINE_BOOST_ATTR = {
     "atk": "attack_boost",
     "def": "defense_boost",
