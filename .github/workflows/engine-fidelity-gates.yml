@@ -1295,22 +1295,22 @@ jobs:
       # discovers `tests/`, so a NEW module is invisible by default -- the fix would ship
       # with a battery that no job runs. Same hole the two steps above each document.
       #
-      # READ BEFORE TRUSTING A GREEN. 27 of the 30 execute here; 3 SKIP, and the skip count
+      # READ BEFORE TRUSTING A GREEN. 29 of the 32 execute here; 3 SKIP, and the skip count
       # is pinned EXACTLY rather than forbidden. The 3 are the producer-side reads --
       # `teams.ts`, `sim/pokemon.ts` and the gen3 randbat pool reachability census (13
       # forme carriers, 7 Transform carriers out of 1682) -- and CI builds no Showdown
       # checkout, the same honest gap the spread-gate and Encore steps record. A FOURTH
       # skip means a behavioural pin quietly acquired a Showdown dependency, which is how a
       # battery goes vacuous while still printing OK. Per-METHOD decorators keep the
-      # reported total at 30 in both environments; a class-level skip would collapse to one
-      # entry and drop the total to 27, defeating the count guard.
+      # reported total at 32 in both environments; a class-level skip would collapse to one
+      # entry and drop the total to 29, defeating the count guard.
       - name: Transform forme-ident belief and world-construction pins
         run: |
           set -o pipefail
           python -m unittest tests.test_transform_forme_ident -v 2>&1 \
             | tee /tmp/transformforme.log
-          if ! grep -qE 'Ran 30 tests' /tmp/transformforme.log; then
-            echo "::error::expected 30 tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 32 tests' /tmp/transformforme.log; then
+            echo "::error::expected 32 tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '\bskipped=3\b' /tmp/transformforme.log; then

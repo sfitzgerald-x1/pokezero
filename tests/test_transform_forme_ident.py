@@ -169,6 +169,20 @@ def _deoxys(forme: str) -> FixturePokemon:
     )
 
 
+def _payload_opponent_transformed(dex: ShowdownDex, donor: FixturePokemon):
+    """The CAPTURED orientation: seat p1 (the Deoxys side), p2's Ditto is transformed.
+
+    `_apply_transform` takes a different branch for a slot that is not the self player --
+    `request_move_state` is passed only when `is_self` -- so the seat this decision was
+    actually recorded at is not covered by the self-seat payload.
+    """
+    payload = _payload(dex, donor)
+    payload["selfPlayer"] = "p1"
+    payload["selfTeamOrder"] = [donor.species, "Swampert"]
+    payload["selfActiveMoves"] = list(payload["sides"]["p1"]["pokemon"][0]["moves"])
+    return payload
+
+
 def _active_spec(world, slot: str):
     """The active ``PokemonSpec`` on ``slot`` of a built world."""
     side = getattr(world.spec, world.slot_sides[slot])
@@ -718,6 +732,35 @@ class TheWholeChainOnTheCapturedDecisionTests(unittest.TestCase):
         )
         self.assertEqual(_active_spec(world, "p2").id, "deoxysdefense")
         self.assertEqual(dict(engine.transform_forme_corrections), {"Deoxys->Deoxys-Defense": 1})
+
+    def test_the_captured_seat_orientation_also_constructs(self) -> None:
+        """Seat p1, opposing Ditto transformed -- exactly the recorded decision.
+
+        `runE-ctrl512-s4-r1000` recorded `seat: 'p1'`, `self_active: Deoxys-Defense`,
+        `opponent_active: Ditto`, i.e. the transformed side is the OPPONENT. The self-seat
+        payload above exercises the other branch of `is_self`.
+        """
+        engine = _belief(SWITCH_DEOXYS, SWITCH_DITTO, TRANSFORM_LINE)
+        target = _active(engine, "p2").to_overlay_payload()["transform_species"]
+        dex = _dex()
+        donor = _deoxys("Deoxys-Defense")
+        payload = _payload_opponent_transformed(dex, donor)
+        self.assertEqual(payload["selfPlayer"], "p1", "fixture guard: the OPPONENT is p2")
+        world = battle_spec_from_payload(
+            payload, _override(donor), dex=dex, transformed_slots={"p2": str(target)},
+        )
+        self.assertEqual(_active_spec(world, "p2").id, "deoxysdefense")
+
+    def test_the_captured_seat_orientation_refused_before_the_fix(self) -> None:
+        """Same orientation, the pre-fix `transformed_slots` value. Held red on purpose."""
+        dex = _dex()
+        donor = _deoxys("Deoxys-Defense")
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                _payload_opponent_transformed(dex, donor), _override(donor), dex=dex,
+                transformed_slots={"p2": "Deoxys"},
+            )
+        self.assertEqual(caught.exception.reason, "transform_unexpressible")
 
 
 if __name__ == "__main__":
