@@ -1275,6 +1275,10 @@ jobs:
       # ratio above was measured on the pre-collapse tree and has NOT been re-run here;
       # only the total is re-measured (`Ran 128 tests`, OK, on the merged tree).
       #
+      # 128 -> 135 with the Tier-2 pruned-conclusion fix: the seven
+      # `Tier2PrunedConclusionTests`. All seven are NEW and all seven RUN (they sit above
+      # this module's `unittest.main()`); counted from the run, not from the diff.
+      #
       # EXACT count, not a floor, for the reason #1163 gave: a floor was the one fail-open
       # in its mutation battery, and this guard lives in YAML where no local `unittest`
       # run can see it.
@@ -1282,8 +1286,8 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          if ! grep -qE 'Ran 128 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 128 engine-search tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 135 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 135 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then

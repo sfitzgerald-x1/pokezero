@@ -1619,6 +1619,347 @@ class Tier2OverlayTests(unittest.TestCase):
         self.assertTrue(investment_products.investment_pinned)
 
 
+class _CumulativeAnnotationSource:
+    """`EnvTier2AnnotationSource`-shaped stub with the real cumulative contract.
+
+    `overlay_for` is "the env trackers' per-index conclusions, CUMULATIVE from
+    battle start" -- it never stops offering an index, which is exactly why the
+    fold's pruning window and the source's overlay drift apart.
+    """
+
+    def __init__(self):
+        self.overlay: dict[int, tuple] = {}
+        self.enabled = True
+        self.calls = 0
+
+    def offer(self, index, values):
+        self.overlay[index] = values
+
+    def active(self):
+        return self.enabled
+
+    def boundary_state(self, player_id):  # pragma: no cover - cross-check only
+        raise NotImplementedError
+
+    def overlay_for(self, player_id):
+        self.calls += 1
+        return dict(self.overlay)
+
+
+class _WindowedAnnotationSource:
+    """A hypothetical source that offers only what the fold can still identify.
+
+    Not a real shape -- the control arm for the no-op proof. Against it the
+    adapter never re-seats anything, so any state difference from the
+    cumulative arm is caused by re-seating.
+
+    Deliberately NOT a subclass of `_CumulativeAnnotationSource`:
+    `test_unreachable_readjudication.EveryWorkflowTestCountGuardMatchesItsModuleTests`
+    forbids same-module inheritance here, because it would break the AST
+    derivation behind this module's exact test-count pin.
+    """
+
+    fold = None
+
+    def __init__(self):
+        self.overlay: dict[int, tuple] = {}
+        self.enabled = True
+        self.calls = 0
+
+    def offer(self, index, values):
+        self.overlay[index] = values
+
+    def active(self):
+        return self.enabled
+
+    def boundary_state(self, player_id):  # pragma: no cover - cross-check only
+        raise NotImplementedError
+
+    def overlay_for(self, player_id):
+        self.calls += 1
+        overlay = dict(self.overlay)
+        if self.fold is None:
+            return overlay
+        tail_start = self.fold.action_total - len(self.fold.action_tail)
+        return {
+            index: values
+            for index, values in overlay.items()
+            if index in self.fold.annotations
+            or tail_start <= index <= self.fold.action_total
+        }
+
+
+class Tier2PrunedConclusionTests(unittest.TestCase):
+    """The cumulative source vs. the windowed fold: `fallback:live_fold_broken`.
+
+    Measured mechanism (control block, seed 9900080, both seats, round 248):
+    ``tracker annotations for indices [2] arrived outside the identifiable range
+    [4, 516]``. Index 2's conclusion did NOT arrive late — it was applied at an
+    early boundary and then evicted by ``FoldState._prune_annotations`` once the
+    512-entry action tail slid past it, while ``EnvTier2AnnotationSource`` kept
+    offering the whole cumulative overlay. The adapter read
+    ``index not in fold.annotations`` as "never applied" and refused the truth.
+
+    These tests reproduce that at the same shape with a 4-entry tail, and pin
+    the two directions the guard still has to hold in.
+    """
+
+    LEAD = LiveFoldAdvanceTests.LEAD
+    _context = LiveFoldAdvanceTests._context
+    # Index 2 is the first ACTION token after the two lead switches -- the same
+    # index the production failure names.
+    ANNOTATED_INDEX = 2
+    VALUES = (0.25, True, False, 0.0)
+
+    @staticmethod
+    def _round(turn: int) -> list[str]:
+        return [
+            "|move|p1a: Rattata|Tackle|p2a: Chansey",
+            f"|-damage|p2a: Chansey|{641 - turn}/641",
+            "|move|p2a: Chansey|Pound|p1a: Rattata",
+            f"|-damage|p1a: Rattata|{300 - turn}/300",
+            "|upkeep",
+            f"|turn|{turn + 1}",
+        ]
+
+    def _policy_with_small_tail(self, source, battle_id="fold-prune"):
+        """A policy whose fold has a 4-token action tail and a 1-token merged tail.
+
+        Production's limits are 512/128; the eviction the bug rides on needs a
+        battle longer than the action tail, which is 249 rounds at the real
+        limits and four here. Nothing else about the path changes: this is the
+        SAME ``_advance_live_fold`` -> ``FoldState.advance_in_place`` ->
+        ``_prune_annotations`` -> ``_apply_tier2_overlay`` chain.
+        """
+        from pokezero.transitions_fold import FoldState
+
+        policy = EngineMctsPolicy(
+            dex=None, set_source=None, module=object(),
+            config=EngineMctsConfig(), annotation_source=source,
+        )
+        key = (battle_id, "p1")
+        policy._live_folds[key] = FoldState.initial(
+            perspective_slot="p1", action_tail_limit=4, merged_tail_limit=1
+        )
+        policy._fold_consumed[key] = 0
+        return policy, key
+
+    def _drive(self, policy, rounds, battle_id="fold-prune", offer_from=1):
+        """Advance ``rounds`` boundaries; the source starts offering index 2 at
+        ``offer_from``. Returns (last fold or None, list of per-round folds)."""
+        lines = list(self.LEAD)
+        folds = []
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            for index in range(rounds):
+                if index:
+                    lines = lines + self._round(index)
+                fold = policy._advance_live_fold(
+                    self._context(lines, battle_id=battle_id, round_index=index)
+                )
+                folds.append(fold)
+                if fold is None:
+                    break
+                if index >= offer_from:
+                    policy._annotation_source.offer(self.ANNOTATED_INDEX, self.VALUES)
+        self._caught = list(caught)
+        return folds
+
+    def _assert_no_fold_break(self, folds):
+        from pokezero.engine_search import EngineSearchFoldMismatchWarning
+
+        self.assertNotIn(None, folds, "the fold broke")
+        self.assertFalse(
+            [w for w in self._caught if issubclass(w.category, EngineSearchFoldMismatchWarning)],
+            "a fold-mismatch warning was raised",
+        )
+
+    def test_a_pruned_conclusion_the_source_keeps_offering_does_not_break_the_fold(self):
+        """THE regression. 8 boundaries drives index 2 out of the 4-token tail."""
+        source = _CumulativeAnnotationSource()
+        policy, key = self._policy_with_small_tail(source)
+        folds = self._drive(policy, 8)
+        self._assert_no_fold_break(folds)
+        final = folds[-1]
+        tail_start = final.action_total - len(final.action_tail)
+        # The premise of the test: index 2 really did leave the identifiable
+        # range and really was pruned. Without this the test passes vacuously.
+        self.assertGreater(tail_start, self.ANNOTATED_INDEX)
+        self.assertNotIn(self.ANNOTATED_INDEX, final.annotations)
+        self.assertNotIn(self.ANNOTATED_INDEX, final.rep_index_map)
+        self.assertIn(self.ANNOTATED_INDEX, source.overlay)
+        # Applied exactly once, then re-seated on every later boundary.
+        self.assertEqual(policy.stats.fold_annotations_applied, 1)
+
+    def test_the_resettled_conclusion_is_counted_not_silent(self):
+        """A class that stops refusing must not stop being visible."""
+        source = _CumulativeAnnotationSource()
+        policy, _key = self._policy_with_small_tail(source)
+        self._assert_no_fold_break(self._drive(policy, 8))
+        self.assertGreater(policy.stats.fold_annotations_resettled, 0)
+        self.assertGreater(policy.stats.fold_annotation_resettle_boundaries, 0)
+        payload = policy.stats.to_dict()
+        self.assertEqual(
+            payload["fold_annotations_resettled"], policy.stats.fold_annotations_resettled
+        )
+        self.assertEqual(
+            payload["fold_annotation_resettle_boundaries"],
+            policy.stats.fold_annotation_resettle_boundaries,
+        )
+
+    def test_resettling_a_pruned_conclusion_changes_no_fold_state(self):
+        """The no-op claim, proved rather than argued.
+
+        Arm A gets the real CUMULATIVE overlay (index 2 offered forever). Arm B
+        gets a hypothetical windowed source that stops offering index 2 the
+        moment it is pruned, so arm B never re-seats anything. If re-seating
+        touched the fold at all the two serialized states would differ.
+        """
+        source_a = _CumulativeAnnotationSource()
+        policy_a, key_a = self._policy_with_small_tail(source_a, battle_id="arm-a")
+        self._assert_no_fold_break(self._drive(policy_a, 8, battle_id="arm-a"))
+
+        source_b = _WindowedAnnotationSource()
+        policy_b, key_b = self._policy_with_small_tail(source_b, battle_id="arm-b")
+        source_b.fold = policy_b._live_folds[key_b]
+        self._assert_no_fold_break(self._drive(policy_b, 8, battle_id="arm-b"))
+
+        self.assertGreater(policy_a.stats.fold_annotations_resettled, 0)
+        self.assertEqual(policy_b.stats.fold_annotations_resettled, 0)
+        self.assertEqual(
+            policy_a._live_folds[key_a].to_payload(),
+            policy_b._live_folds[key_b].to_payload(),
+        )
+        self.assertEqual(
+            policy_a.stats.fold_annotations_applied,
+            policy_b.stats.fold_annotations_applied,
+        )
+
+    def test_a_changed_conclusion_on_a_pruned_index_still_breaks_the_fold(self):
+        """The fail-open direction. Per-index immutability must survive pruning.
+
+        Dropping pruned indices from the overlay instead of re-seating them
+        would make this silent -- the fold would never see the changed value.
+        """
+        from pokezero.engine_search import EngineSearchFoldMismatchWarning
+
+        source = _CumulativeAnnotationSource()
+        policy, _key = self._policy_with_small_tail(source)
+        self._assert_no_fold_break(self._drive(policy, 8))
+        # A tracker conclusion that CHANGED after the fold pruned its index.
+        source.offer(self.ANNOTATED_INDEX, (0.75, True, False, 0.0))
+        lines = list(self.LEAD) + [
+            line for turn in range(1, 8) for line in self._round(turn)
+        ] + self._round(8)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = policy._advance_live_fold(
+                self._context(lines, battle_id="fold-prune", round_index=8)
+            )
+        self.assertIsNone(result)
+        messages = [str(w.message) for w in caught]
+        self.assertTrue(
+            any(issubclass(w.category, EngineSearchFoldMismatchWarning) for w in caught),
+            messages,
+        )
+        # The RIGHT diagnosis: immutability, not a bogus "arrived outside the
+        # identifiable range". A mutant that reports the wrong cause is a
+        # mutant that survives on the count alone.
+        self.assertTrue(
+            any("per-index immutable" in message for message in messages), messages
+        )
+
+    def test_a_never_applied_conclusion_past_the_tail_still_breaks_the_fold(self):
+        """The guard's motivating case, bounded rather than deleted.
+
+        Same shape as the regression -- a positive index below ``tail_start`` --
+        but this one was never applied, so the fold has no banked contribution
+        for it and applying it now is impossible. Still loud.
+        """
+        from pokezero.engine_search import EngineSearchFoldMismatchWarning
+
+        source = _CumulativeAnnotationSource()
+        policy, _key = self._policy_with_small_tail(source)
+        # Never offer anything, so nothing is ever applied.
+        self._assert_no_fold_break(self._drive(policy, 8, offer_from=99))
+        self.assertEqual(policy.stats.fold_annotations_applied, 0)
+        source.offer(self.ANNOTATED_INDEX, self.VALUES)
+        lines = list(self.LEAD) + [
+            line for turn in range(1, 8) for line in self._round(turn)
+        ] + self._round(8)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = policy._advance_live_fold(
+                self._context(lines, battle_id="fold-prune", round_index=8)
+            )
+        self.assertIsNone(result)
+        messages = [str(w.message) for w in caught]
+        self.assertTrue(
+            any(issubclass(w.category, EngineSearchFoldMismatchWarning) for w in caught),
+            messages,
+        )
+        self.assertTrue(
+            any("outside the identifiable range" in message for message in messages),
+            messages,
+        )
+
+    def test_a_conclusion_on_the_open_window_index_is_identifiable(self):
+        """The upper edge of the identifiable range, which nothing else pinned.
+
+        ``_token_identity`` accepts ``index == action_total`` while a window is
+        open, so the adapter's range test has to be inclusive there. Found by a
+        SAFER-direction mutant (`<=` -> `<`) surviving the suite: a strictly
+        more conservative guard that nothing could see.
+        """
+        source = _CumulativeAnnotationSource()
+        policy, key = self._policy_with_small_tail(source, battle_id="open-window")
+        # A mid-turn boundary: the tackle has been emitted, the turn has not
+        # closed, so index 2 is the OPEN window's virtual token.
+        lines = list(self.LEAD) + [
+            "|move|p1a: Rattata|Tackle|p2a: Chansey",
+            "|-damage|p2a: Chansey|468/641",
+        ]
+        source.offer(self.ANNOTATED_INDEX, self.VALUES)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            fold = policy._advance_live_fold(
+                self._context(lines, battle_id="open-window", round_index=0)
+            )
+        self._caught = list(caught)
+        self._assert_no_fold_break([fold])
+        self.assertEqual(fold.action_total, self.ANNOTATED_INDEX)  # the edge itself
+        self.assertIsNotNone(fold.current_window)
+        self.assertEqual(policy.stats.fold_annotations_applied, 1)
+        self.assertEqual(
+            fold.products().transition_tokens[-1].residual, self.VALUES[0]
+        )
+
+    def test_the_applied_record_does_not_outlive_its_fold(self):
+        """The other fail-open: a record kept past its fold re-seats a
+        conclusion that fold never applied. Both drop sites are pinned."""
+        source = _CumulativeAnnotationSource()
+        policy, key = self._policy_with_small_tail(source, battle_id="battle-a")
+        self._assert_no_fold_break(self._drive(policy, 8, battle_id="battle-a"))
+        self.assertIn(self.ANNOTATED_INDEX, policy._fold_annotations_seen[key])
+
+        # 1. another battle drops it (drivers run one battle at a time).
+        source.enabled = False
+        policy._advance_live_fold(
+            self._context(self.LEAD, battle_id="battle-b", round_index=0)
+        )
+        self.assertNotIn(key, policy._fold_annotations_seen)
+
+        # 2. a fold rebuilt from scratch for the SAME key starts empty.
+        fresh = ("battle-b", "p1")
+        policy._live_folds.pop(fresh, None)
+        policy._fold_consumed.pop(fresh, None)
+        policy._fold_annotations_seen[fresh] = {self.ANNOTATED_INDEX: self.VALUES}
+        policy._advance_live_fold(
+            self._context(self.LEAD, battle_id="battle-b", round_index=1)
+        )
+        self.assertEqual(policy._fold_annotations_seen.get(fresh, {}), {})
+
+
 class FallbackAlertTests(unittest.TestCase):
     """Every fallback must be LOUD: warning + logger; strict mode raises."""
 
