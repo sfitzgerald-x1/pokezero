@@ -1747,8 +1747,11 @@ jobs:
           # THE pins, named. `ForcedRefusalTests` is the reason the census number can be
           # believed at all: an instrument that cannot report failure will report
           # success, and this campaign has hit that repeatedly. These four run on a bare
-          # runner (no pokemon-showdown checkout), so unlike the plan/truth-source
-          # classes they must never skip.
+          # runner (no Showdown checkout), so unlike the plan/truth-source classes
+          # they must never skip. The spelling here is deliberate: the register's
+          # `test_the_workflow_scan_sees_the_comment_it_excludes` counts lines in this
+          # file containing the hyphenated checkout name and requires exactly one, so a
+          # second mention here would turn a control into a failure.
           for pin in \
             test_a_forced_construction_refusal_is_counted_and_attributed \
             test_forcing_the_truth_arm_leaves_the_production_arm_byte_identical \
