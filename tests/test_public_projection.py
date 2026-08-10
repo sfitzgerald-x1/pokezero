@@ -193,6 +193,132 @@ def _axes(mismatches):
     return sorted({m.axis for m in mismatches})
 
 
+#: The seven public stat stages, WRITTEN OUT rather than read from
+#: `_BOOST_KEYS`. A loop over the constant under test shrinks with the constant,
+#: so `_BOOST_KEYS` minus `evasion` would silently mean "six subTests instead of
+#: seven, all green" -- the null-world shape. Every set-closure loop below
+#: iterates a literal for the same reason; the literal itself is held honest
+#: against the engine in `SetClosureTests`.
+PUBLIC_BOOST_KEYS = ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")
+
+#: Real gen3 moves a request can offer. Any one of them appearing in
+#: `_REQUEST_PSEUDO_MOVES` blinds `self_move_set` for that move, so each is pinned
+#: to still fire. `rest` is #1212's exemplar move; `recover` is the move behind
+#: the census's one open predicate.
+REAL_REQUEST_MOVES = ("rest", "recover", "sleeptalk", "protect", "toxic", "earthquake")
+
+#: The seat-scoped axes, written out for the same reason as `PUBLIC_BOOST_KEYS`.
+SEAT_SCOPED_AXES = frozenset(
+    {
+        "self_move_set",
+        "self_move_pp",
+        "self_move_disabled",
+        "self_party_species",
+        "self_party_hp",
+        "self_item",
+        "self_ability",
+    }
+)
+
+
+def _ast_of(function):
+    """The parsed body of one function, dedented so a method parses standalone."""
+
+    import ast  # noqa: PLC0415
+    import textwrap  # noqa: PLC0415
+
+    return ast.parse(textwrap.dedent(inspect.getsource(function)))
+
+
+def _dispatch_constants(
+    tree,
+    *,
+    names=("event_type",),
+    subscripts=(("parts", 1),),
+):
+    """Every string literal `tree` COMPARES a protocol-tag expression against.
+
+    #1222's walk keyed on `node.left` being `Name("event_type")` and on that
+    alone, so two real spellings of the same dispatch were invisible to it:
+
+    * `"-endability" == event_type` -- constant on the left;
+    * `parts[1] == "-endability"` -- the raw field, which is literally what
+      `event_type` is assigned FROM two lines above it in
+      `showdown._update_toxic_stage`.
+
+    Neither is exotic and both are fail-OPEN: a fifth parser reset written either
+    way would leave the derived set short, the equality would fail... in the wrong
+    direction, or -- worse -- if the constant were updated to match by hand, the
+    derivation would silently stop being a derivation. The canonical spelling
+    fails CLOSED already, so this is hardening, not a fix. Precedent for widening
+    a scan like this: the `INVOCATION` regex in
+    `EveryWorkflowTestCountGuardMatchesItsModuleTests`, widened because
+    `python3 -m unittest` is a real spelling of `python -m unittest`.
+
+    Deliberately NOT "any comparison against a string literal". `parts[3]` carries
+    the STATUS token (`"tox"`), and `_normalize_identifier(parts[3]) == "tox"` is
+    a Call on the left -- both must stay out or the derived set gains members the
+    constant can never legitimately hold. The tag expression must be one of
+    `names`, or one of the `(container, index)` pairs in `subscripts`.
+    """
+
+    import ast  # noqa: PLC0415
+
+    def _is_tag(node) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in names
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+            index = node.slice
+            if not isinstance(index, ast.Constant) or isinstance(index.value, bool):
+                return False
+            return any(
+                node.value.id == container and index.value == position
+                for container, position in subscripts
+            )
+        return False
+
+    def _literals(node) -> set:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return {node.value}
+        if isinstance(node, (ast.Set, ast.Tuple, ast.List)):
+            return {
+                element.value
+                for element in node.elts
+                if isinstance(element, ast.Constant) and isinstance(element.value, str)
+            }
+        return set()
+
+    found: set = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        operands = [node.left, *node.comparators]
+        if not any(_is_tag(operand) for operand in operands):
+            continue
+        for operand in operands:
+            if not _is_tag(operand):
+                found |= _literals(operand)
+    return found
+
+
+def _emitted_axes(*functions) -> set:
+    """The `axis=` literals a set of mismatch producers can emit."""
+
+    import ast  # noqa: PLC0415
+
+    found: set = set()
+    for function in functions:
+        for node in ast.walk(_ast_of(function)):
+            if (
+                isinstance(node, ast.keyword)
+                and node.arg == "axis"
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            ):
+                found.add(node.value.value)
+    return found
+
+
 class SilenceTests(unittest.TestCase):
     """The comparator must be able to say nothing."""
 
@@ -827,28 +953,20 @@ class AxisFiresTests(unittest.TestCase):
         a healthy instrument. That is the anti-instrument shape this module's own
         docstring warns about in capitals, sitting on the only coverage #1209
         has.
-        """
 
-        import ast
-        import textwrap
+        The walk itself moved into `_dispatch_constants`, which is WIDER than the
+        one this test shipped with: it also reads `"-endability" == event_type`
+        and `parts[1] == "-endability"`. That widening changes nothing about
+        today's source -- `_update_toxic_stage` uses the canonical spelling
+        throughout -- so it is proven on synthetic sources in
+        `SetClosureTests.test_the_tag_dispatch_scan_reads_every_real_spelling`
+        rather than asserted here.
+        """
 
         from pokezero import showdown
         from pokezero.public_projection import _TOXIC_RAMP_RESET_TAGS
 
-        tree = ast.parse(textwrap.dedent(inspect.getsource(showdown._update_toxic_stage)))
-        dispatched: set[str] = set()
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Compare):
-                continue
-            if not (isinstance(node.left, ast.Name) and node.left.id == "event_type"):
-                continue
-            for comparator in node.comparators:
-                if isinstance(comparator, ast.Constant) and isinstance(comparator.value, str):
-                    dispatched.add(comparator.value)
-                elif isinstance(comparator, (ast.Set, ast.Tuple, ast.List)):
-                    for element in comparator.elts:
-                        if isinstance(element, ast.Constant) and isinstance(element.value, str):
-                            dispatched.add(element.value)
+        dispatched = _dispatch_constants(_ast_of(showdown._update_toxic_stage))
 
         # Anti-vacuity: an empty derivation would make the equality trivially
         # satisfiable by emptying the constant, and a walk that silently stops
@@ -1251,6 +1369,449 @@ class AxisClosureTests(unittest.TestCase):
             },
             {axis for axis in AXES if axis.startswith("render_")},
         )
+
+
+class SetClosureTests(unittest.TestCase):
+    """The four remaining hand-maintained membership sets in this module, closed.
+
+    Each one was verified UNPINNED by a one-token sweep on #1215 as merged -- add
+    or remove a single token and the whole suite stayed green:
+
+    * `_REQUEST_PSEUDO_MOVES` + `"rest"`. It filters observed move ids OUT of the
+      `self_move_set` comparison, so one real move id blinds that axis for that
+      move on every world of every census, permanently and silently. `rest` occurs
+      111 times in the gen3 randbat source, and `self_move_set` carries the
+      census's ONLY open predicate. **One token here takes the direction-2
+      headline to a clean zero with nothing red anywhere** -- the exact
+      anti-instrument shape this module's own docstring warns about, on the one
+      axis that still has something to report.
+    * `_BOOST_KEYS` - `"evasion"`. Silences that boost in BOTH render arms and
+      falsifies `render_self_consistency_mismatches`'s published claim to compare
+      "all seven boosts".
+    * `_CURE_TAGS` + `"-heal"`. Every member writes `status = NONE`
+      unconditionally at all three fold sites, so this re-creates the
+      fold-wipes-status defect whose measured cost was the render figure reading
+      969 of 3,078 boundaries instead of 206. Loud once it fires, but nothing
+      pinned it.
+    * `_SELF_AXES` - `"self_move_set"`. Survives because the constant had no
+      consumer anywhere in `src/`, `scripts/` or `tests/` while the module header
+      cites it as defining what the self axes evaluate.
+
+    THE METHOD, unchanged from #1222's `_TOXIC_RAMP_RESET_TAGS`: where the set has
+    a real source of truth, DERIVE it and assert set equality in both directions
+    with an anti-vacuity floor. Where it has none, pin both directions explicitly
+    -- must-contain and must-not-contain. Set equality closes the direction the
+    author is not facing, which is this file's named recurring defect class.
+
+    NOTE ON ARM HYGIENE (report 4 section 4.2). Where a derivation reads a file
+    rather than a loaded object, the path is resolved from the LOADED module's
+    `__file__`, never from this test file's. `tests/conftest.py` prepends the
+    running checkout's `src`, so a test resolving `../scripts` from `__file__`
+    while `PYTHONPATH` selects a different arm would compare arm A's constant to
+    arm B's source of truth and call it agreement.
+    """
+
+    # -- 1. `_REQUEST_PSEUDO_MOVES` ------------------------------------------
+
+    def test_the_request_pseudo_move_set_is_derived_from_the_choice_mapper(self):
+        """The set is exactly the ids the engine's choice mapper cannot resolve.
+
+        `engine_transition_differential.engine_choice_for_action` is the one place
+        in the tree that decides this question, and it decides it in the only
+        order that can be authoritative: it tries `move_id in engine_moves` FIRST
+        and special-cases only what fails that lookup. The ids it special-cases
+        after the lookup ARE the request tokens no engine moveset carries, which
+        is this constant's definition verbatim -- and the constant's own comment
+        has always named that function. So the comment becomes the assertion.
+
+        Both directions. A pseudo-move the mapper stopped translating fails; a
+        REAL move added here fails, because the mapper resolves it and never names
+        it.
+        """
+
+        import ast
+
+        from pathlib import Path
+
+        from pokezero import public_projection
+        from pokezero.public_projection import _REQUEST_PSEUDO_MOVES
+
+        # From the LOADED module, not from this file -- see the class docstring.
+        source = (
+            Path(public_projection.__file__).resolve().parents[2]
+            / "scripts"
+            / "engine_transition_differential.py"
+        )
+        self.assertTrue(
+            source.is_file(),
+            f"the derivation source is missing, so this pin cannot run: {source}",
+        )
+        module = ast.parse(source.read_text(encoding="utf-8"))
+        mapper = next(
+            (
+                node
+                for node in ast.walk(module)
+                if isinstance(node, ast.FunctionDef)
+                and node.name == "engine_choice_for_action"
+            ),
+            None,
+        )
+        self.assertIsNotNone(
+            mapper, "`engine_choice_for_action` was renamed; the derivation is stale"
+        )
+        derived = _dispatch_constants(mapper, names=("move_id",), subscripts=())
+
+        # Anti-vacuity, and it must be able to fire on its own: a walk that stops
+        # matching returns the empty set, which would make the equality below
+        # satisfiable by simply emptying the constant.
+        self.assertGreaterEqual(
+            len(derived),
+            2,
+            "the AST walk found no unresolvable-move-id dispatch in "
+            "`engine_choice_for_action`",
+        )
+        self.assertEqual(
+            derived,
+            set(_REQUEST_PSEUDO_MOVES),
+            "`_REQUEST_PSEUDO_MOVES` no longer mirrors the ids "
+            "`engine_choice_for_action` cannot resolve on the engine's move list",
+        )
+
+    def test_a_real_move_the_request_offers_and_the_world_lacks_always_fires(self):
+        """The must-not-contain direction, behaviourally, on both predicates.
+
+        `test_self_move_set` uses `thunderbolt` and the transformed-copy pin uses
+        `recover`, so today the census's one open predicate is caught BY ACCIDENT
+        OF FIXTURE CHOICE: change either fixture's move and adding that move to
+        `_REQUEST_PSEUDO_MOVES` becomes free again. This makes it deliberate for a
+        list of real moves, and pins both producer predicates for each -- the
+        transformed-copy one being the one the census actually reports.
+        """
+
+        from pokezero.public_projection import _REQUEST_PSEUDO_MOVES
+
+        for move_id in REAL_REQUEST_MOVES:
+            with self.subTest(move=move_id, producer="world"):
+                self.assertNotIn(
+                    move_id,
+                    _REQUEST_PSEUDO_MOVES,
+                    f"{move_id} is a real gen3 move; excluding it blinds "
+                    "`self_move_set` for every world that carries it",
+                )
+                request = _request()
+                request["active"][0]["moves"][0]["id"] = move_id
+                found = state_projection_mismatches(
+                    _context(request=request),
+                    _World(_spec()),
+                    build_poke_engine_state(_spec()),
+                )
+                self.assertEqual(["self_move_set"], _axes(found))
+                self.assertEqual(
+                    ["self_move_set:request_move_absent_from_world"],
+                    [m.predicate for m in found],
+                )
+
+            with self.subTest(move=move_id, producer="transformed_copy"):
+                copy = _mon(
+                    "cradily",
+                    pre_transform=_mon("ditto"),
+                    # A donor moveset that shares nothing with the list above, so
+                    # the request row is genuinely absent from the copy.
+                    moves=(MoveSpec(id="tackle", pp=5), MoveSpec(id="splash", pp=5)),
+                )
+                spec = _spec(
+                    side_one=SideSpec(pokemon=(copy, _mon("pikachu")), active_index=0)
+                )
+                request = _request()
+                request["side"]["pokemon"][0]["details"] = "Ditto, L100"
+                request["side"]["pokemon"][1]["details"] = "Pikachu, L100, M"
+                request["active"][0]["moves"] = [
+                    {"id": move_id, "pp": 5, "disabled": False}
+                ]
+                found = state_projection_mismatches(
+                    _context(request=request), _World(spec), build_poke_engine_state(spec)
+                )
+                self.assertEqual(
+                    ["self_move_set:request_move_absent_from_transformed_copy"],
+                    [m.predicate for m in found],
+                )
+
+    # -- 2. `_BOOST_KEYS` -----------------------------------------------------
+
+    def test_the_boost_key_sets_are_derived_from_the_engines_own_side(self):
+        """The engine's Side is the source of truth for what a public boost IS.
+
+        `poke_engine`'s Side exposes exactly seven `*_boost` attributes and those
+        seven are the public stat stages, so no hand-maintained list here may
+        differ from them. Three lists do exist -- `_BOOST_KEYS` (both render
+        arms), `_ENGINE_BOOST_FIELD` (the state comparator) and the duplicate
+        `_ENGINE_BOOST_ATTR` -- and all three are tied to the engine here, so the
+        duplicate cannot drift either.
+        """
+
+        from pokezero.public_projection import (
+            _BOOST_KEYS,
+            _ENGINE_BOOST_ATTR,
+            _ENGINE_BOOST_FIELD,
+        )
+
+        side = build_poke_engine_state(_spec()).side_one
+        engine_attributes = {name for name in dir(side) if name.endswith("_boost")}
+
+        # Anti-vacuity floor, able to fire alone: if `dir()` ever stops surfacing
+        # the pyo3 getters, every equality below becomes trivially satisfiable by
+        # emptying the constants.
+        self.assertGreaterEqual(
+            len(engine_attributes),
+            7,
+            "the engine Side exposed no `*_boost` attributes; the derivation is blind",
+        )
+        self.assertEqual(
+            engine_attributes,
+            set(_ENGINE_BOOST_FIELD.values()),
+            "`_ENGINE_BOOST_FIELD` no longer mirrors the engine Side's stat stages",
+        )
+        self.assertEqual(
+            _ENGINE_BOOST_FIELD,
+            _ENGINE_BOOST_ATTR,
+            "the two copies of the boost-key -> engine-attribute map have drifted",
+        )
+        self.assertEqual(
+            set(PUBLIC_BOOST_KEYS),
+            set(_ENGINE_BOOST_FIELD),
+            "the public boost keys no longer match the engine-attribute map's keys",
+        )
+        self.assertEqual(
+            list(PUBLIC_BOOST_KEYS),
+            list(_BOOST_KEYS),
+            "`_BOOST_KEYS` is not the seven public stat stages",
+        )
+        self.assertEqual(
+            len(set(_BOOST_KEYS)), len(_BOOST_KEYS), "`_BOOST_KEYS` has a duplicate"
+        )
+
+    def test_every_one_of_the_seven_boosts_fires_on_both_arms(self):
+        """The published claim, MEASURED on each key rather than asserted once.
+
+        `render_self_consistency_mismatches`'s docstring says it compares "all
+        seven boosts" and `_axis_boosts` implies the same for the state
+        comparator, but only `atk` was ever pinned on either. Dropping any other
+        key silenced that boost in both render arms with nothing red -- and
+        `evasion` is the one a too-loose world is most likely to get wrong,
+        because Double Team is the only common source and it is never announced
+        with a value the constructor can check.
+        """
+
+        for key in PUBLIC_BOOST_KEYS:
+            with self.subTest(boost=key, arm="state"):
+                found = state_projection_mismatches(
+                    _context(boosts={"p1": {key: 2}}),
+                    _World(_spec()),
+                    build_poke_engine_state(_spec()),
+                )
+                self.assertEqual(["boosts"], _axes(found))
+                self.assertEqual([f"boosts:{key}"], [m.predicate for m in found])
+
+            with self.subTest(boost=key, arm="render_self_consistency"):
+                helper = RenderSelfConsistencyTests()
+                found = helper._run(
+                    [helper._branch([f"|-boost|p2a: Mantine|{key}|2", "|turn|2"])]
+                )
+                self.assertIn(
+                    f"render_post_state_disagreement:boost:{key}",
+                    sorted({m.predicate for m in found}),
+                )
+
+    # -- 3. `_CURE_TAGS` ------------------------------------------------------
+
+    def test_the_cure_tag_set_is_closed_against_the_parsers_cure_dispatch(self):
+        """No upstream spells out "tags that clear a status", so the closure is
+        assembled from three assertions that together admit nothing else.
+
+        (a) every member is a tag the parser's own public-condition dispatch
+        handles -- a cure tag Showdown does not emit is a typo;
+        (b) set equality over the `-cure*` namespace, which closes both directions
+        inside it;
+        (c) every member is IN that namespace, which is what stops `-heal`,
+        `-damage`, `-sethp` or `faint` from being added -- the mutation that
+        actually matters, since every member wipes status unconditionally at all
+        three fold sites.
+        """
+
+        from pokezero import showdown
+        from pokezero.public_projection import _CURE_TAGS
+
+        dispatched = _dispatch_constants(
+            _ast_of(showdown._update_public_pokemon_condition)
+        ) | _dispatch_constants(_ast_of(showdown._updated_public_condition))
+
+        self.assertGreaterEqual(
+            len(dispatched),
+            6,
+            "the AST walk found no public-condition dispatch tags in the parser",
+        )
+        self.assertTrue(
+            set(_CURE_TAGS) <= dispatched,
+            f"`_CURE_TAGS` names a tag the parser never dispatches on: "
+            f"{sorted(set(_CURE_TAGS) - dispatched)}",
+        )
+        self.assertEqual(
+            {tag for tag in dispatched if tag.startswith("-cure")},
+            set(_CURE_TAGS),
+            "`_CURE_TAGS` no longer mirrors the parser's `-cure*` dispatch",
+        )
+        self.assertEqual(
+            [],
+            [tag for tag in _CURE_TAGS if not tag.startswith("-cure")],
+            "a non-`-cure` tag in `_CURE_TAGS` wipes status at all three fold sites",
+        )
+
+    def test_a_heal_never_clears_a_status_at_any_of_the_three_fold_sites(self):
+        """The must-not-contain direction, behaviourally, at every consumer.
+
+        `_CURE_TAGS` is read in three places and all three write `NONE`
+        unconditionally, so the mutation has to be pinned three times or two of
+        the three stay open. Leftovers puts a `-heal` between almost every pair of
+        lines, which is why this particular widening is the expensive one: the
+        measured cost of status being wiped by an ordinary heal was 969 of 3,078
+        render boundaries "mismatched" instead of 206.
+
+        The `-curestatus` leg of each pair is the positive control: without it
+        this test would also pass on an EMPTIED `_CURE_TAGS`.
+        """
+
+        from pokezero.public_projection import (
+            _fold_public_lines,
+            fold_lines_onto_summary,
+            fold_step_lines,
+        )
+
+        entry = "|switch|p2a: Squirtle|Squirtle, L100, M|256/256 tox"
+        heal = "|-heal|p2a: Squirtle|200/256 tox|[from] item: Leftovers"
+        cure = "|-curestatus|p2a: Squirtle|tox"
+
+        with self.subTest(site="_fold_public_lines"):
+            self.assertEqual("TOXIC", _fold_public_lines([entry, heal]).p2_status)
+            self.assertEqual("NONE", _fold_public_lines([entry, cure]).p2_status)
+
+        pre = _fold_public_lines([entry])
+        with self.subTest(site="fold_step_lines"):
+            self.assertEqual("TOXIC", fold_step_lines([heal], pre).status["p2"])
+            self.assertEqual("NONE", fold_step_lines([cure], pre).status["p2"])
+
+        summary = {
+            "p2": {
+                "active_index": 0,
+                "active_hp": 256,
+                "active_status": "toxic",
+                "boosts": {key: 0 for key in PUBLIC_BOOST_KEYS},
+                "pokemon": [{"hp": 256, "status": "toxic"}],
+                "species": ["squirtle"],
+            }
+        }
+        with self.subTest(site="fold_lines_onto_summary"):
+            self.assertEqual(
+                "toxic", fold_lines_onto_summary(summary, [heal])["p2"]["active_status"]
+            )
+            self.assertEqual(
+                "none", fold_lines_onto_summary(summary, [cure])["p2"]["active_status"]
+            )
+
+    # -- 4. `_SELF_AXES` ------------------------------------------------------
+
+    def test_the_self_axis_set_is_derived_from_its_two_producers(self):
+        """`_SELF_AXES` had NO consumer -- in `src/`, `scripts/` or `tests/`.
+
+        The module header cites it as defining which axes are evaluated only for
+        `context.player_id`, but the seat scoping is structural (the two producers
+        are handed `sides[observed.slot]` and `observed.self_request`), never a
+        lookup against this set. Prose pointing at a constant nothing reads drifts
+        silently, and it did: removing `self_move_set` from it was a green suite.
+
+        The fix is to give it a reader, and the honest reader is a derivation --
+        the `axis=` literals the two seat-scoped producers can actually emit. Both
+        directions: a producer growing an axis that is not listed fails, and a
+        member no producer emits fails too.
+        """
+
+        from pokezero.public_projection import (
+            AXES,
+            _axis_self_moves,
+            _axis_self_party,
+            _SELF_AXES,
+        )
+
+        emitted = _emitted_axes(_axis_self_moves, _axis_self_party)
+
+        self.assertGreaterEqual(
+            len(emitted),
+            7,
+            "the AST walk found no `axis=` literals in the seat-scoped producers",
+        )
+        self.assertEqual(
+            emitted,
+            set(SEAT_SCOPED_AXES),
+            "the seat-scoped producers emit a different axis set than this file pins",
+        )
+        self.assertEqual(
+            emitted,
+            set(_SELF_AXES),
+            "`_SELF_AXES` no longer matches the axes `_axis_self_moves` and "
+            "`_axis_self_party` emit, and the module header cites it as if it did",
+        )
+        self.assertTrue(
+            set(_SELF_AXES) <= set(AXES),
+            "`_SELF_AXES` names an axis outside the closed `AXES` taxonomy",
+        )
+
+    # -- the scan the derivations share ---------------------------------------
+
+    def test_the_tag_dispatch_scan_reads_every_real_spelling(self):
+        """The null-world test for the widening, because the widening is a no-op
+        on today's sources.
+
+        `_update_toxic_stage` and the parser's condition dispatch both use the
+        canonical `event_type == "..."` throughout, so widening the scan cannot be
+        observed anywhere in the tree and would be an untested change asserted to
+        work. Synthetic sources are the only place it CAN be measured. A fifth
+        parser reset written either non-canonical way was invisible to #1222's
+        walk; the canonical form fails closed already, so this is hardening.
+
+        The exclusions matter as much as the inclusions: `parts[3]` carries the
+        status token and a normalising call is not a tag expression, so both must
+        stay OUT or the derived sets gain members no constant may legitimately
+        hold.
+        """
+
+        import ast
+
+        for spelling, source in (
+            ("canonical", 'if event_type == "-endability":\n    pass\n'),
+            ("constant on the left", 'if "-endability" == event_type:\n    pass\n'),
+            ("the raw field", 'if parts[1] == "-endability":\n    pass\n'),
+            ("inequality", 'if event_type != "-endability":\n    pass\n'),
+            ("membership", 'if event_type in {"-endability"}:\n    pass\n'),
+            (
+                "membership, raw field",
+                'if parts[1] in ("-endability",):\n    pass\n',
+            ),
+        ):
+            with self.subTest(reads=spelling):
+                self.assertEqual(
+                    {"-endability"}, _dispatch_constants(ast.parse(source))
+                )
+
+        for excluded, source in (
+            ("parts[3] is the status token", 'if parts[3] == "tox":\n    pass\n'),
+            (
+                "a normalising call is not a tag expression",
+                'if _normalize_identifier(parts[3]) == "tox":\n    pass\n',
+            ),
+            ("an unrelated name", 'if move_name == "rest":\n    pass\n'),
+            ("a non-comparison", 'if event_type.startswith("-cure"):\n    pass\n'),
+        ):
+            with self.subTest(ignores=excluded):
+                self.assertEqual(set(), _dispatch_constants(ast.parse(source)))
 
 
 class _FakeCrate:
