@@ -183,7 +183,7 @@ MAIN (5 cells)                                    BRANCH (1 cell)
 
 The two cells that left `engine_model` were **never 864** — they are `got=0 / want=877`, the leaf
 writing nothing where reality had the flag. The one genuine encore cell is the one that
-**survived**. Nothing was displaced, and `encoder.rs:1659-1662` sorts the bag by raw name, so
+**survived**. Nothing was displaced, and `encoder.rs:1664-1667` sorts the bag by raw name, so
 `"encore" < "mustrecharge"` and mustrecharge can never displace encore from `offset+0` anyway.
 
 I read the family's printed exemplar — `got 864`, which is the survivor — and generalised it to
@@ -270,14 +270,14 @@ These seven columns read md keys that `rust/` never writes:
 
 | column | md key it reads | written anywhere in `rust/`? |
 |---|---|---|
-| `NUMERIC_SELF_WISH_TURNS` / `_OPP_` | `self_wish_turns` / `opponent_wish_turns` | no — `encoder.rs:1310,1318` read only |
-| `NUMERIC_SLEEP_CLAUSE_BLOCKS_*` | `*_sleep_clause_blocks` | no — `encoder.rs:1296,1303` read only |
-| `NUMERIC_STALL_COUNTER` | `{prefix}_stall_counter` | no — `encoder.rs:2181` read only |
-| `NUMERIC_ENCORE_TURNS` | `{prefix}_encore_elapsed` | no — `encoder.rs:2183` read only |
+| `NUMERIC_SELF_WISH_TURNS` / `_OPP_` | `self_wish_turns` / `opponent_wish_turns` | no — `encoder.rs:1315,1323` read only |
+| `NUMERIC_SLEEP_CLAUSE_BLOCKS_*` | `*_sleep_clause_blocks` | no — `encoder.rs:1301,1308` read only |
+| `NUMERIC_STALL_COUNTER` | `{prefix}_stall_counter` | no — `encoder.rs:2186` read only |
+| `NUMERIC_ENCORE_TURNS` | `{prefix}_encore_elapsed` | no — `encoder.rs:2188` read only |
 
 `grep -rn "encore_elapsed\|stall_counter" rust/` returns exactly those two reads and nothing
 else. The stall counter and encore elapsed sit in the same little `(md key, column, divisor)`
-table at `encoder.rs:2179-2189` as `confusion_elapsed` and `wrap_trap_elapsed`.
+table at `encoder.rs:2184-2194` as `confusion_elapsed` and `wrap_trap_elapsed`.
 
 **Three specific claims from the previous revision are withdrawn:**
 
@@ -322,7 +322,7 @@ root-frozen by construction. That is a decision procedure, not four instances.
 | `{prefix}_encore_elapsed` | `NUMERIC_ENCORE_TURNS` | diverges 2 |
 | `{prefix}_confusion_elapsed` | `NUMERIC_CONFUSION_TURNS` | **latent** — never nonzero in 1271 rows |
 | `{prefix}_wrap_trap_elapsed` | `NUMERIC_WRAP_TRAP_TURNS` | **latent** |
-| `{prefix}_meanlook_trap` (`encoder.rs:2195`) | `NUMERIC_MEANLOOK_TRAP` | **latent** |
+| `{prefix}_meanlook_trap` (`encoder.rs:2200`) | `NUMERIC_MEANLOOK_TRAP` | **latent** |
 
 **Membership rests on the closed write set, not on the measurement.** `leaf.rs`'s md writes are 17
 literal `md.insert` keys plus `key_sc` / `key_tox`, and nothing post-processes md between
@@ -343,10 +343,10 @@ values in a game that exercises them is not tested here.
 mechanism with a rationale attached and its own class, which is why it never reaches `state`:
 `self_must_recharge` (that is P3) and the `root_frozen_pack` set — `{prefix}_{truant_loaf,
 choice_locked, item_swapped, last_damage_dealt, last_damage_taken, last_used_move,
-arrived_by_baton_pass, traced_ability}` plus the v4 credit block (`encoder.rs:1332-1338`), the
+arrived_by_baton_pass, traced_ability}` plus the v4 credit block (`encoder.rs:1337-1343`), the
 910-boundary `root_frozen_pack` class in the artifact.
 
-`opponent_matchup_switch_evidence` (`encoder.rs:2255`) is also never written in `leaf.rs`, but it
+`opponent_matchup_switch_evidence` (`encoder.rs:2260`) is also never written in `leaf.rs`, but it
 is **not** a P1 member: the matchup pair is fold-written through `ProductsData` since #1118 and
 carries its own `matchup_fold` class and allowance.
 
@@ -522,20 +522,20 @@ The leaf's own zeroing guard (`leaf.rs:1265-1267`,
 `active.hp <= 0 || active.status != PokemonStatus::TOXIC`) is **not** what produces these rows, and
 the counterfactual confirms it: with the status suffix restored the same guard passes and the leaf
 emits 2. The two arms are observable as other columns and both are absent from `self_team` under
-every class — the `hp <= 0` arm rides `NUMERIC_LEGAL` (`encoder.rs:2303-2306`), whose
+every class — the `hp <= 0` arm rides `NUMERIC_LEGAL` (`encoder.rs:2308-2311`), whose
 `condition.fainted` comes from the same expression as the guard (`leaf.rs:195-198` against `:1266`);
-the status arm rides `CATEGORY_SECONDARY` (`encoder.rs:2279-2283`), which for self-team tokens is
-the engine's own field since `belief` is `None` for `Role::SelfTeam` (`encoder.rs:2013-2015`).
+the status arm rides `CATEGORY_SECONDARY` (`encoder.rs:2284-2288`), which for self-team tokens is
+the engine's own field since `belief` is `None` for `Role::SelfTeam` (`encoder.rs:2018-2020`).
 
 **[CORRECTION]** An earlier revision cited `NUMERIC_PRESENT` and the self-side `attention_mask` as
-the liveness instruments. Both are **constants** (`encoder.rs:2307`, `:1131-1133`) and can never
+the liveness instruments. Both are **constants** (`encoder.rs:2312`, `:1136-1138`) and can never
 diverge, so reading their absence measured nothing.
 
 **Scope of the absence argument, restored — a rewrite deleted it while keeping the argument that
 needs it.** Absence is evidence only if the instrument moves, and the proof that `NUMERIC_LEGAL`
 moves is a **golden-v2** measurement (2055 zeros of 6168 cells, in 787 of 1028 rows) that was
 **never re-run on v4**, so v4's half inherits gv2's liveness check. On the opponent side there is no
-analogue in principle: its status token comes from `belief.status()` first (`encoder.rs:2014`), and
+analogue in principle: its status token comes from `belief.status()` first (`encoder.rs:2019`), and
 `opp_membership` sweeps opponent columns into `epistemic` on 94 v4 boundaries. Stating the lesson
 about constants immediately above the place it had stopped being applied is exactly the failure this
 `[CORRECTION]` describes.
@@ -672,8 +672,8 @@ stale counter.
 **[CORRECTION] — an earlier revision blamed `approximate_sleep_turns=True`. That instrument does
 not feed this column and predicts the wrong direction.**
 
-`NUMERIC_SLEEP_TURNS` reads `exact.sleep_turns()` (`encoder.rs:2350`) = the JSON ledger field
-(`encoder.rs:1485`), written by `leaf.rs:1461-1470` as `base + count` with `base` the **root
+`NUMERIC_SLEEP_TURNS` reads `exact.sleep_turns()` (`encoder.rs:2355`) = the JSON ledger field
+(`encoder.rs:1490`), written by `leaf.rs:1461-1470` as `base + count` with `base` the **root
 ledger's** value ("Root sleepers keep their ledger base"). `approximate_sleep_turns` only seeds
 poke-engine's internal wake-RNG counter (`engine_world.py:1850-1853`). It also predicts the wrong
 sign: a `sleep_turns=0` approximation makes the leaf **lower**, while the measurement is got 0.4
