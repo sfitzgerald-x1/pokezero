@@ -1661,6 +1661,90 @@ class EngineMctsPolicy:
         * never applied and no longer identifiable: a genuinely late conclusion
           that would silently desynchronize the encoder-visible surface. Still
           breaks the fold loudly — this is the case the guard was written for.
+
+        What protects the record, and what does NOT
+        -------------------------------------------
+        The record is refreshed at the bottom of this method from
+        ``fold.annotations`` — the values the fold ACTUALLY applied, canonical-
+        ized by ``apply_annotations_in_place`` — and no index is ever recorded
+        twice with a different value.
+
+        ⚠ **Per-index immutability does NOT establish that, and #1216's merge
+        message wrongly said it did.** The equality check in
+        ``transitions_fold.apply_annotations_in_place``
+        (``transitions_fold.py:316``) runs only inside ``if existing is not
+        None`` (``transitions_fold.py:329``) — i.e. only for indices the fold
+        CURRENTLY HOLDS. An index the fold does not hold is applied FRESH, with
+        nothing to compare against. Every index this record has to defend is
+        precisely one the fold no longer holds, so immutability offers this path
+        no protection at all. Do not re-derive that argument.
+
+        What does establish it is MONOTONICITY of ``tail_start``. For
+        ``record[index]`` to be overwritten with a DIFFERENT value, a pruned
+        index would have to re-enter ``[tail_start, action_total]`` and be
+        applied fresh from a changed overlay. It cannot:
+
+        * ``tail_start = action_total - len(action_tail)`` is monotonic
+          non-decreasing. ``FoldState._close_window``
+          (``transitions_fold.py:814-817``) appends the token, trims the tail to
+          ``action_tail_limit``, and only THEN increments ``action_total``:
+          while the tail is still filling, both sides grow by one and
+          ``tail_start`` is unchanged; once the tail sits at its limit,
+          ``action_total`` grows alone and ``tail_start`` rises by one. It never
+          falls.
+        * an index enters the record only while the fold holds it, and is pruned
+          only when ``index < tail_start`` and it has no merged-tail
+          representative (``FoldState._prune_annotations``,
+          ``transitions_fold.py:984-989``). Monotonicity then keeps
+          ``index < tail_start`` at every later boundary, so the
+          ``tail_start <= index`` branch above is unreachable for it forever,
+          and the only way back into ``fold.annotations`` is the re-seat — which
+          supplies the RECORDED value and is therefore adjudicated by the
+          equality check rather than applied fresh. ``rep_index_map`` cannot
+          readmit a dropped index either: its keys are
+          ``expansion_cursor + _representative_offset(sub)``
+          (``transitions_fold.py:951-956``) with a non-negative offset off a cursor
+          that only advances and that the flatten-bijection assertion holds equal
+          to ``action_total``, so every key it gains is at or above every key it
+          has ever held (dropped by ``FoldState._prune_rep_index_map``,
+          ``transitions_fold.py:979-982``).
+        * the two sites where a fold's ``action_total`` can REGRESS both drop
+          the record first: a rebuilt fold (``fold is None`` →
+          ``_fold_annotations_seen.pop``) and a rewound event stream (→
+          ``_mark_fold_broken``, which is sticky per ``(battle, seat)``, so that
+          key never advances again). ``_drop_stale_folds`` drops other battles'
+          records, and the per-seat key keeps seats apart.
+
+        Stronger still, and worth writing down because it bounds the assertion's
+        blast radius: in correct operation the record is never even RE-VISITED
+        with a second value for one index. ``apply_annotations_in_place`` ends
+        with ``self._prune_annotations()`` at ``transitions_fold.py:362``, at
+        METHOD level rather than inside its loop, so it runs on every call — and
+        a re-seated index is by construction ``< tail_start`` with no merged-tail
+        representative, so it is dropped again before control returns here. A
+        resettled index is therefore never re-recorded at all. And a still-HELD
+        index cannot have changed value, because ``transitions_fold.py:338``
+        writes ``self.annotations[index]`` only on the ``existing is None`` path
+        (``:329`` returns early otherwise). Both halves of the loop below are
+        thus benign in correct operation; the raise is unreachable.
+
+        That is a real dependency rather than a restatement of immutability, and
+        the thing that would actually break it is REPOPULATING ``action_tail``
+        from a longer history than the live fold's — ``_clone``
+        (``transitions_fold.py:1102``) and ``from_payload``
+        (``transitions_fold.py:1280-1281``) are the only writers of the whole
+        deque, and a fold rebuilt through either with a record carried across
+        would lower ``tail_start`` while per-index immutability still held
+        exactly as written. (⚠ An earlier revision of this paragraph offered a
+        dynamic or growable ``action_tail_limit`` as the example. That is WRONG
+        and review caught it: ``_close_window`` appends exactly one token per
+        ``action_total`` increment, so raising the limit only stops a
+        ``popleft`` — ``tail_start`` stays put — and lowering it pops more, which
+        RAISES ``tail_start``. Neither direction can regress it. The wrong
+        example is recorded rather than deleted because it was the one
+        load-bearing reason offered for why this section is not a wording
+        change.) So the record refresh below ASSERTS the invariant instead of
+        assuming it.
         """
         source = self._annotation_source
         if source is None or not source.active():
@@ -1700,9 +1784,30 @@ class EngineMctsPolicy:
                 if applied:
                     self.stats.fold_annotations_applied += applied
                     self.stats.fold_annotation_boundaries += 1
+                # Refresh the record from what the fold HOLDS (canonicalized by
+                # apply_annotations_in_place), never from what the source
+                # OFFERED: the record's meaning is "applied once", and a re-seat
+                # must hand the fold back a value the fold itself produced.
+                #
+                # This was `record.setdefault(index, values)` — silently keeping
+                # the first value, i.e. defence-in-depth nothing could falsify.
+                # It is now the live guard for the monotonicity invariant in the
+                # docstring above. An explicit raise, not an `assert` statement,
+                # because `python -O` strips those; it is caught below and turns
+                # into the loud fold-broken path, which is this method's whole
+                # failure convention.
                 record = self._fold_annotations_seen.setdefault(key, {})
                 for index, values in fold.annotations.items():
-                    record.setdefault(index, values)
+                    previous = record.get(index)
+                    if previous is None:
+                        record[index] = values
+                    elif tuple(previous) != tuple(values):
+                        raise AssertionError(
+                            f"applied-conclusion record for token index {index} "
+                            f"changed ({previous!r} -> {values!r}): a pruned index "
+                            "was applied FRESH again, so tail_start regressed and "
+                            "the re-seat path is no longer sound."
+                        )
         except Exception as error:  # noqa: BLE001 — loud, then fail closed
             self._mark_fold_broken(
                 context, key, f"tier2 overlay failed: {type(error).__name__}: {error}"

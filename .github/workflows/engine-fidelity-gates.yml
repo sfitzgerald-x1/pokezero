@@ -1279,6 +1279,16 @@ jobs:
       # `Tier2PrunedConclusionTests`. All seven are NEW and all seven RUN (they sit above
       # this module's `unittest.main()`); counted from the run, not from the diff.
       #
+      # 135 -> 141 with that fix's review follow-up: six more
+      # `Tier2PrunedConclusionTests`, all NEW and all above `unittest.main()`. Two pin
+      # properties whose MUTANTS SURVIVED the 135 (the record is per-seat, not per-battle;
+      # the record holds what the fold APPLIED, not what the source OFFERED); two pin both
+      # sides of the applied-record invariant's new guard; two close axes that survived a
+      # LATER count. THREE of the six exist because a mutant survived a suite that had
+      # already been called complete -- the safer-direction one survived 138, and the
+      # record-CARDINALITY pair survived 139, every other test in the class having offered
+      # exactly one index. Counted from the run (`Ran 141 tests`, OK), not from the diff.
+      #
       # EXACT count, not a floor, for the reason #1163 gave: a floor was the one fail-open
       # in its mutation battery, and this guard lives in YAML where no local `unittest`
       # run can see it.
@@ -1286,8 +1296,8 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          if ! grep -qE 'Ran 135 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 135 engine-search tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 141 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 141 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
