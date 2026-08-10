@@ -683,6 +683,21 @@ def _round_index(context: Any) -> int:
     return -1 if value is None else int(value)
 
 
+def _request_legal_choices(context: PolicyContext) -> tuple[str, ...]:
+    """The request's legal set, spelled the way the engine spells its choices.
+
+    Delegated to `fallback_replay`, which already derives this for the refusal
+    recorder, so the probe and the recorder cannot drift on what "legal" means.
+    """
+
+    try:
+        from .fallback_replay import _request_legal_choices as _impl
+
+        return tuple(_impl(context))
+    except Exception:  # noqa: BLE001 - a probe must never break the run
+        return ()
+
+
 def probe_choice_mapping(policy: Any, context: PolicyContext, aggregated: Any) -> str | None:
     """Ask ``_map_choices`` whether the REQUEST is mappable, independently of search.
 
@@ -705,9 +720,23 @@ def probe_choice_mapping(policy: Any, context: PolicyContext, aggregated: Any) -
 
     from collections import Counter as _Counter
 
+    probe_weights = aggregated
+    if not probe_weights:
+        # NOT an empty Counter. An empty aggregate makes `_map_choices` answer
+        # "there was nothing to map", which is a fact about the CALL and not about
+        # the request -- shipped that way for one revision and it fired on
+        # 3,231 of 3,231 decisions, i.e. it measured nothing. Ask the question that
+        # has an answer instead: offer the REQUEST's own legal choices, in the
+        # engine's vocabulary, and see whether the mapper accepts them. A refusal
+        # then means the request and the engine genuinely disagree.
+        legal = _request_legal_choices(context)
+        if not legal:
+            return None  # nothing to ask; silence beats a false positive
+        probe_weights = _Counter({choice: 1.0 for choice in legal})
+
     before = dict(policy.stats.choices_unmapped_causes)
     try:
-        mapped = policy._map_choices(context, aggregated or _Counter())  # noqa: SLF001
+        mapped = policy._map_choices(context, probe_weights)  # noqa: SLF001
     except Exception as error:  # noqa: BLE001 - a probe must never break the run
         return f"probe_raised:{type(error).__name__}"
     after = dict(policy.stats.choices_unmapped_causes)

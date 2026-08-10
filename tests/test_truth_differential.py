@@ -131,7 +131,16 @@ class _Context:
             {
                 "self_team": [{"species": "Absol", "active": True, "condition": "100/100"}],
                 "opponent_team": [{"species": "Zapdos", "active": True, "condition": "80/100"}],
-                "action_candidates": ["move 1", "switch 2"],
+                # Real candidate rows: `probe_choice_mapping` derives the request's
+                # legal set from these through `fallback_replay._request_legal_choices`,
+                # and string stand-ins would make the probe silently return early --
+                # which is exactly the vacuity the probe is written to avoid.
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True,
+                     "move_slot": 1, "move_id": "surf"},
+                    {"action_index": 1, "kind": "switch", "legal": True,
+                     "switch_slot": 2, "species": "Zapdos"},
+                ],
             }
         )
         self.public_materialization_state = None
@@ -579,6 +588,48 @@ class ChoiceMappingProbeTests(unittest.TestCase):
         cause = probe_choice_mapping(policy, _Context(), None)
         self.assertEqual(cause, "aggregated_empty")
         self.assertEqual(len(policy.calls), 1)
+
+    def test_a_request_with_no_legal_candidates_is_silent_not_a_finding(self) -> None:
+        """Null-world control: the probe must be able to say nothing."""
+
+        from pokezero.truth_differential import probe_choice_mapping
+
+        class _Policy:
+            stats = _Stats()
+            called = False
+
+            def _map_choices(self, context, aggregated):
+                type(self).called = True
+                return None
+
+        context = _Context()
+        context.observation.metadata = dict(context.observation.metadata)
+        context.observation.metadata["action_candidates"] = []
+        self.assertIsNone(probe_choice_mapping(_Policy(), context, None))
+        self.assertFalse(_Policy.called, "the probe asked a question with no answer")
+
+    def test_the_probe_is_not_vacuous_on_an_ordinary_request(self) -> None:
+        """It fired on 3,231 of 3,231 decisions for one revision. Never again.
+
+        An empty aggregate makes `_map_choices` answer "there was nothing to map",
+        which is a fact about the CALL. The probe must offer the request's own legal
+        choices so that a refusal is a fact about the REQUEST.
+        """
+
+        from pokezero.truth_differential import probe_choice_mapping
+
+        seen: list = []
+
+        class _Policy:
+            stats = _Stats()
+
+            def _map_choices(self, context, aggregated):
+                seen.append(dict(aggregated))
+                return 0
+
+        self.assertIsNone(probe_choice_mapping(_Policy(), _Context(), None))
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(seen[0], "the probe passed an EMPTY aggregate")
 
     def test_a_mappable_request_reports_nothing(self) -> None:
         from pokezero.truth_differential import probe_choice_mapping

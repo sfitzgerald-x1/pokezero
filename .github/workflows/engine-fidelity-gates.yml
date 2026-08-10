@@ -1792,8 +1792,8 @@ jobs:
           python -m unittest tests.test_truth_differential -v 2>&1 | tee /tmp/truthdiff.log
           # EXACT, not a floor. A floor was the one fail-open in #1163's mutation
           # battery, and this guard lives in YAML where no local run can see it.
-          if ! grep -qE 'Ran 37 tests' /tmp/truthdiff.log; then
-            echo "::error::expected 37 truth-differential tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 39 tests' /tmp/truthdiff.log; then
+            echo "::error::expected 39 truth-differential tests; the suite shrank or grew"
             exit 1
           fi
           # THE pins, named. `ForcedRefusalTests` is the reason the census number can be
@@ -1815,7 +1815,9 @@ jobs:
             test_abort_forcing_patches_the_instance_not_the_module \
             test_a_crate_without_the_model_feature_is_refused \
             test_round_zero_is_recorded_as_zero \
-            test_a_construction_refusal_still_yields_a_mapping_reading ; do
+            test_a_construction_refusal_still_yields_a_mapping_reading \
+            test_the_probe_is_not_vacuous_on_an_ordinary_request \
+            test_a_request_with_no_legal_candidates_is_silent_not_a_finding ; do
             # `-A2` because unittest -v puts a docstring's first line between the
             # test name and its verdict.
             if ! grep -A2 -E "^${pin} " /tmp/truthdiff.log | grep -qE '\.\.\. ok$'; then
