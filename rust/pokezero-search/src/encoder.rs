@@ -452,6 +452,19 @@ impl Tables {
     /// `CategoryVocabulary.encode`: pad 0 for empty, direct row lookup, else
     /// the deterministic blake2b-8 OOV bucket.
     fn vocab_encode(&self, value: &str) -> i32 {
+        // Empty cells short-circuit BEFORE `normalize_category`, which is
+        // `value.trim().to_lowercase()` and therefore allocates a String on every call.
+        // `Grid::finish` maps EVERY cell of a token_count x categorical_width grid through
+        // here (23 x 41 = 943 per leaf at v4) and most cells are never populated, so the
+        // allocation was being paid for the empty majority.
+        //
+        // Byte-identical by construction, not merely by test: `normalize_category("")` is
+        // `""`, which the emptiness check below already turns into 0. Whitespace-only input is
+        // unaffected -- it is not `is_empty()`, so it still takes the normalize path and still
+        // returns 0 via that check.
+        if value.is_empty() {
+            return 0;
+        }
         let normalized = normalize_category(value);
         if normalized.is_empty() {
             return 0;
