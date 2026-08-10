@@ -217,6 +217,52 @@ class AxisFiresTests(unittest.TestCase):
         found = self._fire(lines=lines)
         self.assertEqual(["active_hp"], _axes(found))
 
+    def test_a_silent_sethp_is_read_by_the_observed_side(self):
+        """Pain Split writes `|-sethp|...|[silent]`, which the reused one-turn
+        fold does not handle. The whole `active_hp` class on the first census --
+        360 worlds, 45 decisions -- was that gap, with the WORLD right and the
+        observed side stale. Exemplar `ppc-s0-9800144` p1 round 5."""
+
+        spec = _spec(
+            side_two=SideSpec(pokemon=(_mon("squirtle", hp=155), _mon("dodrio")), active_index=0)
+        )
+        lines = BASE_LINES + (
+            "|-sethp|p2a: Squirtle|155/200|[from] move: Pain Split|[silent]",
+        )
+        self.assertEqual([], _axes(self._fire(world_spec=spec, lines=lines)))
+
+    def test_a_sethp_the_world_disagrees_with_still_fires(self):
+        """Safer-direction pin on the fix above."""
+
+        lines = BASE_LINES + (
+            "|-sethp|p2a: Squirtle|155/200|[from] move: Pain Split|[silent]",
+        )
+        self.assertEqual(["active_hp"], _axes(self._fire(lines=lines)))
+
+    def test_cureteam_clears_the_observed_status(self):
+        """Aromatherapy / Heal Bell announce `|-cureteam|`, not `|-curestatus|`.
+        Missing it produced 1,168 worlds over 146 decisions on a census, with the
+        WORLD right and the observed side stale. Exemplar `ppc-s1-10100064` p1
+        round 75."""
+
+        lines = BASE_LINES + (
+            "|-damage|p2a: Squirtle|150/200 tox|[from] psn",
+            "|-cureteam|p2a: Squirtle|[from] move: Aromatherapy",
+        )
+        spec = _spec(
+            side_two=SideSpec(pokemon=(_mon("squirtle", hp=150), _mon("dodrio")), active_index=0)
+        )
+        self.assertEqual([], _axes(self._fire(world_spec=spec, lines=lines)))
+
+    def test_a_status_the_log_still_asserts_after_a_cureteam_still_fires(self):
+        """Safer-direction pin: the cure clears, then a NEW status must be seen."""
+
+        lines = BASE_LINES + (
+            "|-cureteam|p2a: Squirtle|[from] move: Aromatherapy",
+            "|-status|p2a: Squirtle|tox",
+        )
+        self.assertEqual(["active_status"], _axes(self._fire(lines=lines)))
+
     def test_active_status(self):
         lines = BASE_LINES + ("|-status|p2a: Squirtle|brn",)
         found = self._fire(lines=lines)

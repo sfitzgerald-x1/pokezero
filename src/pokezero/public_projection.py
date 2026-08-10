@@ -253,20 +253,81 @@ def observed_public_view(context: Any) -> ObservedPublicView | None:
 def _fold_public_lines(lines: Sequence[str]) -> Any:
     """Fold raw protocol lines into comparable features.
 
-    `showdown_turn_features` takes an object with a `protocol_lines` attribute
-    (its production caller is a one-turn fixture result). Reused verbatim rather
-    than reimplemented: it is the fold the engine fidelity differential has
-    matched engine states against since PR #727, so this oracle and that
-    differential cannot drift on what "the protocol said" means.
+    `showdown_turn_features` supplies weather and side conditions: it is the fold
+    the engine fidelity differential has matched engine states against since PR
+    #727, so this oracle and that differential cannot drift on what "the protocol
+    said" means for those.
+
+    HP AND STATUS ARE RE-DERIVED HERE, and the reason is measured rather than
+    stylistic. That function handles `switch`, `-damage`, `-heal`, `-status`,
+    `-curestatus` and `faint` -- and **not `-sethp`**, which is correct for the
+    one-turn fixtures it was written for and wrong over a whole log. Pain Split
+    sets both sides with `|-sethp|...|[from] move: Pain Split|[silent]`, so the
+    observed side kept the pre-Pain-Split HP while the world -- which reads the
+    line -- held the right one. That produced the whole `active_hp` class on the
+    first census: 360 worlds over 45 decisions, every one of them the OBSERVED
+    side being wrong. Exemplar dumped at `ppc-s0-9800144` p1 round 5, world
+    `armaldo 155/260`, protocol `|-sethp|p2a: Armaldo|155/260|[from] move: Pain
+    Split|[silent]`.
+
+    It also drops that function's requirement that a `|switch|` be seen for a
+    slot before its `-damage` lines count, which is right for a one-turn fixture
+    and needlessly lossy over a log that opens with switches anyway.
     """
 
     import types  # noqa: PLC0415
 
-    return showdown_turn_features(types.SimpleNamespace(protocol_lines=tuple(lines)))
+    from .engine_fidelity import TurnFeatures, _parse_condition  # noqa: PLC0415
+
+    base = showdown_turn_features(types.SimpleNamespace(protocol_lines=tuple(lines)))
+    hp: dict[str, int] = {"p1": -1, "p2": -1}
+    status: dict[str, str] = {"p1": "NONE", "p2": "NONE"}
+    for line in lines:
+        parts = line.split("|")
+        if len(parts) < 3:
+            continue
+        tag = parts[1]
+        slot = parts[2].split(":", 1)[0].strip()[:2]
+        if slot not in ("p1", "p2"):
+            continue
+        if tag in _HP_TAGS_FIELD4 and len(parts) >= 5:
+            value, token = _parse_condition(parts[4])
+            hp[slot] = value
+            status[slot] = _STATUS_TO_ENGINE.get(token, "NONE") if token else "NONE"
+        elif tag in _HP_TAGS_FIELD3 and len(parts) >= 4:
+            value, token = _parse_condition(parts[3])
+            hp[slot] = value
+            if token:
+                status[slot] = _STATUS_TO_ENGINE.get(token, status[slot])
+        elif tag == "-status" and len(parts) >= 4:
+            status[slot] = _STATUS_TO_ENGINE.get(parts[3].strip(), status[slot])
+        elif tag in _CURE_TAGS:
+            status[slot] = "NONE"
+        elif tag == "faint":
+            hp[slot] = 0
+    return TurnFeatures(
+        p1_hp=hp["p1"],
+        p2_hp=hp["p2"],
+        p1_status=status["p1"],
+        p2_status=status["p2"],
+        fainted=frozenset(slot for slot in ("p1", "p2") if hp[slot] == 0),
+        weather=base.weather,
+        side_conditions=base.side_conditions,
+    )
 
 
 #: Protocol tags that state an absolute HP for a slot. `|switch|` and `|drag|`
 #: carry it in field 4; the rest in field 3.
+#: Tags that clear a status. `|-cureteam|` is the one that is easy to miss and
+#: it cost 1,168 worlds over 146 decisions on a census before it was handled:
+#: Aromatherapy and Heal Bell cure the WHOLE TEAM and Showdown announces them
+#: with `|-cureteam|`, not `|-curestatus|`, so the observed side stayed on the
+#: status last printed by a `-damage` condition string while the world correctly
+#: held none. Exemplar `ppc-s1-10100064` p1 round 75:
+#: `|-cureteam|p2a: Blissey|[from] move: Aromatherapy`, observed TOXIC, world
+#: NONE, and the WORLD was right.
+_CURE_TAGS = ("-curestatus", "-cureteam")
+
 _HP_TAGS_FIELD3 = ("-damage", "-heal", "-sethp")
 _HP_TAGS_FIELD4 = ("switch", "drag", "replace")
 
@@ -331,7 +392,7 @@ def fold_step_lines(lines: Sequence[str], pre: Any) -> StepProjection:
             fainted.discard(side)
         elif tag == "-status" and side and len(parts) >= 4:
             status[side] = _STATUS_TO_ENGINE.get(parts[3].strip(), status[side])
-        elif tag == "-curestatus" and side:
+        elif tag in _CURE_TAGS and side:
             status[side] = "NONE"
         elif tag == "faint" and side:
             fainted.add(side)
@@ -465,27 +526,16 @@ def _axis_active_hp(observed: ObservedPublicView, engine: Any) -> list[Projectio
     return out
 
 
-def _currently_fainted(features: Any) -> frozenset[str]:
-    """Which side's ACTIVE is down right now, read from HP.
-
-    NOT ``TurnFeatures.fainted``. That set is populated by every ``|faint|`` line
-    and never cleared, which is right for the one-turn fold it was written for and
-    catastrophic over a whole-log fold: the first faint of the game marks the side
-    permanently, and every later decision then compares a stale flag. Measured on
-    the first smoke game before this was fixed -- 272 of 312 worlds "mismatched",
-    all of them this. A comparator that fires on 87% of worlds is reporting itself.
-    """
-
-    return frozenset(
-        slot
-        for slot, hp in (("p1", features.p1_hp), ("p2", features.p2_hp))
-        if hp == 0
-    )
-
-
+# NO `_currently_fainted` HELPER. It used to recompute "which active is down"
+# from HP beside a fold that already computes exactly that, and the duplication
+# made the fold's own `fainted` field DEAD -- so the battery's mutant for the
+# sticky-faint hazard was unkillable, because the value it corrupted was never
+# read. One producer, one reader: `_fold_public_lines` derives `fainted` from HP
+# and this module trusts it, which puts the hazard back inside the blast radius
+# of `S07-sticky-faint-set-restored-at-the-fold`.
 def _axis_active_status(observed: ObservedPublicView, engine: Any) -> list[ProjectionMismatch]:
     out: list[ProjectionMismatch] = []
-    down = _currently_fainted(observed.turn_features)
+    down = observed.turn_features.fainted
     for slot, obs, eng in (
         ("p1", observed.turn_features.p1_status, engine.p1_status),
         ("p2", observed.turn_features.p2_status, engine.p2_status),
@@ -1405,8 +1455,11 @@ def fold_lines_onto_summary(
             _write_active(slot, value, _ENGINE_STATUS.get(token) if token else None)
         elif tag == "-status" and len(parts) >= 4:
             _write_active(slot, None, _ENGINE_STATUS.get(parts[3].strip(), "none"))
-        elif tag == "-curestatus":
+        elif tag in _CURE_TAGS:
             _write_active(slot, None, "none")
+            if tag == "-cureteam":
+                for mon in out[slot]["pokemon"]:
+                    mon["status"] = "none"
         elif tag == "faint":
             _write_active(slot, 0, None)
         elif tag in ("-boost", "-unboost", "-setboost") and len(parts) >= 5:
