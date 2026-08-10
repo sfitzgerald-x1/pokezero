@@ -9835,9 +9835,12 @@ mod tests {
 mod none_matched_shape_tests {
     use super::*;
     use poke_engine::instruction::{
-        DamageInstruction, HealInstruction, RemoveVolatileStatusInstruction, SwitchInstruction,
+        BoostInstruction, DamageInstruction, HealInstruction, RemoveVolatileStatusInstruction,
+        SetLastUsedMoveInstruction, SwitchInstruction,
     };
-    use poke_engine::state::{PokemonIndex, PokemonType};
+    use poke_engine::state::{
+        LastUsedMove, PokemonBoostableStat, PokemonIndex, PokemonMoveIndex, PokemonType,
+    };
 
     fn dmg(amount: i16) -> Instruction {
         Instruction::Damage(DamageInstruction {
@@ -10167,8 +10170,40 @@ mod none_matched_shape_tests {
     /// `target: Opponent` is part of the requirement, not decoration: the gen3 fidelity fix
     /// at the top of `ability_modify_attack_against` returns early for self/field moves, and
     /// it is what stops Rain Dance -- also Water-typed -- from being a second counterexample.
+    ///
+    /// WHAT WATERSPORT IS, stated because "a gen3 mechanic makes this reachable" would be the
+    /// wrong lesson. In real Showdown Water Sport is SELF-targeting; it reaches
+    /// `ability_modify_attack_against` at all only because poke-engine's `Choice::default()`
+    /// sets `target: Opponent` and this move's entry does not override it. The counterexample
+    /// is therefore an ENGINE-DATA ARTIFACT, not a property of the generation. The guard is
+    /// still right, for a reason that does not weaken with that correction: the renderer must
+    /// match the engine that EMITTED the instruction it is describing, not the cartridge. If
+    /// the entry is ever given `target: MoveTarget::User` -- the faithful fix, and the one
+    /// Rain Dance already received -- this test fails LOUDLY and the absorb axis can be
+    /// revisited on evidence rather than quietly kept.
+    ///
+    /// The third leg is the one that would have broken `ABSORB_HEAL_FRACTION`: producer 2 is
+    /// reachable ONLY from an ability, because no move in the table carries a heal aimed at
+    /// the opponent. One fraction constant is sufficient exactly while that holds.
     #[test]
     fn the_absorb_bypass_producer_is_real() {
+        // NO MOVE is a producer-2 source, so the ability arms -- all `amount: 0.25` -- are
+        // the complete producer set and one constant covers them.
+        let move_borne: Vec<Choices> = poke_engine::choices::MOVES
+            .iter()
+            .filter(|(_, choice)| {
+                choice
+                    .heal
+                    .as_ref()
+                    .is_some_and(|heal| heal.target == MoveTarget::Opponent)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        assert!(
+            move_borne.is_empty(),
+            "a MOVE now carries a heal aimed at the opponent ({move_borne:?}); producer 2 is \
+             no longer ability-only and ABSORB_HEAL_FRACTION is no longer one number"
+        );
         let watersport = poke_engine::choices::MOVES
             .get(&Choices::WATERSPORT)
             .expect("WATERSPORT is in the engine's move table");
@@ -10276,6 +10311,38 @@ mod none_matched_shape_tests {
             protect_blocked_marker_side(&attacker_side_prefix, 1, atk, true, false),
             Some(SideReference::SideTwo)
         );
+        // THE POSITIVE ARMS OF THE ALLOWLIST, pinned because independent review showed
+        // they were not. Deleting every variant but `SetLastUsedMove` from the `=> true`
+        // group survived the whole suite: a safe-direction mutant (lost reclaim, not a
+        // wrong render) but exactly the "the suite does not pin the boundary" signal, and
+        // the boundary is the whole point of an allowlist. A `Boost` on the DEFENDER is
+        // the sharpest case -- it names the refusing side and still moves none of the
+        // three facts, because a stat stage is neither HP, nor the active Pokemon, nor a
+        // volatile.
+        for benign in [
+            Instruction::Boost(BoostInstruction {
+                side_ref: SideReference::SideTwo,
+                stat: PokemonBoostableStat::Defense,
+                amount: 1,
+            }),
+            Instruction::DamageSubstitute(DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 25,
+            }),
+            Instruction::SetLastUsedMove(SetLastUsedMoveInstruction {
+                side_ref: SideReference::SideTwo,
+                last_used_move: LastUsedMove::Move(PokemonMoveIndex::M0),
+                previous_last_used_move: LastUsedMove::None,
+            }),
+        ] {
+            let prefixed = [benign.clone(), marker.clone()];
+            assert_eq!(
+                protect_blocked_marker_side(&prefixed, 1, atk, true, false),
+                Some(SideReference::SideTwo),
+                "{benign:?} moves none of the three defender facts and must not cost the \
+                 render -- if it is dropped from the allowlist the reclaim silently shrinks"
+            );
+        }
     }
 
     /// Containment is checked on FULL instruction equality, not on variant alone.
