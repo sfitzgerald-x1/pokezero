@@ -151,6 +151,24 @@ Left deliberately unclassified pending a proper read, rather than guessed into c
   customisation. Genuinely about the default, or should it compare against the checkpoint's
   schema? That is a behavioural question, not a naming one.
 
+
+## Confirmed NOT this class: test_fallback_replay_end_to_end (7)
+
+Pinning the observation spec at all three `LocalShowdownConfig` sites to v2.2 changed nothing:
+still 7 failures, same messages. Reverted rather than kept -- a fix that fixes nothing is worse
+than no fix, because the next reader assumes that avenue was closed.
+
+The seven collapse to ONE cause: the seed band produces zero refusals under v4, so `self.specs`
+is empty and six tests die on `self.specs[0]` while the seventh reports "this seed band produced
+no refusals, so the chain was never exercised". The refusals are construction-side, which is
+consistent with them not moving when the encode spec is named.
+
+So this is a genuine behavioural difference under v4, not a naming defect, and it belongs in
+bucket C. It needs a real investigation: what does the default schema reach that changes world
+construction or search? Candidates not yet eliminated -- the model config's widths feeding the
+policy, or `EngineMctsConfig` reaching the default indirectly. Recorded as open rather than
+folded into the mechanical bucket, which is where it would have been hidden.
+
 ## Burndown protocol
 
 A slice resumes by **re-running the command**, never by recall. A row is retired when the
