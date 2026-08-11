@@ -67,7 +67,22 @@ class RegistryEncodingTests(unittest.TestCase):
         import pokezero.showdown as S
 
         cls.S = S
-        cls.env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=_showdown_root()))
+        from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2_2
+        from pokezero.showdown import observation_spec_for_schema
+
+        # Name v2.2. Every assertion in this class is a HARD-CODED flat column index (844, 1163,
+        # 852, ...) computed against the v2.2 layout. Left to `LocalShowdownConfig`'s default
+        # spec, the encode silently followed whichever schema held the default slot, so the
+        # indices addressed different columns the day it moved -- and the failure reads as
+        # "Belly Drum should set atk boost to +6", i.e. an interaction regression, not a layout
+        # change. That mis-signalling is the reason to name it rather than to re-derive the
+        # indices for v4: the subject is the interaction, and v2.2 is where these indices live.
+        cls.env = LocalShowdownEnv(
+            LocalShowdownConfig(
+                showdown_root=_showdown_root(),
+                observation_spec=observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2),
+            )
+        )
         cls.vocab = gen3_category_vocabulary(_showdown_root(), include_turn_merged=True)
         cls.specs = {s.name: s for s in interaction_registry_specs()}
 
