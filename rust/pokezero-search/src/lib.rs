@@ -305,10 +305,11 @@ fn stats_to_json(stats: &[MoveStats]) -> String {
         .map(|&index| {
             let stat = &stats[index];
             format!(
-                "{{\"move\":\"{}\",\"visits\":{},\"q\":{:.6}}}",
+                "{{\"move\":\"{}\",\"visits\":{},\"q\":{:.6},\"prior\":{:.6}}}",
                 json_escape(&stat.display),
                 stat.visits,
-                stat.mean()
+                stat.mean(),
+                stat.prior
             )
         })
         .collect();

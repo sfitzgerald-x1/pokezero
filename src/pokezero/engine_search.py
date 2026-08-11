@@ -269,6 +269,41 @@ def _locked_aggregate_choice(
     return None
 
 
+def model_prior_argmax(
+    world_reports: Sequence[tuple[str, Mapping[str, Any]]],
+) -> Optional[str]:
+    """The model's raw answer for this decision: argmax of aggregated root priors.
+
+    The acting seat's per-arm model priors (already masked-renormalized by the
+    crate) are summed across the SAME records the visit aggregate sums over, so
+    collapse multiplicity weighs priors and visits identically and the two
+    argmaxes are comparable quantities. Comparing them per decision is the
+    "search override rate" — the fraction of turns where PUCT's backed-up values
+    moved the choice off the model's own top action.
+
+    Returns None when any report predates the per-arm ``prior`` field (or the
+    entries are malformed): the caller must count that decision as UNMEASURED,
+    never as agreement — a missing instrument is not a concordant reading.
+    """
+
+    priors: Counter[str] = Counter()
+    for side_key, report in world_reports:
+        entries = report.get(side_key)
+        if not isinstance(entries, Sequence):
+            return None
+        for entry in entries:
+            if not isinstance(entry, Mapping) or "prior" not in entry:
+                return None
+            choice = str(entry.get("move") or "")
+            if not choice:
+                return None
+            priors[choice] += float(entry["prior"])
+    if not priors:
+        return None
+    # Deterministic tie-break (value, then name) so the rate is reproducible.
+    return max(priors, key=lambda choice: (priors[choice], choice))
+
+
 class EnvTier2AnnotationSource:
     """Env→policy surface for the live fold's Tier-2 annotation overlay.
 
@@ -729,6 +764,18 @@ class EngineMctsStats:
     # Aborted searches are not counted here -- they are counted, per world draw,
     # in `world_failure_reasons`.
     unique_worlds_searched: int = 0
+    # Searched decisions where the final choice DIFFERS from the model's own
+    # aggregated-prior argmax (`model_prior_argmax`) — the turns search actually
+    # changed the answer. Rate = this / (searched_decisions -
+    # search_override_unmeasured); never over all decisions, since a fallback
+    # has no search answer and an unmeasured decision has no model answer.
+    search_override_decisions: int = 0
+    # Searched decisions where the comparison was IMPOSSIBLE: reports without
+    # the per-arm `prior` field (pre-field crate build), and every decision on
+    # the non-model paths (hp_fraction / legacy), whose uniform priors would
+    # make "the model's argmax" a fiction. Counted, never folded into
+    # agreement — a missing instrument is not a concordant reading.
+    search_override_unmeasured: int = 0
     total_iterations: int = 0
     search_wall_seconds: float = 0.0
     decision_wall_seconds: float = 0.0
@@ -909,6 +956,8 @@ class EngineMctsStats:
             ),
             "worlds_collapsed": self.worlds_collapsed,
             "unique_worlds_searched": self.unique_worlds_searched,
+            "search_override_decisions": self.search_override_decisions,
+            "search_override_unmeasured": self.search_override_unmeasured,
             "total_iterations": self.total_iterations,
             "search_wall_seconds": self.search_wall_seconds,
             "decision_wall_seconds": self.decision_wall_seconds,
@@ -1445,6 +1494,8 @@ class EngineMctsPolicy:
             return self._fallback(context, rng, "choices_unmapped")
 
         self.stats.searched_decisions += 1
+        # No model priors on this path either; the comparison is undefined.
+        self.stats.search_override_unmeasured += 1
         return PolicyDecision(
             action_index=action_index,
             policy_id=self.policy_id,
@@ -1545,6 +1596,8 @@ class EngineMctsPolicy:
             return self._fallback(context, rng, "choices_unmapped")
 
         self.stats.searched_decisions += 1
+        # Uniform priors on this path: "the model's argmax" does not exist here.
+        self.stats.search_override_unmeasured += 1
         return PolicyDecision(
             action_index=action_index,
             policy_id=self.policy_id,
@@ -2442,6 +2495,22 @@ class EngineMctsPolicy:
         if action_index is None:
             return self._fallback(context, rng, "choices_unmapped")
         self.stats.searched_decisions += 1
+        # Override telemetry: did search move the choice off the model's own
+        # argmax? Both argmaxes aggregate over the SAME records (collapse
+        # multiplicity weighs both identically) with the same tie-break.
+        model_choice = model_prior_argmax(
+            [(record["side_key"], record["report"]) for record in world_runs]
+        )
+        search_choice = max(
+            choice_weights, key=lambda choice: (choice_weights[choice], choice)
+        )
+        if model_choice is None:
+            self.stats.search_override_unmeasured += 1
+            override: Optional[bool] = None
+        else:
+            override = model_choice != search_choice
+            if override:
+                self.stats.search_override_decisions += 1
         return PolicyDecision(
             action_index=action_index,
             policy_id=self.policy_id,
@@ -2462,6 +2531,10 @@ class EngineMctsPolicy:
                     "aggregated_choices_basis": (
                         "stopped_prefix" if locked_choice is not None else "full_budget"
                     ),
+                    # None = unmeasured (pre-`prior` crate build), never False.
+                    "model_argmax": model_choice,
+                    "search_argmax": search_choice,
+                    "model_override": override,
                     "early_stop": {
                         "enabled": config.early_stop,
                         # WORLDS, not searches: full_budget_replays counts

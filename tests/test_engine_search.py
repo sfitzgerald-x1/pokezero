@@ -21,6 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from pokezero.engine_search import (  # noqa: E402
+    model_prior_argmax,
     EngineMctsConfig,
     EngineMctsPolicy,
     EngineMctsStats,
@@ -3841,6 +3842,73 @@ class WorldCacheKeyTest(unittest.TestCase):
         self.assertNotEqual(k, world_cache_key({**base, "state_str": "S2"}, "side_one"))
         self.assertNotEqual(k, world_cache_key({**base, "ctx_json": "C2"}, "side_one"))
         self.assertNotEqual(k, world_cache_key(base, "side_two"))
+
+
+class ModelPriorArgmaxTest(unittest.TestCase):
+    """`model_prior_argmax` — the model half of the override-rate comparison.
+
+    The function must aggregate priors over the SAME records the visit
+    aggregate walks (collapse multiplicity included), and must return None —
+    never a guess — when any report predates the per-arm `prior` field.
+    """
+
+    @staticmethod
+    def _report(entries):
+        return {"side_one": entries}
+
+    def test_priors_aggregate_across_worlds_and_argmax_wins(self):
+        reports = [
+            ("side_one", self._report([
+                {"move": "surf", "visits": 9, "q": 0.5, "prior": 0.7},
+                {"move": "rest", "visits": 1, "q": 0.5, "prior": 0.3},
+            ])),
+            ("side_one", self._report([
+                {"move": "surf", "visits": 2, "q": 0.5, "prior": 0.4},
+                {"move": "rest", "visits": 8, "q": 0.5, "prior": 0.6},
+            ])),
+        ]
+        # surf: 0.7 + 0.4 = 1.1 beats rest: 0.3 + 0.6 = 0.9 — the argmax is a
+        # cross-world SUM, not any single world's winner.
+        self.assertEqual(model_prior_argmax(reports), "surf")
+
+    def test_collapse_multiplicity_weighs_priors_like_visits(self):
+        # Three records of one collapsed world outvote one distinct world,
+        # exactly as they do in the visit aggregate.
+        twin = ("side_one", self._report([
+            {"move": "toxic", "visits": 5, "q": 0.5, "prior": 0.9},
+            {"move": "protect", "visits": 5, "q": 0.5, "prior": 0.1},
+        ]))
+        other = ("side_one", self._report([
+            {"move": "toxic", "visits": 5, "q": 0.5, "prior": 0.0},
+            {"move": "protect", "visits": 5, "q": 0.5, "prior": 1.0},
+        ]))
+        self.assertEqual(
+            model_prior_argmax([twin, twin, twin, other]), "toxic"
+        )
+        self.assertEqual(model_prior_argmax([twin, other]), "protect")
+
+    def test_missing_prior_field_is_unmeasured_not_agreement(self):
+        reports = [
+            ("side_one", self._report([
+                {"move": "surf", "visits": 9, "q": 0.5, "prior": 0.7},
+            ])),
+            # Second world from a pre-`prior` crate build.
+            ("side_one", self._report([{"move": "surf", "visits": 9, "q": 0.5}])),
+        ]
+        self.assertIsNone(model_prior_argmax(reports))
+        self.assertIsNone(model_prior_argmax([]))
+        self.assertIsNone(
+            model_prior_argmax([("side_one", {"side_one": None})])
+        )
+
+    def test_tie_break_is_deterministic(self):
+        reports = [
+            ("side_one", self._report([
+                {"move": "aaa", "visits": 1, "q": 0.5, "prior": 0.5},
+                {"move": "zzz", "visits": 1, "q": 0.5, "prior": 0.5},
+            ])),
+        ]
+        self.assertEqual(model_prior_argmax(reports), "zzz")
 
 
 if __name__ == "__main__":
