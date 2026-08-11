@@ -88,6 +88,11 @@ REFUSED = (
 # which is the irreducible case.
 UNCONVERTIBLE = ("tackle", "scratch")
 CONVERTIBLE = ("watersport", "tackle")
+# The same convertible pair with the bypassing callee LAST. `get_sleep_talk_choices` walks
+# the move list in slot order, so this is the case a scan that stops at the second match --
+# or that only looks at MATCHING candidates -- gets wrong, and it is the shape two surviving
+# mutants exploited before it existed.
+CONVERTIBLE_LAST = ("tackle", "scratch", "watersport")
 
 
 def _sleeper(callees: tuple[str, ...] = UNCONVERTIBLE) -> PokemonSpec:
@@ -235,6 +240,21 @@ class ProtectMarkerStateReadTests(unittest.TestCase):
 
         branch = self._marker_branch("waterabsorb", 252, CONVERTIBLE)
         self.assertTrue(branch["attribution_unsafe"], branch)
+        self.assertIn(REFUSED, branch["attribution_unsafe_reasons"], branch)
+        self.assertNotIn(PROTECT_LINE, branch["events"], branch)
+        self.assertNotIn(RENDERED_FULL_HP, branch["lossy_subcases"], branch)
+
+    def test_the_callee_scan_covers_candidates_after_the_second_match(self) -> None:
+        """The fail-closed direction is only fail-closed if EVERY callee is scanned.
+
+        Found by mutation, not by review: restoring the old early `return Ambiguous` on the
+        second match, and narrowing the scan to MATCHING candidates, both survived the first
+        version of this module because its convertible fixture put `watersport` FIRST. Here
+        two protect-flagged callees match before it is reached, so a scan that stops early
+        renders `Protect` over an ability activation.
+        """
+
+        branch = self._marker_branch("waterabsorb", 252, CONVERTIBLE_LAST)
         self.assertIn(REFUSED, branch["attribution_unsafe_reasons"], branch)
         self.assertNotIn(PROTECT_LINE, branch["events"], branch)
         self.assertNotIn(RENDERED_FULL_HP, branch["lossy_subcases"], branch)

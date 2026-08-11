@@ -3192,6 +3192,68 @@ fn protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing() {
     );
 }
 
+/// The scan must cover callees AFTER the second match. Found by mutation, not by review.
+///
+/// `callee_can_convert_an_opponent_heal` is only fail-closed if it is computed over EVERY
+/// candidate. Two mutants exploit that and both SURVIVED the first version of this suite:
+/// restoring the old `return SleepTalkIdent::Ambiguous` the moment a second candidate
+/// matches, and moving the scan inside the `matched` arm so unmatched candidates are
+/// skipped. Neither was visible because the sibling fixtures put the bypassing callee
+/// FIRST, where any scan order finds it.
+///
+/// So the order is inverted here: two protect-flagged callees match before `WATERSPORT`
+/// is ever reached. All three regenerate the same `[Heal 0]` tail, the third from the
+/// OTHER producer, so the branch must refuse -- and an early return refuses nothing.
+#[test]
+fn the_callee_scan_covers_candidates_after_the_second_match() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().sleep_turns = 0;
+    // SLOT ORDER IS THE POINT. `get_sleep_talk_choices` walks the move list in order, so
+    // the two matches come first and the bypassing absorbed callee comes last.
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::SCRATCH);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M3, Choices::WATERSPORT);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PROTECT);
+    state.side_one.get_active().ability = Abilities::WATERABSORB;
+    let maxhp = state.side_one.get_active().maxhp;
+    state.side_one.get_active().hp = maxhp;
+
+    let branches = generate(&mut state);
+    let mut checked = 0;
+    for branch in &branches {
+        let r = rendered(&mut state, branch);
+        let events = r.lines.join("\n");
+        assert!(
+            !events.contains("Protect"),
+            "a bypassing absorbed callee in a LATER slot was not scanned, so the marker \
+             was dressed as Protect:\n{events}"
+        );
+        if r.attribution_unsafe.iter().any(|s| {
+            s == "sleeptalk_called_unidentified:ambiguous_unrenderable:heal_zero_marker"
+        }) {
+            checked += 1;
+        }
+    }
+    assert!(
+        checked > 0,
+        "no branch was refused, so this fixture does not reach the guard and cannot pin \
+         the scan's coverage"
+    );
+}
+
 /// PROTECT, an absorb ability, FULL HP -- and NO callee that could have converted a heal:
 /// RENDER. This is the reclaim, and it is the arm the census block is made of.
 ///
