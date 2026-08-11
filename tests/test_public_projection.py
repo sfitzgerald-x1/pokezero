@@ -1458,10 +1458,18 @@ class AxisClosureTests(unittest.TestCase):
 
 
 class SetClosureTests(unittest.TestCase):
-    """The four remaining hand-maintained membership sets in this module, closed.
+    """The hand-maintained membership sets in this module, closed.
 
-    Each one was verified UNPINNED by a one-token sweep on #1215 as merged -- add
-    or remove a single token and the whole suite stayed green:
+    Sections 1-5 are #1223's, and its own review recorded that the sweep behind
+    them was NOT exhaustive -- see the `RENDER_TELEMETRY_ONLY_LOSSY` bullet. It
+    was then made exhaustive, over every string collection in the module,
+    element by element: 25 survivors on `fb600899`. Sections 6 and 7 are those
+    survivors' constants. The count, not the list, is the deliverable, and the
+    remaining survivor is disclosed in
+    `KnownProducerExclusionTests.test_the_engines_none_sentinel_is_not_a_transform`.
+
+    Each of sections 1-5 was verified UNPINNED by a one-token sweep on #1215 as
+    merged -- add or remove a single token and the whole suite stayed green:
 
     * `_REQUEST_PSEUDO_MOVES` + `"rest"`. It filters observed move ids OUT of the
       `self_move_set` comparison, so one real move id blinds that axis for that
