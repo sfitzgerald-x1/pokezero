@@ -84,6 +84,7 @@ from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
     OBSERVATION_SCHEMA_VERSION_V4,
+    SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
     ObservationSpec,
     PokeZeroObservationV0,
 )
@@ -232,6 +233,105 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     config.token_count,
                     observation_spec_for_schema(schema_version).token_count,
                 )
+
+    def test_transformer_policy_config_resolves_feature_widths_from_stamped_schema(self) -> None:
+        """All THREE widths key off the stamped schema, not the process-wide default.
+
+        #1227 fixed `token_count` alone. That was the only field dying loudly on a v4 config, so
+        it had been masking the other two: once it resolved, a v4 config silently carried v2.2's
+        51/155 against v4's real 41/132 -- wrong on two of three axes, and only caught downstream
+        by the encode-time census refusal.
+        """
+        # Loop the SUPPORTED tuple rather than a hand-list. The hand-list omitted v2.1 -- the one
+        # schema with numeric=140 -- so a resolution wrong only for v2.1 passed everything.
+        for schema_version in SUPPORTED_OBSERVATION_SCHEMA_VERSIONS:
+            with self.subTest(schema_version=schema_version):
+                spec = observation_spec_for_schema(schema_version)
+                config = TransformerPolicyConfig.compact_category(
+                    category_vocab=("species:a",),
+                    category_oov_buckets=1,
+                    observation_schema_version=schema_version,
+                    transition_token_budget=spec.transition_token_count,
+                )
+                self.assertEqual(
+                    (
+                        config.categorical_feature_count,
+                        config.numeric_feature_count,
+                        config.token_count,
+                    ),
+                    (
+                        spec.categorical_feature_count,
+                        spec.numeric_feature_count,
+                        spec.token_count,
+                    ),
+                )
+
+    def test_transformer_policy_config_keeps_explicit_widths_narrower_than_the_census(self) -> None:
+        """Resolution fills the UNSET case only; it must not overwrite a deliberate value.
+
+        Non-vacuity for the test above: a resolver that unconditionally stamped the census would
+        satisfy it and silently destroy every projected or trimmed config.
+        """
+        # The v2 119-numeric relic family: numeric-only, v2-only, below the 121 census. This is
+        # the REAL narrow population. An earlier revision used v4 at 7/9 -- a shape the encoder
+        # refuses outright on its exact-width check, so it pinned as legitimate a config that
+        # cannot exist.
+        spec = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2)
+        config = TransformerPolicyConfig.compact_category(
+            category_vocab=("species:a",),
+            category_oov_buckets=1,
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2,
+            transition_token_budget=spec.transition_token_count,
+            numeric_feature_count=119,
+        )
+        self.assertEqual(config.numeric_feature_count, 119)
+        self.assertLess(config.numeric_feature_count, spec.numeric_feature_count)
+        self.assertEqual(config.categorical_feature_count, spec.categorical_feature_count)
+
+    def test_transformer_policy_config_refuses_zero_and_over_census_widths(self) -> None:
+        """An explicit 0 must RAISE, not be read as unset -- and a width above census must raise.
+
+        Zero is the pin for `is None` over the truthy idiom. `if not self.categorical_feature_count`
+        survives every other test in this file: it silently resolves an explicit 0 to the census
+        and makes the positivity guard below it unreachable. The sibling `transition_token_count`
+        genuinely uses 0 as its unset sentinel, so the wrong idiom here is a live hazard.
+
+        The upper bound is the check the first revision of this PR argued against in a comment.
+        It is one-sided on purpose: narrower is legal (the v2 119-numeric relic), wider is not.
+        """
+        spec = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2)
+        base = dict(
+            category_vocab=("species:a",),
+            category_oov_buckets=1,
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2,
+            transition_token_budget=spec.transition_token_count,
+        )
+        for field in ("categorical_feature_count", "numeric_feature_count"):
+            with self.subTest(field=field, case="zero"):
+                with self.assertRaisesRegex(ValueError, f"{field} must be positive"):
+                    TransformerPolicyConfig.compact_category(**base, **{field: 0})
+            with self.subTest(field=field, case="over census"):
+                over = getattr(spec, field) + 1
+                with self.assertRaisesRegex(ValueError, f"{field} {over} exceeds"):
+                    TransformerPolicyConfig.compact_category(**base, **{field: over})
+
+    def test_transformer_policy_config_resolves_token_count_for_a_trimmed_region(self) -> None:
+        """Closes the gap a surviving mutant found in #1227's review.
+
+        Nothing pinned resolution for a REGION-TRIMMED config: a resolver returning
+        `schema_spec.token_count` instead of `fixed_prefix + transition_token_count` passed all
+        264 tests. v3's full region is 64, so a 32-token budget must resolve to 87 - 64 + 32 = 55.
+        """
+        config = TransformerPolicyConfig.compact_category(
+            category_vocab=("species:a",),
+            category_oov_buckets=1,
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V3,
+            transition_token_budget=32,
+            transition_token_count=32,
+        )
+        full = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V3)
+        self.assertEqual(config.token_count, full.token_count - full.transition_token_count + 32)
+        self.assertNotEqual(config.token_count, full.token_count)
 
     def test_transformer_policy_config_rejects_token_count_from_another_schema(self) -> None:
         other_schema_token_count = observation_spec_for_schema(
