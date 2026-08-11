@@ -371,98 +371,98 @@
         "ambiguous_tail_is_fully_renderable_with_protect": [
           {
             "in": "sleeptalk_refusal_is_unsafe_with_protect",
-            "line": 3495
+            "line": 3553
           },
           {
             "in": "ambiguous_tail_is_fully_renderable",
-            "line": 3566
+            "line": 3624
           }
         ],
         "ambiguous_unrenderable_slug": [],
         "ambiguous_unrenderable_slug_with_protect": [
           {
             "in": "render_move_phase",
-            "line": 2176
+            "line": 2216
           },
           {
             "in": "ambiguous_unrenderable_slug",
-            "line": 4446
+            "line": 4516
           }
         ],
         "branch_events": [],
         "heal_subcase": [
           {
             "in": "unrenderable_family_at_with_protect",
-            "line": 4225
+            "line": 4295
           }
         ],
         "render_action_phase": [
           {
             "in": "render_branch_events",
-            "line": 1169
+            "line": 1177
           },
           {
             "in": "render_branch_events",
-            "line": 1182
+            "line": 1190
           }
         ],
         "render_branch_events": [
           {
             "in": "branch_events",
-            "line": 6019
+            "line": 6180
           }
         ],
         "render_move_phase": [
           {
             "in": "render_action_phase",
-            "line": 1298
+            "line": 1306
           },
           {
             "in": "render_move_phase",
-            "line": 2063
+            "line": 2074
           }
         ],
         "sleeptalk_refusal_is_unsafe": [],
         "sleeptalk_refusal_is_unsafe_with_protect": [
           {
             "in": "render_move_phase",
-            "line": 2155
+            "line": 2195
           },
           {
             "in": "sleeptalk_refusal_is_unsafe",
-            "line": 3483
+            "line": 3541
           }
         ],
         "unrenderable_family_at": [],
         "unrenderable_family_at_with_protect": [
           {
             "in": "unrenderable_family_at",
-            "line": 4146
+            "line": 4216
           },
           {
             "in": "unrenderable_tail_families_with_protect",
-            "line": 4420
+            "line": 4490
           }
         ],
         "unrenderable_tail_families": [],
         "unrenderable_tail_families_with_protect": [
           {
             "in": "ambiguous_tail_is_fully_renderable_with_protect",
-            "line": 3580
+            "line": 3638
           },
           {
             "in": "unrenderable_tail_families",
-            "line": 4394
+            "line": 4464
           },
           {
             "in": "ambiguous_unrenderable_slug_with_protect",
-            "line": 4460
+            "line": 4530
           }
         ]
       },
       "edges_out_of_the_chokepoint": [
-        2155,
-        2176
+        2195,
+        2216
       ],
       "live_entry_points": [
         "branch_events"
@@ -1024,7 +1024,7 @@
       ]
     }
   },
-  "source_commit": "9c4043381118dde39d31db0c9b716ff2ebf97789",
+  "source_commit": "2cb12a0f7570efa227f8465bc84ed791c6d72ec3",
   "verdicts": {
     "R1": {
       "candidate": "Future Sight / Doom Desire -- residual order 11 and the `future_sight_pending` refusal",
@@ -1065,7 +1065,7 @@
     "R10": {
       "candidate": "Shell Bell, and the `heal_drain_or_shellbell` ambiguity",
       "correction": "\u26a0 Three upgrades, and the first changes the strength of the verdict. (1) The row argues the bucket is UNAMBIGUOUS; it is in fact UNEMITTABLE, because every production path into `heal_subcase` starts in `render_move_phase`'s Sleep Talk block and no set pairs `sleeptalk` with a drain move (0 of 393). The row reasons from the bucket's NAME and never traces its caller -- the exact shape the C153 rule forbids. \u26a0 **And the first revision of THIS correction did it too**, in the same sentence that names the failure: it asserted, untraced, that `heal_subcase` is reached only through `ambiguous_unrenderable_slug_with_protect`. There are two routes; review found the second. The conclusion held, the sentence did not, and nothing re-derived it -- so the graph is now built by `rust_call_graph` and pinned. (2) \"the pool's only drain move is `gigadrain`\" was an assertion; it is now the `drain`-flagged subset of the pool's 125 moves, derived from the dex, with the five gen3 drain moves it excludes named. (3) The Shell Bell half rests on the same generation-time item argument R6 does and needs the same runtime clause: the pool's only item-moving moves SWAP (`trick`) or REMOVE (`knockoff`) and no gen3 mechanism creates an item. \u26a0 One site the row's sentence does not cover survives as a note: the NAMED (non-Sleep-Talk) renderer tags a heal `[from] drain` whenever `choice.drain.is_some()`, and Shell Bell sets that field, so a Shell Bell holder would be mislabelled there too -- same unreachability, second site.",
-      "demonstration": "`heal_subcase` (`rust/pokezero-search/src/events.rs:4080`) routes a positive ATTACKER-side heal with foe damage in the same tail to `heal_drain_or_shellbell` at `:4093`. \u26a0 THE BUCKET HAS ONE PRODUCTION EMITTER AND THE ROW DOES NOT NAME IT. The caller graph is DERIVED, not asserted (see `heal_subcase_call_graph`): the crate entry point `['branch_events']` reaches `heal_subcase` only through `render_move_phase`, whose remaining 5 graph roots are thin non-`_with_protect` wrappers with ZERO production callers. `render_move_phase` has exactly 2 edges into the subgraph, both inside its Sleep Talk block -- the `sleeptalk_refusal_is_unsafe_with_protect` predicate at `rust/pokezero-search/src/events.rs:2155` and the slug emit at `:2176`. Only the second produces a KEY; the first is a boolean test whose result is discarded. So the tail is always a SLEEP TALK CALLEE'S tail, and the bucket needs `sleeptalk` and a drain move ON THE SAME SET. Measured per set, the instrument section 8 requires for a two-thing gap: 44 of 393 sets carry `sleeptalk`, 3 carry a drain move, and 0 carry both. The bucket is therefore UNEMITTABLE in this format, which is strictly stronger than the row's \"unambiguous\". Shell Bell, the other half of the name, is implemented AS drain (`src/gen3/items.rs`, arm `Items::SHELLBELL`, sets `attacking_choice.drain`), so it produces a byte-identical `Heal` -- the ambiguity is real by construction and not by enumeration -- and it is absent from the 13-item universe.",
+      "demonstration": "`heal_subcase` (`rust/pokezero-search/src/events.rs:4150`) routes a positive ATTACKER-side heal with foe damage in the same tail to `heal_drain_or_shellbell` at `:4163`. \u26a0 THE BUCKET HAS ONE PRODUCTION EMITTER AND THE ROW DOES NOT NAME IT. The caller graph is DERIVED, not asserted (see `heal_subcase_call_graph`): the crate entry point `['branch_events']` reaches `heal_subcase` only through `render_move_phase`, whose remaining 5 graph roots are thin non-`_with_protect` wrappers with ZERO production callers. `render_move_phase` has exactly 2 edges into the subgraph, both inside its Sleep Talk block -- the `sleeptalk_refusal_is_unsafe_with_protect` predicate at `rust/pokezero-search/src/events.rs:2195` and the slug emit at `:2216`. Only the second produces a KEY; the first is a boolean test whose result is discarded. So the tail is always a SLEEP TALK CALLEE'S tail, and the bucket needs `sleeptalk` and a drain move ON THE SAME SET. Measured per set, the instrument section 8 requires for a two-thing gap: 44 of 393 sets carry `sleeptalk`, 3 carry a drain move, and 0 carry both. The bucket is therefore UNEMITTABLE in this format, which is strictly stronger than the row's \"unambiguous\". Shell Bell, the other half of the name, is implemented AS drain (`src/gen3/items.rs`, arm `Items::SHELLBELL`, sets `attacking_choice.drain`), so it produces a byte-identical `Heal` -- the ambiguity is real by construction and not by enumeration -- and it is absent from the 13-item universe.",
       "foreclosure": "ALL_CALLERS",
       "foreclosure_note": null,
       "instruments": [
@@ -2058,8 +2058,8 @@
     },
     "R9": {
       "candidate": "Liquid Ooze mislabelled by the residual-heal renderer",
-      "correction": "\u26a0 **The row's second sentence is FALSE and is a NON SEQUITUR from its first.** \"The Liquid Ooze guard inside `residual_heal_cause` is therefore dead code\" does not follow from the negative-heal interception, because the guard is not in a negative-heal branch. It is the conjunct `ability != Abilities::LIQUIDOOZE` at `rust/pokezero-search/src/events.rs:5816`, inside the LEECHSEED arm, which only runs on a POSITIVE heal -- exactly the heals the interception lets through. `residual_heal_cause` takes no heal amount at all (`(state, side, next_ins)`), so the sign of the heal is not a fact it can see. It is not dead in the literal sense either: the crate PINS it, at `rust/pokezero-search/src/events.rs:9309`, with a positive heal of 6 and no Leftovers, and that pin's own note records that it exists because deleting the guard once left the suite green. What actually forecloses the conjunct IN THIS FORMAT is the two EARLIER returns plus the item universe: a resolving Wish returns at `:5769` and a Leftovers holder at `:5810`, so the conjunct is only consulted for a positive residual heal on a side holding NEITHER -- and the engine's residual heal producers are Leftovers, Sitrus (outside the 13-item universe, R6), Wish (already returned) and the Leech Seed drain, which under Liquid Ooze is NEGATIVE and intercepted. That enumeration, not the interception, is the demonstration. \u26a0 Two further scope errors in the same cell. The row says \"what makes this row UNREACHABLE is the renderer interception ALONE\": there are THREE ooze-aware sites, not one. The residual plan's own conjunct at `rust/pokezero-search/src/events.rs:5609` is separately pinned in both directions and is live. And the MOVE-PHASE ooze path is a different renderer with its own interception at `rust/pokezero-search/src/events.rs:3318`, which is genuinely REACHABLE -- `gigadrain` on ['exeggutor', 'parasect'] against Liquid Ooze on ['swalot', 'tentacruel'] -- so the mechanic half of this row survives only because that renderer handles it too, which the row does not say. `reports/c131` \u00a75 carries the same false sentence and is corrected by reference.",
-      "demonstration": "`render_residual_instruction` (`rust/pokezero-search/src/events.rs:5109`) intercepts a negative `Instruction::Heal` at `:5137` and renders it as `|-damage|\u2026|[from] ability: Liquid Ooze` in the THEN arm; `plan.take(side, true)` and the `residual_heal_cause` fallback (`:5146`) are the ELSE arm, and `residual_heal_cause` (`:5755`) has exactly ONE call site in the crate. So the drain-reversal damage can never be labelled by the fallback, which is what the row's headline gap needed. Liquid Ooze itself IS reachable -- ['swalot', 'tentacruel'] carry it, `leechseed` is ['bellossom', 'cacturne', 'celebi', 'exeggutor', 'jumpluff', 'meganium', 'sceptile', 'shiftry', 'sunflora', 'tangela', 'tropius', 'venusaur'] of 220 and both moves are `target: normal`, so the seeder-versus-holder pairing is cross-side and ordinary.",
+      "correction": "\u26a0 **The row's second sentence is FALSE and is a NON SEQUITUR from its first.** \"The Liquid Ooze guard inside `residual_heal_cause` is therefore dead code\" does not follow from the negative-heal interception, because the guard is not in a negative-heal branch. It is the conjunct `ability != Abilities::LIQUIDOOZE` at `rust/pokezero-search/src/events.rs:5977`, inside the LEECHSEED arm, which only runs on a POSITIVE heal -- exactly the heals the interception lets through. `residual_heal_cause` takes no heal amount at all (`(state, side, next_ins)`), so the sign of the heal is not a fact it can see. It is not dead in the literal sense either: the crate PINS it, at `rust/pokezero-search/src/events.rs:9470`, with a positive heal of 6 and no Leftovers, and that pin's own note records that it exists because deleting the guard once left the suite green. What actually forecloses the conjunct IN THIS FORMAT is the two EARLIER returns plus the item universe: a resolving Wish returns at `:5930` and a Leftovers holder at `:5971`, so the conjunct is only consulted for a positive residual heal on a side holding NEITHER -- and the engine's residual heal producers are Leftovers, Sitrus (outside the 13-item universe, R6), Wish (already returned) and the Leech Seed drain, which under Liquid Ooze is NEGATIVE and intercepted. That enumeration, not the interception, is the demonstration. \u26a0 Two further scope errors in the same cell. The row says \"what makes this row UNREACHABLE is the renderer interception ALONE\": there are THREE ooze-aware sites, not one. The residual plan's own conjunct at `rust/pokezero-search/src/events.rs:5770` is separately pinned in both directions and is live. And the MOVE-PHASE ooze path is a different renderer with its own interception at `rust/pokezero-search/src/events.rs:3376`, which is genuinely REACHABLE -- `gigadrain` on ['exeggutor', 'parasect'] against Liquid Ooze on ['swalot', 'tentacruel'] -- so the mechanic half of this row survives only because that renderer handles it too, which the row does not say. `reports/c131` \u00a75 carries the same false sentence and is corrected by reference.",
+      "demonstration": "`render_residual_instruction` (`rust/pokezero-search/src/events.rs:5270`) intercepts a negative `Instruction::Heal` at `:5298` and renders it as `|-damage|\u2026|[from] ability: Liquid Ooze` in the THEN arm; `plan.take(side, true)` and the `residual_heal_cause` fallback (`:5307`) are the ELSE arm, and `residual_heal_cause` (`:5916`) has exactly ONE call site in the crate. So the drain-reversal damage can never be labelled by the fallback, which is what the row's headline gap needed. Liquid Ooze itself IS reachable -- ['swalot', 'tentacruel'] carry it, `leechseed` is ['bellossom', 'cacturne', 'celebi', 'exeggutor', 'jumpluff', 'meganium', 'sceptile', 'shiftry', 'sunflora', 'tangela', 'tropius', 'venusaur'] of 220 and both moves are `target: normal`, so the seeder-versus-holder pairing is cross-side and ordinary.",
       "foreclosure": "ALL_CALLERS",
       "foreclosure_note": null,
       "instruments": [
