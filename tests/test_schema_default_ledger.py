@@ -47,7 +47,11 @@ def _derive() -> list[dict]:
 def _key(row: dict) -> str:
     # File+kind+owner, NOT line: a row must survive unrelated line drift, or the gate becomes
     # noise and gets muted. Owner is the enclosing def, which is stable under edits above it.
-    return f"{row['file']}::{row['owner']}::{row['kind']}"
+    # Line IS part of the key. Keying on file+owner+kind collapsed 97 rows to 74 distinct keys,
+    # so a diff that migrated one site and added another at the same key -- what an ordinary PR
+    # looks like -- passed the gate with a NEW conflation in the tree. Line drift is the price;
+    # a bypassable gate is not worth avoiding it.
+    return f"{row['file']}::{row['owner']}::{row['kind']}::{row['line']}"
 
 
 class SchemaDefaultLedgerTest(unittest.TestCase):

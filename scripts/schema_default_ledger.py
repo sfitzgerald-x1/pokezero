@@ -38,8 +38,59 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 CONST = "OBSERVATION_SCHEMA_VERSION"
 DEFAULT_SPEC = "DEFAULT_REPLAY_OBSERVATION_SPEC"
-SPEC_CALLS = {"ObservationSpec"}
-CFG_CALLS = {"TransformerPolicyConfig", "compact_category"}
+# DERIVED, not hardcoded. The first version listed three call names by hand and therefore
+# undercounted by 186 sites -- `LocalShowdownConfig.observation_spec` alone has ~132 callers.
+# That is this program's own error class committed inside the instrument built to retire it:
+# a denominator chosen rather than enumerated. `derive_surfaces` scans src/ for every class
+# attribute or parameter whose DEFAULT is one of GLOBALS, so a new surface is counted the day
+# it is written.
+GLOBALS = {CONST, DEFAULT_SPEC}
+# Alternate constructors do not re-declare the field, so they cannot be derived; they are
+# listed against the type they build and asserted to exist.
+EXTRA_CONSTRUCTORS = {"TransformerPolicyConfig": ["compact_category"]}
+
+
+def derive_surfaces() -> dict[str, set[str]]:
+    """{callable name -> kwargs that silently default to the global default}."""
+    found: dict[str, set[str]] = {}
+
+    def dflt_name(node):
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            return node.value.id
+        return None
+
+    for path in (REPO / "src").rglob("*.py"):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                for st in node.body:
+                    if isinstance(st, ast.AnnAssign) and st.value is not None:
+                        if dflt_name(st.value) in GLOBALS and isinstance(st.target, ast.Name):
+                            found.setdefault(node.name, set()).add(st.target.id)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                a = node.args
+                pairs = list(zip(a.args[-len(a.defaults):] if a.defaults else [], a.defaults))
+                pairs += [(k, d) for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
+                for arg, d in pairs:
+                    if dflt_name(d) in GLOBALS:
+                        found.setdefault(node.name, set()).add(arg.arg)
+    for owner, aliases in EXTRA_CONSTRUCTORS.items():
+        if owner not in found:
+            raise SystemExit(
+                f"ledger: {owner} no longer defaults to the global default; its EXTRA_CONSTRUCTORS "
+                "entry is stale and the count would silently drift."
+            )
+        for alias in aliases:
+            found[alias] = found[owner]
+    return found
+
+
+SURFACES = derive_surfaces()
 # The file that DEFINES the default necessarily reads it; definition sites are not conflation.
 DEFINITION_SITES = {"src/pokezero/observation.py"}
 
@@ -86,10 +137,9 @@ def sites_in(path: Path) -> list[dict]:
             fn = node.func
             name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
             kwargs = {k.arg for k in node.keywords if k.arg}
-            if name in SPEC_CALLS and "schema_version" not in kwargs:
-                add(node, "implicit-spec")
-            elif name in CFG_CALLS and "observation_schema_version" not in kwargs:
-                add(node, "implicit-cfg")
+            if name in SURFACES and not (SURFACES[name] & kwargs):
+                # One kind per surface so a new surface cannot quietly join an existing bucket.
+                add(node, f"implicit:{name}")
     return found
 
 
