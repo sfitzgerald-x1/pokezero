@@ -907,19 +907,21 @@ class TestRoundFourRegressions:
         assert spec.engine_worlds == worlds
         assert "engine_worlds" not in spec.missing
 
-    def test_an_opp_priors_config_id_loses_the_worlds_axis(self):
-        """PRE-EXISTING gap, pinned rather than fixed, so it is not silent.
+    def test_an_opp_priors_config_id_keeps_the_worlds_axis(self):
+        """FIXED 2026-08-11, when the `--opponent-priors` refusal was lifted.
 
         `config_id_for` glues the opponent-priors marker straight onto the last
-        axis token, so the digit scan sees `w8+opp` and drops `engine_worlds`.
-        Found while adding the selection-tuning suffixes, which are `-`
-        separated and do NOT have this problem (the cases above cover them).
+        axis token, so the digit scan used to see `w8+opp` and drop
+        `engine_worlds` while d/s/b still parsed -- a spec that looked populated
+        but had silently lost an axis. The previous version of this test pinned
+        that broken behaviour deliberately, so that lifting the refusal would
+        trip over it first. It did exactly that; this is the other side.
 
-        Not fixed here: it is fail-CLOSED (the field lands in `missing`, the
-        runner refuses rather than replaying at the wrong worlds), no shard can
-        carry the marker today because `--opponent-priors` is refused in
-        `scripts/foulplay_paired_eval.py`, and that refusal is under separate
-        review. Pinned so lifting it trips over this first.
+        The parser now strips a `+`-suffixed marker from each token before the
+        digit scan. Fixed there rather than by respelling the marker because the
+        id bytes are load-bearing: `tests/test_opponent_priors_flag.py:101-104`
+        pins the literal `d4-s1024-b64-w4+opp-priors@k0`, and the id is the
+        merge key for banked shards.
         """
         document = {
             "schema_version": "pokezero.mcts-acceptance-shard.v1",
@@ -934,10 +936,9 @@ class TestRoundFourRegressions:
             _address("accept-search-600004-p1", round_index=7, seat="p1"), document
         )
         assert isinstance(spec, ReplaySpec)
-        assert spec.engine_worlds is None
-        assert "engine_worlds" in spec.missing
-        # The axes before the marker still parse, which is why this is easy to
-        # miss: the spec looks populated.
+        assert spec.engine_worlds == 8
+        assert "engine_worlds" not in spec.missing
+        # All four axes now parse, marker present.
         assert (spec.engine_depth, spec.engine_sims, spec.engine_batch) == (4, 1024, 64)
 
 

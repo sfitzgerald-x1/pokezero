@@ -511,28 +511,42 @@ class SeatBlockTest(unittest.TestCase):
         self.assertEqual(block["games"], 200)
 
 
-class OpponentPriorsRefusalTest(unittest.TestCase):
-    """Cells B/E are refused until the opponent map's ordering is verified.
+class OpponentPriorsLiftedTest(unittest.TestCase):
+    """Cells B/E were refused until the opponent map's ordering was verified.
 
-    The switch-ordering defect is fixed (the request order is computed from the
-    opponent's switch history and passed through ctx), but four prior attempts
-    each looked correct under their own tests, the fix has not cleared
-    independent review, and nothing has run against a real checkpoint. A wrong
-    mapping does not fail -- it reports a confident paired delta from permuted
-    priors, and the campaign reads that as "opponent priors do not help".
+    LIFTED 2026-08-11. This class used to assert the refusal; it now asserts the
+    contract the refusal was protecting, so the flag cannot regress into being
+    accepted-but-inert. A wrong mapping does not fail -- it reports a confident
+    paired delta from permuted priors, and the campaign reads that as "opponent
+    priors do not help" -- so the guard is kept, pointed the other way.
     """
 
-    def test_opponent_priors_are_refused_not_silently_run(self) -> None:
-        with self.assertRaises(SystemExit) as caught:
-            _DRIVER.main([
-                "--checkpoint", "/tmp/c.pt", "--showdown-root", "/tmp/s",
-                "--arm", "search", "--seed-start", "1", "--pairs", "2",
-                "--out", "/tmp/o.json", "--opponent-priors", "--skip-build-check",
-            ])
-        message = str(caught.exception)
-        self.assertIn("REFUSED", message)
-        # The refusal must say what would lift it, not merely that it refused.
-        self.assertIn("review", message)
+    def test_opponent_priors_are_no_longer_refused(self) -> None:
+        # The refusal was a SystemExit carrying "REFUSED" raised in main()
+        # before any game. Assert the string is gone from the driver rather than
+        # invoking main(), which needs torch and a real checkpoint.
+        source = (REPO_ROOT / "scripts" / "foulplay_paired_eval.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("REFUSED pending review", source)
+
+    def test_the_flag_actually_reaches_the_bridge(self) -> None:
+        # The half that matters now: accepted AND forwarded. An accepted flag
+        # that never reaches the bridge would run the whole grid with uniform
+        # opponent priors and report it as the opponent-priors arm.
+        argv = _DRIVER.bridge_argv(args(opponent_priors=True), seat="p1")
+        self.assertIn("--engine-opponent-priors", argv)
+
+    def test_the_cell_identity_records_the_flag(self) -> None:
+        # An opponent-priors cell must not pool with its own control.
+        self.assertEqual(
+            _DRIVER.config_id_for(args(opponent_priors=True)),
+            "d4-s1024-b64-w4+opp-priors@ckpt",
+        )
+        self.assertNotEqual(
+            _DRIVER.config_id_for(args(opponent_priors=True)),
+            _DRIVER.config_id_for(args()),
+        )
 
     def test_the_default_path_is_unaffected(self) -> None:
         # The refusal must not touch the nine cells that do not use the flag.
@@ -577,18 +591,26 @@ class NoDuplicateDefinitionsTest(unittest.TestCase):
     def test_power_report_defines_each_top_level_name_once(self) -> None:
         self.assertEqual(self._duplicate_defs("scripts/foulplay_power_report.py"), {})
 
-    def test_the_refusal_comment_agrees_with_the_refusal(self) -> None:
-        # The spliced copy left a comment saying the ordering defect was live
-        # two lines above a SystemExit saying it was fixed. Whichever way that
-        # is resolved, they must not contradict each other.
+    def test_the_lift_records_its_evidence(self) -> None:
+        # The refusal named what would lift it. Now that it is lifted, the
+        # evidence must stay at the site so the next reader can RE-CHECK rather
+        # than trust -- a lift whose justification has been deleted is
+        # indistinguishable from a lift nobody justified.
         source = (REPO_ROOT / "scripts" / "foulplay_paired_eval.py").read_text(
             encoding="utf-8"
         )
         body = source[source.index("def main("):]
-        guard = body[: body.index("if args.opponent_priors:")]
-        self.assertNotIn("second switch onward", guard,
+        self.assertIn("LIFTED 2026-08-11", body)
+        # the three merged reviews
+        for pr in ("#1194", "#1192", "#1207"):
+            self.assertIn(pr, body, f"lift no longer cites {pr}")
+        # the real-checkpoint evidence, which is the gap the refusal named
+        self.assertIn("iteration-1563", body)
+        self.assertIn("prior_fallbacks == 0", body)
+        # the determinism control, without which the comparison proves nothing
+        self.assertIn("IDENTICAL", body)
+        self.assertNotIn("second switch onward", body,
                          "stale round-4 rationale is back in the live guard")
-        self.assertIn("CRATE-SIDE GATHER", guard)
 
 
 if __name__ == "__main__":

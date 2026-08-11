@@ -414,17 +414,49 @@ def main(argv=None) -> int:
     # A wrong gather does not fail. It returns a confident paired delta and the
     # campaign reads "opponent priors do not help" off a permutation. Cells B
     # and E stay refused until the §8 in-image gate trio clears them.
-    if args.opponent_priors:
-        raise SystemExit(
-            "--opponent-priors is REFUSED pending review. The switch-ordering "
-            "defect is fixed -- the opponent's request order is now computed "
-            "from its switch history and passed through ctx, pinned by a "
-            "three-switch test the golden corpus could not provide -- but the "
-            "fix has not cleared independent review, and nothing has run "
-            "against a real checkpoint. Four prior attempts each looked correct "
-            "under their own tests. Lift this only after review passes and the "
-            "section 8 in-image gate confirms applied priors end to end."
-        )
+    # LIFTED 2026-08-11. The refusal's own terms were "lift this only after
+    # review passes and the section 8 in-image gate confirms applied priors end
+    # to end". Both are now met; recorded here so the next reader can re-check
+    # rather than trust.
+    #
+    # Review: #1194 (crate fails closed when the opponent request order is
+    # absent), #1192 (crate-side gather/apply path test) and #1207 (applied-
+    # priors gate, keyed on visits as the observable) are merged to origin/main
+    # and are ancestors of this commit.
+    #
+    # In-image, fixture weights: tests.test_model_priors_search plus
+    # tests.test_opponent_priors_flag, 29 tests, all pass inside the shipped
+    # image against that image's own crate.
+    #
+    # In-image, REAL CHECKPOINT -- the gap the refusal actually named, since the
+    # tests above use random-weight fixtures at the v3 shape. Against
+    # v4prod-entfull-15m-20260807084357 iteration-1563 (sha256 85ba08ef...):
+    #
+    #   * End to end, 39 searched decisions with priors ON through the bridge:
+    #     prior_fallbacks == 0. #1194 makes a withheld order cost a COUNTED
+    #     fallback, so zero refusals over 39 decisions means the opponent map
+    #     resolved every time -- the fail-closed path is demonstrably not what
+    #     is happening.
+    #   * Same state, same seed, deterministic: one real search input was
+    #     captured mid-game and replayed three times in-process -- OFF, OFF
+    #     again, then ON. The two OFF replays are IDENTICAL field for field
+    #     (minus timing), which is what makes the third comparison mean
+    #     anything; the crate is deterministic given identical arguments. ON
+    #     differs from OFF in 19 fields including the visit counters that
+    #     #1207's gate keys on: early_stop_leader_visits 51 -> 72,
+    #     early_stop_runner_up_visits 36 -> 54, decision_nodes 61 -> 77. So the
+    #     priors are APPLIED and change selection, not merely accepted.
+    #
+    # The control matters and is not decoration: comparing whole GAMES on a
+    # fixed seed does NOT work here. FoulPlay's opponent is time-budgeted
+    # (--search-time-ms), so two identical priors-off games diverged (34 vs 39
+    # decisions). Any on-vs-off game comparison would have been confounded, and
+    # would have "confirmed" applied priors for the wrong reason.
+    #
+    # Still true, and the reason the marker parsing was fixed alongside this:
+    # a wrong gather does not fail loudly, it returns a confident paired delta.
+    # Anything read off an opponent-priors cell should be checked against
+    # prior_fallbacks staying near zero for that cell.
 
     # HARD STOP before any game. A stale build does not error, it produces a
     # plausible number -- same standing as in mcts_acceptance_h2h.
