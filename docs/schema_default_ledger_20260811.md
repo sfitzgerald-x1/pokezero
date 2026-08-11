@@ -350,6 +350,35 @@ comparison inconsistent (one source moved, the other did not), and the same blan
 `test_neural_selfplay` turned a passing test red. Both reverted. The group needs the env and its
 comparison target moved together.
 
+
+## The last 6: four mechanical attempts, four failures. Read them.
+
+Attempts made and reverted, recorded so the next reader does not repeat them:
+
+| attempt | outcome |
+|---|---|
+| pin `test_transitions_fold`'s three `LocalShowdownConfig` sites | annotated-products comparison went inconsistent: one source moved, the other did not |
+| blanket-pin every `compact_category` in `test_neural_selfplay` | turned a PASSING test red (`..._disable_fixed_opponents_for_mirror_self_play`) |
+| pin `test_fallback_replay_end_to_end`'s three env sites to v2.2 | changed nothing: 7 failures, identical messages -- NOT this class |
+| pin the `test_investment_live_env` / `test_tier2_live_env` `_env` helpers to v4 | broke a DIFFERENT test in the same file (`IndexError: tuple index out of range`) |
+
+Four different mechanical shapes, four failures. That is not bad luck; it is the group telling
+us what it is. These tests pair a LIVE ENCODE with a comparison target -- a committed artifact,
+a batch-computed twin, a fold closure -- and the schema has to move on BOTH sides together or
+the test is measuring the mismatch it just created. A one-sided pin is a new bug wearing the fix's
+clothes, and each attempt above produced exactly that.
+
+**The work each needs:** find the comparison target, determine which schema PRODUCED it, and
+give the env that schema -- or, where the target is generated in-test, move both. That is a
+read-and-decide task per test, roughly the same effort as the 8 already migrated by hand, and it
+cannot be batched.
+
+**What must not happen:** filing these six into
+`tests/data/schema_drill_expected_breakages.txt`. The drill would go green tomorrow and mean
+nothing. Their signature (`'v5-drill' != 'v4'`) is indistinguishable at a glance from a genuine
+class-(iii) pin, which is precisely why that file's header states the admission rule and why it
+is the single place this migration can be falsely declared finished.
+
 ## Burndown protocol
 
 A slice resumes by **re-running the command**, never by recall. A row is retired when the
