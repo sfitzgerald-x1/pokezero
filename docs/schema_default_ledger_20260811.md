@@ -169,6 +169,105 @@ construction or search? Candidates not yet eliminated -- the model config's widt
 policy, or `EngineMctsConfig` reaching the default indirectly. Recorded as open rather than
 folded into the mechanical bucket, which is where it would have been hidden.
 
+
+## Phase D worklist: the 33 unexpected breakages
+
+Scored by `bash scripts/schema_rotation_drill.sh` against
+`tests/data/schema_drill_expected_breakages.txt`. **This is the exact remaining migration.**
+Each line is a site that silently depended on which schema held the default slot; the drill
+passes when this list is empty.
+
+The same run reported **0 expected-but-did-not-break**, so all five class-(iii) pins fired.
+That direction is checked because a pin that stops pinning would let the drill "pass" while
+the next rotation goes unnoticed -- the one way this migration could be falsely declared done.
+
+
+**`test_distributed_training.py`** (2)
+
+- `DistributedTrainingTest::test_ddp_two_rank_contiguous_shards_match_single_device_updates`
+- `DistributedTrainingTest::test_ddp_two_rank_ppo_reports_global_metrics_within_parity_bounds`
+
+**`test_engine_env.py`** (1)
+
+- `EngineEnvTest::test_k0_leaves_the_transition_region_present_but_masked`
+
+**`test_engine_stat_attestation.py`** (1)
+
+- `TransportAttestationScriptTests::test_json_result_carries_reproducible_command_and_provenance`
+
+**`test_fallback_replay_end_to_end.py`** (7)
+
+- `TestReplayChainAgainstRealBattles::test_every_address_resolves`
+- `TestReplayChainAgainstRealBattles::test_recording_does_not_perturb_the_run`
+- `TestReplayChainAgainstRealBattles::test_replay_is_deterministic`
+- `TestReplayChainAgainstRealBattles::test_the_recorded_address_replays`
+- `TestReplayChainAgainstRealBattles::test_the_run_actually_refused_something`
+- `TestReplayChainAgainstRealBattles::test_the_runner_searches_under_the_recorded_config`
+- `TestReplayChainAgainstRealBattles::test_the_search_itself_is_deterministic`
+
+**`test_foulplay_bridge.py`** (1)
+
+- `FoulPlayBridgeTest::test_capture_writes_p1_only_rollouts_and_preserves_partial_output`
+
+**`test_golden_corpus.py`** (1)
+
+- `GoldenCorpusLiveSmokeTest::test_one_game_generates_a_verifiable_corpus`
+
+**`test_investment_live_env.py`** (1)
+
+- `LiveInvestmentPopulationTest::test_live_codes_are_knowledge_monotone_vs_batch_and_encode`
+
+**`test_linear_policy.py`** (1)
+
+- `LinearPolicyTest::test_linear_feature_fingerprint_payload_tracks_extractor_source_and_schemas`
+
+**`test_neural_policy.py`** (5)
+
+- `NeuralPolicyScaffoldTest::test_neural_cli_benchmark_history_mask_k_wires_and_stamps`
+- `NeuralPolicyScaffoldTest::test_transformer_forward_accepts_compact_categorical_training_cache_rows`
+- `NeuralPolicyScaffoldTest::test_transformer_forward_accepts_row_indexed_training_cache_windows`
+- `NeuralPolicyScaffoldTest::test_zero_layer_row_indexed_forward_matches_dense_expansion`
+- `TruncateHistoryTensorsTest::test_policy_forward_matches_manual_truncation`
+
+**`test_neural_selfplay.py`** (2)
+
+- `NeuralSelfPlayTest::test_torch_smoke_runs_train_save_load_benchmark_chain`
+- `NeuralSelfPlayTest::test_torch_smoke_trains_from_real_cache_chunks_and_deletes_them`
+
+**`test_observation_schema_flag.py`** (1)
+
+- `SchemaFlagEndToEndTest::test_collect_and_train_v2_2_end_to_end_and_cross_checks`
+
+**`test_observation_spec_v2_1.py`** (1)
+
+- `SpecTableTest::test_spec_for_schema_is_loud_on_unknown_versions`
+
+**`test_online_client.py`** (1)
+
+- `TurnMergedNormalizeThreadingTest::test_default_schema_agent_requests_turn_merged`
+
+**`test_remote_self_describe.py`** (4)
+
+- `RemoteSelfDescribeTests::test_config_exposes_served_model_config`
+- `RemoteSelfDescribeTests::test_explicit_schema_spec_refines_to_trimmed_region`
+- `RemoteSelfDescribeTests::test_reload_refuses_token_shape_mismatch`
+- `RemoteSelfDescribeTests::test_remote_spec_adopts_like_neural_spec`
+
+**`test_roll_enumeration_scope.py`** (1)
+
+- `RollEnumerationRuntimeScope::test_importing_every_differential_consumer_leaves_the_fan_collapsed`
+
+**`test_tier2_live_env.py`** (1)
+
+- `CollectCacheMaskMetadataTest::test_checkpointless_collect_records_masks_and_train_cross_checks`
+
+**`test_token_format_doc.py`** (1)
+
+- `TokenFormatDocSelfValidationTest::test_committed_dump_matches_live_regeneration_byte_for_byte`
+
+**`test_transitions_fold.py`** (1)
+
+- `FoldAnnotatedSurfaceTest::test_annotated_products_match`
 ## Burndown protocol
 
 A slice resumes by **re-running the command**, never by recall. A row is retired when the
