@@ -129,7 +129,9 @@ grep '^FAILED' "$WT/DRILL.txt" | sed 's|.*/tests/||; s|::.*||' | sort | uniq -c 
 # f-string defect in c153, and would have kept charging it forever. A breakage is a test that
 # passes UNROTATED and fails ROTATED -- anything else is noise being attributed to this class.
 echo "== baseline: same tree, same interpreter, default NOT rotated =="
-BASE="${DRILL_BASELINE:-$WT/../schema-drill-baseline}"
+# Derived FROM $WT, never a sibling guess. The old default was "$WT/../schema-drill-baseline",
+# which force-removed an unrelated real directory when the drill was invoked as documented.
+BASE="${DRILL_BASELINE:-${WT%/}-baseline}"
 # Reusable: two full suites in one job exceeds most runners' patience, and the baseline only
 # changes when HEAD does. Set DRILL_BASELINE_REUSE=1 with a baseline already computed at this
 # same commit AND the same scope. Both are recorded: a baseline from a different commit, or
@@ -156,6 +158,19 @@ echo "  baseline failures (NOT attributable to the rotation): $(wc -l < "$WT/bas
 fi
 
 EXPECTED="$REPO/tests/data/schema_drill_expected_breakages.txt"
+# Collection ERRORs and a non-zero-but-no-FAILED run are both "the suite did not measure what
+# it claims". Scoring only ^FAILED made a module-level import failure read as "6 pins no longer
+# pinning" rather than "nothing ran" -- the exact symptom this drill hit twice.
+for f in "$WT/DRILL.txt" "$BASE/BASE.txt"; do
+  if grep -q '^ERROR ' "$f"; then
+    echo "ABORT: $f contains collection ERROR lines -- the run did not measure the suite:"
+    grep '^ERROR ' "$f" | sed 's/^/  /' | head
+    exit 4
+  fi
+  if ! grep -qE '^[0-9]+ (passed|failed)' "$f"; then
+    echo "ABORT: $f has no pytest summary line -- the run did not complete."; exit 4
+  fi
+done
 grep '^FAILED' "$WT/DRILL.txt" | sed 's|.*/tests/||' | sort -u > "$WT/rotated.txt"
 comm -23 "$WT/rotated.txt" "$WT/baseline.txt" > "$WT/actual.txt"
 grep -vE '^\s*(#|$)' "$EXPECTED" | sort -u > "$WT/expected.txt"
