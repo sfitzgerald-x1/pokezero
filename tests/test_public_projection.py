@@ -2267,9 +2267,8 @@ class SetClosureTests(unittest.TestCase):
             #          instead of `parts[3]`, and `_HP_TAGS_FIELD3 = ()`
             # field 4: `_canonical_replacement_marker` returns False outright,
             #          and `_HP_TAGS_FIELD4 = ()`
-            PYTHONPATH=<arm>/src python -B -m unittest \
-              tests.test_public_projection.SetClosureTests\
-.test_the_hp_tag_families_are_derived_from_the_parsers_own_fields
+            PYTHONPATH=<arm>/src python -B -m unittest -k hp_tag_families
+              tests.test_public_projection   ("Ran 1 test", this test alone)
 
         Both read `Ran 1 test ... OK` -- a probe that discriminates nothing at
         all, agreed with by a constant gutted to match, on both families. (The
