@@ -231,6 +231,12 @@ def _require_shaping_json(value: str, *, field: str) -> str:
     return config.canonical_json()
 
 
+# Schemas whose refusal belongs to `__post_init__`'s pinned-tag path, not to the spec lookup.
+_DEFERRED_TO_POST_INIT_REFUSAL = frozenset(
+    {UNVERSIONED_OBSERVATION_SCHEMA, *LEGACY_OBSERVATION_SCHEMA_VERSIONS}
+)
+
+
 @dataclass(frozen=True)
 class TransformerPolicyConfig:
     """Entity-token transformer architecture for `PokeZeroObservationV0` batches."""
@@ -525,14 +531,21 @@ class TransformerPolicyConfig:
         # so it never fired. It is removed rather than kept "just in case" because a silent
         # fall back to the global default is the exact defect class this migration exists to
         # kill: it is how a payload stamped one schema quietly acquired another's widths.
-        try:
-            default_spec = REPLAY_OBSERVATION_SPECS_BY_SCHEMA[payload_schema]
-        except KeyError:
-            raise ValueError(
-                f"no replay observation spec for payload schema {payload_schema!r}; "
-                f"supported: {', '.join(REPLAY_OBSERVATION_SPECS_BY_SCHEMA)}. A payload naming "
-                "an unknown schema must fail, not inherit the build's current default."
-            ) from None
+        default_spec = REPLAY_OBSERVATION_SPECS_BY_SCHEMA.get(payload_schema)
+        if default_spec is None:
+            if payload_schema not in _DEFERRED_TO_POST_INIT_REFUSAL:
+                raise ValueError(
+                    f"no replay observation spec for payload schema {payload_schema!r}; "
+                    f"supported: {', '.join(REPLAY_OBSERVATION_SPECS_BY_SCHEMA)}. A payload "
+                    "naming an unknown schema must fail, not inherit the build's current "
+                    "default."
+                )
+            # Legacy/unversioned payloads are refused by `__post_init__` with the PINNED TAG
+            # message, which names the migration path. Raising here instead would be a worse
+            # error for the commonest case: a first cut of this guard fired first and replaced
+            # "pinned tag" with a bare spec-lookup failure in three tests. Any spec will do --
+            # the widths it supplies are never reached, because the refusal comes first.
+            default_spec = next(iter(REPLAY_OBSERVATION_SPECS_BY_SCHEMA.values()))
         return cls(
             policy_id=_str_field(payload, "policy_id", "entity-transformer"),
             window_size=_int_field(payload, "window_size", 1),
