@@ -4071,15 +4071,27 @@ fn defender_facts_survive_tail_prefix(
 /// stops costing a world.
 ///
 /// WHAT STILL REFUSES, and why the axis cannot simply be deleted. A FULL-HP absorber that
-/// holds PROTECT is genuinely ambiguous and stays refused. Both producers can reach that
-/// state: producer 1 through any protect-flagged callee, and producer 2 through a callee
-/// that BYPASSES Protect, because `ability_modify_attack_against` runs BEFORE the Protect
-/// gate in `before_move` and deliberately RESTORES `flags.protect` -- so an unflagged move
-/// keeps its converted heal where a flagged one has it stripped by
+/// holds PROTECT is ambiguous WHEN SOME CALLEE COULD HAVE CONVERTED A HEAL, and only then.
+/// Both producers can reach that state: producer 1 through any protect-flagged callee, and
+/// producer 2 through a callee that BYPASSES Protect, because `ability_modify_attack_against`
+/// runs BEFORE the Protect gate in `before_move` and deliberately RESTORES `flags.protect` --
+/// so an unflagged move keeps its converted heal where a flagged one has it stripped by
 /// `remove_effects_for_protect`. That is not hypothetical: WATERSPORT is Water-typed,
 /// `target: Opponent` and carries no protect flag, so Water Absorb converts it and Protect
 /// does not strip it. `the_absorb_bypass_producer_is_real` pins that counterexample against
-/// the engine's own move table, so a future reader cannot retire this axis on prose.
+/// the engine's own move table, and
+/// `protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing` now drives it
+/// through the production render path, so a future reader cannot retire this axis on prose.
+///
+/// NARROWED AGAIN, and the caller is where it happened. This function still refuses whenever
+/// `defender_absorb_zero_heal_possible`, unchanged; what changed is what the production read
+/// puts in that argument. The HP clamp is a NECESSARY condition on producer 2, not a
+/// sufficient one, and the sufficient one -- the callee's own post-modification
+/// `heal == Some(Heal{Opponent, > 0})`, see `choice_can_convert_an_opponent_heal` -- is now
+/// ANDed in at `render_move_phase`'s read site. On the census block that is the difference
+/// between refusing 31 decisions and refusing none of them: all 31 hold PROTECT at full HP
+/// with `WATERABSORB` and have two matching callees, both protect-flagged with `heal == None`,
+/// so producer 2 could not have written the instruction being refused.
 ///
 /// EQUIVALENT-MUTANT NOTE. Hardcoding `defender_protected = true` at the PRODUCTION READ
 /// SITE survives the crate suite -- the unit tests below pin the parameter, not the read --
@@ -10183,13 +10195,16 @@ mod none_matched_shape_tests {
              caller uses, and they are all tests: production moved to _with_protect"
         );
 
-        // THE ABSORB NO-OP IS POSSIBLE -> refuse EVEN WITH the volatile. Since #1211 the
-        // flag means "that defender's absorb ability could have emitted THIS zero heal",
-        // i.e. ability present AND its 25% heal clamps to zero. The axis is still right:
-        // `ability_modify_attack_against` runs BEFORE the Protect gate and RESTORES
-        // `flags.protect`, so a protect-bypassing Water move (WATERSPORT, pinned by
-        // `the_absorb_bypass_producer_is_real`) keeps its converted heal while the volatile
-        // is set. Rendering `Protect` over an ability activation corrupts a searched world.
+        // THE ABSORB NO-OP IS POSSIBLE -> refuse EVEN WITH the volatile. The flag now means
+        // "ability present AND its 25% heal clamps to zero AND some callee's modified choice
+        // still carries the converted opponent heal" -- the HP clause is #1211's, the callee
+        // clause is this PR's, and both are computed at the production read site. The axis is
+        // still right: `ability_modify_attack_against` runs BEFORE the Protect gate and
+        // RESTORES `flags.protect`, so a protect-bypassing Water move (WATERSPORT, pinned by
+        // `the_absorb_bypass_producer_is_real` and driven end-to-end by
+        // `protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing`) keeps its
+        // converted heal while the volatile is set. Rendering `Protect` over an ability
+        // activation corrupts a searched world.
         assert_eq!(
             protect_blocked_marker_side(&zero_heal_on_defender, 0, atk, true, true),
             None
@@ -10197,6 +10212,71 @@ mod none_matched_shape_tests {
         assert_eq!(
             unrenderable_family_at_with_protect(&zero_heal_on_defender, 0, atk, true, true),
             Some("heal_zero_marker")
+        );
+    }
+
+    /// The DISCRIMINATOR: producer 2's own `if`, read off the callee rather than approximated
+    /// from the defender.
+    ///
+    /// Pinned as a pure predicate, separately from the read site that ANDs it in, for the
+    /// reason `sleeptalk_refusal_is_unsafe` states about itself: the two halves have to be
+    /// able to fail apart, and a wrong bound here is a WRONG RENDERED LINE rather than an
+    /// extra refusal.
+    #[test]
+    fn only_an_opponent_targeted_positive_heal_can_reach_the_absorb_no_op() {
+        let with = |heal| {
+            let mut choice = Choice::default();
+            choice.heal = heal;
+            choice
+        };
+        // No heal at all -- every protect-BLOCKED callee, because
+        // `remove_effects_for_protect` sets `heal = None`. This is the shape all 31 census
+        // refusals present on both of their matching callees.
+        assert!(!choice_can_convert_an_opponent_heal(&with(None)));
+        // A SELF heal: Rest, Recover, Softboiled, Moonlight... i.e. every native `heal` in
+        // the move table. Never producer 2, whose site reads `target == Opponent`.
+        assert!(!choice_can_convert_an_opponent_heal(&with(Some(
+            poke_engine::choices::Heal { target: MoveTarget::User, amount: 0.5 }
+        ))));
+        // THE ABSORB CONVERSION, and the only writer of this shape: Water Absorb, Volt
+        // Absorb and Dry Skin all set exactly this.
+        assert!(choice_can_convert_an_opponent_heal(&with(Some(
+            poke_engine::choices::Heal { target: MoveTarget::Opponent, amount: 0.25 }
+        ))));
+        // `> 0.0` and not `>= 0.0`, mirroring the producer. A zero-fraction heal writes no
+        // instruction at all, so admitting it would refuse worlds for nothing -- and a
+        // NEGATIVE opponent heal is not this producer either.
+        assert!(!choice_can_convert_an_opponent_heal(&with(Some(
+            poke_engine::choices::Heal { target: MoveTarget::Opponent, amount: 0.0 }
+        ))));
+        assert!(!choice_can_convert_an_opponent_heal(&with(Some(
+            poke_engine::choices::Heal { target: MoveTarget::Opponent, amount: -0.5 }
+        ))));
+    }
+
+    /// The claim the discriminator rests on, MACHINE-CHECKED against the engine's own table
+    /// instead of asserted in a comment.
+    ///
+    /// `choice_can_convert_an_opponent_heal` is read as "an absorb ability converted this
+    /// callee", and that reading is only sound while NO move carries an opponent-targeted
+    /// heal natively. A future engine bump that adds one (Pollen Puff is the obvious
+    /// candidate) would make the field ambiguous again and must fail here rather than
+    /// silently widen what the walk renders.
+    ///
+    /// The `amount > 0.0` filter matches the predicate: a nonpositive native opponent heal
+    /// would be harmless because the producer ignores it too.
+    #[test]
+    fn no_move_in_the_table_natively_heals_the_opponent() {
+        let offenders: Vec<Choices> = poke_engine::choices::MOVES
+            .iter()
+            .filter(|(_, choice)| choice_can_convert_an_opponent_heal(choice))
+            .map(|(id, _)| *id)
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "an opponent-targeted positive heal is no longer unique to the absorb \
+             abilities' conversion, so it can no longer discriminate the two zero-heal \
+             producers: {offenders:?}"
         );
     }
 

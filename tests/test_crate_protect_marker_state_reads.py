@@ -18,18 +18,29 @@ walk. The defender holds `PROTECT` and the engine's Protect-blocked branch marke
 zero-amount `Heal` on the defender -- is the whole tail. That is the shape captured at
 `fb3m21-946004` round 45.
 
-THE THREE ARMS, which are the reason this is a table rather than one case:
+THE SECOND AXIS, added because the first table pinned a PROXY. The read now carries a
+third fact: whether any Sleep Talk callee's post-modification choice still holds the
+absorb ability's converted `Heal{target: Opponent}`, which is producer 2's own and only
+precondition. The old table had no such axis, so its full-HP arm was justified by the
+protect-BYPASSING absorbed move (WATERSPORT) while its fixture used `tackle`/`scratch` --
+Normal-typed and protect-flagged, which Water Absorb cannot convert at all. It therefore
+asserted a refusal the engine could not need, and that is the whole of the census block's
+`ambiguous_unrenderable:heal_zero_marker` class: all 31 decisions at `--truth-sims 64`
+hold PROTECT at full HP with Water Absorb and have exactly two matching callees, both
+protect-flagged with `heal == None` -- (Ice Beam, Toxic) x19 and (Surf, Toxic) x12.
 
-  * no absorb ability            -> rendered before #1211 and after      (control)
-  * absorb ability, HP headroom  -> refused before #1211, rendered after (the change)
-  * absorb ability, FULL HP      -> refused before and after             (the guard)
+THE ARMS, which are the reason this is a table rather than one case:
 
-The third arm is the one that fails silently if it regresses: a full-HP absorber is
-genuinely ambiguous, because `ability_modify_attack_against` runs BEFORE the Protect gate
-and restores `flags.protect`, so a protect-bypassing Water move (WATERSPORT) keeps its
-converted heal and produces the same instruction with a different meaning. Rendering
-`|-activate|...|Protect` there would be a WRONG LINE in a SEARCHED world, which is worse
-than the abort #1211 removes.
+  * no absorb ability, unconvertible callees   -> renders, ORIGINAL token       (#1157)
+  * absorb ability, HP headroom, unconvertible -> renders, HEADROOM token       (#1211)
+  * absorb ability, FULL HP, unconvertible     -> renders, FULL_HP token        (this PR)
+  * absorb ability, FULL HP, CONVERTIBLE       -> REFUSES                       (the guard)
+
+The last arm is the one that fails silently if it regresses, and it is the one the old
+table never built: `ability_modify_attack_against` runs BEFORE the Protect gate and
+restores `flags.protect`, so a protect-bypassing Water move keeps its converted heal and
+produces the same instruction with a different meaning. Rendering `|-activate|...|Protect`
+there would be a WRONG LINE in a SEARCHED world, which is worse than any abort.
 """
 
 from __future__ import annotations
@@ -64,24 +75,30 @@ CTX = json.dumps({"p1": ["Registeel"], "p2": ["Mantine"], "turn": 1})
 PROTECT_LINE = "|-activate|p2a: Mantine|Protect"
 RENDERED = "sleeptalk_called_unidentified:protect_marker_rendered"
 RENDERED_HEADROOM = "sleeptalk_called_unidentified:protect_marker_rendered_absorb_headroom"
+RENDERED_FULL_HP = "sleeptalk_called_unidentified:protect_marker_rendered_absorb_full_hp"
 REFUSED = (
     "sleeptalk_called_unidentified:ambiguous_unrenderable:heal_zero_marker"
 )
 
+# The CALLEE axis. `tackle`/`scratch` are Normal-typed and protect-flagged, so no absorb
+# ability can convert either one and `remove_effects_for_protect` would clear the heal even
+# if it could -- producer 2 cannot reach the tail. `watersport` is Water-typed and carries NO
+# protect flag, so Water Absorb converts it and Protect does not strip it; paired with a
+# blocked `tackle` both callees regenerate the same zero-heal tail from DIFFERENT producers,
+# which is the irreducible case.
+UNCONVERTIBLE = ("tackle", "scratch")
+CONVERTIBLE = ("watersport", "tackle")
 
-def _sleeper() -> PokemonSpec:
-    # Two protect-blockable callees plus Sleep Talk. Blocked by Protect both collapse to
-    # the same single-instruction tail, which is what makes the callee AMBIGUOUS -- the
-    # precondition for this whole code path.
+
+def _sleeper(callees: tuple[str, ...] = UNCONVERTIBLE) -> PokemonSpec:
+    # Two callees plus Sleep Talk, chosen so their tails are byte-identical and the callee is
+    # therefore AMBIGUOUS -- the precondition for this whole code path.
     return PokemonSpec(
         id="registeel", level=100, types=("steel",), hp=200, maxhp=200,
         attack=100, defense=100, special_attack=100, special_defense=100, speed=500,
         status="sleep", ability=None, item=None, sleep_turns=3,
-        moves=(
-            MoveSpec(id="sleeptalk", pp=16),
-            MoveSpec(id="tackle", pp=32),
-            MoveSpec(id="scratch", pp=32),
-        ),
+        moves=(MoveSpec(id="sleeptalk", pp=16),)
+        + tuple(MoveSpec(id=move, pp=32) for move in callees),
     )
 
 
@@ -96,10 +113,13 @@ def _defender(ability: str | None, hp: int) -> PokemonSpec:
 
 @unittest.skipIf(pokezero_search is None, "pokezero_search native module not built")
 class ProtectMarkerStateReadTests(unittest.TestCase):
-    def _branches(self, ability: str | None, hp: int) -> list[dict]:
+    def _branches(
+        self, ability: str | None, hp: int, callees: tuple[str, ...] = UNCONVERTIBLE
+    ) -> list[dict]:
         spec = BattleSpec(
             side_one=SideSpec(
-                pokemon=(_sleeper(),), volatile_statuses=(), side_conditions={}, boosts={},
+                pokemon=(_sleeper(callees),),
+                volatile_statuses=(), side_conditions={}, boosts={},
             ),
             side_two=SideSpec(
                 pokemon=(_defender(ability, hp),),
@@ -115,22 +135,25 @@ class ProtectMarkerStateReadTests(unittest.TestCase):
         )
         return report["branches"]
 
-    def _marker_branch(self, ability: str | None, hp: int) -> dict:
+    def _marker_branch(
+        self, ability: str | None, hp: int, callees: tuple[str, ...] = UNCONVERTIBLE
+    ) -> dict:
         """The branch carrying the Protect-blocked marker, however it was resolved.
 
         Located by its OUTCOME rather than by index, because a branch list that changed
         shape would otherwise make this module pass by looking at the wrong branch.
         """
+        branches = self._branches(ability, hp, callees)
         candidates = [
             branch
-            for branch in self._branches(ability, hp)
+            for branch in branches
             if PROTECT_LINE in branch["events"]
             or REFUSED in branch["attribution_unsafe_reasons"]
         ]
         self.assertEqual(
             len(candidates), 1,
-            f"expected exactly one marker branch for ability={ability} hp={hp}: "
-            f"{self._branches(ability, hp)}",
+            f"expected exactly one marker branch for ability={ability} hp={hp} "
+            f"callees={callees}: {branches}",
         )
         return candidates[0]
 
@@ -168,35 +191,124 @@ class ProtectMarkerStateReadTests(unittest.TestCase):
         self.assertIn(RENDERED_HEADROOM, branch["lossy_subcases"], branch)
         self.assertNotIn(RENDERED, branch["lossy_subcases"], branch)
 
-    def test_a_full_hp_absorber_still_refuses(self) -> None:
-        """THE GUARD, and the arm whose regression is silent. At full HP the absorb no-op
-        is a real producer of this exact instruction, so the world must keep aborting
-        rather than be searched against a fabricated `Protect` line."""
+    def test_a_full_hp_absorber_with_unconvertible_callees_now_renders(self) -> None:
+        """THIS PR, and the arm the census block is made of.
+
+        `tackle`/`scratch` are Normal-typed and protect-flagged, so Water Absorb cannot
+        convert either one: producer 2 has no route to this tail whatever the defender's
+        HP is, and the zero-amount `Heal` is provably the Protect-blocked branch marker.
+        This is the assertion the old table had inverted, and inverting it back is what
+        the whole PR does.
+
+        SAFER-DIRECTION MUTANT'S GRAVE. Reverting the callee conjunct at the production
+        read site -- or any strictly-more-conservative variant of it, including the exact
+        pre-PR expression -- fails HERE and nowhere else in this module.
+        """
 
         branch = self._marker_branch("waterabsorb", 252)
+        self.assertNotIn(REFUSED, branch["attribution_unsafe_reasons"], branch)
+        self.assertFalse(branch["attribution_unsafe"], branch)
+        self.assertIn(PROTECT_LINE, branch["events"], branch)
+
+    def test_the_full_hp_reclaim_is_counted_under_its_own_token(self) -> None:
+        """A class that stops refusing must not stop being visible, and this reclaim must
+        be separable from BOTH earlier ones. `_absorb_headroom` would be a false statement
+        about a full-HP render, and would hide this change inside #1211's series; the bare
+        token would hide it inside #1157's."""
+
+        branch = self._marker_branch("waterabsorb", 252)
+        self.assertIn(RENDERED_FULL_HP, branch["lossy_subcases"], branch)
+        self.assertNotIn(RENDERED_HEADROOM, branch["lossy_subcases"], branch)
+        self.assertNotIn(RENDERED, branch["lossy_subcases"], branch)
+
+    def test_a_full_hp_absorber_with_a_convertible_callee_still_refuses(self) -> None:
+        """THE GUARD, and the arm whose regression is silent -- now built with the
+        counterexample its own rationale has always named.
+
+        `watersport` is Water-typed and carries no protect flag, so the absorb conversion
+        survives `remove_effects_for_protect` and its clamped-to-zero heal is a real
+        producer of this exact instruction while PROTECT is set. The two callees therefore
+        regenerate the same tail from DIFFERENT producers, the marker's meaning is
+        genuinely unknown, and the world must keep aborting rather than be searched
+        against a fabricated `Protect` line.
+        """
+
+        branch = self._marker_branch("waterabsorb", 252, CONVERTIBLE)
         self.assertTrue(branch["attribution_unsafe"], branch)
         self.assertIn(REFUSED, branch["attribution_unsafe_reasons"], branch)
         self.assertNotIn(PROTECT_LINE, branch["events"], branch)
+        self.assertNotIn(RENDERED_FULL_HP, branch["lossy_subcases"], branch)
 
     def test_one_hp_below_full_is_the_boundary(self) -> None:
         """The clamp yields exactly 1 at 251/252, so the engine writes a REAL heal there
-        and never the marker. Pins the boundary rather than a comfortable distance from
-        it: a `>=` slip in the clamp arithmetic moves exactly this point."""
+        and never a zero marker. Pins the boundary rather than a comfortable distance from
+        it: a `>=` slip in the clamp arithmetic moves exactly this point.
+
+        Read on the CONVERTIBLE fixture, because that is now the only one where the clamp
+        is observable: with unconvertible callees both HPs render, and rightly so. At 251
+        `watersport` heals for 1 and its tail stops matching `tackle`'s, so the callee is
+        NAMED and the named path renders Protect; at 252 both collapse onto the zero marker
+        and the branch refuses.
+        """
 
         self.assertIn(
-            PROTECT_LINE, self._marker_branch("waterabsorb", 251)["events"]
+            PROTECT_LINE, self._marker_branch("waterabsorb", 251, CONVERTIBLE)["events"]
         )
         self.assertNotIn(
-            PROTECT_LINE, self._marker_branch("waterabsorb", 252)["events"]
+            PROTECT_LINE, self._marker_branch("waterabsorb", 252, CONVERTIBLE)["events"]
         )
 
     def test_volt_absorb_is_read_the_same_way(self) -> None:
         """The read is on the ability SET, not on one ability. Volt Absorb reaching a
         different answer than Water Absorb would mean the read had been narrowed to a
-        literal somewhere between here and `absorb_ability_can_emit_a_zero_heal`."""
+        literal somewhere between here and `absorb_ability_can_emit_a_zero_heal`.
+
+        Asserted through the COUNTER, not only through the line, because the line alone
+        does not discriminate: see `test_volt_absorb_has_no_bypassing_producer_in_gen3` for
+        why narrowing the ability set is behaviour-neutral for Volt Absorb in gen3. The
+        token is not neutral -- a narrowed set would count these renders under #1157's bare
+        token and silently redefine two series at once.
+        """
 
         self.assertIn(PROTECT_LINE, self._marker_branch("voltabsorb", 192)["events"])
-        self.assertNotIn(PROTECT_LINE, self._marker_branch("voltabsorb", 252)["events"])
+        headroom = self._marker_branch("voltabsorb", 192)
+        self.assertIn(RENDERED_HEADROOM, headroom["lossy_subcases"], headroom)
+        full = self._marker_branch("voltabsorb", 252)
+        self.assertIn(PROTECT_LINE, full["events"], full)
+        self.assertIn(RENDERED_FULL_HP, full["lossy_subcases"], full)
+        self.assertNotIn(RENDERED, full["lossy_subcases"], full)
+
+    def test_volt_absorb_has_no_bypassing_producer_in_gen3(self) -> None:
+        """MEASURED unreachability, with the witness that it could have fired, because
+        "absent" otherwise means "absent at the settings tried".
+
+        Water Absorb's converted heal survives Protect through an unflagged Water move, and
+        `watersport` demonstrates it two tests above. Volt Absorb has no such route in gen3,
+        and the reason is an engine ASYMMETRY worth recording rather than an accident:
+        `gen3/abilities.rs` gates Volt Absorb on `category != MoveCategory::Status` (a gen3
+        fidelity fix; Water Absorb carries no such clause), and every Electric move in the
+        table without the protect flag -- Charge, Magnet Rise, Electric Terrain, Ion Deluge,
+        Magnetic Flux -- is a Status move. So the conversion never happens for the one class
+        of callee that could keep it.
+
+        Enumerated rather than argued, and paired with the Water witness in the same
+        assertion so a change that broke BOTH would not read as this test still passing.
+        """
+
+        bypassing_electric = (
+            "charge", "magnetrise", "electricterrain", "iondeluge", "magneticflux",
+        )
+        for move in bypassing_electric:
+            branch = self._marker_branch("voltabsorb", 252, (move, "tackle"))
+            self.assertNotIn(
+                REFUSED, branch["attribution_unsafe_reasons"],
+                f"{move} reached Volt Absorb's converted heal, so the gen3 Status gate no "
+                f"longer holds and this claim must be re-derived: {branch}",
+            )
+        # THE WITNESS: the same fixture shape DOES refuse for the ability that has a
+        # producer, so the zeros above are zeros from a fixture that can report a refusal.
+        water = self._marker_branch("waterabsorb", 252, CONVERTIBLE)
+        self.assertIn(REFUSED, water["attribution_unsafe_reasons"], water)
 
     def test_the_absorb_producer_at_headroom_emits_a_different_instruction(self) -> None:
         """THE PREMISE, demonstrated through the engine rather than argued from its source.
