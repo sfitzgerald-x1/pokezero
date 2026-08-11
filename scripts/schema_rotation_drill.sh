@@ -63,7 +63,19 @@ open(p, "w").write(s)
 q = f"{wt}/src/pokezero/showdown.py"
 t = open(q).read()
 m = re.search(r'^REPLAY_OBSERVATION_SPECS_BY_SCHEMA[^=]*=\s*\{', t, re.M)
-t = t[:m.end()] + "\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL: V4_REPLAY_OBSERVATION_SPEC," + t[m.end():]
+# Stamp the synthetic spec with its OWN version. Mapping v5-drill to V4_REPLAY_OBSERVATION_SPEC
+# left the table incoherent -- a spec stamped v4 reachable under the v5-drill key -- and
+# `test_spec_for_schema_is_loud_on_unknown_versions` caught it, correctly, as
+# "'pokezero.observation.v4' != 'pokezero.observation.v5-drill'". That was the DRILL's defect
+# masquerading as a surviving instance of the class it is meant to detect: an instrument that
+# manufactures the failure it reports.
+t = t[:m.end()] + ("\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL: _dc_replace(\n"
+                   "        V4_REPLAY_OBSERVATION_SPEC,\n"
+                   "        schema_version=OBSERVATION_SCHEMA_VERSION_V5_DRILL,\n"
+                   "    ),") + t[m.end():]
+t = t.replace("REPLAY_OBSERVATION_SPECS_BY_SCHEMA", "REPLAY_OBSERVATION_SPECS_BY_SCHEMA", 1)
+if "_dc_replace" not in t.split("REPLAY_OBSERVATION_SPECS_BY_SCHEMA")[0]:
+    t = re.sub(r'^(import .*)$', r'from dataclasses import replace as _dc_replace\n\1', t, count=1, flags=re.M)
 if "OBSERVATION_SCHEMA_VERSION_V5_DRILL" not in t.split("REPLAY_OBSERVATION_SPECS_BY_SCHEMA")[0]:
     t = re.sub(r'^(from \.observation import \()', r'\1\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL,', t, count=1, flags=re.M)
 open(q, "w").write(t)
