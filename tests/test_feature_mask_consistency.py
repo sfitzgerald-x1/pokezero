@@ -15,6 +15,7 @@ from unittest.mock import patch
 from pokezero.category_vocab import build_category_vocabulary
 from pokezero.local_showdown import LocalShowdownConfig, env_config_from_checkpoint_provenance
 from pokezero.observation import (
+    OBSERVATION_SCHEMA_VERSION_V2_2,
     DEFAULT_OBSERVATION_FEATURE_MASKS,
     TRANSITION_TOKEN_COUNT,
     ObservationFeatureMasks,
@@ -107,6 +108,13 @@ def _save_k32_checkpoint(path: Path):
 
     config = TransformerPolicyConfig.compact_category(
         policy_id="k32-arm",
+        # Pin v2.2 rather than taking the process default. Every assertion in this module is
+        # about a k=32 history mask, which needs a transition region of at least 32 tokens;
+        # v2/v2.1/v2.2/v3 carry one and v4 does not ("carries no transition region, so
+        # transition_token_budget must be 0"). Reading the default made the whole module
+        # silently contingent on which schema held that slot -- the subject is the k32 latch,
+        # not the fresh default.
+        observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
         category_vocab=_K32_FIXTURE_VOCAB,
         category_oov_buckets=2,
         window_size=1,
@@ -414,6 +422,8 @@ class MaskDerivationTest(unittest.TestCase):
         from pokezero.neural_policy import TransformerPolicyConfig, feature_masks_from_model_config
 
         config = TransformerPolicyConfig.compact_category(
+            # v2.2: a budget of 32 needs a transition region, which v4 does not have.
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
             category_vocab=("species:a",),
             category_oov_buckets=2,
             stats_block_enabled=False,
@@ -427,8 +437,17 @@ class MaskDerivationTest(unittest.TestCase):
                 opponent_tendency_stats_block=False, exact_state=True, transition_token_budget=32
             ),
         )
+        # `DEFAULT_OBSERVATION_FEATURE_MASKS` is schema-AGNOSTIC: its
+        # `transition_token_budget` default is the v2-family `TRANSITION_TOKEN_COUNT` (128),
+        # and under v4 the budget is inert -- there is no region and the encoder never reads
+        # it (see `ObservationFeatureMasks.__post_init__`). A mask DERIVED from a config
+        # therefore only equals that constant for a schema whose region is 128, so this pins
+        # v2.2 rather than the fresh default. The subject is the derive/round-trip identity,
+        # not which schema currently holds the default slot.
         default_config = TransformerPolicyConfig.compact_category(
-            category_vocab=("species:a",), category_oov_buckets=2
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+            category_vocab=("species:a",),
+            category_oov_buckets=2,
         )
         self.assertEqual(
             feature_masks_from_model_config(default_config), DEFAULT_OBSERVATION_FEATURE_MASKS
@@ -447,6 +466,8 @@ class MaskDerivationTest(unittest.TestCase):
         from pokezero.policy import RandomLegalPolicy
 
         config = TransformerPolicyConfig.compact_category(
+            # v2.2: a budget of 32 needs a transition region, which v4 does not have.
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
             category_vocab=("species:a",), category_oov_buckets=2, transition_token_budget=32
         )
 
