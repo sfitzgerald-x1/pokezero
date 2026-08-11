@@ -2152,6 +2152,16 @@ class Tier2PrunedConclusionTests(unittest.TestCase):
         Unreachable in operation means it has to be forced, so the record is
         corrupted directly, with index 2 still HELD -- the fresh-apply shape a
         `tail_start` regression would produce, not the re-seat shape.
+
+        THE CORRUPTION DIFFERS FROM `VALUES` IN THE LAST FIELD ONLY, deliberately.
+        It used to differ in the FIRST (`0.75` vs `0.25`), and #1220's review
+        measured what that costs: `tuple(previous) != tuple(values)` coarsened to
+        `tuple(previous)[:1] != tuple(values)[:1]` -- a guard that compares only
+        the residual and ignores the valid flag, the counter-bit and the
+        investment -- SURVIVED all 141 tests on `6af47d25`, because the one
+        forced corruption happened to move field 0. Moving the LAST field instead
+        kills every prefix-truncation of the comparison at no extra cost, and
+        loses nothing: the full-tuple guard fires either way.
         """
         from pokezero.engine_search import EngineSearchFoldMismatchWarning
 
@@ -2165,7 +2175,15 @@ class Tier2PrunedConclusionTests(unittest.TestCase):
         self.assertEqual(
             policy._fold_annotations_seen[key][self.ANNOTATED_INDEX], self.VALUES
         )
-        policy._fold_annotations_seen[key][self.ANNOTATED_INDEX] = (0.75, True, False, 0.0)
+        corrupted = (0.25, True, False, 0.75)
+        self.assertNotEqual(corrupted, self.VALUES, "the corruption corrupts nothing")
+        self.assertEqual(
+            corrupted[:-1],
+            self.VALUES[:-1],
+            "the corruption must differ in the LAST field ONLY, or a guard that "
+            "compares a prefix of the tuple passes this test unchanged",
+        )
+        policy._fold_annotations_seen[key][self.ANNOTATED_INDEX] = corrupted
 
         context = self._context(
             self._lines_through(3), battle_id="record-guard", round_index=3
@@ -2249,17 +2267,48 @@ class Tier2PrunedConclusionTests(unittest.TestCase):
         the safer-direction mutant that produced
         `test_a_held_index_is_re_recorded_across_boundaries_without_complaint`,
         one index over. Its blast radius is every battle where two Tier-2
-        conclusions differ, i.e. the normal case. The other is
-        `fold.annotations.items()` -> `[:1]`, which records only the first held
-        index and so re-opens #1216's bug for every index after it.
+        conclusions differ, i.e. the normal case. The other two are
+        `fold.annotations.items()` -> `[:1]` and -> `[-1:]`, which record only the
+        first / only the last held index and so re-open #1216's bug for every
+        other index.
+
+        ⚠ AND THE FIRST VERSION OF THIS TEST HAD TO STAGGER ITS TWO OFFERS, WHICH
+        LEFT THE MIRROR MUTANT ALIVE. #1220's review measured it:
+        `fold.annotations.items()` -> `list(...)[-1:]` -- record only the LAST
+        held index -- SURVIVED all 141 tests on `6af47d25`, while `[:1]` died
+        here. The stagger is why, and the stagger is necessary: the record must
+        already hold index 2 when index 5 arrives, which is exactly what kills the
+        wrong-index-lookup mutant. But under a stagger every boundary applies at
+        most one new index, so "last held" and "all newly held" coincide, and TWO
+        CONCLUSIONS AT THE SAME BOUNDARY was untested. The cumulative overlay
+        makes that ordinary, not exotic: `overlay_for` re-offers the whole
+        cumulative map at every boundary, so any two trackers concluding within
+        one boundary of each other arrive together.
+
+        Consequence of the survivor, which is why it is not cosmetic: every index
+        but the last at such a boundary never enters the record. It is then pruned
+        with nothing in `seen`, so the next boundary classifies it `stale`, which
+        raises, which is `_mark_fold_broken` -> `fallback:live_fold_broken` -- the
+        refusal #1216 closed, re-opened loudly for the ordinary case.
+
+        So the fixture now does both: index 2 alone at one boundary (the stagger,
+        kept), then indices 5 AND 6 together at the next (the same-boundary case).
+        Three conclusions over two application boundaries, asserted as such below
+        so the same-boundary half cannot silently degrade back into a stagger.
 
         Tail 64, so nothing is pruned and nothing is re-seated: this is purely
         about the record holding more than one thing at a time.
         """
         second_index, second_values = 5, (0.5, True, True, 0.25)
-        # The premise: the two values must DIFFER, or a cross-index comparison
+        third_index, third_values = 6, (0.125, False, True, 0.5)
+        # The premise: the values must all DIFFER, or a cross-index comparison
         # would be satisfied by accident and this test would pass vacuously.
-        self.assertNotEqual(second_values, self.VALUES)
+        self.assertEqual(
+            3, len({self.VALUES, second_values, third_values}), "values collide"
+        )
+        self.assertEqual(
+            3, len({self.ANNOTATED_INDEX, second_index, third_index}), "indices collide"
+        )
 
         source = _CumulativeAnnotationSource()
         policy, key = self._policy_with_small_tail(
@@ -2284,6 +2333,11 @@ class Tier2PrunedConclusionTests(unittest.TestCase):
                     # Offered a boundary later, so it is applied a boundary later
                     # and the record already holds index 2 when it arrives.
                     source.offer(second_index, second_values)
+                    # SAME boundary as the one above, which is the case the
+                    # stagger cannot reach: both are fresh at the next
+                    # application, so "the last held index" is no longer "every
+                    # index this boundary applied".
+                    source.offer(third_index, third_values)
         self._caught = list(caught)
         self._assert_no_fold_break(folds)
 
@@ -2292,15 +2346,25 @@ class Tier2PrunedConclusionTests(unittest.TestCase):
         self.assertEqual(fold.action_total - len(fold.action_tail), 0)
         self.assertEqual(policy.stats.fold_annotations_resettled, 0)
         self.assertEqual(
-            sorted(fold.annotations), [self.ANNOTATED_INDEX, second_index]
+            sorted(fold.annotations),
+            [self.ANNOTATED_INDEX, second_index, third_index],
         )
-        # BOTH, with their OWN values. Exact dict, not two `assertIn`s: a mutant
-        # that drops the second entry has to fail here.
+        # ALL THREE, with their OWN values. Exact dict, not three `assertIn`s: a
+        # mutant that drops any entry has to fail here.
         self.assertEqual(
             policy._fold_annotations_seen[key],
-            {self.ANNOTATED_INDEX: self.VALUES, second_index: second_values},
+            {
+                self.ANNOTATED_INDEX: self.VALUES,
+                second_index: second_values,
+                third_index: third_values,
+            },
         )
-        self.assertEqual(policy.stats.fold_annotations_applied, 2)
+        # THE SHAPE PREMISE, and the whole point of the third offer: 3
+        # conclusions over 2 application boundaries, so one boundary applied two
+        # of them. Without this, a future edit could re-stagger the offers, keep
+        # the dict assertion green, and silently give `[-1:]` its life back.
+        self.assertEqual(policy.stats.fold_annotations_applied, 3)
+        self.assertEqual(policy.stats.fold_annotation_boundaries, 2)
         self.assertNotIn(key, policy._fold_broken)
 
     def test_each_seats_conclusions_are_WRITTEN_under_its_own_key(self):
