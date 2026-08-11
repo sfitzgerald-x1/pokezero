@@ -76,8 +76,20 @@ t = t[:m.end()] + ("\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL: _dc_replace(\n"
 t = t.replace("REPLAY_OBSERVATION_SPECS_BY_SCHEMA", "REPLAY_OBSERVATION_SPECS_BY_SCHEMA", 1)
 if "_dc_replace" not in t.split("REPLAY_OBSERVATION_SPECS_BY_SCHEMA")[0]:
     t = re.sub(r'^(import .*)$', r'from dataclasses import replace as _dc_replace\n\1', t, count=1, flags=re.M)
+# Register the synthetic schema in EVERY schema-keyed table, not just the spec map. Two
+# earlier drill runs charged `KeyError: 'pokezero.observation.v5-drill'` to the codebase when
+# it was the drill failing to register its own schema in the census maps -- an instrument
+# manufacturing the failure it reports, for the third time. Any table keyed by schema is part
+# of "registering a schema"; missing one makes every consumer of it look like a defect.
+for table in ("_MINIMUM_CATEGORICAL_CENSUS_BY_SCHEMA", "_MINIMUM_NUMERIC_CENSUS_BY_SCHEMA"):
+    mt = re.search(rf'^{table}[^=]*=\s*\{{', t, re.M)
+    if mt:
+        t = t[:mt.end()] + (f"\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL: "
+                            f"{table}[OBSERVATION_SCHEMA_VERSION_V4],") + t[mt.end():]
+    else:
+        raise SystemExit(f"drill: schema-keyed table {table} not found -- registration incomplete")
 if "OBSERVATION_SCHEMA_VERSION_V5_DRILL" not in t.split("REPLAY_OBSERVATION_SPECS_BY_SCHEMA")[0]:
-    t = re.sub(r'^(from \.observation import \()', r'\1\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL,', t, count=1, flags=re.M)
+    t = re.sub(r'^(from \.observation import \()', r'\1\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL,\n    OBSERVATION_SCHEMA_VERSION_V4,', t, count=1, flags=re.M)
 open(q, "w").write(t)
 print("  synthetic v5-drill schema injected; default rotated to it")
 PY
