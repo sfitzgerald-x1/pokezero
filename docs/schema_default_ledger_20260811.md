@@ -119,6 +119,38 @@ defects**, not stylistic. Each remaining one is a candidate for the same.
 | `tests/test_trajectory.py` | 1 |
 | `tests/test_turn_merged_encode.py` | 1 |
 
+
+## Class (iii), refined after reading the production sites
+
+The initial guess of 5 was too narrow, and the shape is now clear: a legitimate default reader
+is **an entry point where "nobody said" has to be answered exactly once.** There are four such
+kinds, and every other site is a conflation:
+
+| kind | why it is legitimate |
+|---|---|
+| the definition (`showdown.py` `DEFAULT_REPLAY_OBSERVATION_SPEC`) | it *is* the default's spec |
+| CLI `or OBSERVATION_SCHEMA_VERSION` fallbacks (`_train`, `_iterate`) | fresh generation, no schema named |
+| fingerprint stamping (`linear_policy` payload) | the fingerprint must hash whatever is current |
+| a config type's own schema/spec field default | one per config type: the single place "nobody said" enters that type |
+
+That last row is what the first pass got wrong. `TransformerPolicyConfig.observation_schema_version`,
+`LinearPolicyModel.observation_schema_version` and `LocalShowdownConfig.observation_spec` are the
+same construct repeated per config type -- each is the one place a caller who named nothing gets
+an answer. Migrating them would not remove the default read, it would just move it to every
+caller.
+
+**The test is: does this site ANSWER "nobody said", or does it CONSUME the answer?** Answering
+is legitimate and belongs on the allowlist. Consuming -- a fixture, an assertion, a derived
+width -- is the conflation, because the consumer had a real requirement it declined to name.
+
+Left deliberately unclassified pending a proper read, rather than guessed into class (iii):
+
+- `engine_env.py:577` -- `config.observation_spec or _default_observation_spec()`; reads like an
+  answering site, but "reads like" is how this class survives.
+- `local_showdown.py:226` -- compares a resolved spec against the default to detect
+  customisation. Genuinely about the default, or should it compare against the checkpoint's
+  schema? That is a behavioural question, not a naming one.
+
 ## Burndown protocol
 
 A slice resumes by **re-running the command**, never by recall. A row is retired when the
