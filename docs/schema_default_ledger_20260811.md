@@ -319,6 +319,37 @@ This is the more dangerous of the two failure modes. An unexpected breakage is v
 that has quietly stopped pinning lets the NEXT rotation pass unnoticed, which is the exact
 condition that let v2.2 sit stale through two schema generations.
 
+
+## Phase D: current scoreboard and the exact residue
+
+    baseline failures (NOT attributable):  18
+    expected (class-iii, must break):       6
+    UNEXPECTED BREAKAGES:                   6
+    EXPECTED-BUT-DID-NOT-BREAK:             0   <- both dead pins revived
+
+**The 6 all share one signature:** `'pokezero.observation.v5-drill' != 'pokezero.observation.v4'`.
+They run a live env, capture the schema stamped into its output artifact, and compare it against
+a hard-coded version.
+
+That makes each of them a CLASSIFICATION question, not a mechanical fix, and it is the last
+genuinely undecided thing in this migration:
+
+- If the assertion's subject is *"the artifact records whatever schema produced it"*, it should
+  compare against the resolved schema, not a literal -- bucket A, and the fix removes the literal.
+- If its subject is *"this env produces v4 artifacts"*, it is class (iii) and belongs in the
+  expected set with a justification.
+
+They must be read individually. Filing all six into the expected set would make the drill pass
+tomorrow and mean nothing -- that file is the one place this migration can be falsely declared
+finished, which is why its own header states the rule. Filing all six as bucket A and deleting
+the literals could equally destroy a real pin on artifact provenance.
+
+Two attempts have already failed by treating this group mechanically: pinning
+`test_transitions_fold`'s three `LocalShowdownConfig` sites left its annotated-products
+comparison inconsistent (one source moved, the other did not), and the same blanket approach on
+`test_neural_selfplay` turned a passing test red. Both reverted. The group needs the env and its
+comparison target moved together.
+
 ## Burndown protocol
 
 A slice resumes by **re-running the command**, never by recall. A row is retired when the
