@@ -268,6 +268,57 @@ the next rotation goes unnoticed -- the one way this migration could be falsely 
 **`test_transitions_fold.py`** (1)
 
 - `FoldAnnotatedSurfaceTest::test_annotated_products_match`
+
+## Phase D scoreboard (baseline-subtracted, coherently-stamped drill)
+
+`DRILL_SCOPE=fast bash scripts/schema_rotation_drill.sh`
+
+    baseline failures (NOT attributable to the rotation): 20
+    expected (class-iii, must break):  6
+    UNEXPECTED BREAKAGES:              6
+    EXPECTED-BUT-DID-NOT-BREAK:        2
+
+The instrument was wrong twice before this, both times in a direction that flattered or
+inflated the result, and both times caught by a test rather than by me:
+
+1. **No baseline.** Pre-existing failures were charged to the rotation -- `test_roll_enumeration_
+   scope` fails on the 3.11 f-string defect in c153 and has nothing to do with schemas. The
+   uncorrected count was 33; corrected, it is 6. Every earlier figure in this document that
+   derives from the uncorrected drill should be read as an upper bound only.
+2. **The synthetic spec was stamped v4.** Mapping `v5-drill` to `V4_REPLAY_OBSERVATION_SPEC`
+   left a spec stamped v4 reachable under the v5-drill key.
+   `test_spec_for_schema_is_loud_on_unknown_versions` reported exactly that
+   (`'...v4' != '...v5-drill'`) and I nearly filed it as a surviving instance of the class. It
+   was the instrument manufacturing the failure it reports. Fixed by stamping the synthetic
+   spec with its own version -- after which the unexpected set CHANGED, which is the tell that
+   the earlier 2 were noise.
+
+### The 6 unexpected -- all live-env encode paths
+
+- `test_engine_stat_attestation::test_real_replay_materializes_and_attests_transport_with_source_hash`
+- `test_golden_corpus::test_wrapped_and_bare_games_are_identical`
+- `test_investment_live_env::test_default_masks_build_no_tracker`
+- `test_tier2_live_env::test_ten_game_sweep_only_monotone_divergences`
+- `test_transitions_fold::test_prefix_closure_over_random_games`
+- `test_transitions_fold::test_prefix_closure_over_scenario_games`
+
+One shape: a live env encodes under the default spec, and the assertion is about the encode.
+`test_transitions_fold` already resisted a mechanical `LocalShowdownConfig` pin once (it left
+two product sources inconsistent), so this group needs the env and its comparison target moved
+together, not a blanket edit.
+
+### The 2 pins that stopped pinning
+
+Both are currently failing at BASELINE, so the subtraction removes them and they can no longer
+serve as pins. They must be repaired before the drill's expected set means anything:
+
+- `test_linear_policy::..._fingerprint_payload_tracks_extractor_source_and_schemas`
+- `test_turn_merged_encode::test_v2_2_is_a_supported_schema_entry_and_the_default`
+
+This is the more dangerous of the two failure modes. An unexpected breakage is visible; a pin
+that has quietly stopped pinning lets the NEXT rotation pass unnoticed, which is the exact
+condition that let v2.2 sit stale through two schema generations.
+
 ## Burndown protocol
 
 A slice resumes by **re-running the command**, never by recall. A row is retired when the
