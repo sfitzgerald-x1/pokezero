@@ -242,11 +242,14 @@ class TransformerPolicyConfig:
     window_size: int = 1
     categorical_vocab_size: int = 2
     token_type_vocab_size: int = DEFAULT_TOKEN_TYPE_VOCAB_SIZE
-    categorical_feature_count: int = DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count
-    numeric_feature_count: int = DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count
-    # Resolved from ``observation_schema_version`` in ``__post_init__``. A dataclass-time
-    # default cannot safely read the global replay spec: the selected schema may differ from
-    # the process-wide fresh-artifact default (for example, a v2.2 config after a v4 rotation).
+    # All three widths resolve from ``observation_schema_version`` in ``__post_init__``. A
+    # dataclass-time default cannot safely read the global replay spec: the selected schema may
+    # differ from the process-wide fresh-artifact default (for example, a v2.2 config after a v4
+    # rotation). #1227 fixed ``token_count`` this way; the two feature widths carried the same
+    # defect and are fixed here, because ``token_count`` dying loudly was the only thing masking
+    # them -- once it resolved, a v4 config silently kept v2.2's 51/155 against v4's 41/132.
+    categorical_feature_count: int | None = None
+    numeric_feature_count: int | None = None
     token_count: int | None = None
     embedding_dim: int = 128
     transformer_layers: int = 2
@@ -422,6 +425,17 @@ class TransformerPolicyConfig:
             raise ValueError("categorical_vocab_size must be greater than 1.")
         if self.token_type_vocab_size <= 1:
             raise ValueError("token_type_vocab_size must be greater than 1.")
+        # Same resolution as `token_count` above, and deliberately NOT a coherence check: the
+        # feature widths are legitimately narrower than the schema census for a region-trimmed
+        # or projected config, so only the unset case is filled and an explicit value is kept.
+        if self.categorical_feature_count is None:
+            object.__setattr__(
+                self, "categorical_feature_count", schema_spec.categorical_feature_count
+            )
+        if self.numeric_feature_count is None:
+            object.__setattr__(
+                self, "numeric_feature_count", schema_spec.numeric_feature_count
+            )
         if self.categorical_feature_count <= 0:
             raise ValueError("categorical_feature_count must be positive.")
         if self.numeric_feature_count <= 0:
