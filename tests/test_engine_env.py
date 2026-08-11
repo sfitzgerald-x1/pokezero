@@ -39,6 +39,8 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from pokezero.env import PokeZeroEnv  # noqa: E402
 from pokezero.observation import ObservationFeatureMasks  # noqa: E402
+from pokezero.observation import schema_with
+from pokezero.showdown import observation_spec_for_schema
 
 _ENV_EXPORTS = ("env_step", "env_options", "env_battle_over")
 _TRANSITION_TOKEN_OFFSET = 23
@@ -95,8 +97,14 @@ class EngineEnvTest(unittest.TestCase):
         from pokezero.engine_env import EngineEnv, EngineEnvConfig
 
         cls.EngineEnv = EngineEnv
+        # k=0 is a MASK over an existing region, so this fixture needs a schema that HAS one.
+        # Taking the default made "the region still exists" contingent on the default slot, and
+        # under v4 (no region at all) the assertion `transition_token_count > 0` failed as
+        # "0 not greater than 0" -- reading as a masking bug rather than a schema without a
+        # region to mask.
         cls.config = EngineEnvConfig(
-            feature_masks=ObservationFeatureMasks(transition_token_budget=0)
+            observation_spec=observation_spec_for_schema(schema_with(transition_region=True)),
+            feature_masks=ObservationFeatureMasks(transition_token_budget=0),
         )
         # One env for the read-only assertions; tests that need isolation make
         # their own. Team generation spawns a Node process, so sharing matters.

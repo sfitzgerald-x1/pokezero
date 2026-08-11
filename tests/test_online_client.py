@@ -12,6 +12,8 @@ from pokezero.online_client import (
     to_id,
 )
 from pokezero.policy import PolicyDecision, legal_action_indices
+from pokezero.observation import schema_with
+from pokezero.showdown import observation_spec_for_schema
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "showdown"
 
@@ -31,6 +33,12 @@ class _FirstLegalPolicy:
 def _agent(our_name: str = "PokeZeroBot", **kwargs) -> OnlineBattleAgent:
     # dex=None keeps type/stat slots padding; a tiny vocab is fine (unknown tokens go to OOV).
     vocab = build_category_vocabulary(["species:Charizard", "move:flamethrower"], oov_buckets=16)
+    # Ask for the PROPERTY, not the default. `OnlineBattleAgent.spec` falls back to the global
+    # default spec, so these assertions silently became "whatever the default happens to be"
+    # -- and the turn-merged one then failed with "default-schema (v2.2) agent must request
+    # turn-merged tokens" while the default was v4, which is not turn-merged at all. The
+    # subject is turn-merged normalization; the schema is an implementation detail of that.
+    kwargs.setdefault("spec", observation_spec_for_schema(schema_with(turn_merged=True)))
     return OnlineBattleAgent(
         policy=_FirstLegalPolicy(), vocab=vocab, dex=None, our_name=our_name, **kwargs
     )
@@ -145,8 +153,9 @@ class TurnMergedNormalizeThreadingTest(unittest.TestCase):
         )
 
     def test_default_schema_agent_requests_turn_merged(self) -> None:
-        # The default spec IS v2.2 since the 2026-07-08 promotion, so an unpinned agent
-        # must request turn-merged normalization.
+        # An agent on a TURN-MERGED schema must request turn-merged normalization. The
+        # schema is selected by property in `_agent`, so this no longer depends on which
+        # version holds the default slot.
         captured: dict = {}
 
         def fake_normalize(*args, **kwargs):
