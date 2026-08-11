@@ -1692,8 +1692,8 @@ def _build_side_spec(
     # fact by scanning recent public events, keeps working unchanged.
     raw_last_used = side_payload.get("lastUsedMove")
     last_used_move_id = normalize_id(raw_last_used) if raw_last_used else None
-    if last_used_move_id == "switch":
-        last_used_move_id = "switch"
+    # The ``"switch"`` sentinel is deliberately NOT special-cased here: it is part of
+    # this field's vocabulary and every branch below reads it for itself.
     volatile_durations: dict[str, int] = {}
     pending_encore_move: str | None = None
     if "encore" in volatiles and transformed_active:
