@@ -451,6 +451,14 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     // impossible. Separate from the bare token so the two reclaims can be differenced;
     // see the emit site for why summing them would make this one unmeasurable.
     "protect_marker_rendered_absorb_headroom",
+    // The third half of that counter, and the one this campaign's census block actually
+    // reaches: a Protect marker rendered on a FULL-HP absorber, where the HP axis says the
+    // absorb no-op WAS possible and the callee scan says no candidate could have produced it.
+    // Its own token for the reason the header above gives -- `_absorb_headroom` would be a
+    // false statement about this render (there is no headroom), and summing it into either
+    // existing token would make the reclaim unmeasurable inside a series a reader is
+    // differencing across eras.
+    "protect_marker_rendered_absorb_full_hp",
     // the escape hatch both paths use when no predicate fired
     "unclassified",
 ];
@@ -2050,7 +2058,10 @@ fn render_move_phase(
             out.lines
                 .push(format!("|move|{attacker_ident}|sleeptalk|{attacker_ident}"));
             let called_tail: Vec<Instruction> = tail.to_vec();
-            let ident = identify_sleep_talk_called(
+            let SleepTalkProbe {
+                ident,
+                callee_can_convert_an_opponent_heal,
+            } = identify_sleep_talk_called(
                 sim.state,
                 side,
                 defender_choice,
@@ -2132,6 +2143,7 @@ fn render_move_phase(
                     let (
                         defender_protected,
                         defender_has_absorb_ability,
+                        defender_absorb_heal_clamps_to_zero,
                         defender_absorb_zero_heal_possible,
                     ) = {
                         let d = match other_side(side) {
@@ -2141,15 +2153,43 @@ fn render_move_phase(
                         let active = d.get_active_immutable();
                         let has_absorb =
                             absorb_ability_can_emit_a_zero_heal(active.ability);
+                        // NARROWED from ability PRESENCE to "that ability could have
+                        // produced THIS instruction". The absorb no-op only exists
+                        // when the engine's own clamp took the 25% heal to zero.
+                        let clamps =
+                            has_absorb && absorb_heal_clamps_to_zero(active.hp, active.maxhp);
                         (
                             d.volatile_statuses
                                 .contains(&PokemonVolatileStatus::PROTECT),
                             has_absorb,
-                            // NARROWED from ability PRESENCE to "that ability could have
-                            // produced THIS instruction". The absorb no-op only exists
-                            // when the engine's own clamp took the 25% heal to zero.
-                            has_absorb
-                                && absorb_heal_clamps_to_zero(active.hp, active.maxhp),
+                            clamps,
+                            // NARROWED AGAIN, from a NECESSARY condition on the defender to
+                            // the producer's OWN condition on the callee. The HP clamp answers
+                            // "could a converted absorb heal have come out as zero"; it does
+                            // not answer "was there a converted absorb heal at all", and on
+                            // the census block the answer to the second question is no at
+                            // every occurrence of this refusal.
+                            //
+                            // MEASURED, on the 31 decisions of
+                            // `ambiguous_unrenderable:heal_zero_marker` at `--truth-sims 64`:
+                            // all 31 hold PROTECT, are at FULL HP with `WATERABSORB`, and have
+                            // exactly two matching callees, BOTH protect-flagged with
+                            // `heal == None`. Two callee pairs account for all of them --
+                            // (Ice Beam, Toxic) x19 and (Surf, Toxic) x12 -- and Ice Beam is
+                            // not even an absorbed type. So the marker was the Protect-blocked
+                            // branch at every one, and the guard was refusing on the
+                            // defender's HP rather than on anything the producer needed.
+                            //
+                            // FAIL-CLOSED IS PRESERVED, and this is the load-bearing claim:
+                            // #1211's `the_absorb_bypass_producer_is_real` counterexample --
+                            // a protect-BYPASSING absorbed move such as `WATERSPORT`, whose
+                            // converted heal survives `remove_effects_for_protect` -- comes
+                            // back from the scan with `heal == Some(Heal{Opponent, 0.25})`,
+                            // so it still refuses. That is not an argument: the scan reports
+                            // that field set on 101 candidate evaluations in the exemplar
+                            // battle alone, so the conjunct is live rather than vacuous, and
+                            // `the_bypassing_callee_still_refuses` pins it.
+                            clamps && callee_can_convert_an_opponent_heal,
                         )
                     };
                     if !sleeptalk_refusal_is_unsafe_with_protect(
@@ -2469,13 +2509,31 @@ fn render_move_phase(
                             // render the ability axis WOULD have refused before this change;
                             // the bare token is unchanged and still means what era 62 and 63
                             // measured, so no series is redefined under a reader.
+                            //
+                            // THREE TOKENS NOW, for the reason the two-token note above
+                            // gives, applied once more. This change admits a render on a
+                            // FULL-HP absorber, which the old expression would have counted
+                            // as `_absorb_headroom` -- a token whose whole meaning is that
+                            // the defender HAD headroom. That would have been a false label
+                            // on a live series AND would have hidden this reclaim inside
+                            // #1211's, which is the "the class stopped refusing and stopped
+                            // being visible" failure `lossy_subcase_renders` exists to
+                            // prevent. `_absorb_full_hp` is therefore the counter the stop
+                            // condition for THIS change is read from, against the fall in
+                            // `world_failure_reasons[...:heal_zero_marker]`.
                             out.mark_lossy_subcase(
                                 SLEEPTALK_LOSSY_TAG,
-                                if defender_has_absorb_ability {
-                                    "sleeptalk_called_unidentified:\
-                                     protect_marker_rendered_absorb_headroom"
-                                } else {
-                                    "sleeptalk_called_unidentified:protect_marker_rendered"
+                                match (
+                                    defender_has_absorb_ability,
+                                    defender_absorb_heal_clamps_to_zero,
+                                ) {
+                                    (true, true) => "sleeptalk_called_unidentified:\
+                                                     protect_marker_rendered_absorb_full_hp",
+                                    (true, false) => "sleeptalk_called_unidentified:\
+                                                      protect_marker_rendered_absorb_headroom",
+                                    (false, _) => {
+                                        "sleeptalk_called_unidentified:protect_marker_rendered"
+                                    }
                                 },
                             );
                         } else if heal_is_a_direct_self_heal(&called_tail, index, side) {
@@ -4491,6 +4549,26 @@ enum SleepTalkIdent {
     Ambiguous,
 }
 
+/// What the callee scan learned, beyond WHICH callee it was.
+///
+/// The scan regenerates every Sleep Talk candidate through the engine's own modification
+/// pass, so it already holds the one fact the zero-heal guard was approximating with the
+/// defender's HP: whether any callee reaches the absorb no-op's producer at all. Returning
+/// it costs nothing and is strictly more informative than the proxy -- see
+/// `callee_can_convert_an_opponent_heal` for why the proxy was not enough.
+struct SleepTalkProbe {
+    ident: SleepTalkIdent,
+    /// Does ANY candidate's post-modification choice still carry an OPPONENT-targeted
+    /// positive heal -- i.e. the exact and only precondition of the engine's full-HP absorb
+    /// no-op (`gen3/generate_instructions.rs` `get_instructions_from_heal`)?
+    ///
+    /// OVER ALL CANDIDATES, not just the matching ones, and that is deliberate: it is the
+    /// fail-closed direction (more candidates can only make this MORE true, hence refuse
+    /// more), and it does not depend on the match set, which the ambiguity means is not a
+    /// singleton anyway.
+    callee_can_convert_an_opponent_heal: bool,
+}
+
 /// The CONTRACT tag. `engine_transition_differential.py` matches this exactly
 /// (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) to decide branch usability, so it
 /// must never carry a sub-case suffix. Named once so the two call sites cannot
@@ -4545,7 +4623,7 @@ fn identify_sleep_talk_called(
     outer_choice: &Choice,
     tail: &[Instruction],
     branch_on_damage: bool,
-) -> SleepTalkIdent {
+) -> SleepTalkProbe {
     let candidates = {
         let s = match side {
             SideReference::SideOne => &state.side_one,
@@ -4554,6 +4632,14 @@ fn identify_sleep_talk_called(
         s.get_active_immutable().get_sleep_talk_choices()
     };
     let mut matched: Option<Choice> = None;
+    // AMBIGUITY IS NOW COUNTED RATHER THAN RETURNED EARLY. The old code returned
+    // `Ambiguous` the instant a second candidate matched, which threw away the remaining
+    // candidates' modified choices -- and `callee_can_convert_an_opponent_heal` must be
+    // computed over ALL of them or it is not the fail-closed direction. The returned VARIANT
+    // is unchanged (`Ambiguous` iff two or more matched), and the extra `shapes` this now
+    // records are unreachable: `shapes` is read only on the `matched == 0` path.
+    let mut match_count = 0usize;
+    let mut can_convert_an_opponent_heal = false;
     // The CLOSEST miss across all candidates. Seeded at the least informative shape so a
     // candidate list that produces nothing still yields a token rather than a default that
     // reads as a diagnosis.
@@ -4608,14 +4694,18 @@ fn identify_sleep_talk_called(
             &mut generated,
             branch_on_damage,
         );
+        // READ THE PRODUCER'S OWN INPUT, from the choice the engine's modification pass just
+        // finished mutating. `choice_can_convert_an_opponent_heal` documents why this field
+        // and not the defender's HP is the discriminator.
+        can_convert_an_opponent_heal |= choice_can_convert_an_opponent_heal(&choice);
         if generated
             .iter()
             .any(|branch| branch.instruction_list.as_slice() == tail)
         {
-            if matched.is_some() {
-                return SleepTalkIdent::Ambiguous;
+            match_count += 1;
+            if matched.is_none() {
+                matched = Some(choice);
             }
-            matched = Some(choice);
         } else {
             // NO MATCH for this candidate. Record HOW CLOSE it came, because the match is
             // byte-exact on the whole instruction list and so a single differing numeric field
@@ -4631,7 +4721,8 @@ fn identify_sleep_talk_called(
             }
         }
     }
-    match matched {
+    let ident = match matched {
+        Some(_) if match_count > 1 => SleepTalkIdent::Ambiguous,
         Some(choice) => SleepTalkIdent::Matched(Box::new(choice)),
         None => SleepTalkIdent::NoneMatched(if shapes.is_empty() {
             // No candidate produced ANY branch to classify, which is the empty-candidate-list
@@ -4642,7 +4733,65 @@ fn identify_sleep_talk_called(
         } else {
             shapes
         }),
+    };
+    SleepTalkProbe {
+        ident,
+        callee_can_convert_an_opponent_heal: can_convert_an_opponent_heal,
     }
+}
+
+/// Could THIS callee, as the engine's modification pass left it, reach the full-HP absorb
+/// no-op?
+///
+/// This is the discriminator the zero-heal guard was missing, and it is not a new belief: it
+/// is the producer's own `if` condition, read off the same struct the producer reads.
+///
+/// gen3 emits a zero-amount `Heal` from exactly two sites and both push on the DEFENDER, so
+/// the instruction cannot say which fired. The guard therefore has to decide from state. It
+/// used to decide from the defender's HP alone (`absorb_heal_clamps_to_zero`, #1211), which
+/// answers "could an absorb heal have clamped to zero IF one had been converted" -- a
+/// NECESSARY condition, and the census block shows it is nowhere near sufficient.
+///
+/// The SUFFICIENT one is here. `get_instructions_from_heal` pushes the zero-amount `Heal`
+/// only in its `heal.target == MoveTarget::Opponent && heal.amount > 0.0` else-branch, and
+/// its `heal` is `choice.heal`. So a callee whose modified choice carries no
+/// opponent-targeted positive heal cannot be producer 2, whatever the defender's HP is.
+///
+/// THREE FACTS make that a proof rather than an argument, all read from the engine rather
+/// than assumed, because this is the direction that renders a wrong line if it is wrong:
+///
+///   1. NO MOVE IN THE TABLE carries an opponent-targeted heal natively. Every
+///      `heal: Some(Heal { target: .. })` in `choices.rs` targets `User` (measured: 17 of
+///      17). The only writer of `target: Opponent` is the absorb abilities' conversion in
+///      `gen3/abilities.rs` (`WATERABSORB`, `VOLTABSORB`, `DRYSKIN`) -- exactly
+///      `absorb_ability_can_emit_a_zero_heal`'s set. So this field being set IS "an absorb
+///      ability converted this callee".
+///   2. PROTECT CLEARS IT. `Choice::remove_effects_for_protect` sets `heal = None`, and it
+///      runs in `before_move` AFTER `ability_modify_attack_against`. So a protect-BLOCKED
+///      callee -- which is what produces producer 1's marker -- provably cannot also be
+///      producer 2, and the two producers are mutually exclusive per callee rather than
+///      merely unlikely to coincide.
+///   3. THE CANDIDATE SET IS THE ENGINE'S. Both the engine's Sleep Talk dispatch
+///      (`gen3/generate_instructions.rs`) and the scan above call
+///      `Pokemon::get_sleep_talk_choices`, with the same `sleep_talk_move`, `first_move` and
+///      `branch_on_damage` threading. So the callee that actually fired is in the scanned
+///      set, and scanning all of it cannot miss it.
+///
+/// WHY NOT REIMPLEMENT THE CONDITION FROM THE MOVE TABLE. The obvious cheaper form -- "does
+/// the sleeper know a move of the absorbed type without the protect flag" -- reads the
+/// UNMODIFIED table entry and is a fail-OPEN: gen3's `WEATHERBALL` is `Normal` in the table
+/// and `Water` in rain, so a rain Weather Ball into a full-HP Water Absorb defender would be
+/// judged unable to convert, and the walk would render `|-activate|..|Protect` over an
+/// ability activation. Reading the post-modification field cannot make that mistake because
+/// the modification is what it reads.
+fn choice_can_convert_an_opponent_heal(choice: &Choice) -> bool {
+    matches!(
+        choice.heal,
+        Some(poke_engine::choices::Heal {
+            target: MoveTarget::Opponent,
+            amount
+        }) if amount > 0.0
+    )
 }
 
 /// How a regenerated candidate branch DIFFERS from the observed tail.

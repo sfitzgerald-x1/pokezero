@@ -3089,47 +3089,72 @@ fn a_full_hp_absorb_activation_is_never_dressed_as_protect() {
     }
 }
 
-/// PROTECT *and* an absorb ability: refuse. The over-refusal, pinned as deliberate.
+/// PROTECT *and* a callee whose converted absorb heal SURVIVES Protect: refuse. The
+/// over-refusal that is genuinely irreducible, now pinned with the counterexample its own
+/// rationale always named.
 ///
-/// A Water Absorb mon that uses Protect hits this routinely -- it is not a corner case, and
-/// review measured it as a real ongoing cost: those worlds stay refused even though the
-/// marker is almost certainly a genuine Protect block. The guard is kept anyway because the
-/// absorb abilities RESTORE `flags.protect` (gen3/abilities.rs), so a protect-bypassing Water
-/// or Electric move would leave `blocked_by_protect == false` with PROTECT still set -- a
-/// zero `Heal` that is NOT a Protect marker while the volatile says otherwise.
+/// HISTORY, because the fixture changed and the reason matters. This test used to use
+/// `TACKLE`/`SCRATCH` callees and assert that PROTECT + a heal-carrying absorb ability
+/// refuses. Its docstring justified that by the protect-BYPASSING absorbed move -- the
+/// absorb abilities RESTORE `flags.protect` (gen3/abilities.rs), so an unflagged Water or
+/// Electric move keeps its converted heal where a flagged one has it stripped by
+/// `remove_effects_for_protect`. But `TACKLE` and `SCRATCH` are NORMAL-typed and
+/// protect-flagged, so the fixture never instantiated the hazard it described: it pinned the
+/// PROXY (the defender's HP) instead of the producer, and the census block's 31 refusals of
+/// `ambiguous_unrenderable:heal_zero_marker` are all of exactly that shape -- two
+/// protect-flagged callees, `heal == None` on both, marker provably the Protect block.
+///
+/// So the fixture is rebuilt around `WATERSPORT`, which IS the counterexample: Water-typed,
+/// `target: Opponent` after the conversion, and carrying NO protect flag, so Water Absorb
+/// converts it and Protect does not strip it. Two callees each regenerate `[Heal 0]` -- one
+/// by being blocked (producer 1), one by converting and clamping (producer 2) -- so the
+/// marker's meaning is genuinely unknown and the world must stay refused.
 ///
 /// Pinning it as a TEST rather than a comment because hardcoding the absorb read to `false`
 /// at the call site survived every other fixture (review's M14b). Without this, the axis
-/// could be silently deleted.
+/// could be silently deleted -- and it is now the ONLY fixture that can catch that, because
+/// the sibling below deliberately expects a render.
 #[test]
-fn protect_plus_an_absorb_ability_refuses_rather_than_guessing() {
+fn protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing() {
     let mut state = confused_state(Choices::SLEEPTALK);
     state.side_two.get_active().status = PokemonStatus::SLEEP;
     state.side_two.get_active().sleep_turns = 0;
+    // The BYPASSING absorbed callee: Water-typed and NOT protect-flagged, so its converted
+    // heal reaches `get_instructions_from_heal` and clamps to zero on a full-HP defender.
     state
         .side_two
         .get_active()
-        .replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
+        .replace_move(PokemonMoveIndex::M1, Choices::WATERSPORT);
+    // The blocked callee, so two candidates regenerate the same `[Heal 0]` tail and the
+    // ident is AMBIGUOUS -- the precondition for the unnamed-callee walk under test.
     state
         .side_two
         .get_active()
-        .replace_move(PokemonMoveIndex::M2, Choices::SCRATCH);
+        .replace_move(PokemonMoveIndex::M2, Choices::TACKLE);
     state
         .side_one
         .volatile_statuses
         .insert(PokemonVolatileStatus::PROTECT);
-    // BOTH conditions true at once. The positive fixture has PROTECT and no absorb; this
-    // adds the absorb, and the expected outcome flips from rendered to refused.
     state.side_one.get_active().ability = Abilities::WATERABSORB;
+    // FULL HP, so the conversion's heal clamps to zero and produces a marker byte-identical
+    // to the Protect one. Below full HP it would be a nonzero heal, a different instruction.
+    let maxhp = state.side_one.get_active().maxhp;
+    state.side_one.get_active().hp = maxhp;
 
     let branches = generate(&mut state);
+    let mut checked = 0;
     for branch in &branches {
         let r = rendered(&mut state, branch);
         let events = r.lines.join("\n");
         assert!(
             !events.contains("Protect"),
-            "with a heal-carrying absorb ability present the marker is ambiguous and must \
-             be refused, not guessed:\n{events}"
+            "a callee whose converted absorb heal survives Protect makes the marker \
+             ambiguous; it must be refused, not guessed:\n{events}"
+        );
+        assert!(
+            !r.lossy_subcases.iter().any(|s| s
+                == "sleeptalk_called_unidentified:protect_marker_rendered_absorb_full_hp"),
+            "the full-HP reclaim counter fired on the genuinely ambiguous case: {r:?}"
         );
         // THE COUNTER MUST BE SILENT, and this is the ONLY fixture that can prove it.
         //
@@ -3150,5 +3175,115 @@ fn protect_plus_an_absorb_ability_refuses_rather_than_guessing() {
                 .any(|s| s == "sleeptalk_called_unidentified:protect_marker_rendered"),
             "the Protect counter fired on a branch that REFUSED to render the marker: {r:?}"
         );
+        if r.attribution_unsafe.iter().any(|s| {
+            s == "sleeptalk_called_unidentified:ambiguous_unrenderable:heal_zero_marker"
+        }) {
+            checked += 1;
+        }
     }
+    // NAME THE WITNESS. "No Protect line was rendered" is satisfied by a fixture that never
+    // built a marker at all, which would make this test pass while proving nothing -- the
+    // failure mode this campaign records as "absence of a class is evidence only where the
+    // class could have fired". So the refusal itself is asserted, by its exact predicate.
+    assert!(
+        checked > 0,
+        "no branch was refused as ambiguous_unrenderable:heal_zero_marker, so this fixture \
+         never reached the guard it exists to pin"
+    );
+}
+
+/// PROTECT, an absorb ability, FULL HP -- and NO callee that could have converted a heal:
+/// RENDER. This is the reclaim, and it is the arm the census block is made of.
+///
+/// The exact fixture the sibling above used to assert the opposite on, and the change is the
+/// whole of this PR. `TACKLE` and `SCRATCH` are NORMAL-typed and protect-flagged, so Water
+/// Absorb cannot convert either one and `remove_effects_for_protect` would clear the heal
+/// even if it could. Producer 2 therefore has no way to reach this tail, the zero-amount
+/// `Heal` is provably the Protect-blocked branch marker, and `|-activate|..|Protect` is the
+/// line the walk owes.
+///
+/// MEASURED SHAPE, not an invented one. All 31 `heal_zero_marker` refusals on the census
+/// block at `--truth-sims 64` hold PROTECT, sit at full HP with `WATERABSORB`, and have
+/// exactly two matching callees, both protect-flagged with `heal == None`: (Ice Beam, Toxic)
+/// x19 and (Surf, Toxic) x12.
+///
+/// THIS IS THE SAFER-DIRECTION MUTANT'S GRAVE. Reverting the callee conjunct -- or any
+/// strictly-more-conservative variant of it, including the old `clamps` expression -- makes
+/// this test fail. Without it the suite would be silent exactly where an over-refusal lives,
+/// which is the fail-open shape a mutation battery cannot see by reverting the fix alone.
+#[test]
+fn protect_plus_an_absorb_ability_with_no_convertible_callee_renders() {
+    let mut state = confused_state(Choices::SLEEPTALK);
+    state.side_two.get_active().status = PokemonStatus::SLEEP;
+    state.side_two.get_active().sleep_turns = 0;
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M1, Choices::TACKLE);
+    state
+        .side_two
+        .get_active()
+        .replace_move(PokemonMoveIndex::M2, Choices::SCRATCH);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PROTECT);
+    state.side_one.get_active().ability = Abilities::WATERABSORB;
+    // FULL HP: the axis #1211 left refusing. With headroom this would already render, under
+    // the `_absorb_headroom` token, so the fixture would not exercise the new arm at all.
+    let maxhp = state.side_one.get_active().maxhp;
+    state.side_one.get_active().hp = maxhp;
+
+    let branches = generate(&mut state);
+    let mut checked = 0;
+    for branch in &branches {
+        let r = rendered(&mut state, branch);
+        let events = r.lines.join("\n");
+        let markers = events.matches("|Protect").count();
+        if markers == 0 {
+            continue;
+        }
+        assert!(
+            !r.attribution_unsafe.iter().any(|s| s
+                == "sleeptalk_called_unidentified:ambiguous_unrenderable:heal_zero_marker"),
+            "the marker rendered AND the branch was still refused: {r:?}"
+        );
+        // COUNT IT, under the token that describes THIS reclaim. `_absorb_headroom` would be
+        // a false statement here (there is no headroom) and would hide this change inside
+        // #1211's series; the bare token would hide it inside #1157's.
+        let counted = |slug: &str| r.lossy_subcases.iter().filter(|s| *s == slug).count();
+        assert_eq!(
+            counted("sleeptalk_called_unidentified:protect_marker_rendered_absorb_full_hp"),
+            markers,
+            "the full-HP reclaim counter must fire exactly once per rendered Protect line: \
+             {r:?}"
+        );
+        assert_eq!(
+            counted("sleeptalk_called_unidentified:protect_marker_rendered_absorb_headroom"),
+            0,
+            "a full-HP render was counted as an HP-headroom render, which redefines #1211's \
+             series under a reader differencing it: {r:?}"
+        );
+        assert_eq!(
+            counted("sleeptalk_called_unidentified:protect_marker_rendered"),
+            0,
+            "a full-HP absorber's render was counted under #1157's bare token: {r:?}"
+        );
+        // `set(lossy)` UNCHANGED -- the contract `engine_transition_differential.py` matches
+        // exactly, whose bytes are pinned by the certification lifecycle.
+        let distinct: std::collections::BTreeSet<&str> =
+            r.lossy.iter().map(String::as_str).collect();
+        assert_eq!(
+            distinct,
+            ["sleeptalk_called_unidentified"].into_iter().collect(),
+            "the reclaim changed set(lossy); the transition differential's acceptance set \
+             moves with it: {r:?}"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "no branch rendered the Protect marker, so the reclaim this PR exists for is not \
+         exercised by its own fixture"
+    );
 }
