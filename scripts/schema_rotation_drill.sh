@@ -67,8 +67,25 @@ echo "== result =="
 tail -1 "$WT/DRILL.txt"
 echo "-- breakages by file --"
 grep '^FAILED' "$WT/DRILL.txt" | sed 's|.*/tests/||; s|::.*||' | sort | uniq -c | sort -rn
+# BASELINE. Without it the drill counts pre-existing failures as breakages: the first scored
+# run charged `test_roll_enumeration_scope` to the rotation when it actually fails on the 3.11
+# f-string defect in c153, and would have kept charging it forever. A breakage is a test that
+# passes UNROTATED and fails ROTATED -- anything else is noise being attributed to this class.
+echo "== baseline: same tree, same interpreter, default NOT rotated =="
+BASE="$WT/../schema-drill-baseline"
+git -C "$REPO" worktree remove --force "$BASE" 2>/dev/null
+git -C "$REPO" worktree add -q --detach "$BASE" HEAD || exit 3
+find "$BASE/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
+PYTHONPATH="$BASE/src" "$VENV" -m pytest "$BASE/tests" -q -p no:randomly \
+  --ignore="$BASE/tests/test_terminal_disposition_register.py" \
+  --ignore="$BASE/tests/test_unreachable_readjudication.py" \
+  --ignore="$BASE/tests/test_wide_seed_negative_census.py" > "$BASE/BASE.txt" 2>&1
+grep '^FAILED' "$BASE/BASE.txt" | sed 's|.*/tests/||' | sort -u > "$WT/baseline.txt"
+echo "  baseline failures (NOT attributable to the rotation): $(wc -l < "$WT/baseline.txt" | tr -d ' ')"
+
 EXPECTED="$REPO/tests/data/schema_drill_expected_breakages.txt"
-grep '^FAILED' "$WT/DRILL.txt" | sed 's|.*/tests/||' | sort -u > "$WT/actual.txt"
+grep '^FAILED' "$WT/DRILL.txt" | sed 's|.*/tests/||' | sort -u > "$WT/rotated.txt"
+comm -23 "$WT/rotated.txt" "$WT/baseline.txt" > "$WT/actual.txt"
 grep -vE '^\s*(#|$)' "$EXPECTED" | sort -u > "$WT/expected.txt"
 
 UNEXPECTED=$(comm -23 "$WT/actual.txt" "$WT/expected.txt")

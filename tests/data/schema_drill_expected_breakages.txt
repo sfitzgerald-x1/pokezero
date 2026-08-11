@@ -10,3 +10,6 @@ test_observation_spec_v3.py::SchemaTableTest::test_v3_is_supported_but_not_the_d
 test_observation_spec_v4.py::V4SchemaTableTest::test_v4_is_supported_grouped_feature_packed_not_turn_merged_and_IS_the_default
 test_turn_merged_encode.py::SchemaTableTest::test_v2_2_is_a_supported_schema_entry_and_the_default
 test_observation_spec_v2_1.py::SpecTableTest::test_schema_keyed_censuses
+# Fingerprint stamping: the payload HASHES the observation schema, so the fingerprint must move
+# when the default does. A fingerprint that survived a schema rotation would be the bug.
+test_linear_policy.py::LinearPolicyTest::test_linear_feature_fingerprint_payload_tracks_extractor_source_and_schemas
