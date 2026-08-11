@@ -180,24 +180,6 @@
     "owner": "DatasetTest"
   },
   {
-    "file": "tests/test_distributed_training.py",
-    "line": 37,
-    "kind": "implicit-spec",
-    "owner": "_observation"
-  },
-  {
-    "file": "tests/test_distributed_training.py",
-    "line": 147,
-    "kind": "implicit-cfg",
-    "owner": "DistributedTrainingTest"
-  },
-  {
-    "file": "tests/test_distributed_training.py",
-    "line": 224,
-    "kind": "implicit-cfg",
-    "owner": "DistributedTrainingTest"
-  },
-  {
     "file": "tests/test_env.py",
     "line": 10,
     "kind": "implicit-spec",
@@ -325,231 +307,45 @@
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 204,
+    "line": 218,
     "kind": "implicit-cfg",
     "owner": "NeuralPolicyScaffoldTest"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 208,
+    "line": 222,
     "kind": "default-spec",
     "owner": "NeuralPolicyScaffoldTest"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 209,
+    "line": 223,
     "kind": "default-spec",
     "owner": "NeuralPolicyScaffoldTest"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 210,
+    "line": 224,
     "kind": "default-spec",
     "owner": "NeuralPolicyScaffoldTest"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 312,
+    "line": 326,
     "kind": "implicit-cfg",
     "owner": "NeuralPolicyScaffoldTest"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 316,
+    "line": 330,
     "kind": "implicit-cfg",
     "owner": "NeuralPolicyScaffoldTest"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 406,
-    "kind": "implicit-cfg",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 487,
+    "line": 2682,
     "kind": "default-spec",
     "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 539,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 598,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 2667,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 3792,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 3792,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 3870,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 3870,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 4493,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 4494,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 4694,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 4695,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 4921,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 4922,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5058,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5058,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5116,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5116,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5238,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5238,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5329,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5329,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5407,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5407,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5489,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5489,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5554,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5555,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5723,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5724,
-    "kind": "default-spec",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 8727,
-    "kind": "default-spec",
-    "owner": "TruncateHistoryTensorsTest"
   },
   {
     "file": "tests/test_neural_selfplay.py",
@@ -709,7 +505,7 @@
   },
   {
     "file": "tests/test_remote_self_describe.py",
-    "line": 54,
+    "line": 59,
     "kind": "implicit-cfg",
     "owner": "_train_checkpoint"
   },
