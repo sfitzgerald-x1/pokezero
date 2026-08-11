@@ -132,10 +132,11 @@ echo "== baseline: same tree, same interpreter, default NOT rotated =="
 BASE="${DRILL_BASELINE:-$WT/../schema-drill-baseline}"
 # Reusable: two full suites in one job exceeds most runners' patience, and the baseline only
 # changes when HEAD does. Set DRILL_BASELINE_REUSE=1 with a baseline already computed at this
-# same commit. The SHA is recorded so a stale baseline cannot be reused silently -- reusing one
-# from a different commit would quietly subtract the wrong set.
+# same commit AND the same scope. Both are recorded: a baseline from a different commit, or
+# from `fast` reused under `full`, would silently subtract the wrong set -- and a wrong
+# subtraction is invisible, it just makes the residue look smaller than it is.
 if [ "${DRILL_BASELINE_REUSE:-0}" = "1" ] && [ -f "$BASE/BASE.sha" ] \
-   && [ "$(cat "$BASE/BASE.sha")" = "$(git -C "$REPO" rev-parse HEAD)" ]; then
+   && [ "$(cat "$BASE/BASE.sha")" = "$(git -C "$REPO" rev-parse HEAD) ${DRILL_SCOPE:-full}" ]; then
   echo "  reusing baseline at $(cat "$BASE/BASE.sha" | cut -c1-8)"
   grep '^FAILED' "$BASE/BASE.txt" | sed 's|.*/tests/||' | sort -u > "$WT/baseline.txt"
   echo "  baseline failures (NOT attributable to the rotation): $(wc -l < "$WT/baseline.txt" | tr -d ' ')"
@@ -144,7 +145,7 @@ fi
 if [ "${SKIP_BASELINE:-0}" != "1" ]; then
 git -C "$REPO" worktree remove --force "$BASE" 2>/dev/null
 git -C "$REPO" worktree add -q --detach "$BASE" HEAD || exit 3
-git -C "$REPO" rev-parse HEAD > "$BASE/BASE.sha"
+echo "$(git -C "$REPO" rev-parse HEAD) ${DRILL_SCOPE:-full}" > "$BASE/BASE.sha"
 find "$BASE/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
 PYTHONPATH="$BASE/src" "$VENV" -m pytest $(drill_targets "$BASE") -q -p no:randomly \
   --ignore="$BASE/tests/test_terminal_disposition_register.py" \
