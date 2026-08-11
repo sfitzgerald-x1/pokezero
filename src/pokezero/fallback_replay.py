@@ -29,7 +29,8 @@ On what a replay can and cannot claim
 -------------------------------------
 ``fallback_replay_spec`` establishes that fidelity turns on which MCTS ran, not
 on which script wrote the shard. The pokezero crate searches under an explicit
-seed (``engine_search.py:1202``) and is reproducible; poke-engine's own
+seed -- the ``seed=rng.getrandbits(63)`` argument of ``puct_search_multi`` in
+``EngineMctsPolicy._search_hp_fraction_crate`` -- and is reproducible; poke-engine's own
 ``monte_carlo_tree_search`` is not, **even at a fixed iteration count** --
 measured, five runs at ``iterations=4000`` on one captured state gave five
 different visit distributions, because its chance-node sampler builds a fresh
@@ -110,8 +111,10 @@ class DecisionSnapshot:
 #: Sentinel: the wrapped name was a CLASS method, not an instance attribute.
 _ABSENT = object()
 
-#: The only reason `_map_choices` can produce (`engine_search.py:1134`, `:1234`,
-#: `:1917`). Used to decide whether a captured aggregate is the engine's actual
+#: The only reason `_map_choices` can produce: the three
+#: `self._fallback(context, rng, "choices_unmapped")` call sites in `EngineMctsPolicy`
+#: (the poke-engine, hp_fraction_crate and model search paths, one each).
+#: Used to decide whether a captured aggregate is the engine's actual
 #: proposal for the refused decision -- see `RefusalRecord.engine_choices`.
 _MAPPING_REASON = "choices_unmapped"
 
@@ -141,8 +144,9 @@ class RefusalRecord:
     reason: str
 
     #: World-failure classes that fired ON THIS DECISION, raw keys, with counts.
-    #: This is the same delta `_fallback` files addresses under
-    #: (`engine_search.py:2380-2385`), kept whole instead of reduced to keys.
+    #: This is the same delta `_fallback` files addresses under -- its
+    #: `delta = {key: count - self._world_failures_before.get(key, 0) ...}`
+    #: comprehension -- kept whole instead of reduced to keys.
     world_failures: Mapping[str, int] = field(default_factory=dict)
     #: `(attempted, constructed, searched)` spent on this decision. A decision
     #: that constructed worlds and still refused is a different bug from one
@@ -158,7 +162,8 @@ class RefusalRecord:
     #: (`reason == "choices_unmapped"`). Not a conservatism -- a correctness
     #: rule. The early-stop lock probe calls
     #: `_map_choices(context, Counter({locked_choice: 1.0}))`
-    #: (`engine_search.py:1858-1861`) purely to test a lock, and
+    #: (`_search_model`'s early-stop block, beside `_locked_aggregate_choice`) purely
+    #: to test a lock, and
     #: `crate_search_failed` / `early_stop_replay_failed` then refuse without a
     #: second call. Reporting the last aggregate unconditionally therefore
     #: printed a SYNTHETIC single-choice probe as "the engine proposed", for a
@@ -172,8 +177,8 @@ class RefusalRecord:
     #: The request's legal choices, in the engine's own vocabulary, so the two
     #: sets are directly comparable. Built from
     #: `observation.metadata["action_candidates"]` filtered by
-    #: `legal_action_mask` -- the same filter `_map_choices` applies
-    #: (`engine_search.py:2279-2284`).
+    #: `legal_action_mask` -- the same filter `_map_choices` applies, its candidate
+    #: admission test `candidate.get("legal")` and `mask[index]`.
     request_legal_choices: tuple[str, ...] = ()
     #: Choices the engine proposed that the request did not offer. For a
     #: `choices_unmapped` refusal this is the finding: report 3 spent three
@@ -219,15 +224,16 @@ class RefusalRecord:
 def _request_legal_choices(context: Any) -> tuple[str, ...]:
     """The request's legal set, spelled the way the engine spells its choices.
 
-    Mirrors `_map_choices`'s admission rule exactly -- `legal` AND permitted by
-    `legal_action_mask` (`engine_search.py:2279-2284`) -- because a set built by
+    Mirrors `_map_choices`'s admission rule exactly -- `candidate.get("legal")` AND
+    permitted by `mask[index]` -- because a set built by
     a *different* rule would make every comparison against `engine_choices` a
     comparison with this function rather than with the request.
 
     ``normalize_id`` is applied for the same reason and is NOT optional. The
-    mapping keys on ``normalize_id(move_id)`` (``engine_search.py:2286``) and
-    ``normalize_id(species)`` (``:2293-2295``), and matches the engine's own
-    choice string through ``normalize_id`` too (``:2332``, ``:2325``). Without
+    mapping keys on ``normalize_id(str(candidate.get("move_id") or ""))`` and
+    ``normalize_id(str(pokemon.get("species") or ""))`` in ``_map_choices``'s candidate
+    loop, and matches the engine's own choice string through ``normalize_id`` too, in
+    that function's ``switch `` and move arms over ``aggregated``. Without
     it, ``Nidoran-F``, ``Mr. Mime`` and ``Unown-C`` never intersect
     ``engine_choices`` -- so a decision whose mapping SUCCEEDED renders as a
     legality mismatch, on precisely the ``choices_unmapped`` case this record
@@ -240,7 +246,8 @@ def _request_legal_choices(context: Any) -> tuple[str, ...]:
     candidates = metadata.get("action_candidates") if isinstance(metadata, Mapping) else None
     if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
         return ()
-    # The bare attribute, as `_map_choices` uses it (`engine_search.py:2274`).
+    # The bare attribute, as `_map_choices` uses it
+    # (`mask = context.observation.legal_action_mask`).
     # `getattr(...) or ()` raises "truth value of an array is ambiguous" on an
     # array-like mask -- an instrument that crashes the run it measures.
     mask = getattr(observation, "legal_action_mask", None)
@@ -556,7 +563,8 @@ class ReplayOutcome(str, Enum):
     #: READ THE CLASS BEFORE READING TOO MUCH INTO THIS. For a construction-side
     #: refusal -- `no_worlds_constructed`, which is 43 of era 64's 67 resolvable
     #: addresses, i.e. the MAJORITY -- the refusal happens at
-    #: `engine_search.py:1101`, before the search reads `search_sims`,
+    #: `_fallback(context, rng, "no_worlds_constructed")` in `EngineMctsPolicy._search`,
+    #: before the search reads `search_sims`,
     #: `search_depth`, `c_puct`, `deep_ko_split` or `leaf_eval`. So a match here
     #: establishes that the seed, the id grammar, the resolver, the seat-parity
     #: rule, the opponent policy, the belief-sampling stream and
@@ -906,8 +914,9 @@ def engine_config_for(spec: ReplaySpec) -> Any:
 
     Under the shipped harness the refusals that actually occur are
     construction-side (`no_worlds_constructed`), and the construction loop
-    (`engine_search.py:1049-1101`) reads only `worlds`, `sample_retry_factor`
-    and the four `approximate_*` flags before refusing at `:1101`. It does NOT
+    (`EngineMctsPolicy._search`'s `while len(worlds) < self._config.worlds` loop)
+    reads only `worlds`, `sample_retry_factor` and the four `approximate_*` flags
+    before refusing with `no_worlds_constructed`. It does NOT
     read `search_sims`, `search_depth`, `c_puct`, `deep_ko_split`, `leaf_eval`,
     `search_batch` or `model_priors`. So an end-to-end replay reproduces the
     recorded address even when every one of those is silently wrong -- deleting

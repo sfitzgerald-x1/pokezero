@@ -42,7 +42,7 @@ every actor is deterministic. The deciding fact is which MCTS ran:
   from Python reaches it.
 * **The pokezero crate's search is explicitly seeded**:
   ``puct_search_multi(..., seed=rng.getrandbits(63))``
-  (``engine_search.py:1202``). Measured: two 40-battle sweeps under
+  (in ``EngineMctsPolicy._search_hp_fraction_crate``). Measured: two 40-battle sweeps under
   ``leaf_eval="hp_fraction_crate"`` are byte-identical.
 
 This is worth stating precisely because the obvious remedy does not work.
@@ -69,7 +69,8 @@ rebuilt? Under the bridge, yes and trivially: it is reseeded per decision from
 which is exactly the address. Under ``RolloutDriver`` it is a per-battle-per-seat
 stream created once (``rollout.py:414-426``) and advanced by every preceding
 decision, with a data-dependent number of draws (the world-sampling retry loop,
-``engine_search.py:1050-1098``), so decision *N* is reachable only by replaying
+``EngineMctsPolicy._search``'s ``while len(worlds) < self._config.worlds``), so
+decision *N* is reachable only by replaying
 ``0..N-1``.
 
 The two axes are inverted between the two families. Eras 61-64 -- the entire
@@ -127,8 +128,8 @@ HARNESS_ROLLOUT_K0_GRID = "rollout-k0-grid"
 #: from it, and the search it names is measured byte-identical across runs.
 #:
 #: Narrower than it sounds, and the narrowing is load-bearing for the majority
-#: refusal class. The construction loop (`engine_search.py:1049-1101`) decides a
-#: `no_worlds_constructed` refusal from six settings: `worlds`,
+#: refusal class. The construction loop (`EngineMctsPolicy._search`'s world-sampling
+#: `while` loop) decides a `no_worlds_constructed` refusal from six settings: `worlds`,
 #: `sample_retry_factor`, and `approximate_sleep_turns`,
 #: `approximate_substitute_health`, `approximate_partial_trap_turns`,
 #: `approximate_hidden_duration_volatiles`. Only `worlds` is a
@@ -288,7 +289,8 @@ class ReplaySpec:
     engine_c_puct: float | None = None
     #: A real producer setting, not a constant: `scripts/hc_depth_grid.py:107`
     #: exposes it as `--deep-ko-split/--no-deep-ko-split`, writes it at `:288`,
-    #: and `engine_search.py:1203` passes it into `puct_search_multi`. A shard
+    #: and `_search_hp_fraction_crate` passes it into `puct_search_multi` as
+    #: `deep_ko_split=config.deep_ko_split`. A shard
     #: that recorded `false` must not replay under the dataclass default `true`.
     deep_ko_split: bool | None = None
     opponent_priors: bool | None = None
@@ -835,8 +837,9 @@ _REQUIRED_FOR_REPLAY: tuple[str, ...] = (
 _MEASURED_REPRODUCIBLE_LEAF_EVALS = frozenset({"hp_fraction_crate"})
 
 #: Seeded, but with no byte-identity measurement behind it. `model` passes a
-#: per-world `record["seed"]` (`engine_search.py:1838`) into
-#: `native.search_batched_multi_encoded` (`:1733`) -- NOT the `puct_search_multi`
+#: per-world `record["seed"]` (assembled positionally by `native_search_args`) into
+#: `native.search_batched_multi_encoded` (in `_search_model`'s `run_world`) -- NOT the
+#: `puct_search_multi`
 #: line the crate path uses, which an earlier revision miscited here -- and it
 #: additionally runs a TorchScript forward, which is not bitwise reproducible
 #: across devices or cuDNN algorithm selection. Calling that `exact` would be the
@@ -902,7 +905,8 @@ def _fidelity(
         return FIDELITY_UNVERIFIED, (
             in_process,
             f"leaf_eval={leaf_eval!r} is seeded per world "
-            "(engine_search.py:1838 -> native.search_batched_multi_encoded, :1733)",
+            "(native_search_args passes record['seed'] positionally into "
+            "native.search_batched_multi_encoded)",
             "but byte identity has NOT been measured for it, and it runs a "
             "TorchScript forward that is not bitwise reproducible across devices "
             "or cuDNN algorithm selection -- treat a match as evidence, not proof",
@@ -919,7 +923,7 @@ def _fidelity(
     notes = [
         in_process,
         f"leaf_eval={leaf_eval!r} searches under an explicit seed "
-        "(engine_search.py:1202 puct_search_multi(seed=rng.getrandbits(63))) and "
+        "(_search_hp_fraction_crate: puct_search_multi(seed=rng.getrandbits(63))) and "
         "is measured byte-identical across runs",
         stream_note,
     ]
