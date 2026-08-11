@@ -102,9 +102,15 @@ def main() -> int:
     rows = [r for p in tracked_py() for r in sites_in(p)]
     rows.sort(key=lambda r: (r["file"], r["line"]))
 
+    kinds_all = {r["kind"] for r in rows}
     if args.json:
         print(json.dumps(rows, indent=2))
-        return 0
+        # Exit 2 here too. The FIRST version returned 0 from this branch before the UNPARSED
+        # check below, so the one output mode the CI gate actually consumes was the one mode
+        # without the loud-failure guarantee -- and the gate duly reported the UNPARSED marker
+        # row as a brand-new default reader. The discipline has to hold in every mode or it
+        # holds in none.
+        return 2 if "UNPARSED" in kinds_all else 0
 
     kinds: dict[str, int] = {}
     files: dict[str, int] = {}
