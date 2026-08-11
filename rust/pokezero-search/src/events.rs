@@ -4578,6 +4578,17 @@ struct SleepTalkProbe {
     /// fail-closed direction (more candidates can only make this MORE true, hence refuse
     /// more), and it does not depend on the match set, which the ambiguity means is not a
     /// singleton anyway.
+    ///
+    /// EQUIVALENT-MUTANT NOTE, recorded so the next reader does not chase it. Narrowing the
+    /// scan to MATCHING candidates SURVIVES the mutation battery, and it survives because it
+    /// is equivalent, not because the suite is silent: if producer 2 fired, the callee that
+    /// fired is the one that generated this tail, so it matches by construction and a
+    /// matching-only scan cannot miss it. A candidate that carries the converted heal and
+    /// does NOT match did not produce THIS tail, so its heal is irrelevant to it. The
+    /// all-candidates form is kept anyway because it is the strictly more conservative of the
+    /// two and does not rest on that argument. Restoring the old EARLY RETURN on the second
+    /// match is a different mutant and is NOT equivalent -- it skips candidates outright, and
+    /// `the_callee_scan_covers_candidates_after_the_second_match` kills it.
     callee_can_convert_an_opponent_heal: bool,
 }
 
