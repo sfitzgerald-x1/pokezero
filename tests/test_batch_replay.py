@@ -22,7 +22,7 @@ from pokezero.neural_policy import (
     TransformerTrainingConfig,
     train_transformer_policy,
 )
-from pokezero.observation import ObservationSpec, PokeZeroObservationV0
+from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2_2, ObservationSpec, PokeZeroObservationV0
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 try:  # torch-dependent suite
@@ -36,7 +36,13 @@ LEGAL_TWO_ACTION_MASK = (True, True, False, False, False, False, False, False, F
 
 
 def _observation(value: int) -> PokeZeroObservationV0:
-    spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1)
+    # v2-family shape by construction (token_count comes from the v2-family module constants),
+    # so name the schema instead of letting it stamp whichever holds the default slot.
+    spec = ObservationSpec(
+        categorical_feature_count=1,
+        numeric_feature_count=1,
+        schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+    )
     return PokeZeroObservationV0(
         categorical_ids=tuple((value,) for _ in range(spec.token_count)),
         numeric_features=tuple((float(value),) for _ in range(spec.token_count)),
@@ -91,6 +97,7 @@ def _model_config() -> TransformerPolicyConfig:
     # Dropout stays enabled on purpose: replay must not perturb the RNG stream,
     # so identically-seeded runs must produce identical dropout masks too.
     return TransformerPolicyConfig.compact_category(
+        observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
         category_vocab=tuple(range(1, 17)), category_oov_buckets=4, policy_id="replay",
         window_size=2, token_type_vocab_size=8, categorical_feature_count=1,
         numeric_feature_count=1, embedding_dim=16, transformer_layers=1,
