@@ -379,6 +379,52 @@ nothing. Their signature (`'v5-drill' != 'v4'`) is indistinguishable at a glance
 class-(iii) pin, which is precisely why that file's header states the admission rule and why it
 is the single place this migration can be falsely declared finished.
 
+
+## Phase D: PASS at fast scope; full scope pending
+
+    DRILL_SCOPE=fast bash scripts/schema_rotation_drill.sh
+    expected (class-iii, must break): 6
+    actual breakages:                 6
+    PASS: the breakage set is EXACTLY the class-(iii) readers.
+
+**What this proves and what it does not.** Fast scope covers every file that has ever broken
+under a rotation plus the expected set. It therefore proves no KNOWN site still reaches the
+default. It cannot see a new breakage in a file that has never broken -- only the full drill
+can, and the full run is the stop condition. Stating the difference because a fast PASS is
+exactly the kind of result that gets rounded up to "done".
+
+### The last six were the instrument, not the codebase
+
+All six remaining "surviving instances" were the drill failing to register its synthetic schema
+in `_MINIMUM_CATEGORICAL_CENSUS_BY_SCHEMA` and `_MINIMUM_NUMERIC_CENSUS_BY_SCHEMA`. Every
+consumer of those maps raised `KeyError('...v5-drill')` and the drill charged it to the tree.
+
+That is the THIRD instrument defect in this phase:
+
+| # | defect | effect on the number |
+|---|---|---|
+| 1 | no baseline | pre-existing failures charged to the rotation: 33 vs the true 6 |
+| 2 | synthetic spec stamped `v4` under the `v5-drill` key | manufactured a spec-table incoherence and reported it as a class instance |
+| 3 | schema not registered in the census maps | manufactured 6 KeyErrors and reported them as class instances |
+
+Each was caught by a test, none by inspection, and each CHANGED the answer. Four mechanical
+"fixes" were attempted against defect 3's six and reverted -- attempts to repair code that was
+not broken.
+
+**The tell, ignored at the time:** the claim "all six share one shape" came from a FILE-WIDE
+sorted error list, never a per-test attribution. The true per-test error was `KeyError`, not the
+schema mismatch asserted. Same error class as "18 checked, 0 mismatches" against a denominator
+of 28 -- a claim whose subject was never enumerated. An instrument built to enforce that rule
+violated it three times; the rule is not self-executing just because it is written down.
+
+### Guards now in the drill, each from a defect it would have caught
+
+- baseline subtraction, keyed on **(SHA, scope)** -- a `fast` baseline reused under `full`
+  subtracts the wrong set, and a wrong subtraction is invisible
+- synthetic spec stamped with its own version
+- registration in EVERY schema-keyed table, **hard-failing** on one it does not know about
+- both directions checked: unexpected breakages AND pins that have stopped pinning
+
 ## Burndown protocol
 
 A slice resumes by **re-running the command**, never by recall. A row is retired when the
