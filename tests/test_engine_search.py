@@ -2259,6 +2259,19 @@ class Tier2PrunedConclusionTests(unittest.TestCase):
         mutants of that axis survive all 139, one of them a plausible typo on a
         line this PR introduces.
 
+        The blocking one is `previous = record.get(index)` ->
+        `previous = next(iter(record.values()), None)`: a wrong-index lookup that
+        compares the NEW index's value against some OTHER index's recorded value.
+        With two differing conclusions it raises on a completely benign path and
+        breaks the seat for the rest of the battle -- the same failure mode as
+        the safer-direction mutant that produced
+        `test_a_held_index_is_re_recorded_across_boundaries_without_complaint`,
+        one index over. Its blast radius is every battle where two Tier-2
+        conclusions differ, i.e. the normal case. The other two are
+        `fold.annotations.items()` -> `[:1]` and -> `[-1:]`, which record only the
+        first / only the last held index and so re-open #1216's bug for every
+        other index.
+
         ⚠ AND THE FIRST VERSION OF THIS TEST HAD TO STAGGER ITS TWO OFFERS, WHICH
         LEFT THE MIRROR MUTANT ALIVE. #1220's review measured it:
         `fold.annotations.items()` -> `list(...)[-1:]` -- record only the LAST
@@ -2282,19 +2295,6 @@ class Tier2PrunedConclusionTests(unittest.TestCase):
         kept), then indices 5 AND 6 together at the next (the same-boundary case).
         Three conclusions over two application boundaries, asserted as such below
         so the same-boundary half cannot silently degrade back into a stagger.
-
-        The blocking one is `previous = record.get(index)` ->
-        `previous = next(iter(record.values()), None)`: a wrong-index lookup that
-        compares the NEW index's value against some OTHER index's recorded value.
-        With two differing conclusions it raises on a completely benign path and
-        breaks the seat for the rest of the battle -- the same failure mode as
-        the safer-direction mutant that produced
-        `test_a_held_index_is_re_recorded_across_boundaries_without_complaint`,
-        one index over. Its blast radius is every battle where two Tier-2
-        conclusions differ, i.e. the normal case. The other two are
-        `fold.annotations.items()` -> `[:1]` and -> `[-1:]`, which record only the
-        first / only the last held index and so re-open #1216's bug for every
-        other index.
 
         Tail 64, so nothing is pruned and nothing is re-seated: this is purely
         about the record holding more than one thing at a time.
