@@ -384,6 +384,17 @@ class EngineMctsConfig:
     # RESIDUAL but did not clear as harmless against an EXTERNAL opponent,
     # whose non-uniform policy is exactly what uniform play mismodels.
     use_opponent_priors: bool = False
+    # First-play urgency for UNVISITED arms in the native PUCT selection.
+    # None = the flat 0.5 the crate has always used (`MoveStats::mean` at zero
+    # visits); a float r prices an unvisited arm at
+    # clamp(parent mean in that seat's frame - r, 0, 1), which is KataGo/Leela's
+    # `fpuReductionMax` minus the sqrt-of-visited-policy-mass scaling the
+    # selection-tuning plan defers on purpose (one new mechanism per stage).
+    #
+    # Default None for the same reason `use_opponent_priors` defaults False:
+    # flag-off must be the search every recorded result was produced under, and
+    # that equivalence is asserted bit-for-bit, not argued.
+    fpu_reduction: float | None = None
     # Opt-in safe STOP rule. A tree may stop at a completed batch only after
     # this floor and only when the unspent simulations cannot change its root
     # visit argmax. Multi-world aggregation applies a second safety bound.
@@ -428,6 +439,15 @@ class EngineMctsConfig:
                 )
         elif self.early_stop:
             raise ValueError("early_stop is supported only with leaf_eval='model'.")
+        if self.fpu_reduction is not None and not 0.0 <= self.fpu_reduction <= 1.0:
+            # Refused here as well as in the crate: Q is a win probability, so a
+            # negative reduction is a first-play BONUS -- the opposite of the
+            # mechanism -- and a shard that typed one would otherwise discover
+            # it only from the search behaving backwards.
+            raise ValueError(
+                "fpu_reduction must be in 0.0..=1.0 when set, "
+                f"got {self.fpu_reduction!r}."
+            )
 
 
 def _world_failure_key(error: EngineWorldUnsupported) -> str:
@@ -812,6 +832,31 @@ class EngineMctsStats:
     lossy_subcase_renders: Counter = field(default_factory=Counter)
     attribution_unsafe_renders: int = 0
     prior_fallbacks: int = 0
+    # Within-batch selection collisions, PER SEAT (model mode only; the crate
+    # reports these from `multiply_batched_encoded_core` and nowhere else,
+    # because a collision is a property of a batch and the sequential core
+    # finalizes every selection before taking the next).
+    #
+    # Summed across searched worlds, numerator AND denominator, so a consumer
+    # divides pooled totals instead of averaging per-world ratios -- worlds do
+    # not all contribute the same number of selections (early stop, aborts,
+    # collapsed worlds searched at multiplicity x budget), and a mean of ratios
+    # would weight a 64-sim world like a 2048-sim one.
+    #
+    # The seat mapping is already applied crate-side: `..._self_...` is the
+    # searching seat whichever side it sat on. That matters because the
+    # mechanism under audit is SIDE-absolute -- the round's unreconciled
+    # provisionals land on `s2_stats` regardless of who is searching -- so a p1
+    # decision and a p2 decision put the asymmetry in opposite raw counters and
+    # only the seat-mapped view pools correctly.
+    collision_rounds: int = 0
+    collision_pending_rounds: int = 0
+    collision_selections: int = 0
+    collision_joint_repeats: int = 0
+    collision_self_repeats: int = 0
+    collision_opponent_repeats: int = 0
+    collision_traversals: int = 0
+    collision_leaf_repeats: int = 0
     early_stop_triggered_worlds: int = 0
     early_stop_accepted_decisions: int = 0
     early_stop_full_budget_replays: int = 0
@@ -936,6 +981,14 @@ class EngineMctsStats:
             "lossy_subcase_renders": dict(self.lossy_subcase_renders),
             "attribution_unsafe_renders": self.attribution_unsafe_renders,
             "prior_fallbacks": self.prior_fallbacks,
+            "collision_rounds": self.collision_rounds,
+            "collision_pending_rounds": self.collision_pending_rounds,
+            "collision_selections": self.collision_selections,
+            "collision_joint_repeats": self.collision_joint_repeats,
+            "collision_self_repeats": self.collision_self_repeats,
+            "collision_opponent_repeats": self.collision_opponent_repeats,
+            "collision_traversals": self.collision_traversals,
+            "collision_leaf_repeats": self.collision_leaf_repeats,
             "early_stop_triggered_worlds": self.early_stop_triggered_worlds,
             "early_stop_accepted_decisions": self.early_stop_accepted_decisions,
             "early_stop_full_budget_replays": self.early_stop_full_budget_replays,
@@ -957,6 +1010,27 @@ class EngineMctsStats:
         if self.depth_reached_samples:
             payload["depth_reached_mean"] = (
                 self.depth_reached_sum / self.depth_reached_samples
+            )
+        if self.collision_selections:
+            # Per-selection repeat rates. The self/opponent pair is the whole
+            # point: the deferred-leaf theory says the placeholder is
+            # side-asymmetric, so it predicts these two SEPARATE, and only their
+            # difference is evidence -- the joint rate pools them and cannot see
+            # it. Read them against `collision_pending_rounds /
+            # collision_rounds`, which says what share of rounds had a
+            # placeholder in them at all.
+            payload["collision_joint_rate"] = (
+                self.collision_joint_repeats / self.collision_selections
+            )
+            payload["collision_self_rate"] = (
+                self.collision_self_repeats / self.collision_selections
+            )
+            payload["collision_opponent_rate"] = (
+                self.collision_opponent_repeats / self.collision_selections
+            )
+        if self.collision_traversals:
+            payload["collision_leaf_rate"] = (
+                self.collision_leaf_repeats / self.collision_traversals
             )
         if self.searched_decisions:
             payload["iterations_per_searched_decision"] = (
@@ -999,6 +1073,12 @@ def native_search_args(
     * `use_opponent_priors` FOLLOWS the early-stop pair in the native
       signature, so turning it on must also materialize that pair -- otherwise
       `True` lands in `early_stop_min_sims`.
+    * `fpu_reduction` follows `use_opponent_priors` for the same reason one slot
+      further out: setting it must materialize BOTH the early-stop pair and the
+      opponent flag, or the float lands in `use_opponent_priors` and turns the
+      opponent head on by accident while the FPU stays off. The cascade below is
+      written as three widening conditions, not three independent ones, so that
+      cannot happen.
 
     `sims` overrides `config.search_sims` for ONE call: #1009 concentrates
     duplicate belief worlds into a single deeper search, so a collapsed record
@@ -1019,10 +1099,13 @@ def native_search_args(
         config.deep_ko_split,
         config.model_priors,
     ]
-    if early_stop_min_sims or config.use_opponent_priors:
+    fpu_reduction = getattr(config, "fpu_reduction", None)
+    if early_stop_min_sims or config.use_opponent_priors or fpu_reduction is not None:
         search_args.extend([early_stop_min_sims, record["side_key"] == "side_one"])
-    if config.use_opponent_priors:
-        search_args.append(True)
+    if config.use_opponent_priors or fpu_reduction is not None:
+        search_args.append(bool(config.use_opponent_priors))
+    if fpu_reduction is not None:
+        search_args.append(float(fpu_reduction))
     return search_args
 
 
@@ -1512,6 +1595,15 @@ class EngineMctsPolicy:
                         c_puct=config.c_puct,
                         seed=rng.getrandbits(63),
                         deep_ko_split=config.deep_ko_split,
+                        # Keyword, and omitted entirely when unset, so this call
+                        # stays runnable against a pre-FPU wheel: the depth study
+                        # measures this path and a TypeError here would look like
+                        # a world failure rather than a stale image.
+                        **(
+                            {"fpu_reduction": config.fpu_reduction}
+                            if config.fpu_reduction is not None
+                            else {}
+                        ),
                     )
                 )
             except Exception as error:  # noqa: BLE001 — count, keep the other worlds
@@ -2252,6 +2344,24 @@ class EngineMctsPolicy:
                 report.get("attribution_unsafe_renders") or 0
             )
             self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
+            # Per-INVOCATION like the phase walls above: a conservatively
+            # replayed world collided that many times twice and must report it.
+            # `.get(...) or 0` keeps a pre-collision-counter wheel readable.
+            for field_name in (
+                "collision_rounds",
+                "collision_pending_rounds",
+                "collision_selections",
+                "collision_joint_repeats",
+                "collision_self_repeats",
+                "collision_opponent_repeats",
+                "collision_traversals",
+                "collision_leaf_repeats",
+            ):
+                setattr(
+                    self.stats,
+                    field_name,
+                    getattr(self.stats, field_name) + int(report.get(field_name) or 0),
+                )
             return report
 
         for world, state in worlds:
@@ -3301,6 +3411,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "depth": args.depth,
             "model_priors": config.model_priors,
             "use_opponent_priors": config.use_opponent_priors,
+            "fpu_reduction": config.fpu_reduction,
             "early_stop": config.early_stop,
             "early_stop_min_sims": config.early_stop_min_sims,
         },

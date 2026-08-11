@@ -349,6 +349,7 @@ class _EncodedSearchFixture:
         early_stop_side_one: bool = True,
         ctx_json: str | None = None,
         use_opponent_priors: bool | None = None,
+        fpu_reduction: float | None = None,
         position: dict | None = None,
     ) -> dict:
         position = self.position if position is None else position
@@ -371,8 +372,13 @@ class _EncodedSearchFixture:
         ]
         # Appended only when asked for, so every pre-existing call in this file
         # keeps making the historical 14-positional call byte for byte.
-        if use_opponent_priors is not None:
-            args.append(use_opponent_priors)
+        # `fpu_reduction` sits one slot past `use_opponent_priors`, so asking for
+        # it has to materialize that flag too -- the same cascade
+        # `engine_search.native_search_args` implements in production.
+        if use_opponent_priors is not None or fpu_reduction is not None:
+            args.append(bool(use_opponent_priors))
+        if fpu_reduction is not None:
+            args.append(fpu_reduction)
         return json.loads(self.native.search_batched_multi_encoded(*args))
 
     # -- opponent-seat helpers (used only by OpponentPriorsEncodedSearchTest) --
@@ -577,6 +583,106 @@ class ModelPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
                 sum(entry["visits"] for entry in stopped[side]),
                 stopped["iterations"],
             )
+
+    def test_fpu_reduction_changes_the_encoded_search_and_none_is_the_default(
+        self,
+    ) -> None:
+        """The FPU flag through the MODEL core, not just `select`.
+
+        Two claims, and the second is the one the campaign rests on:
+
+        * `Some(r)` moves the root visit distribution -- otherwise the crate
+          could accept the argument, thread it through `MultiPlyConfig`, and
+          drop it before `traverse`, and every bit-identity gate would still
+          pass because they all run with the flag OFF;
+        * omitting the argument and passing it as the crate's default produce
+          the SAME report modulo wall clock, so the extra two positionals the
+          cascade appends are inert on their own.
+
+        Skewed priors are what make an FPU reduction visible at all (PUCT's
+        exploration term for an unvisited arm grows as `sqrt(N)` regardless of
+        Q), so this runs with `model_priors=True` -- the production setting.
+        """
+        drop = {"elapsed_s", "iterations_per_s"}
+        drop |= {k for k in ("encode_s", "model_s", "tree_s", "fold_clone_s",
+                             "render_s", "fold_advance_s", "tensor_s",
+                             "action_map_s", "row_input_s", "products_s",
+                             "row_write_s")}
+
+        def stable(report: dict) -> dict:
+            return {k: v for k, v in report.items() if k not in drop}
+
+        legacy = self._search(sims=128, batch=8, seed=5, model_priors=True)
+        explicit_zero_flags = self._search(
+            sims=128, batch=8, seed=5, model_priors=True, use_opponent_priors=False
+        )
+        self.assertEqual(
+            stable(legacy),
+            stable(explicit_zero_flags),
+            "the appended flag positionals must be inert when they are at their defaults",
+        )
+
+        reduced = self._search(
+            sims=128, batch=8, seed=5, model_priors=True, fpu_reduction=0.3
+        )
+        self.assertNotEqual(
+            [entry["visits"] for entry in legacy["side_one"]],
+            [entry["visits"] for entry in reduced["side_one"]],
+            "fpu_reduction reached the config but not the search",
+        )
+        self.assertEqual(reduced["fpu_reduction"], 0.3)
+        self.assertNotIn(
+            "fpu_reduction", legacy, "a legacy report must keep the bytes it always had"
+        )
+        for side in ("side_one", "side_two"):
+            self.assertEqual(
+                sum(entry["visits"] for entry in reduced[side]), reduced["iterations"]
+            )
+
+    def test_the_collision_counter_reports_both_seats_and_its_denominators(
+        self,
+    ) -> None:
+        """The stage-0 instrument, through a real batched search.
+
+        Pins the FIELD NAMES (the analysis wires to these), the seat label, and
+        the two identities that make the rates readable: one traversal per
+        completed simulation, and at least one selection per traversal. A
+        counter whose denominator is wrong reports a rate that is wrong by the
+        same factor and looks perfectly plausible.
+        """
+        report = self._search(sims=128, batch=16, seed=5, model_priors=True)
+        self.assertEqual(report["collision_traversals"], report["iterations"])
+        self.assertEqual(report["collision_rounds"], report["rounds"])
+        self.assertGreaterEqual(
+            report["collision_selections"], report["collision_traversals"]
+        )
+        self.assertEqual(
+            report["collision_self_side"], self.position["self_side"]
+        )
+        for field in (
+            "collision_pending_rounds",
+            "collision_joint_repeats",
+            "collision_self_repeats",
+            "collision_opponent_repeats",
+            "collision_leaf_repeats",
+        ):
+            self.assertGreaterEqual(report[field], 0, field)
+        self.assertLessEqual(
+            report["collision_pending_rounds"], report["collision_rounds"]
+        )
+        # Batch 16 vs batch 1: a batch of one finalizes before the next
+        # selection, so it has no round to collide inside. If the counter read
+        # the same for both it would not be measuring virtual-loss failure.
+        serial = self._search(sims=128, batch=1, seed=5, model_priors=True)
+        self.assertEqual(serial["collision_joint_repeats"], 0)
+        self.assertEqual(serial["collision_self_repeats"], 0)
+        self.assertEqual(serial["collision_opponent_repeats"], 0)
+        self.assertGreater(
+            report["collision_self_repeats"] + report["collision_opponent_repeats"],
+            0,
+            "a 16-selection round that never repeats a seat's arm would mean the "
+            "ledger is not reading the paths it was given",
+        )
 
 
 @unittest.skipIf(numpy is None, "requires numpy")

@@ -52,6 +52,31 @@ class DefaultsAreOffTest(unittest.TestCase):
         on = parser.parse_args(["--checkpoint", "/tmp/c.pt", "--engine-opponent-priors"])
         self.assertTrue(on.engine_opponent_priors)
 
+    def test_fpu_defaults_to_the_legacy_flat_urgency_everywhere(self) -> None:
+        # Same standing as the opponent flag above, one layer per assertion:
+        # a default that drifted on ONE of these three would make the campaign's
+        # "flag-off is the historical search" claim false at whichever layer the
+        # shard actually configures.
+        import dataclasses
+
+        from pokezero.foulplay_bridge import ControlledFoulPlayConfig, build_arg_parser
+
+        self.assertIsNone(EngineMctsConfig().fpu_reduction)
+        field = {f.name: f for f in dataclasses.fields(ControlledFoulPlayConfig)}[
+            "engine_fpu_reduction"
+        ]
+        self.assertIsNone(field.default)
+        parser = build_arg_parser()
+        self.assertIsNone(
+            parser.parse_args(["--checkpoint", "/tmp/c.pt"]).engine_fpu_reduction
+        )
+        self.assertEqual(
+            parser.parse_args(
+                ["--checkpoint", "/tmp/c.pt", "--engine-fpu-reduction", "0.2"]
+            ).engine_fpu_reduction,
+            0.2,
+        )
+
     def test_paired_driver_cell_id_records_the_flag(self) -> None:
         # A '+opp-priors' cell must not be mergeable with a plain cell: cells B
         # and E are read entirely against this label.
@@ -188,6 +213,37 @@ class NativeCallContractTest(unittest.TestCase):
         self.assertEqual(args[12], 0)
         self.assertIs(args[14], True)
 
+    def test_fpu_alone_materializes_the_two_flags_it_sits_behind(self) -> None:
+        # `fpu_reduction` is one slot past `use_opponent_priors`, which is two
+        # slots past the early-stop pair. Appending the float without the two
+        # arguments in front of it would land 0.2 in `early_stop_min_sims` --
+        # a 0-sim floor, silently -- or in `use_opponent_priors`, turning the
+        # opponent head on in a cell whose whole point is that it is off.
+        args = self._captured_args(fpu_reduction=0.2)
+        self.assertEqual(len(args), 16)
+        self.assertEqual(args[12], 0)
+        self.assertIs(args[13], True)
+        self.assertIs(args[14], False, "the opponent flag must stay off")
+        self.assertEqual(args[15], 0.2)
+
+    def test_both_flags_on_appends_both_in_signature_order(self) -> None:
+        args = self._captured_args(use_opponent_priors=True, fpu_reduction=0.3)
+        self.assertEqual(len(args), 16)
+        self.assertIs(args[14], True)
+        self.assertEqual(args[15], 0.3)
+
+    def test_fpu_none_leaves_every_other_arm_byte_for_byte(self) -> None:
+        # The bit-identity claim at the call-assembly layer: the default config
+        # and an explicitly-None one must produce the SAME list, and it must be
+        # the historical 12.
+        self.assertEqual(self._captured_args(fpu_reduction=None), self._captured_args())
+        self.assertEqual(len(self._captured_args(fpu_reduction=None)), 12)
+
+    def test_an_out_of_range_fpu_reduction_is_refused_by_the_config(self) -> None:
+        for bad in (-0.1, 1.5):
+            with self.assertRaises(ValueError):
+                EngineMctsConfig(fpu_reduction=bad)
+
     def test_flag_lands_in_the_slot_the_crate_declares(self) -> None:
         # Guards the positional assembly against a crate signature change.
         try:
@@ -203,10 +259,14 @@ class NativeCallContractTest(unittest.TestCase):
             inspect.signature(native.search_batched_multi_encoded).parameters
         )
         params = [p for p in params if p not in ("self", "/")]
-        self.assertEqual(params[-1], "use_opponent_priors")
-        self.assertEqual(params[-3:-1], ["early_stop_min_sims", "early_stop_side_one"])
+        self.assertEqual(params[-1], "fpu_reduction")
+        self.assertEqual(
+            params[-4:-1],
+            ["early_stop_min_sims", "early_stop_side_one", "use_opponent_priors"],
+        )
         # Index check against the assembly above: 12 leading positionals.
         self.assertEqual(params.index("use_opponent_priors"), 14)
+        self.assertEqual(params.index("fpu_reduction"), 15)
 
 
 if __name__ == "__main__":

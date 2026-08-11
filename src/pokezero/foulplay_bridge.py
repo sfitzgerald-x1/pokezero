@@ -518,6 +518,11 @@ class ControlledFoulPlayConfig:
     # Opponent-side model priors in the native search (campaign cells B/E).
     # Default OFF -- flag-off must reproduce the uniform-opponent search.
     engine_opponent_priors: bool = False
+    # First-play-urgency reduction in the native search (selection-tuning stage
+    # 2 cells). None = the crate's flat 0.5 for unvisited arms, which is what
+    # every recorded result was produced under; a float r is the KataGo-style
+    # reduction off the parent mean in the acting seat's own frame.
+    engine_fpu_reduction: float | None = None
     device: str | None = None
     temperature: float = 1.0
     cpuct: float = 1.25
@@ -1553,6 +1558,10 @@ class ControlledFoulPlayBenchmarkResult:
                 # Part of the cell's identity, not a footnote: cells B and E
                 # are read entirely against whether this was on.
                 "opponent_priors": self.config.engine_opponent_priors,
+                # Same standing: a stage-2 cell is read entirely against which
+                # reduction it ran at, so the value belongs in the cell's
+                # identity block and not only in the launch command.
+                "fpu_reduction": self.config.engine_fpu_reduction,
                 # The searcher's own telemetry. `search_wall_per_searched_decision`
                 # is lifted to the top of this block because it, not
                 # policy_timing.average_elapsed_seconds, is what the 20 s/turn
@@ -3332,6 +3341,7 @@ def _build_policy(
                 c_puct=config.engine_c_puct,
                 model_priors=config.engine_model_priors,
                 use_opponent_priors=config.engine_opponent_priors,
+                fpu_reduction=config.engine_fpu_reduction,
             ),
         )
 
@@ -4828,6 +4838,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help="Seed the OPPONENT seat's priors from the checkpoint's "
                              "opponent action head (default: uniform, as every recorded "
                              "result was produced).")
+    parser.add_argument("--engine-fpu-reduction", type=float, default=None,
+                        help="First-play-urgency reduction for unvisited arms in the "
+                             "native search: an unvisited child is priced at the parent "
+                             "mean in that seat's frame minus this value, clamped to "
+                             "[0, 1] (default: the flat 0.5 every recorded result used).")
     parser.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, mps.")
     parser.add_argument("--temperature", type=float, default=1.0, help="Checkpoint policy softmax temperature.")
     parser.add_argument("--cpuct", type=float, default=1.25, help="Root PUCT exploration constant.")
@@ -5155,6 +5170,7 @@ def _config_from_args(
         engine_c_puct=getattr(args, "engine_c_puct", 1.4),
         engine_model_priors=not getattr(args, "no_engine_model_priors", False),
         engine_opponent_priors=getattr(args, "engine_opponent_priors", False),
+        engine_fpu_reduction=getattr(args, "engine_fpu_reduction", None),
         device=args.device,
         temperature=args.temperature,
         cpuct=args.cpuct,
