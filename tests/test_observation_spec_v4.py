@@ -232,10 +232,12 @@ class V4EncodeTestBase(unittest.TestCase):
 class V4SchemaTableTest(unittest.TestCase):
     """The schema table, the CLI choice, and the specs the two resolve to."""
 
-    def test_v4_is_supported_turn_merged_grouped_and_feature_packed_but_not_the_default(self) -> None:
-        # Adding a schema must never move the fresh default: every running arm keeps collecting
-        # under the schema its checkpoints were trained on.
-        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
+    def test_v4_is_supported_grouped_feature_packed_not_turn_merged_and_IS_the_default(self) -> None:
+        # v4 took the fresh default on 2026-08-10. The prior rule -- "adding a schema must never
+        # move the fresh default" -- guarded arms mid-campaign against a silent rotation; it is
+        # retired here rather than broken, because v4 is what every arm already runs and the
+        # default was naming a schema nothing collects under.
+        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V4)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V4, SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertEqual(SUPPORTED_OBSERVATION_SCHEMA_VERSIONS[-1], OBSERVATION_SCHEMA_VERSION_V4)
         # V4 keeps v3's grouped projection but is NOT turn-merged — it has no transition

@@ -10,6 +10,7 @@ from pokezero.observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     FIELD_TOKEN_COUNT,
     OBSERVATION_SCHEMA_VERSION,
+    OBSERVATION_SCHEMA_VERSION_V2_2,
     OPPONENT_POKEMON_TOKEN_COUNT,
     SELF_POKEMON_TOKEN_COUNT,
     OPPONENT_TENDENCY_STATS_TOKEN_COUNT,
@@ -17,6 +18,7 @@ from pokezero.observation import (
     ObservationFeatureMasks,
 )
 from pokezero.showdown import (
+    observation_spec_for_schema,
     _TT_KIND_CANT,
     _TT_KIND_MOVE,
     _TT_KIND_SWITCH,
@@ -362,8 +364,13 @@ class TransitionKindLockstepTest(unittest.TestCase):
             + ACTION_CANDIDATE_TOKEN_COUNT,
         )
         self.assertEqual(TRANSITION_TOKEN_OFFSET, OPPONENT_TENDENCY_STATS_TOKEN_OFFSET + OPPONENT_TENDENCY_STATS_TOKEN_COUNT)
+        # Pin the V2.2 spec explicitly, not `DEFAULT_REPLAY_OBSERVATION_SPEC`. This is a
+        # v2-FAMILY layout coherence check: the module constants above describe v2.2's token
+        # sections, so reading the default here silently re-aimed the assertion whenever the
+        # fresh default moved (it did, to v4, 2026-08-10) and turned a layout regression into
+        # a schema-rotation failure. The subject is v2.2's layout either way.
         self.assertEqual(
-            DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
+            observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2).token_count,
             TRANSITION_TOKEN_OFFSET + TRANSITION_TOKEN_COUNT,
         )
 

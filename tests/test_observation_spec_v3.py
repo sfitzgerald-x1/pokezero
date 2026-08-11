@@ -20,6 +20,7 @@ from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
+    OBSERVATION_SCHEMA_VERSION_V4,
     SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
 )
@@ -345,9 +346,10 @@ class SchemaTableTest(unittest.TestCase):
             observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V3),
             V3_REPLAY_OBSERVATION_SPEC,
         )
-        # v2.2 keeps the fresh-selection default: v3 launches only after the fresh
-        # golden corpus and EOC audit pass (spec coordination section).
-        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
+        # v3 is not the fresh-selection default -- v4 is, since 2026-08-10. v3 remains fully
+        # reachable via `--observation-schema` and via any v3 checkpoint's latch.
+        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V4)
+        self.assertNotEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V3)
         # v3 shares v2.2's turn-merged transition surface.
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V3, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)

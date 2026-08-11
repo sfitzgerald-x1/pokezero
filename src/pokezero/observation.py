@@ -71,10 +71,19 @@ OBSERVATION_SCHEMA_VERSION_V3 = "pokezero.observation.v3"
 OBSERVATION_SCHEMA_VERSION_V4 = "pokezero.observation.v4"
 # The CURRENT schema: what fresh artifacts (new trains, checkpoint-free encodes) are stamped
 # with. Loading a checkpoint always overrides this default with the checkpoint's own schema.
-# v2.2 earned the default slot (2026-07-08): under the schedule-uncompressed A/B reads the
-# turn-merged arm matched or beat v2.1/v2 on every yardstick and holds the current bests;
-# v2.1/v2 artifacts remain first-class via the checkpoint-driven latch.
-OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V2_2
+#
+# v4 holds the slot (2026-08-11). v2.2 had held it since 2026-07-08 and was never rotated as v3
+# and v4 landed, under a rule that "adding a schema never moves the default" -- which protected
+# arms mid-campaign from a silent rotation. That rule is RETIRED, not violated: v4 is what every
+# arm already runs, so the default was naming a schema nothing collects under.
+#
+# Nothing was ever mis-stamped by the staleness. This constant is only the "nobody said"
+# fallback -- `--observation-schema` and the checkpoint latch both win over it -- which is why
+# the committed v3 and v4 corpora carry v3 and v4, not v2.2. What it does drive is fresh
+# generation with no schema named, and any fingerprint that hashes it.
+#
+# v2/v2.1/v2.2/v3 remain first-class via the checkpoint-driven latch.
+OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V4
 SUPPORTED_OBSERVATION_SCHEMA_VERSIONS = (
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,

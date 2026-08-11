@@ -14,6 +14,7 @@ from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,
     OBSERVATION_SCHEMA_VERSION_V2_2,
+    OBSERVATION_SCHEMA_VERSION_V4,
     SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
     ObservationFeatureMasks,
 )
@@ -34,6 +35,7 @@ from pokezero.showdown import (
     TRANSITION_TOKEN_OFFSET,
     V2_1_REPLAY_OBSERVATION_SPEC,
     V2_2_REPLAY_OBSERVATION_SPEC,
+    V4_REPLAY_OBSERVATION_SPEC,
     V2_REPLAY_OBSERVATION_SPEC,
     normalize_for_player,
     observation_from_player_state,
@@ -92,8 +94,12 @@ class SpecTableTest(unittest.TestCase):
         )
         # Fresh (checkpoint-free) encodes and fresh trains default to v2.2 (turn-merged,
         # promoted 2026-07-08); v2/v2.1 stay checkpoint-driven modes.
-        self.assertEqual(DEFAULT_REPLAY_OBSERVATION_SPEC, V2_2_REPLAY_OBSERVATION_SPEC)
-        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
+        # The default spec follows the default schema, which is v4 since 2026-08-11. v2.2's own
+        # census is pinned by the assertions above and is unaffected by which schema holds the
+        # default slot -- that separation is the point of naming the spec rather than the default.
+        self.assertEqual(DEFAULT_REPLAY_OBSERVATION_SPEC, V4_REPLAY_OBSERVATION_SPEC)
+        # v4 holds the default slot since 2026-08-11; v2.2 remains first-class via the latch.
+        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V4)
         # Both widths share every other dimension: the schemas differ ONLY in numeric census
         # (plus the schema-conditioned encode branches).
         self.assertEqual(
@@ -525,7 +531,9 @@ class ConfigDualSchemaTest(unittest.TestCase):
 
     def test_fresh_config_stamps_v2_2_and_its_width(self) -> None:
         # The fresh-selection default flipped to v2.2 on 2026-07-08.
-        config = self._config()
+        # Explicitly v2.2: this asserts a V2.2 property, and reading the fresh default here
+        # silently re-aimed it when the default rotated to v4 (2026-08-10).
+        config = self._config(observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2)
         self.assertEqual(config.observation_schema_version, OBSERVATION_SCHEMA_VERSION_V2_2)
         self.assertEqual(config.numeric_feature_count, 155)
 
@@ -563,8 +571,11 @@ class ConfigDualSchemaTest(unittest.TestCase):
         ).to_dict()
         v21_payload.pop("numeric_feature_count")
         self.assertEqual(TransformerPolicyConfig.from_dict(v21_payload).numeric_feature_count, 140)
-        # The fresh default config is v2.2-stamped; its schema-keyed width default is 155.
-        v22_payload = self._config().to_dict()
+        # v2.2's schema-keyed width default is 155. Pinned explicitly rather than via the fresh
+        # default, which is v4 since 2026-08-10.
+        v22_payload = self._config(
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2
+        ).to_dict()
         v22_payload.pop("numeric_feature_count")
         self.assertEqual(TransformerPolicyConfig.from_dict(v22_payload).numeric_feature_count, 155)
 
@@ -591,7 +602,10 @@ class ConfigDualSchemaTest(unittest.TestCase):
         )
         # The fresh default config resolves to the v2.2 (turn-merged) table entry.
         self.assertEqual(
-            observation_spec_from_model_config(self._config()), V2_2_REPLAY_OBSERVATION_SPEC
+            observation_spec_from_model_config(
+                self._config(observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2)
+            ),
+            V2_2_REPLAY_OBSERVATION_SPEC,
         )
         # Intra-schema width narrowing survives (the pre-CB/investment 119-column v2 family):
         narrowed = observation_spec_from_model_config(

@@ -37,13 +37,20 @@ class ObservationSpecTest(unittest.TestCase):
         )
 
     def test_schema_version_is_v2_2_with_v2_v2_1_v3_v4_supported_and_v1_legacy(self) -> None:
-        # Checkpoint-driven schema window: v2.2 (turn-merged transitions) is the
-        # fresh-artifact default since the 2026-07-08 promotion; v2 and v2.1 stay fully
-        # supported checkpoint-driven modes, v3 is supported but opt-in (not the default
-        # until the Rust fold encoder mirrors it), v4 (the k0 feature pack) is supported and
-        # likewise opt-in — adding a schema never moves the default, which is what keeps every
-        # running arm's artifacts on the schema they were collected under. v1 stays legacy-refused.
-        self.assertEqual(OBSERVATION_SCHEMA_VERSION, "pokezero.observation.v2.2")
+        # Checkpoint-driven schema window: v4 (the k0 feature pack) is the fresh-artifact
+        # default since 2026-08-10; v2, v2.1, v2.2 and v3 stay fully supported checkpoint-driven
+        # modes. v1 stays legacy-refused.
+        #
+        # This constant is ONLY the "nobody said" fallback. Every path that resolves a schema --
+        # `--observation-schema`, or the checkpoint latch -- wins over it, which is why it sat at
+        # v2.2 through the v3 and v4 rollouts without mis-stamping anything: the committed v3 and
+        # v4 corpora carry v3 and v4, not v2.2. What it does still drive is fresh generation with
+        # no schema named, and any fingerprint that hashes it.
+        #
+        # The rule this replaces was "adding a schema never moves the default", which protected
+        # arms mid-campaign from a silent rotation. It is retired rather than violated: v4 is what
+        # every arm now runs, so the default was pointing at a schema nothing collects under.
+        self.assertEqual(OBSERVATION_SCHEMA_VERSION, "pokezero.observation.v4")
         self.assertEqual(
             SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
             (
