@@ -81,6 +81,7 @@ from pokezero.neural_policy import (
 from pokezero.neural_selfplay import _require_promoted_opponent_pool as require_neural_promoted_opponent_pool
 from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION_V2,
+    OBSERVATION_SCHEMA_VERSION_V2_1,
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
     OBSERVATION_SCHEMA_VERSION_V4,
@@ -102,6 +103,19 @@ from pokezero.value_calibration import ValueCalibrationReport
 LEGAL_TWO_ACTION_MASK = (True, True, False, False, False, False, False, False, False)
 LEGAL_ACTION_ONE_MASK = (False, True, False, False, False, False, False, False, False)
 LEGAL_ACTION_ONE_TWO_MASK = (False, True, True, False, False, False, False, False, False)
+
+
+# These smoke fixtures STAMP v2.1 while drawing their widths from the global default spec --
+# the conflation in one line. Coherent only while the default was a v2-family schema; against a
+# v4 default it produced `token_count 23 does not equal the fixed prefix (23) +
+# transition_token_count (128)`. Widths now come from the schema the fixture claims.
+_V21_SPEC = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_1)
+# Every config in this module is pinned to v2.2, so a spec reference must be too. Reading the
+# GLOBAL default spec here was the last incoherence: `token_count=DEFAULT_REPLAY_OBSERVATION_SPEC
+# .token_count` handed a v4 token count (23) to a v2.2-stamped config needing 151, and the
+# resulting "token_count 23 does not equal the fixed prefix (23) + transition_token_count (128)"
+# named neither the schema nor the fixture that disagreed.
+_V22_SPEC = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2)
 
 
 def observation(
@@ -403,7 +417,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
     def test_transformer_policy_config_requires_category_vocab(self) -> None:
         with self.assertRaisesRegex(ValueError, "category_vocab is required"):
-            TransformerPolicyConfig()
+            TransformerPolicyConfig(
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,)
 
     def test_validate_initial_model_config_detects_warm_start_vocab_mismatch(self) -> None:
         from pokezero.neural_policy import _validate_initial_model_config
@@ -484,7 +499,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             window_size=4,
             categorical_feature_count=4,
             numeric_feature_count=2,
-            token_count=DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
+            token_count=_V22_SPEC.token_count,
             embedding_dim=8,
             transformer_layers=0,
             attention_heads=1,
@@ -536,7 +551,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             window_size=4,
             categorical_feature_count=4,
             numeric_feature_count=2,
-            token_count=DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
+            token_count=_V22_SPEC.token_count,
             embedding_dim=8,
             transformer_layers=1,
             attention_heads=1,
@@ -595,7 +610,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             window_size=4,
             categorical_feature_count=4,
             numeric_feature_count=2,
-            token_count=DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
+            token_count=_V22_SPEC.token_count,
             embedding_dim=8,
             transformer_layers=0,
             attention_heads=1,
@@ -3789,7 +3804,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         fake_model = object()
         fake_training_result = SimpleNamespace(
-            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle", observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count, numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False)
+            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle", observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=_V21_SPEC.categorical_feature_count, numeric_feature_count=_V21_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False)
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3867,7 +3882,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         fake_model = object()
         fake_training_result = SimpleNamespace(
-            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle", observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count, numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False)
+            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle", observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=_V21_SPEC.categorical_feature_count, numeric_feature_count=_V21_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False)
         )
         captured = {}
 
@@ -4490,8 +4505,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 window_size=1,
                 format_id="gen3randombattle",
                 observation_schema_version="pokezero.observation.v2.1",
-                categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
-                numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+                categorical_feature_count=_V22_SPEC.categorical_feature_count,
+                numeric_feature_count=_V22_SPEC.numeric_feature_count,
                 category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True,
                 exact_state_enabled=True,
                 transition_token_budget=128,
@@ -4691,8 +4706,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             window_size=1,
             format_id="gen3randombattle",
             observation_schema_version="pokezero.observation.v2.1",
-            categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
-            numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+            categorical_feature_count=_V22_SPEC.categorical_feature_count,
+            numeric_feature_count=_V22_SPEC.numeric_feature_count,
             category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True,
             exact_state_enabled=True,
             transition_token_budget=128,
@@ -4918,8 +4933,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 window_size=1,
                 format_id="gen3randombattle",
                 observation_schema_version="pokezero.observation.v2.1",
-                categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
-                numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+                categorical_feature_count=_V22_SPEC.categorical_feature_count,
+                numeric_feature_count=_V22_SPEC.numeric_feature_count,
                 category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True,
                 exact_state_enabled=True,
                 transition_token_budget=128,
@@ -5055,7 +5070,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         fake_model = object()
         fake_training_result = SimpleNamespace(
-            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle", observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count, numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False)
+            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle", observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=_V21_SPEC.categorical_feature_count, numeric_feature_count=_V21_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False)
         )
         captured = {}
 
@@ -5113,7 +5128,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 return {"matchups": 4}
 
         fake_model = object()
-        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count, numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False))
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=_V21_SPEC.categorical_feature_count, numeric_feature_count=_V21_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False))
         captured = {}
 
         def fake_benchmark_rollouts(**kwargs):
@@ -5235,7 +5250,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 return {"matchups": 4}
 
         fake_model = object()
-        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count, numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False))
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=_V21_SPEC.categorical_feature_count, numeric_feature_count=_V21_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False))
         captured = {}
 
         def fake_benchmark_rollouts(**kwargs):
@@ -5326,7 +5341,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 return {"matchups": 4}
 
         fake_model = object()
-        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count, numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False))
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=_V21_SPEC.categorical_feature_count, numeric_feature_count=_V21_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False))
         captured = {}
 
         def fake_benchmark_rollouts(**kwargs):
@@ -5404,7 +5419,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 return {"matchups": 6}
 
         fake_model = object()
-        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count, numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False))
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=_V21_SPEC.categorical_feature_count, numeric_feature_count=_V21_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False))
         captured = {}
 
         def fake_benchmark_rollouts(**kwargs):
@@ -5486,7 +5501,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 return {"matchups": 4}
 
         fake_model = object()
-        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count, numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False))
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, observation_schema_version="pokezero.observation.v2.1", categorical_feature_count=_V21_SPEC.categorical_feature_count, numeric_feature_count=_V21_SPEC.numeric_feature_count, category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False))
         captured = {}
 
         def fake_benchmark_rollouts(**kwargs):
@@ -5551,8 +5566,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             model_config=SimpleNamespace(
                 policy_id="neural-smoke", window_size=1,
                 observation_schema_version="pokezero.observation.v2.1",
-                categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
-                numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+                categorical_feature_count=_V22_SPEC.categorical_feature_count,
+                numeric_feature_count=_V22_SPEC.numeric_feature_count,
                 category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True,
                 exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False,
             )
@@ -5720,8 +5735,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             model_config=SimpleNamespace(
                 policy_id="neural-smoke", window_size=1,
                 observation_schema_version="pokezero.observation.v2.1",
-                categorical_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
-                numeric_feature_count=DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+                categorical_feature_count=_V22_SPEC.categorical_feature_count,
+                numeric_feature_count=_V22_SPEC.numeric_feature_count,
                 category_vocab=("move:c", "species:a", "species:b"), category_oov_buckets=16, stats_block_enabled=True,
                 exact_state_enabled=True, transition_token_budget=128, transition_token_count=128, tier2_residuals=True, tier2_investment=False,
             )
@@ -8724,7 +8739,7 @@ class TruncateHistoryTensorsTest(unittest.TestCase):
             window_size=1,
             categorical_feature_count=2,
             numeric_feature_count=3,
-            token_count=DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
+            token_count=_V22_SPEC.token_count,
             embedding_dim=8,
             transformer_layers=1,
             attention_heads=2,
