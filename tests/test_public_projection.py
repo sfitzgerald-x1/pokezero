@@ -1932,42 +1932,50 @@ class SetClosureTests(unittest.TestCase):
 
     # -- 4. `_SELF_AXES` ------------------------------------------------------
 
-    def test_the_self_axis_set_is_derived_from_its_two_producers(self):
-        """`_SELF_AXES` had NO consumer -- in `src/`, `scripts/` or `tests/`.
+    #: The two seat-scoped producers, each with the floor on its OWN `axis=`
+    #: contribution. One tuple, read by the real derivation below and by the
+    #: mutant test after it, so the mutant cannot be pinned against a copy of the
+    #: floors that has drifted from the ones that ship.
+    SELF_AXIS_FLOORS = (("_axis_self_moves", 3), ("_axis_self_party", 4))
 
-        The module header cites it as defining which axes are evaluated only for
-        `context.player_id`, but the seat scoping is structural (the two producers
-        are handed `sides[observed.slot]` and `observed.self_request`), never a
-        lookup against this set. Prose pointing at a constant nothing reads drifts
-        silently, and it did: removing `self_move_set` from it was a green suite.
+    @staticmethod
+    def _self_axes_emitted():
+        """`{producer name: the `axis=` literals it can emit}` for the two."""
 
-        The fix is to give it a reader, and the honest reader is a derivation --
-        the `axis=` literals the two seat-scoped producers can actually emit. Both
-        directions: a producer growing an axis that is not listed fails, and a
-        member no producer emits fails too.
+        from pokezero.public_projection import _axis_self_moves, _axis_self_party
+
+        return {
+            "_axis_self_moves": _emitted_axes(_axis_self_moves),
+            "_axis_self_party": _emitted_axes(_axis_self_party),
+        }
+
+    def _check_self_axes_derivation(self, emitted_by_producer, *, floors):
+        """Every assertion the `_SELF_AXES` derivation makes, over a SUPPLIED
+        per-producer mapping rather than over the live producers.
+
+        Factored out so the mutant test below runs this exact assertion sequence
+        against a perturbed mapping, instead of a re-typed imitation of it.
+
+        DELIBERATELY NO `subTest` in the floor loop, and this is load-bearing:
+        `subTest` reports a failure to the TestResult instead of raising, so a
+        caller wrapping this in `assertRaises` would see nothing and conclude the
+        floor does not fire. The producer name is carried in the message instead.
         """
 
-        from pokezero.public_projection import (
-            AXES,
-            _axis_self_moves,
-            _axis_self_party,
-            _SELF_AXES,
-        )
-
-        emitted = _emitted_axes(_axis_self_moves, _axis_self_party)
+        from pokezero.public_projection import AXES, _SELF_AXES
 
         # PER-SOURCE anti-vacuity, same reason as `_CURE_TAGS` above: a floor on
         # the union of two producers is satisfied by either one of them alone, so
         # it cannot fire when one producer stops emitting. Each is floored on its
         # own contribution.
-        for producer, floor in ((_axis_self_moves, 3), (_axis_self_party, 4)):
-            with self.subTest(producer=producer.__name__):
-                self.assertGreaterEqual(
-                    len(_emitted_axes(producer)),
-                    floor,
-                    f"`{producer.__name__}` no longer emits {floor} `axis=` "
-                    "literals; the derivation is reading one producer, not two",
-                )
+        for name, floor in floors:
+            self.assertGreaterEqual(
+                len(emitted_by_producer[name]),
+                floor,
+                f"`{name}` no longer emits {floor} `axis=` literals; the "
+                "derivation is reading one producer, not two",
+            )
+        emitted = set().union(*emitted_by_producer.values())
         self.assertGreaterEqual(
             len(emitted),
             7,
@@ -1988,6 +1996,114 @@ class SetClosureTests(unittest.TestCase):
             set(_SELF_AXES) <= set(AXES),
             "`_SELF_AXES` names an axis outside the closed `AXES` taxonomy",
         )
+        return emitted
+
+    def test_the_self_axis_set_is_derived_from_its_two_producers(self):
+        """`_SELF_AXES` had NO consumer -- in `src/`, `scripts/` or `tests/`.
+
+        The module header cites it as defining which axes are evaluated only for
+        `context.player_id`, but the seat scoping is structural (the two producers
+        are handed `sides[observed.slot]` and `observed.self_request`), never a
+        lookup against this set. Prose pointing at a constant nothing reads drifts
+        silently, and it did: removing `self_move_set` from it was a green suite.
+
+        The fix is to give it a reader, and the honest reader is a derivation --
+        the `axis=` literals the two seat-scoped producers can actually emit. Both
+        directions: a producer growing an axis that is not listed fails, and a
+        member no producer emits fails too.
+
+        What the per-source floor here is worth is pinned by the test below, not
+        argued here; #1225 argued it and got it wrong in the safe direction.
+        """
+
+        self._check_self_axes_derivation(
+            self._self_axes_emitted(), floors=self.SELF_AXIS_FLOORS
+        )
+
+    def test_only_the_per_source_floor_catches_an_axis_migrating_between_producers(
+        self,
+    ):
+        """⚠ CORRECTION to #1225's own note on the floor above, which UNDER-claimed
+        it -- wrongly, but in the safe direction.
+
+        #1225 recorded: *"the same per-source treatment is applied to `_SELF_AXES`,
+        and honestly it closes nothing there: that derivation's union floor of 7
+        already equals the total its two producers emit, so any loss already trips
+        it. It is applied for uniformity with the rule, not because a hole was
+        measured."* The premise is true and the conclusion does not follow. A
+        union floor sees LOSS. It cannot see MIGRATION, because migration is not a
+        loss -- and a derivation whose whole subject is *which producer emits
+        what* is exactly the thing migration corrupts.
+
+        The discriminating case, which is what this test is: move
+        `self_move_disabled` from `_axis_self_moves` to `_axis_self_party`. The
+        union stays 7, the members stay equal to `_SELF_AXES` and to
+        `SEAT_SCOPED_AXES`, `<= AXES` still holds -- every set assertion passes.
+        Only the per-source floor fires. So the floor closes SOURCE-ATTRIBUTION
+        DRIFT, a class a union floor structurally cannot express, and the note is
+        corrected rather than relayed.
+
+        Why it matters beyond bookkeeping: the module header's whole claim about
+        these axes is that they are evaluated only for `context.player_id`, and it
+        cites the two producers by name as the reason. An axis quietly emitted
+        from a different producer than the one documented is that citation going
+        stale with every equality still green.
+
+        MEASURED AT SOURCE, not only simulated here. On `6af47d25`, with
+        `axis="self_move_disabled"` removed from `_axis_self_moves`' literal and a
+        `ProjectionMismatch(axis="self_move_disabled", ...)` construction added to
+        `_axis_self_party`:
+
+            PYTHONPATH=<arm>/src python -B -m unittest tests.test_public_projection
+            -> Ran 113 tests ... FAILED (failures=1)
+               AssertionError: 2 not greater than or equal to 3 :
+               `_axis_self_moves` no longer emits 3 `axis=` literals; the
+               derivation is reading one producer, not two
+
+        One failure in the module, and it is the floor. With the floors alone
+        neutered to `0` the same mutant reads `Ran 1 test ... OK`, which is the
+        half of the claim a passing assertion cannot show -- so it is asserted
+        below as well, by running the check with `floors=()`.
+        """
+
+        migrated_axis = "self_move_disabled"
+        real = self._self_axes_emitted()
+
+        # PREMISES, so a migration that migrates nothing cannot pass this test.
+        self.assertIn(
+            migrated_axis,
+            real["_axis_self_moves"],
+            f"{migrated_axis} is no longer emitted by `_axis_self_moves`, so the "
+            "mutation below moves nothing and proves nothing; pick the axis this "
+            "test should be migrating instead",
+        )
+        self.assertNotIn(migrated_axis, real["_axis_self_party"])
+
+        migrated = {
+            "_axis_self_moves": real["_axis_self_moves"] - {migrated_axis},
+            "_axis_self_party": real["_axis_self_party"] | {migrated_axis},
+        }
+        self.assertNotEqual(migrated, real, "the mutation is a no-op")
+        self.assertEqual(
+            set().union(*migrated.values()),
+            set().union(*real.values()),
+            "the union MUST be unchanged, or this is a loss and not a migration, "
+            "and the union floor would have caught it after all",
+        )
+
+        # 1. Every non-per-source assertion still passes. This is the half that
+        #    makes the claim non-trivial: without the floor the mutant is green.
+        self._check_self_axes_derivation(migrated, floors=())
+
+        # 2. And the per-source floor is what catches it -- with its own message,
+        #    so a future failure here cannot be some other assertion's.
+        with self.assertRaises(AssertionError) as caught:
+            self._check_self_axes_derivation(
+                migrated, floors=self.SELF_AXIS_FLOORS
+            )
+        message = str(caught.exception)
+        self.assertIn("the derivation is reading one producer, not two", message)
+        self.assertIn("_axis_self_moves", message)
 
     # -- 5. `RENDER_TELEMETRY_ONLY_LOSSY` ------------------------------------
 
@@ -2141,6 +2257,41 @@ class SetClosureTests(unittest.TestCase):
         everything" fails here instead of agreeing with whatever it is given.
         That is the anti-vacuity floor for a probe, and it is the shape the plain
         `len(...) >= n` floor cannot express.
+
+        ⚠ THAT ASSERTION SHIPPED ONE-SIDED IN #1225, AND THIS IS THE OTHER SIDE.
+        `universe - field` non-empty says the probe rejects something; it does
+        NOT say the probe accepts anything, and the set equality below is
+        satisfied by two empty sets. Measured on `6af47d25`, this module only:
+
+            # field 3: `_updated_public_condition`'s field-3 branch returns None
+            #          instead of `parts[3]`, and `_HP_TAGS_FIELD3 = ()`
+            # field 4: `_canonical_replacement_marker` returns False outright,
+            #          and `_HP_TAGS_FIELD4 = ()`
+            PYTHONPATH=<arm>/src python -B -m unittest \
+              tests.test_public_projection.SetClosureTests\
+.test_the_hp_tag_families_are_derived_from_the_parsers_own_fields
+
+        Both read `Ran 1 test ... OK` -- a probe that discriminates nothing at
+        all, agreed with by a constant gutted to match, on both families. (The
+        whole module still killed neither; the full suite did, elsewhere, which
+        is why this was recorded as a follow-up and not as a hole in coverage.)
+        It is nevertheless exactly the one-directional pin this module's own
+        header names as its recurring defect class, so both directions are
+        asserted here now: the probe must reject part of its universe AND accept
+        part of it.
+
+        SCOPE LIMIT OF THE FIELD-4 DERIVATION, stated because it is invisible
+        otherwise. The field-4 universe is `event_tags` -- the 19 tags
+        `showdown._public_event_from_line` dispatches on -- so the equality only
+        constrains `_HP_TAGS_FIELD4` INSIDE that universe. If
+        `_canonical_replacement_marker` grew a tag the public-event dispatch does
+        not parse (`detailschange`, say), the probe would never offer it and the
+        derivation would not notice; growing `faint`, which IS dispatched, is
+        caught. That is defensible -- a tag the parser never parses cannot reach
+        the fold, so it cannot move a folded HP or a mismatch count -- but it is
+        a property of the universe, not of the probe, and it moves the moment the
+        parser learns a new tag. The field-3 universe (`condition_tags`, from
+        `_updated_public_condition`'s own dispatch) is the same shape.
         """
 
         from pokezero import showdown
@@ -2169,6 +2320,12 @@ class SetClosureTests(unittest.TestCase):
             "the field-3 probe accepted every tag the parser dispatches on, so "
             "it discriminates nothing and the equality below is vacuous",
         )
+        self.assertTrue(
+            field3,
+            "the field-3 probe accepted NO tag the parser dispatches on. That is "
+            "the OTHER vacuity: with `_HP_TAGS_FIELD3` emptied to match, the "
+            "equality below is two empty sets agreeing",
+        )
         self.assertEqual(
             field3,
             set(_HP_TAGS_FIELD3),
@@ -2194,6 +2351,12 @@ class SetClosureTests(unittest.TestCase):
             event_tags - field4,
             "the field-4 probe accepted every protocol tag, so it discriminates "
             "nothing and the equality below is vacuous",
+        )
+        self.assertTrue(
+            field4,
+            "the field-4 probe accepted NO protocol tag. That is the OTHER "
+            "vacuity: with `_HP_TAGS_FIELD4` emptied to match, the equality "
+            "below is two empty sets agreeing",
         )
         self.assertEqual(
             field4,
