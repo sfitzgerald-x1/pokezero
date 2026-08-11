@@ -67,9 +67,29 @@ echo "== result =="
 tail -1 "$WT/DRILL.txt"
 echo "-- breakages by file --"
 grep '^FAILED' "$WT/DRILL.txt" | sed 's|.*/tests/||; s|::.*||' | sort | uniq -c | sort -rn
-N=$(grep -c '^FAILED' "$WT/DRILL.txt")
+EXPECTED="$REPO/tests/data/schema_drill_expected_breakages.txt"
+grep '^FAILED' "$WT/DRILL.txt" | sed 's|.*/tests/||' | sort -u > "$WT/actual.txt"
+grep -vE '^\s*(#|$)' "$EXPECTED" | sort -u > "$WT/expected.txt"
+
+UNEXPECTED=$(comm -23 "$WT/actual.txt" "$WT/expected.txt")
+MISSING=$(comm -13 "$WT/actual.txt" "$WT/expected.txt")
+NU=$(printf '%s' "$UNEXPECTED" | grep -c . || true)
+NM=$(printf '%s' "$MISSING" | grep -c . || true)
+
 echo
-echo "TOTAL BREAKAGES: $N"
-echo "PASS CONDITION: only class-(iii) legitimate-reader tests may appear above."
+echo "expected (class-iii, must break): $(wc -l < "$WT/expected.txt" | tr -d ' ')"
+echo "actual breakages:                 $(wc -l < "$WT/actual.txt" | tr -d ' ')"
+echo
+if [ "$NU" -gt 0 ]; then
+  echo "UNEXPECTED BREAKAGES ($NU) -- surviving instances of the class, each earns a ledger row:"
+  printf '%s\n' "$UNEXPECTED" | sed 's/^/  /'
+fi
+if [ "$NM" -gt 0 ]; then
+  # A class-(iii) test that did NOT break is worse than an unexpected one: it means the pin on
+  # the default's identity has stopped pinning, so the next rotation goes unnoticed.
+  echo "EXPECTED-BUT-DID-NOT-BREAK ($NM) -- these pins are no longer pinning:"
+  printf '%s\n' "$MISSING" | sed 's/^/  /'
+fi
+[ "$NU" -eq 0 ] && [ "$NM" -eq 0 ] && echo "PASS: the breakage set is EXACTLY the class-(iii) readers. The class is dead."
 echo "Full log: $WT/DRILL.txt"
-exit $(( N == 0 ? 0 : 1 ))
+exit $(( NU + NM == 0 ? 0 : 1 ))
