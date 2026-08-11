@@ -11,12 +11,28 @@
 # nobody names is the only clean probe, and it is also the real future event this must make free.
 #
 # Usage:  bash scripts/schema_rotation_drill.sh [worktree-path]
+#         DRILL_SCOPE=fast  ...   scope to the files that have ever broken + the expected set.
+#
+# `fast` exists because two full suites take ~22 minutes and get killed by most runners. It is
+# for ITERATION ONLY and is NOT the stop condition: a scoped drill cannot see a NEW breakage in
+# a file that has never broken before, which is precisely what the full drill is for. Treat a
+# fast PASS as "worth running the full one", never as proof.
 # Exit 0 = the class is dead. Nonzero = breakages beyond the legitimate readers; see the diff.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WT="${1:-/tmp/schema-v5-drill}"
 VENV="$REPO/.venv/bin/python"
+
+drill_targets() {
+  local root="$1"
+  if [ "${DRILL_SCOPE:-full}" = "fast" ]; then
+    sed 's/::.*//' "$REPO/tests/data/schema_drill_scope.txt" 2>/dev/null \
+      | grep -vE '^\s*(#|$)' | sort -u | sed "s|^|$root/tests/|"
+  else
+    echo "$root/tests"
+  fi
+}
 
 echo "== drill: synthetic v5 rotation =="
 git -C "$REPO" worktree remove --force "$WT" 2>/dev/null
@@ -58,7 +74,7 @@ PY
 "$VENV" -c "import sys; sys.path.insert(0,'$WT/src'); from pokezero.observation import OBSERVATION_SCHEMA_VERSION as v; print('  default is now:', v)" || exit 3
 
 find "$WT/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
-PYTHONPATH="$WT/src" "$VENV" -m pytest "$WT/tests" -q -p no:randomly \
+PYTHONPATH="$WT/src" "$VENV" -m pytest $(drill_targets "$WT") -q -p no:randomly \
   --ignore="$WT/tests/test_terminal_disposition_register.py" \
   --ignore="$WT/tests/test_unreachable_readjudication.py" \
   --ignore="$WT/tests/test_wide_seed_negative_census.py" > "$WT/DRILL.txt" 2>&1
@@ -89,7 +105,7 @@ git -C "$REPO" worktree remove --force "$BASE" 2>/dev/null
 git -C "$REPO" worktree add -q --detach "$BASE" HEAD || exit 3
 git -C "$REPO" rev-parse HEAD > "$BASE/BASE.sha"
 find "$BASE/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
-PYTHONPATH="$BASE/src" "$VENV" -m pytest "$BASE/tests" -q -p no:randomly \
+PYTHONPATH="$BASE/src" "$VENV" -m pytest $(drill_targets "$BASE") -q -p no:randomly \
   --ignore="$BASE/tests/test_terminal_disposition_register.py" \
   --ignore="$BASE/tests/test_unreachable_readjudication.py" \
   --ignore="$BASE/tests/test_wide_seed_negative_census.py" > "$BASE/BASE.txt" 2>&1
