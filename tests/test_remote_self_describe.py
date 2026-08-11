@@ -18,6 +18,7 @@ import threading
 import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2_2
 
 try:
     import torch  # noqa: F401
@@ -45,6 +46,10 @@ def _train_checkpoint(temp_dir: Path, name: str, **config_overrides) -> Path:
     with data.open("w", encoding="utf-8") as handle:
         write_rollout_record(handle, rollout_record())
     values = dict(
+        # Name v2.2. These fixtures pair a 151-token observation with the config below, and the
+        # self-describe expectations encode that shape. Left to the default, the config followed
+        # whichever schema held the slot while the observations stayed v2-family.
+        observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
         category_vocab=tuple(range(1, 17)), category_oov_buckets=4, policy_id=name,
         window_size=2, token_type_vocab_size=8, categorical_feature_count=1,
         numeric_feature_count=1, embedding_dim=16, transformer_layers=1,
