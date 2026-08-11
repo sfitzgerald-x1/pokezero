@@ -1,0 +1,1214 @@
+[
+  {
+    "file": "docs/token-format/extract_turn16.py",
+    "line": 665,
+    "kind": "bare-const",
+    "owner": "<module>"
+  },
+  {
+    "file": "scripts/bench_crate_search.py",
+    "line": 51,
+    "kind": "implicit-cfg",
+    "owner": "_template_inputs"
+  },
+  {
+    "file": "scripts/encode_foulplay_capture.py",
+    "line": 141,
+    "kind": "default-spec",
+    "owner": "main"
+  },
+  {
+    "file": "scripts/play_online_baseline.py",
+    "line": 56,
+    "kind": "default-spec",
+    "owner": "main"
+  },
+  {
+    "file": "scripts/shaping_ranker.py",
+    "line": 228,
+    "kind": "default-spec",
+    "owner": "evaluate_candidate_model"
+  },
+  {
+    "file": "scripts/shaping_ranker.py",
+    "line": 393,
+    "kind": "implicit-cfg",
+    "owner": "main"
+  },
+  {
+    "file": "src/pokezero/engine_env.py",
+    "line": 1140,
+    "kind": "default-spec",
+    "owner": "_default_observation_spec"
+  },
+  {
+    "file": "src/pokezero/linear_policy.py",
+    "line": 80,
+    "kind": "bare-const",
+    "owner": "_linear_feature_fingerprint_payload"
+  },
+  {
+    "file": "src/pokezero/linear_policy.py",
+    "line": 110,
+    "kind": "bare-const",
+    "owner": "LinearPolicyModel"
+  },
+  {
+    "file": "src/pokezero/local_showdown.py",
+    "line": 226,
+    "kind": "default-spec",
+    "owner": "env_config_from_checkpoint_provenance"
+  },
+  {
+    "file": "src/pokezero/local_showdown.py",
+    "line": 271,
+    "kind": "default-spec",
+    "owner": "LocalShowdownConfig"
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 2684,
+    "kind": "implicit-cfg",
+    "owner": "_describe"
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 3025,
+    "kind": "bare-const",
+    "owner": "_train"
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 3092,
+    "kind": "implicit-cfg",
+    "owner": "_train"
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 5593,
+    "kind": "bare-const",
+    "owner": "_iterate"
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 5697,
+    "kind": "implicit-cfg",
+    "owner": "_iterate"
+  },
+  {
+    "file": "src/pokezero/neural_policy.py",
+    "line": 245,
+    "kind": "default-spec",
+    "owner": "TransformerPolicyConfig"
+  },
+  {
+    "file": "src/pokezero/neural_policy.py",
+    "line": 246,
+    "kind": "default-spec",
+    "owner": "TransformerPolicyConfig"
+  },
+  {
+    "file": "src/pokezero/neural_policy.py",
+    "line": 257,
+    "kind": "bare-const",
+    "owner": "TransformerPolicyConfig"
+  },
+  {
+    "file": "src/pokezero/neural_policy.py",
+    "line": 483,
+    "kind": "default-spec",
+    "owner": "TransformerPolicyConfig"
+  },
+  {
+    "file": "src/pokezero/online_client.py",
+    "line": 99,
+    "kind": "default-spec",
+    "owner": "OnlineBattleAgent"
+  },
+  {
+    "file": "src/pokezero/showdown.py",
+    "line": 1143,
+    "kind": "default-spec",
+    "owner": "<module>"
+  },
+  {
+    "file": "src/pokezero/showdown.py",
+    "line": 1143,
+    "kind": "bare-const",
+    "owner": "<module>"
+  },
+  {
+    "file": "src/pokezero/showdown.py",
+    "line": 4280,
+    "kind": "default-spec",
+    "owner": "observation_from_player_state"
+  },
+  {
+    "file": "src/pokezero/teacher_scenarios.py",
+    "line": 553,
+    "kind": "implicit-spec",
+    "owner": "_observation"
+  },
+  {
+    "file": "tests/test_batch_replay.py",
+    "line": 39,
+    "kind": "implicit-spec",
+    "owner": "_observation"
+  },
+  {
+    "file": "tests/test_batch_replay.py",
+    "line": 93,
+    "kind": "implicit-cfg",
+    "owner": "_model_config"
+  },
+  {
+    "file": "tests/test_bench_model_eval.py",
+    "line": 25,
+    "kind": "implicit-cfg",
+    "owner": "_tiny_config"
+  },
+  {
+    "file": "tests/test_bootstrap.py",
+    "line": 38,
+    "kind": "implicit-spec",
+    "owner": "observation"
+  },
+  {
+    "file": "tests/test_cache_concat.py",
+    "line": 44,
+    "kind": "implicit-spec",
+    "owner": "<module>"
+  },
+  {
+    "file": "tests/test_collection.py",
+    "line": 61,
+    "kind": "implicit-spec",
+    "owner": "observation"
+  },
+  {
+    "file": "tests/test_crate_model_leafeval.py",
+    "line": 52,
+    "kind": "implicit-cfg",
+    "owner": "_tiny_config"
+  },
+  {
+    "file": "tests/test_crate_model_leafeval.py",
+    "line": 202,
+    "kind": "implicit-cfg",
+    "owner": "CrateTorchScriptParityTest"
+  },
+  {
+    "file": "tests/test_dataset.py",
+    "line": 40,
+    "kind": "implicit-spec",
+    "owner": "observation"
+  },
+  {
+    "file": "tests/test_dataset.py",
+    "line": 814,
+    "kind": "implicit-spec",
+    "owner": "DatasetTest"
+  },
+  {
+    "file": "tests/test_dataset.py",
+    "line": 866,
+    "kind": "implicit-spec",
+    "owner": "DatasetTest"
+  },
+  {
+    "file": "tests/test_distributed_training.py",
+    "line": 37,
+    "kind": "implicit-spec",
+    "owner": "_observation"
+  },
+  {
+    "file": "tests/test_distributed_training.py",
+    "line": 147,
+    "kind": "implicit-cfg",
+    "owner": "DistributedTrainingTest"
+  },
+  {
+    "file": "tests/test_distributed_training.py",
+    "line": 224,
+    "kind": "implicit-cfg",
+    "owner": "DistributedTrainingTest"
+  },
+  {
+    "file": "tests/test_env.py",
+    "line": 10,
+    "kind": "implicit-spec",
+    "owner": "_observation"
+  },
+  {
+    "file": "tests/test_export_model.py",
+    "line": 27,
+    "kind": "implicit-cfg",
+    "owner": "_tiny_config"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 108,
+    "kind": "implicit-cfg",
+    "owner": "_save_k32_checkpoint"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 179,
+    "kind": "implicit-cfg",
+    "owner": "CategoryVocabDerivationTest"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 202,
+    "kind": "implicit-cfg",
+    "owner": "CategoryVocabDerivationTest"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 416,
+    "kind": "implicit-cfg",
+    "owner": "MaskDerivationTest"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 430,
+    "kind": "implicit-cfg",
+    "owner": "MaskDerivationTest"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 449,
+    "kind": "implicit-cfg",
+    "owner": "MaskDerivationTest"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 605,
+    "kind": "implicit-cfg",
+    "owner": "K32HarnessPathTest"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 1106,
+    "kind": "implicit-cfg",
+    "owner": "Tier2ProvenanceLatchTest"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 1122,
+    "kind": "implicit-cfg",
+    "owner": "Tier2ProvenanceLatchTest"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 1172,
+    "kind": "implicit-cfg",
+    "owner": "InvestmentProvenanceLatchTest"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 1188,
+    "kind": "implicit-cfg",
+    "owner": "InvestmentProvenanceLatchTest"
+  },
+  {
+    "file": "tests/test_foulplay_bridge.py",
+    "line": 737,
+    "kind": "default-spec",
+    "owner": "FoulPlayBridgeTest"
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 38,
+    "kind": "implicit-spec",
+    "owner": "observation"
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 221,
+    "kind": "bare-const",
+    "owner": "LinearPolicyTest"
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 306,
+    "kind": "bare-const",
+    "owner": "LinearPolicyTest"
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 45,
+    "kind": "implicit-cfg",
+    "owner": "CompactCategoryConfigTests"
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 56,
+    "kind": "implicit-cfg",
+    "owner": "CompactCategoryConfigTests"
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 63,
+    "kind": "implicit-cfg",
+    "owner": "CompactCategoryConfigTests"
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 72,
+    "kind": "implicit-cfg",
+    "owner": "CompactCategoryConfigTests"
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 78,
+    "kind": "implicit-cfg",
+    "owner": "CompactCategoryConfigTests"
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 81,
+    "kind": "implicit-cfg",
+    "owner": "CompactCategoryConfigTests"
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 92,
+    "kind": "implicit-cfg",
+    "owner": "CompactEmbeddingTests"
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 117,
+    "kind": "implicit-cfg",
+    "owner": "CompactCheckpointRoundTripTests"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 111,
+    "kind": "implicit-spec",
+    "owner": "observation"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 191,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 195,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 196,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 197,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 281,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 293,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 298,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 299,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 311,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 313,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 315,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 317,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 322,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 329,
+    "kind": "implicit-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 358,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 365,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 409,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 416,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 467,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 474,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 582,
+    "kind": "implicit-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 583,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 628,
+    "kind": "implicit-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 629,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 666,
+    "kind": "implicit-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 667,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 738,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 777,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 810,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 842,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 892,
+    "kind": "implicit-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 893,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 934,
+    "kind": "implicit-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 935,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 988,
+    "kind": "implicit-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 989,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1044,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1047,
+    "kind": "implicit-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1099,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1158,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1312,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1379,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1426,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1459,
+    "kind": "implicit-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1460,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 2518,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 3643,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 3643,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 3721,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 3721,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4344,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4345,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4545,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4546,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4772,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4773,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4909,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4909,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4967,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4967,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5089,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5089,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5180,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5180,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5258,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5258,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5340,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5340,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5405,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5406,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5574,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5575,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5807,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5890,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5963,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6017,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6076,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6148,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6192,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6284,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6347,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6808,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6907,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7643,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7701,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7758,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7851,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7888,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7940,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7987,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8021,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8106,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8164,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8255,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8327,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8355,
+    "kind": "implicit-cfg",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8546,
+    "kind": "implicit-cfg",
+    "owner": "TruncateHistoryTensorsTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8553,
+    "kind": "default-spec",
+    "owner": "TruncateHistoryTensorsTest"
+  },
+  {
+    "file": "tests/test_neural_selfplay.py",
+    "line": 58,
+    "kind": "implicit-cfg",
+    "owner": "_entity_test_model_config"
+  },
+  {
+    "file": "tests/test_neural_selfplay.py",
+    "line": 834,
+    "kind": "implicit-cfg",
+    "owner": "NeuralSelfPlayTest"
+  },
+  {
+    "file": "tests/test_neural_selfplay.py",
+    "line": 5511,
+    "kind": "implicit-cfg",
+    "owner": "NeuralSelfPlayTest"
+  },
+  {
+    "file": "tests/test_neural_selfplay.py",
+    "line": 5556,
+    "kind": "implicit-cfg",
+    "owner": "NeuralSelfPlayTest"
+  },
+  {
+    "file": "tests/test_neural_selfplay.py",
+    "line": 5654,
+    "kind": "implicit-cfg",
+    "owner": "_write_loadable_fake_checkpoint"
+  },
+  {
+    "file": "tests/test_neural_selfplay.py",
+    "line": 6217,
+    "kind": "implicit-spec",
+    "owner": "observation"
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 28,
+    "kind": "implicit-spec",
+    "owner": "ObservationSpecTest"
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 46,
+    "kind": "bare-const",
+    "owner": "ObservationSpecTest"
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 60,
+    "kind": "implicit-spec",
+    "owner": "ObservationSpecTest"
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 86,
+    "kind": "implicit-spec",
+    "owner": "ObservationSpecTest"
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 98,
+    "kind": "implicit-spec",
+    "owner": "ObservationSpecTest"
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 111,
+    "kind": "implicit-spec",
+    "owner": "ObservationSpecTest"
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 143,
+    "kind": "implicit-spec",
+    "owner": "ObservationPerspectiveTest"
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 366,
+    "kind": "default-spec",
+    "owner": "TransitionKindLockstepTest"
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 959,
+    "kind": "bare-const",
+    "owner": "DataSideOneWayDoorTest"
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 983,
+    "kind": "default-spec",
+    "owner": "DataSideOneWayDoorTest"
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 988,
+    "kind": "implicit-cfg",
+    "owner": "DataSideOneWayDoorTest"
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 1022,
+    "kind": "implicit-cfg",
+    "owner": "LegacyCheckpointRefusalTest"
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 1046,
+    "kind": "implicit-cfg",
+    "owner": "LegacyCheckpointRefusalTest"
+  },
+  {
+    "file": "tests/test_observation_spec_v2_1.py",
+    "line": 95,
+    "kind": "default-spec",
+    "owner": "SpecTableTest"
+  },
+  {
+    "file": "tests/test_observation_spec_v2_1.py",
+    "line": 96,
+    "kind": "bare-const",
+    "owner": "SpecTableTest"
+  },
+  {
+    "file": "tests/test_observation_spec_v2_1.py",
+    "line": 522,
+    "kind": "implicit-cfg",
+    "owner": "ConfigDualSchemaTest"
+  },
+  {
+    "file": "tests/test_observation_spec_v3.py",
+    "line": 350,
+    "kind": "bare-const",
+    "owner": "SchemaTableTest"
+  },
+  {
+    "file": "tests/test_observation_spec_v4.py",
+    "line": 238,
+    "kind": "bare-const",
+    "owner": "V4SchemaTableTest"
+  },
+  {
+    "file": "tests/test_policy.py",
+    "line": 21,
+    "kind": "implicit-spec",
+    "owner": "observation"
+  },
+  {
+    "file": "tests/test_region_trim.py",
+    "line": 37,
+    "kind": "implicit-cfg",
+    "owner": "_config"
+  },
+  {
+    "file": "tests/test_remote_self_describe.py",
+    "line": 54,
+    "kind": "implicit-cfg",
+    "owner": "_train_checkpoint"
+  },
+  {
+    "file": "tests/test_replay_branching.py",
+    "line": 56,
+    "kind": "default-spec",
+    "owner": "_observation_with_recent_event_token"
+  },
+  {
+    "file": "tests/test_replay_branching.py",
+    "line": 84,
+    "kind": "default-spec",
+    "owner": "_observation_with_self_hp_fraction"
+  },
+  {
+    "file": "tests/test_replay_branching.py",
+    "line": 144,
+    "kind": "default-spec",
+    "owner": "_observation_with_numeric_feature"
+  },
+  {
+    "file": "tests/test_replay_import.py",
+    "line": 27,
+    "kind": "implicit-spec",
+    "owner": "observation"
+  },
+  {
+    "file": "tests/test_rollout.py",
+    "line": 10,
+    "kind": "implicit-spec",
+    "owner": "observation"
+  },
+  {
+    "file": "tests/test_selfplay.py",
+    "line": 44,
+    "kind": "implicit-spec",
+    "owner": "observation"
+  },
+  {
+    "file": "tests/test_selfplay.py",
+    "line": 587,
+    "kind": "bare-const",
+    "owner": "SelfPlayTest"
+  },
+  {
+    "file": "tests/test_shaping.py",
+    "line": 39,
+    "kind": "implicit-spec",
+    "owner": "observation"
+  },
+  {
+    "file": "tests/test_shaping_provenance.py",
+    "line": 87,
+    "kind": "implicit-cfg",
+    "owner": "CheckpointShapingStampTest"
+  },
+  {
+    "file": "tests/test_showdown.py",
+    "line": 1609,
+    "kind": "default-spec",
+    "owner": "Phase2DynamicStateTest"
+  },
+  {
+    "file": "tests/test_trajectory.py",
+    "line": 9,
+    "kind": "implicit-spec",
+    "owner": "observation"
+  },
+  {
+    "file": "tests/test_turn_merged_encode.py",
+    "line": 84,
+    "kind": "bare-const",
+    "owner": "SchemaTableTest"
+  }
+]
