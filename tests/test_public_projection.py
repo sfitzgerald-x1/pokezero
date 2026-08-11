@@ -1110,6 +1110,47 @@ class KnownProducerExclusionTests(unittest.TestCase):
         found = self._run(spec, request)
         self.assertEqual([], _axes(found))
 
+    def test_the_engines_none_sentinel_is_not_a_transform(self):
+        """The membership literal that decides whether the carve-out applies AT
+        ALL, and it was unpinned in the direction that switches it ON.
+
+        `Pokemon.pre_transform` reads back as the engine's SERIALIZED form, and an
+        UNtransformed mon serializes it as `"none;..."` rather than as empty --
+        which is why `_pre_transform_species` tests the token against `("",
+        "none")`. Delete `"none"` from that tuple and `_is_transformed` flips
+        False -> True for every ordinary mon: `_identity_species` starts calling
+        them `none`, and the moveset, PP and ability exclusions written for a
+        Transform start applying to mons that never transformed. The suite was
+        green.
+
+        DISCLOSED: the `""` element of the same tuple is an EQUIVALENT MUTANT and
+        is deliberately not pinned here. `token` is `_norm(head)`, so when the
+        token is empty the function returns `""` whether or not `""` is in the
+        tuple. A test that appeared to kill it would be testing nothing.
+        """
+
+        from pokezero.public_projection import (
+            _identity_species,
+            _is_transformed,
+            _pre_transform_species,
+        )
+
+        untransformed = types.SimpleNamespace(
+            id="squirtle", pre_transform="none;0;0;0;0;0;none:0;none:0"
+        )
+        self.assertEqual("", _pre_transform_species(untransformed))
+        self.assertFalse(_is_transformed(untransformed))
+        self.assertEqual("squirtle", _identity_species(untransformed))
+
+        # The positive control, so the assertions above are not satisfiable by a
+        # `_is_transformed` that has become constantly False.
+        transformed = types.SimpleNamespace(
+            id="dugtrio", pre_transform="ditto;1;1;1;1;1;transform:32;none:0"
+        )
+        self.assertEqual("ditto", _pre_transform_species(transformed))
+        self.assertTrue(_is_transformed(transformed))
+        self.assertEqual("ditto", _identity_species(transformed))
+
     def test_a_transformed_active_runs_the_donors_ability(self):
         """Measured: `ditto: request ability limber != world arenatrap`, 8 worlds
         on a six-game shard. Transform copies the ability; the request keeps
@@ -1417,10 +1458,18 @@ class AxisClosureTests(unittest.TestCase):
 
 
 class SetClosureTests(unittest.TestCase):
-    """The four remaining hand-maintained membership sets in this module, closed.
+    """The hand-maintained membership sets in this module, closed.
 
-    Each one was verified UNPINNED by a one-token sweep on #1215 as merged -- add
-    or remove a single token and the whole suite stayed green:
+    Sections 1-5 are #1223's, and its own review recorded that the sweep behind
+    them was NOT exhaustive -- see the `RENDER_TELEMETRY_ONLY_LOSSY` bullet. It
+    was then made exhaustive, over every string collection in the module,
+    element by element: 25 survivors on `fb600899`. Sections 6 and 7 are those
+    survivors' constants. The count, not the list, is the deliverable, and the
+    remaining survivor is disclosed in
+    `KnownProducerExclusionTests.test_the_engines_none_sentinel_is_not_a_transform`.
+
+    Each of sections 1-5 was verified UNPINNED by a one-token sweep on #1215 as
+    merged -- add or remove a single token and the whole suite stayed green:
 
     * `_REQUEST_PSEUDO_MOVES` + `"rest"`. It filters observed move ids OUT of the
       `self_move_set` comparison, so one real move id blinds that axis for that
@@ -1727,10 +1776,45 @@ class SetClosureTests(unittest.TestCase):
         from pokezero import showdown
         from pokezero.public_projection import _CURE_TAGS
 
-        dispatched = _dispatch_constants(
-            _ast_of(showdown._update_public_pokemon_condition)
-        ) | _dispatch_constants(_ast_of(showdown._updated_public_condition))
+        sources = {
+            "_update_public_pokemon_condition": _dispatch_constants(
+                _ast_of(showdown._update_public_pokemon_condition)
+            ),
+            "_updated_public_condition": _dispatch_constants(
+                _ast_of(showdown._updated_public_condition)
+            ),
+        }
+        dispatched = set().union(*sources.values())
 
+        # PER-SOURCE anti-vacuity, and on each source's `-cure*` CONTRIBUTION
+        # rather than on its raw tag count -- because the contribution is what
+        # the equality below actually consumes.
+        #
+        # A floor on the UNION cannot fire on a PARTIAL loss of one source, and
+        # independent review of #1223 measured exactly that: rename
+        # `_update_public_pokemon_condition`'s `-cureteam` dispatch out of the
+        # `-cure*` namespace AND drop `-cureteam` from the constant, and this
+        # test stays green -- the union floor of 6 is still met by the other
+        # source on its own, and the `-cure*` subset equality still holds over
+        # what is left. The whole suite killed that mutant only through a
+        # positive control elsewhere. A per-source floor is strictly stronger and
+        # this one fires on that mutant directly, because the renamed source
+        # drops from two `-cure*` tags to one.
+        for name, floor in (
+            ("_update_public_pokemon_condition", 2),
+            ("_updated_public_condition", 1),
+        ):
+            with self.subTest(source=name):
+                contributed = {
+                    tag for tag in sources[name] if tag.startswith("-cure")
+                }
+                self.assertGreaterEqual(
+                    len(contributed),
+                    floor,
+                    f"`showdown.{name}` no longer dispatches on {floor} `-cure*` "
+                    "tag(s); the derivation is now reading one source where it "
+                    "claims to read two",
+                )
         self.assertGreaterEqual(
             len(dispatched),
             6,
@@ -1872,6 +1956,18 @@ class SetClosureTests(unittest.TestCase):
 
         emitted = _emitted_axes(_axis_self_moves, _axis_self_party)
 
+        # PER-SOURCE anti-vacuity, same reason as `_CURE_TAGS` above: a floor on
+        # the union of two producers is satisfied by either one of them alone, so
+        # it cannot fire when one producer stops emitting. Each is floored on its
+        # own contribution.
+        for producer, floor in ((_axis_self_moves, 3), (_axis_self_party, 4)):
+            with self.subTest(producer=producer.__name__):
+                self.assertGreaterEqual(
+                    len(_emitted_axes(producer)),
+                    floor,
+                    f"`{producer.__name__}` no longer emits {floor} `axis=` "
+                    "literals; the derivation is reading one producer, not two",
+                )
         self.assertGreaterEqual(
             len(emitted),
             7,
@@ -2014,6 +2110,283 @@ class SetClosureTests(unittest.TestCase):
             _BOOST_ALIAS,
             "`_BOOST_ALIAS` is not the identity on the seven public boost keys",
         )
+
+    # -- 6. `_HP_TAGS_FIELD3` and `_HP_TAGS_FIELD4` ---------------------------
+
+    def test_the_hp_tag_families_are_derived_from_the_parsers_own_fields(self):
+        """The two families named for the protocol FIELD they read, derived from
+        the two parser functions that decide which field that is.
+
+        THESE ARE THE SETS FOLD SITE 3 ESCAPED. An exhaustive per-element sweep
+        over this module -- delete one element of one string collection, run this
+        module -- scored 25 survivors on `fb600899`, and ten of them were these
+        two families: `_HP_TAGS_FIELD4`'s own `drag` and `replace`, plus the four
+        inline copies `observed_toxic_multiplier` and `fold_lines_onto_summary`
+        each kept of them. The copies are hoisted onto these names in the same
+        commit as this test; these assertions are what the names are now worth.
+
+        BEHAVIOURAL PROBES, not AST mirrors. A mirror keeps agreeing with an
+        upstream that has been renamed or gutted and stops being a derivation
+        without saying so. A probe agrees only with the function that still reads
+        the field.
+
+        * FIELD3 = the tags for which `showdown._updated_public_condition`
+          returns `parts[3]` VERBATIM as the mon's new condition.
+        * FIELD4 = the tags `showdown._canonical_replacement_marker` accepts as a
+          canonical switch-family payload -- a five-field shape whose `parts[4]`
+          it requires to be present and non-empty.
+
+        Each probe runs over a universe that CONTAINS non-members and is asserted
+        to reject some of them, so a probe that had degenerated into "accept
+        everything" fails here instead of agreeing with whatever it is given.
+        That is the anti-vacuity floor for a probe, and it is the shape the plain
+        `len(...) >= n` floor cannot express.
+        """
+
+        from pokezero import showdown
+        from pokezero.public_projection import _HP_TAGS_FIELD3, _HP_TAGS_FIELD4
+
+        condition_tags = _dispatch_constants(
+            _ast_of(showdown._updated_public_condition)
+        )
+        self.assertGreaterEqual(
+            len(condition_tags),
+            6,
+            "the AST walk found no condition dispatch in the parser",
+        )
+        field3 = {
+            tag
+            for tag in condition_tags
+            if showdown._updated_public_condition(
+                "300/320 tox",
+                event_type=tag,
+                parts=["", tag, "p1a: Zigzagoon", "123/320 tox"],
+            )
+            == "123/320 tox"
+        }
+        self.assertTrue(
+            condition_tags - field3,
+            "the field-3 probe accepted every tag the parser dispatches on, so "
+            "it discriminates nothing and the equality below is vacuous",
+        )
+        self.assertEqual(
+            field3,
+            set(_HP_TAGS_FIELD3),
+            "`_HP_TAGS_FIELD3` is no longer the set of tags whose condition the "
+            "parser reads out of protocol field 3",
+        )
+
+        event_tags = _dispatch_constants(_ast_of(showdown._public_event_from_line))
+        self.assertGreaterEqual(
+            len(event_tags),
+            15,
+            "the AST walk found no public-event dispatch in the parser",
+        )
+
+        def _switch_family(tag):
+            parts = ["", tag, "p1a: Zigzagoon", "Zigzagoon, L84, M", "123/320"]
+            return showdown._canonical_replacement_marker(
+                "|".join(parts), event_type=tag, parts=parts
+            )
+
+        field4 = {tag for tag in event_tags if _switch_family(tag)}
+        self.assertTrue(
+            event_tags - field4,
+            "the field-4 probe accepted every protocol tag, so it discriminates "
+            "nothing and the equality below is vacuous",
+        )
+        self.assertEqual(
+            field4,
+            set(_HP_TAGS_FIELD4),
+            "`_HP_TAGS_FIELD4` is no longer the parser's switch family, whose "
+            "condition lives in protocol field 4",
+        )
+        self.assertEqual(
+            set(),
+            set(_HP_TAGS_FIELD3) & set(_HP_TAGS_FIELD4),
+            "a tag in both families is claimed by whichever fold branch is "
+            "tested first, so its membership in the other one means nothing",
+        )
+
+    def test_every_member_of_both_hp_families_moves_the_folded_hp(self):
+        """The behavioural half of the derivation, on EVERY member and at the two
+        sites that used to hold their own copies.
+
+        `replace` is the member nothing exercised: deleting it from
+        `_HP_TAGS_FIELD4` itself was green while the step fold's HP went 123 ->
+        -1. Gen 3 never emits `|replace|`, which is the honest reason it had no
+        test -- not a reason to leave it unpinned, because the fold is what
+        decides whether a mismatch is reported at all.
+        """
+
+        from pokezero.public_projection import (
+            _HP_TAGS_FIELD3,
+            _HP_TAGS_FIELD4,
+            fold_lines_onto_summary,
+            fold_step_lines,
+        )
+
+        pre = types.SimpleNamespace(
+            p1_hp=320, p2_hp=320, p1_status="NONE", p2_status="NONE"
+        )
+        summary = {
+            "p2": {
+                "active_index": 0,
+                "active_hp": 320,
+                "active_status": "none",
+                "boosts": {key: 0 for key in PUBLIC_BOOST_KEYS},
+                "pokemon": [{"hp": 320, "status": "none"}],
+                "species": ["zigzagoon"],
+            }
+        }
+        for tag in _HP_TAGS_FIELD3:
+            line = f"|{tag}|p2a: Zigzagoon|123/320"
+            with self.subTest(field=3, tag=tag):
+                self.assertEqual(123, fold_step_lines([line], pre).hp["p2"])
+                self.assertEqual(
+                    123, fold_lines_onto_summary(summary, [line])["p2"]["active_hp"]
+                )
+        for tag in _HP_TAGS_FIELD4:
+            line = f"|{tag}|p2a: Zigzagoon|Zigzagoon, L84, M|123/320"
+            with self.subTest(field=4, tag=tag):
+                self.assertEqual(123, fold_step_lines([line], pre).hp["p2"])
+                self.assertEqual(
+                    123, fold_lines_onto_summary(summary, [line])["p2"]["active_hp"]
+                )
+
+    def test_a_leftovers_heal_does_not_silence_the_toxic_count_axis(self):
+        """THE HEADLINE, and the reason `observed_toxic_multiplier`'s inline copy
+        of `_HP_TAGS_FIELD3` was the highest-value survivor of the sweep.
+
+        The axis prices a Toxic tick as `(previous_hp - hp) / (maxhp // 16)`, so
+        it is only correct while `last_hp` is current. Every non-`-damage` member
+        of `_HP_TAGS_FIELD3` exists in that loop to keep it current. Drop `-heal`
+        from the copy and a Leftovers heal stops updating it: the observed
+        multiplier goes 2 -> None and the axis reports nothing, permanently and
+        silently, on the most common item in the format (1,371 occurrences in the
+        gen 3 randbat source). `toxic_count` is #1209's ONLY coverage. It is the
+        same shape #1222 fixed for `-heal` in `_TOXIC_RAMP_RESET_TAGS`, one
+        function away.
+        """
+
+        from pokezero.public_projection import observed_toxic_multiplier
+
+        for tag, restatement in (
+            ("-heal", "|-heal|p2a: Zigzagoon|280/320 tox|[from] item: Leftovers"),
+            ("-sethp", "|-sethp|p2a: Zigzagoon|280/320 tox|[from] move: Pain Split"),
+        ):
+            with self.subTest(restated_by=tag):
+                lines = [
+                    "|switch|p2a: Zigzagoon|Zigzagoon, L84, M|265/320 tox",
+                    restatement,
+                    "|-damage|p2a: Zigzagoon|240/320 tox|[from] psn",
+                ]
+                # 280 - 240 == 40 == 2 * (320 // 16). Without the restatement the
+                # loop prices 265 - 240 == 25 against a unit of 20, which is not
+                # integral, and the axis returns None.
+                self.assertEqual(2, observed_toxic_multiplier(lines)["p2"])
+
+    # -- 7. `_BOOST_WRITE_TAGS` and `_BOOST_CLEAR_TAGS` -----------------------
+
+    def test_the_summary_fold_boost_tag_sets_are_pinned_in_both_directions(self):
+        """Two tuples with no upstream, so pinned rather than derived -- and the
+        must-NOT-contain half is the one that matters.
+
+        `-clearallboost` is Haze. `fold_lines_onto_summary` has a separate arm for
+        it that clears BOTH sides, and that arm is reached only because
+        `_BOOST_CLEAR_TAGS` does not claim the tag first. Adding it here is the
+        strictly-more-conservative-looking mutant that is actually FAIL-OPEN: Haze
+        would clear one side, the other side's stale boosts would then agree with
+        a world Haze had already emptied, and `render_post_state_disagreement`
+        would go quiet exactly where a too-loose world lives.
+        """
+
+        from pokezero.public_projection import _BOOST_CLEAR_TAGS, _BOOST_WRITE_TAGS
+
+        self.assertEqual(("-boost", "-unboost", "-setboost"), _BOOST_WRITE_TAGS)
+        self.assertEqual(
+            ("-clearboost", "-clearnegativeboost", "-invertboost"),
+            _BOOST_CLEAR_TAGS,
+        )
+        self.assertEqual(
+            set(),
+            set(_BOOST_WRITE_TAGS) & set(_BOOST_CLEAR_TAGS),
+            "a tag in both sets is claimed by whichever branch is tested first",
+        )
+        for name, tags in (
+            ("_BOOST_WRITE_TAGS", _BOOST_WRITE_TAGS),
+            ("_BOOST_CLEAR_TAGS", _BOOST_CLEAR_TAGS),
+        ):
+            with self.subTest(must_not_contain="-clearallboost", constant=name):
+                self.assertNotIn(
+                    "-clearallboost",
+                    tags,
+                    f"`-clearallboost` in `{name}` makes Haze clear the acting "
+                    "side only, which is fail-open on the render arm",
+                )
+
+    def test_each_reachable_boost_tag_folds_the_way_the_render_arm_needs(self):
+        """The behavioural half, on the members gen 3 can actually reach.
+
+        `-boost` was already pinned, on all seven keys, by
+        `test_every_one_of_the_seven_boosts_fires_on_both_arms`. `-unboost` and
+        `-setboost` were not, and both survived deletion: an unpinned `-setboost`
+        folds Belly Drum's `atk 6` to 0.
+
+        NOT pinned behaviourally, and disclosed rather than faked:
+        `-clearnegativeboost` and `-invertboost` do not exist in gen 3, and the
+        fold's treatment of them (zero everything) is an approximation of what
+        they mean. Asserting today's output for them would cement the
+        approximation as a claim. They are held by the lexical pin above.
+        """
+
+        from pokezero.public_projection import fold_lines_onto_summary
+
+        def _summary(**boosts):
+            def side():
+                return {
+                    "active_index": 0,
+                    "active_hp": 320,
+                    "active_status": "none",
+                    "boosts": {**{key: 0 for key in PUBLIC_BOOST_KEYS}, **boosts},
+                    "pokemon": [{"hp": 320, "status": "none"}],
+                    "species": ["zigzagoon"],
+                }
+
+            return {"p1": side(), "p2": side()}
+
+        with self.subTest(tag="-unboost", pins="the sign of the delta"):
+            folded = fold_lines_onto_summary(
+                _summary(), ["|-unboost|p2a: Zigzagoon|atk|2"]
+            )
+            self.assertEqual(-2, folded["p2"]["boosts"]["atk"])
+
+        with self.subTest(tag="-setboost", pins="assignment, not a delta"):
+            # From -2, Belly Drum's `atk 6` is 6. Folded as a delta it is 4;
+            # dropped from the set entirely it stays -2.
+            folded = fold_lines_onto_summary(
+                _summary(atk=-2), ["|-setboost|p2a: Zigzagoon|atk|6"]
+            )
+            self.assertEqual(6, folded["p2"]["boosts"]["atk"])
+
+        with self.subTest(tag="-clearboost", pins="the acting side only"):
+            folded = fold_lines_onto_summary(
+                _summary(atk=2), ["|-clearboost|p2a: Zigzagoon"]
+            )
+            self.assertEqual(0, folded["p2"]["boosts"]["atk"])
+            self.assertEqual(2, folded["p1"]["boosts"]["atk"])
+
+        with self.subTest(tag="-clearallboost", pins="BOTH sides -- the Haze pin"):
+            folded = fold_lines_onto_summary(
+                _summary(atk=2), ["|-clearallboost|p2a: Zigzagoon"]
+            )
+            self.assertEqual(0, folded["p2"]["boosts"]["atk"])
+            self.assertEqual(
+                0,
+                folded["p1"]["boosts"]["atk"],
+                "Haze cleared one side; `_BOOST_CLEAR_TAGS` has claimed the tag "
+                "ahead of the `-clearallboost` arm",
+            )
 
     # -- the scan the derivations share ---------------------------------------
 
@@ -2509,6 +2882,30 @@ class RenderSelfConsistencyTests(unittest.TestCase):
         found = self._run([self._branch(events, post_p2=post)])
         self.assertIn("render_post_state_disagreement:party_hp", self._predicates(found))
 
+    def test_a_benched_mons_STATUS_disagreement_fires(self):
+        """The other half of the party comparison, which nothing pinned.
+
+        `party_hp` had the test above; the two-element field tuple it shares with
+        `status` did not, so deleting `"status"` from it removed the
+        `render_post_state_disagreement:party_status` predicate from the module
+        ENTIRELY -- the string occurs once -- and the suite stayed green. That is
+        the `_BOOST_KEYS` - `evasion` shape #1223 closed, one function along.
+
+        Note the fixture deliberately puts the disagreement on a BENCHED mon with
+        a status the render never mentions: `active_status` is compared
+        separately, so an active-slot fixture would be killed by the wrong
+        assertion.
+        """
+
+        events = ["|turn|2"]
+        post = {"active_index": 0, "active_hp": 192, "active_status": "none",
+                "boosts": {k: 0 for k in ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")},
+                "pokemon": [{"hp": 192, "status": "none"}, {"hp": 150, "status": "burn"}]}
+        found = self._run([self._branch(events, post_p2=post)])
+        self.assertIn(
+            "render_post_state_disagreement:party_status", self._predicates(found)
+        )
+
     def test_a_switch_the_post_state_does_not_agree_with(self):
         events = ["|switch|p2a: Dodrio|Dodrio, L100, M|150/150", "|turn|2"]
         found = self._run([self._branch(events)])
@@ -2766,6 +3163,100 @@ class EngineSearchHookTests(unittest.TestCase):
         source = inspect.getsource(EngineMctsPolicy._search)
         self.assertIn("worlds.append((world, state))", source)
         self.assertIn("self._notify_world_observer(context, world, state)", source)
+
+
+class BothSeatsAreFoldedTests(unittest.TestCase):
+    """Every `("p1", "p2")` slot guard in this module, exercised on the P1 seat.
+
+    Seven of the 25 survivors of the per-element sweep over this module were slot
+    guards, and the cause is uniform rather than interesting: every other fixture
+    in this file acts on `p2`, so deleting `"p1"` from a guard silences the p1
+    seat -- half of every census -- with nothing red. That is not a theoretical
+    half: `state_projection_mismatches` is evaluated for `context.player_id`,
+    which is p1 as often as it is p2, and the seat a guard drops is the seat
+    whose disagreements simply stop being counted.
+
+    One site had BOTH elements surviving -- `_fold_public_lines`'s `fainted` set,
+    which nothing asserted on at either seat.
+    """
+
+    def test_the_whole_log_fold_reads_both_seats(self):
+        from pokezero.public_projection import _fold_public_lines
+
+        folded = _fold_public_lines(
+            [
+                "|switch|p1a: Pikachu|Pikachu, L100, M|200/200",
+                "|switch|p2a: Squirtle|Squirtle, L100, M|320/320",
+                "|-damage|p1a: Pikachu|120/200",
+                "|-damage|p2a: Squirtle|240/320",
+            ]
+        )
+        self.assertEqual((120, 240), (folded.p1_hp, folded.p2_hp))
+
+    def test_the_whole_log_fold_reports_a_faint_on_either_seat(self):
+        from pokezero.public_projection import _fold_public_lines
+
+        entry = [
+            "|switch|p1a: Pikachu|Pikachu, L100, M|200/200",
+            "|switch|p2a: Squirtle|Squirtle, L100, M|320/320",
+        ]
+        for slot, ident in (("p1", "p1a: Pikachu"), ("p2", "p2a: Squirtle")):
+            with self.subTest(fainted=slot):
+                folded = _fold_public_lines(entry + [f"|faint|{ident}"])
+                self.assertEqual(frozenset({slot}), folded.fainted)
+
+    def test_the_step_fold_reads_both_seats(self):
+        from pokezero.public_projection import fold_step_lines
+
+        pre = types.SimpleNamespace(
+            p1_hp=200, p2_hp=320, p1_status="NONE", p2_status="NONE"
+        )
+        folded = fold_step_lines(
+            ["|-damage|p1a: Pikachu|120/200", "|-damage|p2a: Squirtle|240/320"], pre
+        )
+        self.assertEqual({"p1": 120, "p2": 240}, dict(folded.hp))
+
+    def test_the_toxic_multiplier_is_recovered_for_both_seats(self):
+        from pokezero.public_projection import observed_toxic_multiplier
+
+        lines = [
+            "|switch|p1a: Pikachu|Pikachu, L100, M|280/320 tox",
+            "|switch|p2a: Squirtle|Squirtle, L100, M|280/320 tox",
+            "|-damage|p1a: Pikachu|240/320 tox|[from] psn",
+            "|-damage|p2a: Squirtle|260/320 tox|[from] psn",
+        ]
+        # 320 // 16 == 20, so 40 is two ticks and 20 is one.
+        self.assertEqual({"p1": 2, "p2": 1}, observed_toxic_multiplier(lines))
+
+    def test_the_render_self_consistency_arm_compares_the_p1_side(self):
+        """The predicate carries no slot, so this fixture makes p2 AGREE and only
+        p1 disagree -- otherwise the assertion would be satisfied by the p2 arm
+        that every other fixture already exercises."""
+
+        helper = RenderSelfConsistencyTests()
+        post_p1 = {
+            "active_index": 0,
+            "active_hp": 100,
+            "active_status": "none",
+            "boosts": {k: 0 for k in PUBLIC_BOOST_KEYS},
+            "pokemon": [{"hp": 100, "status": "none"}, {"hp": 180, "status": "none"}],
+        }
+        found = helper._run([helper._branch(["|turn|2"], post_p1=post_p1)])
+        self.assertIn(
+            "render_post_state_disagreement:active_hp",
+            sorted({m.predicate for m in found}),
+        )
+
+    def test_the_render_transition_arm_compares_the_p1_status(self):
+        """`_render_mismatch_reasons`'s status loop, on p1. The log burns Pikachu
+        and the rendered branch never says so."""
+
+        helper = RenderProjectionTests()
+        observed = ["|-status|p1a: Pikachu|brn", "|turn|4"]
+        rendered = ["|turn|4"]
+        branches = [{"events": rendered, "lossy": [], "attribution_unsafe": False}]
+        _found, diagnostics = helper._run(branches, observed)
+        self.assertIn("p1 status", " | ".join(diagnostics["reasons"]))
 
 
 if __name__ == "__main__":
