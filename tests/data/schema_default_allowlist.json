@@ -97,7 +97,7 @@
   },
   {
     "file": "src/pokezero/neural_policy.py",
-    "line": 260,
+    "line": 266,
     "kind": "bare-const",
     "owner": "TransformerPolicyConfig"
   },
@@ -124,18 +124,6 @@
     "line": 4280,
     "kind": "default-spec",
     "owner": "observation_from_player_state"
-  },
-  {
-    "file": "tests/test_batch_replay.py",
-    "line": 39,
-    "kind": "implicit-spec",
-    "owner": "_observation"
-  },
-  {
-    "file": "tests/test_batch_replay.py",
-    "line": 93,
-    "kind": "implicit-cfg",
-    "owner": "_model_config"
   },
   {
     "file": "tests/test_bench_model_eval.py",
