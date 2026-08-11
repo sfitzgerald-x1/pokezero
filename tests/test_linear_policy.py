@@ -313,11 +313,19 @@ class LinearPolicyTest(unittest.TestCase):
         self.assertEqual(
             linear_feature_fingerprint(),
             # Pinned hash tracks the fingerprint payload; the observation spec version
-            # (pokezero.observation.v2.2 since the 2026-07-08 default flip) is
-            # intentionally part of it. The v2- and v2.1-era fingerprints live in
-            # LEGACY_LINEAR_FEATURE_FINGERPRINTS so older linear artifacts stay loadable
-            # through the dual-schema window.
-            "016206c05d4d65a409ebf55d4dfda6adb441bfe2ff719cfa6094b05c16f973d7",
+            # (pokezero.observation.v4 since the 2026-08-11 default rotation) is intentionally
+            # part of it. Earlier-era fingerprints live in LEGACY_LINEAR_FEATURE_FINGERPRINTS so
+            # older linear artifacts stay loadable through the dual-schema window.
+            #
+            # THE FINGERPRINT MOVED, DELIBERATELY. This is one of the two owner-visible
+            # consequences of rotating the default: a fingerprint that hashes the schema must
+            # change when the schema does, and one that survived a rotation would be the bug.
+            # (The other consequence is that checkpoint-free encodes now stamp v4.)
+            #
+            # Re-derived from the tree via `linear_feature_fingerprint()`, not copied from the
+            # failure output -- the value below and the value in a failure message can differ
+            # when the test itself is stale, and only one of them is evidence.
+            "925de5e1d833a325b36180300689008b609325548db3882a6632574ec3e3064a",
         )
         self.assertIn(
             "2c58350d2d4f34d7a19e10ddcf2ccf6886903089bcfb5124d09f2d29465f393d",

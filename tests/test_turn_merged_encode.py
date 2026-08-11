@@ -16,6 +16,7 @@ from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2_1,
     OBSERVATION_SCHEMA_VERSION_V2_2,
+    OBSERVATION_SCHEMA_VERSION_V4,
     SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
     ObservationFeatureMasks,
 )
@@ -79,9 +80,16 @@ class SchemaTableTest(unittest.TestCase):
             observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2),
             V2_2_REPLAY_OBSERVATION_SPEC,
         )
-        # Turn-merged earned the fresh-selection default (2026-07-08 schedule-uncompressed
-        # reads); v2.1 stays a supported, checkpoint-latched schema.
-        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
+        # v4 holds the fresh-selection default since 2026-08-11. v2.2 held it from 2026-07-08
+        # and stays a supported, checkpoint-latched schema -- which is what the assertions above
+        # pin, and they are unaffected by which version holds the default slot.
+        #
+        # This assertion is class-(iii): its subject IS the default's identity, so it MUST break
+        # when the default rotates. That is why it appears in
+        # tests/data/schema_drill_expected_breakages.txt. It had gone stale here, which made it
+        # fail at baseline and therefore stop pinning anything -- the quiet failure mode that let
+        # this constant sit wrong through two schema generations.
+        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V4)
 
     def test_v2_2_widths_extend_the_v2_1_census(self) -> None:
         self.assertEqual(
