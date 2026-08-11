@@ -128,7 +128,20 @@ grep '^FAILED' "$WT/DRILL.txt" | sed 's|.*/tests/||; s|::.*||' | sort | uniq -c 
 # run charged `test_roll_enumeration_scope` to the rotation when it actually fails on the 3.11
 # f-string defect in c153, and would have kept charging it forever. A breakage is a test that
 # passes UNROTATED and fails ROTATED -- anything else is noise being attributed to this class.
-echo "== baseline: same tree, same interpreter, default NOT rotated =="
+# BASELINE COMMIT. Taking the baseline at HEAD is only valid when HEAD is UNROTATED. On a branch
+# that already rotated the default, a HEAD baseline makes the drill measure "current default ->
+# synthetic", never "old default -> new default", and every real cost of the actual rotation is
+# subtracted as "pre-existing". That inverted the first defect this drill was built to fix:
+# instead of charging pre-existing failures to the rotation, it charged the rotation's failures
+# to "pre-existing". Set DRILL_BASELINE_REF to the pre-rotation commit for a rotation PR.
+BASE_REF="${DRILL_BASELINE_REF:-HEAD}"
+if [ "$BASE_REF" = "HEAD" ] && ! git -C "$REPO" show HEAD:src/pokezero/observation.py \
+     | grep -q "^OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V2_2"; then
+  echo "WARNING: HEAD is already rotated, so a HEAD baseline hides the rotation's own cost."
+  echo "         Set DRILL_BASELINE_REF=<pre-rotation commit> to measure the real rotation."
+  echo "         Proceeding measures 'current default -> synthetic' ONLY."
+fi
+echo "== baseline: $BASE_REF, same interpreter, default NOT rotated =="
 # Derived FROM $WT, never a sibling guess. The old default was "$WT/../schema-drill-baseline",
 # which force-removed an unrelated real directory when the drill was invoked as documented.
 BASE="${DRILL_BASELINE:-${WT%/}-baseline}"
@@ -138,7 +151,7 @@ BASE="${DRILL_BASELINE:-${WT%/}-baseline}"
 # from `fast` reused under `full`, would silently subtract the wrong set -- and a wrong
 # subtraction is invisible, it just makes the residue look smaller than it is.
 if [ "${DRILL_BASELINE_REUSE:-0}" = "1" ] && [ -f "$BASE/BASE.sha" ] \
-   && [ "$(cat "$BASE/BASE.sha")" = "$(git -C "$REPO" rev-parse HEAD) ${DRILL_SCOPE:-full}" ]; then
+   && [ "$(cat "$BASE/BASE.sha")" = "$(git -C "$REPO" rev-parse "$BASE_REF") ${DRILL_SCOPE:-full}" ]; then
   echo "  reusing baseline at $(cat "$BASE/BASE.sha" | cut -c1-8)"
   grep '^FAILED' "$BASE/BASE.txt" | sed 's|.*/tests/||' | sort -u > "$WT/baseline.txt"
   echo "  baseline failures (NOT attributable to the rotation): $(wc -l < "$WT/baseline.txt" | tr -d ' ')"
@@ -146,8 +159,8 @@ if [ "${DRILL_BASELINE_REUSE:-0}" = "1" ] && [ -f "$BASE/BASE.sha" ] \
 fi
 if [ "${SKIP_BASELINE:-0}" != "1" ]; then
 git -C "$REPO" worktree remove --force "$BASE" 2>/dev/null
-git -C "$REPO" worktree add -q --detach "$BASE" HEAD || exit 3
-echo "$(git -C "$REPO" rev-parse HEAD) ${DRILL_SCOPE:-full}" > "$BASE/BASE.sha"
+git -C "$REPO" worktree add -q --detach "$BASE" "$BASE_REF" || exit 3
+echo "$(git -C "$REPO" rev-parse "$BASE_REF") ${DRILL_SCOPE:-full}" > "$BASE/BASE.sha"
 find "$BASE/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
 PYTHONPATH="$BASE/src" "$VENV" -m pytest $(drill_targets "$BASE") -q -p no:randomly \
   --ignore="$BASE/tests/test_terminal_disposition_register.py" \
