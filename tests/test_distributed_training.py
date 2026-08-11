@@ -25,6 +25,7 @@ from pokezero.neural_policy import (
 )
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
+from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2_2
 
 
 def _free_local_port() -> int:
@@ -34,7 +35,11 @@ def _free_local_port() -> int:
 
 
 def _observation(value: int) -> PokeZeroObservationV0:
-    spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1)
+    spec = ObservationSpec(
+        categorical_feature_count=1,
+        numeric_feature_count=1,
+        schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+    )
     return PokeZeroObservationV0(
         categorical_ids=tuple((value,) for _ in range(spec.token_count)),
         numeric_features=tuple((float(value),) for _ in range(spec.token_count)),
@@ -145,6 +150,7 @@ class DistributedTrainingTest(unittest.TestCase):
             with data_path.open("w", encoding="utf-8") as handle:
                 write_rollout_record(handle, _rollout_record())
             config = TransformerPolicyConfig.compact_category(
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
                 category_vocab=("a", "b", "c", "d"),
                 category_oov_buckets=1,
                 policy_id="ddp-parity",
@@ -222,6 +228,7 @@ class DistributedTrainingTest(unittest.TestCase):
             with data_path.open("w", encoding="utf-8") as handle:
                 write_rollout_record(handle, _rollout_record())
             config = TransformerPolicyConfig.compact_category(
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
                 category_vocab=("a", "b", "c", "d"),
                 category_oov_buckets=1,
                 policy_id="ddp-ppo-parity",
