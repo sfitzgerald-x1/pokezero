@@ -97,9 +97,11 @@ Hazards from report 4 sections 4.2 and 4.4, handled in code rather than in a REA
   and reported separately from kills by assertion.
 * **An instrument that cannot report failure reports success.** The worktree check
   FAILS CLOSED -- if git cannot be run, the sweep refuses rather than measuring a
-  modified file and printing a match -- and it covers the kill criterion's own files,
-  not just the target. The target digest is CHECKED against the digests published
-  pairs were measured on, not merely displayed.
+  modified file and printing a match -- and it covers the kill criterion's own files
+  AND the arm-selection files (``ARM_SELECTION_FILES``), not just the target. The
+  target digest is CHECKED against the digests published pairs were measured on, not
+  merely displayed, and ``git status --porcelain`` over the WHOLE worktree is printed
+  verbatim so an edit outside the watched set is at least legible in the artifact.
 
 Usage
 -----
@@ -121,6 +123,7 @@ import hashlib
 import json
 import os
 import shutil
+import string
 import subprocess
 import sys
 import time
@@ -144,6 +147,17 @@ KNOWN_TARGET_DIGESTS = {
     "87867c2e": "the PRE-#1225 file (fb600899, #1225's base arm)",
     "8bbebad8": "the POST-#1225 file (6af47d25 through b0d21647)",
 }
+
+#: The files that decide WHICH TREE is measured, and therefore part of the
+#: measurement. ``tests/__init__.py`` and ``tests/conftest.py`` both move THIS
+#: checkout's ``src`` to the front of ``sys.path``; report 4 section 4.2 item 3 is a
+#: whole review round voided by exactly that mechanism. Watching only the target and
+#: the criterion module left them unwatched, so the readout could print
+#: `worktree: verified clean` and `same criterion` on a tree whose arm selection had
+#: been edited -- section 4.2 item 3 one level up, inside the provenance instrument.
+#: Wrong-tree poisoning would still surface downstream (every mutant survives), but a
+#: coverage-WEAKENING edit here need not, so these are watched and fingerprinted.
+ARM_SELECTION_FILES = (Path("tests/__init__.py"), Path("tests/conftest.py"))
 
 
 @dataclass(frozen=True)
@@ -293,6 +307,39 @@ UNIVERSES: tuple[Universe, ...] = (
 )
 
 UNIVERSES_BY_NAME = {universe.name: universe for universe in UNIVERSES}
+
+
+def _validate_publications() -> None:
+    """Every publication must be anchored to a KNOWN target digest, at import time.
+
+    Comparability is decided by ``digest.startswith(publication.target_sha256)``, and
+    ``"".startswith`` is vacuously true -- an empty or typo'd prefix would make a pair
+    comparable on EVERY file, which is the same class of defect as the invented pairs
+    this provenance layer exists to stop. So the anchor is checked here rather than
+    trusted: >= 8 lower-case hex characters, and a key of ``KNOWN_TARGET_DIGESTS``.
+    """
+
+    def refuse(message: str) -> None:
+        # Exit 2, like every other refusal: 0 = measured and matching, 1 = MISMATCH,
+        # 2 = refused or misconfigured. A bare AssertionError would surface as 1 and
+        # read to a caller as "the sweep disagreed with the record".
+        print(f"ERROR: publication table is invalid -- {message}", file=sys.stderr)
+        raise SystemExit(2)
+
+    for universe in UNIVERSES:
+        for publication in universe.publications:
+            anchor = publication.target_sha256
+            where = f"{universe.name} / #{publication.pr or '?'} ({publication.arm})"
+            if len(anchor) < 8 or anchor.strip(string.hexdigits) or anchor != anchor.lower():
+                refuse(f"{where}: target_sha256 {anchor!r} is not >=8 lower-case hex characters")
+            if anchor[:8] not in KNOWN_TARGET_DIGESTS:
+                refuse(f"{where}: target_sha256 {anchor!r} names a file absent from "
+                       f"KNOWN_TARGET_DIGESTS, so nothing states which file it was measured on")
+            if publication.status not in ("published", "disputed"):
+                refuse(f"{where}: unknown status {publication.status!r}")
+
+
+_validate_publications()
 
 
 # --- source surgery -----------------------------------------------------------
@@ -706,10 +753,29 @@ def criterion_fingerprint(targets: tuple[str, ...]) -> tuple[str, list[str]]:
     subject is a survivor count published without the thing that produced it.
     """
 
+    return _fingerprint(criterion_paths(targets), "kill-criterion module")
+
+
+def harness_fingerprint() -> tuple[str, list[str]]:
+    """sha256 over the ARM-SELECTION files -- what decides which tree is measured.
+
+    Kept separate from the criterion digest rather than folded into it, because
+    ``Publication.criterion_sha256`` is the per-file digest of the criterion module as
+    the record carries it, and mixing more files in would make every published pair
+    permanently uncomparable.
+    """
+
+    return _fingerprint([ROOT / path for path in ARM_SELECTION_FILES], "arm-selection file")
+
+
+def _fingerprint(paths: list[Path], what: str) -> tuple[str, list[str]]:
     digests, blob = [], b""
-    for path in criterion_paths(targets):
+    for path in paths:
         if not path.is_file():
-            raise SystemExit(f"ERROR: kill-criterion module {path} does not exist; refusing to guess")
+            print(f"ERROR: {what} {path} does not exist; refusing to guess", file=sys.stderr)
+            # Exit 2 like every other refusal in this script: a caller that tells
+            # "refused" from "mismatch" by exit code must not have to special-case one.
+            raise SystemExit(2)
         data = path.read_bytes()
         digests.append(f"{path.relative_to(ROOT)}@sha256:{sha256_bytes(data)[:16]}")
         blob += data
@@ -766,6 +832,26 @@ def _first_failure(output: str) -> str:
     return ""
 
 
+def whole_worktree_porcelain() -> str:
+    """``git status --porcelain`` over the WHOLE worktree, verbatim, for the readout.
+
+    The watched set refuses; this one merely SHOWS. An unwatched edit that changes what
+    the sweep measures can then at least be read off the artifact instead of being
+    invisible in it.
+    """
+
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(ROOT), "status", "--porcelain"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return f"UNAVAILABLE ({type(error).__name__}: {error})"
+    if completed.returncode != 0:
+        return f"UNAVAILABLE (git status exited {completed.returncode})"
+    return completed.stdout.rstrip() or "(empty -- the whole worktree is clean)"
+
+
 def worktree_state(paths: list[Path]) -> tuple[bool, str]:
     """(clean, reason). FAILS CLOSED: an unrunnable check is not a clean check.
 
@@ -793,27 +879,27 @@ def worktree_state(paths: list[Path]) -> tuple[bool, str]:
 # --- readout -------------------------------------------------------------------
 
 
-def stamp(universe: Universe, digest: str, criterion: str) -> str:
+def stamp(universe: Universe, digest: str, criterion: str, harness: str = "") -> str:
     """Every count is printed through this. That is the whole discipline."""
 
     return (
         f"[universe={universe.name} threshold=>={universe.min_elements}-element "
         f"dunder_all={'IN' if universe.include_dunder_all else 'OUT'} "
         f"dict_keys={universe.dict_key_scope} "
-        f"target@{digest[:16]} criterion@{criterion[:8]}]"
+        f"target@{digest[:16]} criterion@{criterion[:8]} harness@{harness[:8]}]"
     )
 
 
 def report_universe(
     universe: Universe, results: list[Result], digest: str, criterion: str,
-    targets: tuple[str, ...], structural_only: bool, worktree: str,
+    harness: str, targets: tuple[str, ...], structural_only: bool, worktree: str,
 ) -> dict:
     selected = [result for result in results if in_universe(result.candidate, universe)]
     deletions = len(selected)
     survivors = [r for r in selected if r.verdict == "survived"]
     wrong_cause = [r for r in selected if r.verdict.startswith("killed_wrong_cause")]
     invalid = [r for r in selected if r.verdict == "invalid"]
-    tag = stamp(universe, digest, criterion)
+    tag = stamp(universe, digest, criterion, harness)
 
     print(f"{tag} definition: {universe.definition}")
     if universe.note:
@@ -833,7 +919,7 @@ def report_universe(
         for result in invalid:
             print(f"{tag} INVALID {result.detail}")
 
-    comparable, elsewhere, verdicts = [], [], []
+    comparable, elsewhere, verdicts, statuses = [], [], [], []
     for publication in universe.publications:
         (comparable if digest.startswith(publication.target_sha256) else elsewhere).append(publication)
     for publication in elsewhere:
@@ -853,22 +939,36 @@ def report_universe(
             else (f"DIFFERENT criterion: published at {publication.criterion_sha256} "
                   f"({publication.criterion_test_defs} test defs), measured at {criterion[:8]}")
         )
+        # The criterion status is folded INTO the verdict, not printed beside it: a
+        # consumer scraping `verdict` out of the JSON would otherwise lose the one
+        # caveat that says the pair was published against a different suite.
+        # `statuses` is the machine-readable half and `verdicts` the prose half. They
+        # are separate because folding the criterion caveat into the verdict STRING made
+        # the old substring test (`"DIFFER" in verdict`) fire on "DIFFERENT criterion",
+        # so three MATCHING universes reported MISMATCH and the exit code went to 1.
+        # A status token cannot collide with prose.
         if deletions != publication.deletions:
+            statuses.append("deletions_differ")
             verdicts.append(f"DELETIONS DIFFER FROM #{publication.pr} "
-                            f"({deletions} vs {publication.deletions})")
+                            f"({deletions} vs {publication.deletions}) [{criterion_note}]")
         elif structural_only:
-            verdicts.append(f"DELETIONS MATCH #{publication.pr} (survivors not measured)")
+            statuses.append("deletions_match_survivors_unmeasured")
+            verdicts.append(f"DELETIONS MATCH #{publication.pr} (survivors not measured) "
+                            f"[{criterion_note}]")
         elif len(survivors) != publication.survivors:
+            statuses.append("survivors_differ")
             verdicts.append(f"SURVIVORS DIFFER FROM #{publication.pr} "
-                            f"({len(survivors)} vs {publication.survivors})")
+                            f"({len(survivors)} vs {publication.survivors}) [{criterion_note}]")
         else:
+            statuses.append("match")
             verdicts.append(f"MATCHES #{publication.pr} "
-                            f"({publication.deletions}/{publication.survivors})")
+                            f"({publication.deletions}/{publication.survivors}) [{criterion_note}]")
         print(f"{tag} vs #{publication.pr} {publication.arm} [{publication.label}]: "
-              f"{verdicts[-1]}; {criterion_note}")
+              f"{verdicts[-1]}")
 
     if not verdicts:
         verdict = "DERIVED -- no comparable publication at this target digest"
+        statuses.append("derived")
         print(f"{tag} {verdict}")
     else:
         verdict = "; ".join(verdicts)
@@ -882,6 +982,7 @@ def report_universe(
         "derived": universe.derived,
         "target": str(TARGET), "target_sha256": digest,
         "criterion_sha256": criterion,
+        "arm_selection_sha256": harness,
         "kill_criterion": None if structural_only else " ".join(test_command(targets)),
         "deletions": deletions,
         "survivors": None if structural_only else len(survivors),
@@ -894,7 +995,8 @@ def report_universe(
              "survivors": p.survivors, "comparable": digest.startswith(p.target_sha256)}
             for p in universe.publications
         ],
-        "verdict": verdict, "worktree": worktree,
+        "verdict": verdict, "comparison_statuses": statuses, "worktree": worktree,
+        "whole_worktree_porcelain": whole_worktree_porcelain(),
     }
 
 
@@ -918,6 +1020,7 @@ def main(argv: list[str] | None = None) -> int:
     original = target_path.read_text(encoding="utf-8")
     digest_before = sha256(target_path)
     criterion_digest, criterion_files = criterion_fingerprint(targets)
+    harness_digest, harness_files = harness_fingerprint()
 
     print(f"# {TARGET} sha256 = {digest_before}")
     known = KNOWN_TARGET_DIGESTS.get(digest_before[:8])
@@ -926,18 +1029,26 @@ def main(argv: list[str] | None = None) -> int:
     print(f"# kill criterion content sha256 = {criterion_digest}")
     for entry in criterion_files:
         print(f"#   {entry}")
+    print(f"# arm-selection (sys.path) content sha256 = {harness_digest}")
+    for entry in harness_files:
+        print(f"#   {entry}")
     print(f"# repo = {ROOT}")
     print(f"# commit = {_commit()}")
     print(f"# python = {sys.executable}")
     print(f"# kill criterion = {' '.join(test_command(targets))} "
           f"(cwd={ROOT}, PYTHONPATH={ROOT / 'src'})")
+    porcelain = whole_worktree_porcelain()
+    print("# git status --porcelain (WHOLE worktree, verbatim -- the watched set refuses, "
+          "this only shows):")
+    for line in porcelain.splitlines():
+        print(f"#   {line}")
     print()
 
     candidates = enumerate_candidates(original)
 
     if arguments.list:
         for universe in universes:
-            tag = stamp(universe, digest_before, criterion_digest)
+            tag = stamp(universe, digest_before, criterion_digest, harness_digest)
             selected = [c for c in candidates if in_universe(c, universe)]
             print(f"{tag} deletions = {len(selected)}")
             for candidate in selected:
@@ -954,11 +1065,12 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.structural_only:
         results = [Result(candidate=c, verdict="not_measured") for c in candidates]
     else:
-        watched = [TARGET, *[p.relative_to(ROOT) for p in criterion_paths(targets)]]
+        watched = [TARGET, *[p.relative_to(ROOT) for p in criterion_paths(targets)],
+                   *ARM_SELECTION_FILES]
         clean, reason = worktree_state(watched)
         if not clean:
-            print("ERROR: refusing to sweep -- the target and the kill criterion are not "
-                  f"verifiably clean: {reason}", file=sys.stderr)
+            print("ERROR: refusing to sweep -- the watched set (target, kill criterion, "
+                  f"arm-selection files) is not verifiably clean: {reason}", file=sys.stderr)
             return 2
         worktree_note = f"verified clean before the sweep: {', '.join(str(p) for p in watched)}"
         purged = purge_bytecode(ROOT)
@@ -998,14 +1110,15 @@ def main(argv: list[str] | None = None) -> int:
         print()
 
     payload = [
-        report_universe(universe, results, digest_before, criterion_digest,
+        report_universe(universe, results, digest_before, criterion_digest, harness_digest,
                         targets, arguments.structural_only, worktree_note)
         for universe in universes
     ]
     if arguments.json:
         arguments.json.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         print(f"# wrote {arguments.json}")
-    bad = [row for row in payload if "DIFFER" in row["verdict"]]
+    bad = [row for row in payload
+           if any(status.endswith("_differ") for status in row["comparison_statuses"])]
     for row in bad:
         print(f"# MISMATCH {row['universe']}: {row['verdict']}. A mismatch is a FINDING about this "
               f"file at this digest and this criterion. Do not edit the published pair to agree.")

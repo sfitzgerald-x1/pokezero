@@ -3,8 +3,9 @@
 ``EngineMctsStats.fallback_samples`` files a ``{battle_id, round, seat, reason}``
 tuple for every fallback decision, keyed by class and by reason. The battle id
 carries the seed, so -- as the ``fallback_samples`` field comment in
-``EngineMctsStats`` puts it -- *any entry here replays as a single turn*. This module is the reader half of the reader/replay-driver
-pair that the burndown goal records as not existing.
+``EngineMctsStats`` puts it -- *any entry here replays as a single turn*. This module
+is the reader half of the reader/replay-driver pair that the burndown goal records as
+not existing.
 
 It exists because the campaign has repeatedly theorised about causes it could have
 read. Four eras of addresses accumulated on disk while a burndown report spent three
@@ -306,8 +307,9 @@ def _walk_stats_blocks(node: Any) -> Iterator[Mapping[str, Any]]:
 
     Acceptance is by the PRESENCE of ``fallback_samples``, which is the structural
     marker of a cumulative scope: ``EngineMctsStats.to_dict()`` always emits its
-    ``"fallback_samples"`` entry, while every mirror and every delta omits it. Selecting on the count fields instead admitted three kinds of
-    non-scope and double-counted all of them:
+    ``"fallback_samples"`` entry, while every mirror and every delta omits it.
+    Selecting on the count fields instead admitted three kinds of non-scope and
+    double-counted all of them:
 
     * the ``engine_mcts``-level copy of ``fallback_reasons`` sitting beside its own
       ``policy_stats`` -- measured 1835 -> 3670 decisions on the four-era corpus;
