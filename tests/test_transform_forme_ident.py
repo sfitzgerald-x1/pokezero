@@ -84,6 +84,23 @@ SWITCH_DITTO = "|switch|p2a: Ditto|Ditto, L100|258/258"
 TRANSFORM_LINE = "|-transform|p2a: Ditto|p1a: Deoxys"
 
 
+def _pokedex_names(root) -> dict:
+    """`{id: (name, baseSpecies)}` parsed from `data/pokedex.ts`, the producer itself."""
+    import re
+
+    text = (root / "data" / "pokedex.ts").read_text()
+    out: dict = {}
+    for entry in re.finditer(r"^\t(\w+): \{(.*?)^\t\},", text, re.S | re.M):
+        body = entry.group(2)
+        name = re.search(r'^\t\tname: "(.*?)",', body, re.M)
+        base = re.search(r'^\t\tbaseSpecies: "(.*?)",', body, re.M)
+        if name is not None:
+            out[entry.group(1)] = (
+                name.group(1), base.group(1) if base is not None else name.group(1)
+            )
+    return out
+
+
 def _belief(*lines: str) -> PublicBattleBeliefEngine:
     return PublicBattleBeliefEngine.from_events(
         [_public_event_from_line(line) for line in lines], format_id="gen3randombattle"
@@ -331,6 +348,24 @@ class TheProtocolReallyNamesTheFormeAfterItsBaseTests(unittest.TestCase):
             "-transform no longer passes Pokemon objects (which serialize as idents)",
         )
 
+    @requires_showdown("needs a pokemon-showdown checkout to read pokedex.ts")
+    def test_the_forme_naming_law_this_bound_relies_on_holds(self) -> None:
+        """`name` is `baseSpecies`, or `baseSpecies` + "-" + a forme suffix. No exceptions.
+
+        This is the premise that lets `_resolve_transform_target_species` test a
+        hyphen BOUNDARY instead of reading the dex -- which it cannot do, because
+        `belief.py` is a declared stdlib leaf and imports nothing outside the standard
+        library. If upstream ever ships a forme whose name is not its base plus a hyphen,
+        the bound stops being equivalent to a `baseSpecies` comparison and this goes red.
+        """
+        entries = _pokedex_names(showdown_root())
+        self.assertGreater(len(entries), 1000, "pokedex.ts parse looks empty")
+        violations = [
+            (name, base) for name, base in entries.values()
+            if name != base and not name.startswith(f"{base}-")
+        ]
+        self.assertEqual(violations, [], "a species name is not its baseSpecies plus a hyphen")
+
     @requires_showdown("needs a pokemon-showdown checkout to load the gen3 randbat pool")
     def test_the_reachable_population_is_bounded_and_non_empty(self) -> None:
         """Anti-vacuity, and a staleness alarm on the two figures the PR reports.
@@ -338,22 +373,11 @@ class TheProtocolReallyNamesTheFormeAfterItsBaseTests(unittest.TestCase):
         Counted SEPARATELY and never summed: the predicate needs a Transform carrier on
         one side AND a base-nicknamed forme on the OTHER side of the same battle.
         """
-        import re
-
         from pokezero.randbat import load_gen3_randbat_source_cached
 
         # `baseSpecies` read from the producer, `data/pokedex.ts`, rather than guessed from
         # the spelling: the randbat pool stores `Deoxysdefense`, which no hyphen rule finds.
-        dex_text = (showdown_root() / "data" / "pokedex.ts").read_text()
-        base_of: dict[str, tuple[str, str]] = {}
-        for entry in re.finditer(r"^\t(\w+): \{(.*?)^\t\},", dex_text, re.S | re.M):
-            body = entry.group(2)
-            name = re.search(r'^\t\tname: "(.*?)",', body, re.M)
-            base = re.search(r'^\t\tbaseSpecies: "(.*?)",', body, re.M)
-            if name is not None:
-                base_of[entry.group(1)] = (
-                    name.group(1), base.group(1) if base is not None else name.group(1)
-                )
+        base_of = _pokedex_names(showdown_root())
 
         source = load_gen3_randbat_source_cached(showdown_root_str())
         variants = [v for uni in source.universes.values() for v in uni.variants]
@@ -502,6 +526,36 @@ class BeliefResolvesTheTransformTargetFormeTests(unittest.TestCase):
         # fix hoisted above the species read.
         self.assertEqual(engine._running_ability.get(ditto.key), "Pressure")
 
+    def test_a_p2_TARGET_resolves_too(self) -> None:
+        """Mirror seat: OUR Ditto is p1 and copies THEIR forme on p2.
+
+        Every other `-transform` line in this module has actor p2 / target p1, so the
+        resolver's slot lookup was only ever exercised in one direction. Transform is
+        symmetric -- our own Ditto or Mew copying their mon is the same seam -- and a
+        resolver that had hard-coded the opposing side would pass everything above.
+        """
+        engine = _belief(
+            "|switch|p1a: Ditto|Ditto, L100|258/258",
+            "|switch|p2a: Deoxys|Deoxys-Speed, L79|180/180",
+            "|-transform|p1a: Ditto|p2a: Deoxys",
+        )
+        ditto = _active(engine, "p1")
+        self.assertTrue(ditto.transformed)
+        self.assertEqual(ditto.transform_species, "Deoxys-Speed")
+        self.assertEqual(
+            dict(engine.transform_forme_corrections), {"Deoxys->Deoxys-Speed": 1}
+        )
+
+    def test_a_p2_TARGET_is_bounded_the_same_way(self) -> None:
+        """The bound is not direction-dependent either."""
+        engine = _belief(
+            "|switch|p1a: Ditto|Ditto, L100|258/258",
+            "|switch|p2a: Nidoran-F|Nidoran-F, L83|200/200",
+            "|-transform|p1a: Ditto|p2a: Nidoran-M",
+        )
+        self.assertEqual(_active(engine, "p1").transform_species, "Nidoran-M")
+        self.assertEqual(dict(engine.transform_forme_corrections), {})
+
     def test_the_overlay_payload_key_engine_search_reads_carries_the_forme(self) -> None:
         """The exact hop: ``engine_search`` builds ``transformed_slots`` from this key."""
         engine = _belief(SWITCH_DEOXYS, SWITCH_DITTO, TRANSFORM_LINE)
@@ -539,14 +593,63 @@ class ADesynchronisedBeliefIsNotTrustedTests(unittest.TestCase):
         self.assertEqual(_active(engine, "p2").transform_species, "Deoxys")
         self.assertEqual(dict(engine.transform_forme_corrections), {})
 
-    def test_a_hyphenated_base_species_is_not_mistaken_for_a_forme(self) -> None:
-        """``Ho-Oh`` is a base species, not ``Ho`` plus a forme suffix."""
+    def test_a_hyphenated_SIBLING_species_is_not_mistaken_for_a_forme(self) -> None:
+        """``Nidoran-M`` and ``Nidoran-F`` are different dex species, not formes.
+
+        THIS IS THE NON-VACUOUS HYPHEN PIN. Its predecessor used ``Ho-Oh`` on both sides,
+        where ``tracked == ident_species`` returns at the early exit and the hyphen rule is
+        never reached -- a test that pinned nothing, and a mutant of that rule survived it.
+        Here the two names DIFFER, so the bound is the only thing that can reject them.
+
+        Under the previous ``_base_species_id`` bound (split on the first hyphen) both
+        normalise to ``nidoran``, so this substituted ``Nidoran-F`` for a protocol that said
+        ``Nidoran-M`` and counted it as a forme correction. Dex #32 vs #29, different stats.
+        """
+        engine = _belief(
+            "|switch|p1a: Nidoran-F|Nidoran-F, L83|200/200",
+            SWITCH_DITTO,
+            "|-transform|p2a: Ditto|p1a: Nidoran-M",
+        )
+        self.assertNotEqual(
+            _active(engine, "p1").species, "Nidoran-M",
+            "fixture guard: the two names must DIFFER or this pins nothing",
+        )
+        self.assertEqual(_active(engine, "p2").transform_species, "Nidoran-M")
+        self.assertEqual(dict(engine.transform_forme_corrections), {})
+
+    def test_an_identical_name_returns_at_the_early_exit(self) -> None:
+        """``Ho-Oh`` on both sides. Kept, but labelled: this exercises the early exit only."""
         engine = _belief(
             "|switch|p1a: Ho-Oh|Ho-Oh, L73|300/300",
             SWITCH_DITTO,
             "|-transform|p2a: Ditto|p1a: Ho-Oh",
         )
+        self.assertEqual(_active(engine, "p1").species, _active(engine, "p2").transform_species)
         self.assertEqual(_active(engine, "p2").transform_species, "Ho-Oh")
+        self.assertEqual(dict(engine.transform_forme_corrections), {})
+
+    def test_a_forme_suffix_must_sit_on_a_hyphen_BOUNDARY(self) -> None:
+        """``Mewtwo`` starts with ``Mew`` and is not a forme of it.
+
+        This pair is chosen because it SEPARATES the two rules: `"mewtwo"` passes a bare
+        `startswith("mew")` and fails `startswith("mew-")`. An earlier version of this test
+        used Metang/Metagross, which is not a prefix pair at all -- it passed under both the
+        real bound and a boundary-dropping mutant, i.e. it passed in both worlds and pinned
+        nothing. The mutation battery caught that; the pair below kills the mutant.
+
+        Mew is not incidental: it is one of the only two Transform carriers in the gen3
+        randbat pool (6 of the 7 variants).
+        """
+        engine = _belief(
+            "|switch|p1a: Mewtwo|Mewtwo, L74|250/250",
+            SWITCH_DITTO,
+            "|-transform|p2a: Ditto|p1a: Mew",
+        )
+        self.assertTrue(
+            "mewtwo".startswith("mew"),
+            "fixture guard: this pair must be a real bare-prefix pair or it pins nothing",
+        )
+        self.assertEqual(_active(engine, "p2").transform_species, "Mew")
         self.assertEqual(dict(engine.transform_forme_corrections), {})
 
 

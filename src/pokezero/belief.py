@@ -1425,14 +1425,30 @@ class PublicBattleBeliefEngine:
         (`data/random-battles/gen3/teams.ts:619`), so the ident says ``Deoxys`` for a
         ``Deoxys-Defense``. The belief is built from the switch DETAILS and carries the forme.
 
-        The upgrade is DELIBERATELY NARROW: the tracked species is taken only when it is the
-        same BASE species as the ident, i.e. only where the ident could be the base-name
-        spelling of exactly that mon. That bound is what keeps the guard downstream honest.
-        A belief that disagrees with the protocol at base level is a desynchronised belief,
-        not a forme spelling, and substituting it would put a species nobody named into a
-        searched world — silently wrong, which is worse than the refusal it would remove.
-        In that case the ident is kept and ``engine_world._apply_transform`` still fails
-        closed, exactly as before this method existed.
+        The upgrade is DELIBERATELY NARROW: the tracked name must be the ident followed by a
+        HYPHEN and a forme suffix, i.e. only where the ident could be the ``baseSpecies``
+        spelling of exactly that mon. Anything else keeps the ident, and
+        ``engine_world._apply_transform`` still fails closed exactly as it did before this
+        method existed. A belief that disagrees with the protocol beyond a forme suffix is a
+        desynchronised belief, and substituting it would put a species nobody named into a
+        searched world — silently wrong, which is worse than the refusal it removes.
+
+        WHY A HYPHEN-BOUNDARY PREFIX AND NOT ``_base_species_id``. That helper splits on the
+        FIRST hyphen, which conflates ``Nidoran-M`` with ``Nidoran-F``: different dex species
+        (#32 and #29), different stats, neither a forme of the other. Under the split rule an
+        ident of ``Nidoran-M`` against a tracked ``Nidoran-F`` was substituted and counted as
+        a correction — precisely the case this docstring claims to exclude. Unreachable in
+        gen3 randbats (neither is among the 220 pool keys) but a real leak, found in review.
+        ``_base_species_id`` is left alone because ``_benched_target_belief`` depends on its
+        current behaviour; only this bound moves.
+
+        WHY THIS NEEDS NO DEX. Showdown's naming law is that a species' ``name`` is either its
+        ``baseSpecies`` or ``baseSpecies`` + ``"-"`` + a forme suffix, so the hyphen-boundary
+        test IS the ``baseSpecies`` test. Measured over ``data/pokedex.ts``: **1516 of 1516
+        entries obey it, zero violations**, pinned by
+        ``test_the_forme_naming_law_this_bound_relies_on_holds``. Reading the dex here instead
+        would break this module's declared stdlib-LEAF property — ``belief.py`` imports
+        nothing outside the standard library, on purpose.
 
         Corrections are COUNTED (``transform_forme_corrections``) rather than merely applied:
         a refusal that stops firing tells you nothing about whether the path that replaced it
@@ -1444,7 +1460,7 @@ class PublicBattleBeliefEngine:
         tracked = target_belief.species
         if not tracked or tracked == ident_species:
             return ident_species
-        if _base_species_id(tracked) != _base_species_id(ident_species):
+        if not tracked.strip().lower().startswith(f"{ident_species.strip().lower()}-"):
             return ident_species
         self._transform_forme_corrections[f"{ident_species}->{tracked}"] = (
             self._transform_forme_corrections.get(f"{ident_species}->{tracked}", 0) + 1
