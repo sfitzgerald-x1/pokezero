@@ -519,9 +519,20 @@ class TransformerPolicyConfig:
         payload_schema = _str_field(
             payload, "observation_schema_version", UNVERSIONED_OBSERVATION_SCHEMA
         )
-        default_spec = REPLAY_OBSERVATION_SPECS_BY_SCHEMA.get(
-            payload_schema, DEFAULT_REPLAY_OBSERVATION_SPEC
-        )
+        # Fail closed, do NOT fall back to the process default. This `.get` default was
+        # unreachable -- `SUPPORTED_OBSERVATION_SCHEMA_VERSIONS` and the spec table have equal
+        # key sets, and `__post_init__` refuses an unsupported schema before widths are read --
+        # so it never fired. It is removed rather than kept "just in case" because a silent
+        # fall back to the global default is the exact defect class this migration exists to
+        # kill: it is how a payload stamped one schema quietly acquired another's widths.
+        try:
+            default_spec = REPLAY_OBSERVATION_SPECS_BY_SCHEMA[payload_schema]
+        except KeyError:
+            raise ValueError(
+                f"no replay observation spec for payload schema {payload_schema!r}; "
+                f"supported: {', '.join(REPLAY_OBSERVATION_SPECS_BY_SCHEMA)}. A payload naming "
+                "an unknown schema must fail, not inherit the build's current default."
+            ) from None
         return cls(
             policy_id=_str_field(payload, "policy_id", "entity-transformer"),
             window_size=_int_field(payload, "window_size", 1),

@@ -9,7 +9,7 @@ from typing import Any, Mapping, Sequence
 
 from .collection import RolloutRecord, write_rollout_record
 from .env import TerminalState
-from .observation import ObservationSpec, PokeZeroObservationV0
+from .observation import OBSERVATION_SCHEMA_VERSION_V2_2, ObservationSpec, PokeZeroObservationV0
 from .policy import Policy, PolicyDecision, ScriptedTeacherPolicy
 from .trajectory import BattleTrajectory, TrajectoryStep
 
@@ -550,7 +550,15 @@ def _run_scenario(policy: Policy, scenario: TeacherScenario, *, rng_seed: int) -
 
 
 def _observation(mask: tuple[bool, ...], *, metadata: Mapping[str, Any]) -> PokeZeroObservationV0:
-    spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1)
+    # Name v2.2: a hand-built ObservationSpec computes `token_count` from the v2-FAMILY module
+    # constants, so this synthetic observation is 151 tokens whatever `schema_version` says.
+    # Left implicit, it stamped whichever schema held the default slot onto a v2.2-shaped
+    # payload -- coherent while the default was v2.2, incoherent the moment it moved.
+    spec = ObservationSpec(
+        categorical_feature_count=1,
+        numeric_feature_count=1,
+        schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+    )
     return PokeZeroObservationV0(
         categorical_ids=tuple((0,) for _ in range(spec.token_count)),
         numeric_features=tuple((0.0,) for _ in range(spec.token_count)),

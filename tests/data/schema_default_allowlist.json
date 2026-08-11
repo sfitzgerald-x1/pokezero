@@ -102,12 +102,6 @@
     "owner": "TransformerPolicyConfig"
   },
   {
-    "file": "src/pokezero/neural_policy.py",
-    "line": 523,
-    "kind": "default-spec",
-    "owner": "TransformerPolicyConfig"
-  },
-  {
     "file": "src/pokezero/online_client.py",
     "line": 99,
     "kind": "default-spec",
@@ -130,12 +124,6 @@
     "line": 4280,
     "kind": "default-spec",
     "owner": "observation_from_player_state"
-  },
-  {
-    "file": "src/pokezero/teacher_scenarios.py",
-    "line": 553,
-    "kind": "implicit-spec",
-    "owner": "_observation"
   },
   {
     "file": "tests/test_batch_replay.py",
