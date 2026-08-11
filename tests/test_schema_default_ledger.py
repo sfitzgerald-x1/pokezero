@@ -20,7 +20,9 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-ALLOWLIST = REPO / "corpus" / "schema_default_allowlist.json"
+# tests/data, not corpus/: corpus/ is gitignored, so an allowlist there is invisible to
+# everyone else and the gate silently cannot run. Caught by `git add` refusing the path.
+ALLOWLIST = REPO / "tests" / "data" / "schema_default_allowlist.json"
 LEDGER = REPO / "scripts" / "schema_default_ledger.py"
 
 
@@ -62,7 +64,7 @@ class SchemaDefaultLedgerTest(unittest.TestCase):
             "  - a specific version  -> OBSERVATION_SCHEMA_VERSION_V2_2 (etc.)\n"
             "  - a schema property   -> schema_with(transition_region=True)\n"
             "If this site is a genuine default reader, add it to "
-            "corpus/schema_default_allowlist.json WITH a justification in the PR body; there "
+            "tests/data/schema_default_allowlist.json WITH a justification in the PR body; there "
             "are only five, and each is load-bearing.",
         )
 
@@ -91,7 +93,7 @@ class SchemaDefaultLedgerTest(unittest.TestCase):
             len(json.loads(ALLOWLIST.read_text())),
             "the derived site count and the allowlist have diverged; regenerate with "
             "`python3.12 scripts/schema_default_ledger.py --json > "
-            "corpus/schema_default_allowlist.json` and justify every added row.",
+            "tests/data/schema_default_allowlist.json` and justify every added row.",
         )
 
 
