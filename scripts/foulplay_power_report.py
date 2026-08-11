@@ -299,6 +299,11 @@ def main(argv=None) -> int:
         campaign = json.loads(Path(args.campaign).read_text(encoding="utf-8"))
         by_cell = {c["cell_id"]: c for c in campaign.get("cells", [])}
 
+        # THE driver's builder, imported rather than re-implemented. The two
+        # copies drifting is a silent failure of exactly the kind the tag
+        # comment below records, and the selection knobs doubled the surface.
+        from foulplay_paired_eval import search_config_id  # noqa: PLC0415
+
         def cid_of(cell):
             # The campaign KEY (k0/k1), matching what the launcher passes as
             # --checkpoint-tag. Deriving it from the checkpoint path instead
@@ -308,10 +313,13 @@ def main(argv=None) -> int:
             tag = cell["checkpoint"]
             if cell["arm"] == "raw":
                 return f"raw@{tag}"
-            base = f"d{cell['depth']}-s{cell['sims']}-b{cell['batch']}-w{cell['worlds']}"
-            if cell.get("opponent_priors"):
-                base += "+opp-priors"
-            return f"{base}@{tag}"
+            return search_config_id(
+                depth=cell["depth"], sims=cell["sims"],
+                batch=cell["batch"], worlds=cell["worlds"], tag=tag,
+                opponent_priors=bool(cell.get("opponent_priors")),
+                fpu_reduction=cell.get("fpu_reduction"),
+                c_puct=cell.get("c_puct"),
+            )
 
         for cell in campaign.get("cells", []):
             ref = cell.get("reads_against")

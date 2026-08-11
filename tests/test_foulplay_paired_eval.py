@@ -44,6 +44,8 @@ def args(**overrides) -> argparse.Namespace:
         batch=64,
         worlds=4,
         opponent_priors=False,
+        engine_fpu_reduction=None,
+        engine_c_puct=None,
         engine_model_path=None,
         engine_tables_path=None,
         foulplay_root=None,
@@ -92,6 +94,209 @@ class ConfigIdTest(unittest.TestCase):
             _DRIVER.config_id_for(args(arm="raw", checkpoint="/c/k0.pt")),
             _DRIVER.config_id_for(args(arm="raw", checkpoint="/c/k1.pt")),
         )
+
+
+class SelectionKnobIdentityTest(unittest.TestCase):
+    """The selection knobs must SPLIT a cell, and must split nothing else.
+
+    Two cells differing only in fpu_reduction or c_puct would otherwise carry
+    one config_id, and every downstream read is keyed on that string: the
+    merger would pool a stage-2 arm into its own control and report the pooled
+    mean as the arm's delta. Pooling produces a number, so nothing errors.
+
+    The other half is the reason the suffixes are conditional: the banked
+    depth-panel and axis-study shards were written before either knob existed,
+    and they must stay mergeable with an untuned cell rendered today.
+    """
+
+    def test_the_default_string_did_not_move(self) -> None:
+        # Byte-identical to the pre-knob id, asserted as a LITERAL rather than
+        # against a re-derivation, so a change to the builder cannot agree with
+        # itself. This is the same string as ConfigIdTest above and that is the
+        # point -- it is the compatibility claim, spelled out where it is made.
+        self.assertEqual(_DRIVER.config_id_for(args()), "d4-s1024-b64-w4@ckpt")
+
+    def test_each_knob_alone_changes_the_id(self) -> None:
+        default = _DRIVER.config_id_for(args())
+        fpu = _DRIVER.config_id_for(args(engine_fpu_reduction=0.2))
+        cpuct = _DRIVER.config_id_for(args(engine_c_puct=0.8))
+        self.assertEqual(fpu, "d4-s1024-b64-w4-fpu0.2@ckpt")
+        self.assertEqual(cpuct, "d4-s1024-b64-w4-c0.8@ckpt")
+        self.assertEqual(len({default, fpu, cpuct}), 3)
+
+    def test_the_knobs_compose_in_the_plans_order(self) -> None:
+        # The plan's deliverable names the config d{}-s{}-b{}-w{}-op{}-fpu{}-c{}.
+        self.assertEqual(
+            _DRIVER.config_id_for(
+                args(opponent_priors=True, engine_fpu_reduction=0.2, engine_c_puct=2.0)
+            ),
+            "d4-s1024-b64-w4+opp-priors-fpu0.2-c2@ckpt",
+        )
+
+    def test_two_fpu_values_do_not_pool(self) -> None:
+        # The stage-2 panel is r in {0.1, 0.2, 0.3} on one base cell, so these
+        # three ids are the only thing keeping the three arms apart.
+        ids = {_DRIVER.config_id_for(args(engine_fpu_reduction=r))
+               for r in (0.1, 0.2, 0.3)}
+        self.assertEqual(len(ids), 3, ids)
+
+    def test_fpu_zero_is_a_setting_not_an_absence(self) -> None:
+        # Some(0.0) prices an unvisited arm at the parent mean; None is the flat
+        # 0.5. A truthiness test here would merge that arm into the control.
+        self.assertEqual(
+            _DRIVER.config_id_for(args(engine_fpu_reduction=0.0)),
+            "d4-s1024-b64-w4-fpu0@ckpt",
+        )
+        self.assertNotEqual(
+            _DRIVER.config_id_for(args(engine_fpu_reduction=0.0)),
+            _DRIVER.config_id_for(args()),
+        )
+
+    def test_an_explicit_default_c_puct_lands_on_the_banked_control(self) -> None:
+        # Stage 3 reads {0.8, 1.1, 2.0} against the stage-2 winner, which was run
+        # before c_puct was a knob and so carries no suffix. A cell that spells
+        # 1.4 out must pool with it -- it IS the same search -- or the control
+        # becomes an empty cell.
+        self.assertEqual(_DRIVER.BRIDGE_DEFAULT_C_PUCT, 1.4)
+        self.assertEqual(
+            _DRIVER.config_id_for(args(engine_c_puct=1.4)),
+            _DRIVER.config_id_for(args()),
+        )
+
+    def test_the_same_value_typed_two_ways_is_one_cell(self) -> None:
+        # A campaign JSON may carry 2 or 2.0 for the same arm.
+        self.assertEqual(
+            _DRIVER.config_id_for(args(engine_c_puct=2)),
+            _DRIVER.config_id_for(args(engine_c_puct=2.0)),
+        )
+
+    def test_the_raw_arm_ignores_the_knobs(self) -> None:
+        # The raw arm runs no search, and one raw shard per checkpoint is the
+        # denominator of every tuned cell's delta. Suffixing it would strand it.
+        self.assertEqual(
+            _DRIVER.config_id_for(
+                args(arm="raw", engine_fpu_reduction=0.2, engine_c_puct=0.8)
+            ),
+            "raw@ckpt",
+        )
+
+    def test_a_namespace_predating_the_knobs_raises_rather_than_pools(self) -> None:
+        # Read directly, not through getattr: an old caller must fail loudly
+        # instead of being handed the control's id.
+        stale = args()
+        del stale.engine_fpu_reduction
+        with self.assertRaises(AttributeError):
+            _DRIVER.config_id_for(stale)
+
+    def test_the_merger_builds_the_identical_id(self) -> None:
+        """The report's campaign-side builder must agree with the driver's.
+
+        Two builders drifting does not error: depth_reference is populated with
+        ids that match no shard, `depth_rule_applied` still reports true, and
+        the non-starvation rule never fires. That is a recorded past failure of
+        this exact pair, on the checkpoint tag.
+        """
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT / "scripts"))
+        from foulplay_paired_eval import search_config_id
+
+        cell = {"checkpoint": "k1", "arm": "search", "depth": 8, "sims": 2048,
+                "batch": 64, "worlds": 1, "fpu_reduction": 0.2, "c_puct": 0.8}
+        self.assertEqual(
+            search_config_id(
+                depth=cell["depth"], sims=cell["sims"], batch=cell["batch"],
+                worlds=cell["worlds"], tag=cell["checkpoint"],
+                opponent_priors=bool(cell.get("opponent_priors")),
+                fpu_reduction=cell.get("fpu_reduction"),
+                c_puct=cell.get("c_puct"),
+            ),
+            _DRIVER.config_id_for(
+                args(checkpoint="/c/t.pt", checkpoint_tag="k1", depth=8, sims=2048,
+                     batch=64, worlds=1, engine_fpu_reduction=0.2, engine_c_puct=0.8)
+            ),
+        )
+
+
+class SelectionKnobForwardingTest(unittest.TestCase):
+    """A knob that reaches nothing is this harness's recurring defect.
+
+    So these assert the CHILD ARGV, from a real parse where possible: the
+    bridge's `--engine-fpu-reduction` / `--engine-c-puct` are the only path from
+    this driver into `EngineMctsConfig`, and an unforwarded flag produces a
+    complete, plausible shard measured at the default.
+    """
+
+    def test_both_knobs_reach_the_child_when_set(self) -> None:
+        argv = _DRIVER.bridge_argv(
+            args(engine_fpu_reduction=0.2, engine_c_puct=0.8), seat="p1"
+        )
+        self.assertEqual(argv[argv.index("--engine-fpu-reduction") + 1], "0.2")
+        self.assertEqual(argv[argv.index("--engine-c-puct") + 1], "0.8")
+
+    def test_unset_knobs_leave_the_child_argv_unchanged(self) -> None:
+        # The compatibility claim at the argv level: an untuned cell must hand
+        # the bridge exactly what it handed it before the knobs existed, so it
+        # inherits the crate's flat 0.5 and c_puct 1.4.
+        argv = _DRIVER.bridge_argv(args(), seat="p1")
+        self.assertNotIn("--engine-fpu-reduction", argv)
+        self.assertNotIn("--engine-c-puct", argv)
+
+    def test_fpu_zero_is_forwarded(self) -> None:
+        argv = _DRIVER.bridge_argv(args(engine_fpu_reduction=0.0), seat="p1")
+        self.assertEqual(argv[argv.index("--engine-fpu-reduction") + 1], "0.0")
+
+    def test_the_raw_arm_carries_neither(self) -> None:
+        argv = _DRIVER.bridge_argv(
+            args(arm="raw", engine_fpu_reduction=0.2, engine_c_puct=0.8), seat="p1"
+        )
+        self.assertNotIn("--engine-fpu-reduction", argv)
+        self.assertNotIn("--engine-c-puct", argv)
+
+    def test_the_real_cli_yields_the_dests_bridge_argv_reads(self) -> None:
+        # CLI -> Namespace -> child argv, on one real parse. Every other test
+        # here hand-builds a Namespace, so a renamed add_argument would leave
+        # the suite green while a real shard died inside bridge_argv.
+        ns = _DRIVER.build_parser().parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+            "--arm", "search", "--seed-start", "1", "--pairs", "2",
+            "--out", "/tmp/shard.json",
+            "--engine-fpu-reduction", "0.3", "--engine-c-puct", "1.1",
+        ])
+        self.assertEqual(ns.engine_fpu_reduction, 0.3)
+        self.assertEqual(ns.engine_c_puct, 1.1)
+        argv = _DRIVER.bridge_argv(ns, seat="p2")
+        self.assertEqual(argv[argv.index("--engine-fpu-reduction") + 1], "0.3")
+        self.assertEqual(argv[argv.index("--engine-c-puct") + 1], "1.1")
+        self.assertEqual(_DRIVER.config_id_for(ns), "d4-s1024-b64-w4-fpu0.3-c1.1@ckpt")
+
+    def test_the_cli_defaults_are_both_none(self) -> None:
+        ns = _DRIVER.build_parser().parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+            "--arm", "search", "--seed-start", "1", "--pairs", "2",
+            "--out", "/tmp/shard.json",
+        ])
+        self.assertIsNone(ns.engine_fpu_reduction)
+        self.assertIsNone(ns.engine_c_puct)
+
+    def test_the_bridge_declares_both_flags(self) -> None:
+        """The far end of the chain, asserted against the bridge's real parser.
+
+        Without this the driver could emit a flag no bridge accepts, and the
+        failure would be a dead shard at game 0 rather than a wrong number --
+        but it would be a dead shard per cell, discovered on the cluster.
+        """
+        from pokezero.foulplay_bridge import build_arg_parser
+
+        dests = {a.dest for a in build_arg_parser()._actions}
+        self.assertIn("engine_fpu_reduction", dests)
+        self.assertIn("engine_c_puct", dests)
+        parsed = build_arg_parser().parse_args([
+            "--checkpoint", "/tmp/c.pt",
+            "--engine-fpu-reduction", "0.2", "--engine-c-puct", "0.8",
+        ])
+        self.assertEqual(parsed.engine_fpu_reduction, 0.2)
+        self.assertEqual(parsed.engine_c_puct, 0.8)
 
 
 class FoulplayPathTest(unittest.TestCase):

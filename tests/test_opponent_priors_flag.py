@@ -92,7 +92,8 @@ class DefaultsAreOffTest(unittest.TestCase):
         spec.loader.exec_module(driver)
         base = dict(
             arm="search", depth=4, sims=1024, batch=64, worlds=4,
-            opponent_priors=False, checkpoint="/c/k0.pt",
+            opponent_priors=False, engine_fpu_reduction=None, engine_c_puct=None,
+            checkpoint="/c/k0.pt",
         )
         self.assertEqual(
             driver.config_id_for(argparse.Namespace(**base)), "d4-s1024-b64-w4@k0"

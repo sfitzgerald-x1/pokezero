@@ -1502,6 +1502,103 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(policy.start_override_samples_per_scenario, 3)
         self.assertEqual(policy.max_opponent_action_scenarios, 1)
 
+    def test_build_policy_hands_the_selection_knobs_to_the_search_config(self) -> None:
+        """The last bridge-side link of the selection-tuning chain.
+
+        `engine_c_puct` and `engine_fpu_reduction` are inert unless this
+        construction copies them onto `EngineMctsConfig`, which is the object
+        `native_search_args` reads (c_puct at positional slot 8, fpu behind the
+        widening cascade). A dropped assignment here does not fail: the shard
+        completes, at the default, under a config_id that claims otherwise.
+        """
+        import pokezero.engine_search as engine_search
+
+        captured = {}
+
+        class FakeEnginePolicy:
+            def __init__(self, *, config=None, policy_id=None, **_: object) -> None:
+                captured["config"] = config
+                self.policy_id = policy_id
+
+        fake_result = type(
+            "FakeTrainingResult",
+            (),
+            {"model_config": type("FakeModelConfig", (), {"policy_id": "fake-base"})()},
+        )()
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            policy_mode="engine-mcts",
+            engine_model_path=Path("/art/model_ts.pt"),
+            engine_tables_path=Path("/art/encoder_tables.json"),
+            engine_c_puct=0.8,
+            engine_fpu_reduction=0.2,
+        )
+
+        with patch.object(engine_search, "EngineMctsPolicy", FakeEnginePolicy), patch(
+            "pokezero.foulplay_bridge.load_showdown_dex_cached", return_value=object()
+        ), patch(
+            "pokezero.foulplay_bridge.load_gen3_randbat_source_cached",
+            return_value=object(),
+        ):
+            _build_policy(
+                config=config,
+                model=object(),
+                result=fake_result,
+                value_model=object(),
+                value_result=fake_result,
+                env_config=object(),
+                rollout_config=object(),
+                policy_id="fake-base",
+            )
+
+        self.assertEqual(captured["config"].c_puct, 0.8)
+        self.assertEqual(captured["config"].fpu_reduction, 0.2)
+
+    def test_build_policy_leaves_the_selection_knobs_at_their_recorded_defaults(self) -> None:
+        # The other half: an untuned cell must reach the crate as the search
+        # every banked result was produced under -- flat 0.5 FPU, c_puct 1.4.
+        import pokezero.engine_search as engine_search
+
+        captured = {}
+
+        class FakeEnginePolicy:
+            def __init__(self, *, config=None, **_: object) -> None:
+                captured["config"] = config
+
+        fake_result = type(
+            "FakeTrainingResult",
+            (),
+            {"model_config": type("FakeModelConfig", (), {"policy_id": "fake-base"})()},
+        )()
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            policy_mode="engine-mcts",
+            engine_model_path=Path("/art/model_ts.pt"),
+            engine_tables_path=Path("/art/encoder_tables.json"),
+        )
+
+        with patch.object(engine_search, "EngineMctsPolicy", FakeEnginePolicy), patch(
+            "pokezero.foulplay_bridge.load_showdown_dex_cached", return_value=object()
+        ), patch(
+            "pokezero.foulplay_bridge.load_gen3_randbat_source_cached",
+            return_value=object(),
+        ):
+            _build_policy(
+                config=config,
+                model=object(),
+                result=fake_result,
+                value_model=object(),
+                value_result=fake_result,
+                env_config=object(),
+                rollout_config=object(),
+                policy_id="fake-base",
+            )
+
+        self.assertEqual(captured["config"].c_puct, 1.4)
+        self.assertIsNone(captured["config"].fpu_reduction)
+
     def test_foulplay_process_command_seeds_python_random(self) -> None:
         config = ControlledFoulPlayConfig(
             checkpoint=Path("checkpoint.pt"),

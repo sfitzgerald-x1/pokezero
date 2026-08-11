@@ -59,6 +59,13 @@ SCHEMA_VERSION = "pokezero.foulplay-paired-shard.v1"
 # delta is measuring the opponent instead of the search config.
 FOULPLAY_SEARCH_TIME_MS = 1000
 
+# The bridge's own --engine-c-puct default, mirrored so config_id can normalise
+# an explicitly-passed 1.4 back to the unsuffixed string. Stage 3 reads its
+# arms against a BANKED control -- the stage-2 winner, run before c_puct was a
+# knob at all -- so a cell that names the default value must land on that
+# control's id rather than on an id of its own with no games behind it.
+BRIDGE_DEFAULT_C_PUCT = 1.4
+
 # The full FoulPlay-family thread pin. Unpinned BLAS in a CPU-capped pod is a
 # ~10x thrash, and it lands on the FoulPlay side, which silently weakens the
 # opponent. Mirrors foundation/foulplay-k8s-probe.sh.
@@ -95,6 +102,54 @@ def checkpoint_tag(checkpoint: str, explicit: str | None = None) -> str:
     return stem
 
 
+def _knob_label(value: float) -> str:
+    """Render a float knob into an id fragment.
+
+    `%g` rather than `str`, so `2` and `2.0` -- the same search, typed two ways
+    in a campaign JSON -- cannot split one cell into two ids.
+    """
+    return f"{value:g}"
+
+
+def search_config_id(
+    *,
+    depth: int,
+    sims: int,
+    batch: int,
+    worlds: int,
+    tag: str,
+    opponent_priors: bool = False,
+    fpu_reduction: float | None = None,
+    c_puct: float | None = None,
+) -> str:
+    """The search-arm cell identity, over primitives rather than a Namespace.
+
+    Shared with ``foulplay_power_report.cid_of``, which builds the same id from
+    a campaign cell dict. Two builders drifting apart is not a loud failure: the
+    report's depth_reference simply matches no shard, `depth_rule_applied`
+    reports true, and the non-starvation rule silently never fires. That already
+    happened once on the checkpoint tag.
+    """
+    base = f"d{depth}-s{sims}-b{batch}-w{worlds}"
+    # Each of these changes search SEMANTICS, so each is part of the cell
+    # identity: two cells differing only by one of them must not merge, or an
+    # experimental arm is pooled into its own control.
+    #
+    # Each is also omitted at its default, so a cell that varies none of them
+    # keeps byte-for-byte the id it had before these knobs existed -- the banked
+    # depth/axis shards stay mergeable across this change rather than becoming
+    # a second, empty cell.
+    if opponent_priors:
+        base = f"{base}+opp-priors"
+    if fpu_reduction is not None:
+        # `is not None`, never truthiness: `Some(0.0)` prices an unvisited arm
+        # at the parent mean, which is NOT the legacy flat 0.5 that `None` is.
+        base = f"{base}-fpu{_knob_label(fpu_reduction)}"
+    if c_puct is not None and float(c_puct) != BRIDGE_DEFAULT_C_PUCT:
+        base = f"{base}-c{_knob_label(c_puct)}"
+    return f"{base}@{tag}"
+
+
 def config_id_for(args: argparse.Namespace) -> str:
     """The cell identity that provenance and the merger key on."""
     # EVERY arm is checkpoint-qualified. Two collisions motivate this, and both
@@ -106,12 +161,16 @@ def config_id_for(args: argparse.Namespace) -> str:
     tag = checkpoint_tag(args.checkpoint, getattr(args, "checkpoint_tag", None))
     if args.arm == "raw":
         return f"raw@{tag}"
-    base = f"d{args.depth}-s{args.sims}-b{args.batch}-w{args.worlds}"
-    # The flag changes search semantics, so it is part of the cell identity --
-    # two cells that differ only by opponent priors must not merge.
-    if args.opponent_priors:
-        base = f"{base}+opp-priors"
-    return f"{base}@{tag}"
+    # Attributes read directly, not through getattr: a caller whose Namespace
+    # predates a knob must raise here rather than be handed the default id and
+    # merged into the control.
+    return search_config_id(
+        depth=args.depth, sims=args.sims, batch=args.batch, worlds=args.worlds,
+        tag=tag,
+        opponent_priors=args.opponent_priors,
+        fpu_reduction=args.engine_fpu_reduction,
+        c_puct=args.engine_c_puct,
+    )
 
 
 def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
@@ -150,6 +209,14 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
             argv += ["--engine-tables-path", str(args.engine_tables_path)]
         if args.opponent_priors:
             argv.append("--engine-opponent-priors")
+        # Selection knobs, forwarded ONLY when set. Unset must leave the child
+        # argv byte-identical to the pre-tuning one, so an untuned cell inherits
+        # the bridge's own defaults -- the crate's flat 0.5 FPU and c_puct 1.4 --
+        # and stays comparable to every banked shard.
+        if args.engine_fpu_reduction is not None:
+            argv += ["--engine-fpu-reduction", str(args.engine_fpu_reduction)]
+        if args.engine_c_puct is not None:
+            argv += ["--engine-c-puct", str(args.engine_c_puct)]
     if args.device:
         argv += ["--device", args.device]
     return argv
@@ -288,6 +355,14 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--worlds", type=int, default=4)
     ap.add_argument("--opponent-priors", action="store_true",
                     help="engine-mcts opponent-side model priors (cells B/E)")
+    ap.add_argument("--engine-fpu-reduction", type=float, default=None,
+                    help="first-play-urgency reduction for unvisited arms in the native "
+                         "search (selection-tuning stage 2). Unset = the crate's flat "
+                         "0.5, which every recorded result was produced under.")
+    ap.add_argument("--engine-c-puct", type=float, default=None,
+                    help=f"PUCT exploration constant for the native search "
+                         f"(selection-tuning stage 3). Unset = the bridge's "
+                         f"{BRIDGE_DEFAULT_C_PUCT}, which is the banked control.")
     ap.add_argument("--checkpoint-tag", default=None,
                     help="explicit short label for this checkpoint (e.g. k0). Keeps cells "
                          "distinct when two checkpoints share a filename, which the "
@@ -432,6 +507,11 @@ def main(argv=None) -> int:
         "pairs": args.pairs,
         "foulplay_search_time_ms": FOULPLAY_SEARCH_TIME_MS,
         "opponent_priors": bool(args.opponent_priors),
+        # Recorded as well as encoded in config_id: the id normalises (an
+        # explicit c_puct 1.4 leaves no suffix), so the id alone cannot say what
+        # the child was actually told.
+        "fpu_reduction": args.engine_fpu_reduction,
+        "c_puct": args.engine_c_puct,
         # Named, never silently dropped: an incomplete seat makes the paired
         # delta unscoreable for those seeds and the merger must see it.
         "missing_seeds": missing,
