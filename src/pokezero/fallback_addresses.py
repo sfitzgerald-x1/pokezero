@@ -2,9 +2,10 @@
 
 ``EngineMctsStats.fallback_samples`` files a ``{battle_id, round, seat, reason}``
 tuple for every fallback decision, keyed by class and by reason. The battle id
-carries the seed, so -- as ``engine_search.py:663`` puts it -- *any entry here
-replays as a single turn*. This module is the reader half of the reader/replay-driver
-pair that the burndown goal records as not existing.
+carries the seed, so -- as the ``fallback_samples`` field comment in
+``EngineMctsStats`` puts it -- *any entry here replays as a single turn*. This module
+is the reader half of the reader/replay-driver pair that the burndown goal records as
+not existing.
 
 It exists because the campaign has repeatedly theorised about causes it could have
 read. Four eras of addresses accumulated on disk while a burndown report spent three
@@ -14,7 +15,7 @@ four exact addresses were already recorded.
 Design notes, each paid for by a prior defect:
 
 * **Counts here are not frequencies.** The producer caps addresses per class at
-  ``_FALLBACK_SAMPLES_PER_CLASS`` (``engine_search.py:457``), so counting addresses
+  ``_FALLBACK_SAMPLES_PER_CLASS``, so counting addresses
   ranks a class by how many raw variants it shattered into, not by how often it
   fired -- an inversion of 18x is reachable. :class:`CorpusScan` therefore also
   reads the uncapped ``world_failure_reasons`` / ``fallback_reasons`` totals, and
@@ -55,7 +56,7 @@ __all__ = [
 # Canonicalisation is ALLOWLIST-BASED, and that choice is the whole design.
 #
 # The tempting rule -- "a quoted literal is payload, strip them all" -- is wrong, and
-# `_blocker_bucket` (`engine_search.py:410-425`) already records why: for
+# `_blocker_bucket` already records why: for
 # `baton-pass` the quoted operand is the VOLATILE and is "the entire actionable
 # content", so a bare `materialization_blocker: baton-pass` gave "no way to tell
 # whether it was a Substitute worth supporting or a Bide worth refusing". The same
@@ -91,9 +92,10 @@ _LITERAL = r"(?<![A-Za-z])'[^']*'(?![A-Za-z])"
 # names who was present, not what failed.
 # The three Gen 3 trapping abilities. If one of THESE names the foe, the refusal
 # means something categorically different: the foe really does carry a trapping
-# mechanism and `engine_world.py:790-796` declined the exemption anyway -- a
-# disagreement between those lines and Showdown, reachable for `magnetpull` vs a
-# non-Steel self and `arenatrap` vs a Flying/Levitate self. Every other ability
+# mechanism and engine_world's trap check declined the exemption anyway -- its
+# `foe_ability == "magnetpull" and "steel" in types` and grounded-`arenatrap` arms
+# disagreeing with Showdown, reachable for `magnetpull` vs a non-Steel self and
+# `arenatrap` vs a Flying/Levitate self. Every other ability
 # means no trapping mechanism was sampled at all, which is a belief-sampling desync
 # in a different subsystem. Merging them would bury the rare class inside the common
 # one -- exactly what per-class address keying exists to prevent.
@@ -113,7 +115,8 @@ _BYSTANDER_POSITIONS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 # Seat/slot appears in two spellings across producers -- `{slot}:` unquoted
-# (`engine_world.py:2315`) and `side {slot!r}` quoted (`encore_move_unknown`). One
+# (`materialization_blocker`'s `f"{slot}: {', '.join(blockers)}"`, and its
+# neighbours) and `side {slot!r}` quoted (`encore_move_unknown`). One
 # family therefore split by seat and the other did not, partitioning the key space
 # by an f-string accident.
 #
@@ -121,7 +124,8 @@ _BYSTANDER_POSITIONS: tuple[tuple[re.Pattern[str], str], ...] = (
 # revision erased it, justified by "seat is already a field on FallbackAddress" --
 # that premise is false. `FallbackAddress.seat` is `context.player_id`, the ACTING
 # seat, whereas the slot in the key is the side of the world that failed to build,
-# and `engine_world.py:511` builds both sides on every decision. So a p1 decision
+# and `battle_spec_from_payload`'s `for slot in _PLAYER_SLOTS:` builds both sides
+# on every decision. So a p1 decision
 # routinely carries a `side 'p2'` failure. "My own side is unexpressible" and "the
 # opponent's inferred side is unexpressible" are different bugs -- the second is a
 # belief-sampling problem -- and `hc-d4.json` records 16 of each in one block.
@@ -302,23 +306,26 @@ def _walk_stats_blocks(node: Any) -> Iterator[Mapping[str, Any]]:
     and ``scripts/hc_depth_grid.py`` uses ``engine_stats``.
 
     Acceptance is by the PRESENCE of ``fallback_samples``, which is the structural
-    marker of a cumulative scope: ``EngineMctsStats.to_dict()``
-    (``engine_search.py:834-837``) always emits it, while every mirror and every
-    delta omits it. Selecting on the count fields instead admitted three kinds of
-    non-scope and double-counted all of them:
+    marker of a cumulative scope: ``EngineMctsStats.to_dict()`` always emits its
+    ``"fallback_samples"`` entry, while every mirror and every delta omits it.
+    Selecting on the count fields instead admitted three kinds of non-scope and
+    double-counted all of them:
 
     * the ``engine_mcts``-level copy of ``fallback_reasons`` sitting beside its own
       ``policy_stats`` -- measured 1835 -> 3670 decisions on the four-era corpus;
     * ``seat_block``'s lift of ``world_failure_reasons`` to ``per_seat`` level
       (``scripts/foulplay_paired_eval.py:215-247``);
-    * the PER-GAME DELTA blocks written by ``engine_search.py:2645-2654`` into the
-      same document as the cumulative totals at ``:2683-2684``. Those deltas sum
-      exactly to the cumulative, so accepting them doubles every count.
+    * the PER-GAME DELTA blocks ``engine_search.main`` appends per game -- its
+      ``games.append({... Counter(policy.stats.world_failure_reasons)
+      - world_failures_before})`` block -- into the same document as the cumulative
+      ``report`` totals. Those deltas sum exactly to the cumulative, so accepting
+      them doubles every count.
 
     Presence, not truthiness: a scope that recorded no addresses still owns its
     ``fallback_sample_addresses_dropped`` and its totals. This is the common case,
     not an edge case -- ``world_failure_reasons`` is incremented per failed world in
-    the construction loop (``engine_search.py:1096``) whether or not the decision
+    the construction loop (``EngineMctsPolicy._search``'s
+    ``while len(worlds) < self._config.worlds``) whether or not the decision
     ultimately falls back, while ``fallback_samples`` is written only in
     ``_fallback``. A healthy run with world failures and zero fallback decisions
     therefore has ``fallback_samples: {}`` and non-empty counts.

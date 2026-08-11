@@ -448,7 +448,8 @@ class TestSelfPlayWriters:
 
     def test_hc_grid_reads_deep_ko_split(self):
         # A real producer setting (`hc_depth_grid.py:107` BooleanOptionalAction,
-        # written :288, consumed `engine_search.py:1203`). Dropping it let a
+        # written :288, consumed by `_search_hp_fraction_crate`'s `puct_search_multi`
+        # call). Dropping it let a
         # `false` shard resolve `exact` and replay under the dataclass default
         # `true` -- a different search reported as the recorded one.
         document = _hc_grid_shard()

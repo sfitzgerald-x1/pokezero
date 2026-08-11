@@ -1220,8 +1220,8 @@ jobs:
       # gives: no local `unittest` or `pytest` run can see it, so a battery that shrinks
       # is red here rather than quietly green.
       #
-      # READ THIS BEFORE TRUSTING A GREEN. 16 of the 21 tests execute here; 5 SKIP.
-      # The 16 need no engine and no Showdown checkout -- `battle_spec_from_payload` is
+      # READ THIS BEFORE TRUSTING A GREEN. 18 of the 23 tests execute here; 5 SKIP.
+      # The 18 need no engine and no Showdown checkout -- `battle_spec_from_payload` is
       # pure construction over a payload literal -- and those are the behavioural pins.
       # The 5 that skip are `PoolCannotReachTheLockedMoveDivergenceTests`, which scans
       # the real gen3 set pool and `data/moves.ts` to bound at ZERO the one shape where
@@ -1236,15 +1236,22 @@ jobs:
       # The skip count is pinned EXACTLY, not forbidden: `skipped=5` and no more. A sixth
       # skip means a behavioural pin quietly acquired a Showdown dependency, which is how
       # a battery goes vacuous while still reporting OK. Per-METHOD skip decorators keep
-      # the reported count at 21 in both environments; a class-level skip would collapse
-      # to one entry and drop the count to 16, defeating the count guard.
+      # the reported count at 23 in both environments; a class-level skip would collapse
+      # to one entry and drop the count to 18, defeating the count guard.
+      #
+      # 21 -> 23 with `TheSwitchSentinelSeedsTheEnginesOwnVariantTests`, which pins the
+      # UN-encored branch's `switch:0` seeding on both seats. Nothing pinned it: renaming
+      # the `"switch"` literal at that call site sent the sentinel into the resolver,
+      # which cannot match it, so the seeding silently became `""` with nothing red. The
+      # dead no-op `if last_used_move_id == "switch": last_used_move_id = "switch"` that
+      # sat next to the latch and read like a guard is deleted in the same commit.
       - name: Encore public-lastUsedMove world-construction pins
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_world_encore_last_used -v 2>&1 \
             | tee /tmp/encorelastused.log
-          if ! grep -qE 'Ran 21 tests' /tmp/encorelastused.log; then
-            echo "::error::expected 21 tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 23 tests' /tmp/encorelastused.log; then
+            echo "::error::expected 23 tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE 'OK \(skipped=5\)' /tmp/encorelastused.log; then
