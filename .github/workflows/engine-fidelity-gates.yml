@@ -1413,8 +1413,16 @@ jobs:
           # invariant plus six debug_assert!s in tree.rs. A mass-gate workflow running
           # the crate in the one profile where its mass assertion does not exist is the
           # defect this job is named after. Found by review of #1083.
+          # --no-fail-fast IS LOAD-BEARING, and its absence was measured rather than
+          # suspected. cargo stops after the first failing TARGET, so with one failing lib
+          # test only 4 of 36 binaries ran: measured on this tree by applying a single
+          # fail-open mutant, 4 binaries with the flag absent versus 36 with it present. Every
+          # renderer pin named in the loop below lives in a target that never executed, so the
+          # step reported one failure and 32 binaries' worth of verdicts were never rendered.
+          # `grep -rn "no-fail-fast"` had no hits anywhere in the tracked tree.
           RUSTFLAGS="-C debug-assertions=yes" \
-            cargo test --release --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            cargo test --release --no-fail-fast \
+              --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
             | tee /tmp/cargo.log
           if grep -qE '^test result: FAILED' /tmp/cargo.log; then
             echo "::error::a crate suite failed"
@@ -1564,8 +1572,20 @@ jobs:
           # NO behavioural pin: all eight stayed green with it deleted, and so did this suite at
           # 459, `--test test_gen3`, the engine lib suite, test_branch_mass_reconstruction and
           # test_collapsed_arm_mass_oracle. The two added tests reach the guard's decline path.
-          if [ "${passed:-0}" -lt 461 ]; then
-            echo "::error::expected >= 461 crate tests, got ${passed:-0}"
+          #
+          # RAISED 461 -> 519. The 461 was the exact head total when it was written and was
+          # then left unraised across subsequent PRs, so by the time this change arrived the
+          # suite passed 517 and the floor would have absorbed the deletion of 56 tests --
+          # including every fixture the Sleep-Talk zero-heal guard depends on. That is the
+          # same blindness the paragraphs above describe, arriving for the fifth time, and it
+          # is why the floor is only meaningful when it EQUALS the current total.
+          #   measured on this tree: 519 summed `test result: ok` passes across 36 binaries,
+          #   `cargo test --release --no-fail-fast`, 0 failures. Identical under
+          #   `--features model` (519, and the executed test-NAME sets are equal in both
+          #   directions), which is why the model step below asserts the same number.
+          # Anyone adding a test raises this line. That is the intended cost.
+          if [ "${passed:-0}" -lt 519 ]; then
+            echo "::error::expected >= 519 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
@@ -1646,7 +1666,13 @@ jobs:
                      a_protect_blocked_sleep_talk_callee_renders_the_exact_protect_line \
                      without_the_protect_volatile_no_protect_line_is_invented \
                      a_full_hp_absorb_activation_is_never_dressed_as_protect \
-                     protect_plus_an_absorb_ability_refuses_rather_than_guessing \
+                     protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing \
+                     protect_plus_an_absorb_ability_with_no_convertible_callee_renders \
+                     the_callee_scan_covers_candidates_after_the_second_match \
+                     events::none_matched_shape_tests::the_bypassing_callee_still_refuses \
+                     events::none_matched_shape_tests::the_bypassing_producer_set_is_derived_from_every_gate \
+                     events::none_matched_shape_tests::only_an_opponent_targeted_positive_heal_can_reach_the_absorb_no_op \
+                     events::none_matched_shape_tests::no_move_in_the_table_natively_heals_the_opponent \
                      events::none_matched_shape_tests::the_protect_marker_renders_only_when_the_state_proves_it \
                      events::none_matched_shape_tests::the_protect_marker_is_defender_side_and_zero_amount_only \
                      events::none_matched_shape_tests::the_absorb_guard_covers_exactly_the_zero_heal_producers \
@@ -1698,6 +1724,77 @@ jobs:
               exit 1
             }
           done
+
+      - name: The abort channel COMPILES -- `--features model`, which no job built before
+        run: |
+          set -o pipefail
+          # WHY THIS STEP EXISTS. `tree.rs:305`'s abort gate is `allow(dead_code)` without the
+          # `model` cargo feature, so every crate step above compiles the channel THIS
+          # PR's class travels on out of the build entirely -- report 4 section 4.1, in the CI
+          # config rather than in a measurement run. `model.rs` is likewise never compiled, and
+          # the named `abort_telemetry::*` pins above are source-text assertions over
+          # `include_str!("model.rs")` precisely because of that.
+          #
+          # WHAT IT BUYS, STATED EXACTLY, because overclaiming here would be the same defect in
+          # the other direction. Measured on this tree: the executed test-NAME set is
+          # IDENTICAL with and without the feature -- 519 names both ways, `comm` empty in both
+          # directions. So this adds ZERO behavioural coverage of the abort gate; no crate test
+          # reaches it. It buys compile coverage of `model.rs` and of the gate, and it removes
+          # the `allow(dead_code)` masking. A behavioural gate on the abort channel needs the
+          # truth-differential harness, which is not a CI job.
+          #
+          # THE LIBRARY-PATH TRAP, found by running it. `build.rs` embeds an rpath for the
+          # maturin-built cdylib only, so `cargo test --features model` binaries do not get it
+          # and abort at load with SIGABRT. cargo then prints `error: test failed` and NO
+          # `test result: FAILED` line, so a step grepping only for that line would pass on a
+          # run where nothing executed. `set -o pipefail` is what actually catches it; the
+          # library path is what prevents it.
+          python -m pip install --quiet torch==2.12.1 \
+            --index-url https://download.pytorch.org/whl/cpu
+          LIBTORCH_USE_PYTORCH=1 LIBTORCH_BYPASS_VERSION_CHECK=1 \
+            LD_LIBRARY_PATH="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')" \
+            RUSTFLAGS="-C debug-assertions=yes" \
+            cargo test --release --no-fail-fast --features model \
+              --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            | tee /tmp/cargo-model.log
+          if grep -qE '^test result: FAILED' /tmp/cargo-model.log; then
+            echo "::error::a crate suite failed under --features model"
+            exit 1
+          fi
+          model_tests=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo-model.log \
+            | grep -oE '[0-9]+' | paste -sd+ - | bc)
+          if [ "${model_tests:-0}" -lt 519 ]; then
+            echo "::error::expected >= 519 crate tests under --features model, got ${model_tests:-0}"
+            exit 1
+          fi
+
+      - name: The production-read pin runs at all -- build the native module and run it
+        run: |
+          set -o pipefail
+          # `events.rs` names `tests/test_crate_protect_marker_state_reads.py` as THE pin for
+          # the three state facts the Sleep Talk zero-heal guard reads, and no CI job ran it.
+          # Adding it to a module list alone would not have been enough: the module is
+          # `skipIf(pokezero_search is None)` and no job builds the native module, so it would
+          # have SKIPPED and reported green -- an instrument that cannot report failure.
+          # So the wheel is built first, and the skip is made loud below.
+          maturin build --release --manifest-path rust/pokezero-search/Cargo.toml --out /tmp/wheels
+          python -m pip install --quiet --force-reinstall --no-deps /tmp/wheels/*.whl
+          python -c "import pokezero_search; print('native module ok')"
+          python -m unittest tests.test_crate_protect_marker_state_reads -v 2>&1 \
+            | tee /tmp/protectread.log
+          # A SKIP HERE IS A FAILURE. The module's whole value is that it exercises the
+          # production READ, which every crate unit test passes in as a literal.
+          if grep -qE 'skipped|OK \(skipped' /tmp/protectread.log; then
+            echo "::error::the production-read pin SKIPPED; the native module was not importable"
+            exit 1
+          fi
+          # EXACT, in the shape #1204's scan pairs -- a `>=` comparison is unpairable and
+          # showed up as a NEW blind spot in `test_the_guard_scan_coverage_triple_is_re_derived`
+          # the moment this step was added. That gate is the reason this line is a literal.
+          if ! grep -qE 'Ran 13 tests' /tmp/protectread.log; then
+            echo "::error::the production-read pin did not run all 13 tests"
+            exit 1
+          fi
 
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check

@@ -571,9 +571,9 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 42 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure. The workflow holds **31** lines containing the unittest
-invocation, of which **one is a comment**, so there are **30 executable** invocation sites at this
-head; the scan resolves **30** of them and leaves **none** unresolved. **This step is among the
+rather than inherited from #1205's figure. The workflow holds **32** lines containing the unittest
+invocation, of which **one is a comment**, so there are **31 executable** invocation sites at this
+head; the scan resolves **31** of them and leaves **none** unresolved. **This step is among the
 resolved ones** — the number is not restated here, because a fourth copy of it is a fourth thing to
 go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 42 from the module's AST
 and matches the guard. All three numbers are **re-derived by the pin** rather than typed.
@@ -704,7 +704,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.head_fingerprint` | bd1b99ed85cb1ccc |
+| `t1.head_fingerprint` | 1e18dcc189de6711 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
@@ -722,12 +722,12 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t3.speed_ties_order_le_10` | 20 |
 | `t3.speed_ties_perish` | 4 |
 | `t3.speed_ties_with_a_leftovers_winner` | 24 |
-| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:5686 |
+| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:5767 |
 | `t4.boundary` | 1000513/121 |
 | `t4.branch_miss_pct` | 100.00 |
 | `t4.engine_component` | itemleftovers |
 | `t4.heal_mismatch_rows_in_the_wide_census` | 2 |
-| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:5758 |
+| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:5839 |
 | `t4.leftovers_truncated_consumers` | 1 |
 | `t4.leftovers_truncated_references` | 2 |
 | `t4.observed_component` | heal |
