@@ -3021,6 +3021,19 @@ fn render_move_phase(
     //   KILLED, i.e. pinned by a fixture:
     //     `category == Status`      -- a damaging move's miss stays a miss (WRAP fixture).
     //     `accuracy < 100.0`        -- family D stays deferred (YAWN fixture).
+    //     `effectiveness > 0.0`     -- a type-immune defender keeps its bare `|move|` line
+    //                                  (DISABLE-into-Ghost fixture). ⚠ THIS WAS DECLARED
+    //                                  UNPINNABLE ON A FALSE REASON: the note said every
+    //                                  sub-100% member except LEECHSEED and DISABLE applies
+    //                                  CONFUSION, whose counter makes the tail non-empty --
+    //                                  and then argued as though the named exception did not
+    //                                  exist. DISABLE applies no CONFUSION, so the case is
+    //                                  ~20 lines of fixture. The clause "kept as the
+    //                                  deference to the type-immunity render" was false too:
+    //                                  both `|-immune|` arms below require `is_damaging` or
+    //                                  `status.is_some()`, so a volatile-only Status move
+    //                                  gets NO immune render at all. That missing line is a
+    //                                  real, separate gap, named rather than fixed here.
     //     re-adding `absorb`        -- the blocker-1 fix itself (absorb-ability fixture).
     //
     //   SURVIVED, declared here rather than counted as caught. The first four cannot be
@@ -3029,17 +3042,16 @@ fn render_move_phase(
     //     `status.is_none()`        -- NO opponent-target volatile Status move under 100%
     //                                  accuracy also carries a `status`. Zero candidates.
     //     `side_condition.is_none()`-- likewise zero.
-    //     `choice.target == Opponent` and the closure's `vs.target == Opponent` -- zero moves
-    //                                  where those two disagree, in either direction.
+    //     `choice.target == Opponent` and the closure's `vs.target == Opponent` -- exactly
+    //                                  TWO moves disagree, BURNINGBULWARK and CURSE, both
+    //                                  `choice.target = Opponent` with a `User` volatile, and
+    //                                  both at 100% accuracy -- so zero UNDER 100% ACCURACY,
+    //                                  which is the population this arm sees. An earlier
+    //                                  revision said "zero, in either direction" without the
+    //                                  qualifier; the conclusion held, the count did not.
     //     `!non_ghost_curse`        -- CURSE is 100% accuracy, so the pinned accuracy
     //                                  conjunct already excludes it; a single mutant cannot
     //                                  reach it.
-    //     `effectiveness > 0.0`     -- reachable in principle (a Normal-typed member into a
-    //                                  Ghost defender) but not cheaply pinnable: every
-    //                                  sub-100% member except LEECHSEED and DISABLE applies
-    //                                  CONFUSION, whose counter instruction makes the tail
-    //                                  non-empty so `!has_any_effect` fails first. Kept as
-    //                                  the deference to the type-immunity render.
     //     the dominance comparison  -- see the note above; swept across all nine generations
     //                                  by review, zero candidates anywhere.
     //
@@ -3065,7 +3077,50 @@ fn render_move_phase(
     //
     // Left for a change that measures its `|move|`-line and `fail`-column movement against the
     // fidelity corpus rather than riding along here. Bounded and named, not silent.
+    // LEECH SEED INTO A GRASS DEFENDER IS `|-immune|`, and this is a KNOWN-WRONG LINE THAT
+    // ROUND 2 OF THIS CHANGE WOULD OTHERWISE HAVE SHIPPED. Review found it in the core arm.
+    //
+    // Showdown gates Leech Seed on `onTryImmunity(target) { return !target.hasType('Grass') }`,
+    // which is NOT a type-effectiveness zero -- Grass-vs-Grass is 0.5 -- so `effectiveness`
+    // never defers to it and neither did this file. Measured on the engine: with a GRASS
+    // defender the move phase produces a single 100% EMPTY branch whether or not the target
+    // already carries the seed, i.e. the engine models the immunity as a no-op and rolls no
+    // accuracy at all. Before this change that branch rendered `|[miss]|`; with `volatile_fail`
+    // and no this predicate it rendered `|-fail|`; the truth is `|-immune|`. Three different
+    // `fold`/encoder columns, and the first two are both wrong.
+    //
+    // RENDERED RATHER THAN REFUSED, deliberately, and the doctrine picks this way round: fail
+    // closed applies when the value CANNOT BE KNOWN, and this one can -- the defender's types
+    // are in the state and the rule is fixed. A refusal here would abort the whole WORLD via
+    // `reject_attribution_unsafe` for a case that is decidable, which is the trade the
+    // campaign is trying to stop making.
+    //
+    // THE LINE IS CORPUS-MEASURED, in the same committed capture as the fail form:
+    // `tests/fixtures/showdown/capture/lines-battle-gen3randombattle-controlled-20260710004.log`
+    // turn 9 shows `|move|p1a: Jumpluff|Leech Seed|p2a: Cacturne` -- explicit target, no
+    // `[still]` -- followed by `|-immune|p2a: Cacturne`. Cacturne is Grass/Dark.
+    //
+    // NOT SCOPED TO THE ALREADY-SEEDED CASE, on purpose. The unseeded Grass target is the
+    // same state, the same root cause and the same wrong column, and it reached here as a
+    // `|[miss]|` through the miss inference rather than through this arm. Fixing only the half
+    // this PR happens to own is the "the class is closed means the instances we looked at are
+    // closed" defect. Reach for both halves is measured in
+    // `scripts/c157_no_effect_hit_reach.py`.
+    //
+    // Reachability of the already-seeded half specifically is not hypothetical: gen3
+    // `remove_volatile_statuses_on_switch` retains `LEECHSEED => baton_passing`, so Baton Pass
+    // can hand a live seed to a Grass receiver.
+    let leechseed_grass_immune = !has_any_effect
+        && choice.move_id == Choices::LEECHSEED
+        && {
+            let d = match defender {
+                SideReference::SideOne => &sim.state.side_one,
+                SideReference::SideTwo => &sim.state.side_two,
+            };
+            d.get_active_immutable().has_type(&PokemonType::GRASS)
+        };
     let volatile_fail = !has_any_effect
+        && !leechseed_grass_immune
         && choice.category == MoveCategory::Status
         && choice.status.is_none()
         && choice.side_condition.is_none()
@@ -3196,6 +3251,7 @@ fn render_move_phase(
     if choice.target == MoveTarget::Opponent
         && !status_fail
         && !volatile_fail
+        && !leechseed_grass_immune
         && !non_ghost_curse
         && ability_immune.is_none()
         && !deals_damage_to_defender
@@ -3331,6 +3387,13 @@ fn render_move_phase(
                     }
                 }
             }
+            return;
+        }
+        if leechseed_grass_immune && !defender_protected {
+            // Ahead of the effectiveness and ability arms because neither can see an
+            // `onTryImmunity`, and behind Protect because Showdown's Protect check runs
+            // first -- a protected Grass target shows the Protect activation, not this.
+            out.lines.push(format!("|-immune|{defender_ident}"));
             return;
         }
         if defender_protected && choice.flags.protect {

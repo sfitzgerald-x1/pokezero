@@ -3731,3 +3731,115 @@ fn a_damaging_moves_miss_is_still_a_miss_even_when_its_volatile_could_not_apply(
         "expected exactly one labelled miss branch: {branches:?}"
     );
 }
+
+/// Leech Seed into a GRASS defender is `|-immune|`, and BOTH halves of that state are
+/// asserted because they had two different wrong answers.
+///
+/// Showdown gates the move on `onTryImmunity(target) { return !target.hasType('Grass') }`,
+/// which is not a type-effectiveness zero — Grass-vs-Grass is 0.5 — so `effectiveness > 0.0`
+/// never deferred to it. The engine models the immunity as a single 100% EMPTY move phase
+/// whether or not the target already carries the seed, so before this change the unseeded
+/// half rendered `|[miss]|` through the miss inference and the seeded half rendered
+/// `|-fail|` through `volatile_fail`. Both are wrong and they land in different encoder
+/// columns; the truth is `|-immune|` with the explicit target kept.
+///
+/// Corpus-measured, in the same committed capture as the fail form:
+/// `tests/fixtures/showdown/capture/lines-battle-gen3randombattle-controlled-20260710004.log`
+/// turn 9 — `|move|p1a: Jumpluff|Leech Seed|p2a: Cacturne` then `|-immune|p2a: Cacturne`.
+///
+/// Rendered rather than refused because the value is KNOWABLE: the defender's types are in
+/// the state and the rule is fixed, so "fail closed" does not apply and a refusal would
+/// abort the whole world for a decidable case.
+#[test]
+fn leech_seed_into_a_grass_defender_is_immune_seeded_or_not() {
+    for already_seeded in [false, true] {
+        let mut state = confused_state(Choices::LEECHSEED);
+        state
+            .side_two
+            .volatile_statuses
+            .remove(&PokemonVolatileStatus::CONFUSION);
+        state.side_one.get_active().types = (PokemonType::GRASS, PokemonType::TYPELESS);
+        if already_seeded {
+            state
+                .side_one
+                .volatile_statuses
+                .insert(PokemonVolatileStatus::LEECHSEED);
+        }
+
+        let branches = generate(&mut state);
+        let mut seen = 0usize;
+        for branch in &branches {
+            let text = render(&mut state.clone(), branch);
+            if !text.contains("|move|p2a: Opponent|leechseed") {
+                continue;
+            }
+            seen += 1;
+            assert!(
+                !text.contains("|[miss]") && !text.contains("|-miss|"),
+                "seeded={already_seeded}: a Grass target is IMMUNE, not missed: {text}"
+            );
+            assert!(
+                !text.contains("|-fail|p2a: Opponent"),
+                "seeded={already_seeded}: a Grass target is IMMUNE, not a fizzled volatile -- \
+                 this is the known-wrong line review found in the core arm: {text}"
+            );
+            assert_in_order(
+                &text,
+                &["|move|p2a: Opponent|leechseed|p1a: Lead", "|-immune|p1a: Lead"],
+            );
+        }
+        assert_eq!(
+            seen, 1,
+            "seeded={already_seeded}: expected exactly one leechseed branch: {branches:?}"
+        );
+    }
+}
+
+/// `effectiveness > 0.0` is PINNED, not declared, and the declaration it replaces was wrong.
+///
+/// The note used to say every sub-100% family member except LEECHSEED and DISABLE applies
+/// CONFUSION, whose counter makes the tail non-empty — and then argued as though the named
+/// exception did not exist. DISABLE applies no CONFUSION at all, so a Ghost defender already
+/// carrying DISABLE reaches this arm with an empty tail: the shipped predicate renders a bare
+/// `|move|..|disable|..` and the mutant that drops `effectiveness > 0.0` renders
+/// `||[still]` + `|-fail|` instead.
+///
+/// It also disproves the other half of that note: there is NO type-immunity render on this
+/// path to defer to. Both `|-immune|` arms in the deterministic block require `is_damaging`
+/// or `choice.status.is_some()`, and a volatile-only Status move is neither — which is why
+/// the assertion below is that the line is BARE rather than that it is `|-immune|`. That
+/// missing line is a real, separate gap and is named rather than fixed here.
+#[test]
+fn a_type_immune_defender_keeps_its_bare_move_line_rather_than_the_fail_form() {
+    let mut state = confused_state(Choices::DISABLE);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_one.get_active().types = (PokemonType::GHOST, PokemonType::TYPELESS);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::DISABLE);
+
+    let branches = generate(&mut state);
+    let mut seen = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        if !text.contains("|move|p2a: Opponent|disable") {
+            continue;
+        }
+        seen += 1;
+        assert!(
+            text.contains("|move|p2a: Opponent|disable|p1a: Lead"),
+            "a type-immune defender keeps the explicit target: {text}"
+        );
+        assert!(
+            !text.contains("|move|p2a: Opponent|disable||[still]")
+                && !text.contains("|-fail|p2a: Opponent"),
+            "Normal-into-Ghost is type immunity, not a fizzled volatile: the fail form claims \
+             the move connected and did nothing, which is the opposite of immune: {text}"
+        );
+    }
+    assert_eq!(seen, 1, "expected exactly one disable branch: {branches:?}");
+}

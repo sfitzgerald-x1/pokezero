@@ -147,6 +147,18 @@ def family_d(move: dict) -> bool:
     )
 
 
+def family_e_grass_immune_reach(table, variants):
+    """The Leech Seed / Grass-receiver pairing, both halves of the `|-immune|` case.
+
+    Reported as a PAIRING rather than a move family: the render is wrong whenever a Leech Seed
+    user faces a Grass-typed target, and it does not matter whether the target already carries
+    the seed (that only decides WHICH wrong line was emitted before the fix). So the reach is
+    the product of two independent pool populations, and both are counted here.
+    """
+    seeders = sum(1 for _s, _v, moves in variants if any(m["move_id"] == "LEECHSEED" for m in moves))
+    return seeders
+
+
 FAMILIES = (
     ("A  status_fail (already handled)", family_a),
     ("B  volatile_fail (THE DEFECT, fixed)", family_b),
@@ -207,6 +219,42 @@ def main() -> int:
                 f"    {name:14s} acc={accuracy:5.1f}  P(hit,no-op)={hit_mass:.3f} "
                 f"P(miss)={miss_mass:.3f}  {verdict:20s} carriers={counts.get(name, 0):5d}"
             )
+
+    # E: the Leech-Seed-into-Grass immunity, which is a PAIRING and not a move family.
+    # ⚠ THE FIRST VERSION OF THIS BLOCK PRINTED A SILENT ZERO. It read `universe.types`,
+    # which does not exist on that object, so `getattr(..., None)` returned None for every
+    # species and the Grass count came out 0/1682 -- against a pool that obviously contains
+    # Cacturne and Venusaur. An absent measurement rendering as a clean zero is the exact trap
+    # this campaign keeps paying for, so the type lookup now goes through the dex and RAISES
+    # when a species does not resolve.
+    from pokezero.dex import load_showdown_dex_cached
+
+    dex = load_showdown_dex_cached(args.showdown_root)
+    seeders = family_e_grass_immune_reach(table, variants)
+    grass = 0
+    grass_species = set()
+    for species, _variant_id, _moves in variants:
+        info = dex.species_info(species)
+        if info is None or not info.types:
+            raise SystemExit(
+                f"species {species!r} does not resolve to types in the dex; refusing to "
+                "report a Grass count that silently treats it as non-Grass"
+            )
+        if any(str(t).lower() == "grass" for t in info.types):
+            grass += 1
+            grass_species.add(species)
+    if grass == 0:
+        raise SystemExit(
+            "the Grass count came out ZERO over a pool that contains Grass species; that is "
+            "an instrument failure, not a measurement"
+        )
+    print("\n=== FAMILY E  Leech Seed into a GRASS target -> |-immune| (fixed) ===")
+    print(f"  Leech Seed carriers:  {seeders}/{total} ({seeders / total:.2%})")
+    print(f"  Grass-typed variants: {grass}/{total} ({grass / total:.2%}) across "
+          f"{len(grass_species)} species")
+    print("  Both halves of the state are covered: already-seeded (was `|-fail|`) and")
+    print("  not-seeded (was `|[miss]|`). Cross-side pairing, so the two populations are")
+    print("  independent and either can be the receiver of a Baton-Passed seed.")
     return 0
 
 
