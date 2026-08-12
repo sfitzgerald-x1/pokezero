@@ -12,14 +12,21 @@
 #
 # Usage:  bash scripts/schema_rotation_drill.sh [worktree-path]
 #         DRILL_SCOPE=fast   ...  scope to the files that have ever broken + the expected set.
-#         DRILL_SHAPE=differ ...  give the synthetic schema a DIFFERENT shape from v4.
+#         DRILL_SHAPE=differ ...  EXPERIMENTAL, NOT SOUND YET. See the warning below.
 #
 # Why a shape-differing variant exists. The default synthetic schema is shape-IDENTICAL to v4 so
 # that every breakage is unambiguously a NAMING failure. The cost of that choice is that no
 # shape-dependent conflation can break under it -- and both real bugs this effort found
 # (#1227 token_count, #1228 the feature widths) were shape bugs. A drill that structurally
-# cannot reproduce its own motivating defects is not sufficient evidence on its own. Run both:
-# `differ` finds shape conflations, the default localises them to naming.
+# cannot reproduce its own motivating defects is not sufficient evidence on its own.
+#
+# STATUS: `differ` is NOT sound yet and its output must not be used as evidence. Observed on
+# first run: a test appearing in BOTH "unexpected breakages" and "expected but did not break",
+# which is impossible if the comparison were correct. Two contributing causes are known -- the
+# seven pre-existing `fallback_replay` tests change pytest bucket (FAILED -> ERROR) under a
+# shape change, and the baseline reuse key covers (SHA, scope) but NOT shape -- and there may be
+# more. Left in the tree, clearly labelled, because the GAP it addresses is real: the default
+# probe structurally cannot catch a shape conflation. Fixing the scorer is the next task.
 #
 # `fast` exists because two full suites take ~22 minutes and get killed by most runners. It is
 # for ITERATION ONLY and is NOT the stop condition: a scoped drill cannot see a NEW breakage in
@@ -214,15 +221,33 @@ EXPECTED="$REPO/tests/data/schema_drill_expected_breakages.txt"
 # it claims". Scoring only ^FAILED made a module-level import failure read as "6 pins no longer
 # pinning" rather than "nothing ran" -- the exact symptom this drill hit twice.
 for f in "$WT/DRILL.txt" "$BASE/BASE.txt"; do
-  if grep -q '^ERROR ' "$f"; then
-    echo "ABORT: $f contains collection ERROR lines -- the run did not measure the suite:"
-    grep '^ERROR ' "$f" | sed 's/^/  /' | head
-    exit 4
-  fi
   if ! grep -qE '^[0-9]+ (passed|failed)' "$f"; then
     echo "ABORT: $f has no pytest summary line -- the run did not complete."; exit 4
   fi
 done
+# ERRORs are subtracted like FAILEDs, not treated as an automatic abort. The first cut aborted
+# on ANY error and immediately fired on the pre-existing `fallback_replay` errors, which surface
+# as ERROR rather than FAILED under the fast scope -- a guard against "the run measured nothing"
+# that instead blocked every run. A NEW error (one absent from the baseline) is still fatal:
+# that is the module-level-import case, where the suite silently stops and the score would read
+# as "pins no longer pinning".
+# Normalise to the bare test id and compare against BOTH baseline errors and baseline failures.
+# A test already broken in the baseline may change failure MODE under the rotation -- the seven
+# pre-existing `fallback_replay` tests FAIL unrotated and ERROR under a shape-differing schema,
+# because the breakage moves into setUpClass. Same broken tests, different pytest bucket; not
+# something the rotation caused. Two bugs were here at once: the sed also assumed a leading
+# `/tests/` and produced "ERROR ERROR ..." for relative paths.
+_norm() { sed -E 's|^(ERROR|FAILED) +||; s|^.*/tests/|tests/|' "$1" | sort -u; }
+grep -E '^(ERROR|FAILED) ' "$BASE/BASE.txt" > "$WT/base_broken.raw" || true
+grep '^ERROR ' "$WT/DRILL.txt" > "$WT/rot_err.raw" || true
+_norm "$WT/base_broken.raw" > "$WT/base_broken.txt"
+_norm "$WT/rot_err.raw" > "$WT/rot_err.txt"
+NEW_ERR=$(comm -13 "$WT/base_broken.txt" "$WT/rot_err.txt")
+if [ -n "$NEW_ERR" ]; then
+  echo "ABORT: the rotated run has ERRORs the baseline does not -- the suite did not measure:"
+  printf '%s\n' "$NEW_ERR" | sed 's/^/  /' | head
+  exit 4
+fi
 grep '^FAILED' "$WT/DRILL.txt" | sed 's|.*/tests/||' | sort -u > "$WT/rotated.txt"
 comm -23 "$WT/rotated.txt" "$WT/baseline.txt" > "$WT/actual.txt"
 grep -vE '^\s*(#|$)' "$EXPECTED" | sort -u > "$WT/expected.txt"
