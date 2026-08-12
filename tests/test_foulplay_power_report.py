@@ -548,5 +548,66 @@ class DepthRuleTest(unittest.TestCase):
         self.assertIn("d6-s2048-b64-w4@k0", rep["ranking_eligible"])
 
 
+class ArmWitnessTest(unittest.TestCase):
+    """The merger must SAY which arm a cell was, for the two axes cell ids cannot.
+
+    `+oracle-belief` is in config_id, so its risk is the opposite one: a shard
+    written by an older driver would carry the flag in its body and NOT in its id,
+    pooling the oracle arm into its own sampled control. Override telemetry is not
+    in config_id at all by design, so the merger has to report the split or an
+    override rate read off the cell's pair count is wrong by the telemetry-off
+    share.
+    """
+
+    def _cell(self, report, cid):
+        return report["cells"][cid]
+
+    def test_the_oracle_arm_is_witnessed_and_the_sampled_twin_is_not(self) -> None:
+        scores = {(0, "p1"): 1.0, (1, "p1"): 0.0}
+        oracle = shard("d8-s1024-b64-w1+oracle-belief@k0", "search", "k0", scores)
+        oracle["oracle_belief"] = True
+        report = run([
+            oracle,
+            shard("d8-s1024-b64-w1@k0", "search", "k0", scores),
+            shard("raw@k0", "raw", "k0", scores),
+        ])
+        self.assertIs(
+            self._cell(report, "d8-s1024-b64-w1+oracle-belief@k0")["oracle_belief"],
+            True,
+        )
+        self.assertIs(
+            self._cell(report, "d8-s1024-b64-w1@k0")["oracle_belief"], False
+        )
+
+    def test_pooling_the_two_beliefs_into_one_cell_is_terminal(self) -> None:
+        # An older driver, or a hand-edited shard, is the only way to reach this.
+        # It must not merge: pooled, §4a's centerpiece figure is the average of
+        # the two arms it contrasts.
+        mixed = shard("d8-s1024-b64-w1@k0", "search", "k0", {(0, "p1"): 1.0})
+        mixed["oracle_belief"] = True
+        with self.assertRaises(SystemExit) as caught:
+            run([
+                shard("d8-s1024-b64-w1@k0", "search", "k0", {(1, "p1"): 0.0}),
+                mixed,
+                shard("raw@k0", "raw", "k0", {(0, "p1"): 0.5, (1, "p1"): 0.5}),
+            ])
+        self.assertIn("oracle-belief", str(caught.exception))
+
+    def test_the_telemetry_split_inside_one_cell_is_counted(self) -> None:
+        # Pooling here is CORRECT -- same search -- so the count is the only way a
+        # reader learns the override rate's denominator covers half the games.
+        on = shard("d8-s1024-b64-w1@k0", "search", "k0", {(0, "p1"): 1.0})
+        on["override_telemetry"] = True
+        off = shard("d8-s1024-b64-w1@k0", "search", "k0", {(1, "p1"): 0.0})
+        report = run([
+            on, off, shard("raw@k0", "raw", "k0", {(0, "p1"): 0.5, (1, "p1"): 0.5}),
+        ])
+        cell = self._cell(report, "d8-s1024-b64-w1@k0")
+        self.assertEqual(cell["override_telemetry_shards"], {"on": 1, "off": 1})
+        # And the pooling itself still happened: both seeds are in the cell.
+        self.assertEqual(cell["pairs"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
+

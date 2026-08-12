@@ -528,6 +528,19 @@ class ControlledFoulPlayConfig:
     # Default OFF -- it appends a positional to the native call, so an image that
     # predates it refuses every world rather than ignoring the flag.
     engine_override_telemetry: bool = False
+    # ORACLE BELIEF (docs/mcts_value_gap_investigation_20260811.md §4a / H5):
+    # search the TRUE hidden state instead of a sampled one. Every belief world
+    # is the true completion, injected through EngineMctsPolicy's documented
+    # `fixed_override` hook by the same machinery the truth-injection census uses
+    # (pokezero.truth_differential.TruthWorldBuilder), so the two arms differ in
+    # the BELIEF and in nothing else.
+    #
+    # This DOES change the search -- that is the point of the arm -- so unlike
+    # engine_override_telemetry it is part of the cell's identity upstream.
+    # Default OFF, and it fails the game loudly rather than falling back to a
+    # sampled world: an oracle arm that silently contains sampled decisions reads
+    # as "truth does not help", which is exactly the finding §4a exists to make.
+    engine_oracle_belief: bool = False
     device: str | None = None
     temperature: float = 1.0
     cpuct: float = 1.25
@@ -601,6 +614,16 @@ class ControlledFoulPlayConfig:
                     f"policy_mode='engine-mcts' requires {', '.join(missing)} "
                     "(export them with mcts_eval.materialize_search_artifacts)."
                 )
+        if self.engine_oracle_belief and self.policy_mode != "engine-mcts":
+            # Refused rather than ignored. The hook it injects through is
+            # EngineMctsPolicy's; under 'raw' or 'root-puct' the flag would reach
+            # nothing at all and the shard would report an oracle arm that never
+            # ran one, which is this campaign's recurring defect shape.
+            raise ValueError(
+                "engine_oracle_belief requires policy_mode='engine-mcts' "
+                f"(got {self.policy_mode!r}); it injects through "
+                "EngineMctsPolicy's fixed_override hook, which no other policy has."
+            )
         if self.opponent_journal not in OPPONENT_JOURNAL_MODES:
             raise ValueError(
                 "opponent_journal must be one of "
@@ -1572,6 +1595,11 @@ class ControlledFoulPlayBenchmarkResult:
                 # `policy_stats.search_override_unmeasured` says how much of the
                 # denominator was lost; this says whether the instrument ran.
                 "override_telemetry": self.config.engine_override_telemetry,
+                # Same standing as opponent_priors: §4a is read entirely against
+                # whether the belief was the truth or a sample, and "arm identity
+                # witnessed from shard telemetry, not job labels" is a standing
+                # rule of this campaign.
+                "oracle_belief": self.config.engine_oracle_belief,
                 # The searcher's own telemetry. `search_wall_per_searched_decision`
                 # is lifted to the top of this block because it, not
                 # policy_timing.average_elapsed_seconds, is what the 20 s/turn
@@ -2428,6 +2456,11 @@ class _ControlledBattleState:
     opponent_journal: list[OpponentJournalEntry] = field(default_factory=list)
     # Opponent decisions the recorder raised on. See the recording site.
     opponent_journal_failures: int = 0
+    # Per-battle truth-world builder for the oracle-belief arm (§4a). Cached
+    # because its packed teams are a pure function of this battle's opening
+    # requests, and rebuilding them per decision would repack 12 sets a turn for
+    # an answer that cannot change. None under every other arm.
+    oracle_truth_builder: Any | None = None
 
     def all_lines(self) -> list[str]:
         return [*self.public_lines, *self.request_lines.values()]
@@ -4349,6 +4382,15 @@ async def _handle_decision_boundary(
             ),
             public_materialization_state=public_materialization_state,
         )
+        # BEFORE the wall-clock boundary below, on purpose: the packing is this
+        # arm's instrument, not part of the search it measures, so charging it to
+        # policy_elapsed_seconds would make the oracle arm look slower than the
+        # sampled arm by the cost of the instrument. Cached per battle, so this is
+        # a dict lookup on every decision after the first.
+        if config.engine_oracle_belief:
+            _install_oracle_belief_override(
+                state, policy, pokezero_context, config=config
+            )
         # Match the local benchmark boundary: policy selection begins after the
         # observation/context are ready and ends at the returned decision.
         pokezero_choice_wall_start = time.perf_counter()
@@ -4525,6 +4567,122 @@ def _select_policy_decision(
     if callable(selector):
         return selector(context, rng=rng)
     return policy.select_action(observation, rng=rng)
+
+
+class _OpeningRequestsView:
+    """``TruthWorldBuilder``'s ``env`` duck-type, backed by the bridge's own journal.
+
+    The builder was written against ``LocalShowdownEnv._first_requests`` (seeded
+    self-play), and it reads that attribute through ``getattr`` -- so the seam is a
+    shape, not a class. The controlled bridge is not that env but it holds the
+    identical data: it drives BOTH Showdown streams to run FoulPlay at all, so
+    ``_handle_stream_event`` appends every ``|request|`` line for p1 AND p2 to
+    ``state.request_history``, ungated by any capture flag.
+
+    FIRST entry per seat, which is that seat's battle-opening request -- the same
+    thing ``LocalShowdownEnv`` keeps (it stores requests with ``setdefault``), and
+    wanted for the same reason: Showdown reorders ``side.pokemon[]`` active-first as
+    the battle runs, so a live snapshot would pack the wrong lead into slot zero,
+    and the metadata path would bake a Trace/Skill-Swap-mutated *current* ability
+    into the set. There is no team preview in gen3randombattle, so the opening
+    request is a move request and already names all six.
+
+    NOT a hidden-information leak into anything but this arm: the view is
+    constructed only when ``engine_oracle_belief`` is set, and the ordinary
+    observation/materialization boundary (``_public_materialization_state``, which
+    admits exactly one private payload -- the PokeZero seat's own request) is
+    untouched.
+    """
+
+    __slots__ = ("_first_requests",)
+
+    def __init__(self, state: _ControlledBattleState) -> None:
+        opening: dict[str, Mapping[str, Any]] = {}
+        for seat, line in state.request_history:
+            if seat in opening or not line.startswith("|request|"):
+                continue
+            payload = json.loads(line[len("|request|") :])
+            if isinstance(payload, Mapping):
+                opening[seat] = payload
+        self._first_requests = opening
+
+
+def _install_oracle_belief_override(
+    state: _ControlledBattleState,
+    policy: Policy,
+    context: PolicyContext,
+    *,
+    config: ControlledFoulPlayConfig,
+) -> None:
+    """Point every belief world at the TRUE completion for this battle (§4a / H5).
+
+    REUSED, not reimplemented: ``TruthWorldBuilder`` is the truth-injection
+    machinery the fallback-burndown census runs on, and ``fixed_override`` is the
+    hook it injects through (``truth_differential`` sets the same attribute the
+    same way). A second packer here would be a second thing to be wrong, and the
+    census's measured self-half equality -- 233/233 decisions byte-identical to
+    production's own self team -- would not transfer to it.
+
+    SET EVERY DECISION rather than once per battle. The bridge builds ONE policy
+    and reuses it for every seed, so a hook left set from the previous battle
+    would search the previous battle's teams: a confident paired delta computed
+    against the wrong hidden state, with nothing anywhere reporting an error.
+
+    RAISES rather than falling back. A sampled world here is not a degraded
+    oracle reading, it is a sampled-belief decision wearing the oracle arm's
+    config_id, and §4a is read entirely off the difference between those two arms.
+    The driver treats a non-zero exit as terminal and refuses to write a partial
+    shard, which is the correct outcome: a dead shard is recoverable, a silently
+    mixed one is not.
+
+    SCOPE of that raise, so the operational cost is not overstated: it covers only
+    the truth SOURCE -- a missing or short opening request, or a set the catalog
+    will not pack. Everything downstream is unchanged, because it has to be: if
+    `world_battle_spec` or the crate refuses the TRUE override, the decision takes
+    production's ordinary world-failure and fallback path, exactly as a sampled
+    world would. That is honest but it is also the arm's main reading hazard --
+    the true override is the SAME on every attempt, so a refusal refuses all
+    `worlds` attempts and the decision falls back to the raw policy. READ THE
+    ORACLE ARM'S `fallback_rate` AGAINST ITS SAMPLED TWIN'S BEFORE ITS WIN RATE:
+    a systematically higher one means part of the arm is not search at all. The
+    truth-injection census's rate for reference is 12 refusals in 52,140
+    decisions, measured on a self-play env rather than this one.
+    """
+
+    from .truth_differential import TruthWorldBuilder  # noqa: PLC0415 — pulls in engine_search
+
+    if not hasattr(policy, "_fixed_override"):
+        raise RuntimeError(
+            "engine_oracle_belief is set but the policy has no fixed_override hook "
+            f"({type(policy).__name__}); the oracle arm would silently be the sampled arm"
+        )
+    builder = state.oracle_truth_builder
+    if builder is None:
+        builder = TruthWorldBuilder(
+            _OpeningRequestsView(state),
+            # The catalog the packer rederives revealed sets against. Resolved the
+            # same way the engine-MCTS policy resolves its own sampler source, NOT
+            # through _resolved_belief_set_source: that one is env-gated and may be
+            # None, and a None here is an AttributeError mid-battle.
+            set_source=load_gen3_randbat_source_cached(config.showdown_root),
+        )
+        state.oracle_truth_builder = builder
+    override, failure = builder.override_for(context)
+    if override is None:
+        raise RuntimeError(
+            f"oracle-belief arm could not build the TRUE world for battle "
+            f"{state.battle_id} round {context.decision_round_index}: "
+            f"{failure or 'unknown reason'}"
+        )
+    policy._fixed_override = override  # noqa: SLF001 — the documented hook
+    # The APPLIED counter, not just the requested flag. `engine.oracle_belief` in
+    # the summary says the arm was asked for; this says the truth was installed,
+    # per decision, and it rides out in `policy_stats` beside the fallback
+    # counters -- so a reader can see `oracle_belief_decisions == decisions` (the
+    # arm ran) separately from the fallback rate (the truth survived the chain).
+    stats = getattr(policy, "stats", None)
+    if stats is not None:
+        stats.oracle_belief_decisions += 1
 
 
 def _requested_legal_action_masks_for_context(
@@ -4862,6 +5020,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
                              "override_measured_decisions) instead of leaving unmeasurable "
                              "decisions to read as agreement. Needs an image whose crate "
                              "accepts `arm_priors` (the per-arm prior column).")
+    parser.add_argument("--engine-oracle-belief", action="store_true",
+                        help="Search the TRUE hidden state instead of sampled belief worlds "
+                             "(value-gap plan §4a / H5). Every world is the true completion, "
+                             "rebuilt from BOTH seats' opening requests -- which the bridge "
+                             "already holds, since it drives both Showdown streams -- and "
+                             "injected through EngineMctsPolicy's fixed_override hook. "
+                             "engine-mcts only. Fails the game rather than falling back to a "
+                             "sampled world.")
     parser.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, mps.")
     parser.add_argument("--temperature", type=float, default=1.0, help="Checkpoint policy softmax temperature.")
     parser.add_argument("--cpuct", type=float, default=1.25, help="Root PUCT exploration constant.")
@@ -5191,6 +5357,7 @@ def _config_from_args(
         engine_opponent_priors=getattr(args, "engine_opponent_priors", False),
         engine_fpu_reduction=getattr(args, "engine_fpu_reduction", None),
         engine_override_telemetry=getattr(args, "engine_override_telemetry", False),
+        engine_oracle_belief=getattr(args, "engine_oracle_belief", False),
         device=args.device,
         temperature=args.temperature,
         cpuct=args.cpuct,

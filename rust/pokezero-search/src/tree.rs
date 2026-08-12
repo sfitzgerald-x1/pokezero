@@ -1340,6 +1340,93 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
+    // Override telemetry (`arm_priors`) — REPORTING ONLY
+    // -----------------------------------------------------------------
+
+    /// Remove every `,"prior":<number>` that `stats_to_json` inserts.
+    fn strip_prior_columns(report: &str) -> String {
+        let mut out = String::with_capacity(report.len());
+        let mut rest = report;
+        while let Some(at) = rest.find(",\"prior\":") {
+            out.push_str(&rest[..at]);
+            let tail = &rest[at..];
+            let end = tail
+                .find('}')
+                .expect("a prior column must end inside its own arm entry");
+            rest = &tail[end..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// `arm_priors` adds a column and changes NOTHING else.
+    ///
+    /// The value-gap plan's §2 override measurement is switched on per shard, and
+    /// `scripts/foulplay_paired_eval.py` deliberately keeps the flag OUT of
+    /// `config_id` on the strength of this claim: telemetry-on and telemetry-off
+    /// are one cell, so a shard that measured an override rate pools with a banked
+    /// shard that did not. If the flag perturbed selection, §2 would be measuring a
+    /// different engine than every other stage under the same cell id — a wrong
+    /// number, not an error.
+    ///
+    /// The STRUCTURAL half of the argument is visible in the signatures rather than
+    /// here: `arm_priors` is not an input to the search at all. It is threaded to
+    /// `multiply_report_json`, which takes a FINISHED [`MultiPlyOutcome`], and
+    /// [`MultiPlyConfig`] — the struct whose fields ARE the search's semantics —
+    /// has no such field, for the reason stated above `multiply_report_json`.
+    ///
+    /// The MEASURED half is this: one search, both renderings, and the on-report
+    /// with its added key removed is byte-identical to the off-report. Rendering
+    /// the SAME outcome twice is the point — it removes run-to-run variation from
+    /// the comparison entirely, so a difference could only come from the flag.
+    #[test]
+    fn arm_priors_only_adds_a_reported_column() {
+        let cfg = MultiPlyConfig {
+            max_depth: 4,
+            c_puct: 1.4,
+            deep_ko_split: true,
+            use_opponent_priors: false,
+            fpu_reduction: None,
+        };
+        let outcome = run_with_fpu(STRADDLE, 256, cfg.max_depth, 11, cfg.deep_ko_split, None);
+        let off = multiply_report_json(&outcome, 256, &cfg, 11, "hp_fraction", "", false);
+        let on = multiply_report_json(&outcome, 256, &cfg, 11, "hp_fraction", "", true);
+        // Positive control on the query: if `prior` never appeared, the strip
+        // below would trivially "prove" identity on two identical strings.
+        assert!(on.contains(",\"prior\":"), "the flag added no column: {on}");
+        assert!(!off.contains("\"prior\":"), "flag-off must add none: {off}");
+        assert_ne!(off, on);
+        assert_eq!(
+            strip_prior_columns(&on),
+            off,
+            "arm_priors changed something other than the arm-prior column"
+        );
+    }
+
+    /// The complement: a knob that DOES belong in `config_id` must be visible in
+    /// the same rendering, so the test above is a statement about `arm_priors` and
+    /// not about a report that ignores its config.
+    #[test]
+    fn fpu_reduction_by_contrast_reaches_the_report_and_the_search() {
+        let base = MultiPlyConfig {
+            max_depth: 4,
+            c_puct: 1.4,
+            deep_ko_split: true,
+            use_opponent_priors: false,
+            fpu_reduction: None,
+        };
+        let tuned = MultiPlyConfig {
+            fpu_reduction: Some(0.3),
+            ..base
+        };
+        let outcome = run_with_fpu(STRADDLE, 256, base.max_depth, 11, base.deep_ko_split, None);
+        let plain = multiply_report_json(&outcome, 256, &base, 11, "hp_fraction", "", false);
+        let with_fpu = multiply_report_json(&outcome, 256, &tuned, 11, "hp_fraction", "", false);
+        assert!(!plain.contains("fpu_reduction"));
+        assert!(with_fpu.contains("\"fpu_reduction\":0.3"));
+    }
+
+    // -----------------------------------------------------------------
     // Within-batch collision ledger
     // -----------------------------------------------------------------
 

@@ -41,7 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 import sys
 
@@ -128,7 +128,29 @@ def collect_rows(shards: list[dict]) -> tuple[dict, dict]:
         cid = shard["config_id"]
         meta.setdefault(cid, {"arm": shard["arm"], "shards": [], "per_seat": [],
                               "checkpoint": shard.get("checkpoint"),
-                              "opponent_priors": shard.get("opponent_priors", False)})
+                              "opponent_priors": shard.get("opponent_priors", False),
+                              # config_id CARRIES this one, so every shard of a
+                              # cell must agree; disagreement is asserted below.
+                              "oracle_belief": bool(shard.get("oracle_belief", False)),
+                              # config_id deliberately does NOT carry this one --
+                              # it is observational, so telemetry-on and
+                              # telemetry-off are the same search and pool into one
+                              # cell. Counted per shard rather than collapsed to a
+                              # boolean, because an override rate whose denominator
+                              # is a SUBSET of the cell's games has to be readable
+                              # as such (see search_config_id's note).
+                              "override_telemetry_shards": Counter()})
+        if bool(shard.get("oracle_belief", False)) != meta[cid]["oracle_belief"]:
+            # Not a warning. The oracle and sampled arms are the two halves of
+            # §4a's split; pooled, the centerpiece figure is their average.
+            raise SystemExit(
+                f"cell {cid} pools oracle-belief and sampled-belief shards "
+                f"({shard['_path']}). config_id must carry +oracle-belief -- an "
+                "older driver wrote one of these shards."
+            )
+        meta[cid]["override_telemetry_shards"][
+            "on" if shard.get("override_telemetry") else "off"
+        ] += 1
         meta[cid]["shards"].append(shard["_path"])
         meta[cid]["per_seat"].append(shard.get("per_seat", {}))
         for row in shard.get("rows", []):
@@ -319,6 +341,7 @@ def main(argv=None) -> int:
                 opponent_priors=bool(cell.get("opponent_priors")),
                 fpu_reduction=cell.get("fpu_reduction"),
                 c_puct=cell.get("c_puct"),
+                oracle_belief=bool(cell.get("oracle_belief")),
             )
 
         for cell in campaign.get("cells", []):
@@ -351,6 +374,12 @@ def main(argv=None) -> int:
         scored["latency"] = latency_of(meta[cid])
         scored["health"] = health_of(meta[cid])
         scored["opponent_priors"] = meta[cid]["opponent_priors"]
+        # Arm identity witnessed from the shards, not from the cell id alone --
+        # and for the telemetry the cell id says nothing at all.
+        scored["oracle_belief"] = meta[cid]["oracle_belief"]
+        scored["override_telemetry_shards"] = dict(
+            meta[cid]["override_telemetry_shards"]
+        )
         if scored.get("pairs", 0) < args.min_pairs:
             scored["min_pairs_shortfall"] = (
                 f"{scored.get('pairs', 0)} pairs < the required minimum of {args.min_pairs}"

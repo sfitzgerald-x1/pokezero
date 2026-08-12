@@ -46,6 +46,8 @@ def args(**overrides) -> argparse.Namespace:
         opponent_priors=False,
         engine_fpu_reduction=None,
         engine_c_puct=None,
+        engine_override_telemetry=False,
+        engine_oracle_belief=False,
         engine_model_path=None,
         engine_tables_path=None,
         foulplay_root=None,
@@ -297,6 +299,245 @@ class SelectionKnobForwardingTest(unittest.TestCase):
         ])
         self.assertEqual(parsed.engine_fpu_reduction, 0.2)
         self.assertEqual(parsed.engine_c_puct, 0.8)
+
+
+class OverrideTelemetryPassthroughTest(unittest.TestCase):
+    """The value-gap plan's §2 measurement cannot be switched on from a shard.
+
+    That was the state of this driver at the commit that ADDED the telemetry: the
+    bridge grew `--engine-override-telemetry` and the config field defaulting to
+    False, and nothing here could reach it -- so a campaign shard would have
+    emitted no telemetry at all and §2 would have come back empty, after the
+    GPU-hours were spent. Same shape as the stage-2 death on
+    `--engine-fpu-reduction`, one layer up.
+
+    The flag is OBSERVATIONAL, so it is pinned in two directions at once: it must
+    REACH the bridge, and it must NOT reach config_id.
+    """
+
+    def test_the_flag_reaches_the_child_when_set(self) -> None:
+        self.assertIn(
+            "--engine-override-telemetry",
+            _DRIVER.bridge_argv(args(engine_override_telemetry=True), seat="p1"),
+        )
+
+    def test_unset_leaves_the_child_argv_unchanged(self) -> None:
+        self.assertNotIn(
+            "--engine-override-telemetry", _DRIVER.bridge_argv(args(), seat="p1")
+        )
+
+    def test_the_raw_arm_carries_it_not(self) -> None:
+        # The raw arm runs no search, so there is no override to measure.
+        self.assertNotIn(
+            "--engine-override-telemetry",
+            _DRIVER.bridge_argv(
+                args(arm="raw", engine_override_telemetry=True), seat="p1"
+            ),
+        )
+
+    def test_the_real_cli_parses_it_and_forwards_it(self) -> None:
+        # CLI -> Namespace -> child argv on one real parse, for the same reason
+        # the selection knobs get this test: a hand-built Namespace cannot see a
+        # renamed add_argument.
+        ns = _DRIVER.build_parser().parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+            "--arm", "search", "--seed-start", "1", "--pairs", "2",
+            "--out", "/tmp/shard.json", "--engine-override-telemetry",
+        ])
+        self.assertTrue(ns.engine_override_telemetry)
+        self.assertIn(
+            "--engine-override-telemetry", _DRIVER.bridge_argv(ns, seat="p2")
+        )
+
+    def test_the_cli_default_is_off(self) -> None:
+        ns = _DRIVER.build_parser().parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+            "--arm", "search", "--seed-start", "1", "--pairs", "2",
+            "--out", "/tmp/shard.json",
+        ])
+        self.assertFalse(ns.engine_override_telemetry)
+
+    def test_the_bridge_declares_and_parses_the_flag(self) -> None:
+        """The far end of the chain. A flag no bridge accepts is a dead shard."""
+        from pokezero.foulplay_bridge import build_arg_parser
+
+        self.assertIn(
+            "engine_override_telemetry", {a.dest for a in build_arg_parser()._actions}
+        )
+        parsed = build_arg_parser().parse_args(
+            ["--checkpoint", "/tmp/c.pt", "--engine-override-telemetry"]
+        )
+        self.assertTrue(parsed.engine_override_telemetry)
+        self.assertFalse(
+            build_arg_parser().parse_args(
+                ["--checkpoint", "/tmp/c.pt"]
+            ).engine_override_telemetry
+        )
+
+    def test_the_bridge_config_carries_it_into_the_engine_config(self) -> None:
+        # The last hop: bridge CLI -> ControlledFoulPlayConfig ->
+        # EngineMctsConfig.override_telemetry. Asserted on the FIELD NAMES rather
+        # than by running a search, which needs a checkpoint.
+        import dataclasses
+
+        from pokezero.engine_search import EngineMctsConfig
+        from pokezero.foulplay_bridge import ControlledFoulPlayConfig
+
+        field = {f.name: f for f in dataclasses.fields(ControlledFoulPlayConfig)}[
+            "engine_override_telemetry"
+        ]
+        self.assertIs(field.default, False)
+        self.assertIs(EngineMctsConfig().override_telemetry, False)
+
+    def test_the_flag_is_deliberately_absent_from_config_id(self) -> None:
+        """Observational, so telemetry-on and telemetry-off are ONE cell.
+
+        Plan §1/H1 reads the production override rate by turning the instrument on
+        in an axis-study cell, and that read needs those shards to pool with the
+        banked ones. The behavioural claim underneath this is pinned in
+        tests/test_opponent_priors_flag.py::OverrideTelemetryIsObservationalTest
+        and rust/pokezero-search/src/tree.rs.
+        """
+        self.assertEqual(
+            _DRIVER.config_id_for(args(engine_override_telemetry=True)),
+            _DRIVER.config_id_for(args()),
+        )
+        self.assertEqual(
+            _DRIVER.config_id_for(args(engine_override_telemetry=True)),
+            "d4-s1024-b64-w4@ckpt",
+        )
+        # Positive control on the same builder: a knob that DOES change the
+        # search still splits the cell, so the equality above is a statement
+        # about this flag and not about a builder that ignores everything.
+        self.assertNotEqual(
+            _DRIVER.config_id_for(args(engine_fpu_reduction=0.2)),
+            _DRIVER.config_id_for(args()),
+        )
+
+    def test_the_shard_body_witnesses_the_instrument(self) -> None:
+        # Since config_id omits it, the report body is the ONLY place a reader can
+        # learn whether the rate in this shard has a denominator. Asserted against
+        # the module source, because building a real report needs two bridge runs.
+        source = (
+            Path(__file__).resolve().parents[1] / "scripts" / "foulplay_paired_eval.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"override_telemetry": bool(args.engine_override_telemetry)', source)
+
+
+class OracleBeliefPassthroughTest(unittest.TestCase):
+    """§4a's arm: search the TRUE hidden state, same config and seeds.
+
+    Unlike the telemetry flag this one CHANGES the search -- it replaces every
+    sampled belief world with the true completion -- so it must split the cell.
+    Its sampled twin is the same cell with the flag off, which is why the
+    fragment has to exist: pooled, the plan's centerpiece figure would be the
+    average of the two arms it is trying to contrast.
+    """
+
+    def test_the_flag_splits_the_cell(self) -> None:
+        self.assertEqual(
+            _DRIVER.config_id_for(args(engine_oracle_belief=True)),
+            "d4-s1024-b64-w4+oracle-belief@ckpt",
+        )
+        self.assertNotEqual(
+            _DRIVER.config_id_for(args(engine_oracle_belief=True)),
+            _DRIVER.config_id_for(args()),
+        )
+
+    def test_off_leaves_every_banked_id_byte_identical(self) -> None:
+        # The compatibility half, same as every knob before it.
+        self.assertEqual(_DRIVER.config_id_for(args()), "d4-s1024-b64-w4@ckpt")
+        self.assertEqual(
+            _DRIVER.config_id_for(
+                args(opponent_priors=True, engine_fpu_reduction=0.3, engine_c_puct=0.8)
+            ),
+            "d4-s1024-b64-w4+opp-priors-fpu0.3-c0.8@ckpt",
+        )
+
+    def test_it_composes_with_the_selection_knobs(self) -> None:
+        self.assertEqual(
+            _DRIVER.config_id_for(
+                args(opponent_priors=True, engine_oracle_belief=True,
+                     engine_fpu_reduction=0.3, engine_c_puct=0.8)
+            ),
+            "d4-s1024-b64-w4+opp-priors+oracle-belief-fpu0.3-c0.8@ckpt",
+        )
+
+    def test_the_merger_builds_the_identical_id(self) -> None:
+        # foulplay_power_report.cid_of imports search_config_id, so the only way
+        # the two can drift is a keyword the campaign side forgets to pass -- and
+        # a drifted id matches no shard while reporting success.
+        import sys
+
+        sys.path.insert(0, str(REPO_ROOT / "scripts"))
+        from foulplay_paired_eval import search_config_id
+
+        cell = {"checkpoint": "k0", "arm": "search", "depth": 8, "sims": 16384,
+                "batch": 64, "worlds": 1, "oracle_belief": True}
+        self.assertEqual(
+            search_config_id(
+                depth=cell["depth"], sims=cell["sims"], batch=cell["batch"],
+                worlds=cell["worlds"], tag=cell["checkpoint"],
+                opponent_priors=bool(cell.get("opponent_priors")),
+                fpu_reduction=cell.get("fpu_reduction"),
+                c_puct=cell.get("c_puct"),
+                oracle_belief=bool(cell.get("oracle_belief")),
+            ),
+            _DRIVER.config_id_for(
+                args(checkpoint="/c/t.pt", checkpoint_tag="k0", depth=8, sims=16384,
+                     batch=64, worlds=1, engine_oracle_belief=True)
+            ),
+        )
+
+    def test_the_report_side_passes_the_keyword(self) -> None:
+        # cid_of is a closure inside main(), so it cannot be called directly here.
+        # The source check is the cheap stand-in for the drift that has already
+        # happened once on this pair (the checkpoint tag).
+        source = (
+            Path(__file__).resolve().parents[1] / "scripts" / "foulplay_power_report.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('oracle_belief=bool(cell.get("oracle_belief"))', source)
+
+    def test_the_flag_reaches_the_child_only_on_a_search_arm(self) -> None:
+        self.assertIn(
+            "--engine-oracle-belief",
+            _DRIVER.bridge_argv(args(engine_oracle_belief=True), seat="p1"),
+        )
+        self.assertNotIn(
+            "--engine-oracle-belief", _DRIVER.bridge_argv(args(), seat="p1")
+        )
+        self.assertNotIn(
+            "--engine-oracle-belief",
+            _DRIVER.bridge_argv(args(arm="raw", engine_oracle_belief=True), seat="p1"),
+        )
+
+    def test_the_real_cli_parses_it_and_forwards_it(self) -> None:
+        ns = _DRIVER.build_parser().parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+            "--arm", "search", "--seed-start", "1", "--pairs", "2",
+            "--out", "/tmp/shard.json", "--engine-oracle-belief",
+        ])
+        self.assertTrue(ns.engine_oracle_belief)
+        self.assertIn("--engine-oracle-belief", _DRIVER.bridge_argv(ns, seat="p2"))
+        self.assertEqual(
+            _DRIVER.config_id_for(ns), "d4-s1024-b64-w4+oracle-belief@ckpt"
+        )
+
+    def test_the_bridge_declares_and_parses_the_flag(self) -> None:
+        from pokezero.foulplay_bridge import build_arg_parser
+
+        self.assertIn(
+            "engine_oracle_belief", {a.dest for a in build_arg_parser()._actions}
+        )
+        parsed = build_arg_parser().parse_args(
+            ["--checkpoint", "/tmp/c.pt", "--engine-oracle-belief"]
+        )
+        self.assertTrue(parsed.engine_oracle_belief)
+        self.assertFalse(
+            build_arg_parser().parse_args(
+                ["--checkpoint", "/tmp/c.pt"]
+            ).engine_oracle_belief
+        )
 
 
 class FoulplayPathTest(unittest.TestCase):

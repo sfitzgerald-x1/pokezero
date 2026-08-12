@@ -121,6 +121,7 @@ def search_config_id(
     opponent_priors: bool = False,
     fpu_reduction: float | None = None,
     c_puct: float | None = None,
+    oracle_belief: bool = False,
 ) -> str:
     """The search-arm cell identity, over primitives rather than a Namespace.
 
@@ -139,8 +140,37 @@ def search_config_id(
     # keeps byte-for-byte the id it had before these knobs existed -- the banked
     # depth/axis shards stay mergeable across this change rather than becoming
     # a second, empty cell.
+    #
+    # DELIBERATELY ABSENT: `--engine-override-telemetry`. It is the one knob on
+    # this driver that is OBSERVATIONAL -- it asks the crate for one extra
+    # reported column per root arm (`arm_priors`) and nothing on the search's path
+    # reads it, so telemetry-on and telemetry-off are the same search. A fragment
+    # for it would therefore split ONE cell into two, and plan §1/H1 depends on
+    # the opposite: the production override rate is read by turning the instrument
+    # on in an axis-study cell whose shards must still pool with the banked ones.
+    # The behavioural claim is not argued, it is pinned -- crate-side by
+    # `rust/pokezero-search/src/tree.rs::arm_priors_only_adds_a_reported_column`,
+    # call-side by
+    # `tests/test_opponent_priors_flag.py::OverrideTelemetryIsObservationalTest`,
+    # and this exclusion itself by
+    # `tests/test_foulplay_paired_eval.py::OverrideTelemetryPassthroughTest`.
+    # The flag is still WITNESSED per shard (`override_telemetry` in the report
+    # body), because "did the instrument run" is exactly what an id that omits it
+    # cannot say.
+    #
+    # One consequence, stated rather than absorbed: pooling means a cell can hold
+    # shards that measured an override rate and shards that did not, so read the
+    # rate on `policy_stats.override_measured_decisions`, never on the cell's pair
+    # count (`foulplay_power_report` reports the on/off shard split for that
+    # reason). Wall-clock per decision is likewise only comparable within a shard
+    # set that agrees on this flag.
     if opponent_priors:
         base = f"{base}+opp-priors"
+    if oracle_belief:
+        # The belief itself, which is the most semantic axis there is: this arm
+        # searches the TRUE hidden state. §4a's whole reading is truth-arm vs
+        # sampled-arm, so pooling them would erase the experiment.
+        base = f"{base}+oracle-belief"
     if fpu_reduction is not None:
         # `is not None`, never truthiness: `Some(0.0)` prices an unvisited arm
         # at the parent mean, which is NOT the legacy flat 0.5 that `None` is.
@@ -170,6 +200,7 @@ def config_id_for(args: argparse.Namespace) -> str:
         opponent_priors=args.opponent_priors,
         fpu_reduction=args.engine_fpu_reduction,
         c_puct=args.engine_c_puct,
+        oracle_belief=args.engine_oracle_belief,
     )
 
 
@@ -217,6 +248,16 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
             argv += ["--engine-fpu-reduction", str(args.engine_fpu_reduction)]
         if args.engine_c_puct is not None:
             argv += ["--engine-c-puct", str(args.engine_c_puct)]
+        # OBSERVATIONAL, forwarded on the same "only when set" rule as the
+        # selection knobs above -- an unset cell must render the byte-identical
+        # child argv it rendered before this flag existed. Unlike them it stays
+        # out of config_id; see search_config_id for why.
+        if args.engine_override_telemetry:
+            argv.append("--engine-override-telemetry")
+        # Same "only when set" rule, but this one IS in config_id: it changes the
+        # belief the search runs on, which is the one thing §4a varies.
+        if args.engine_oracle_belief:
+            argv.append("--engine-oracle-belief")
     if args.device:
         argv += ["--device", args.device]
     return argv
@@ -363,6 +404,19 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"PUCT exploration constant for the native search "
                          f"(selection-tuning stage 3). Unset = the bridge's "
                          f"{BRIDGE_DEFAULT_C_PUCT}, which is the banked control.")
+    ap.add_argument("--engine-override-telemetry", action="store_true",
+                    help="per-decision override telemetry in the native search "
+                         "(docs/mcts_value_gap_investigation_20260811.md §2): the raw "
+                         "policy head's root argmax beside the search's own choice, on "
+                         "its own denominator. OBSERVATIONAL -- it does not change the "
+                         "search and so is NOT part of config_id; the shard reports it "
+                         "as `override_telemetry` instead.")
+    ap.add_argument("--engine-oracle-belief", action="store_true",
+                    help="search the TRUE hidden state instead of sampled belief worlds "
+                         "(docs/mcts_value_gap_investigation_20260811.md §4a / H5). Its "
+                         "sampled-belief twin is the SAME cell with this flag off, so run "
+                         "both on the same seed band. Carries a `+oracle-belief` fragment "
+                         "in config_id: this one does change the search.")
     ap.add_argument("--checkpoint-tag", default=None,
                     help="explicit short label for this checkpoint (e.g. k0). Keeps cells "
                          "distinct when two checkpoints share a filename, which the "
@@ -544,6 +598,15 @@ def main(argv=None) -> int:
         # the child was actually told.
         "fpu_reduction": args.engine_fpu_reduction,
         "c_puct": args.engine_c_puct,
+        # The ONLY record that the instrument ran, since config_id omits it on
+        # purpose. A cell may hold telemetry-on and telemetry-off shards; an
+        # override rate read off the cell's pair count instead of off
+        # `policy_stats.override_measured_decisions` would then be wrong by
+        # exactly the telemetry-off share, silently.
+        "override_telemetry": bool(args.engine_override_telemetry),
+        # In config_id AND here, same reason c_puct is: arm identity witnessed
+        # from the shard body, never from a job label.
+        "oracle_belief": bool(args.engine_oracle_belief),
         # Named, never silently dropped: an incomplete seat makes the paired
         # delta unscoreable for those seeds and the merger must see it.
         "missing_seeds": missing,

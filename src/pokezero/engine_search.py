@@ -807,6 +807,14 @@ class EngineMctsStats:
     decisions: int = 0
     searched_decisions: int = 0
     fallback_decisions: int = 0
+    # Decisions an ORACLE-BELIEF arm injected the TRUE world for (value-gap plan
+    # §4a). Incremented by whatever harness installs `fixed_override` per
+    # decision, NOT by the search: a config flag can only witness that the arm was
+    # REQUESTED, and this campaign already learned the difference the expensive way
+    # on opponent priors (accepted, then refused inside the crate, reported as a
+    # clean null). Zero on every other arm; equal to `decisions` on a healthy
+    # oracle run, which is the check.
+    oracle_belief_decisions: int = 0
     # Decisions where the removal signal fired (a mon's item is publicly
     # stripped or consumed): worlds constructed with that item cleared instead
     # of failing closed. Localizes which battles exercise the removal path.
@@ -1058,6 +1066,7 @@ class EngineMctsStats:
             "decisions": self.decisions,
             "searched_decisions": self.searched_decisions,
             "fallback_decisions": self.fallback_decisions,
+            "oracle_belief_decisions": self.oracle_belief_decisions,
             "fallback_rate": self.fallback_decisions / self.decisions if self.decisions else 0.0,
             "removed_item_decisions": self.removed_item_decisions,
             "item_override_decisions": self.item_override_decisions,

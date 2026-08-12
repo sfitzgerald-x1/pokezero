@@ -25,6 +25,7 @@ tests/test_opponent_action_mapping.py.
 
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 from pokezero.engine_search import EngineMctsConfig, native_search_args
@@ -93,6 +94,7 @@ class DefaultsAreOffTest(unittest.TestCase):
         base = dict(
             arm="search", depth=4, sims=1024, batch=64, worlds=4,
             opponent_priors=False, engine_fpu_reduction=None, engine_c_puct=None,
+            engine_oracle_belief=False,
             checkpoint="/c/k0.pt",
         )
         self.assertEqual(
@@ -318,6 +320,147 @@ class NativeCallContractTest(unittest.TestCase):
         self.assertEqual(params.index("use_opponent_priors"), 14)
         self.assertEqual(params.index("fpu_reduction"), 15)
         self.assertEqual(params.index("arm_priors"), 16)
+
+
+class OverrideTelemetryIsObservationalTest(unittest.TestCase):
+    """`override_telemetry` must not change the SEARCH, only what it reports.
+
+    This is the claim `scripts/foulplay_paired_eval.search_config_id` rests on
+    when it keeps the flag OUT of config_id: telemetry-on and telemetry-off are
+    one cell, so a shard that measured an override rate pools with a banked shard
+    that did not. If the flag perturbed selection, plan §2 would be measuring a
+    different engine than every other stage while reporting the same cell id --
+    a wrong number, not an error.
+
+    Turning it on materializes four positionals it sits behind, and THAT is the
+    only way it could leak into the search. So the pins here are:
+
+    * every materialized slot carries the crate's OWN DECLARED DEFAULT, read off
+      the installed wheel rather than hardcoded -- so materializing the slot is a
+      no-op against the call the crate would have made for itself;
+    * the single exception, `early_stop_side_one` on a side_two record, is
+      report-only in the crate. `model.rs` guards the in-loop early-stop check
+      with `early_stop_min_sims > 0` (which is 0 here), and the one unguarded
+      `root_visit_lock` call after the loop assigns only
+      `early_stop_leader_visits` / `early_stop_runner_up_visits`, two REPORT
+      fields that `engine_search` deliberately does not absorb (see the
+      `root_visit_gap_sum` comment, which names this exact seat hazard). It also
+      flips the report's `early_stop_side` string.
+    * `arm_priors` itself reaches only `multiply_report_json` ->
+      `stats_to_json(.., with_prior)`, which appends one `"prior"` key per root
+      arm entry and changes nothing else. Pinned crate-side by
+      `tree.rs::arm_priors_only_adds_a_reported_column`.
+
+    NOT pinned here, and honestly: an end-to-end on/off replay of one real search
+    input. That needs a TorchScript leaf artifact and a real checkpoint, which is
+    the in-image gate's job -- the same boundary the opponent-priors flag's own
+    on/off replay was run at (see the note in scripts/foulplay_paired_eval.py).
+    """
+
+    _SLOTS = (
+        (12, "early_stop_min_sims"),
+        (13, "early_stop_side_one"),
+        (14, "use_opponent_priors"),
+        (15, "fpu_reduction"),
+        (16, "arm_priors"),
+    )
+
+    def _crate_defaults(self) -> dict[str, object]:
+        try:
+            import pokezero_search
+        except ModuleNotFoundError:
+            self.skipTest("crate not built")
+        native = getattr(pokezero_search, "NativeLeafModel", None)
+        if native is None or not hasattr(native, "search_batched_multi_encoded"):
+            self.skipTest("wheel lacks the model-feature search entry point")
+        import inspect
+
+        parameters = inspect.signature(native.search_batched_multi_encoded).parameters
+        return {name: parameters[name].default for _, name in self._SLOTS}
+
+    def _args(self, side_key: str, **config_kwargs) -> list:
+        cfg = EngineMctsConfig(**_MODEL_CONFIG, **config_kwargs)
+        record = {
+            "state_str": "state", "ctx_json": "ctx", "seed": 7, "side_key": side_key,
+        }
+        return native_search_args(
+            cfg, record, tables_json="tables", root_inputs="root", rust_fold=FOLD,
+            early_stop_min_sims=0,
+        )
+
+    def test_the_materialized_slots_carry_the_crates_own_defaults(self) -> None:
+        defaults = self._crate_defaults()
+        args = self._args("side_one", override_telemetry=True)
+        for index, name in self._SLOTS:
+            if name == "arm_priors":
+                # The one slot that is SUPPOSED to differ from the default.
+                self.assertIs(args[index], True, name)
+                self.assertIs(defaults[name], False, "crate default must stay off")
+                continue
+            self.assertEqual(
+                args[index], defaults[name],
+                f"slot {index} ({name}) must equal the crate's own default, or "
+                "materializing it to reach arm_priors changes the search",
+            )
+
+    def test_the_only_slot_that_can_differ_is_the_report_only_early_stop_side(
+        self,
+    ) -> None:
+        # A side_two record passes early_stop_side_one=False where the crate's
+        # default is True. Named here rather than left to be discovered: with
+        # early_stop_min_sims at 0 the crate cannot early-stop at all, so the
+        # value reaches only the report's `early_stop_side` /
+        # `early_stop_leader_visits` / `early_stop_runner_up_visits` fields.
+        defaults = self._crate_defaults()
+        args = self._args("side_two", override_telemetry=True)
+        differing = [
+            name for index, name in self._SLOTS
+            if name != "arm_priors" and args[index] != defaults[name]
+        ]
+        self.assertEqual(differing, ["early_stop_side_one"])
+        self.assertEqual(args[12], 0, "no early-stop floor, so the side is inert")
+
+    def test_engine_search_does_not_absorb_the_report_fields_that_slot_moves(
+        self,
+    ) -> None:
+        # The complement of the test above: if a future revision started reading
+        # the crate's leader/runner-up pair, the seat-dependent value WOULD reach
+        # a number the campaign publishes, and telemetry would stop being free.
+        # `engine_search` derives its visit gap from the acting seat's own entries
+        # for exactly this reason.
+        source = (
+            Path(__file__).resolve().parents[1] / "src" / "pokezero" / "engine_search.py"
+        ).read_text(encoding="utf-8")
+        for field in ("early_stop_leader_visits", "early_stop_runner_up_visits"):
+            reads = [
+                line for line in source.splitlines()
+                if field in line and not line.lstrip().startswith("#")
+            ]
+            self.assertEqual(reads, [], f"{field} is now read: {reads}")
+        # Positive control for the grep above: a field the module DOES read must
+        # be found by the identical query, or an empty result means nothing.
+        control = [
+            line for line in source.splitlines()
+            if "early_stopped" in line and not line.lstrip().startswith("#")
+        ]
+        self.assertTrue(control, "the control field was not found; the query is broken")
+
+    def test_every_earlier_slot_is_byte_for_byte_the_flag_off_call(self) -> None:
+        # The whole-list form of the claim, at both seats and against a tuned
+        # cell: the telemetry-on call is the telemetry-off call plus its own
+        # trailing True, and nothing in front of it moves.
+        for side_key in ("side_one", "side_two"):
+            for knobs in ({}, {"use_opponent_priors": True, "fpu_reduction": 0.3}):
+                with self.subTest(side_key=side_key, knobs=sorted(knobs)):
+                    on = self._args(side_key, override_telemetry=True, **knobs)
+                    off = self._args(side_key, **knobs)
+                    padded = off + [None] * (17 - len(off))
+                    padded[12] = 0
+                    padded[13] = side_key == "side_one"
+                    padded[14] = bool(knobs.get("use_opponent_priors", False))
+                    padded[15] = knobs.get("fpu_reduction")
+                    padded[16] = True
+                    self.assertEqual(on, padded)
 
 
 if __name__ == "__main__":
