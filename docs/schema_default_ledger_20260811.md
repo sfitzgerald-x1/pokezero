@@ -477,6 +477,37 @@ Every guard added after a defect immediately found more instances than inspectio
 None depended on remembering. That is the only mechanism in this effort with a clean record --
 including against its author.
 
+
+## N and the drill measure different things, and both are needed
+
+These two facts are not in tension, and reading either alone misleads:
+
+    ledger N        213 sites still reach the global default
+    drill           0 unexpected breakages; gate 1 breaks zero tests vs main
+
+**N is EXPOSURE: how many sites could conflate.** The drill is REALISED FAILURE: how many
+actually do, today, under a rotation. A site that takes the default and genuinely does not care
+which schema it gets is counted by N and invisible to the drill -- correctly, in both cases. It
+is exposure because the day it starts caring, nothing warns anyone; it is not a failure because
+today it does not.
+
+`LocalShowdownConfig.observation_spec` is 130 of the remaining 213 -- the largest single
+surface, and almost entirely tests that need *an* env and have no stake in its schema. Migrating
+all 130 would be busywork; leaving the surface unguarded is how the class regenerates. The
+authorship gate is what resolves that: the 130 are grandfathered in the allowlist, and the
+131st fails in the PR that writes it.
+
+So the honest end state is:
+
+- **realised failure: zero** -- the rotation is free today, proven by set equality against main
+  and by the acceptance drill
+- **exposure: 213 sites**, frozen by the gate so it can only shrink
+- **the two production surfaces that could be fixed at the source were** -- `ObservationSpec`
+  and `PokeZeroObservationV0` stamps, which removed 70 sites without touching a call site
+
+Claiming "the class is dead" on the drill alone would be the same error as the original
+"202 -> 97": a true number answering a question narrower than the one being asked.
+
 ## Burndown protocol
 
 A slice resumes by **re-running the command**, never by recall. A row is retired when the
