@@ -27,6 +27,32 @@ from pokezero.showdown import (
     V2_1_REPLAY_OBSERVATION_SPEC,
     parse_showdown_replay,
 )
+def _budget_schema_choice() -> str:
+    """CLI choice string for a schema that HAS a transition region to budget against.
+
+    Derived by INVERTING `observation_schema_version_from_choice` over the supported set rather
+    than assuming the choice is the version string with the prefix stripped. There is no
+    forward helper for this direction, and guessing the format would put a third statement of
+    the schema naming convention in the tree -- which is the shape of defect being retired.
+    """
+    from pokezero.observation import SUPPORTED_OBSERVATION_SCHEMA_VERSIONS, schema_with
+    from pokezero.showdown import observation_schema_version_from_choice
+
+    wanted = schema_with(transition_region=True)
+    for version in SUPPORTED_OBSERVATION_SCHEMA_VERSIONS:
+        choice = version.rsplit(".", 1)[-1] if version.count(".") < 3 else ".".join(
+            version.split(".")[-2:]
+        )
+        try:
+            if observation_schema_version_from_choice(choice) == wanted:
+                return choice
+        except Exception:
+            continue
+    raise AssertionError(f"no CLI choice maps to {wanted}")
+
+
+_BUDGET_SCHEMA_CHOICE = _budget_schema_choice()
+
 
 _SEED = 303  # deterministic ~59-turn game with populated residuals on both sides
 
@@ -438,6 +464,12 @@ class CollectCacheMaskMetadataTest(unittest.TestCase):
                     "--out", str(out),
                     "--seed-start", "17",
                     "--showdown-root", str(root),
+                    # A 32-token history budget needs a schema WITH a transition region. The
+                    # collect was flagless, so it followed the fresh-selection default and, once
+                    # that became v4 (no region at all), the CLI refused with
+                    # "transition_token_budget must be in 0..0 ... got 32" and the test saw only
+                    # exit code 1. The subject is the mask metadata round-trip, not the default.
+                    "--observation-schema", _BUDGET_SCHEMA_CHOICE,
                     "--transition-token-budget", "32",
                 ]
             )
