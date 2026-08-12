@@ -508,6 +508,52 @@ So the honest end state is:
 Claiming "the class is dead" on the drill alone would be the same error as the original
 "202 -> 97": a true number answering a question narrower than the one being asked.
 
+
+## FINAL: Phase D passes at full scope
+
+    bash scripts/schema_rotation_drill.sh            # ~22 min, two full suites
+
+    baseline (unrotated):   8 failed, 5796 passed    <- ~5804 tests
+    rotated (v5-drill):    15 failed, 5789 passed    <- ~5804 tests
+    attributable:          15 - 8 = 7
+
+    expected 7 / actual 7  -- md5 58e99231122be90faebc0397c8b20d6c on both, diff empty
+    PASS: the breakage set is EXACTLY the class-(iii) readers.
+
+All seven assert the default's identity: four name which schema holds the slot, one is the
+schema-keyed census table, one is the fingerprint that hashes the schema, one is the
+token-format dump's `current_default` line. Nothing else in 5804 tests notices the default
+moving.
+
+**Gate 1, independently and not through the drill:** rotating the real constant to v4 leaves a
+failure set BYTE-IDENTICAL to main's 8 pre-existing failures. Two full suites and a `diff`.
+
+### Seven defects were in the instruments, and two failed toward PASS
+
+| defect | direction | invented / hid |
+|---|---|---|
+| no baseline | toward FAIL | 27 phantom breakages (33 vs the true 6) |
+| synthetic spec stamped v4 under the v5 key | toward FAIL | a spec-table incoherence |
+| schema unregistered in the census maps | toward FAIL | 6 phantom breakages |
+| ERROR abort not baseline-relative | toward FAIL | blocked every run |
+| normalisation assumed absolute pytest paths | **toward PASS** | every comparison |
+| sed delimiter collided with the alternation | **toward PASS** | scored 15 real failures as 0 |
+| empty-normalisation guard ran before its file | toward FAIL | aborted every run |
+
+Four mechanical "fixes" were attempted against defect 3's phantoms and reverted -- repairing
+code that was never broken.
+
+**Both PASS-direction defects were caught by one design choice: checking BOTH directions.**
+"Nothing broke AND the pins that must break did not break" is impossible, and that contradiction
+is the only signal that surfaced either. A drill checking unexpected breakages alone -- the
+obvious design, and my first intent -- would have reported two clean passes from a scorer
+emitting empty files.
+
+The rule this program was built to enforce is that no figure ships without a verified
+denominator. The instrument built to enforce it violated it seven times. Written rules do not
+execute; guards that hard-fail do. Every guard here exists because of a defect it would have
+caught, and each one found more than inspection had.
+
 ## Burndown protocol
 
 A slice resumes by **re-running the command**, never by recall. A row is retired when the
