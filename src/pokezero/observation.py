@@ -117,6 +117,11 @@ GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS = (
 # does the turn-merged families — and this tuple is what every such latch tests.
 FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V4,)
 
+# Schemas using v3's numeric projection. Exists so `numeric_index_for_schema` can ask a PROPERTY
+# ("which projection does this schema use") instead of naming a version -- the identity form
+# silently routed any unlisted schema to the unprojected legacy path.
+V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V3,)
+
 
 def schema_with(
     *,

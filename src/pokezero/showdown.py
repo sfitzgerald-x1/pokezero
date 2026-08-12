@@ -38,6 +38,7 @@ from .observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     DEFAULT_OBSERVATION_FEATURE_MASKS,
     FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
+    V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS,
     FIELD_TOKEN_COUNT,
     OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2,
@@ -1225,9 +1226,15 @@ def numeric_index_for_schema(schema_version: str, legacy_index: int) -> int:
     """
 
     spec = observation_spec_for_schema(schema_version)
-    if schema_version == OBSERVATION_SCHEMA_VERSION_V4:
+    # Membership, not identity. `== V4` is a schema-default conflation wearing a different hat:
+    # it asks "is this THE feature-pack schema" and answers by naming one version, so any later
+    # schema with the same projection silently falls through to the UNPROJECTED legacy path and
+    # returns wrong-but-plausible indices instead of raising. Measured on a synthetic v5 sharing
+    # v4's layout: 134 of 155 legacy indices disagreed, and all 50 dropped columns returned an
+    # index where they must return None.
+    if schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS:
         return v4_numeric_index(legacy_index)
-    if schema_version == OBSERVATION_SCHEMA_VERSION_V3:
+    if schema_version in V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS:
         return v3_numeric_index(legacy_index)
     if legacy_index < 0 or legacy_index >= spec.numeric_feature_count:
         raise ValueError(
@@ -1251,10 +1258,10 @@ def numeric_index_if_present_for_schema(
     case — every later column sits above its census, so the range check below already covers it.
     """
 
-    if schema_version == OBSERVATION_SCHEMA_VERSION_V4:
+    if schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS:
         if legacy_index in V4_DROPPED_LEGACY_NUMERIC_INDICES:
             return None
-    elif schema_version == OBSERVATION_SCHEMA_VERSION_V3:
+    elif schema_version in V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS:
         if (
             legacy_index in V3_DROPPED_LEGACY_NUMERIC_INDICES
             or legacy_index in V4_ONLY_NUMERIC_INDICES
