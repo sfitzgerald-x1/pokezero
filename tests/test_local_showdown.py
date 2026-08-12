@@ -95,6 +95,26 @@ def _without_substitute_volatile(materialization: Any, *, player: str) -> Any:
     )
 
 
+def _with_substitute_volatile(materialization: Any, *, player: str) -> Any:
+    """Add the Substitute VOLATILE without changing anything else.
+
+    Needed to reach guards that fire on the sampled world rather than on the provenance:
+    a Substitute must be publicly up before the resolver ever sizes one.
+    """
+
+    replay = materialization.replay
+    existing = tuple(replay.volatiles.get(player, ()))
+    if "substitute" in existing:
+        return materialization
+    return replace(
+        materialization,
+        replay=replace(
+            replay,
+            volatiles={**dict(replay.volatiles), player: existing + ("substitute",)},
+        ),
+    )
+
+
 def _with_substitute_provenance(
     materialization: Any,
     *,
@@ -2117,6 +2137,189 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                         ),
                         {category: 1},
                     )
+
+    def test_public_materialization_restores_a_substitute_on_a_multi_pokemon_team(self) -> None:
+        """A BENCH row must not be judged against the active slot's Substitute provenance.
+
+        Every other Substitute construction test here uses a ONE-Pokemon team, so no bench row
+        was ever walked. `applyPublicVolatiles` is called per row with `[]` for the bench, so
+        without the `isActive` predicate the reverse provenance guard sees an empty `seen` set
+        beside a `full` state and throws on **every benched mon while a Substitute is up** --
+        i.e. every Substitute decision in production would refuse while this suite stayed
+        green. Mutation confirmed it: dropping `isActive` SURVIVED the whole battery.
+
+        The bug this pins is the identifier, not the value, which is why varying only the
+        provenance values could never have found it.
+        """
+
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Pikachu", ability="Static", moves=("Substitute",), level=100
+                        ),
+                        FixturePokemon(
+                            species="Snorlax", ability="Immunity", moves=("Harden",), level=100
+                        ),
+                    )
+                ),
+                "p2": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Ditto", ability="Limber", moves=("Harden",), level=100
+                        ),
+                        FixturePokemon(
+                            species="Geodude", ability="Sturdy", moves=("Harden",), level=100
+                        ),
+                    )
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=7302, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})
+            materialization = source.public_materialization_state("p1")
+            payload = _public_materialization_payload(materialization)
+            side = payload["sides"]["p1"]
+            self.assertEqual(side["substituteHealthState"], "full")
+            # The whole point of this fixture: a row the active-slot guard must skip.
+            bench_rows = [row for row in side["pokemon"] if not row.get("active")]
+            self.assertTrue(bench_rows, "fixture must expose at least one bench row")
+
+            search_env.materialize_public_world(
+                state=materialization, start_override=start_override, seed=7302
+            )
+            snapshot = search_env.snapshot()
+            substitute = _active_substitute_from_snapshot(snapshot, "p1")
+            assert substitute is not None
+            self.assertEqual(substitute["hp"], _active_maxhp_from_snapshot(snapshot, "p1") // 4)
+            # The bench mon must carry NO Substitute of its own.
+            battle = snapshot.bridge_snapshot["battle"]
+            bench = [p for p in battle["sides"][0]["pokemon"] if not p.get("isActive")]
+            self.assertTrue(bench, "materialized world must still have a bench")
+            for pokemon in bench:
+                self.assertNotIn("substitute", pokemon.get("volatiles") or {})
+
+    def test_public_materialization_succeeds_after_a_substitute_broke(self) -> None:
+        """`broken` is the most common post-Substitute state and MUST still materialize.
+
+        127 of the slot-observations in a 200-battle sample were `broken`. Nothing covered it,
+        and dropping `"broken"` from `ABSENT_SUBSTITUTE_HEALTH_STATES` SURVIVED the battery --
+        another mass fail-shut invisible to the suite, since every decision after any
+        Substitute broke would refuse.
+        """
+
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Pikachu",
+                            ability="Static",
+                            moves=("Substitute", "Harden"),
+                            level=100,
+                        ),
+                    )
+                ),
+                "p2": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Hitmonlee",
+                            ability="Limber",
+                            moves=("Seismic Toss", "Harden"),
+                            level=100,
+                        ),
+                    )
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=7301, start_override=start_override)
+            source.step({"p1": 0, "p2": 1})  # Substitute up.
+            source.step({"p1": 1, "p2": 0})  # Seismic Toss breaks it outright.
+            materialization = source.public_materialization_state("p1")
+
+            self.assertEqual(materialization.replay.substitute_health_state["p1"], "broken")
+            self.assertNotIn("substitute", materialization.replay.volatiles["p1"])
+            payload = _public_materialization_payload(materialization)
+            self.assertEqual(payload["sides"]["p1"]["volatiles"], [])
+            self.assertIsNone(payload["sides"]["p1"]["substituteDepletion"])
+
+            # Must NOT refuse: a Substitute that publicly ended leaves nothing to rebuild.
+            search_env.materialize_public_world(
+                state=materialization, start_override=start_override, seed=7301
+            )
+            self.assertIsNone(_active_substitute_from_snapshot(search_env.snapshot(), "p1"))
+
+    def test_public_materialization_refuses_a_substitute_the_sampled_max_hp_cannot_size(
+        self,
+    ) -> None:
+        """`floor(maxhp / 4) < 1` must refuse rather than build a degenerate Substitute.
+
+        Unreachable through normal play -- Showdown's Shedinja clause refuses Substitute at
+        `maxhp === 1` -- so this injects the contradiction directly onto a real Shedinja
+        (maxhp 1, giving `initial == 0`). Pinned because the guard's OTHER arm,
+        `!Number.isInteger(initial)`, catches a missing or non-numeric `maxhp`, and without it
+        `full` returns `NaN`; since `NaN <= 0` is false, Showdown would then carry a Substitute
+        that NEVER breaks. A silently wrong searched world is strictly worse than a refusal.
+
+        SCOPE, stated rather than implied: this exercises the `initial < 1` arm. The harness
+        cannot inject a non-numeric `maxhp` into the bridge's serialized snapshot, so the
+        `!Number.isInteger` arm is covered only by removal of the whole condition, which this
+        test does kill. Worth noting the Python sibling (`engine_world`) has NO equivalent
+        guard at all and would compute `maxhp // 4 == 0` silently.
+        """
+
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Shedinja",
+                            ability="Wonder Guard",
+                            moves=("Harden",),
+                            level=100,
+                        ),
+                    )
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Ditto", ability="Limber", moves=("Harden",)),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=7303, start_override=start_override)
+            source.step({"p1": 0, "p2": 0})
+            base = source.public_materialization_state("p1")
+            active = next(
+                row
+                for row in _public_materialization_payload(base)["sides"]["p1"]["pokemon"]
+                if row.get("active")
+            )
+            # Shedinja is maxhp 1 at every level, so floor(maxhp / 4) == 0.
+            self.assertEqual(int(str(active["condition"]).split()[0].split("/")[1]), 1)
+
+            state = _with_substitute_provenance(
+                _with_substitute_volatile(base, player="p1"), player="p1", state="full"
+            )
+            with self.assertRaises(LocalShowdownError) as caught:
+                search_env.materialize_public_world(
+                    state=state, start_override=start_override, seed=7303
+                )
+            self.assertEqual(
+                root_puct_direct_materialization_rejection_category(caught.exception),
+                "substitute_health_provenance_contradiction",
+            )
 
     def test_public_materialization_refuses_substitute_provenance_without_its_volatile(self) -> None:
         """The OTHER direction: provenance says a Substitute is up, `volatiles` does not.
