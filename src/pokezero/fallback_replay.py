@@ -187,7 +187,8 @@ class RefusalRecord:
     choices_unmapped_causes: Mapping[str, int] = field(default_factory=dict)
 
     #: `f"{seed}:{seat}:{round}"` when the harness reseeds per decision
-    #: (`foulplay_bridge.py:3541`); `None` under the per-battle stream regime.
+    #: (`foulplay_bridge._select_policy_decision`); `None` under the per-battle
+    #: stream regime.
     decision_rng_seed: str | None = None
     #: The pre-decision baseline was lost, so every delta on this record may span
     #: more than one decision. Carried on the record rather than only on the
@@ -923,9 +924,10 @@ def engine_config_for(spec: ReplaySpec) -> Any:
     the override splat survived the whole integration suite, twice, including
     with non-default recorded values.
 
-    `worlds` is the exception and is consulted: `attempts_budget = worlds *
-    sample_retry_factor` at `:1050`, which is why a refusal in that class shows
-    exactly `worlds * sample_retry_factor` attempts. An earlier revision of this
+    `worlds` is the exception and is consulted: that same loop's
+    `attempts_budget = self._config.worlds * self._config.sample_retry_factor`
+    is why a refusal in that class shows exactly `worlds * sample_retry_factor`
+    attempts. An earlier revision of this
     docstring said "before any search parameter is consulted", which is wrong.
 
     The config is therefore asserted directly, and published on

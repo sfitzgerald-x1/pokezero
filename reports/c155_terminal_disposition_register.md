@@ -127,15 +127,16 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`0975c5f29bdf8253…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`e9d4ac708d6efe69…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
-legitimate, and it has now happened **six times**. Restricting `git log 7fcd9e19..HEAD` to **all** of
+legitimate, and it has now happened **once per row of the table below** — DE-NUMBERED on purpose,
+see the warning under it. Restricting `git log 7fcd9e19..HEAD` to **all** of
 the fingerprint's inputs — the 74 gen3 patches, `poke-engine-gen3-patches.txt`,
 `poke-engine-base-source.json`, the 11 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
-exactly six commits. ⚠ **The `input` column is DERIVED, and the third row was wrong on
+a SUPERSET of those rows, for the reason recorded below. ⚠ **The `input` column is DERIVED, and the third row was wrong on
 first write** — it carried `+403 −74`, which was neither this file's numstat nor any other
 figure in the tree. `git diff --numstat <base> <head> -- rust/pokezero-search/src/events.rs`
 is the derivation, and it returns the same pair against `83efbede`, `a6249971` and the
@@ -161,6 +162,7 @@ above.
 | #1221 | `rust/pokezero-search/src/encoder.rs`, +26 −0 | `2ec5bfd1c7292ed6…` |
 | `716345cc` (#1234) | `rust/pokezero-search/src/events.rs`, +501 −49 (and `src/tree.rs`, +81 −0) | `44dcfca90130ed91…` |
 | C157 | `rust/pokezero-search/src/events.rs`, +259 −12 | `0975c5f29bdf8253…` |
+| C157 review round 2 | `rust/pokezero-search/src/events.rs` (absorb predicate + per-conjunct battery) | `e9d4ac708d6efe69…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -169,10 +171,21 @@ LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerp
 narrative and its pinned appendix disagreed about the head, which is precisely the drift the
 appendix exists to prevent. Only the appendix is pinned by
 `tests/test_terminal_disposition_register.py`, so the prose could go stale green. Worse for a
-merge: git auto-merged the prose without a conflict and silently kept THIS branch's numbers,
-dropping #1234's move entirely — an auto-merge is not a reconciliation. Both rows are restored
-above, in landing order, with the count corrected to six. Filed as the follow-up T1 already
-names: pin the prose to the appendix, or derive the prose FROM it.
+merge: git auto-merged the prose without a conflict and silently kept the branch's numbers,
+dropping #1234's move entirely — an auto-merge is not a reconciliation.
+
+⚠ **AND THE COUNT IS NOW DE-NUMBERED, because re-pointing it failed twice in three commits.**
+A first fix here said "five times", a second said "six"; independent review then derived
+**seven** from this paragraph's own stated command, and by the following commit it was
+**eight**. Every crate-touching commit moves it — *including the commits that edit this
+document*, since `compute_fingerprint` hashes crate SOURCES and this row's own repairs ride
+along with them. A literal count in prose is therefore a figure that is false by the time it is
+read, which is exactly what §4.8 says to stop doing: **de-number a stale citation, never
+re-point it.** The TABLE is the record; the raw `git log` count is a superset of it because it
+also counts merge commits and comment-only edits that moved the stamp without adding a row. If
+you want the number, run the command in the paragraph above and say which commit you ran it at.
+The standing follow-up is unchanged and now has three recurrences behind it: derive this prose
+FROM Appendix A, or pin it.
 
 ⚠ **And the second landed while this register was in review**, three days after C153's build. That
 is not an aside: it is T1's argument, live. C151 §3 deferred the terminal sweep precisely because
@@ -501,10 +514,10 @@ defect did not exist on either of their trees.** A typed `25` would have shipped
 Where CI gates on the merge, **local green and CI green are different measurements**; §6 declares
 that coupling and the assertion carries the fix in its own failure message.
 
-**Every measurement behind T2–T6 predates the head build**, and none is at `0975c5f29bdf8253` —
-nor at `ec4ff0349eab7fdd`, `44dcfca90130ed91`, `2ec5bfd1c7292ed6`, `028a4c52a4ad9fe7` or
-`9517aab98d56a9ba`, the builds
-this document was reconciled against at the four preceding merges plus this branch's own earlier head. Read the
+**Every measurement behind T2–T6 predates the head build**, and none is at `e9d4ac708d6efe69` —
+nor at `0975c5f29bdf8253`, `ec4ff0349eab7fdd`, `44dcfca90130ed91`, `2ec5bfd1c7292ed6`,
+`028a4c52a4ad9fe7` or `9517aab98d56a9ba`, the builds
+this document was reconciled against at the four preceding merges plus this branch's own earlier heads. Read the
 table in T1 before quoting that as a re-sweep scope: T3, T4 and T5 rest on an engine build; **T2 and
 T6 build no engine at all** and carry no `engine_fingerprint`.
 
@@ -719,7 +732,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.head_fingerprint` | 0975c5f29bdf8253 |
+| `t1.head_fingerprint` | e9d4ac708d6efe69 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
@@ -737,12 +750,12 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t3.speed_ties_order_le_10` | 20 |
 | `t3.speed_ties_perish` | 4 |
 | `t3.speed_ties_with_a_leftovers_winner` | 24 |
-| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:5936 |
+| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:6020 |
 | `t4.boundary` | 1000513/121 |
 | `t4.branch_miss_pct` | 100.00 |
 | `t4.engine_component` | itemleftovers |
 | `t4.heal_mismatch_rows_in_the_wide_census` | 2 |
-| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:6008 |
+| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:6092 |
 | `t4.leftovers_truncated_consumers` | 1 |
 | `t4.leftovers_truncated_references` | 2 |
 | `t4.observed_component` | heal |

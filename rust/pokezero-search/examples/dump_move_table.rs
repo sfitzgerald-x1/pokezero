@@ -29,7 +29,7 @@ fn main() {
              \"target\": \"{:?}\", \"base_power\": {}, \"has_status\": {}, \"has_volatile\": {}, \
              \"has_boost\": {}, \"has_side_condition\": {}, \"has_heal\": {}, \"has_drain\": {}, \
              \"has_crash\": {}, \"has_recoil\": {}, \"has_secondaries\": {}, \"volatile\": \"{}\", \
-             \"boost\": \"{}\"}}",
+             \"boost\": \"{}\", \"flag_protect\": {}}}",
             choice.accuracy,
             choice.category,
             choice.target,
@@ -53,6 +53,7 @@ fn main() {
                 .as_ref()
                 .map(|b| format!("{:?}:{:?}", b.target, b.boosts))
                 .unwrap_or_default(),
+            choice.flags.protect,
         );
     }
     println!("\n}}");

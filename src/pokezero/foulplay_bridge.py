@@ -238,9 +238,10 @@ OPPONENT_JOURNAL_SCHEMA_VERSION = "pokezero.opponent-journal.v1"
 #                both ways, 0 per-block mismatches.
 #   numerator    DISTINCT (battle_id, round, seat) across all keys of that block's
 #                `fallback_samples` = decisions that have a replayable address.
-#                DISTINCT is load-bearing: `:2404` files one address PER KEY, so a
-#                single decision appears under `fallback:<reason>` AND under every
-#                world-failure class in its delta.
+#                DISTINCT is load-bearing: `_fallback`'s
+#                `for key in [f"fallback:{reason}", *delta]` loop files one address
+#                PER KEY, so a single decision appears under `fallback:<reason>` AND
+#                under every world-failure class in its delta.
 #
 #   2,093 fallback decisions -> 609 addressed -> 1,484 (70.9%) with NO address.
 #
@@ -254,9 +255,10 @@ OPPONENT_JOURNAL_SCHEMA_VERSION = "pokezero.opponent-journal.v1"
 # WHICH RULE DOES THE DROPPING -- the cap of 3 is NOT the main one. Per-key bucket
 # sizes within a block are 719 x 1, 140 x 2, 47 x 3 (906 keys, none over 3). Only
 # those 47 (5.2%) ever reached `_FALLBACK_SAMPLES_PER_CLASS`; the other 859 (94.8%)
-# were never limited by it, so every address they did not retain was refused by the
-# one-address-per-battle rule at `:2421`. The per-battle rule is the dominant
-# mechanism and the cap is the ~5% tail.
+# were never limited by it, so every address they did not retain was refused by
+# `_fallback`'s "One address per BATTLE" guard
+# (`any(entry["battle_id"] == str(battle_id) for entry in bucket)`). The per-battle
+# rule is the dominant mechanism and the cap is the ~5% tail.
 #
 # That split is in KEYS, which is what these shards can support. The DECISION-level
 # split is NOT measurable from them: attributing an unaddressed decision needs to know

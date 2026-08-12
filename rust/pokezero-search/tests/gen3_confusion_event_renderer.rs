@@ -3516,3 +3516,218 @@ fn the_paralysis_marker_still_owns_its_line_across_the_fail_split() {
         "expected the marked paralysis branch to keep its exact line: {branches:?}"
     );
 }
+
+/// An ABSORB-ABILITY defender gets the same fail render as a plain one, and this is the
+/// blocker independent review found in the first revision of `volatile_fail`.
+///
+/// `absorb` is `is_absorb_ability(defender_ability)` — the defender's ability and nothing
+/// else, with no move-type and no damaging check in it. The predicate carried an
+/// `absorb.is_none()` conjunct, so the whole arm switched OFF for every Volt Absorb / Water
+/// Absorb / Flash Fire defender whatever the move was used, and those defenders kept the
+/// 0.90-vs-0.10 `|[miss]|` mislabel this change exists to remove. It did not regress main —
+/// it silently declined to fix it, which is why 524 tests noticed nothing.
+///
+/// The asymmetry was the tell: `status_fail`, the arm this one mirrors, has NO absorb
+/// conjunct and renders Toxic into an already-poisoned Water Absorb target correctly. The
+/// plain-defender control is in the same loop so this cannot pass by the arm being dead.
+///
+/// Reach for the pairing, measured: 91 of 1682 variants across 12 species carry one of the
+/// three abilities and 45 carry Leech Seed, independent populations.
+#[test]
+fn an_absorb_ability_defender_is_not_excluded_from_the_fail_render() {
+    for ability in [
+        None,
+        Some(Abilities::WATERABSORB),
+        Some(Abilities::VOLTABSORB),
+        Some(Abilities::FLASHFIRE),
+    ] {
+        let mut state = confused_state(Choices::LEECHSEED);
+        state
+            .side_two
+            .volatile_statuses
+            .remove(&PokemonVolatileStatus::CONFUSION);
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        if let Some(ability) = ability {
+            state.side_one.get_active().ability = ability;
+        }
+
+        let branches = generate(&mut state);
+        let mut seen = 0usize;
+        for branch in &branches {
+            let text = render(&mut state.clone(), branch);
+            if !text.contains("|move|p2a: Opponent|leechseed") {
+                continue;
+            }
+            seen += 1;
+            assert!(
+                !text.contains("|[miss]") && !text.contains("|-miss|"),
+                "defender ability {ability:?}: 0.90 hit-with-no-effect against 0.10 miss, so \
+                 |[miss]| is the MINORITY outcome. An absorb ability must not switch this arm \
+                 off -- `absorb` reads the ability alone and this is exactly the hole review \
+                 found: {text}"
+            );
+            assert_in_order(
+                &text,
+                &[
+                    "|move|p2a: Opponent|leechseed||[still]",
+                    "|-fail|p2a: Opponent",
+                ],
+            );
+        }
+        assert_eq!(
+            seen, 1,
+            "ability {ability:?}: expected exactly one merged fizzle branch; 0 means this \
+             fixture never reached the arm: {branches:?}"
+        );
+    }
+}
+
+/// Protect keeps its OWN render, which is what makes the deleted `!defender_protected`
+/// conjunct redundant rather than load-bearing.
+///
+/// The redundancy is a property of the engine: `Choice::remove_effects_for_protect` sets
+/// `volatile_status = None`, so under Protect `volatile_fail`'s closure finds no volatile and
+/// cannot fire. It is NOT redundant because that function sets `accuracy = 100.0` — the gen3
+/// patch restores the original accuracy on the next line, deliberately, to keep the miss and
+/// blocked-hit branches distinct, and this fixture asserts BOTH of those branches so the
+/// distinction is pinned too. Re-adding the conjunct leaves this green; DELETING the engine's
+/// volatile clear turns it red, which is the direction that matters.
+#[test]
+fn protect_keeps_its_own_render_when_the_volatile_could_not_have_applied() {
+    let mut state = confused_state(Choices::LEECHSEED);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::LEECHSEED);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PROTECT);
+
+    let branches = generate(&mut state);
+    let mut blocked = 0usize;
+    let mut missed = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        if !text.contains("|move|p2a: Opponent|leechseed") {
+            continue;
+        }
+        assert!(
+            !text.contains("|-fail|p2a: Opponent"),
+            "the fail form must never preempt Protect's own render: {text}"
+        );
+        if text.contains("|-activate|p1a: Lead|Protect") {
+            blocked += 1;
+        } else if text.contains("|[miss]") {
+            // Correct: Protect cleared the volatile, so this branch has no
+            // hit-with-no-effect competitor and the empty tail really is the miss.
+            missed += 1;
+        }
+    }
+    assert_eq!(blocked, 1, "expected the blocked-hit branch: {branches:?}");
+    assert_eq!(
+        missed, 1,
+        "expected the miss branch to stay distinct -- if this is 0 the engine stopped \
+         restoring accuracy after `remove_effects_for_protect`: {branches:?}"
+    );
+}
+
+/// The accuracy-100 sibling stays DEFERRED, which pins this change's own scope line.
+///
+/// Yawn is 100% accuracy with an opponent-target volatile, so on an already-yawning target it
+/// is family D: deterministic, no miss to compete with, and a MISSING `|-fail|` rather than a
+/// mislabel. Dropping `choice.accuracy < 100.0` expands this change into that family with
+/// nothing else noticing — review measured that mutant as a survivor, so it is pinned here.
+///
+/// NORMAL-TYPED ON PURPOSE, and the first version of this fixture was VACUOUS for missing it.
+/// It used Confuse Ray, which is GHOST-typed: against the default Normal-typed target
+/// `effectiveness` is 0, the predicate dies on `effectiveness > 0.0` before the accuracy
+/// conjunct is ever consulted, and the `accuracy < 100.0` mutant SURVIVED this test. A pin is
+/// not a pin until the mutant dies, so that was measured rather than assumed.
+#[test]
+fn the_accuracy_100_volatile_sibling_is_left_alone() {
+    let mut state = confused_state(Choices::YAWN);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::YAWN);
+
+    let branches = generate(&mut state);
+    let mut seen = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        if !text.contains("|move|p2a: Opponent|yawn") {
+            continue;
+        }
+        seen += 1;
+        // Scoped to the move under test: side one's own Splash is a self-target move and
+        // legitimately renders the blank-target `[still]` form, so a whole-text match here
+        // would pass for the wrong reason. Review's rule about vacuous assertions, applied
+        // to an assertion of mine that was the opposite -- failing for the wrong reason.
+        assert!(
+            text.contains("|move|p2a: Opponent|yawn|p1a: Lead"),
+            "family D keeps its explicit target and gains no fail line; it is deferred to a \
+             change that measures its |move|-line and fail-column movement against the \
+             fidelity corpus, so this arm must not reach it: {text}"
+        );
+        assert!(
+            !text.contains("|move|p2a: Opponent|yawn||[still]")
+                && !text.contains("|-fail|p2a: Opponent"),
+            "family D is deferred; this arm must not render its fail form: {text}"
+        );
+    }
+    assert!(seen > 0, "fixture never reached a yawn render: {branches:?}");
+}
+
+/// A DAMAGING move that misses is still a miss, which pins the `category == Status` conjunct.
+///
+/// Wrap at 85% applies `PARTIALLYTRAPPED`, so against an already-trapped target it has the
+/// same "volatile cannot apply" shape — but it deals damage, so its no-op hit is NOT an empty
+/// delta and the only empty branch is the real miss. There is no competitor and `|[miss]|` is
+/// exact. Eight gen3 moves have this shape (BIND, CLAMP, FIRESPIN, MAGMASTORM, SANDTOMB,
+/// THUNDERCAGE, WHIRLPOOL, WRAP, 70-90% accuracy), so dropping the conjunct would relabel a
+/// correct miss on all of them.
+#[test]
+fn a_damaging_moves_miss_is_still_a_miss_even_when_its_volatile_could_not_apply() {
+    let mut state = confused_state(Choices::WRAP);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PARTIALLYTRAPPED);
+
+    let branches = generate(&mut state);
+    let mut missed = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        if !text.contains("|move|p2a: Opponent|wrap") {
+            continue;
+        }
+        assert!(
+            !text.contains("|-fail|p2a: Opponent"),
+            "a damaging move's empty branch is the MISS -- its no-op hit still deals damage, \
+             so there is no competitor to outweigh it: {text}"
+        );
+        if text.contains("|[miss]") {
+            missed += 1;
+        }
+    }
+    assert_eq!(
+        missed, 1,
+        "expected exactly one labelled miss branch: {branches:?}"
+    );
+}

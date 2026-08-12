@@ -42,10 +42,13 @@
 //!   is the same shape and is still labelled `|[miss]|`; 0 of 1682 gen3 randbat variants
 //!   carry a sub-100%-accuracy member of that family (`scripts/c157_no_effect_hit_reach.py`);
 //! - full-paralysis vs. miss was ALSO this shape and is now decided, not guessed: the
-//!   engine marks both move-time immobilizers (`Instruction::MoveImmobilized`), so
-//!   `|cant|..|par` is emitted from the marker and an unmarked empty tail is provably not
-//!   an immobilization. The old probability-mass guess, and PR #1140's proposal to gate it,
-//!   both describe a branch that no longer exists;
+//!   engine marks both MOVE-TIME immobilizers — full paralysis and Attract
+//!   (`Instruction::MoveImmobilized`) — so `|cant|..|par` is emitted from the marker and an
+//!   unmarked empty tail is provably not one of those two. NOT a claim about every `|cant|`:
+//!   the SLEEP and FREEZE gates in `consume_move_prelude` still render `|cant|..|slp` and
+//!   `|cant|..|frz` from an empty unmarked remainder, deliberately, and they return before
+//!   this arm. The old probability-mass guess, and PR #1140's proposal to gate it, both
+//!   describe a branch that no longer exists;
 //! - the KO-straddle branch conflates "high roll" and "crit" at the level of
 //!   BRANCH STRUCTURE — one arm carries both masses. Its damage IS now labelled
 //!   `|-crit|` when it exceeds the maximum non-crit roll, since that is decidable;
@@ -2851,10 +2854,19 @@ fn render_move_phase(
     let ghost_curse = choice.move_id == Choices::CURSE && !non_ghost_curse;
     let self_target = choice.target == MoveTarget::User || non_ghost_curse;
     // A status-inflicting move against an already-statused defender cannot
-    // work; the engine merges its no-op "hit" branch with the miss branch,
-    // and the fail outcome carries most of the probability mass — render the
-    // real protocol's fail form (blank target + [still]), never [miss]
-    // (documented ambiguity: a real 15%-miss renders identically here).
+    // work; the engine merges its no-op "hit" branch with the miss branch —
+    // render the real protocol's fail form, never [miss] (documented
+    // ambiguity: a real miss renders identically here).
+    //
+    // ⚠ "the fail outcome carries most of the probability mass" STOOD HERE UNCHECKED, and it
+    // is the same assert-in-a-comment this file's `volatile_fail` arm was written to stop
+    // doing. It happens to be TRUE for every gen3 member of this family -- the lowest
+    // accuracy is 55% (SING, GRASSWHISTLE, POISONGAS), so `no_effect_hit_outweighs_miss`
+    // holds for all twelve, measured from the engine's own table -- but nothing here tests
+    // it. Left as a claim about the move table rather than converted into a code path,
+    // deliberately: routing this arm through the comparison would change behaviour only
+    // below 50% accuracy, where gen3 has no member, so it would be an untestable edit to a
+    // shipped arm. Recorded as a KNOWN ASSERTION rather than silently reworded.
     // Type-based status immunity (Steel/Poison vs psn, Fire vs brn, Ice vs
     // frz): the real protocol shows |-immune| and it wins over the
     // already-statused fail (PS checks immunity first).
@@ -2966,18 +2978,93 @@ fn render_move_phase(
     // conjunct is a mutation toward the SAFER behaviour and it survives; that is declared
     // here rather than counted as caught.
     //
-    // The deterministic causes are excluded the way the miss inference below excludes them,
-    // so the two are mutually exclusive by construction: a protected, ability-immune,
-    // type-immune or absorbing defender keeps its own exact render.
+    // EVERY CONJUNCT BELOW IS EITHER PINNED OR DECLARED, and two that were here at first
+    // review are GONE because they were wrong or redundant. An earlier revision of this note
+    // said the arm "excludes the deterministic causes the way the miss inference does"; it
+    // did not, it excluded MORE, and review caught the difference behaviourally.
+    //
+    //   * `absorb.is_none()` -- DELETED, it was a live defect. `absorb` is
+    //     `is_absorb_ability(defender_ability)` and reads the DEFENDER'S ABILITY ONLY: no
+    //     move-type and no damaging check anywhere in it. So it was false for every Volt
+    //     Absorb / Water Absorb / Flash Fire defender whatever the move, and this whole arm
+    //     switched off for them -- measured through the renderer, an already-seeded Water
+    //     Absorb, Volt Absorb or Flash Fire target kept the 9:1 `|[miss]|` mislabel while a
+    //     plain one rendered the fail. The tell was the asymmetry with `status_fail`, which
+    //     has NO absorb conjunct and renders Toxic-into-an-already-poisoned-Water-Absorb
+    //     correctly; "mirrors `status_fail`" was the claim and this arm was strictly
+    //     narrower. It is not needed for soundness either: the absorb render below is gated
+    //     on `is_damaging`, which `category == Status` here already excludes.
+    //   * `!defender_protected` -- DELETED as redundant, and the redundancy is a property of
+    //     the engine, not a reachability argument. `Choice::remove_effects_for_protect`
+    //     (`choices.rs`) sets `volatile_status = None`, so under Protect the closure below
+    //     finds no volatile and the arm cannot fire. NOTE what does NOT hold: that function
+    //     also sets `accuracy = 100.0`, but the gen3 patch RESTORES the original accuracy on
+    //     the next line to keep miss and blocked-hit branches distinct -- so accuracy is the
+    //     wrong reason to call it redundant, and the volatile is the right one. The removal
+    //     depends on `flags.protect` gating that call: measured on the engine's own table,
+    //     all five family members carry the flag and NO opponent-target volatile Status move
+    //     under 100% accuracy lacks it. Pinned by a fixture that keeps Protect's own render.
+    //
+    //   * `ability_immune.is_none()` -- DELETED as provably vacuous HERE, by derivation
+    //     rather than by reachability. Every arm of `ability_immunity` requires either
+    //     `damaging` (Levitate, Wonder Guard) or `inflicts(status)` (Immunity, Insomnia,
+    //     Vital Spirit, Limber, Water Veil, Magma Armor), and this predicate already
+    //     excludes both with `category == Status` and `status.is_none()`. Re-adding it is
+    //     behaviour-neutral, measured.
+    //
+    // EVERY CONJUNCT, MEASURED. `cargo test --no-fail-fast`, 36 binaries, one mutant at a
+    // time, on a harness that treats a mutant it could not APPLY as an instrument failure
+    // rather than a survivor -- the first version of that harness printed "SURVIVED" for
+    // three mutants whose anchor was not unique, which is the tally-that-cannot-express-a-
+    // survivor defect this campaign records, committed inside the check for it.
+    //
+    //   KILLED, i.e. pinned by a fixture:
+    //     `category == Status`      -- a damaging move's miss stays a miss (WRAP fixture).
+    //     `accuracy < 100.0`        -- family D stays deferred (YAWN fixture).
+    //     re-adding `absorb`        -- the blocker-1 fix itself (absorb-ability fixture).
+    //
+    //   SURVIVED, declared here rather than counted as caught. The first four cannot be
+    //   distinguished by ANY gen3 fixture, and that is a property of the engine's move
+    //   table, measured from it rather than assumed:
+    //     `status.is_none()`        -- NO opponent-target volatile Status move under 100%
+    //                                  accuracy also carries a `status`. Zero candidates.
+    //     `side_condition.is_none()`-- likewise zero.
+    //     `choice.target == Opponent` and the closure's `vs.target == Opponent` -- zero moves
+    //                                  where those two disagree, in either direction.
+    //     `!non_ghost_curse`        -- CURSE is 100% accuracy, so the pinned accuracy
+    //                                  conjunct already excludes it; a single mutant cannot
+    //                                  reach it.
+    //     `effectiveness > 0.0`     -- reachable in principle (a Normal-typed member into a
+    //                                  Ghost defender) but not cheaply pinnable: every
+    //                                  sub-100% member except LEECHSEED and DISABLE applies
+    //                                  CONFUSION, whose counter instruction makes the tail
+    //                                  non-empty so `!has_any_effect` fails first. Kept as
+    //                                  the deference to the type-immunity render.
+    //     the dominance comparison  -- see the note above; swept across all nine generations
+    //                                  by review, zero candidates anywhere.
+    //
+    //   Re-adding either DELETED conjunct above is behaviour-neutral and survives, which is
+    //   the evidence that they were dead rather than a gap in the suite -- the opposite
+    //   reading from a survivor of a conjunct that is still in the code.
     //
     // SCOPED TO ACCURACY < 100, which is where the mislabel lives. At 100% accuracy the same
     // shape is DETERMINISTIC (no miss exists), the miss inference cannot fire, and today's
     // render is a plain `|move|<attacker>|<move>|<defender>` with no fail line — a MISSING
-    // line rather than a wrong one. That sibling is real and larger (ATTRACT, CONFUSERAY,
-    // MEANLOOK, SPIDERWEB, TAUNT, TORMENT, YAWN, NIGHTMARE, FORESIGHT, LOCKON, INGRAIN and
-    // ENCORE are all 100%), and it is left for a change that measures its `|move|`-line and
-    // `fail`-column movement against the fidelity corpus instead of riding along here. Its
-    // reach is in `scripts/c157_no_effect_hit_reach.py` so it is a bounded, named gap.
+    // line rather than a wrong one. That sibling is real and larger: **21 moves, 104 of 1682
+    // variants (6.18%)**, and the pool's carriers are ENCORE (95) and YAWN (14) — measured by
+    // `scripts/c157_no_effect_hit_reach.py`, which is the citation of record for it.
+    //
+    // ⚠ An earlier revision of this note said "23 moves, 121, 7.19%" and named MEANLOOK,
+    // SPIDERWEB, LOCKON and INGRAIN as members. All five figures and all four names were
+    // WRONG, and review caught them against this repo's own committed script. The 121
+    // reproduces exactly under a predicate that tests `has_volatile` instead of the volatile's
+    // TARGET, which admits CURSE (17 carriers — the move this very predicate excludes by
+    // `!non_ghost_curse`); and MEANLOOK, SPIDERWEB and LOCKON carry NO volatile at all in the
+    // engine's table while INGRAIN's targets the USER. Naming members from memory instead of
+    // from the table is the same defect the accuracy figures are derived in-crate to avoid.
+    //
+    // Left for a change that measures its `|move|`-line and `fail`-column movement against the
+    // fidelity corpus rather than riding along here. Bounded and named, not silent.
     let volatile_fail = !has_any_effect
         && choice.category == MoveCategory::Status
         && choice.status.is_none()
@@ -2985,9 +3072,6 @@ fn render_move_phase(
         && choice.target == MoveTarget::Opponent
         && !non_ghost_curse
         && choice.accuracy < 100.0
-        && !defender_protected
-        && ability_immune.is_none()
-        && absorb.is_none()
         && effectiveness > 0.0
         && no_effect_hit_outweighs_miss(choice.accuracy)
         && choice.volatile_status.as_ref().map_or(false, |vs| {
