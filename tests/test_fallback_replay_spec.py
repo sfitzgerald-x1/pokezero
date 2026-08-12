@@ -463,7 +463,7 @@ class TestSelfPlayWriters:
         assert "deep_ko_split" not in spec.missing
 
     def test_hc_grid_cell_must_match_the_document(self):
-        # The cell selects the depth (`hc_depth_grid.py:196`). An hc-d8 address
+        # The cell selects the depth (`hc_depth_grid._cell_depth`). An hc-d8 address
         # read against an hc-d4 shard previously resolved with depth=4 and
         # fidelity=exact -- the collision `ReplaySpec.source` exists to name.
         document = _hc_grid_shard(cell="hc-d4", seed=600000)

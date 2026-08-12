@@ -494,8 +494,7 @@ def _foulplay_fields(
         "checkpoint_sha256": _as_str(document.get("checkpoint_sha256")),
         "format_id": _as_str(document.get("format_id")),
         "policy_mode": _as_str(document.get("policy_mode")),
-        # foulplay_bridge._build_policy's `EngineMctsConfig(leaf_eval="model", ...)`
-        # hardcodes the model leaf for engine-mcts.
+        # foulplay_bridge._build_policy hardcodes the model leaf for engine-mcts.
         "leaf_eval": "model" if document.get("policy_mode") == "engine-mcts" else None,
         "engine_depth": _as_int(engine.get("depth")),
         "engine_sims": _as_int(engine.get("sims")),
@@ -618,12 +617,12 @@ def _hc_grid_fields(
     fields: dict[str, Any] = {
         "checkpoint": _as_str(document.get("checkpoint")),
         "policy_mode": "engine-mcts",
-        # scripts/hc_depth_grid.py:220 -- the handcrafted leaf, so the checkpoint
-        # is the OPPONENT's and no model/tables artifact is involved.
+        # hc_depth_grid's `leaf_eval="hp_fraction_crate"` -- the handcrafted leaf, so
+        # the checkpoint is the OPPONENT's and no model/tables artifact is involved.
         # READ, with the script's compiled-in value as the fallback. Asserting
         # it made the leaf-eval fidelity branch unreachable through
         # `resolve_address` -- a latent wrong answer for the day
-        # `hc_depth_grid` grows a `--leaf-eval` flag. `:220` is today's value.
+        # `hc_depth_grid` grows a `--leaf-eval` flag. That literal is today's value.
         "leaf_eval": _leaf_eval(document, "hp_fraction_crate"),
         "engine_depth": _as_int(document.get("depth")),
         "engine_sims": _as_int(document.get("sims")),
@@ -744,8 +743,8 @@ def _acceptance_fields(
     caveats = [caveat] if caveat else []
     config_id = _as_str(document.get("config_id")) or ""
     parsed: dict[str, int] = {}
-    # The checkpoint tag is stripped FIRST: `config_id_for` renders
-    # `f"{base}@{tag}"` (scripts/foulplay_paired_eval.py:110), so `"w8@k1"` is
+    # The checkpoint tag is stripped FIRST: `scripts/foulplay_paired_eval.py`'s
+    # `config_id_for` ends `return f"{base}@{tag}"`, so `"w8@k1"` is
     # not a digit run and `engine_worlds` would silently read None -- the spec
     # would go `underspecified` and the runner would refuse a perfectly
     # resolvable address.
@@ -754,7 +753,8 @@ def _acceptance_fields(
             parsed[part[0]] = int(part[1:])
     fields: dict[str, Any] = {
         "checkpoint": _as_str(document.get("checkpoint")),
-        "format_id": "gen3randombattle",  # scripts/mcts_acceptance_h2h.py:435
+        # mcts_acceptance_h2h's `RolloutConfig(format_id="gen3randombattle")`
+        "format_id": "gen3randombattle",
         "policy_mode": "engine-mcts",
         "leaf_eval": _leaf_eval(document, "model"),  # :79-107
         "engine_depth": parsed.get("d"),
