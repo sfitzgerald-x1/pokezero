@@ -907,14 +907,26 @@ class TheDerivedClaimsAreDerivedTests(unittest.TestCase):
             "a second live entry point reaches `heal_subcase`; R10's unemittability "
             "argument is scoped to the Sleep Talk block and must be re-traced",
         )
-        # DE-NUMBERED, not re-pointed. This assertion carried the literals `[2155, 2176]`
-        # and went red on a change that only INSERTED lines above them -- the landmine the
-        # ledger's own §4.8 describes, on the module whose whole point is that citations
-        # must be re-derived. The two edges are named by their call-site text, which is
-        # unique in the file (the `fn` definitions read `fn <name>(` and the thin wrappers
-        # call the non-`_with_protect` form), so a MOVED edge updates itself and a DELETED
-        # or DUPLICATED one is still a loud failure. The count and the identity of the two
-        # sites are what the assertion was protecting; the integers were not.
+        # DE-NUMBERED, not re-pointed, and this is the one edit this change makes to a gate.
+        #
+        # The assertion's message says "the NUMBER of ways into the subgraph ... changed",
+        # which is the claim R10's unemittability argument rests on. What it COMPARED was a
+        # pair of line ADDRESSES inside `render_move_phase`, so it fired on any edit that
+        # shifted that function -- a docstring insert would do it -- while reporting a
+        # semantic change that had not happened. That is the landmine shape report 4 §4.8
+        # records: "de-number a stale citation; never re-point it." Two changes hit it
+        # independently (#1234 and this one), which is the argument for not re-pointing a
+        # third time.
+        #
+        # THE COUNT ALONE IS NOT ENOUGH, and that is the one thing added back here.
+        # `assertEqual(committed, rederived)` above does compare the whole graph, line
+        # numbers included -- but BOTH of its sides come from `c154.rust_call_graph`, so it
+        # is an oracle whose two sides derive from one source and it gets quieter, not
+        # louder, if that builder's own matching drifts. The two edges are therefore ALSO
+        # resolved here straight out of the file text, by call-site strings that are unique
+        # in it (the definitions read `fn <name>(`, and the thin wrappers call the
+        # non-`_with_protect` form). A MOVED edge updates itself; a DELETED or DUPLICATED
+        # one is a loud failure; and the addresses stay out of this file.
         chokepoint_calls = ("if !sleeptalk_refusal_is_unsafe_with_protect(",
                             "&ambiguous_unrenderable_slug_with_protect(")
         with open(os.path.join(REPO, c154.EV), encoding="utf-8") as handle:
@@ -930,12 +942,14 @@ class TheDerivedClaimsAreDerivedTests(unittest.TestCase):
             expected_edges.append(hits[0])
         self.assertEqual(
             rederived["edges_out_of_the_chokepoint"], sorted(expected_edges),
-            "the number or the identity of the ways into the subgraph from "
-            "`render_move_phase` changed",
+            "the identity of the ways into the subgraph from `render_move_phase` changed, "
+            "derived from the file text rather than from the graph builder",
         )
         self.assertEqual(
             len(rederived["edges_out_of_the_chokepoint"]), 2,
-            "exactly two edges, which is R10's unemittability argument",
+            "the number of ways into the subgraph from `render_move_phase` changed; R10's "
+            "unemittability argument is scoped to its Sleep Talk block and must be "
+            "re-traced",
         )
         self.assertEqual(len(rederived["dead_wrappers_with_no_production_caller"]), 5)
 
