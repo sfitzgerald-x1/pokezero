@@ -47,7 +47,10 @@ set -uo pipefail
 # immutable snapshot makes the run immune to edits in the working tree.
 if [ "${DRILL_REEXEC:-0}" != "1" ]; then
   _snap="$(mktemp -t schema_rotation_drill)" || exit 3
-  cat "${BASH_SOURCE[0]}" > "$_snap"
+  cat "${BASH_SOURCE[0]}" > "$_snap" || { echo "ABORT: snapshot copy failed"; exit 10; }
+  # `bash <empty file>` exits 0, so an unchecked copy turns disk-full into a silent PASS.
+  [ -s "$_snap" ] || { echo "ABORT: snapshot is empty"; exit 10; }
+  trap 'rm -f "$_snap"' EXIT
   # DRILL_REPO must ride along: $REPO is derived from BASH_SOURCE, which after re-exec points at
   # the snapshot in /tmp, not the checkout. The first cut omitted it and the run died on
   # "fatal: not a git repository".
@@ -86,6 +89,7 @@ echo "== drill: synthetic v5 rotation =="
 git -C "$REPO" worktree remove --force "$WT" 2>/dev/null
 git -C "$REPO" worktree add -q --detach "$WT" HEAD || exit 3
 cd "$WT" || exit 3
+export DRILL_WT="$WT"
 
 python3 - "$WT" <<'PY'
 import pathlib, re, sys
@@ -98,10 +102,26 @@ s = open(p).read()
 # layout". Identical shape means every breakage is unambiguously a naming failure.
 anchor = re.search(r'^OBSERVATION_SCHEMA_VERSION_V4\s*=.*$', s, re.M)
 s = s[:anchor.end()] + '\nOBSERVATION_SCHEMA_VERSION_V5_DRILL = "pokezero.observation.v5-drill"' + s[anchor.end():]
-s = re.sub(r'^(SUPPORTED_OBSERVATION_SCHEMA_VERSIONS\s*=\s*\()', r'\1\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL,', s, count=1, flags=re.M)
+# Appended LAST, not first. `schema_with()` iterates `reversed(SUPPORTED)` to prefer the NEWEST
+# match, so inserting the synthetic schema at the front made it the oldest and `schema_with()`
+# never returned it -- every site the migration moved to the property selector was INERT under
+# the drill, which is the migration's own vocabulary going untested by its acceptance check.
+_m = re.search(r'^SUPPORTED_OBSERVATION_SCHEMA_VERSIONS\s*=\s*\((.*?)\)', s, re.S | re.M)
+if _m is None:
+    raise SystemExit("drill: could not locate SUPPORTED_OBSERVATION_SCHEMA_VERSIONS")
+s = s[:_m.end(1)] + "\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL," + s[_m.end(1):]
 s = re.sub(r'^(GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS\s*=\s*\()', r'\1\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL,', s, count=1, flags=re.M)
 s = s.replace("FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V4,)",
               "FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V4, OBSERVATION_SCHEMA_VERSION_V5_DRILL)")
+# V2_1_LINEAGE was MISSED, and v4 is a member. It drives `schema_v2_1` in showdown.py (sub-HP
+# fraction, PP-validity bits, pinned Tier-2 investment, defender identity), so omitting it made
+# the synthetic schema encode DIFFERENTLY from v4 -- two numeric cells -- which falsifies the
+# drill's central premise that only NAMING can break. Third defect from this same class; the
+# encode-equivalence precondition below is what actually closes it.
+_m21 = re.search(r'^V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS\s*=\s*\((.*?)\)', s, re.S | re.M)
+if _m21 is None:
+    raise SystemExit("drill: could not locate V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS")
+s = s[:_m21.end(1)] + "\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL," + s[_m21.end(1):]
 s = re.sub(r'^(\s*)OBSERVATION_SCHEMA_VERSION_V4: (V4_TRANSITION_TOKEN_COUNT,)$',
            r'\1OBSERVATION_SCHEMA_VERSION_V4: \2\n\1OBSERVATION_SCHEMA_VERSION_V5_DRILL: \2', s, count=1, flags=re.M)
 s = s.replace("OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V4",
@@ -191,7 +211,68 @@ print("  synthetic v5-drill schema injected; default rotated to it")
 PY
 [ $? -eq 0 ] || { echo "FAILED to inject the drill schema"; exit 3; }
 
-"$VENV" -c "import sys; sys.path.insert(0,'$WT/src'); from pokezero.observation import OBSERVATION_SCHEMA_VERSION as v; print('  default is now:', v)" || exit 3
+# PRECONDITION 1: the rotation actually happened. The injection edits are regex-based and their
+# results were never checked, so a reformatted source line would silently no-op and the drill
+# would score an UNROTATED tree as clean.
+"$VENV" - <<'PRE' || exit 8
+import sys
+sys.path.insert(0, __import__("os").environ["DRILL_WT"] + "/src")
+from pokezero.observation import (
+    OBSERVATION_SCHEMA_VERSION as v,
+    SUPPORTED_OBSERVATION_SCHEMA_VERSIONS as SUP,
+    schema_with,
+)
+assert v.endswith("v5-drill"), f"default is {v!r}, not the synthetic schema -- injection no-oped"
+assert SUP[-1] == v, f"synthetic schema is not LAST in SUPPORTED ({SUP[-1]!r}); schema_with() " \
+                     "iterates reversed() and would never return it, leaving every " \
+                     "property-selector site inert under the drill"
+assert schema_with(feature_pack=True) == v, (
+    f"schema_with(feature_pack=True) -> {schema_with(feature_pack=True)!r}, not the synthetic "
+    "schema; the migration's own vocabulary is untested by this run"
+)
+print(f"  default is now: {v}")
+print(f"  schema_with(feature_pack=True) -> {schema_with(feature_pack=True)}")
+PRE
+
+# PRECONDITION 2: the synthetic schema ENCODES IDENTICALLY to v4. This is the drill's central
+# premise -- "shape-identical, so every breakage is a naming failure" -- and it was FALSE:
+# V2_1_LINEAGE went unregistered and two numeric cells differed. Asserting the premise instead of
+# documenting it closes the whole "unregistered schema-keyed table" class, which has produced
+# THREE separate instrument defects. Any table the injection misses now shows up here as an
+# encode difference, before a single test is scored.
+"$VENV" - <<'PRE' || exit 9
+import os, sys
+sys.path.insert(0, os.environ["DRILL_WT"] + "/src")
+from pokezero.observation import OBSERVATION_SCHEMA_VERSION as drill, OBSERVATION_SCHEMA_VERSION_V4 as v4
+from pokezero.showdown import observation_spec_for_schema
+a, b = observation_spec_for_schema(v4), observation_spec_for_schema(drill)
+fields = ("token_count", "categorical_feature_count", "numeric_feature_count",
+          "transition_token_count", "opponent_tendency_stats_token_count")
+bad = [(f, getattr(a, f), getattr(b, f)) for f in fields if getattr(a, f) != getattr(b, f)]
+if bad:
+    print("  SPEC MISMATCH v4 vs synthetic:", bad); sys.exit(9)
+from pokezero.observation import (
+    FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS, GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
+    TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS, V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS,
+    V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS, REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA,
+)
+tuples = {
+    "FEATURE_PACK": FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
+    "GROUPED_LAYOUT": GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
+    "TURN_MERGED": TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
+    "V2_1_LINEAGE": V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS,
+    "V3_PROJECTION": V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS,
+}
+skew = [n for n, t in tuples.items() if (v4 in t) != (drill in t)]
+if REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA.get(v4) != REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA.get(drill):
+    skew.append("REPLAY_TRANSITION_TOKEN_COUNTS")
+if skew:
+    print("  MEMBERSHIP SKEW v4 vs synthetic in:", skew)
+    print("  The synthetic schema is not equivalent to v4, so a breakage cannot be attributed")
+    print("  to NAMING. Register it in these structures before trusting any verdict.")
+    sys.exit(9)
+print("  premise verified: synthetic schema is spec- and membership-equivalent to v4")
+PRE
 
 find "$WT/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
 PYTHONPATH="$WT/src" "$VENV" -m pytest $(drill_targets "$WT") -q -p no:randomly > "$WT/DRILL.txt" 2>&1
@@ -250,6 +331,30 @@ fi
 # The summary's failure count MUST equal the number of ids we scored. They disagreed by 4 once
 # (18 vs 14, pytest-subtests) and the shortfall was silent. This makes any future missed bucket
 # -- a new pytest reporter prefix, a plugin -- a hard failure instead of a quiet undercount.
+# DENOMINATOR. Without this, a suite killed partway prints a summary line, passes the
+# "has a summary" guard, and scores PASS over a fraction of the tests -- verified: a synthetic
+# "18 failed, 20 passed" summary produced "PASS: the class is dead" and exit 0. All seven pins
+# sort at or before test_turn_merged_encode.py, so any truncation past that point looks clean.
+_tot() { # passed+failed+skipped from a pytest summary line
+  local f="$1" p x s2
+  p=$(grep -oE '[0-9]+ passed' "$f" | tail -1 | grep -oE '[0-9]+' || echo 0)
+  x=$(grep -oE '[0-9]+ failed' "$f" | tail -1 | grep -oE '[0-9]+' || echo 0)
+  s2=$(grep -oE '[0-9]+ skipped' "$f" | tail -1 | grep -oE '[0-9]+' || echo 0)
+  echo $(( ${p:-0} + ${x:-0} + ${s2:-0} ))
+}
+_rot_tot=$(_tot "$WT/DRILL.txt"); _base_tot=$(_tot "$BASE/BASE.txt")
+echo "  denominator: rotated=$_rot_tot baseline=$_base_tot"
+if [ "$_rot_tot" -lt 100 ] || [ "$_base_tot" -lt 100 ]; then
+  echo "ABORT: a run collected only $_rot_tot / $_base_tot tests -- that is not this suite."
+  exit 11
+fi
+_skew=$(( _rot_tot > _base_tot ? _rot_tot - _base_tot : _base_tot - _rot_tot ))
+if [ "$_skew" -gt 5 ]; then
+  echo "ABORT: rotated and baseline denominators differ by $_skew ($_rot_tot vs $_base_tot)."
+  echo "       One run measured a different suite; the subtraction is meaningless."
+  exit 11
+fi
+
 _summary_failed=$(grep -oE '^[0-9]+ failed' "$WT/DRILL.txt" | head -1 | grep -oE '[0-9]+' || echo 0)
 _scored=$(grep -cE '^(FAILED|SUBFAILED)' "$WT/DRILL.txt" || true)
 if [ "${_summary_failed:-0}" -ne "${_scored:-0}" ]; then
@@ -323,6 +428,9 @@ comm -23 "$WT/attributable.txt" "$WT/artifacts.txt" > "$WT/actual.txt"
 _art=$(comm -12 "$WT/attributable.txt" "$WT/artifacts.txt" | grep -c . || true)
 [ "${_art:-0}" -gt 0 ] && echo "  source-mutation artifacts subtracted: $_art"
 grep -vE '^\s*(#|$)' "$EXPECTED" | sort -u > "$WT/expected.txt"
+# Present-but-all-comments is the same as absent, and combined with a no-op rotation it scored a
+# PASS. `-f` was not enough.
+[ -s "$WT/expected.txt" ] || { echo "ABORT: the expected-breakages file has no entries."; exit 7; }
 
 UNEXPECTED=$(comm -23 "$WT/actual.txt" "$WT/expected.txt")
 MISSING=$(comm -13 "$WT/actual.txt" "$WT/expected.txt")
@@ -343,6 +451,21 @@ if [ "$NM" -gt 0 ]; then
   echo "EXPECTED-BUT-DID-NOT-BREAK ($NM) -- these pins are no longer pinning:"
   printf '%s\n' "$MISSING" | sed 's/^/  /'
 fi
-[ "$NU" -eq 0 ] && [ "$NM" -eq 0 ] && echo "PASS: the breakage set is EXACTLY the class-(iii) readers. The class is dead."
+_mode="scope=${DRILL_SCOPE:-full} shape=${DRILL_SHAPE:-identical} rotated=$_rot_tot baseline=$_base_tot"
+if [ "$NU" -eq 0 ] && [ "$NM" -eq 0 ]; then
+  if [ "${DRILL_SHAPE:-identical}" != "identical" ] || [ "${DRILL_SCOPE:-full}" != "full" ]; then
+    # A `fast` or `differ` transcript used to be byte-indistinguishable from a full identical
+    # run, including the words "The class is dead". Labels that live only in source comments are
+    # not labels.
+    echo "INCONCLUSIVE ($_mode): breakage set matches, but this configuration is NOT the stop"
+    echo "  condition. fast cannot see a new breakage in a file that has never broken; differ is"
+    echo "  known-unsound. Re-run with no DRILL_SCOPE/DRILL_SHAPE before quoting a result."
+    exit 12
+  fi
+  echo "PASS ($_mode): the breakage set is EXACTLY the class-(iii) readers."
+  echo "  SCOPE OF THIS CLAIM: no test reads the default's VERSION where it means a specific one."
+  echo "  It does NOT cover shape-dependent conflations -- the synthetic schema is shape-identical"
+  echo "  to v4 by design, so a site asserting a v4 width passes both arms. Pair with a shape probe."
+fi
 echo "Full log: $WT/DRILL.txt"
 exit $(( NU + NM == 0 ? 0 : 1 ))
