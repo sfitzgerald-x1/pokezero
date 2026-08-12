@@ -249,9 +249,9 @@ class TestFoulplaySidecar:
         assert spec.opponent_search_time_ms == 1000
 
     def test_decision_rng_seed_is_the_literal_bridge_expression(self):
-        # foulplay_bridge.py:3541 -- reproduced verbatim, because a replay that
-        # builds this string differently gets a different world sample and a
-        # different refusal.
+        # foulplay_bridge._select_policy_decision -- reproduced verbatim, because
+        # a replay that builds this string differently gets a different world
+        # sample and a different refusal.
         spec = resolve_address(_address(), _foulplay_sidecar())
         assert isinstance(spec, ReplaySpec)
         assert spec.decision_rng_seed == "8220001:p1:103"
@@ -261,7 +261,8 @@ class TestFoulplaySidecar:
         # The trivially-wrong implementation is `opponent_seed = seed`. It passes
         # for the default schedule, so the fixture DECOUPLES the two bands: this
         # run set foulplay_random_seed=990000 against seed_start=8220000, which
-        # foulplay_bridge.py:2375 says makes battle 8220001's opponent 990001.
+        # foulplay_bridge._per_seed_foulplay_random_seed_schedule_for_offsets says
+        # makes battle 8220001's opponent 990001.
         document = _foulplay_sidecar(
             opponent_seeds=list(range(990000, 990008)),
         )
