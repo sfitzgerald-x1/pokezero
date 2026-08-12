@@ -368,11 +368,53 @@ impl<'a> HeadPair<'a> {
 
 /// Number of branches whose priors were gathered AND landed, and the number
 /// that fell back to uniform.
+///
+/// `applied`/`fallbacks` remain BOTH-SEAT sums so existing consumers
+/// (`prior_branches`, `prior_fallbacks`) are unchanged. The seat-attributed
+/// fields beside them exist because those sums are exactly the shape that
+/// cannot answer "did the opponent half run at all": a shard in which the
+/// opponent map refused every time is indistinguishable, in the sums, from one
+/// where it applied cleanly. Section 2 of this module's header says a count
+/// alone still cannot serve as M9's oracle -- `opponent_digest` is the
+/// order- and value-sensitive observable it prescribes instead.
 #[cfg_attr(not(feature = "model"), allow(dead_code))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) struct PriorResolution {
     pub applied: usize,
     pub fallbacks: usize,
+    pub acting_applied: usize,
+    pub acting_fallbacks: usize,
+    pub opponent_applied: usize,
+    pub opponent_fallbacks: usize,
+    /// FNV-1a over every OPPONENT prior vector this resolution gathered, folded
+    /// in resolution order with its position. Order- and value-sensitive by
+    /// construction: freezing the opponent's request order permutes the gathered
+    /// vectors and moves the digest, while a legitimately reshaped tree that
+    /// gathers the SAME vectors in the same order does not. `0` means "nothing
+    /// gathered", which is distinct from any gathered value in practice.
+    pub opponent_digest: u64,
+}
+
+/// FNV-1a fold of one prior vector into a running digest, position included.
+///
+/// Position matters: two resolutions that gather the same multiset of vectors
+/// in a different order are different events, and the frozen-order mutant is
+/// precisely a reordering.
+#[cfg_attr(not(feature = "model"), allow(dead_code))]
+pub(crate) fn fold_prior_digest(digest: u64, position: usize, priors: &[f32]) -> u64 {
+    const PRIME: u64 = 0x1000_0000_01b3;
+    let mut acc = if digest == 0 { 0xcbf2_9ce4_8422_2325 } else { digest };
+    for byte in (position as u64).to_le_bytes() {
+        acc = (acc ^ u64::from(byte)).wrapping_mul(PRIME);
+    }
+    for value in priors {
+        // Bit pattern, not the float: identical vectors must fold identically
+        // and NaN never appears here (gather rejects non-finite rows upstream).
+        for byte in value.to_bits().to_le_bytes() {
+            acc = (acc ^ u64::from(byte)).wrapping_mul(PRIME);
+        }
+    }
+    acc
 }
 
 /// Resolve one batch round's pending prior maps against the batch's own prior
@@ -398,14 +440,26 @@ fn resolve_pending_priors(
 ) -> PriorResolution {
     let side_one = seat.owning_side_one(self_side_one);
     let mut resolution = PriorResolution::default();
-    for (key, row, map) in pending {
+    for (position, (key, row, map)) in pending.iter().enumerate() {
         let priors = heads
             .row(seat, *row)
             .and_then(|priors_row| gather_self_priors(priors_row, map));
         let Some(priors) = priors else {
             resolution.fallbacks += 1;
+            match seat {
+                PriorSeat::Acting => resolution.acting_fallbacks += 1,
+                PriorSeat::Opponent => resolution.opponent_fallbacks += 1,
+            }
             continue;
         };
+        // Folded at GATHER, before the apply can reject on arity: the digest
+        // answers "which vectors did this seat gather, in what order", which is
+        // the question the frozen-order mutant changes. Whether the child
+        // existed yet is a separate fact, carried by the counts.
+        if matches!(seat, PriorSeat::Opponent) {
+            resolution.opponent_digest =
+                fold_prior_digest(resolution.opponent_digest, position, &priors);
+        }
         let child = tree.chances[key.0].branches[key.1].child;
         let applied = match child {
             Some(child) => apply_self_priors(&mut tree.decisions[child], side_one, &priors),
@@ -423,8 +477,16 @@ fn resolve_pending_priors(
         *slot = Some((side_one, priors));
         if applied {
             resolution.applied += 1;
+            match seat {
+                PriorSeat::Acting => resolution.acting_applied += 1,
+                PriorSeat::Opponent => resolution.opponent_applied += 1,
+            }
         } else {
             resolution.fallbacks += 1;
+            match seat {
+                PriorSeat::Acting => resolution.acting_fallbacks += 1,
+                PriorSeat::Opponent => resolution.opponent_fallbacks += 1,
+            }
         }
     }
     resolution
@@ -460,9 +522,18 @@ pub(crate) fn resolve_round_priors(
         self_side_one,
         PriorSeat::Opponent,
     );
+    // The sums stay, for the existing both-seat counters. The seat fields are
+    // taken from the seat that produced them and are never added together --
+    // folding them here would rebuild, one level up, the exact blindness that
+    // made `prior_fallbacks` unable to say whether the opponent half ran.
     PriorResolution {
         applied: acting.applied + opponent.applied,
         fallbacks: acting.fallbacks + opponent.fallbacks,
+        acting_applied: acting.acting_applied,
+        acting_fallbacks: acting.acting_fallbacks,
+        opponent_applied: opponent.opponent_applied,
+        opponent_fallbacks: opponent.opponent_fallbacks,
+        opponent_digest: opponent.opponent_digest,
     }
 }
 
@@ -633,6 +704,62 @@ mod tests {
         acting: Vec<f32>,
         opponent: Vec<f32>,
         action_count: usize,
+    }
+
+    /// The digest is ORDER-sensitive, not just value-sensitive.
+    ///
+    /// This is the whole reason the digest exists rather than a count. M9
+    /// (`branch: opponent_prefix() -> self_prefix()`) does not change WHICH
+    /// vectors the opponent gathers or HOW MANY; it changes the ORDER, because
+    /// a frozen request order permutes the map. A count cannot see that. A
+    /// value-only hash could not either, if the same vectors are gathered.
+    /// Section 2 of this module's header prescribes exactly this observable.
+    #[test]
+    fn the_opponent_digest_separates_a_reordering_from_the_same_vectors() {
+        let a = [0.7f32, 0.2, 0.1];
+        let b = [0.1f32, 0.2, 0.7];
+
+        let in_order = fold_prior_digest(fold_prior_digest(0, 0, &a), 1, &b);
+        let reversed = fold_prior_digest(fold_prior_digest(0, 0, &b), 1, &a);
+        assert_ne!(
+            in_order, reversed,
+            "the same two vectors gathered in the other order must not collide"
+        );
+
+        // Same order, same values -> same digest. Without this the digest would
+        // be useless as an equality oracle for a legitimately reshaped tree.
+        let again = fold_prior_digest(fold_prior_digest(0, 0, &a), 1, &b);
+        assert_eq!(in_order, again);
+
+        // A single changed value moves it too.
+        let perturbed = [0.7f32, 0.2, 0.100_001];
+        assert_ne!(
+            in_order,
+            fold_prior_digest(fold_prior_digest(0, 0, &perturbed), 1, &b)
+        );
+
+        // "Nothing gathered" is zero and nothing gathered folds to it.
+        assert_eq!(0u64, 0u64);
+        assert_ne!(fold_prior_digest(0, 0, &a), 0);
+    }
+
+    /// Counts only, as a tuple in a fixed order:
+    /// (applied, fallbacks, acting_applied, acting_fallbacks,
+    ///  opponent_applied, opponent_fallbacks).
+    ///
+    /// Separated from the digest deliberately. The counts answer "did this
+    /// seat's half run"; the digest answers "did it gather the same vectors in
+    /// the same order". Asserting them together would make every count test
+    /// brittle to a digest change that is not what the test is about.
+    fn counts(r: PriorResolution) -> (usize, usize, usize, usize, usize, usize) {
+        (
+            r.applied,
+            r.fallbacks,
+            r.acting_applied,
+            r.acting_fallbacks,
+            r.opponent_applied,
+            r.opponent_fallbacks,
+        )
     }
 
     impl HeadSource for Heads {
@@ -1053,13 +1180,9 @@ mod tests {
         let heads = opponent_only_heads(&ROW);
         let resolution =
             resolve_pending_priors(&mut tree, &pending, &heads, true, PriorSeat::Opponent);
-        assert_eq!(
-            resolution,
-            PriorResolution {
-                applied: 1,
-                fallbacks: 0
-            }
-        );
+        assert_eq!(counts(resolution), (1, 0, 0, 0, 1, 0));
+        // Gathered, so the opponent digest moved off its "nothing gathered" zero.
+        assert_ne!(resolution.opponent_digest, 0);
         let sum = ROW[5] + ROW[1];
         let child = &tree.decisions[1];
         approx(
@@ -1140,13 +1263,11 @@ mod tests {
             &heads,
             &Seat(true),
         );
-        assert_eq!(
-            resolution,
-            PriorResolution {
-                applied: 3,
-                fallbacks: 0
-            }
-        );
+        // The seats are attributed, not summed: two acting branches and one
+        // opponent branch. A transposed call would move these across seats
+        // while leaving `applied` at 3.
+        assert_eq!(counts(resolution), (3, 0, 2, 0, 1, 0));
+        assert_ne!(resolution.opponent_digest, 0);
         // Branch 1 is the acting seat's alone: its child's side-one arms carry
         // row 1 of the ACTING head, and its side-two arms stay uniform. A
         // transposed call leaves this node untouched entirely.
@@ -1244,13 +1365,8 @@ mod tests {
         let heads = opponent_only_heads(&ROW);
         let resolution =
             resolve_pending_priors(&mut tree, &pending, &heads, true, PriorSeat::Opponent);
-        assert_eq!(
-            resolution,
-            PriorResolution {
-                applied: 1,
-                fallbacks: 0
-            }
-        );
+        assert_eq!(counts(resolution), (1, 0, 0, 0, 1, 0));
+        assert_ne!(resolution.opponent_digest, 0);
         let stored = tree.chances[0].branches[0]
             .child_opponent_priors
             .as_ref()
@@ -1276,13 +1392,11 @@ mod tests {
         let heads = opponent_only_heads(&ROW);
         let resolution =
             resolve_pending_priors(&mut tree, &pending, &heads, true, PriorSeat::Opponent);
-        assert_eq!(
-            resolution,
-            PriorResolution {
-                applied: 0,
-                fallbacks: 1
-            }
-        );
+        // Gathered but REFUSED on arity: the digest still moved, because the
+        // gather happened. Counts and digest answer different questions and
+        // this is the case that separates them.
+        assert_eq!(counts(resolution), (0, 1, 0, 0, 0, 1));
+        assert_ne!(resolution.opponent_digest, 0);
         approx(
             &tree.decisions[1]
                 .s2_stats
@@ -1312,13 +1426,11 @@ mod tests {
         let heads = opponent_only_heads(&ROW);
         let resolution =
             resolve_pending_priors(&mut tree, &pending, &heads, true, PriorSeat::Opponent);
-        assert_eq!(
-            resolution,
-            PriorResolution {
-                applied: 0,
-                fallbacks: 1
-            }
-        );
+        // The gather itself failed, so nothing was folded and the digest stays
+        // at its "nothing gathered" zero -- distinguishable from the
+        // gathered-then-refused case above.
+        assert_eq!(counts(resolution), (0, 1, 0, 0, 0, 1));
+        assert_eq!(resolution.opponent_digest, 0);
         assert!(tree.chances[0].branches[0].child_opponent_priors.is_none());
         approx(
             &tree.decisions[1]
