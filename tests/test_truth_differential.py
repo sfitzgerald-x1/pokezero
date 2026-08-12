@@ -1148,6 +1148,126 @@ class MergedArtifactIdentityTests(unittest.TestCase):
         # ...but it must not be invisible either.
         self.assertEqual(summary["non_shard_inputs"], [str(summary_path)])
 
+    def test_the_schema_family_not_just_v1_counts_as_a_shard(self) -> None:
+        """A future `/v2` shard must be COMPARED, not silently aggregated.
+
+        Under `schema == ".../v1"` a `/v2` payload was classified "not a shard" for the
+        alarm while its records still entered the published total -- excluded from the very
+        check meant to catch a second observation schema. This kills that stricter variant.
+        """
+
+        from truth_differential_census import is_census_shard, merge_shards
+
+        self.assertTrue(is_census_shard({"schema": "truth-differential-census-shard/v1"}))
+        self.assertTrue(is_census_shard({"schema": "truth-differential-census-shard/v2"}))
+        self.assertFalse(is_census_shard({"schema": "public-projection-census-shard/v1"}))
+        self.assertFalse(is_census_shard({}))
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            v1 = self._shard(tmp, "v1.json", artifact_identity=self._stamped("aaaa1111"))
+            v2 = self._shard(tmp, "v2.json", artifact_identity=self._stamped("bbbb2222"))
+            payload = json.loads(v2.read_text())
+            payload["schema"] = "truth-differential-census-shard/v2"
+            v2.write_text(json.dumps(payload), encoding="utf-8")
+            summary = merge_shards([v1, v2])
+
+        self.assertEqual(summary["merged_shard_count"], 2)
+        self.assertEqual(summary["non_shard_inputs"], [])
+        self.assertIn(
+            "checkpoint",
+            summary["artifact_identity_mismatches"],
+            "a /v2 shard entered the merge without its artifacts being compared",
+        )
+
+    def test_only_the_shards_that_are_compared_contribute_records(self) -> None:
+        """The structural invariant: one predicate governs arithmetic AND the alarm.
+
+        Nothing may be a shard for the total and a non-shard for the comparison.
+        """
+
+        from truth_differential_census import merge_shards
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            good = self._shard(
+                tmp,
+                "good.json",
+                artifact_identity=self._stamped("aaaa1111"),
+                records=[{"battle_id": "b", "seat": "p1"}],
+            )
+            foreign = tmp / "foreign.json"
+            foreign.write_text(
+                json.dumps({"schema": "something-else/v1", "records": [{"x": 1}, {"x": 2}]}),
+                encoding="utf-8",
+            )
+            summary = merge_shards([good, foreign])
+
+        for shard in summary["shards"]:
+            if not shard["is_census_shard"]:
+                self.assertEqual(
+                    shard["records_counted"],
+                    0,
+                    "a payload excluded from the comparison still fed the total",
+                )
+            else:
+                self.assertEqual(shard["records_counted"], shard["records_present"])
+        self.assertEqual(summary["non_shard_records_excluded"], 2)
+
+    def test_an_artifact_absent_altogether_is_its_own_distinct_value(self) -> None:
+        """Pins the `"absent"` token, which the docstring claims but nothing held.
+
+        A shard with no artifact_identity AND no truth_config paths must not read as
+        agreeing with a stamped shard. Filtering `"absent"` out of the distinct set --
+        which passed green -- dies here.
+        """
+
+        from truth_differential_census import merge_shards
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            summary = merge_shards(
+                [
+                    self._shard(tmp, "a.json", artifact_identity=self._stamped("aaaa1111")),
+                    self._shard(tmp, "bare.json"),  # a real shard, no artifacts recorded
+                ]
+            )
+
+        mismatches = summary["artifact_identity_mismatches"]
+        for key in ("checkpoint", "model_path", "tables"):
+            self.assertIn(key, mismatches, f"{key}: an absent artifact read as agreement")
+            self.assertIn("absent", mismatches[key])
+
+    def test_the_pre_stamp_fallback_covers_all_three_artifacts(self) -> None:
+        """Reducing the fallback to the checkpoint alone passed green.
+
+        The old assertion only checked `checkpoint`, and the all-three subTest covers
+        stamped shards. A pre-stamp shard's model and tables paths matter just as much:
+        an encoder-table swap changes the layout the model reads.
+        """
+
+        from truth_differential_census import shard_artifact_identity
+
+        identity = shard_artifact_identity(
+            {
+                "truth_config": {
+                    "checkpoint_path": "/gone/ckpt.pt",
+                    "model_path": "/gone/model_ts.pt",
+                    "tables_path": "/gone/encoder_tables.json",
+                }
+            }
+        )
+
+        self.assertEqual(sorted(identity), ["checkpoint", "model_path", "tables"])
+        for key, expected in (
+            ("checkpoint", "/gone/ckpt.pt"),
+            ("model_path", "/gone/model_ts.pt"),
+            ("tables", "/gone/encoder_tables.json"),
+        ):
+            self.assertEqual(identity[key]["path"], expected)
+            self.assertIsNone(identity[key]["sha256"])
+            self.assertTrue(identity[key]["unstamped"])
+
     def test_the_queue_says_when_a_number_spans_two_baselines(self) -> None:
         from truth_differential_census import render_queue
 
@@ -1176,6 +1296,120 @@ class MergedArtifactIdentityTests(unittest.TestCase):
         self.assertIn("aaaa1111", mixed)
         self.assertIn("bbbb2222", mixed)
         self.assertNotIn("DO NOT SHARE ONE ARTIFACT SET", clean)
+
+
+class QueueBaselineReportingTests(unittest.TestCase):
+    """The report layer must not assert the result of a check that never ran."""
+
+    def _render(self, **summary: object) -> str:
+        from truth_differential_census import render_queue
+
+        base: dict[str, Any] = {"truth_probed_decisions": 10, "truth_rejection_rate": 0.0}
+        base.update(summary)
+        return render_queue(base, commands=["cmd"], title="T")
+
+    def test_a_summary_with_no_comparison_says_NOT_CHECKED_not_agreement(self) -> None:
+        """THE live case: re-rendering any pre-PR summary, e.g. the salvaged censusB one.
+
+        `summary.get(...) or {}` cannot tell "every shard agreed" from "nobody looked".
+        Emitting the reassuring sentence for a comparison that never happened is this
+        PR's own failure mode one layer up.
+        """
+
+        # Key entirely absent -- exactly what a pre-stamp `--mode report` output has.
+        absent = self._render(shards=[{"path": "a.json", "is_census_shard": True}])
+
+        self.assertIn("NOT CHECKED", absent)
+        self.assertNotIn(
+            "All merged shards report the same artifact set",
+            absent,
+            "an unperformed comparison was reported as agreement",
+        )
+
+    def test_an_empty_comparison_is_reported_as_agreement_not_as_unchecked(self) -> None:
+        """The other side of the distinction: empty means checked and clean."""
+
+        empty = self._render(
+            artifact_identity_mismatches={},
+            shards=[{"path": "a.json", "is_census_shard": True}],
+        )
+
+        self.assertIn("All merged shards report the same artifact set", empty)
+        self.assertNotIn("NOT CHECKED", empty)
+
+    def test_the_path_not_an_identity_caveat_is_gated_on_an_unstamped_shard(self) -> None:
+        """A caveat that always prints is boilerplate; it must apply where it appears."""
+
+        stamped_only = self._render(
+            artifact_identity_mismatches={},
+            shards=[
+                {
+                    "path": "a.json",
+                    "is_census_shard": True,
+                    "artifact_identity": {
+                        "checkpoint": {"path": "/a.pt", "sha256": "aaaa1111"},
+                        "model_path": {"path": "/m.pt", "sha256": "mmmm1111"},
+                        "tables": {"path": "/t.json", "sha256": "tttt1111"},
+                    },
+                }
+            ],
+        )
+        with_unstamped = self._render(
+            artifact_identity_mismatches={},
+            shards=[
+                {
+                    "path": "old.json",
+                    "is_census_shard": True,
+                    "artifact_identity": {
+                        "checkpoint": {"path": "/gone.pt", "sha256": None, "unstamped": True}
+                    },
+                }
+            ],
+        )
+
+        self.assertNotIn("Agreement here is by PATH", stamped_only)
+        self.assertIn("Agreement here is by PATH", with_unstamped)
+
+    def test_unmerged_inputs_are_named_in_the_doc(self) -> None:
+        """An excluded file is otherwise invisible to a reader of the published doc."""
+
+        rendered = self._render(
+            artifact_identity_mismatches={},
+            shard_count=3,
+            merged_shard_count=2,
+            non_shard_inputs=["/out/summary.json"],
+            non_shard_records_excluded=0,
+            shards=[{"path": "a.json", "is_census_shard": True}],
+        )
+
+        self.assertIn("were NOT merged", rendered)
+        self.assertIn("/out/summary.json", rendered)
+        self.assertIn("2 of 3 inputs", rendered)
+
+    def test_dropped_records_are_screamed_about_not_merely_counted(self) -> None:
+        """Non-zero excluded records means a real shard silently left the census."""
+
+        rendered = self._render(
+            artifact_identity_mismatches={},
+            shard_count=2,
+            merged_shard_count=1,
+            non_shard_inputs=["/out/mystery.json"],
+            non_shard_records_excluded=3427,
+            shards=[{"path": "a.json", "is_census_shard": True}],
+        )
+
+        self.assertIn("WARNING", rendered)
+        self.assertIn("3427", rendered)
+        self.assertIn("DROPPED", rendered)
+
+    def test_a_summary_without_a_merged_count_does_not_invent_one(self) -> None:
+        rendered = self._render(
+            artifact_identity_mismatches={},
+            shard_count=4,
+            shards=[{"path": "a.json", "is_census_shard": True}],
+        )
+
+        self.assertIn("UNRECORDED", rendered)
 
 
 class WitnessCompletenessTests(unittest.TestCase):

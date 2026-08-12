@@ -820,6 +820,7 @@ def _shard_games(plan: Mapping[str, Any] | None, args: argparse.Namespace) -> li
 
 _ARTIFACT_KEYS = ("checkpoint", "model_path", "tables")
 _SHARD_SCHEMA = "truth-differential-census-shard/v1"
+_SHARD_SCHEMA_FAMILY = "truth-differential-census-shard/"
 
 
 def is_census_shard(payload: Mapping[str, Any]) -> bool:
@@ -830,9 +831,15 @@ def is_census_shard(payload: Mapping[str, Any]) -> bool:
     exactly this shape. Such a file has no artifact set at all, and counting its absence
     as a disagreement fires the cross-baseline alarm on a perfectly uniform census. An
     alarm that cries wolf on a clean merge gets ignored, which costs the same as silence.
+
+    A PREFIX match on the schema family, not equality with ``/v1``. Under equality a
+    future ``/v2`` shard would be classified "not a shard" for alarm purposes while its
+    ``records`` still entered the published total -- excluded from the very check meant to
+    catch it. Nothing may be a shard for arithmetic and a non-shard for the alarm, so one
+    predicate decides both (see ``merge_shards``).
     """
 
-    return payload.get("schema") == _SHARD_SCHEMA
+    return str(payload.get("schema") or "").startswith(_SHARD_SCHEMA_FAMILY)
 
 
 def shard_artifact_identity(payload: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -908,7 +915,12 @@ def merge_shards(paths: Iterable[Path]) -> dict[str, Any]:
     shards: list[dict[str, Any]] = []
     for path in paths:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        records.extend(payload.get("records") or [])
+        # ONE predicate decides both the arithmetic and the alarm. Aggregating a payload's
+        # records while excluding it from the artifact comparison is how a second
+        # observation schema could enter the published total unremarked.
+        shard_is_census = is_census_shard(payload)
+        contributed = (payload.get("records") or []) if shard_is_census else []
+        records.extend(contributed)
         shards.append(
             {
                 "path": str(path),
@@ -918,7 +930,10 @@ def merge_shards(paths: Iterable[Path]) -> dict[str, Any]:
                 "identity_witness_mismatches": payload.get("identity_witness_mismatches"),
                 "identity_witness": payload.get("identity_witness"),
                 "artifact_identity": shard_artifact_identity(payload),
-                "is_census_shard": is_census_shard(payload),
+                "is_census_shard": shard_is_census,
+                "schema": payload.get("schema"),
+                "records_counted": len(contributed),
+                "records_present": len(payload.get("records") or []),
                 "games_ok": sum(1 for g in payload.get("per_game") or [] if g.get("ok")),
                 "games_failed": sum(1 for g in payload.get("per_game") or [] if not g.get("ok")),
                 "driver_config": payload.get("driver_config"),
@@ -928,14 +943,20 @@ def merge_shards(paths: Iterable[Path]) -> dict[str, Any]:
     summary = aggregate_records(records)
     summary["shards"] = shards
     summary["shard_count"] = len(shards)
+    merged = [shard for shard in shards if shard["is_census_shard"]]
+    summary["merged_shard_count"] = len(merged)
     # Only real shards are compared: a globbed-in report summary carries no artifact set
-    # and must not read as a disagreeing baseline.
-    summary["artifact_identity_mismatches"] = artifact_identity_mismatches(
-        [shard for shard in shards if shard["is_census_shard"]]
-    )
+    # and must not read as a disagreeing baseline. Same predicate as the aggregation above.
+    summary["artifact_identity_mismatches"] = artifact_identity_mismatches(merged)
     summary["non_shard_inputs"] = [
         shard["path"] for shard in shards if not shard["is_census_shard"]
     ]
+    # Records a non-shard input was carrying and did NOT contribute. Non-zero means a
+    # real shard was misclassified and has silently left the census -- the one way this
+    # reconciliation can lose data rather than protect it, so it is counted, not assumed.
+    summary["non_shard_records_excluded"] = sum(
+        shard["records_present"] for shard in shards if not shard["is_census_shard"]
+    )
     summary["instrument_error_total"] = sum(
         int(shard.get("instrument_error_count") or 0) for shard in shards
     )
@@ -989,6 +1010,15 @@ def render_queue(summary: Mapping[str, Any], *, commands: Sequence[str], title: 
         f"| decisions seen | DECISIONS | {summary.get('decisions_seen')} |"
     )
     lines.append(f"| battles | BATTLES | {summary.get('battles')} |")
+    # The denominator's provenance belongs beside the number, not only in the JSON: a
+    # reader must be able to see how many shards were actually merged into the figure
+    # above, and whether any input was dropped on the way.
+    merged_count = summary.get("merged_shard_count")
+    total_inputs = summary.get("shard_count")
+    if merged_count is None:
+        lines.append(f"| shards merged | SHARDS | UNRECORDED (of {total_inputs} inputs) |")
+    else:
+        lines.append(f"| shards merged | SHARDS | {merged_count} of {total_inputs} inputs |")
     lines.append(
         "| truth unavailable (instrument gap) | DECISIONS | "
         f"{summary.get('truth_unavailable_decisions')} |"
@@ -1071,8 +1101,23 @@ def render_queue(summary: Mapping[str, Any], *, commands: Sequence[str], title: 
     lines.append("")
     lines.append("## Which baseline produced this number")
     lines.append("")
+    # ABSENT is not EMPTY. `summary.get(...) or {}` cannot tell "every shard agreed" from
+    # "no comparison was ever performed", and a summary written before the stamp existed
+    # has the key missing -- so a reassuring sentence would be asserting the result of a
+    # check that never ran. That is this PR's own failure mode one layer up: an instrument
+    # that cannot say "I did not check" says "it is fine".
+    checked = "artifact_identity_mismatches" in summary
     artifact_mismatches = summary.get("artifact_identity_mismatches") or {}
-    if artifact_mismatches:
+    if not checked:
+        lines.append(
+            "**ARTIFACT IDENTITY: NOT CHECKED.** This summary carries no "
+            "`artifact_identity_mismatches` key, so no cross-shard artifact comparison was "
+            "performed -- it predates the check, or was produced by a merge that did not "
+            "run it. **Do NOT read the absence of a warning as agreement.** Which "
+            "checkpoint, TorchScript model and encoder tables produced this figure is "
+            "UNVERIFIED here; re-run `--mode report` over the shards to establish it."
+        )
+    elif artifact_mismatches:
         lines.append(
             "**THE MERGED SHARDS DO NOT SHARE ONE ARTIFACT SET.** The figure above spans "
             "more than one baseline and must NOT be read as a single measurement -- a "
@@ -1087,10 +1132,49 @@ def render_queue(summary: Mapping[str, Any], *, commands: Sequence[str], title: 
             lines.append(f"| `{name}` | {rendered} |")
     else:
         lines.append(
-            "All merged shards report the same artifact set (or there is only one shard). "
-            "`unstamped:` values are pre-stamp shards identified by path only -- a path is "
-            "not an identity, so agreement among those is weaker than a digest match."
+            "All merged shards report the same artifact set (or there is only one shard)."
         )
+        # Gated on an actual `unstamped:` token. Printed unconditionally it appears
+        # under fully digest-stamped merges too, where it does not apply, and a caveat
+        # that always prints is boilerplate the reader learns to skip.
+        if any(
+            _artifact_token((shard.get("artifact_identity") or {}).get(key)).startswith(
+                "unstamped:"
+            )
+            for shard in (summary.get("shards") or [])
+            if shard.get("is_census_shard")
+            for key in _ARTIFACT_KEYS
+        ):
+            lines.append("")
+            lines.append(
+                "**Agreement here is by PATH, not digest.** At least one merged shard is "
+                "pre-stamp (`unstamped:`), and a path is not an identity -- two shards from "
+                "different machines can carry the same path string over different bytes. "
+                "This is weaker than a digest match and cannot be strengthened after the "
+                "fact."
+            )
+    # Inputs that did NOT enter the figure. Listed here rather than only in the JSON:
+    # an excluded file is otherwise invisible to a reader of the doc, and a real shard
+    # misclassified as a non-shard would leave the census without a word.
+    non_shard = summary.get("non_shard_inputs")
+    excluded_records = summary.get("non_shard_records_excluded") or 0
+    if non_shard:
+        lines.append("")
+        lines.append(
+            f"**{len(non_shard)} input(s) were NOT merged** -- not census shards "
+            "(no `truth-differential-census-shard/*` schema), so they contributed neither "
+            "records nor an artifact set:"
+        )
+        lines.append("")
+        for path in non_shard:
+            lines.append(f"- `{path}`")
+        if excluded_records:
+            lines.append("")
+            lines.append(
+                f"**WARNING: {excluded_records} record(s) in those inputs were DROPPED.** A "
+                "non-shard input carrying records means a real shard was misclassified and "
+                "has silently left the census. Investigate before publishing this figure."
+            )
     lines.append("")
     lines.append("```json")
     lines.append(

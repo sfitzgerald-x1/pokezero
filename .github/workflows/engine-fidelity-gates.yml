@@ -2006,8 +2006,8 @@ jobs:
           python -m unittest tests.test_truth_differential -v 2>&1 | tee /tmp/truthdiff.log
           # EXACT, not a floor. A floor was the one fail-open in #1163's mutation
           # battery, and this guard lives in YAML where no local run can see it.
-          if ! grep -qE 'Ran 57 tests' /tmp/truthdiff.log; then
-            echo "::error::expected 57 truth-differential tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 67 tests' /tmp/truthdiff.log; then
+            echo "::error::expected 67 truth-differential tests; the suite shrank or grew"
             exit 1
           fi
           # THE pins, named. `ForcedRefusalTests` is the reason the census number can be
