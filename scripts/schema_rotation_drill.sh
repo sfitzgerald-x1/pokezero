@@ -48,10 +48,14 @@ set -uo pipefail
 if [ "${DRILL_REEXEC:-0}" != "1" ]; then
   _snap="$(mktemp -t schema_rotation_drill)" || exit 3
   cat "${BASH_SOURCE[0]}" > "$_snap"
-  DRILL_REEXEC=1 exec bash "$_snap" "$@"
+  # DRILL_REPO must ride along: $REPO is derived from BASH_SOURCE, which after re-exec points at
+  # the snapshot in /tmp, not the checkout. The first cut omitted it and the run died on
+  # "fatal: not a git repository".
+  DRILL_REEXEC=1 DRILL_REPO="${DRILL_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}" \
+    exec bash "$_snap" "$@"
 fi
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="${DRILL_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 WT="${1:-/tmp/schema-v5-drill}"
 VENV="$REPO/.venv/bin/python"
 
