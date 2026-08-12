@@ -471,6 +471,38 @@ def require_model_feature(witness: Mapping[str, Any]) -> None:
         )
 
 
+def artifact_identity(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
+    """Stamp the model artifacts into the shard BY CONTENT, not just by path.
+
+    ``identity_witness`` already digests the compiled crate (``_extension_hash``) and
+    the Python sources, but the three model artifacts were recorded as bare paths.
+    A path is not an identity: a checkpoint replaced in place, or two different
+    ``model_ts.pt`` files at one path, are indistinguishable across shards -- and when
+    the path is deleted the shard no longer says which bytes produced its numbers.
+    That happened: the ``v3hist-k64-...-2657`` baseline's artifacts were destroyed and
+    only the paths survive in the published shards.
+
+    Unreadable artifacts are reported as an ``error`` string rather than raising, so a
+    missing file cannot turn a finished shard's numbers into a lost run.
+    """
+
+    identity: dict[str, dict[str, Any]] = {}
+    for key in ("checkpoint", "model_path", "tables"):
+        raw = getattr(args, key, None)
+        if not raw:
+            continue
+        entry: dict[str, Any] = {"path": str(raw)}
+        try:
+            data = Path(raw).read_bytes()
+        except OSError as exc:
+            entry["error"] = f"{type(exc).__name__}: {exc}"
+        else:
+            entry["sha256"] = hashlib.sha256(data).hexdigest()
+            entry["bytes"] = len(data)
+        identity[key] = entry
+    return identity
+
+
 def run_shard(args: argparse.Namespace) -> int:
     from pokezero.collection import policy_from_spec  # noqa: F401 - parity with prod harnesses
     from pokezero.dex import load_showdown_dex_cached
@@ -614,6 +646,8 @@ def run_shard(args: argparse.Namespace) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     per_game: list[dict[str, Any]] = []
+    # Hashed once: dump() runs every --dump-every games and the checkpoint is ~40 MB.
+    artifacts = artifact_identity(args)
 
     def dump() -> None:
         payload = {
@@ -627,6 +661,7 @@ def run_shard(args: argparse.Namespace) -> int:
             "identity_witness": witness,
             "identity_witness_child_neutral_cwd": child_witness,
             "identity_witness_mismatches": mismatches,
+            "artifact_identity": artifacts,
             "plan_source_hash": plan["source_hash"] if plan else None,
             "wall_seconds": time.perf_counter() - started,
             "per_game": per_game,

@@ -11,8 +11,11 @@ the forcing.
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 import random
 import sys
+import tempfile
 import unittest
 from collections import Counter
 from pathlib import Path
@@ -796,6 +799,76 @@ class ForcingApparatusTests(unittest.TestCase):
                 require_model_feature({})
             require_model_feature({"pokezero_search_model_feature": True})  # no raise
         self.assertIn("pokezero_search_model_feature", noise.getvalue())
+
+
+class ArtifactIdentityTests(unittest.TestCase):
+    """The three model artifacts must be stamped by CONTENT, not just by path.
+
+    A path-only stamp cannot survive the artifact being replaced in place or deleted --
+    which is exactly how the ``v3hist-k64-...-2657`` baseline became unidentifiable.
+    """
+
+    def _args(self, **kwargs: object) -> argparse.Namespace:
+        base = {"checkpoint": None, "model_path": None, "tables": None}
+        base.update(kwargs)
+        return argparse.Namespace(**base)
+
+    def test_each_artifact_is_stamped_with_its_own_real_sha256(self) -> None:
+        from truth_differential_census import artifact_identity
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            payloads = {
+                "checkpoint": b"ckpt-bytes",
+                "model_path": b"ts-bytes-and-then-some",
+                "tables": b"{}",
+            }
+            paths = {}
+            for key, blob in payloads.items():
+                path = root / f"{key}.bin"
+                path.write_bytes(blob)
+                paths[key] = path
+            identity = artifact_identity(self._args(**{k: str(v) for k, v in paths.items()}))
+
+        self.assertEqual(set(identity), {"checkpoint", "model_path", "tables"})
+        for key, blob in payloads.items():
+            # The digest must be of THAT artifact's bytes -- not a constant, and not
+            # the same value for all three. A stub returning one digest fails here.
+            self.assertEqual(identity[key]["sha256"], hashlib.sha256(blob).hexdigest())
+            self.assertEqual(identity[key]["bytes"], len(blob))
+            self.assertEqual(identity[key]["path"], str(paths[key]))
+        digests = {entry["sha256"] for entry in identity.values()}
+        self.assertEqual(len(digests), 3, "distinct artifacts must get distinct digests")
+
+    def test_replacing_an_artifact_in_place_changes_the_stamp(self) -> None:
+        """The whole point: same path, different bytes, different shard identity."""
+
+        from truth_differential_census import artifact_identity
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "model_ts.pt"
+            path.write_bytes(b"baseline-A")
+            before = artifact_identity(self._args(model_path=str(path)))
+            path.write_bytes(b"baseline-B")
+            after = artifact_identity(self._args(model_path=str(path)))
+
+        self.assertEqual(before["model_path"]["path"], after["model_path"]["path"])
+        self.assertNotEqual(before["model_path"]["sha256"], after["model_path"]["sha256"])
+
+    def test_a_missing_artifact_is_reported_and_does_not_raise(self) -> None:
+        """A vanished artifact must not discard a finished shard's numbers."""
+
+        from truth_differential_census import artifact_identity
+
+        identity = artifact_identity(self._args(checkpoint="/nonexistent/ckpt.pt"))
+        self.assertIn("error", identity["checkpoint"])
+        self.assertNotIn("sha256", identity["checkpoint"])
+        self.assertEqual(identity["checkpoint"]["path"], "/nonexistent/ckpt.pt")
+
+    def test_unset_artifacts_are_omitted_rather_than_stamped_as_null(self) -> None:
+        from truth_differential_census import artifact_identity
+
+        self.assertEqual(artifact_identity(self._args()), {})
 
 
 class WitnessCompletenessTests(unittest.TestCase):
