@@ -23,6 +23,8 @@ from pokezero.showdown import (
     parse_showdown_replay,
 )
 from tests.test_tier2_live_env import _integration_root, _play
+from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2_2
+from pokezero.showdown import observation_spec_for_schema
 
 
 @unittest.skipUnless(_integration_root() is not None, "requires built Showdown checkout and node")
@@ -36,7 +38,17 @@ class LiveInvestmentPopulationTest(unittest.TestCase):
 
         return LocalShowdownEnv(
             LocalShowdownConfig(
-                showdown_root=self.root, set_belief_source=True, feature_masks=masks
+                showdown_root=self.root,
+                set_belief_source=True,
+                feature_masks=masks,
+                # v2.2: this module indexes observations with the V2-FAMILY layout constants
+                # (OPPONENT_POKEMON_TOKEN_OFFSET et al), so the encode must produce that layout.
+                # Taking the default silently paired v2-family offsets with a 23-token v4
+                # observation -- `IndexError: tuple index out of range`, which reads as a
+                # tracker bug rather than a layout mismatch. An earlier attempt pinned this to
+                # v4 and broke a sibling test for exactly the inverse reason; the constants,
+                # not the corpus, are what fix the schema here.
+                observation_spec=observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2),
             )
         )
 
