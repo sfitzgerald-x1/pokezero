@@ -244,7 +244,10 @@ class TransformerPolicyConfig:
     token_type_vocab_size: int = DEFAULT_TOKEN_TYPE_VOCAB_SIZE
     categorical_feature_count: int = DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count
     numeric_feature_count: int = DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count
-    token_count: int = DEFAULT_REPLAY_OBSERVATION_SPEC.token_count
+    # Resolved from ``observation_schema_version`` in ``__post_init__``. A dataclass-time
+    # default cannot safely read the global replay spec: the selected schema may differ from
+    # the process-wide fresh-artifact default (for example, a v2.2 config after a v4 rotation).
+    token_count: int | None = None
     embedding_dim: int = 128
     transformer_layers: int = 2
     attention_heads: int = 4
@@ -407,6 +410,8 @@ class TransformerPolicyConfig:
         # hand-edited payload that trims one without the other must fail loudly here.
         fixed_tokens = schema_spec.token_count - schema_spec.transition_token_count
         expected_token_count = fixed_tokens + self.transition_token_count
+        if self.token_count is None:
+            object.__setattr__(self, "token_count", expected_token_count)
         if self.token_count != expected_token_count:
             raise ValueError(
                 f"token_count {self.token_count} does not equal the fixed prefix "

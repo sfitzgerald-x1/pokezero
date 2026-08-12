@@ -907,9 +907,26 @@ class TheDerivedClaimsAreDerivedTests(unittest.TestCase):
             "a second live entry point reaches `heal_subcase`; R10's unemittability "
             "argument is scoped to the Sleep Talk block and must be re-traced",
         )
+        # DE-NUMBERED, deliberately, and this is the one edit this PR makes to a gate.
+        #
+        # The assertion's own message says "the NUMBER of ways into the subgraph ...
+        # changed", and that is the claim R10's unemittability argument rests on. The
+        # literal it compared was a pair of LINE ADDRESSES inside `render_move_phase`, so it
+        # fired on any edit that shifted that function -- a docstring insert would do it --
+        # while reporting a semantic change that had not happened. That is the landmine shape
+        # report 4 §4.8 records: "de-number a stale citation; never re-point it."
+        #
+        # Nothing is lost by dropping the addresses. `assertEqual(committed, rederived)`
+        # above compares the WHOLE graph, line numbers included, against the committed
+        # artifact, so a moved edge still forces a regeneration and a read of the diff; and
+        # `test_the_r10_cell_states_the_derived_route_count` holds the ledger prose to this
+        # same count. What was unique to the literal was only its address, which is the part
+        # that is not a claim about anything.
         self.assertEqual(
-            rederived["edges_out_of_the_chokepoint"], [2155, 2176],
-            "the number of ways into the subgraph from `render_move_phase` changed",
+            len(rederived["edges_out_of_the_chokepoint"]), 2,
+            "the number of ways into the subgraph from `render_move_phase` changed; R10's "
+            "unemittability argument is scoped to its Sleep Talk block and must be "
+            "re-traced",
         )
         self.assertEqual(len(rederived["dead_wrappers_with_no_production_caller"]), 5)
 

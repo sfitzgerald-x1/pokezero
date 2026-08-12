@@ -207,7 +207,7 @@ class TestRecorderCapturesPerDecisionState:
         }
 
     def test_a_lock_probe_is_not_reported_as_the_engines_proposal(self):
-        # `engine_search.py:1858-1861` calls `_map_choices(context,
+        # `_search_model`'s early-stop block calls `_map_choices(context,
         # Counter({locked_choice: 1.0}))` purely to test an early-stop lock;
         # `crate_search_failed` then refuses with no second call. Reporting the
         # last aggregate unconditionally printed that synthetic single-choice
@@ -292,7 +292,8 @@ class TestRecorderCapturesPerDecisionState:
         # not reach: `normalize_id("Zapdos") == "zapdos"` differs only in case,
         # so a helper with no normalisation at all passed that assertion. These
         # species do not survive without it, and the engine's own choice strings
-        # go through `normalize_id` (`engine_search.py:2325`, `:2293-2295`) -- so
+        # go through `normalize_id` (in `_map_choices`, on both the candidate species
+        # and the engine's own `switch <species>` string) -- so
         # without it a SUCCESSFUL mapping renders as a legality mismatch.
         policy = _FakePolicy()
         recorder = attach_refusal_recorder(policy)
