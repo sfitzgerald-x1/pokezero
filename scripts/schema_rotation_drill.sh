@@ -11,7 +11,15 @@
 # nobody names is the only clean probe, and it is also the real future event this must make free.
 #
 # Usage:  bash scripts/schema_rotation_drill.sh [worktree-path]
-#         DRILL_SCOPE=fast  ...   scope to the files that have ever broken + the expected set.
+#         DRILL_SCOPE=fast   ...  scope to the files that have ever broken + the expected set.
+#         DRILL_SHAPE=differ ...  give the synthetic schema a DIFFERENT shape from v4.
+#
+# Why a shape-differing variant exists. The default synthetic schema is shape-IDENTICAL to v4 so
+# that every breakage is unambiguously a NAMING failure. The cost of that choice is that no
+# shape-dependent conflation can break under it -- and both real bugs this effort found
+# (#1227 token_count, #1228 the feature widths) were shape bugs. A drill that structurally
+# cannot reproduce its own motivating defects is not sufficient evidence on its own. Run both:
+# `differ` finds shape conflations, the default localises them to naming.
 #
 # `fast` exists because two full suites take ~22 minutes and get killed by most runners. It is
 # for ITERATION ONLY and is NOT the stop condition: a scoped drill cannot see a NEW breakage in
@@ -69,10 +77,22 @@ m = re.search(r'^REPLAY_OBSERVATION_SPECS_BY_SCHEMA[^=]*=\s*\{', t, re.M)
 # "'pokezero.observation.v4' != 'pokezero.observation.v5-drill'". That was the DRILL's defect
 # masquerading as a surviving instance of the class it is meant to detect: an instrument that
 # manufactures the failure it reports.
-t = t[:m.end()] + ("\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL: _dc_replace(\n"
-                   "        V4_REPLAY_OBSERVATION_SPEC,\n"
-                   "        schema_version=OBSERVATION_SCHEMA_VERSION_V5_DRILL,\n"
-                   "    ),") + t[m.end():]
+import os as _os
+_shape = _os.environ.get("DRILL_SHAPE", "identical")
+if _shape == "differ":
+    # One fewer numeric column than v4. Small enough that nothing structural changes, large
+    # enough that any consumer carrying v4's width against this schema mismatches loudly.
+    _spec_expr = ("_dc_replace(\n"
+                  "        V4_REPLAY_OBSERVATION_SPEC,\n"
+                  "        schema_version=OBSERVATION_SCHEMA_VERSION_V5_DRILL,\n"
+                  "        numeric_feature_count=V4_REPLAY_OBSERVATION_SPEC.numeric_feature_count - 1,\n"
+                  "    )")
+else:
+    _spec_expr = ("_dc_replace(\n"
+                  "        V4_REPLAY_OBSERVATION_SPEC,\n"
+                  "        schema_version=OBSERVATION_SCHEMA_VERSION_V5_DRILL,\n"
+                  "    )")
+t = t[:m.end()] + f"\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL: {_spec_expr}," + t[m.end():]
 t = t.replace("REPLAY_OBSERVATION_SPECS_BY_SCHEMA", "REPLAY_OBSERVATION_SPECS_BY_SCHEMA", 1)
 if "_dc_replace" not in t.split("REPLAY_OBSERVATION_SPECS_BY_SCHEMA")[0]:
     t = re.sub(r'^(import .*)$', r'from dataclasses import replace as _dc_replace\n\1', t, count=1, flags=re.M)
