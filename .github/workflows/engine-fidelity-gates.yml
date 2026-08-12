@@ -1725,7 +1725,7 @@ jobs:
             }
           done
 
-      - name: The abort channel COMPILES -- `--features model`, which no job built before
+      - name: The abort seam under `--features model` -- COMPILE COVERAGE PLUS ONE BEHAVIOURAL RUNG
         run: |
           set -o pipefail
           # WHY THIS STEP EXISTS. `tree.rs:305`'s abort gate is `allow(dead_code)` without the
@@ -1736,12 +1736,24 @@ jobs:
           # `include_str!("model.rs")` precisely because of that.
           #
           # WHAT IT BUYS, STATED EXACTLY, because overclaiming here would be the same defect in
-          # the other direction. Measured on this tree: the executed test-NAME set is
-          # IDENTICAL with and without the feature -- 519 names both ways, `comm` empty in both
-          # directions. So this adds ZERO behavioural coverage of the abort gate; no crate test
-          # reaches it. It buys compile coverage of `model.rs` and of the gate, and it removes
-          # the `allow(dead_code)` masking. A behavioural gate on the abort channel needs the
-          # truth-differential harness, which is not a CI job.
+          # the other direction. The FIRST revision of this step bought compile coverage and
+          # nothing else, and review proved it: the executed test-NAME set was IDENTICAL with
+          # and without the feature -- 519 names both ways, `comm` empty in both directions --
+          # so no CI test observed an abort under either setting, and section 4.1 was NOT
+          # discharged by adding the flag.
+          #
+          # `tree::model_abort_seam_tests` is the answer to that, and it is deliberately narrow.
+          # It is `cfg`-gated on the feature, so the two builds are now OBSERVABLY different --
+          # 520 tests here against 519 on the plain step -- and it asserts the gated seam
+          # actually REJECTS and that the error carries the predicate the census keys
+          # `world_failure_reasons` by. Null-worlded: replacing the seam's condition with
+          # `if false` reddens exactly that test.
+          #
+          # ⚠ STILL NOT DISCHARGED, and this comment is where a reader will look. The abort
+          # channel is exercised at the SEAM only. Nothing in CI drives a search over a world
+          # and observes `worlds_searched < worlds_constructed`; that needs the
+          # truth-differential harness and its model artifacts and is not a CI job. Treat
+          # "the abort channel is covered in CI" as FALSE and this as one rung of it.
           #
           # THE LIBRARY-PATH TRAP, found by running it. `build.rs` embeds an rpath for the
           # maturin-built cdylib only, so `cargo test --features model` binaries do not get it
@@ -1763,10 +1775,20 @@ jobs:
           fi
           model_tests=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo-model.log \
             | grep -oE '[0-9]+' | paste -sd+ - | bc)
-          if [ "${model_tests:-0}" -lt 519 ]; then
-            echo "::error::expected >= 519 crate tests under --features model, got ${model_tests:-0}"
+          # 520, not 519, and the DIFFERENCE is the point: `tree::model_abort_seam_tests` exists
+          # only on this build. Equal floors would mean the two steps could not tell each other
+          # apart, which is the state review found. Measured: plain 519, model 520.
+          if [ "${model_tests:-0}" -lt 520 ]; then
+            echo "::error::expected >= 520 crate tests under --features model, got ${model_tests:-0}"
             exit 1
           fi
+          # And name the gated pin, because a total can be restored by unrelated tests -- the
+          # lesson the plain step's own comment records.
+          gated=tree::model_abort_seam_tests::the_gated_abort_seam_rejects_an_attribution_unsafe_branch_with_its_predicate
+          grep -qxE "test $gated \.\.\. ok" /tmp/cargo-model.log || {
+            echo "::error::the model-gated abort-seam pin did not run"
+            exit 1
+          }
 
       - name: The production-read pin runs at all -- build the native module and run it
         run: |

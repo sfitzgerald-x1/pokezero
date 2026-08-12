@@ -919,6 +919,87 @@ pub(crate) fn puct_search_multi(
 // see tests/test_multiply_chance_search.py for the Python-side gates)
 // ---------------------------------------------------------------------------
 
+/// The abort seam, exercised BEHAVIOURALLY and only on a `model` build.
+///
+/// WHY THIS MODULE EXISTS, and it is the narrowest honest answer to a real gap. Report 4
+/// section 4.1 says an abort-channel figure taken on a non-`model` build is unfalsifiable,
+/// because `reject_attribution_unsafe` just above is `allow(dead_code)` without the feature.
+/// Review then established the same thing about CI: adding `--features model` to the crate
+/// step changed NOTHING observable, because the executed test-NAME sets were identical with
+/// and without it -- measured, 519 both ways with `comm` empty in both directions. A step
+/// whose only effect is that the code compiles cannot discharge a claim about whether the
+/// channel FIRES.
+///
+/// So this test does two things nothing else did. It calls the gated seam and asserts the
+/// error it produces carries the exact predicate the Python side keys `world_failure_reasons`
+/// by -- so the wrapper is not merely compiled but demonstrably routes the reason through. And
+/// because it is `cfg`-gated, it makes the two builds OBSERVABLY different: the model build now
+/// runs one test the plain build does not, which is why the workflow's model step carries a
+/// higher count floor than the plain one. That difference is the discriminator whose absence
+/// was the reviewer's whole point.
+///
+/// WHAT IT STILL DOES NOT DO, stated so nobody reads it as more than it is: it exercises the
+/// SEAM, not a full search. Nothing here drives a tree over a world and observes
+/// `worlds_searched < worlds_constructed`; that needs the truth-differential harness and its
+/// model artifacts, and is recorded as the follow-up. This is one rung, not the ladder.
+#[cfg(all(test, feature = "model"))]
+mod model_abort_seam_tests {
+    use super::*;
+    use poke_engine::state::PokemonMoveIndex;
+
+    #[test]
+    fn the_gated_abort_seam_rejects_an_attribution_unsafe_branch_with_its_predicate() {
+        let s1 = MoveChoice::Move(PokemonMoveIndex::M0);
+        let s2 = MoveChoice::Move(PokemonMoveIndex::M0);
+        let instructions: Vec<Instruction> = Vec::new();
+        let seam = BranchSeam {
+            s1: &s1,
+            s2: &s2,
+            instructions: &instructions,
+            parent: None,
+            chance: 0,
+            branch_index: 0,
+            branch_on_damage: false,
+            depth: 0,
+        };
+
+        // A CLEAN branch must pass, or the assertion below proves nothing about the reason.
+        let clean = crate::events::RenderedEvents::default();
+        assert!(
+            seam.reject_attribution_unsafe(&clean).is_ok(),
+            "the seam rejected a branch carrying no attribution-unsafe reason"
+        );
+
+        // And the refusing case must carry the class name through. This is the exact string
+        // the census reads, prefix included -- `truth_differential.py` matches
+        // "attribution-unsafe renderer branch rejected before" to attribute the stage.
+        let mut unsafe_branch = crate::events::RenderedEvents::default();
+        unsafe_branch.attribution_unsafe.push(
+            "sleeptalk_called_unidentified:ambiguous_unrenderable:heal_zero_marker".to_string(),
+        );
+        let error = seam
+            .reject_attribution_unsafe(&unsafe_branch)
+            .expect_err("the gated seam accepted an attribution-unsafe branch");
+        let text = error.to_string();
+        assert!(
+            text.contains("attribution-unsafe renderer branch rejected before"),
+            "the abort error lost the prefix the census attributes the stage by: {text}"
+        );
+        assert!(
+            text.contains("tree/model fold"),
+            "the abort error lost the seam name, so a census row could not tell this abort \
+             from the env-stepping one: {text}"
+        );
+        assert!(
+            text.contains(
+                "sleeptalk_called_unidentified:ambiguous_unrenderable:heal_zero_marker"
+            ),
+            "the abort error lost the predicate, which is the key the class is counted \
+             under: {text}"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
