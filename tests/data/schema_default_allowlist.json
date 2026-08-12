@@ -565,19 +565,19 @@
   },
   {
     "file": "src/pokezero/showdown.py",
-    "line": 1143,
+    "line": 1147,
     "kind": "default-spec",
     "owner": "<module>"
   },
   {
     "file": "src/pokezero/showdown.py",
-    "line": 1143,
+    "line": 1147,
     "kind": "bare-const",
     "owner": "<module>"
   },
   {
     "file": "src/pokezero/showdown.py",
-    "line": 4280,
+    "line": 4290,
     "kind": "default-spec",
     "owner": "observation_from_player_state"
   },
@@ -1039,7 +1039,19 @@
   },
   {
     "file": "tests/test_golden_corpus.py",
-    "line": 464,
+    "line": 423,
+    "kind": "default-spec",
+    "owner": "GoldenCorpusLiveSmokeTest"
+  },
+  {
+    "file": "tests/test_golden_corpus.py",
+    "line": 456,
+    "kind": "bare-const",
+    "owner": "GoldenCorpusLiveSmokeTest"
+  },
+  {
+    "file": "tests/test_golden_corpus.py",
+    "line": 486,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "WrappedTrajectoryIdentityTests"
   },
@@ -1048,12 +1060,6 @@
     "line": 44,
     "kind": "implicit:PokeZeroObservationV0",
     "owner": "_observation"
-  },
-  {
-    "file": "tests/test_investment_live_env.py",
-    "line": 38,
-    "kind": "implicit:LocalShowdownConfig",
-    "owner": "LiveInvestmentPopulationTest"
   },
   {
     "file": "tests/test_linear_policy.py",
@@ -1171,20 +1177,14 @@
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 136,
+    "line": 137,
     "kind": "implicit:PokeZeroObservationV0",
     "owner": "observation"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 218,
+    "line": 219,
     "kind": "implicit:compact_category",
-    "owner": "NeuralPolicyScaffoldTest"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 222,
-    "kind": "default-spec",
     "owner": "NeuralPolicyScaffoldTest"
   },
   {
@@ -1201,61 +1201,55 @@
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 326,
+    "line": 225,
+    "kind": "default-spec",
+    "owner": "NeuralPolicyScaffoldTest"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 327,
     "kind": "implicit:compact_category",
     "owner": "NeuralPolicyScaffoldTest"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 330,
+    "line": 331,
     "kind": "implicit:compact_category",
     "owner": "NeuralPolicyScaffoldTest"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 2682,
+    "line": 2683,
     "kind": "default-spec",
     "owner": "NeuralPolicyScaffoldTest"
   },
   {
     "file": "tests/test_neural_selfplay.py",
-    "line": 58,
+    "line": 59,
     "kind": "implicit:compact_category",
     "owner": "_entity_test_model_config"
   },
   {
     "file": "tests/test_neural_selfplay.py",
-    "line": 834,
+    "line": 835,
     "kind": "implicit:compact_category",
     "owner": "NeuralSelfPlayTest"
   },
   {
     "file": "tests/test_neural_selfplay.py",
-    "line": 5511,
-    "kind": "implicit:compact_category",
-    "owner": "NeuralSelfPlayTest"
-  },
-  {
-    "file": "tests/test_neural_selfplay.py",
-    "line": 5556,
-    "kind": "implicit:compact_category",
-    "owner": "NeuralSelfPlayTest"
-  },
-  {
-    "file": "tests/test_neural_selfplay.py",
-    "line": 5654,
+    "line": 5664,
     "kind": "implicit:compact_category",
     "owner": "_write_loadable_fake_checkpoint"
   },
   {
     "file": "tests/test_neural_selfplay.py",
-    "line": 6217,
+    "line": 6227,
     "kind": "implicit:ObservationSpec",
     "owner": "observation"
   },
   {
     "file": "tests/test_neural_selfplay.py",
-    "line": 6218,
+    "line": 6228,
     "kind": "implicit:PokeZeroObservationV0",
     "owner": "observation"
   },
@@ -1324,6 +1318,18 @@
     "line": 151,
     "kind": "implicit:PokeZeroObservationV0",
     "owner": "ObservationPerspectiveTest"
+  },
+  {
+    "file": "tests/test_observation_schema_flag.py",
+    "line": 185,
+    "kind": "bare-const",
+    "owner": "SchemaFlagEndToEndTest"
+  },
+  {
+    "file": "tests/test_observation_schema_flag.py",
+    "line": 189,
+    "kind": "bare-const",
+    "owner": "SchemaFlagEndToEndTest"
   },
   {
     "file": "tests/test_observation_spec_v2.py",
@@ -1621,7 +1627,7 @@
   },
   {
     "file": "tests/test_tier2_live_env.py",
-    "line": 220,
+    "line": 246,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "MonotoneConsistencySweepTest"
   },
@@ -1639,25 +1645,19 @@
   },
   {
     "file": "tests/test_transitions_fold.py",
-    "line": 160,
+    "line": 162,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "FoldClosureRandomGamesTest"
   },
   {
     "file": "tests/test_transitions_fold.py",
-    "line": 193,
+    "line": 195,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "FoldClosureScenarioGamesTest"
   },
   {
     "file": "tests/test_transitions_fold.py",
-    "line": 261,
-    "kind": "implicit:LocalShowdownConfig",
-    "owner": "FoldAnnotatedSurfaceTest"
-  },
-  {
-    "file": "tests/test_transitions_fold.py",
-    "line": 544,
+    "line": 561,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "FoldPerfNote"
   },
