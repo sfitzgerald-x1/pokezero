@@ -907,9 +907,35 @@ class TheDerivedClaimsAreDerivedTests(unittest.TestCase):
             "a second live entry point reaches `heal_subcase`; R10's unemittability "
             "argument is scoped to the Sleep Talk block and must be re-traced",
         )
+        # DE-NUMBERED, not re-pointed. This assertion carried the literals `[2155, 2176]`
+        # and went red on a change that only INSERTED lines above them -- the landmine the
+        # ledger's own §4.8 describes, on the module whose whole point is that citations
+        # must be re-derived. The two edges are named by their call-site text, which is
+        # unique in the file (the `fn` definitions read `fn <name>(` and the thin wrappers
+        # call the non-`_with_protect` form), so a MOVED edge updates itself and a DELETED
+        # or DUPLICATED one is still a loud failure. The count and the identity of the two
+        # sites are what the assertion was protecting; the integers were not.
+        chokepoint_calls = ("if !sleeptalk_refusal_is_unsafe_with_protect(",
+                            "&ambiguous_unrenderable_slug_with_protect(")
+        with open(os.path.join(REPO, c154.EV), encoding="utf-8") as handle:
+            events_lines = handle.read().splitlines()
+        expected_edges = []
+        for needle in chokepoint_calls:
+            hits = [n for n, line in enumerate(events_lines, 1) if needle in line]
+            self.assertEqual(
+                len(hits), 1,
+                f"{needle!r} is no longer a unique call site in {c154.EV}; an ambiguous "
+                "anchor is a wrong citation waiting to happen",
+            )
+            expected_edges.append(hits[0])
         self.assertEqual(
-            rederived["edges_out_of_the_chokepoint"], [2155, 2176],
-            "the number of ways into the subgraph from `render_move_phase` changed",
+            rederived["edges_out_of_the_chokepoint"], sorted(expected_edges),
+            "the number or the identity of the ways into the subgraph from "
+            "`render_move_phase` changed",
+        )
+        self.assertEqual(
+            len(rederived["edges_out_of_the_chokepoint"]), 2,
+            "exactly two edges, which is R10's unemittability argument",
         )
         self.assertEqual(len(rederived["dead_wrappers_with_no_production_caller"]), 5)
 

@@ -3152,3 +3152,162 @@ fn protect_plus_an_absorb_ability_refuses_rather_than_guessing() {
         );
     }
 }
+
+/// A volatile the defender ALREADY CARRIES is not a miss, and the renderer used to call it
+/// one for the larger half of the branch.
+///
+/// `combine_duplicate_instructions` merges a move's successful-but-no-op hit with its miss
+/// when both deltas are empty. The miss inference then labelled the whole merged branch
+/// `|[miss]|` with no test of which half it was. For Leech Seed at 90% accuracy on an
+/// already-seeded target the split is 0.90 hit-no-op against 0.10 miss, so `|[miss]|` was
+/// the MINORITY render at 9:1 — and `miss` is not cosmetic: `fold.rs`'s `process_line`
+/// turns `|-miss|` into `window.miss`, which the encoder carries as its own column, so the
+/// wrong label wrote false data into a feature the search consumes.
+///
+/// The line pair asserted here is corpus-measured, not inferred:
+/// `tests/fixtures/showdown/capture/lines-battle-gen3randombattle-controlled-20260710004.log`
+/// turn 7 shows real Showdown emitting `|move|p1a: Jumpluff|Leech Seed||[still]` then
+/// `|-fail|p1a: Jumpluff` — blank target, failing on the USER.
+///
+/// Reach: Leech Seed is on 45 of the 1682 gen3 randbat variants
+/// (`scripts/c157_no_effect_hit_reach.py`), and every searched world in which a seeder
+/// re-clicks Leech Seed at an already-seeded foe generates this branch.
+#[test]
+fn an_already_carried_volatile_renders_the_fail_not_the_minority_miss() {
+    let mut state = confused_state(Choices::LEECHSEED);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    // The DEFENDER (side one) is already seeded, so side two's Leech Seed can only fizzle.
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::LEECHSEED);
+
+    let branches = generate(&mut state);
+    let mut fail_renders = 0usize;
+    for branch in &branches {
+        let rendered = rendered(&mut state.clone(), branch);
+        let text = rendered.lines.join("\n");
+        assert!(
+            rendered.attribution_unsafe.is_empty(),
+            "the fail render must not cost a refusal: {rendered:?}"
+        );
+        if !text.contains("|move|p2a: Opponent|leechseed") {
+            continue;
+        }
+        fail_renders += 1;
+        assert!(
+            !text.contains("|[miss]") && !text.contains("|-miss|"),
+            "0.90 hit-with-no-effect against 0.10 miss: |[miss]| is the MINORITY outcome \
+             and must not be rendered: {text}"
+        );
+        assert_in_order(
+            &text,
+            &[
+                "|move|p2a: Opponent|leechseed||[still]",
+                "|-fail|p2a: Opponent",
+            ],
+        );
+    }
+    assert_eq!(
+        fail_renders, 1,
+        "expected exactly one merged fizzle branch; if this is 0 the fixture never reached \
+         the arm: {branches:?}"
+    );
+}
+
+/// NULL WORLD for the arm above: with NOTHING already carried, the same move at the same
+/// accuracy must still render `|[miss]|`.
+///
+/// This is the control #1140's reverted second commit did not have. That change suppressed
+/// the sibling render whenever a volatile was merely PRESENT on the move, without asking
+/// whether a competing outcome existed, and turned a correct line into an invented one
+/// where the competitor's mass was zero. Here the competitor genuinely does not exist — the
+/// engine emits a separate non-empty hit branch — so an empty tail IS the miss, and a
+/// blanket `volatile_fail` that ignored the defender's own volatile set would take this
+/// test red.
+#[test]
+fn a_volatile_with_no_competitor_is_still_a_miss() {
+    let mut state = confused_state(Choices::LEECHSEED);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+
+    let branches = generate(&mut state);
+    let mut miss_renders = 0usize;
+    let mut applied_renders = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        if text.contains("|[miss]") {
+            miss_renders += 1;
+            assert!(
+                text.contains("|-miss|p2a: Opponent|p1a: Lead"),
+                "a labelled miss keeps its companion line: {text}"
+            );
+            assert!(
+                !text.contains("|-fail|"),
+                "an unseeded target's empty tail is a MISS, not a fail: {text}"
+            );
+        } else if text.contains("|move|p2a: Opponent|leechseed") {
+            applied_renders += 1;
+        }
+    }
+    assert_eq!(
+        miss_renders, 1,
+        "the 10% miss branch must still be labelled: {branches:?}"
+    );
+    assert_eq!(
+        applied_renders, 1,
+        "and the 90% branch must be the one that APPLIES the seed, proving the engine \
+         really does split them when the volatile is absent: {branches:?}"
+    );
+}
+
+/// The immobilizer arm is untouched by the fail/miss split, checked in the same fan.
+///
+/// `|cant|..|par` comes from `Instruction::MoveImmobilized` and from nothing else; the
+/// probability-mass GUESS that PR #1140 was written to gate no longer exists in this file.
+/// Asserted on a 90%-accuracy move whose foe is already seeded, i.e. the exact state where
+/// all three empty-delta outcomes (immobilization, no-op hit, miss) are live at once.
+#[test]
+fn the_paralysis_marker_still_owns_its_line_across_the_fail_split() {
+    let mut state = confused_state(Choices::LEECHSEED);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::PARALYZE;
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::LEECHSEED);
+
+    let branches = generate(&mut state);
+    let mut par_renders = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        let marked = branch.instruction_list.iter().any(|i| matches!(i,
+            Instruction::MoveImmobilized(m) if m.reason == ImmobilizeReason::Paralysis));
+        if text.contains("|cant|p2a: Opponent|par") {
+            par_renders += 1;
+            assert!(
+                marked,
+                "a `|cant|..|par` line without the engine's marker is the guess this \
+                 renderer no longer makes: {text}"
+            );
+        }
+        if marked {
+            assert!(
+                !text.contains("|-fail|p2a: Opponent") && !text.contains("|[miss]"),
+                "an immobilized branch is neither a fail nor a miss: {text}"
+            );
+        }
+    }
+    assert_eq!(
+        par_renders, 1,
+        "expected the marked paralysis branch to keep its exact line: {branches:?}"
+    );
+}
