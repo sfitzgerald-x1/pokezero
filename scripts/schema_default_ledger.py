@@ -39,7 +39,7 @@ REPO = Path(__file__).resolve().parents[1]
 CONST = "OBSERVATION_SCHEMA_VERSION"
 DEFAULT_SPEC = "DEFAULT_REPLAY_OBSERVATION_SPEC"
 # DERIVED, not hardcoded. The first version listed three call names by hand and therefore
-# undercounted by 186 sites -- `LocalShowdownConfig.observation_spec` alone has ~132 callers.
+# undercounted by 187 sites -- `LocalShowdownConfig.observation_spec` alone has ~133 callers.
 # That is this program's own error class committed inside the instrument built to retire it:
 # a denominator chosen rather than enumerated. `derive_surfaces` scans src/ for every class
 # attribute or parameter whose DEFAULT is one of GLOBALS, so a new surface is counted the day
@@ -164,10 +164,12 @@ def sites_in(path: Path) -> list[dict]:
             # EACH-OF, not any-of. `SURFACES[name] & kwargs` scored a call safe if it passed ANY
             # of the surface's default-bearing kwargs, so a `compact_category(numeric_feature_
             # count=..., ...)` that never named a schema counted as migrated while still taking
-            # the process-wide default. 43 sites were hidden that way -- and 41 of them pin a
-            # WIDTH and default the SCHEMA, which is precisely the shape of the two production
-            # bugs (#1227 token_count, #1228 the feature widths) this ledger cites as its reason
-            # to exist. A site is only safe once EVERY route to a global is closed.
+            # the process-wide default. TWO figures, which are easy to conflate and were:
+            #   43 sites were hidden by the any-of bug; 41 of those 43 pin a WIDTH and default the
+            #      SCHEMA -- precisely the shape of #1227 (token_count) and #1228 (the widths).
+            #   44 of ALL 391 rows have only the schema route open (41 compact_category +
+            #      3 LinearPolicyModel), which is a superset and a different question.
+            # A site is only safe once EVERY route to a global is closed.
             unclosed = SURFACES.get(name, frozenset()) - kwargs
             if name in SURFACES and unclosed:
                 # One kind per surface so a new surface cannot quietly join an existing bucket.

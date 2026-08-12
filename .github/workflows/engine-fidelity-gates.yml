@@ -285,14 +285,13 @@ jobs:
             # touches nothing else -- so without this line the gate that would object
             # is not even a trigger.
             tests/test_roll_enumeration_scope.py
-            # The schema-default gate and everything it depends on. 288 of its 391 rows live in
-            # tests/ and scripts/, and neither path is broad in this filter -- so a PR that adds a
-            # default reader THERE triggered no workflow at all. Worse, the gate's own artifacts
+            # The schema-default gate and everything it depends on. 331 of its 391 rows live outside
+            # src/ (288 in tests/, 43 in scripts/), and neither path is broad in this filter -- so a
+            # PR that adds a default reader THERE triggered no workflow at all. Worse, the gate's own artifacts
             # were unlisted, so a PR that regenerated or deleted the allowlist tripped nothing:
             # the same "a guard nothing runs" shape this file already records twice above, and the
             # exact failure the header calls forbidden.
             scripts/schema_default_ledger.py
-            scripts/schema_identity_gate_scan.py
             tests/test_schema_default_ledger.py
             tests/test_schema_with_selector.py
             tests/data/schema_default_allowlist.json

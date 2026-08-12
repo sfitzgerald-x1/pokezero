@@ -59,7 +59,14 @@ def _key(row: dict) -> str:
     # Bypassability is instead closed by COUNTING per key (see below): file+owner+kind collapsed
     # 97 rows to 74 distinct keys, so a set comparison let a diff migrate one site and add
     # another at the same key. A multiset does not.
-    return f"{row['file']}::{row['owner']}::{row['kind']}"
+    # `unclosed` IS part of the key. Without it, a row could silently gain routes: deleting both
+    # width kwargs from an existing call left N, the key count and every gate test unchanged, while
+    # that call went from defaulting one route to defaulting three. That is a regression of exactly
+    # the shape this ledger cites as its reason to exist (41 of the rows the any-of bug hid pin a
+    # width and default the schema), and it was invisible because `unclosed` was recorded in the
+    # allowlist and then excluded from every comparison.
+    unclosed = ",".join(row.get("unclosed", ()))
+    return f"{row['file']}::{row['owner']}::{row['kind']}::{unclosed}"
 
 
 class SchemaDefaultLedgerTest(unittest.TestCase):

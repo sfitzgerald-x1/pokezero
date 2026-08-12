@@ -8,10 +8,21 @@ what the site wanted, the conflation is free and invisible. It becomes visible o
 default moves — and then everything that conflated the two fails at once, with failure messages
 that name the wrong subsystem.
 
-It is not a style problem. Two production bugs of this exact shape were found and fixed while
-building this ledger: `TransformerPolicyConfig.token_count` and its two feature widths defaulted
-off the process-wide spec rather than the config's own stamped schema, so a config stamped one
-schema silently carried another's shape.
+It is not a style problem. `TransformerPolicyConfig.token_count` defaulted off the process-wide spec rather than the config's
+own stamped schema, so a config stamped one schema silently carried another's `token_count`. That
+one is FIXED (`__post_init__` derives it).
+
+Its two sibling **feature widths are still live, on this branch and on main** —
+`neural_policy.py:245-246` default off `DEFAULT_REPLAY_OBSERVATION_SPEC` and nothing recomputes
+them, so today:
+
+    v2    config=(51,155)  spec=(39,121)
+    v2.1  config=(51,155)  spec=(39,140)
+    v4    config=(51,155)  spec=(41,132)
+
+An earlier version of this paragraph described both as found *and fixed*, in the past tense. The
+widths fix is not in this PR. This is stated rather than smoothed because the paragraph is the
+justification the rest of the document rests on.
 
 ## N, and the command that produces it
 
@@ -69,7 +80,7 @@ Rows key as a **multiset** on `file::owner::kind`:
 - Not a set — that let a plain ADDITION at an existing key pass unseen. A `Counter` difference
   catches a key whose count grew (verified: 391 → 392 reddens; invisible to a set).
   **What it does NOT close:** migrating one site and adding another under the *same*
-  `file::owner::kind` leaves the count unchanged and passes. 28 keys carry more than one row, the
+  `file::owner::kind` leaves the count unchanged and passes. 26 keys carry more than one row, the
   largest 4. An earlier version of this document claimed the multiset closed that case; it does
   not, and saying so was worse than the gap.
 - Not including the line number — that made the allowlist interpreter-dependent (`ast` reports a

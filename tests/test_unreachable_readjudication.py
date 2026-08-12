@@ -31,7 +31,7 @@ WHAT IS PINNED, and in every case what would have to be true for the pin to be v
      anchor changes the string and fails here, and a DELETED anchor raises out of the
      resolver rather than silently pointing at whatever now occupies the line. This is the
      single most load-bearing assertion in the module: without it these are 26 paragraphs
-     of prose with hard-coded line numbers, which is exactly what #1202 turned into
+     of prose with hard-coded line numbers, which is exactly what the C156 pass turned into
      fifteen stale citations overnight.
 
   3. **The pool half cannot be laundered.** `build_verdicts` re-runs the absence
@@ -445,7 +445,7 @@ class TheCitationsAreResolvedOnEveryRunTests(unittest.TestCase):
         `build_verdicts` resolves every citation through `_anchor` / `_anchor_after` /
         `_raise_line` against the tree as it is NOW, using the artifact's own committed
         pool measurements as the data half. A moved anchor changes a line number and this
-        fails; a deleted one raises out of the resolver. #1202 moved fifteen citations in
+        fails; a deleted one raises out of the resolver. The C156 pass moved fifteen citations in
         one merge on demonstrations whose entire value was that they had been traced.
         """
 
@@ -1138,14 +1138,17 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
     trap this module has now hit three times.
 
     ⚠ **THE LINE NUMBER OF THAT COMMENT IS NOT WRITTEN DOWN ANYWHERE, and the reason is
-    C156's own defect.** Its first revision cited it as `:1202` in three places in this
+    C156's own defect.** Its first revision cited it BY LINE NUMBER in three places in this
     module and once in `reports/c156`, and C156's own eleven-line workflow comment moved it
     to a different line IN THE SAME COMMIT -- four citations stale inside the change that
     staled them, in a pass whose subject is stale typed numbers. Review found it, and then
     found the FIRST TWO FIXES for it defective in turn; the record is in
     `test_the_scan_sees_every_invocation_a_flat_scan_sees`, which is where the working one
-    lives. (`#1202` elsewhere in this module is the PULL REQUEST, not a line, and is not
-    affected.)
+    lives. This module now names NO workflow line number and no bare four-digit token that could
+    become one: the guard below is scoped by VALUE, so a PR reference and a line citation are
+    indistinguishable to it -- and a later edit that slides a real guard onto that value turns the
+    prose red. Which is what happened: adding steps to this workflow slid a `Ran N tests` guard
+    onto the very number this paragraph used to quote.)
     """
 
     WORKFLOW = ".github/workflows/engine-fidelity-gates.yml"
@@ -1354,7 +1357,7 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
         then review's finding on each of the two fixes for it. All three are recorded,
         because the later ones are worse than the first.
 
-          * **The defect.** C156's first revision cited the comment as `:1202` three times
+          * **The defect.** C156's first revision cited the comment BY LINE NUMBER three times
             here and once in `reports/c156`, and C156's own workflow comment moved it in
             the same commit. Four citations stale inside the change that staled them.
           * **Fix 1 reddened on NOISE.** It pinned the typed citation to the computed line,
@@ -1384,7 +1387,7 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
             cannot go stale and is not in scope here.
           * ⚠ **It catches a citation typed at its CORRECT value, and cannot catch one that
             is already wrong.** Authoring time is exactly when this defect is born -- C156
-            typed `:1202` while the comment WAS at 1202 -- so the guard fires as the mistake
+            typed the line number while the comment WAS at it -- so the guard fires as the mistake
             is made, before the edit that stales it. But a citation that has ALREADY drifted
             equals no computed value and is invisible here. Not hypothetical: the
             contact-ability step's citation named line 469 and had been wrong since #1204
