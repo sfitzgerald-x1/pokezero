@@ -1024,7 +1024,7 @@
       ]
     }
   },
-  "source_commit": "feb0527f07ef26f4534495ab0abbf220b0828b70",
+  "source_commit": "b6800080a2678ae0bf9c3bb9edd26ed373cc9fef",
   "verdicts": {
     "R1": {
       "candidate": "Future Sight / Doom Desire -- residual order 11 and the `future_sight_pending` refusal",
