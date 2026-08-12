@@ -75,12 +75,12 @@ under*. If the subject genuinely is one version, name that version.
 "fail-closed" is an authorship-time check: a new default reader fails in the PR that introduces
 it, not during the next rotation.
 
-Rows key as a **multiset** on `file::owner::kind`:
+Rows key as a **multiset** on `file::owner::kind::unclosed`:
 
 - Not a set — that let a plain ADDITION at an existing key pass unseen. A `Counter` difference
   catches a key whose count grew (verified: 391 → 392 reddens; invisible to a set).
   **What it does NOT close:** migrating one site and adding another under the *same*
-  `file::owner::kind` leaves the count unchanged and passes. 26 keys carry more than one row, the
+  `file::owner::kind::unclosed` leaves the count unchanged and passes. 26 keys carry more than one row, the
   largest 4. An earlier version of this document claimed the multiset closed that case; it does
   not, and saying so was worse than the gap.
 - Not including the line number — that made the allowlist interpreter-dependent (`ast` reports a
@@ -88,7 +88,15 @@ Rows key as a **multiset** on `file::owner::kind`:
   off-by-one.
 - `owner` is the **innermost** enclosing scope. The first version used `ast.walk` (breadth-first)
   with `setdefault`, which locked in the outermost — every method of a `TestCase` collapsed onto
-  the class name, and 57% of rows became invisible to any key comparison.
+  the class name. Measured at the time: 115 of 202 rows (57%) invisible to any key comparison. On
+  the current tree the same collapse would hide 38%; both figures are stated because a single
+  percentage with no tree attached is the kind of number this document is about.
+- `unclosed` is **part of the key**. Without it a row could silently gain routes: deleting both
+  width kwargs from an existing call took it from defaulting one route to three with N, the key
+  count and every gate test unchanged — a regression of exactly the shape this ledger cites as its
+  reason to exist. The trade-off, stated because the alternative is stating only the win: closing a
+  route also changes the key, so a strict *improvement* (adding `numeric_feature_count=`) reddens
+  the gate and requires regenerating the allowlist.
 
 **The allowlist is grandfathered exposure, not a list of blessed readers.** It is expected to
 shrink. A row is legitimate only if the site *answers* "nobody said" — the definition of the

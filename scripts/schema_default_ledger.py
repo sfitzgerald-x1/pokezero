@@ -167,8 +167,12 @@ def sites_in(path: Path) -> list[dict]:
             # the process-wide default. TWO figures, which are easy to conflate and were:
             #   43 sites were hidden by the any-of bug; 41 of those 43 pin a WIDTH and default the
             #      SCHEMA -- precisely the shape of #1227 (token_count) and #1228 (the widths).
-            #   44 of ALL 391 rows have only the schema route open (41 compact_category +
-            #      3 LinearPolicyModel), which is a superset and a different question.
+            #   127 of ALL 391 rows have only a SCHEMA route open, under either kwarg name
+            #      (41 compact_category + 49 PokeZeroObservationV0 + 34 ObservationSpec +
+            #      3 LinearPolicyModel). Of those, 44 are open specifically on
+            #      `observation_schema_version`. An earlier comment quoted the 44 while
+            #      describing the 127's question -- a true number answering a narrower question
+            #      than the one asked, which is the failure this whole ledger exists to retire.
             # A site is only safe once EVERY route to a global is closed.
             unclosed = SURFACES.get(name, frozenset()) - kwargs
             if name in SURFACES and unclosed:

@@ -285,9 +285,19 @@ jobs:
             # touches nothing else -- so without this line the gate that would object
             # is not even a trigger.
             tests/test_roll_enumeration_scope.py
-            # The schema-default gate and everything it depends on. 331 of its 391 rows live outside
-            # src/ (288 in tests/, 43 in scripts/), and neither path is broad in this filter -- so a
-            # PR that adds a default reader THERE triggered no workflow at all. Worse, the gate's own artifacts
+            # The schema-default gate and everything it depends on. 332 of its 391 rows live
+            # outside src/ (288 tests/, 43 scripts/, 1 docs/).
+            #
+            # ⚠ NAMING THESE FILES DOES NOT CLOSE THE HOLE, and an earlier revision of this comment
+            # claimed it did, in the past tense. `mass-gate` runs only when this filter matches, and
+            # matching the filter's patterns against the tree leaves 329 of 391 rows (84%) in
+            # unmatched files -- 62 tests/, 37 scripts/, 1 docs/. So the PR-level claim "a new
+            # default reader fails in the PR that introduces it" holds only for PRs that ALSO touch
+            # src/pokezero/**, this workflow, or the gate artifacts below. The lines below close
+            # the artifact half: a PR that regenerates or deletes the allowlist now trips the job,
+            # which it did not before. The tests/ and scripts/ half is left open deliberately
+            # rather than papered over -- broadening to `tests/**` would run this job on nearly
+            # every PR in the repo, which is a cost decision, not a hygiene one. Worse, the gate's own artifacts
             # were unlisted, so a PR that regenerated or deleted the allowlist tripped nothing:
             # the same "a guard nothing runs" shape this file already records twice above, and the
             # exact failure the header calls forbidden.
@@ -510,8 +520,7 @@ jobs:
       # The surface list is DISCOVERED, not hardcoded. A second review pass showed the
       # hardcoded five-tuple left 22 of 37 engine-touching modules outside every probe --
       # including src/pokezero/engine_env.py, which runs pokezero_search.env_step and is
-      # reached by the pokezero-rollout console script. With an enabler there a real
-      # The schema-default gate is worthless if it never runs, and it did not: it was authored
+       # The schema-default gate is worthless if it never runs, and it did not: it was authored
       # with no workflow step, so "fails at authorship" meant "fails for whoever remembers to run
       # it". A SKIP is treated as a FAILURE here -- the gate skips when the ledger reports an
       # unparsable file, and on this job that means something else broke, not that the check is
@@ -532,6 +541,7 @@ jobs:
             exit 1
           fi
 
+      # reached by the pokezero-rollout console script. With an enabler there a real
       # search process came back ENUMERATED and this step still read `Ran 14 tests OK`.
       - name: Roll-enumeration scope gate
         run: |

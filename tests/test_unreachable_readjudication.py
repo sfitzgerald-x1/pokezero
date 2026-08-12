@@ -31,7 +31,7 @@ WHAT IS PINNED, and in every case what would have to be true for the pin to be v
      anchor changes the string and fails here, and a DELETED anchor raises out of the
      resolver rather than silently pointing at whatever now occupies the line. This is the
      single most load-bearing assertion in the module: without it these are 26 paragraphs
-     of prose with hard-coded line numbers, which is exactly what the C156 pass turned into
+     of prose with hard-coded line numbers, which is exactly what #1202 turned into
      fifteen stale citations overnight.
 
   3. **The pool half cannot be laundered.** `build_verdicts` re-runs the absence
@@ -445,7 +445,7 @@ class TheCitationsAreResolvedOnEveryRunTests(unittest.TestCase):
         `build_verdicts` resolves every citation through `_anchor` / `_anchor_after` /
         `_raise_line` against the tree as it is NOW, using the artifact's own committed
         pool measurements as the data half. A moved anchor changes a line number and this
-        fails; a deleted one raises out of the resolver. The C156 pass moved fifteen citations in
+        fails; a deleted one raises out of the resolver. #1202 moved fifteen citations in
         one merge on demonstrations whose entire value was that they had been traced.
         """
 
@@ -1144,11 +1144,13 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
     staled them, in a pass whose subject is stale typed numbers. Review found it, and then
     found the FIRST TWO FIXES for it defective in turn; the record is in
     `test_the_scan_sees_every_invocation_a_flat_scan_sees`, which is where the working one
-    lives. This module now names NO workflow line number and no bare four-digit token that could
-    become one: the guard below is scoped by VALUE, so a PR reference and a line citation are
-    indistinguishable to it -- and a later edit that slides a real guard onto that value turns the
-    prose red. Which is what happened: adding steps to this workflow slid a `Ran N tests` guard
-    onto the very number this paragraph used to quote.)
+    lives. (`#1202` elsewhere in this module is the PULL REQUEST, not a line, and is not
+    affected: the guard below matches `":%d" % number`, so a `#`-prefixed reference cannot
+    collide with a workflow line. A previous pass de-numbered those PR references too, on the
+    stated grounds that the guard "cannot distinguish a PR reference from a line citation" --
+    which is false, and cost this paragraph the sentence that had said so correctly. Verified by
+    mutation: restoring `#1202` leaves the guard green; inserting `:<a live invocation line>`
+    reddens it.)
     """
 
     WORKFLOW = ".github/workflows/engine-fidelity-gates.yml"

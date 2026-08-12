@@ -134,6 +134,18 @@ class SchemaWithTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             schema_with(transition_region=True, turn_mergd=False)  # type: ignore[call-arg]
 
+    def test_the_properties_are_keyword_only(self) -> None:
+        """Positional calls must be a TypeError.
+
+        Removing the `*` marker leaves every other test here green while allowing
+        `schema_with(True)`. A later inserted property would then silently re-aim every positional
+        caller -- the exact silent re-aiming this function exists to remove. The docstring, the
+        design doc and the PR body all advertise "keyword-only with no **kwargs"; the **kwargs half
+        was pinned and this half was not.
+        """
+        with self.assertRaises(TypeError):
+            schema_with(True)  # type: ignore[misc]
+
     def test_the_transition_count_table_agrees_with_the_spec_table(self) -> None:
         """`REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA` is a SECOND copy of spec data.
 
