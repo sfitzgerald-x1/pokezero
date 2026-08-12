@@ -19,9 +19,11 @@ from types import SimpleNamespace
 
 from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION_V2_1,
+    OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2_2,
 )
 from pokezero.showdown import (
+    observation_spec_for_schema,
     V2_1_REPLAY_OBSERVATION_SPEC,
     V2_2_REPLAY_OBSERVATION_SPEC,
     observation_schema_version_from_choice,
@@ -173,12 +175,18 @@ class SchemaFlagEndToEndTest(unittest.TestCase):
             default_metadata = json.loads(
                 (default_cache / "metadata.json").read_text(encoding="utf-8")
             )
+            # A flagless collect stamps the fresh-selection default and carries ITS census.
+            # Asserted against the constant and its own spec, not against a literal version:
+            # the subject here is "flagless collect == the default", which stays true across
+            # rotations, whereas naming v2.2 made it a v2.2 test wearing an end-to-end costume.
+            # The explicit --observation-schema v2.2 / v2.1 collects above are what pin those
+            # schemas, and they are unaffected by which version holds the default slot.
             self.assertEqual(
-                default_metadata["observation_schema"], OBSERVATION_SCHEMA_VERSION_V2_2
+                default_metadata["observation_schema"], OBSERVATION_SCHEMA_VERSION
             )
             self.assertEqual(
                 default_metadata["observation_shapes"]["numeric_features"][-1],
-                V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+                observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION).numeric_feature_count,
             )
 
             # Cross-check hard-fails both directions through the real CLI (run BEFORE
@@ -187,7 +195,13 @@ class SchemaFlagEndToEndTest(unittest.TestCase):
             import io
 
             for data, schema_args, expectation in (
-                (v2_1_cache, [], "cross-schema"),  # v2.2 default train on a v2.1 cache
+                # Explicit v2.2, not "whatever the default is". The pair must be CROSS-schema
+                # for the guard under test to be the one that fires; relying on the default to
+                # supply v2.2 meant that after the rotation this became a v4-vs-v2.1 pair, where
+                # the category-vocab guard trips first and the assertion failed looking for
+                # "cross-schema" in a vocab error. The subject is the cross-schema refusal, so
+                # both sides of the pair are now named.
+                (v2_1_cache, ["--observation-schema", "v2.2"], "cross-schema"),
                 (v2_2_cache, ["--observation-schema", "v2.1"], "cross-schema"),
             ):
                 stderr = io.StringIO()
