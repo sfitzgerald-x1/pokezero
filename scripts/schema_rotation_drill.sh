@@ -165,24 +165,6 @@ if "_dc_replace" not in t.split("REPLAY_OBSERVATION_SPECS_BY_SCHEMA")[0]:
 # its own construction is a NameError, which the first cut of this hit immediately.
 _tables = ("_MINIMUM_CATEGORICAL_CENSUS_BY_SCHEMA", "_MINIMUM_NUMERIC_CENSUS_BY_SCHEMA")
 
-# A table-scan cannot see an `if schema_version == <A VERSION>` gate -- there is no table to
-# register into -- so it silently routes the synthetic schema down a wrong branch. Two such
-# gates existed in showdown.py and disagreed on 134/155 numeric indices. They are now property
-# membership tests; this guard fails the drill if a new one appears, because the drill's
-# central premise (only NAMING failures break) is false while one exists.
-_identity = []
-for _f in sorted((pathlib.Path(wt) / "src" / "pokezero").rglob("*.py")):
-    for _i, _l in enumerate(_f.read_text().splitlines(), 1):
-        if re.search(r'==\s*OBSERVATION_SCHEMA_VERSION_V\d', _l) or \
-           re.search(r'OBSERVATION_SCHEMA_VERSION_V[\d_]+\s*==', _l):
-            _identity.append(f"{_f.relative_to(wt)}:{_i}: {_l.strip()[:80]}")
-if _identity:
-    raise SystemExit(
-        "drill: schema IDENTITY gates found in src/ -- a table-scan cannot register into these,\n"
-        "so the synthetic schema would route down a wrong branch and every consumer would look\n"
-        "like a defect. Replace with property membership, or the drill's result is not evidence:\n  "
-        + "\n  ".join(_identity)
-    )
 for table in _tables:
     if not re.search(rf'^{table}\b', t, re.M):
         raise SystemExit(f"drill: schema-keyed table {table} not found -- registration incomplete")
@@ -210,6 +192,16 @@ open(q, "w").write(t)
 print("  synthetic v5-drill schema injected; default rotated to it")
 PY
 [ $? -eq 0 ] || { echo "FAILED to inject the drill schema"; exit 3; }
+
+# PRECONDITION 0: no unlisted schema identity gate exists. A line-oriented grep used to do this
+# and caught 2 of 7 evasive forms -- it missed `!=`, `in (literal tuple)`, string literals, dict
+# keys, `is`, and match/case, and TWO live gates evaded it while it claimed none existed. The
+# scanner is AST-based, so the syntactic form is irrelevant.
+"$VENV" "$REPO/scripts/schema_identity_gate_scan.py" || {
+  echo "ABORT: an unlisted schema identity gate exists, so a breakage cannot be attributed to"
+  echo "       NAMING -- the synthetic schema would route down a wrong branch."
+  exit 13
+}
 
 # PRECONDITION 1: the rotation actually happened. The injection edits are regex-based and their
 # results were never checked, so a reformatted source line would silently no-op and the drill

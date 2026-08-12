@@ -505,6 +505,19 @@ jobs:
       # incomplete and it refuses to report), and the project venv is 3.11 -- so before this
       # step it ran nowhere. A skip here is therefore treated as a FAILURE: this job pins 3.12,
       # so a skip means something else broke, not that the check is inapplicable.
+      # An identity gate (`schema_version == V4`) is the same defect as reading the default: it
+      # asks "is this exactly v<n>" where it means "does this have property P", so every later
+      # schema with P silently takes the wrong branch. Six were converted during the v4 rotation;
+      # two more evaded the first line-based guard. This one is AST-based.
+      - name: Schema identity-gate scan
+        run: |
+          set -o pipefail
+          python scripts/schema_identity_gate_scan.py 2>&1 | tee /tmp/identgate.log
+          if ! grep -q 'no unlisted schema identity gates' /tmp/identgate.log; then
+            echo "::error::unlisted schema identity gate(s) in src/ -- convert to a property tuple"
+            exit 1
+          fi
+
       - name: Schema-default conflation gate
         run: |
           set -o pipefail

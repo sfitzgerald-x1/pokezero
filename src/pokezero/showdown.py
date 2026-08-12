@@ -8229,7 +8229,13 @@ def _attention_mask(
     mask.extend([opponent_tendency_stats_visible] * spec.opponent_tendency_stats_token_count)
     transition_stream = (
         state.turn_merged_tokens
-        if spec.schema_version in (OBSERVATION_SCHEMA_VERSION_V2_2, OBSERVATION_SCHEMA_VERSION_V3)
+        # Membership in the PROPERTY tuple, not a hand-listed pair. `(V2_2, V3)` is a spelling
+        # of "is this schema turn-merged", and TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS is
+        # exactly that set -- so a future turn-merged schema silently took the
+        # `transition_tokens` branch here. Found by an adversarial review of the rotation
+        # drill's identity-gate guard, which greps only `== V<n>` and so could not see the
+        # `in (...)` form.
+        if spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
         else state.transition_tokens
     )
     filled = min(
