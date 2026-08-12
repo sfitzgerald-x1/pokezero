@@ -3357,3 +3357,581 @@ fn protect_plus_an_absorb_ability_with_no_convertible_callee_renders() {
          exercised by its own fixture"
     );
 }
+
+/// A volatile the defender ALREADY CARRIES is not a miss, and the renderer used to call it
+/// one for the larger half of the branch.
+///
+/// `combine_duplicate_instructions` merges a move's successful-but-no-op hit with its miss
+/// when both deltas are empty. The miss inference then labelled the whole merged branch
+/// `|[miss]|` with no test of which half it was. For Leech Seed at 90% accuracy on an
+/// already-seeded target the split is 0.90 hit-no-op against 0.10 miss, so `|[miss]|` was
+/// the MINORITY render at 9:1 — and `miss` is not cosmetic: `fold.rs`'s `process_line`
+/// turns `|-miss|` into `window.miss`, which the encoder carries as its own column, so the
+/// wrong label wrote false data into a feature the search consumes.
+///
+/// The line pair asserted here is corpus-measured, not inferred:
+/// `tests/fixtures/showdown/capture/lines-battle-gen3randombattle-controlled-20260710004.log`
+/// turn 7 shows real Showdown emitting `|move|p1a: Jumpluff|Leech Seed||[still]` then
+/// `|-fail|p1a: Jumpluff` — blank target, failing on the USER.
+///
+/// Reach: Leech Seed is on 45 of the 1682 gen3 randbat variants
+/// (`scripts/c157_no_effect_hit_reach.py`), and every searched world in which a seeder
+/// re-clicks Leech Seed at an already-seeded foe generates this branch.
+#[test]
+fn an_already_carried_volatile_renders_the_fail_not_the_minority_miss() {
+    let mut state = confused_state(Choices::LEECHSEED);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    // The DEFENDER (side one) is already seeded, so side two's Leech Seed can only fizzle.
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::LEECHSEED);
+
+    let branches = generate(&mut state);
+    let mut fail_renders = 0usize;
+    for branch in &branches {
+        let rendered = rendered(&mut state.clone(), branch);
+        let text = rendered.lines.join("\n");
+        assert!(
+            rendered.attribution_unsafe.is_empty(),
+            "the fail render must not cost a refusal: {rendered:?}"
+        );
+        if !text.contains("|move|p2a: Opponent|leechseed") {
+            continue;
+        }
+        fail_renders += 1;
+        assert!(
+            !text.contains("|[miss]") && !text.contains("|-miss|"),
+            "0.90 hit-with-no-effect against 0.10 miss: |[miss]| is the MINORITY outcome \
+             and must not be rendered: {text}"
+        );
+        assert_in_order(
+            &text,
+            &[
+                "|move|p2a: Opponent|leechseed||[still]",
+                "|-fail|p2a: Opponent",
+            ],
+        );
+    }
+    assert_eq!(
+        fail_renders, 1,
+        "expected exactly one merged fizzle branch; if this is 0 the fixture never reached \
+         the arm: {branches:?}"
+    );
+}
+
+/// NULL WORLD for the arm above: with NOTHING already carried, the same move at the same
+/// accuracy must still render `|[miss]|`.
+///
+/// This is the control #1140's reverted second commit did not have. That change suppressed
+/// the sibling render whenever a volatile was merely PRESENT on the move, without asking
+/// whether a competing outcome existed, and turned a correct line into an invented one
+/// where the competitor's mass was zero. Here the competitor genuinely does not exist — the
+/// engine emits a separate non-empty hit branch — so an empty tail IS the miss, and a
+/// blanket `volatile_fail` that ignored the defender's own volatile set would take this
+/// test red.
+#[test]
+fn a_volatile_with_no_competitor_is_still_a_miss() {
+    let mut state = confused_state(Choices::LEECHSEED);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+
+    let branches = generate(&mut state);
+    let mut miss_renders = 0usize;
+    let mut applied_renders = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        if text.contains("|[miss]") {
+            miss_renders += 1;
+            assert!(
+                text.contains("|-miss|p2a: Opponent|p1a: Lead"),
+                "a labelled miss keeps its companion line: {text}"
+            );
+            assert!(
+                !text.contains("|-fail|"),
+                "an unseeded target's empty tail is a MISS, not a fail: {text}"
+            );
+        } else if text.contains("|move|p2a: Opponent|leechseed") {
+            applied_renders += 1;
+        }
+    }
+    assert_eq!(
+        miss_renders, 1,
+        "the 10% miss branch must still be labelled: {branches:?}"
+    );
+    assert_eq!(
+        applied_renders, 1,
+        "and the 90% branch must be the one that APPLIES the seed, proving the engine \
+         really does split them when the volatile is absent: {branches:?}"
+    );
+}
+
+/// The immobilizer arm is untouched by the fail/miss split, checked in the same fan.
+///
+/// `|cant|..|par` comes from `Instruction::MoveImmobilized` and from nothing else; the
+/// probability-mass GUESS that PR #1140 was written to gate no longer exists in this file.
+/// Asserted on a 90%-accuracy move whose foe is already seeded, i.e. the exact state where
+/// all three empty-delta outcomes (immobilization, no-op hit, miss) are live at once.
+#[test]
+fn the_paralysis_marker_still_owns_its_line_across_the_fail_split() {
+    let mut state = confused_state(Choices::LEECHSEED);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_two.get_active().status = PokemonStatus::PARALYZE;
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::LEECHSEED);
+
+    let branches = generate(&mut state);
+    let mut par_renders = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        let marked = branch.instruction_list.iter().any(|i| matches!(i,
+            Instruction::MoveImmobilized(m) if m.reason == ImmobilizeReason::Paralysis));
+        if text.contains("|cant|p2a: Opponent|par") {
+            par_renders += 1;
+            assert!(
+                marked,
+                "a `|cant|..|par` line without the engine's marker is the guess this \
+                 renderer no longer makes: {text}"
+            );
+        }
+        if marked {
+            assert!(
+                !text.contains("|-fail|p2a: Opponent") && !text.contains("|[miss]"),
+                "an immobilized branch is neither a fail nor a miss: {text}"
+            );
+        }
+    }
+    assert_eq!(
+        par_renders, 1,
+        "expected the marked paralysis branch to keep its exact line: {branches:?}"
+    );
+}
+
+/// An ABSORB-ABILITY defender gets the same fail render as a plain one, and this is the
+/// blocker independent review found in the first revision of `volatile_fail`.
+///
+/// `absorb` is `is_absorb_ability(defender_ability)` — the defender's ability and nothing
+/// else, with no move-type and no damaging check in it. The predicate carried an
+/// `absorb.is_none()` conjunct, so the whole arm switched OFF for every Volt Absorb / Water
+/// Absorb / Flash Fire defender whatever the move was used, and those defenders kept the
+/// 0.90-vs-0.10 `|[miss]|` mislabel this change exists to remove. It did not regress main —
+/// it silently declined to fix it, which is why 524 tests noticed nothing.
+///
+/// The asymmetry was the tell: `status_fail`, the arm this one mirrors, has NO absorb
+/// conjunct and renders Toxic into an already-poisoned Water Absorb target correctly. The
+/// plain-defender control is in the same loop so this cannot pass by the arm being dead.
+///
+/// Reach for the pairing, measured: 91 of 1682 variants across 12 species carry one of the
+/// three abilities and 45 carry Leech Seed, independent populations.
+#[test]
+fn an_absorb_ability_defender_is_not_excluded_from_the_fail_render() {
+    for ability in [
+        None,
+        Some(Abilities::WATERABSORB),
+        Some(Abilities::VOLTABSORB),
+        Some(Abilities::FLASHFIRE),
+    ] {
+        let mut state = confused_state(Choices::LEECHSEED);
+        state
+            .side_two
+            .volatile_statuses
+            .remove(&PokemonVolatileStatus::CONFUSION);
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::LEECHSEED);
+        if let Some(ability) = ability {
+            state.side_one.get_active().ability = ability;
+        }
+
+        let branches = generate(&mut state);
+        let mut seen = 0usize;
+        for branch in &branches {
+            let text = render(&mut state.clone(), branch);
+            if !text.contains("|move|p2a: Opponent|leechseed") {
+                continue;
+            }
+            seen += 1;
+            assert!(
+                !text.contains("|[miss]") && !text.contains("|-miss|"),
+                "defender ability {ability:?}: 0.90 hit-with-no-effect against 0.10 miss, so \
+                 |[miss]| is the MINORITY outcome. An absorb ability must not switch this arm \
+                 off -- `absorb` reads the ability alone and this is exactly the hole review \
+                 found: {text}"
+            );
+            assert_in_order(
+                &text,
+                &[
+                    "|move|p2a: Opponent|leechseed||[still]",
+                    "|-fail|p2a: Opponent",
+                ],
+            );
+        }
+        assert_eq!(
+            seen, 1,
+            "ability {ability:?}: expected exactly one merged fizzle branch; 0 means this \
+             fixture never reached the arm: {branches:?}"
+        );
+    }
+}
+
+/// Protect keeps its OWN render, which is what makes the deleted `!defender_protected`
+/// conjunct redundant rather than load-bearing.
+///
+/// The redundancy is a property of the engine: `Choice::remove_effects_for_protect` sets
+/// `volatile_status = None`, so under Protect `volatile_fail`'s closure finds no volatile and
+/// cannot fire. It is NOT redundant because that function sets `accuracy = 100.0` — the gen3
+/// patch restores the original accuracy on the next line, deliberately, to keep the miss and
+/// blocked-hit branches distinct, and this fixture asserts BOTH of those branches so the
+/// distinction is pinned too. Re-adding the conjunct leaves this green; DELETING the engine's
+/// volatile clear turns it red, which is the direction that matters.
+#[test]
+fn protect_keeps_its_own_render_when_the_volatile_could_not_have_applied() {
+    // TYPING SWEPT, because the first version of this fixture used only the default
+    // NORMAL defender and was therefore BLIND BY CONSTRUCTION to the Grass row -- the
+    // one-value-for-a-keyed-quantity defect. With a Grass defender the `|-immune|` render's
+    // own `!defender_protected` guard is what keeps Protect's line; review measured
+    // `drop_render_protect_guard` surviving and changing 8 rows, all of them Grass.
+    // The EXPECTED SPLIT is keyed on the typing, and that difference is the ordering pin.
+    // Showdown resolves Protect in `hitStepTryHitEvent` (`sim/battle-actions.ts`), which runs
+    // BEFORE both `hitStepTryImmunity` and `hitStepAccuracy`. So:
+    //   * a NORMAL target rolls accuracy behind Protect -- 2 distinct lines, one miss;
+    //   * a GRASS target never reaches the accuracy roll at all, because Protect already
+    //     ended the move, so BOTH engine branches map to the Protect line and there is no
+    //     miss to render. The engine's 10/90 split is its own artifact there.
+    // Asserting one number for both typings is what would leave the keying untested.
+    for (label, types, want_blocked, want_missed) in [
+        ("Normal defender", (PokemonType::NORMAL, PokemonType::TYPELESS), 1usize, 1usize),
+        ("Grass/Dark defender", (PokemonType::GRASS, PokemonType::DARK), 2usize, 0usize),
+    ] {
+    let mut state = confused_state(Choices::LEECHSEED);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_one.get_active().types = types;
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::LEECHSEED);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PROTECT);
+
+    let branches = generate(&mut state);
+    let mut blocked = 0usize;
+    let mut missed = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        if !text.contains("|move|p2a: Opponent|leechseed") {
+            continue;
+        }
+        assert!(
+            !text.contains("|-fail|p2a: Opponent"),
+            "{label}: the fail form must never preempt Protect's own render: {text}"
+        );
+        assert!(
+            !text.contains("|-immune|"),
+            "{label}: Showdown resolves Protect BEFORE Leech Seed's onTryImmunity, so a \
+             protected target shows the Protect activation and never `|-immune|`: {text}"
+        );
+        if text.contains("|-activate|p1a: Lead|Protect") {
+            blocked += 1;
+        } else if text.contains("|[miss]") {
+            // Correct: Protect cleared the volatile, so this branch has no
+            // hit-with-no-effect competitor and the empty tail really is the miss.
+            missed += 1;
+        }
+    }
+    assert_eq!(
+        blocked, want_blocked,
+        "{label}: expected {want_blocked} Protect render(s): {branches:?}"
+    );
+    assert_eq!(
+        missed, want_missed,
+        "{label}: expected {want_missed} labelled miss branch(es). For the Normal row a 0 \
+         means the engine stopped restoring accuracy after `remove_effects_for_protect`; for \
+         the Grass row a 1 means an accuracy roll is being rendered behind a move Protect \
+         had already ended: {branches:?}"
+    );
+    }
+}
+
+/// The accuracy-100 sibling stays DEFERRED, which pins this change's own scope line.
+///
+/// Yawn is 100% accuracy with an opponent-target volatile, so on an already-yawning target it
+/// is family D: deterministic, no miss to compete with, and a MISSING `|-fail|` rather than a
+/// mislabel. Dropping `choice.accuracy < 100.0` expands this change into that family with
+/// nothing else noticing — review measured that mutant as a survivor, so it is pinned here.
+///
+/// NORMAL-TYPED ON PURPOSE, and the first version of this fixture was VACUOUS for missing it.
+/// It used Confuse Ray, which is GHOST-typed: against the default Normal-typed target
+/// `effectiveness` is 0, the predicate dies on `effectiveness > 0.0` before the accuracy
+/// conjunct is ever consulted, and the `accuracy < 100.0` mutant SURVIVED this test. A pin is
+/// not a pin until the mutant dies, so that was measured rather than assumed.
+#[test]
+fn the_accuracy_100_volatile_sibling_is_left_alone() {
+    let mut state = confused_state(Choices::YAWN);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::YAWN);
+
+    let branches = generate(&mut state);
+    let mut seen = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        if !text.contains("|move|p2a: Opponent|yawn") {
+            continue;
+        }
+        seen += 1;
+        // Scoped to the move under test: side one's own Splash is a self-target move and
+        // legitimately renders the blank-target `[still]` form, so a whole-text match here
+        // would pass for the wrong reason. Review's rule about vacuous assertions, applied
+        // to an assertion of mine that was the opposite -- failing for the wrong reason.
+        assert!(
+            text.contains("|move|p2a: Opponent|yawn|p1a: Lead"),
+            "family D keeps its explicit target and gains no fail line; it is deferred to a \
+             change that measures its |move|-line and fail-column movement against the \
+             fidelity corpus, so this arm must not reach it: {text}"
+        );
+        assert!(
+            !text.contains("|move|p2a: Opponent|yawn||[still]")
+                && !text.contains("|-fail|p2a: Opponent"),
+            "family D is deferred; this arm must not render its fail form: {text}"
+        );
+    }
+    assert!(seen > 0, "fixture never reached a yawn render: {branches:?}");
+}
+
+/// A DAMAGING move that misses is still a miss, which pins the `category == Status` conjunct.
+///
+/// Wrap at 85% applies `PARTIALLYTRAPPED`, so against an already-trapped target it has the
+/// same "volatile cannot apply" shape — but it deals damage, so its no-op hit is NOT an empty
+/// delta and the only empty branch is the real miss. There is no competitor and `|[miss]|` is
+/// exact. Eight gen3 moves have this shape (BIND, CLAMP, FIRESPIN, MAGMASTORM, SANDTOMB,
+/// THUNDERCAGE, WHIRLPOOL, WRAP, 70-90% accuracy), so dropping the conjunct would relabel a
+/// correct miss on all of them.
+#[test]
+fn a_damaging_moves_miss_is_still_a_miss_even_when_its_volatile_could_not_apply() {
+    let mut state = confused_state(Choices::WRAP);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::PARTIALLYTRAPPED);
+
+    let branches = generate(&mut state);
+    let mut missed = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        if !text.contains("|move|p2a: Opponent|wrap") {
+            continue;
+        }
+        assert!(
+            !text.contains("|-fail|p2a: Opponent"),
+            "a damaging move's empty branch is the MISS -- its no-op hit still deals damage, \
+             so there is no competitor to outweigh it: {text}"
+        );
+        if text.contains("|[miss]") {
+            missed += 1;
+        }
+    }
+    assert_eq!(
+        missed, 1,
+        "expected exactly one labelled miss branch: {branches:?}"
+    );
+}
+
+/// Leech Seed into a GRASS defender is `|-immune|`, and BOTH halves of that state are
+/// asserted because they had two different wrong answers.
+///
+/// Showdown gates the move on `onTryImmunity(target) { return !target.hasType('Grass') }`,
+/// which is not a type-effectiveness zero — Grass-vs-Grass is 0.5 — so `effectiveness > 0.0`
+/// never deferred to it. The engine models the immunity as a single 100% EMPTY move phase
+/// whether or not the target already carries the seed, so before this change the unseeded
+/// half rendered `|[miss]|` through the miss inference and the seeded half rendered
+/// `|-fail|` through `volatile_fail`. Both are wrong and they land in different encoder
+/// columns; the truth is `|-immune|` with the explicit target kept.
+///
+/// Corpus-measured, in the same committed capture as the fail form:
+/// `tests/fixtures/showdown/capture/lines-battle-gen3randombattle-controlled-20260710004.log`
+/// turn 9 — `|move|p1a: Jumpluff|Leech Seed|p2a: Cacturne` then `|-immune|p2a: Cacturne`.
+///
+/// Rendered rather than refused because the value is KNOWABLE: the defender's types are in
+/// the state and the rule is fixed, so "fail closed" does not apply and a refusal would
+/// abort the whole world for a decidable case.
+#[test]
+fn leech_seed_into_a_grass_defender_is_immune_seeded_or_not() {
+    // TYPING IS SWEPT, and the dual-type row is the one that matters. `has_type` must match
+    // Grass in EITHER slot: 122 of the 168 Grass variants in the pool (14 of 19 species) are
+    // dual-typed, and the corpus line this fixture cites as its evidence is **Cacturne, which
+    // is Grass/Dark**. A pure-Grass-only fixture pins the wrong half of its own citation --
+    // review measured `stricter_pure_grass_only` surviving and reverting 122 variants, and
+    // `grep -rn "PokemonType::GRASS" tests/` found exactly one defender assignment in the
+    // whole suite, `(GRASS, TYPELESS)`. Grass in slot TWO is swept for the same reason.
+    for (label, types) in [
+        ("pure Grass", (PokemonType::GRASS, PokemonType::TYPELESS)),
+        ("Grass/Dark (Cacturne, the cited corpus line)", (PokemonType::GRASS, PokemonType::DARK)),
+        ("Dark/Grass (Grass in the second slot)", (PokemonType::DARK, PokemonType::GRASS)),
+    ] {
+    for already_seeded in [false, true] {
+        let mut state = confused_state(Choices::LEECHSEED);
+        state
+            .side_two
+            .volatile_statuses
+            .remove(&PokemonVolatileStatus::CONFUSION);
+        state.side_one.get_active().types = types;
+        if already_seeded {
+            state
+                .side_one
+                .volatile_statuses
+                .insert(PokemonVolatileStatus::LEECHSEED);
+        }
+
+        let branches = generate(&mut state);
+        let mut seen = 0usize;
+        for branch in &branches {
+            let text = render(&mut state.clone(), branch);
+            if !text.contains("|move|p2a: Opponent|leechseed") {
+                continue;
+            }
+            seen += 1;
+            assert!(
+                !text.contains("|[miss]") && !text.contains("|-miss|"),
+                "seeded={already_seeded}: a Grass target is IMMUNE, not missed: {text}"
+            );
+            assert!(
+                !text.contains("|-fail|p2a: Opponent"),
+                "{label} seeded={already_seeded}: a Grass target is IMMUNE, not a fizzled \
+                 volatile -- this is the known-wrong line review found in the core arm: {text}"
+            );
+            assert_in_order(
+                &text,
+                &["|move|p2a: Opponent|leechseed|p1a: Lead", "|-immune|p1a: Lead"],
+            );
+        }
+        assert_eq!(
+            seen, 1,
+            "{label} seeded={already_seeded}: expected exactly one leechseed branch: \
+             {branches:?}"
+        );
+    }
+    }
+}
+
+/// The immunity is scoped to LEECH SEED, and removing that scope INVENTS an immunity.
+///
+/// `drop_move_id_scope` survives the rest of the suite and changes 64 sweep rows: without
+/// `move_id == LEECHSEED`, DISABLE, SUPERSONIC, SWAGGER and SWEET KISS all start emitting
+/// `|-immune|` into a Grass defender, which has no immunity to any of them — Normal into
+/// Grass is 1.0. That is a fail-open in the loud direction: a line asserting the move could
+/// not touch the target when it could.
+///
+/// DISABLE is the probe because it applies no CONFUSION, so its tail stays empty and it
+/// reaches the arm. The correct answer for it against an already-disabled Grass target is the
+/// fizzled-volatile fail form, and that is asserted positively so the test cannot pass by the
+/// branch disappearing.
+#[test]
+fn the_grass_immunity_is_scoped_to_leech_seed_and_invents_nothing() {
+    let mut state = confused_state(Choices::DISABLE);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_one.get_active().types = (PokemonType::GRASS, PokemonType::DARK);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::DISABLE);
+
+    let branches = generate(&mut state);
+    let mut seen = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        if !text.contains("|move|p2a: Opponent|disable") {
+            continue;
+        }
+        seen += 1;
+        assert!(
+            !text.contains("|-immune|"),
+            "Grass has no immunity to DISABLE; an `|-immune|` here is an INVENTED immunity, \
+             which is what dropping the move-id scope produces: {text}"
+        );
+        assert_in_order(
+            &text,
+            &[
+                "|move|p2a: Opponent|disable||[still]",
+                "|-fail|p2a: Opponent",
+            ],
+        );
+    }
+    assert_eq!(seen, 1, "expected exactly one disable branch: {branches:?}");
+}
+
+/// `effectiveness > 0.0` is PINNED, not declared, and the declaration it replaces was wrong.
+///
+/// The note used to say every sub-100% family member except LEECHSEED and DISABLE applies
+/// CONFUSION, whose counter makes the tail non-empty — and then argued as though the named
+/// exception did not exist. DISABLE applies no CONFUSION at all, so a Ghost defender already
+/// carrying DISABLE reaches this arm with an empty tail: the shipped predicate renders a bare
+/// `|move|..|disable|..` and the mutant that drops `effectiveness > 0.0` renders
+/// `||[still]` + `|-fail|` instead.
+///
+/// It also disproves the other half of that note: there is NO type-immunity render on this
+/// path to defer to. Both `|-immune|` arms in the deterministic block require `is_damaging`
+/// or `choice.status.is_some()`, and a volatile-only Status move is neither — which is why
+/// the assertion below is that the line is BARE rather than that it is `|-immune|`. That
+/// missing line is a real, separate gap and is named rather than fixed here.
+#[test]
+fn a_type_immune_defender_keeps_its_bare_move_line_rather_than_the_fail_form() {
+    let mut state = confused_state(Choices::DISABLE);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_one.get_active().types = (PokemonType::GHOST, PokemonType::TYPELESS);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::DISABLE);
+
+    let branches = generate(&mut state);
+    let mut seen = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        if !text.contains("|move|p2a: Opponent|disable") {
+            continue;
+        }
+        seen += 1;
+        assert!(
+            text.contains("|move|p2a: Opponent|disable|p1a: Lead"),
+            "a type-immune defender keeps the explicit target: {text}"
+        );
+        assert!(
+            !text.contains("|move|p2a: Opponent|disable||[still]")
+                && !text.contains("|-fail|p2a: Opponent"),
+            "Normal-into-Ghost is type immunity, not a fizzled volatile: the fail form claims \
+             the move connected and did nothing, which is the opposite of immune: {text}"
+        );
+    }
+    assert_eq!(seen, 1, "expected exactly one disable branch: {branches:?}");
+}
