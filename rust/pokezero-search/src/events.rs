@@ -435,11 +435,25 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     // The SUCCESS-side counter for the Protect marker. Registered even though the
     // caller does not currently reach this gate: `mark_lossy_subcase` asserts only
     // `starts_with(lossy_tag)` and, unlike `mark_attribution_unsafe_subcase`, never
-    // calls `assert_subcase_vocabulary`. That asymmetry is a latent trap rather than
-    // a licence -- the moment anyone closes it (a sensible hardening, since the lossy
-    // sub-case channel is otherwise unbounded) an unregistered token becomes a
-    // PRODUCTION panic on a `--release` wheel, and a pyo3 panic escapes
-    // `except Exception` and kills the campaign worker. Registering costs one line.
+    // calls `assert_subcase_vocabulary`.
+    //
+    // WHAT THAT ASYMMETRY MEANS, corrected. This block used to say an unregistered token
+    // "becomes a PRODUCTION panic", present tense, which overstates it in the direction that
+    // makes the entry look self-enforcing. It is not: for THESE tokens the registration is
+    // INERT on the production path, and review measured the consequence -- deregistering one
+    // of them survived the whole suite. The conditional is what is true: registration
+    // matters the moment anyone routes `mark_lossy_subcase` through the gate, which is a
+    // sensible hardening since the lossy sub-case channel is otherwise unbounded.
+    //
+    // WHY THAT ROUTING IS NOT DONE HERE, so the next reader does not assume it was an
+    // oversight: `the_paired_tag_assert_in_mark_lossy_subcase` deliberately passes
+    // `attract_empty_tail_ambiguous:miss`, whose tokens this vocabulary DEREGISTERED, so
+    // routing would panic an existing pin that is testing something else entirely. Closing
+    // the asymmetry means dealing with that pin first.
+    //
+    // What makes these entries load-bearing today is `PROTECT_MARKER_COUNTERS`: the emit
+    // site's own array, iterated by `the_live_subcase_slugs_are_all_in_vocabulary`, so a
+    // token that reaches the emit site and not this list fails there.
     //
     // Prefixed for the same reason as the `shape_*` and `heal_*` tokens: this
     // vocabulary is shared across every lossy tag and validated per token with no
@@ -2523,18 +2537,10 @@ fn render_move_phase(
                             // `world_failure_reasons[...:heal_zero_marker]`.
                             out.mark_lossy_subcase(
                                 SLEEPTALK_LOSSY_TAG,
-                                match (
+                                protect_marker_counter_slug(
                                     defender_has_absorb_ability,
                                     defender_absorb_heal_clamps_to_zero,
-                                ) {
-                                    (true, true) => "sleeptalk_called_unidentified:\
-                                                     protect_marker_rendered_absorb_full_hp",
-                                    (true, false) => "sleeptalk_called_unidentified:\
-                                                      protect_marker_rendered_absorb_headroom",
-                                    (false, _) => {
-                                        "sleeptalk_called_unidentified:protect_marker_rendered"
-                                    }
-                                },
+                                ),
                             );
                         } else if heal_is_a_direct_self_heal(&called_tail, index, side) {
                             // RENDER the direct self-heal. Bare `|-heal|{ident}|{cond}` with no
@@ -4579,16 +4585,43 @@ struct SleepTalkProbe {
     /// more), and it does not depend on the match set, which the ambiguity means is not a
     /// singleton anyway.
     ///
-    /// EQUIVALENT-MUTANT NOTE, recorded so the next reader does not chase it. Narrowing the
-    /// scan to MATCHING candidates SURVIVES the mutation battery, and it survives because it
-    /// is equivalent, not because the suite is silent: if producer 2 fired, the callee that
-    /// fired is the one that generated this tail, so it matches by construction and a
-    /// matching-only scan cannot miss it. A candidate that carries the converted heal and
-    /// does NOT match did not produce THIS tail, so its heal is irrelevant to it. The
-    /// all-candidates form is kept anyway because it is the strictly more conservative of the
-    /// two and does not rest on that argument. Restoring the old EARLY RETURN on the second
-    /// match is a different mutant and is NOT equivalent -- it skips candidates outright, and
-    /// `the_callee_scan_covers_candidates_after_the_second_match` kills it.
+    /// EQUIVALENT-MUTANT NOTE, recorded so the next reader does not chase it -- and SCOPED,
+    /// because the first version of this note was stated for the whole function and is only
+    /// true of one arm. Review caught that.
+    ///
+    /// **On the `Ambiguous` arm**, narrowing the scan to MATCHING candidates is equivalent,
+    /// not merely unkilled: if producer 2 fired, the callee that fired is the one that
+    /// generated this tail, so it matches by construction and a matching-only scan cannot
+    /// miss it. A candidate that carries the converted heal and does NOT match did not
+    /// produce THIS tail, so its heal is irrelevant to it.
+    ///
+    /// **On the `NoneMatched` arm that argument is FALSE as stated**, because the matching set
+    /// is empty by definition -- "the callee that fired matches" is exactly what did not
+    /// happen there. The arm does reach this flag: `sleeptalk_refusal_is_unsafe_with_protect`
+    /// answers `NoneMatched(_) => true`, and `mark_attribution_unsafe_subcase` does not
+    /// short-circuit, so the walk runs and calls `protect_blocked_marker_side` with it. What
+    /// bounds the consequence is that the refusal is UNCONDITIONAL on that arm: the flag
+    /// cannot turn a refused `NoneMatched` branch into a searched one. It can only change
+    /// lines on a branch nothing consumes, and fire the render counter there -- which is why
+    /// that counter is documented as counting BRANCH RENDERS and not reclaimed worlds.
+    /// Measured: `…_absorb_full_hp` and `none_matched` decisions do not co-occur in any shard
+    /// of any arm run for this change (9900068 carries 19 `none_matched` decisions and 0
+    /// full-HP renders; every shard with full-HP renders carries 0 `none_matched`). That is
+    /// NOT a discharge -- nothing shows the marker could have fired in 9900068 -- and it is
+    /// recorded as an observation, not a proof.
+    ///
+    /// **`NoCandidates` has no behavioural coverage and cannot have any**, which is why a
+    /// strictly-safer mutant that forces this flag `true` on an empty candidate list also
+    /// survives. Measured against a control rather than argued: with the sleeper's only move
+    /// being Sleep Talk the engine emits ONE branch, the 50% "nothing happened" arm, and no
+    /// branch carrying a callee tail -- so no branch exists on which the flag is consulted.
+    /// The control with two callees emits the second branch and does refuse. An arm with no
+    /// reachable branch cannot be distinguished by any fixture.
+    ///
+    /// The all-candidates form is kept because it is the strictly more conservative of the two
+    /// and does not rest on the `Ambiguous`-only argument. Restoring the old EARLY RETURN on
+    /// the second match is a different mutant and is NOT equivalent -- it skips candidates
+    /// outright, and `the_callee_scan_covers_candidates_after_the_second_match` kills it.
     callee_can_convert_an_opponent_heal: bool,
 }
 
@@ -4597,6 +4630,43 @@ struct SleepTalkProbe {
 /// must never carry a sub-case suffix. Named once so the two call sites cannot
 /// drift apart.
 const SLEEPTALK_LOSSY_TAG: &str = "sleeptalk_called_unidentified";
+
+/// Every literal the Protect-marker counter can emit, named ONCE so the emit site and the
+/// vocabulary gate cannot drift.
+///
+/// They used to be inline literals at the emit site and hand-copied, one per `assert`, into
+/// `the_live_subcase_slugs_are_all_in_vocabulary`. That gate's own comment says "**BOTH** have
+/// to clear it or the branch that fires less often is the one that panics a release wheel" --
+/// and when a THIRD literal was added for the full-HP reclaim, the gate was not updated and
+/// its stated invariant was silently violated. Review found it; a mutant deregistering the new
+/// token survived the whole suite.
+///
+/// Hand-copying was the defect, so the copy is gone: the gate calls
+/// `protect_marker_counter_slug` over every input and validates whatever comes back.
+const PROTECT_MARKER_RENDERED: &str = "sleeptalk_called_unidentified:protect_marker_rendered";
+const PROTECT_MARKER_RENDERED_ABSORB_HEADROOM: &str =
+    "sleeptalk_called_unidentified:protect_marker_rendered_absorb_headroom";
+const PROTECT_MARKER_RENDERED_ABSORB_FULL_HP: &str =
+    "sleeptalk_called_unidentified:protect_marker_rendered_absorb_full_hp";
+/// WHICH counter literal a rendered Protect marker belongs to.
+///
+/// Extracted from the emit site so the vocabulary gate can DERIVE the set it validates by
+/// calling this over every input, instead of mirroring a hand-written list. The mirror is
+/// what went stale: the gate spelled out two literals under the comment "BOTH have to clear
+/// it", a third was added at the emit site, and the gate was not updated.
+fn protect_marker_counter_slug(
+    defender_has_absorb_ability: bool,
+    defender_absorb_heal_clamps_to_zero: bool,
+) -> &'static str {
+    match (
+        defender_has_absorb_ability,
+        defender_absorb_heal_clamps_to_zero,
+    ) {
+        (true, true) => PROTECT_MARKER_RENDERED_ABSORB_FULL_HP,
+        (true, false) => PROTECT_MARKER_RENDERED_ABSORB_HEADROOM,
+        (false, _) => PROTECT_MARKER_RENDERED,
+    }
+}
 
 /// Measurement label for a failed Sleep Talk identification.
 ///
@@ -7925,22 +7995,34 @@ mod tests {
             let slug = none_matched_slugs(one_shape(shape)).next().unwrap();
             assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, slug);
         }
-        // The Protect counter's literal, through the PRODUCTION gate rather than a
-        // membership check. Strictly stronger: membership passes a re-composed literal that
-        // the gate would reject. Its caller is `mark_lossy_subcase`, which does NOT reach
-        // this gate today -- the `&'static str` bound on its `subcase` keeps that caller set
+        // EVERY Protect-counter literal, through the PRODUCTION gate rather than a membership
+        // check. Strictly stronger: membership passes a re-composed literal that the gate
+        // would reject. Its caller is `mark_lossy_subcase`, which does NOT reach this gate
+        // today -- the `&'static str` bound on its `subcase` keeps that caller set
         // literals-only and greppable, so running them through here is what makes closing
         // that asymmetry safe later.
-        assert_subcase_vocabulary(
-            SLEEPTALK_LOSSY_TAG,
-            "sleeptalk_called_unidentified:protect_marker_rendered",
-        );
-        // #1211's second literal, through the same gate. The emit site picks between the
-        // two, so BOTH have to clear it or the branch that fires less often is the one that
-        // panics a release wheel.
-        assert_subcase_vocabulary(
-            SLEEPTALK_LOSSY_TAG,
-            "sleeptalk_called_unidentified:protect_marker_rendered_absorb_headroom",
+        //
+        // ITERATED, not hand-copied, and that is the fix for a defect review found here. This
+        // block used to spell out two literals with the comment "BOTH have to clear it or the
+        // branch that fires less often is the one that panics a release wheel". A third
+        // literal was then added at the emit site for the full-HP reclaim and this gate was
+        // not updated, so the block's own stated invariant was violated and a mutant
+        // deregistering the new token survived the entire suite. `PROTECT_MARKER_COUNTERS` is
+        // the emit site's own array, so the copy that could go stale no longer exists.
+        let mut seen = std::collections::BTreeSet::new();
+        for has_absorb in [true, false] {
+            for clamps in [true, false] {
+                let slug = protect_marker_counter_slug(has_absorb, clamps);
+                assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, slug);
+                seen.insert(slug);
+            }
+        }
+        assert_eq!(
+            seen.len(), 3,
+            "the Protect counter no longer has exactly three distinct literals: {seen:?}. \
+             That is fine, but this gate derives the set from \
+             `protect_marker_counter_slug` and the count is what tells a reader the emit \
+             site's arity changed"
         );
         // The MULTI-shape composition too: `none_matched_slugs` yields one slug per observed
         // shape and a real world can carry several, so each must clear the gate.
@@ -10224,6 +10306,136 @@ mod none_matched_shape_tests {
             unrenderable_family_at_with_protect(&zero_heal_on_defender, 0, atk, true, true),
             Some("heal_zero_marker")
         );
+    }
+
+    /// The CONJUNCT IS LIVE, not vacuous -- pinned through the ENGINE's own modification pass
+    /// rather than a hand-built `Choice`.
+    ///
+    /// This test exists because `render_move_phase` cited it by name and it did not exist.
+    /// Review found the citation resolving to nothing but its own comment, which is the
+    /// "instrument that cannot report failure" shape wearing a citation's clothes. The claim it
+    /// was cited for is the load-bearing half of the whole guard: that
+    /// `choice_can_convert_an_opponent_heal` can actually be TRUE in production, so the new
+    /// conjunct still refuses the genuinely ambiguous case rather than being a constant
+    /// `false` dressed as a predicate.
+    ///
+    /// Pinned at the SCAN, not at the predicate, and that is the point. The sibling
+    /// `only_an_opponent_targeted_positive_heal_can_reach_the_absorb_no_op` feeds the
+    /// predicate a `Choice` this test file constructed, so it cannot show that anything in the
+    /// engine ever sets the field. Here `identify_sleep_talk_called` regenerates the callees
+    /// through `generate_instructions_from_move`, so the flag is TRUE only if the absorb
+    /// conversion really wrote `heal` and `remove_effects_for_protect` really left it alone.
+    /// The control is the same fixture with protect-flagged callees, where the strip does
+    /// happen and the flag must be FALSE -- without it, a mutant hardcoding the flag `true`
+    /// would pass.
+    #[test]
+    fn the_bypassing_callee_still_refuses() {
+        let mut state = State::default();
+        state.side_two.get_active().ability = Abilities::WATERABSORB;
+        let maxhp = state.side_two.get_active().maxhp;
+        state.side_two.get_active().hp = maxhp;
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::PROTECT);
+        state.side_one.get_active().status = PokemonStatus::SLEEP;
+
+        let mut probe_flag = |callees: [Choices; 2]| {
+            state
+                .side_one
+                .get_active()
+                .replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
+            state
+                .side_one
+                .get_active()
+                .replace_move(PokemonMoveIndex::M1, callees[0]);
+            state
+                .side_one
+                .get_active()
+                .replace_move(PokemonMoveIndex::M2, callees[1]);
+            let mut outer = poke_engine::choices::MOVES
+                .get(&Choices::SLEEPTALK)
+                .unwrap()
+                .clone();
+            outer.move_id = Choices::SLEEPTALK;
+            let tail = [Instruction::Heal(HealInstruction {
+                side_ref: SideReference::SideTwo,
+                heal_amount: 0,
+            })];
+            identify_sleep_talk_called(
+                &mut state,
+                SideReference::SideOne,
+                &Choice::default(),
+                &outer,
+                &tail,
+                false,
+            )
+            .callee_can_convert_an_opponent_heal
+        };
+
+        assert!(
+            probe_flag([Choices::WATERSPORT, Choices::TACKLE]),
+            "the engine's own modification pass did not leave an opponent-targeted heal on a \
+             protect-BYPASSING absorbed callee, so the conjunct that keeps the genuinely \
+             ambiguous case refused is vacuous and the guard is a fail-open"
+        );
+        assert!(
+            !probe_flag([Choices::SURF, Choices::TACKLE]),
+            "a protect-FLAGGED absorbed callee still carried its converted heal, so \
+             remove_effects_for_protect no longer strips it and the two producers are no \
+             longer mutually exclusive per callee"
+        );
+    }
+
+    /// The bypassing-producer set, DERIVED from the engine's gates instead of from the move
+    /// type alone -- and the correction to a figure this change published wrong.
+    ///
+    /// The PR body first reported the set as "the five Water moves without the protect flag",
+    /// counted 27 / 1682 pool carriers for `raindance`, and then said Rain Dance never reaches
+    /// the producer. Review was right that this is incoherent: a move that cannot reach the
+    /// producer is not in the set, so the count was of something irrelevant. The gate the
+    /// first enumeration missed is `ability_modify_attack_against`'s own first statement --
+    /// `if attacker_choice.target != MoveTarget::Opponent { return; }` -- whose comment names
+    /// Rain Dance as the reason it exists.
+    ///
+    /// So the set is: absorbed move TYPE, `target: Opponent`, and no protect flag. For
+    /// `VOLTABSORB` gen3 adds `category != Status`, which no unflagged Electric move can
+    /// satisfy. Derived here so the PR's pool claim rests on a gate-accurate set.
+    #[test]
+    fn the_bypassing_producer_set_is_derived_from_every_gate() {
+        let bypassing = |want: PokemonType, status_gated: bool| -> Vec<Choices> {
+            poke_engine::choices::MOVES
+                .iter()
+                .filter(|(_, c)| {
+                    c.move_type == want
+                        && c.target == MoveTarget::Opponent
+                        && !c.flags.protect
+                        && !(status_gated && c.category == MoveCategory::Status)
+                })
+                .map(|(id, _)| *id)
+                .collect()
+        };
+        let mut water = bypassing(PokemonType::WATER, false);
+        water.sort_by_key(|c| format!("{c:?}"));
+        assert_eq!(
+            water,
+            vec![Choices::WATERSPORT],
+            "the Water-side bypassing-producer set changed; the PR's pool-reachability claim \
+             is derived from exactly this list and must be recounted"
+        );
+        assert!(
+            bypassing(PokemonType::ELECTRIC, true).is_empty(),
+            "gen3 gates Volt Absorb on `category != Status` and every unflagged Electric move \
+             is a Status move; an Electric bypassing producer now exists: {:?}",
+            bypassing(PokemonType::ELECTRIC, true)
+        );
+        // THE NEAR MISS, kept explicit: Rain Dance is Water-typed and unflagged, and is
+        // excluded by the TARGET gate alone. Dropping that gate is what produced the wrong
+        // published figure.
+        let raindance = poke_engine::choices::MOVES.get(&Choices::RAINDANCE).unwrap();
+        assert_eq!(raindance.move_type, PokemonType::WATER);
+        assert!(!raindance.flags.protect);
+        assert_ne!(raindance.target, MoveTarget::Opponent);
     }
 
     /// The DISCRIMINATOR: producer 2's own `if`, read off the callee rather than approximated

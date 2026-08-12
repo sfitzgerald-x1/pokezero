@@ -3201,6 +3201,14 @@ fn protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing() {
 /// skipped. Neither was visible because the sibling fixtures put the bypassing callee
 /// FIRST, where any scan order finds it.
 ///
+/// WHAT THIS FIXTURE ACTUALLY CLOSES, corrected. It kills the EARLY-RETURN mutant only.
+/// Review caught this docstring claiming both, and it was wrong on the second: the
+/// matching-only scan still survives, because `WATERSPORT` matches this tail too, so
+/// restricting the scan to matching candidates still sees it. That mutant is an EQUIVALENCE on
+/// the `Ambiguous` arm and is documented as one on `SleepTalkProbe`; it is not a hole this
+/// fixture forgot to plug. Claiming a kill it does not deliver is the same defect as a
+/// citation resolving to nothing.
+///
 /// So the order is inverted here: two protect-flagged callees match before `WATERSPORT`
 /// is ever reached. All three regenerate the same `[Heal 0]` tail, the third from the
 /// OTHER producer, so the branch must refuse -- and an early return refuses nothing.

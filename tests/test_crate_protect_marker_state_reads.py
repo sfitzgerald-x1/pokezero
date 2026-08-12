@@ -252,6 +252,12 @@ class ProtectMarkerStateReadTests(unittest.TestCase):
         version of this module because its convertible fixture put `watersport` FIRST. Here
         two protect-flagged callees match before it is reached, so a scan that stops early
         renders `Protect` over an ability activation.
+
+        WHAT THIS CLOSES, corrected: the EARLY-RETURN mutant only. Review caught this
+        docstring claiming both. The matching-only scan still survives, because `watersport`
+        matches this tail too, so a matching-only scan still sees it -- it is an EQUIVALENCE on
+        the `Ambiguous` arm, documented as one on `SleepTalkProbe`, not a gap this fixture
+        forgot. A claimed kill that is not delivered is the same defect as a dangling citation.
         """
 
         branch = self._marker_branch("waterabsorb", 252, CONVERTIBLE_LAST)
