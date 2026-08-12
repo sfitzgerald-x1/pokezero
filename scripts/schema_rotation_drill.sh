@@ -255,12 +255,6 @@ grep -E '^(ERROR|FAILED) ' "$BASE/BASE.txt" > "$WT/base_broken.raw" || true
 grep '^ERROR ' "$WT/DRILL.txt" > "$WT/rot_err.raw" || true
 _norm "$WT/base_broken.raw" > "$WT/base_broken.txt"
 _norm "$WT/rot_err.raw" > "$WT/rot_err.txt"
-# Empty normalised output means the normaliser broke, not that the tree is clean. The sed
-# delimiter bug produced exactly this and it scored as a PASS.
-if [ -s "$WT/DRILL.txt" ] && grep -q '^FAILED' "$WT/DRILL.txt" && [ ! -s "$WT/rotated.txt" ]; then
-  echo "ABORT: the run has FAILED lines but normalisation produced nothing -- scorer is broken."
-  exit 5
-fi
 NEW_ERR=$(comm -13 "$WT/base_broken.txt" "$WT/rot_err.txt")
 if [ -n "$NEW_ERR" ]; then
   echo "ABORT: the rotated run has ERRORs the baseline does not -- the suite did not measure:"
@@ -268,6 +262,15 @@ if [ -n "$NEW_ERR" ]; then
   exit 4
 fi
 grep '^FAILED' "$WT/DRILL.txt" | _norm_id | sort -u > "$WT/rotated.txt"
+# Empty normalised output means the normaliser broke, not that the tree is clean -- the sed
+# delimiter bug produced exactly that and it scored as a PASS. Placed AFTER rotated.txt is
+# written: the first cut of this guard sat six lines too early and tested a file that did not
+# exist yet, so it aborted every run. A guard in the wrong place is still a bug, just a noisy
+# one instead of a silent one.
+if grep -q '^FAILED' "$WT/DRILL.txt" && [ ! -s "$WT/rotated.txt" ]; then
+  echo "ABORT: the run has FAILED lines but normalisation produced nothing -- scorer is broken."
+  exit 5
+fi
 comm -23 "$WT/rotated.txt" "$WT/baseline.txt" > "$WT/actual.txt"
 grep -vE '^\s*(#|$)' "$EXPECTED" | sort -u > "$WT/expected.txt"
 
