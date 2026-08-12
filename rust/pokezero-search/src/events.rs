@@ -3110,6 +3110,31 @@ fn render_move_phase(
     // Reachability of the already-seeded half specifically is not hypothetical: gen3
     // `remove_volatile_statuses_on_switch` retains `LEECHSEED => baton_passing`, so Baton Pass
     // can hand a live seed to a Grass receiver.
+    //
+    // TWO LATENT DIVERGENCES, HELD CLOSED BY THE POOL AND NOT BY THIS CODE. Named here with
+    // their measurement so that a pool change surfaces them instead of silently shipping a
+    // wrong line:
+    //
+    //   * a SEMI-INVULNERABLE Grass target (Fly / Dig / Dive / Bounce in progress) gets
+    //     `|-immune|` here, where Showdown's `hitStepInvulnerabilityEvent` runs BEFORE
+    //     `hitStepTryImmunity` and answers `|-miss|`;
+    //   * a Grass target behind MAGIC COAT gets `|-immune|`, where Showdown bounces the move
+    //     back at the user.
+    //
+    // Both are unreachable in gen3 randbats and only because of the SET POOL: FLY, DIG, DIVE,
+    // BOUNCE and MAGICCOAT have **0 of 1682** carriers, counted over the generated variant
+    // universe and cross-checked against raw `data/random-battles/gen3/sets.json`, where none
+    // of the five names occurs at all. The engine's charge machinery works, so nothing in this
+    // file or the engine holds these closed -- only the pool does, which is exactly the kind
+    // of premise that stops being true when someone edits a pool. Deliberately NOT guarded:
+    // a guard on an unreachable arm cannot be tested, and the reachability claim is the
+    // honest artefact.
+    //
+    // KNOWN UNPINNED, declared: dropping `!has_any_effect` from this predicate SURVIVES the
+    // suite. Measured reason -- the engine models the immunity as a no-op, so a Leech Seed into
+    // a Grass defender NEVER produces a non-empty move tail, and the render site below is
+    // nested inside `if !has_any_effect` regardless. The conjunct is belt-and-braces and the
+    // mutant is unreachable rather than uncaught.
     let leechseed_grass_immune = !has_any_effect
         && choice.move_id == Choices::LEECHSEED
         && {

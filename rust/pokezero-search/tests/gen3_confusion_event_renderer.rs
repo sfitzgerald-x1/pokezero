@@ -3597,11 +3597,29 @@ fn an_absorb_ability_defender_is_not_excluded_from_the_fail_render() {
 /// volatile clear turns it red, which is the direction that matters.
 #[test]
 fn protect_keeps_its_own_render_when_the_volatile_could_not_have_applied() {
+    // TYPING SWEPT, because the first version of this fixture used only the default
+    // NORMAL defender and was therefore BLIND BY CONSTRUCTION to the Grass row -- the
+    // one-value-for-a-keyed-quantity defect. With a Grass defender the `|-immune|` render's
+    // own `!defender_protected` guard is what keeps Protect's line; review measured
+    // `drop_render_protect_guard` surviving and changing 8 rows, all of them Grass.
+    // The EXPECTED SPLIT is keyed on the typing, and that difference is the ordering pin.
+    // Showdown resolves Protect in `hitStepTryHitEvent` (`sim/battle-actions.ts`), which runs
+    // BEFORE both `hitStepTryImmunity` and `hitStepAccuracy`. So:
+    //   * a NORMAL target rolls accuracy behind Protect -- 2 distinct lines, one miss;
+    //   * a GRASS target never reaches the accuracy roll at all, because Protect already
+    //     ended the move, so BOTH engine branches map to the Protect line and there is no
+    //     miss to render. The engine's 10/90 split is its own artifact there.
+    // Asserting one number for both typings is what would leave the keying untested.
+    for (label, types, want_blocked, want_missed) in [
+        ("Normal defender", (PokemonType::NORMAL, PokemonType::TYPELESS), 1usize, 1usize),
+        ("Grass/Dark defender", (PokemonType::GRASS, PokemonType::DARK), 2usize, 0usize),
+    ] {
     let mut state = confused_state(Choices::LEECHSEED);
     state
         .side_two
         .volatile_statuses
         .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_one.get_active().types = types;
     state
         .side_one
         .volatile_statuses
@@ -3621,7 +3639,12 @@ fn protect_keeps_its_own_render_when_the_volatile_could_not_have_applied() {
         }
         assert!(
             !text.contains("|-fail|p2a: Opponent"),
-            "the fail form must never preempt Protect's own render: {text}"
+            "{label}: the fail form must never preempt Protect's own render: {text}"
+        );
+        assert!(
+            !text.contains("|-immune|"),
+            "{label}: Showdown resolves Protect BEFORE Leech Seed's onTryImmunity, so a \
+             protected target shows the Protect activation and never `|-immune|`: {text}"
         );
         if text.contains("|-activate|p1a: Lead|Protect") {
             blocked += 1;
@@ -3631,12 +3654,18 @@ fn protect_keeps_its_own_render_when_the_volatile_could_not_have_applied() {
             missed += 1;
         }
     }
-    assert_eq!(blocked, 1, "expected the blocked-hit branch: {branches:?}");
     assert_eq!(
-        missed, 1,
-        "expected the miss branch to stay distinct -- if this is 0 the engine stopped \
-         restoring accuracy after `remove_effects_for_protect`: {branches:?}"
+        blocked, want_blocked,
+        "{label}: expected {want_blocked} Protect render(s): {branches:?}"
     );
+    assert_eq!(
+        missed, want_missed,
+        "{label}: expected {want_missed} labelled miss branch(es). For the Normal row a 0 \
+         means the engine stopped restoring accuracy after `remove_effects_for_protect`; for \
+         the Grass row a 1 means an accuracy roll is being rendered behind a move Protect \
+         had already ended: {branches:?}"
+    );
+    }
 }
 
 /// The accuracy-100 sibling stays DEFERRED, which pins this change's own scope line.
@@ -3752,13 +3781,25 @@ fn a_damaging_moves_miss_is_still_a_miss_even_when_its_volatile_could_not_apply(
 /// abort the whole world for a decidable case.
 #[test]
 fn leech_seed_into_a_grass_defender_is_immune_seeded_or_not() {
+    // TYPING IS SWEPT, and the dual-type row is the one that matters. `has_type` must match
+    // Grass in EITHER slot: 122 of the 168 Grass variants in the pool (14 of 19 species) are
+    // dual-typed, and the corpus line this fixture cites as its evidence is **Cacturne, which
+    // is Grass/Dark**. A pure-Grass-only fixture pins the wrong half of its own citation --
+    // review measured `stricter_pure_grass_only` surviving and reverting 122 variants, and
+    // `grep -rn "PokemonType::GRASS" tests/` found exactly one defender assignment in the
+    // whole suite, `(GRASS, TYPELESS)`. Grass in slot TWO is swept for the same reason.
+    for (label, types) in [
+        ("pure Grass", (PokemonType::GRASS, PokemonType::TYPELESS)),
+        ("Grass/Dark (Cacturne, the cited corpus line)", (PokemonType::GRASS, PokemonType::DARK)),
+        ("Dark/Grass (Grass in the second slot)", (PokemonType::DARK, PokemonType::GRASS)),
+    ] {
     for already_seeded in [false, true] {
         let mut state = confused_state(Choices::LEECHSEED);
         state
             .side_two
             .volatile_statuses
             .remove(&PokemonVolatileStatus::CONFUSION);
-        state.side_one.get_active().types = (PokemonType::GRASS, PokemonType::TYPELESS);
+        state.side_one.get_active().types = types;
         if already_seeded {
             state
                 .side_one
@@ -3780,8 +3821,8 @@ fn leech_seed_into_a_grass_defender_is_immune_seeded_or_not() {
             );
             assert!(
                 !text.contains("|-fail|p2a: Opponent"),
-                "seeded={already_seeded}: a Grass target is IMMUNE, not a fizzled volatile -- \
-                 this is the known-wrong line review found in the core arm: {text}"
+                "{label} seeded={already_seeded}: a Grass target is IMMUNE, not a fizzled \
+                 volatile -- this is the known-wrong line review found in the core arm: {text}"
             );
             assert_in_order(
                 &text,
@@ -3790,9 +3831,60 @@ fn leech_seed_into_a_grass_defender_is_immune_seeded_or_not() {
         }
         assert_eq!(
             seen, 1,
-            "seeded={already_seeded}: expected exactly one leechseed branch: {branches:?}"
+            "{label} seeded={already_seeded}: expected exactly one leechseed branch: \
+             {branches:?}"
         );
     }
+    }
+}
+
+/// The immunity is scoped to LEECH SEED, and removing that scope INVENTS an immunity.
+///
+/// `drop_move_id_scope` survives the rest of the suite and changes 64 sweep rows: without
+/// `move_id == LEECHSEED`, DISABLE, SUPERSONIC, SWAGGER and SWEET KISS all start emitting
+/// `|-immune|` into a Grass defender, which has no immunity to any of them — Normal into
+/// Grass is 1.0. That is a fail-open in the loud direction: a line asserting the move could
+/// not touch the target when it could.
+///
+/// DISABLE is the probe because it applies no CONFUSION, so its tail stays empty and it
+/// reaches the arm. The correct answer for it against an already-disabled Grass target is the
+/// fizzled-volatile fail form, and that is asserted positively so the test cannot pass by the
+/// branch disappearing.
+#[test]
+fn the_grass_immunity_is_scoped_to_leech_seed_and_invents_nothing() {
+    let mut state = confused_state(Choices::DISABLE);
+    state
+        .side_two
+        .volatile_statuses
+        .remove(&PokemonVolatileStatus::CONFUSION);
+    state.side_one.get_active().types = (PokemonType::GRASS, PokemonType::DARK);
+    state
+        .side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::DISABLE);
+
+    let branches = generate(&mut state);
+    let mut seen = 0usize;
+    for branch in &branches {
+        let text = render(&mut state.clone(), branch);
+        if !text.contains("|move|p2a: Opponent|disable") {
+            continue;
+        }
+        seen += 1;
+        assert!(
+            !text.contains("|-immune|"),
+            "Grass has no immunity to DISABLE; an `|-immune|` here is an INVENTED immunity, \
+             which is what dropping the move-id scope produces: {text}"
+        );
+        assert_in_order(
+            &text,
+            &[
+                "|move|p2a: Opponent|disable||[still]",
+                "|-fail|p2a: Opponent",
+            ],
+        );
+    }
+    assert_eq!(seen, 1, "expected exactly one disable branch: {branches:?}");
 }
 
 /// `effectiveness > 0.0` is PINNED, not declared, and the declaration it replaces was wrong.

@@ -147,13 +147,15 @@ def family_d(move: dict) -> bool:
     )
 
 
-def family_e_grass_immune_reach(table, variants):
+def family_e_grass_immune_reach(variants):
     """The Leech Seed / Grass-receiver pairing, both halves of the `|-immune|` case.
 
     Reported as a PAIRING rather than a move family: the render is wrong whenever a Leech Seed
     user faces a Grass-typed target, and it does not matter whether the target already carries
-    the seed (that only decides WHICH wrong line was emitted before the fix). So the reach is
-    the product of two independent pool populations, and both are counted here.
+    the seed (that only decides WHICH wrong line was emitted before the fix).
+
+    NOT a product. Both counts come from the same 1682-variant universe, so the seeders are a
+    subset of it; the pairing is a cross-SIDE condition on one pool.
     """
     seeders = sum(1 for _s, _v, moves in variants if any(m["move_id"] == "LEECHSEED" for m in moves))
     return seeders
@@ -230,7 +232,7 @@ def main() -> int:
     from pokezero.dex import load_showdown_dex_cached
 
     dex = load_showdown_dex_cached(args.showdown_root)
-    seeders = family_e_grass_immune_reach(table, variants)
+    seeders = family_e_grass_immune_reach(variants)
     grass = 0
     grass_species = set()
     for species, _variant_id, _moves in variants:
@@ -253,8 +255,12 @@ def main() -> int:
     print(f"  Grass-typed variants: {grass}/{total} ({grass / total:.2%}) across "
           f"{len(grass_species)} species")
     print("  Both halves of the state are covered: already-seeded (was `|-fail|`) and")
-    print("  not-seeded (was `|[miss]|`). Cross-side pairing, so the two populations are")
-    print("  independent and either can be the receiver of a Baton-Passed seed.")
+    print("  not-seeded (was `|[miss]|`).")
+    print("  ⚠ THESE TWO COUNTS DO NOT MULTIPLY. Both are drawn from the SAME 1682-variant")
+    print("  universe, so the seeders are a SUBSET of it and not an independent population;")
+    print("  an earlier revision of this text read as though they multiplied. What the")
+    print("  pairing needs is a seeder on one side and a Grass variant on the other, which is")
+    print("  a cross-SIDE condition on one pool, not a product of two.")
     return 0
 
 

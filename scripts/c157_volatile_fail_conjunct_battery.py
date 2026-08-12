@@ -23,6 +23,12 @@ check for it. So:
     without libtorch while emitting no `test result: FAILED` line, so the binary COUNT is the
     discriminator and not the failure count.
 
+⚠ `--min-binaries` DEFAULTED TO 30 AND THAT WAS BELOW THE FAILURE MODE IT EXISTS TO CATCH.
+Measured: a `--features model` run with no `DYLD_LIBRARY_PATH` reports **32** binaries, 246
+passed, 0 failed, with 4 binaries SIGABRT-ing silently. A threshold of 30 therefore accepted
+the exact condition the guard was written for. It is 34 now, above that 32 and below the 36
+this crate reports when whole.
+
 Usage:
   scripts/c157_volatile_fail_conjunct_battery.py --self-test
   scripts/c157_volatile_fail_conjunct_battery.py [--only NAME ...]
@@ -55,6 +61,46 @@ BLOCK = """    let volatile_fail = !has_any_effect
         && choice.volatile_status.as_ref().map_or(false, |vs| {
             vs.target == MoveTarget::Opponent && {"""
 
+#: The `|-immune|` predicate and its render site. A SECOND block, because the battery covered
+#: only `volatile_fail` and review found three surviving stricter mutants on this one -- the
+#: pure-Grass narrowing alone silently reverted 122 of the 168 Grass variants, including the
+#: Grass/Dark species whose captured line is this change's cited evidence.
+GRASS_BLOCK = """    let leechseed_grass_immune = !has_any_effect
+        && choice.move_id == Choices::LEECHSEED
+        && {
+            let d = match defender {
+                SideReference::SideOne => &sim.state.side_one,
+                SideReference::SideTwo => &sim.state.side_two,
+            };
+            d.get_active_immutable().has_type(&PokemonType::GRASS)
+        };"""
+
+RENDER_BLOCK = """        if leechseed_grass_immune && !defender_protected {"""
+
+GRASS_MUTANTS: dict[str, tuple[str, str, str]] = {
+    # name: (block, old, new)
+    "stricter_pure_grass_only": (
+        GRASS_BLOCK,
+        "            d.get_active_immutable().has_type(&PokemonType::GRASS)",
+        "            d.get_active_immutable().types == (PokemonType::GRASS, PokemonType::TYPELESS) // MUTANT",
+    ),
+    "drop_move_id_scope": (
+        GRASS_BLOCK,
+        "        && choice.move_id == Choices::LEECHSEED\n",
+        "        && true // MUTANT\n",
+    ),
+    "drop_has_any_effect_grass": (
+        GRASS_BLOCK,
+        "    let leechseed_grass_immune = !has_any_effect\n",
+        "    let leechseed_grass_immune = true // MUTANT\n",
+    ),
+    "drop_render_protect_guard": (
+        RENDER_BLOCK,
+        "        if leechseed_grass_immune && !defender_protected {",
+        "        if leechseed_grass_immune { // MUTANT",
+    ),
+}
+
 MUTANTS: dict[str, tuple[str, str]] = {
     "drop_grass_immune":        ("        && !leechseed_grass_immune\n", "        && true // MUTANT\n"),
     "drop_category_status":     ("        && choice.category == MoveCategory::Status\n", "        && true // MUTANT\n"),
@@ -86,18 +132,24 @@ def _read() -> str:
 
 
 def apply(name: str) -> str:
+    if name in GRASS_MUTANTS:
+        return _apply_in(name, *GRASS_MUTANTS[name])
     old, new = MUTANTS[name]
+    return _apply_in(name, BLOCK, old, new)
+
+
+def _apply_in(name: str, block: str, old: str, new: str) -> str:
     source = _read()
-    if source.count(BLOCK) != 1:
+    if source.count(block) != 1:
         raise InstrumentFailure(
-            f"the `volatile_fail` block was found {source.count(BLOCK)} times, not once; "
+            f"the anchor block for {name} was found {source.count(block)} times, not once; "
             "the harness is anchored to source that has moved"
         )
-    if BLOCK.count(old) != 1:
+    if block.count(old) != 1:
         raise InstrumentFailure(
-            f"{name}: anchor occurs {BLOCK.count(old)} times INSIDE the predicate, not once"
+            f"{name}: anchor occurs {block.count(old)} times INSIDE its block, not once"
         )
-    mutated = source.replace(BLOCK, BLOCK.replace(old, new), 1)
+    mutated = source.replace(block, block.replace(old, new), 1)
     if mutated == source:
         raise InstrumentFailure(f"{name}: produced no textual change")
     EVENTS.write_text(mutated, encoding="utf-8")
@@ -122,7 +174,7 @@ def run_suite(min_binaries: int) -> tuple[int, int, int]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--only", nargs="*", default=None)
-    parser.add_argument("--min-binaries", type=int, default=30)
+    parser.add_argument("--min-binaries", type=int, default=34)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
@@ -137,7 +189,9 @@ def main() -> int:
         return 1
 
     before = _read()
-    names = args.only or [n for n in MUTANTS if not n.startswith("_")]
+    names = args.only or (
+        [n for n in MUTANTS if not n.startswith("_")] + list(GRASS_MUTANTS)
+    )
     worst = 0
     for name in names:
         try:
