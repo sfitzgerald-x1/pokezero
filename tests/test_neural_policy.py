@@ -82,6 +82,7 @@ from pokezero.neural_selfplay import _require_promoted_opponent_pool as require_
 from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,
+    schema_with,
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
     OBSERVATION_SCHEMA_VERSION_V4,
@@ -3352,8 +3353,24 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(json.loads(stdout.getvalue()), {"ok": True})
 
     def test_neural_cli_benchmark_history_mask_k_wires_and_stamps(self) -> None:
+        # The checkpoint names a schema WITH a transition region. `--history-mask-k` bounds
+        # against the loaded checkpoint's schema, falling back to the env spec when the policy
+        # carries no model_config -- and the env spec follows the process default. With no
+        # model_config the bound therefore became 1..0 under a v4 default, because v4 has no
+        # history region at all, and the CLI refused with "must be in 1..0, got 16".
+        #
+        # That refusal is CORRECT: masking history on a schema with no history is meaningless.
+        # The defect was the fixture, which asserted a history knob while declining to say which
+        # schema it belonged to. A real history-masked benchmark loads a checkpoint that has a
+        # region, so the fixture now is one.
+        _history_schema = schema_with(transition_region=True)
+
+        class FakeResult:
+            model_config = SimpleNamespace(observation_schema_version=_history_schema)
+
         class FakePolicy:
             policy_id = "neural-smoke"
+            result = FakeResult()
 
         class FakeReport:
             def to_dict(self) -> dict:
