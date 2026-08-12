@@ -14,6 +14,7 @@ how the v4 rotation went.
 from __future__ import annotations
 
 import json
+from collections import Counter
 import subprocess
 import sys
 import unittest
@@ -47,18 +48,24 @@ def _derive() -> list[dict]:
 def _key(row: dict) -> str:
     # File+kind+owner, NOT line: a row must survive unrelated line drift, or the gate becomes
     # noise and gets muted. Owner is the enclosing def, which is stable under edits above it.
-    # Line IS part of the key. Keying on file+owner+kind collapsed 97 rows to 74 distinct keys,
-    # so a diff that migrated one site and added another at the same key -- what an ordinary PR
-    # looks like -- passed the gate with a NEW conflation in the tree. Line drift is the price;
-    # a bypassable gate is not worth avoiding it.
-    return f"{row['file']}::{row['owner']}::{row['kind']}::{row['line']}"
+    # NO line in the key. Keying on the line made the gate interpreter-dependent: `ast` reports
+    # a different `lineno` for the same multi-line call across Python versions, so an allowlist
+    # generated on 3.14 failed on CI's 3.12 with an off-by-one (`fallback_replay.py::...::112`
+    # vs `::111`). That was my own fix for bypassability, and it traded a real hole for a
+    # portability bug.
+    #
+    # Bypassability is instead closed by COUNTING per key (see below): file+owner+kind collapsed
+    # 97 rows to 74 distinct keys, so a set comparison let a diff migrate one site and add
+    # another at the same key. A multiset does not.
+    return f"{row['file']}::{row['owner']}::{row['kind']}"
 
 
 class SchemaDefaultLedgerTest(unittest.TestCase):
     def test_no_new_site_reaches_the_global_default(self) -> None:
-        derived = {_key(r) for r in _derive()}
-        allowed = {_key(r) for r in json.loads(ALLOWLIST.read_text())}
-        new = sorted(derived - allowed)
+        derived = Counter(_key(r) for r in _derive())
+        allowed = Counter(_key(r) for r in json.loads(ALLOWLIST.read_text()))
+        # A multiset difference: a key whose COUNT grew is a new site even if the key existed.
+        new = sorted((derived - allowed).elements())
         self.assertEqual(
             new,
             [],
@@ -74,9 +81,9 @@ class SchemaDefaultLedgerTest(unittest.TestCase):
 
     def test_the_allowlist_only_shrinks(self) -> None:
         """Retired rows must be REMOVED from the allowlist, or the burndown cannot converge."""
-        derived = {_key(r) for r in _derive()}
-        allowed = {_key(r) for r in json.loads(ALLOWLIST.read_text())}
-        stale = sorted(allowed - derived)
+        derived = Counter(_key(r) for r in _derive())
+        allowed = Counter(_key(r) for r in json.loads(ALLOWLIST.read_text()))
+        stale = sorted((allowed - derived).elements())
         self.assertEqual(
             stale,
             [],
