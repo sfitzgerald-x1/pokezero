@@ -2177,6 +2177,7 @@ fn render_move_phase(
                 choice,
                 &called_tail,
                 branch_on_damage,
+                NoneMatchedTailOrigin { segment, cursor },
             );
             match ident {
                 SleepTalkIdent::Matched(called_choice) => {
@@ -5105,7 +5106,16 @@ fn identify_sleep_talk_called(
     outer_choice: &Choice,
     tail: &[Instruction],
     branch_on_damage: bool,
+    origin: NoneMatchedTailOrigin<'_>,
 ) -> SleepTalkProbe {
+    // GATED DIAGNOSTIC, off unless `POKEZERO_NONE_MATCHED_DUMP=1`. The `NoneMatched`
+    // arm was measured unreachable from every turn-start state this repo can construct
+    // (0 in 1,341,623 rendered branches over three sweeps) yet fires in the production
+    // tree, so the only route to its cause is to capture it there. Collecting the
+    // per-candidate branch lists unconditionally would allocate on every Sleep Talk
+    // render, so the collection itself is behind the same gate.
+    let dump = none_matched_dump_level();
+    let mut dump_rows: Vec<(Choices, Vec<StateInstructions>)> = Vec::new();
     let candidates = {
         let s = match side {
             SideReference::SideOne => &state.side_one,
@@ -5113,6 +5123,9 @@ fn identify_sleep_talk_called(
         };
         s.get_active_immutable().get_sleep_talk_choices()
     };
+    // Read BEFORE the loop consumes the list. It is what separates `NoCandidates` from
+    // `Empty` now that a no-op branch contributes no shape -- see the seeding below.
+    let candidate_count = candidates.len();
     let mut matched: Option<Choice> = None;
     // AMBIGUITY IS NOW COUNTED RATHER THAN RETURNED EARLY. The old code returned
     // `Ambiguous` the instant a second candidate matched, which threw away the remaining
@@ -5180,6 +5193,9 @@ fn identify_sleep_talk_called(
         // finished mutating. `choice_can_convert_an_opponent_heal` documents why this field
         // and not the defender's HP is the discriminator.
         can_convert_an_opponent_heal |= choice_can_convert_an_opponent_heal(&choice);
+        if dump != NoneMatchedDumpLevel::Off {
+            dump_rows.push((choice.move_id, generated.clone()));
+        }
         if generated
             .iter()
             .any(|branch| branch.instruction_list.as_slice() == tail)
@@ -5198,28 +5214,361 @@ fn identify_sleep_talk_called(
             // era-60 measurement says in as many words that it "must be classified before it
             // can be fixed". This is that classification, and it is the same move that turned
             // `ambiguous_unrenderable` from one opaque key into a ranked family list.
-            for branch in &generated {
-                shapes.insert(divergence_shape(branch.instruction_list.as_slice(), tail));
+            // `filter_map`, because `divergence_shape` now answers `None` for a NO-OP branch
+            // and a no-op is evidence about no candidate. Skipping it is the whole of the
+            // label fix: without it `shape_empty` appeared on every decision this pool can
+            // produce and the token carried no bits. See `divergence_shape` for the two
+            // measurements behind that, both taken first-hand.
+            for shape in generated
+                .iter()
+                .filter_map(|branch| divergence_shape(branch.instruction_list.as_slice(), tail))
+            {
+                shapes.insert(shape);
             }
         }
     }
     let ident = match matched {
         Some(_) if match_count > 1 => SleepTalkIdent::Ambiguous,
         Some(choice) => SleepTalkIdent::Matched(Box::new(choice)),
-        None => SleepTalkIdent::NoneMatched(if shapes.is_empty() {
-            // No candidate produced ANY branch to classify, which is the empty-candidate-list
-            // case. `NoCandidates` is reachable only from here.
+        // SEEDED FROM THE CANDIDATE COUNT, not from `shapes.is_empty()` alone. Since a no-op
+        // branch no longer contributes a shape, an empty `shapes` has TWO causes and they are
+        // different facts: there were no candidates to look at, or there were candidates and
+        // every branch every one of them generated was a no-op. Keying `NoCandidates` off
+        // emptiness alone would report the first when the second happened -- the exact
+        // conflation `NoCandidates` was split out of `Empty` to remove, re-entered from the
+        // other side.
+        //
+        // ⚠ THIS IS A SECOND LABEL CHANGE AND IT RELABELS AN EXISTING CASE, so it is called
+        // out rather than left to be discovered. Before this, `shapes.is_empty()` alone
+        // seeded `NoCandidates`, so "candidates EXISTED but every one generated zero branches"
+        // reported `shape_no_candidates` -- a token whose own doc says "there was nothing to
+        // look at", which was false for it. It now reports `shape_empty`, whose new meaning
+        // ("no candidate contributed anything classifiable") is exactly that case. So the
+        // change is not only the removal of a vacuous token: one pre-existing case moves
+        // buckets, into the bucket that describes it.
+        //
+        // Not observed in the captured population -- all 36 decisions carried a classifiable
+        // branch -- so this arm is recorded as a correctness fix to the labelling, with no
+        // measurement behind its frequency.
+        None if candidate_count == 0 => {
             let mut only = NoneMatchedShapes::default();
             only.insert(NoneMatchedShape::NoCandidates);
-            only
-        } else {
-            shapes
-        }),
+            SleepTalkIdent::NoneMatched(only)
+        }
+        None if shapes.is_empty() => {
+            let mut only = NoneMatchedShapes::default();
+            only.insert(NoneMatchedShape::Empty);
+            SleepTalkIdent::NoneMatched(only)
+        }
+        None => SleepTalkIdent::NoneMatched(shapes),
     };
+    // `NoneMatched` only under `=1`; EVERY outcome under `=all`. The boundary of a
+    // persistent latch cannot be read from the failing decisions alone -- what distinguishes
+    // latched from unlatched is visible only in the decisions that DID identify their callee,
+    // and those emit nothing under `=1`.
+    if dump == NoneMatchedDumpLevel::All
+        || (dump == NoneMatchedDumpLevel::NoneMatchedOnly
+            && matches!(ident, SleepTalkIdent::NoneMatched(_)))
+    {
+        let (outcome, shapes) = match &ident {
+            SleepTalkIdent::NoneMatched(shapes) => ("none_matched", *shapes),
+            SleepTalkIdent::Ambiguous => ("ambiguous", NoneMatchedShapes::default()),
+            SleepTalkIdent::Matched(_) => ("matched", NoneMatchedShapes::default()),
+        };
+        emit_none_matched_dump(
+            state,
+            side,
+            defender_choice,
+            outer_choice,
+            tail,
+            branch_on_damage,
+            origin,
+            &dump_rows,
+            shapes,
+            outcome,
+        );
+    }
     SleepTalkProbe {
         ident,
         callee_can_convert_an_opponent_heal: can_convert_an_opponent_heal,
     }
+}
+
+/// Where the `tail` handed to [`identify_sleep_talk_called`] came from.
+///
+/// `tail` is `&segment[cursor..]`, and the two halves it drops -- WHICH segment, and how
+/// much of it the prelude already consumed -- are exactly what a `none_matched` capture
+/// needs and cannot recover from the slice. Carried as one struct rather than two extra
+/// parameters so the identifier's signature stays inside clippy's arity limit.
+#[derive(Clone, Copy)]
+struct NoneMatchedTailOrigin<'a> {
+    segment: &'a [Instruction],
+    cursor: usize,
+}
+
+/// How much of the Sleep Talk identification to dump.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum NoneMatchedDumpLevel {
+    Off,
+    /// `POKEZERO_NONE_MATCHED_DUMP=1` -- only the decisions that failed to identify a callee.
+    NoneMatchedOnly,
+    /// `POKEZERO_NONE_MATCHED_DUMP=all` -- every Sleep Talk identification, including the ones
+    /// that succeeded. Needed to read a BOUNDARY: what separates a refusing decision from a
+    /// non-refusing neighbour is not in the refusing decisions.
+    All,
+}
+
+/// Which level the environment selects.
+///
+/// Read ONCE. A per-call `env::var` inside the renderer would show up as a syscall in the
+/// search hot path even with the dump off.
+fn none_matched_dump_level() -> NoneMatchedDumpLevel {
+    static LEVEL: std::sync::OnceLock<NoneMatchedDumpLevel> = std::sync::OnceLock::new();
+    *LEVEL.get_or_init(|| {
+        none_matched_dump_level_from_env(
+            std::env::var("POKEZERO_NONE_MATCHED_DUMP").ok().as_deref(),
+        )
+    })
+}
+
+/// The variable-to-level mapping, split out so it is testable.
+///
+/// `none_matched_dump_level` latches process-wide on first read, so a test that set the
+/// variable would decide the value for every other test in the binary depending on execution
+/// order. The pure function has no such coupling -- and the DEFAULT is the thing worth
+/// pinning: an `is_ok()` gate would have enabled the dump for `POKEZERO_NONE_MATCHED_DUMP=0`.
+fn none_matched_dump_level_from_env(value: Option<&str>) -> NoneMatchedDumpLevel {
+    match value {
+        Some("1") => NoneMatchedDumpLevel::NoneMatchedOnly,
+        Some("all") => NoneMatchedDumpLevel::All,
+        _ => NoneMatchedDumpLevel::Off,
+    }
+}
+
+/// The content probe for a build carrying the diagnostic.
+///
+/// Every dump line starts with this, so `strings` over the built extension answers "is the
+/// dump compiled in" WITHOUT trusting a hash -- the crate embeds absolute build paths, so
+/// two builds of identical source differ by hash anyway.
+const NONE_MATCHED_DUMP_MARKER: &str = "PZ_NONE_MATCHED_DUMP_V1";
+
+/// JSON-escape a `{:?}` rendering for the dump.
+fn dump_json_string(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 2);
+    out.push('"');
+    for c in raw.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn dump_instruction_list(list: &[Instruction]) -> String {
+    let items: Vec<String> = list
+        .iter()
+        .map(|i| dump_json_string(&format!("{i:?}")))
+        .collect();
+    format!("[{}]", items.join(","))
+}
+
+/// How many leading instructions two lists share. The single most informative number in
+/// the capture: it says WHERE the regeneration and the engine parted company, which a
+/// whole-list equality test cannot.
+fn dump_common_prefix(a: &[Instruction], b: &[Instruction]) -> usize {
+    a.iter().zip(b).take_while(|(x, y)| x == y).count()
+}
+
+fn dump_active_summary(state: &State, side: SideReference) -> String {
+    let s = match side {
+        SideReference::SideOne => &state.side_one,
+        SideReference::SideTwo => &state.side_two,
+    };
+    let p = s.get_active_immutable();
+    let moves: Vec<String> = p
+        .moves
+        .into_iter()
+        .map(|m| dump_json_string(&format!("{:?}", m.id)))
+        .collect();
+    format!(
+        "{{\"species\":{},\"hp\":{},\"maxhp\":{},\"status\":{},\"ability\":{},\"item\":{},\"moves\":[{}],\"volatiles\":{},\"substitute_health\":{},\"sleep_turns\":{},\"rest_turns\":{}}}",
+        dump_json_string(&format!("{}", p.id)),
+        p.hp,
+        p.maxhp,
+        dump_json_string(&format!("{:?}", p.status)),
+        dump_json_string(&format!("{:?}", p.ability)),
+        dump_json_string(&format!("{:?}", p.item)),
+        moves.join(","),
+        dump_json_string(&format!("{:?}", s.volatile_statuses)),
+        s.substitute_health,
+        p.sleep_turns,
+        p.rest_turns,
+    )
+}
+
+fn dump_choice_summary(c: &Choice) -> String {
+    format!(
+        "{{\"move_id\":{},\"first_move\":{},\"sleep_talk_move\":{},\"category\":{},\"base_power\":{},\"accuracy\":{},\"target\":{},\"move_type\":{},\"heal\":{},\"status\":{},\"volatile_status\":{},\"flags_protect\":{}}}",
+        dump_json_string(&format!("{:?}", c.move_id)),
+        c.first_move,
+        c.sleep_talk_move,
+        dump_json_string(&format!("{:?}", c.category)),
+        c.base_power,
+        c.accuracy,
+        dump_json_string(&format!("{:?}", c.target)),
+        dump_json_string(&format!("{:?}", c.move_type)),
+        dump_json_string(&format!("{:?}", c.heal)),
+        dump_json_string(&format!("{:?}", c.status)),
+        dump_json_string(&format!("{:?}", c.volatile_status)),
+        c.flags.protect,
+    )
+}
+
+/// One `none_matched` decision, as a single JSON line on stderr.
+///
+/// stderr and not a file, deliberately: the census driver's own
+/// `engine-search FALLBACK: battle=... round=N seat=pX` line goes to the same descriptor
+/// AFTER the decision resolves, so a capture interleaved there is attributable to a round
+/// and a seat with no extra plumbing. Nothing else in this crate writes to stderr.
+///
+/// SPLIT from the line it builds so the line is testable. The arm this fires on is
+/// unreachable from every fixture state (measured: 0 in 1,341,623 rendered branches), so a
+/// test that had to reach the arm could not exist; a test on the pure formatter can.
+#[allow(clippy::too_many_arguments)]
+fn emit_none_matched_dump(
+    state: &State,
+    side: SideReference,
+    defender_choice: &Choice,
+    outer_choice: &Choice,
+    tail: &[Instruction],
+    branch_on_damage: bool,
+    origin: NoneMatchedTailOrigin<'_>,
+    rows: &[(Choices, Vec<StateInstructions>)],
+    shapes: NoneMatchedShapes,
+    outcome: &str,
+) {
+    eprintln!(
+        "{NONE_MATCHED_DUMP_MARKER} {}",
+        none_matched_dump_line(
+            state,
+            side,
+            defender_choice,
+            outer_choice,
+            tail,
+            branch_on_damage,
+            origin,
+            rows,
+            shapes,
+            outcome,
+        )
+    );
+}
+
+/// The dump payload for one `none_matched` decision, as one line of JSON.
+#[allow(clippy::too_many_arguments)]
+fn none_matched_dump_line(
+    state: &State,
+    side: SideReference,
+    defender_choice: &Choice,
+    outer_choice: &Choice,
+    tail: &[Instruction],
+    branch_on_damage: bool,
+    origin: NoneMatchedTailOrigin<'_>,
+    rows: &[(Choices, Vec<StateInstructions>)],
+    shapes: NoneMatchedShapes,
+    outcome: &str,
+) -> String {
+    let candidates: Vec<String> = rows
+        .iter()
+        .map(|(move_id, generated)| {
+            let branches: Vec<String> = generated
+                .iter()
+                .map(|b| {
+                    format!(
+                        "{{\"percentage\":{},\"len\":{},\"common_prefix_with_tail\":{},\"shape\":{},\"instructions\":{}}}",
+                        b.percentage,
+                        b.instruction_list.len(),
+                        dump_common_prefix(&b.instruction_list, tail),
+                        dump_json_string(
+                            divergence_shape(&b.instruction_list, tail)
+                                .map_or("noop_branch_no_evidence", |s| s.token())
+                        ),
+                        dump_instruction_list(&b.instruction_list),
+                    )
+                })
+                .collect();
+            format!(
+                "{{\"move_id\":{},\"branch_count\":{},\"branches\":[{}]}}",
+                dump_json_string(&format!("{move_id:?}")),
+                generated.len(),
+                branches.join(","),
+            )
+        })
+        .collect();
+    let observed: Vec<String> = NoneMatchedShape::ALL
+        .iter()
+        .filter(|s| shapes.contains(**s))
+        .map(|s| dump_json_string(s.token()))
+        .collect();
+    format!(
+        "{{\"outcome\":{},\"side\":{},\"branch_on_damage\":{},\"outer_first_move\":{},\"outer_choice\":{},\"defender_choice\":{},\"cursor\":{},\"segment_len\":{},\"tail_len\":{},\"segment\":{},\"prelude_consumed\":{},\"tail\":{},\"shapes\":[{}],\"candidate_count\":{},\"candidates\":[{}],\"attacker\":{},\"defender\":{},\"weather\":{},\"attacker_party\":{},\"defender_party\":{}}}",
+        dump_json_string(outcome),
+        dump_json_string(&format!("{side:?}")),
+        branch_on_damage,
+        outer_choice.first_move,
+        dump_choice_summary(outer_choice),
+        dump_choice_summary(defender_choice),
+        origin.cursor,
+        origin.segment.len(),
+        tail.len(),
+        dump_instruction_list(origin.segment),
+        dump_instruction_list(&origin.segment[..origin.cursor]),
+        dump_instruction_list(tail),
+        observed.join(","),
+        rows.len(),
+        candidates.join(","),
+        dump_active_summary(state, side),
+        dump_active_summary(state, other_side(side)),
+        dump_json_string(&format!("{:?}", state.weather)),
+        dump_party_summary(state, side),
+        dump_party_summary(state, other_side(side)),
+    )
+}
+
+/// EVERY party slot's status, not just the active's.
+///
+/// This is the field the first version of the dump did not carry, and it is where the latch
+/// variable lives: a party-wide cure's instruction list depends on which BENCHED slots are
+/// statused, and the active's own record says nothing about them.
+fn dump_party_summary(state: &State, side: SideReference) -> String {
+    let s = match side {
+        SideReference::SideOne => &state.side_one,
+        SideReference::SideTwo => &state.side_two,
+    };
+    let slots: Vec<String> = (&s.pokemon)
+        .into_iter()
+        .enumerate()
+        .map(|(index, p)| {
+            format!(
+                "{{\"slot\":{},\"active\":{},\"species\":{},\"hp\":{},\"status\":{},\"rest_turns\":{},\"sleep_turns\":{}}}",
+                index,
+                index == s.active_index as usize,
+                dump_json_string(&format!("{}", p.id)),
+                p.hp,
+                dump_json_string(&format!("{:?}", p.status)),
+                p.rest_turns,
+                p.sleep_turns,
+            )
+        })
+        .collect();
+    format!("[{}]", slots.join(","))
 }
 
 /// Could THIS callee, as the engine's modification pass left it, reach the full-HP absorb
@@ -5475,21 +5824,69 @@ fn nearest_divergence<'a>(
     tail: &[Instruction],
 ) -> NoneMatchedShape {
     branches
-        .map(|branch| divergence_shape(branch, tail))
+        .filter_map(|branch| divergence_shape(branch, tail))
         .min()
-        // `Empty`, NOT `NoCandidates`. This fires when a candidate that DOES exist generated
-        // zero branches, which is "the candidate produced nothing" -- exactly what `Empty`
-        // means. Returning `NoCandidates` here reintroduced the very conflation that variant
-        // was split out to remove, so `NoCandidates` is now reachable ONLY from the seed, where
-        // it means the candidate list itself was empty.
+        // `Empty`, NOT `NoCandidates`. This fires when a candidate that DOES exist contributed
+        // no classifiable branch -- it generated zero branches, or every branch it generated
+        // was a NO-OP (see `divergence_shape`). Both are "the candidate produced nothing",
+        // which is exactly what `Empty` means. Returning `NoCandidates` here reintroduced the
+        // very conflation that variant was split out to remove, so `NoCandidates` is now
+        // reachable ONLY from the seed, where it means the candidate list itself was empty.
         .unwrap_or(NoneMatchedShape::Empty)
 }
 
-/// Classify one candidate branch against the observed tail.
-fn divergence_shape(branch: &[Instruction], tail: &[Instruction]) -> NoneMatchedShape {
+/// Classify one candidate branch against the observed tail, or `None` if the branch carries
+/// no evidence about any candidate.
+///
+/// **`None` means A NO-OP BRANCH, and it is not the same as `Empty`.** A branch with an empty
+/// instruction list is the engine's rendering of "the callee ran and changed nothing" --
+/// which every pool has in quantity: an accuracy miss, a type immunity, Rest while already
+/// asleep, and a callee blocked by a Protect that moved second all emit it. It is therefore
+/// evidence about NO candidate: seeing one says only that the callee list contains a move
+/// that can whiff, not that this candidate is nearer to or farther from the tail than any
+/// other.
+///
+/// It used to return `Empty` here, and the consequence was measured, not argued. Two figures,
+/// both derived first-hand from the census plan (`variant_count: 1682`,
+/// `source_hash f9e35e1fddae5064`) and from the live capture:
+///
+///   1. **REST IS IN ALL 70 OF THE POOL'S SLEEP TALK VARIANTS**, 70 of 70, and Rest
+///      regenerated while the user is already asleep produces an EMPTY branch. So every
+///      `none_matched` this pool can produce carries at least one no-op branch by
+///      construction -- there is no subset of the pool on which `shape_empty` discriminates.
+///      (30 distinct non-Sleep-Talk callees span those 70 variants; 210 callee slots.)
+///   2. **In the live capture it was present on 36 of 36 refusals and separated none of
+///      them.** The whole observed set was `{shape_empty, shape_length}` on all 36.
+///
+/// So the set reduces to `{shape_length}` -- one token, and the one that names something.
+///
+/// An earlier revision of this comment cited "12 of 33 callees", which was carried in from a
+/// brief rather than derived here; 33 does not reproduce (the operative count is 30, since
+/// `get_sleep_talk_choices` filters only Sleep Talk and `NONE`) and the numerator was never
+/// measured at all. Replaced with figures this repo can re-derive.
+///
+/// LABEL ONLY. `sleeptalk_refusal_is_unsafe` answers `NoneMatched(_) => true` regardless of
+/// the shape set, so nothing here can turn a refused branch into a searched one, or the
+/// reverse. `Empty` keeps its token (`shape_empty`) and its vocabulary registration; what
+/// changes is that it now means "no candidate contributed anything classifiable" instead of
+/// "at least one branch somewhere was a no-op".
+fn divergence_shape(branch: &[Instruction], tail: &[Instruction]) -> Option<NoneMatchedShape> {
     if branch.is_empty() {
-        return NoneMatchedShape::Empty;
+        return None;
     }
+    Some(divergence_shape_of_nonempty(branch, tail))
+}
+
+/// The classification of a NON-EMPTY candidate branch against the observed tail.
+///
+/// Split from [`divergence_shape`] so the no-op guard is one line and the classification is
+/// total on its input: every path below returns a shape, and none of them has to re-check
+/// emptiness.
+fn divergence_shape_of_nonempty(branch: &[Instruction], tail: &[Instruction]) -> NoneMatchedShape {
+    debug_assert!(
+        !branch.is_empty(),
+        "the no-op guard in `divergence_shape` is the only caller's contract"
+    );
     if branch.len() != tail.len() {
         // SPLIT BY CONTAINMENT before falling back to a bare length mismatch.
         //
@@ -5521,7 +5918,8 @@ fn divergence_shape(branch: &[Instruction], tail: &[Instruction]) -> NoneMatched
         // containment evidence. Empty tails are real here -- `tail` is `&segment[cursor..]`
         // and this file handles the empty case elsewhere -- so the bucket whose doc says
         // "the tail is reproduced and the branch continues" would be contaminated.
-        // The branch-empty mirror is caught by the `is_empty` return above.
+        // The branch-empty mirror never reaches here: `divergence_shape` returns `None` for
+        // it, because a no-op branch is evidence about no candidate at all.
         if tail.is_empty() {
             return NoneMatchedShape::Length;
         }
@@ -10474,6 +10872,171 @@ mod tests {
     }
 }
 
+/// The gated `none_matched` diagnostic, tested WITHOUT reaching the arm it reports on.
+///
+/// The arm is not reachable from a default state (it needs a party-wide-cure callee and a
+/// benched sleeper -- see `tests/gen3_sleeptalk_party_cure_prelude_boundary.rs`), and the dump
+/// is off by default, so what is testable here is the two things that can silently rot: the
+/// GATE's default, and the LINE's shape. Both have bitten this campaign in the same way --
+/// an instrument that cannot report failure reports success.
+#[cfg(test)]
+mod none_matched_dump_tests {
+    use super::*;
+    use poke_engine::instruction::DamageInstruction;
+
+    fn dmg(amount: i16) -> Instruction {
+        Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideTwo,
+            damage_amount: amount,
+        })
+    }
+
+    /// OFF unless asked. The dump writes to stderr from inside the search hot path; a default
+    /// that leaked would corrupt every harness that reads the same descriptor for the census's
+    /// own `engine-search FALLBACK:` lines.
+    ///
+    /// Asserted on the CLASSIFIER, not on the `OnceLock` reader: `none_matched_dump_level`
+    /// latches its first read process-wide, so a test that set the variable would decide the
+    /// value for every other test in the binary depending on order.
+    #[test]
+    fn the_dump_is_off_unless_the_variable_selects_a_level() {
+        assert_eq!(
+            none_matched_dump_level_from_env(None),
+            NoneMatchedDumpLevel::Off,
+            "no variable must mean no dump"
+        );
+        assert_eq!(
+            none_matched_dump_level_from_env(Some("")),
+            NoneMatchedDumpLevel::Off
+        );
+        assert_eq!(
+            none_matched_dump_level_from_env(Some("0")),
+            NoneMatchedDumpLevel::Off,
+            "a falsy value must not enable it -- `is_ok()` on the variable would"
+        );
+        assert_eq!(
+            none_matched_dump_level_from_env(Some("1")),
+            NoneMatchedDumpLevel::NoneMatchedOnly
+        );
+        assert_eq!(
+            none_matched_dump_level_from_env(Some("all")),
+            NoneMatchedDumpLevel::All,
+            "`all` is what makes a BOUNDARY readable: the decisions that identified their \
+             callee are the ones a latch's edge has to be diffed against"
+        );
+    }
+
+    /// ONE LINE, and it carries the fields the capture is for.
+    ///
+    /// A multi-line record would break the interleaving with the census driver's own
+    /// per-decision line, which is the entire round/seat attribution mechanism -- there is no
+    /// decision id threaded into this crate.
+    #[test]
+    fn the_dump_line_is_one_line_and_carries_the_captured_fields() {
+        let mut state = State::default();
+        state.side_one.get_active().status = PokemonStatus::SLEEP;
+        let segment = [dmg(3), dmg(30)];
+        let outer = Choice {
+            move_id: Choices::SLEEPTALK,
+            first_move: false,
+            ..Default::default()
+        };
+        let defender = Choice {
+            move_id: Choices::SUBSTITUTE,
+            ..Default::default()
+        };
+        let rows = vec![(
+            Choices::HEALBELL,
+            vec![StateInstructions {
+                percentage: 100.0,
+                instruction_list: vec![dmg(30)],
+            }],
+        )];
+        let mut shapes = NoneMatchedShapes::default();
+        shapes.insert(NoneMatchedShape::Length);
+
+        let line = none_matched_dump_line(
+            &state,
+            SideReference::SideOne,
+            &defender,
+            &outer,
+            &segment[1..],
+            true,
+            NoneMatchedTailOrigin {
+                segment: &segment,
+                cursor: 1,
+            },
+            &rows,
+            shapes,
+            "none_matched",
+        );
+
+        assert!(
+            !line.contains('\n'),
+            "the record must be ONE line or the attribution-by-interleaving breaks: {line}"
+        );
+        for field in [
+            "\"outcome\":\"none_matched\"",
+            "\"cursor\":1",
+            "\"segment_len\":2",
+            "\"tail_len\":1",
+            "\"outer_first_move\":false",
+            "\"branch_on_damage\":true",
+            "\"move_id\":\"HEALBELL\"",
+            "\"move_id\":\"SUBSTITUTE\"",
+            "\"shapes\":[\"shape_length\"]",
+            "\"prelude_consumed\":",
+            "\"attacker_party\":",
+            "\"defender_party\":",
+            // THE diagnostic. Whole-list equality cannot say WHERE the two parted company;
+            // this can, and on the captured population it is 0 on every branch.
+            "\"common_prefix_with_tail\":",
+        ] {
+            assert!(
+                line.contains(field),
+                "the dump dropped {field}: a capture missing a field is a capture that has to \
+                 be retaken at production budget. Line: {line}"
+            );
+        }
+    }
+
+    /// A no-op branch is reported as carrying no evidence, in the dump as in the classifier.
+    ///
+    /// Without this the dump would print an empty `shape` for the very branches the label fix
+    /// exists to discount, and a reader would have to know that an empty string meant "no-op".
+    #[test]
+    fn a_noop_branch_is_labelled_as_no_evidence_in_the_dump() {
+        let state = State::default();
+        let rows = vec![(
+            Choices::REST,
+            vec![StateInstructions {
+                percentage: 100.0,
+                instruction_list: Vec::new(),
+            }],
+        )];
+        let line = none_matched_dump_line(
+            &state,
+            SideReference::SideOne,
+            &Choice::default(),
+            &Choice::default(),
+            &[dmg(30)],
+            false,
+            NoneMatchedTailOrigin {
+                segment: &[dmg(30)],
+                cursor: 0,
+            },
+            &rows,
+            NoneMatchedShapes::default(),
+            "none_matched",
+        );
+        assert!(
+            line.contains("\"shape\":\"noop_branch_no_evidence\""),
+            "an empty branch must SAY it is a no-op rather than reporting a shape it does not \
+             have: {line}"
+        );
+    }
+}
+
 #[cfg(test)]
 mod none_matched_shape_tests {
     use super::*;
@@ -10512,12 +11075,12 @@ mod none_matched_shape_tests {
     fn a_numeric_disagreement_is_values_only_and_a_variant_swap_is_structure() {
         assert_eq!(
             divergence_shape(&[dmg(30)], &[dmg(31)]),
-            NoneMatchedShape::ValuesOnly,
+            Some(NoneMatchedShape::ValuesOnly),
             "same variant, different number: a roll disagreement"
         );
         assert_eq!(
             divergence_shape(&[dmg(30)], &[heal(30)]),
-            NoneMatchedShape::Structure,
+            Some(NoneMatchedShape::Structure),
             "different variant at the same position: a different transition"
         );
     }
@@ -10537,7 +11100,7 @@ mod none_matched_shape_tests {
         });
         assert_eq!(
             divergence_shape(std::slice::from_ref(&one), std::slice::from_ref(&two)),
-            NoneMatchedShape::Structure,
+            Some(NoneMatchedShape::Structure),
             "the same variant on the OTHER side is a wrong-target bug, not a roll disagreement"
         );
         // ...and the same side with a different number is still numeric, so the fix did not
@@ -10548,7 +11111,7 @@ mod none_matched_shape_tests {
         });
         assert_eq!(
             divergence_shape(std::slice::from_ref(&one), std::slice::from_ref(&one_bigger)),
-            NoneMatchedShape::ValuesOnly
+            Some(NoneMatchedShape::ValuesOnly)
         );
     }
 
@@ -10577,12 +11140,12 @@ mod none_matched_shape_tests {
         // containment cases, which is exactly why the bare token could not be acted on.
         assert_eq!(
             divergence_shape(&[dmg(30)], &[dmg(30), heal(10)]),
-            NoneMatchedShape::BranchIsPrefix,
+            Some(NoneMatchedShape::BranchIsPrefix),
             "the branch reproduces the head of the tail and the tail continues past it"
         );
         assert_eq!(
             divergence_shape(&[dmg(30), heal(10)], &[dmg(30)]),
-            NoneMatchedShape::TailIsPrefix,
+            Some(NoneMatchedShape::TailIsPrefix),
             "the tail is reproduced and the branch continues past it -- the mirror case, and \
              it must NOT collapse into the branch-shorter bucket"
         );
@@ -10591,7 +11154,7 @@ mod none_matched_shape_tests {
         // not establish -- era 61's 4,786 worlds were all reported under it.
         assert_eq!(
             divergence_shape(&[heal(10)], &[dmg(30), heal(10)]),
-            NoneMatchedShape::Length,
+            Some(NoneMatchedShape::Length),
             "a shorter list that is not a PREFIX of the longer is a real structural miss"
         );
     }
@@ -10758,6 +11321,10 @@ mod none_matched_shape_tests {
                 &outer,
                 &tail,
                 false,
+                NoneMatchedTailOrigin {
+                    segment: &tail,
+                    cursor: 0,
+                },
             )
             .callee_can_convert_an_opponent_heal
         };
@@ -11197,31 +11764,69 @@ mod none_matched_shape_tests {
     fn containment_compares_payloads_not_just_variants() {
         assert_eq!(
             divergence_shape(&[dmg(30)], &[dmg(31), heal(10)]),
-            NoneMatchedShape::Length
+            Some(NoneMatchedShape::Length)
         );
         assert_eq!(
             divergence_shape(&[dmg(30)], &[dmg(30), heal(10)]),
-            NoneMatchedShape::BranchIsPrefix
+            Some(NoneMatchedShape::BranchIsPrefix)
         );
     }
 
-    /// An EMPTY branch stays `Empty`, not a containment shape.
+    /// An EMPTY branch is NO EVIDENCE, and it is certainly not a containment shape.
     ///
-    /// The empty slice is a prefix of everything, so ordering matters: the `is_empty` check
-    /// runs first. Collapsing these would fold "the candidate generated nothing" -- the move
-    /// did not execute at all -- into "the candidate reproduced the tail's head", which is a
-    /// different question with a different owner.
+    /// The empty slice is a prefix of everything, so ordering matters: the emptiness check
+    /// runs first. Collapsing these would fold "the candidate did nothing" into "the
+    /// candidate reproduced the tail's head", which is a different question with a different
+    /// owner.
+    ///
+    /// It answers `None` rather than `Empty` because an empty branch is a NO-OP -- a miss, a
+    /// type immunity, Rest while already asleep, a callee blocked by a Protect that moved
+    /// second -- and REST IS IN ALL 70 of the pool's Sleep Talk variants, so every
+    /// `none_matched` the pool can produce carries one by construction. Reporting it made
+    /// `shape_empty` universal and therefore worth zero bits.
     #[test]
     fn an_empty_branch_is_not_reported_as_containment() {
-        assert_eq!(divergence_shape(&[], &[dmg(30)]), NoneMatchedShape::Empty);
+        assert_eq!(divergence_shape(&[], &[dmg(30)]), None);
     }
 
     #[test]
-    fn an_empty_candidate_branch_is_its_own_shape() {
-        // Distinct from `length` deliberately: a candidate that generated NOTHING means the
-        // move did not execute in regeneration at all, which is a different question from one
-        // that executed and produced a different number of instructions.
-        assert_eq!(divergence_shape(&[], &[dmg(30)]), NoneMatchedShape::Empty);
+    fn a_noop_branch_contributes_no_shape_at_all() {
+        // The captured population is the reason. Every one of the 36 `none_matched` decisions
+        // in seed 9900068 has a `REST` candidate that regenerates a single EMPTY branch (Rest
+        // while already asleep), so `shape_empty` was on all 36 and separated none of them
+        // from any other. The bit that names something is the OTHER token.
+        assert_eq!(divergence_shape(&[], &[dmg(30)]), None);
+        assert_eq!(divergence_shape(&[], &[]), None);
+    }
+
+    /// The captured signature: the branch is a proper SUFFIX of the tail.
+    ///
+    /// Read off the live capture, not constructed to pass. In seed 9900068 the Sleep Talk
+    /// callee is Heal Bell and it regenerates `tail[1..]` EXACTLY, 36 of 36 -- the tail's head
+    /// was eaten by `consume_move_prelude`'s Rest/natural-wake arm, which matches
+    /// `ChangeStatus{SLEEP -> NONE}` on `side_ref` alone and so absorbed the party-wide cure
+    /// of a BENCHED party member as "the sleeper woke up".
+    ///
+    /// A suffix is not a prefix in either direction, so the containment split cannot see it
+    /// and the class reports `Length` -- "a genuinely different transition" -- for a
+    /// transition that is exactly right and a phase boundary that is off by one instruction.
+    /// This test pins the observation so the token cannot be re-read as an ownership verdict.
+    #[test]
+    fn a_branch_that_is_a_proper_suffix_of_the_tail_reports_length_not_containment() {
+        let tail = [dmg(7), dmg(30), heal(10)];
+        let branch = [dmg(30), heal(10)];
+        assert_eq!(
+            divergence_shape(&branch, &tail),
+            Some(NoneMatchedShape::Length),
+            "a suffix relation is invisible to the containment split; it is not evidence of a \
+             wrong callee"
+        );
+        assert_eq!(
+            tail.iter().zip(&branch).take_while(|(a, b)| a == b).count(),
+            0,
+            "the capture's `common_prefix_with_tail` was 0 on every branch of every candidate \
+             of all 36 decisions -- that is what makes this shape unreadable"
+        );
     }
 
     /// `min` over candidates must keep the CLOSEST miss, or a structurally-unrelated candidate
@@ -11264,7 +11869,7 @@ mod none_matched_shape_tests {
     fn an_empty_tail_is_not_reported_as_containment() {
         assert_eq!(
             divergence_shape(&[dmg(30)], &[]),
-            NoneMatchedShape::Length,
+            Some(NoneMatchedShape::Length),
             "an empty tail carries no containment evidence"
         );
     }
