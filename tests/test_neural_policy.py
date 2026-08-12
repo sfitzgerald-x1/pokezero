@@ -79,10 +79,21 @@ from pokezero.neural_policy import (
     learning_rate_for_progress,
 )
 from pokezero.neural_selfplay import _require_promoted_opponent_pool as require_neural_promoted_opponent_pool
-from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2, ObservationSpec, PokeZeroObservationV0
+from pokezero.observation import (
+    OBSERVATION_SCHEMA_VERSION_V2,
+    OBSERVATION_SCHEMA_VERSION_V2_2,
+    OBSERVATION_SCHEMA_VERSION_V3,
+    OBSERVATION_SCHEMA_VERSION_V4,
+    ObservationSpec,
+    PokeZeroObservationV0,
+)
 from pokezero.policy import PolicyContext, PolicyDecision
 from pokezero.run_audit import RunAuditConfig, run_audit_config_payload
-from pokezero.showdown import ACTION_CANDIDATE_TOKEN_OFFSET, DEFAULT_REPLAY_OBSERVATION_SPEC
+from pokezero.showdown import (
+    ACTION_CANDIDATE_TOKEN_OFFSET,
+    DEFAULT_REPLAY_OBSERVATION_SPEC,
+    observation_spec_for_schema,
+)
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 from pokezero.value_calibration import ValueCalibrationReport
 
@@ -191,6 +202,39 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(config.temporal_aggregator, "mean")
         self.assertGreaterEqual(config.token_count, ACTION_CANDIDATE_TOKEN_OFFSET + 9)
         self.assertEqual(TransformerPolicyConfig.from_dict(config.to_dict()), config)
+
+    def test_transformer_policy_config_resolves_token_count_from_stamped_schema(self) -> None:
+        for schema_version, transition_token_budget in (
+            (OBSERVATION_SCHEMA_VERSION_V3, 64),
+            (OBSERVATION_SCHEMA_VERSION_V4, 0),
+        ):
+            with self.subTest(schema_version=schema_version):
+                config = TransformerPolicyConfig.compact_category(
+                    category_vocab=("species:a",),
+                    category_oov_buckets=1,
+                    observation_schema_version=schema_version,
+                    transition_token_budget=transition_token_budget,
+                )
+
+                self.assertEqual(
+                    config.token_count,
+                    observation_spec_for_schema(schema_version).token_count,
+                )
+
+    def test_transformer_policy_config_rejects_token_count_from_another_schema(self) -> None:
+        other_schema_token_count = observation_spec_for_schema(
+            OBSERVATION_SCHEMA_VERSION_V2_2
+        ).token_count
+        with self.assertRaisesRegex(
+            ValueError,
+            rf"token_count {other_schema_token_count} does not equal",
+        ):
+            TransformerPolicyConfig.compact_category(
+                category_vocab=("species:a",),
+                category_oov_buckets=1,
+                observation_schema_version=OBSERVATION_SCHEMA_VERSION_V4,
+                token_count=other_schema_token_count,
+            )
 
     def test_checkpoint_root_puct_defaults_to_hidden_reserve_candidates(self) -> None:
         base = SimpleNamespace(

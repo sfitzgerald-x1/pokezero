@@ -158,6 +158,12 @@ jobs:
             # single worst place in this file for the gap the C152 block above records.
             reports/c155_terminal_disposition_register.md
             tests/test_terminal_disposition_register.py
+            # The Transform forme-ident battery. `src/pokezero/**` already triggers this
+            # job, so the FIX is covered; this line covers the pin itself, for the reason
+            # every entry above is listed -- a PR whose only change is deleting the module
+            # matches no other filter, skips `mass-gate` (the only job that runs it) and
+            # goes green.
+            tests/test_transform_forme_ident.py
             # The coverage-bound pins' ENTIRE input. Without these listed, a PR whose
             # only change is deleting one of them skips mass-gate and goes green.
             reports/artifacts/c131_leechseed_main_dev_sweep.json
@@ -409,8 +415,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_public_projection -v 2>&1 \
             | tee /tmp/pubproj.log
-          if ! grep -qE 'Ran 100 tests' /tmp/pubproj.log; then
-            echo "::error::expected 100 public-projection pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 114 tests' /tmp/pubproj.log; then
+            echo "::error::expected 114 public-projection pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. RenderBandWidthTests is the only thing pinning
@@ -1271,8 +1277,8 @@ jobs:
       # gives: no local `unittest` or `pytest` run can see it, so a battery that shrinks
       # is red here rather than quietly green.
       #
-      # READ THIS BEFORE TRUSTING A GREEN. 16 of the 21 tests execute here; 5 SKIP.
-      # The 16 need no engine and no Showdown checkout -- `battle_spec_from_payload` is
+      # READ THIS BEFORE TRUSTING A GREEN. 18 of the 23 tests execute here; 5 SKIP.
+      # The 18 need no engine and no Showdown checkout -- `battle_spec_from_payload` is
       # pure construction over a payload literal -- and those are the behavioural pins.
       # The 5 that skip are `PoolCannotReachTheLockedMoveDivergenceTests`, which scans
       # the real gen3 set pool and `data/moves.ts` to bound at ZERO the one shape where
@@ -1287,15 +1293,22 @@ jobs:
       # The skip count is pinned EXACTLY, not forbidden: `skipped=5` and no more. A sixth
       # skip means a behavioural pin quietly acquired a Showdown dependency, which is how
       # a battery goes vacuous while still reporting OK. Per-METHOD skip decorators keep
-      # the reported count at 21 in both environments; a class-level skip would collapse
-      # to one entry and drop the count to 16, defeating the count guard.
+      # the reported count at 23 in both environments; a class-level skip would collapse
+      # to one entry and drop the count to 18, defeating the count guard.
+      #
+      # 21 -> 23 with `TheSwitchSentinelSeedsTheEnginesOwnVariantTests`, which pins the
+      # UN-encored branch's `switch:0` seeding on both seats. Nothing pinned it: renaming
+      # the `"switch"` literal at that call site sent the sentinel into the resolver,
+      # which cannot match it, so the seeding silently became `""` with nothing red. The
+      # dead no-op `if last_used_move_id == "switch": last_used_move_id = "switch"` that
+      # sat next to the latch and read like a guard is deleted in the same commit.
       - name: Encore public-lastUsedMove world-construction pins
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_world_encore_last_used -v 2>&1 \
             | tee /tmp/encorelastused.log
-          if ! grep -qE 'Ran 21 tests' /tmp/encorelastused.log; then
-            echo "::error::expected 21 tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 23 tests' /tmp/encorelastused.log; then
+            echo "::error::expected 23 tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE 'OK \(skipped=5\)' /tmp/encorelastused.log; then
@@ -1332,6 +1345,41 @@ jobs:
           # true and false cases were both unreliable.
           if grep -qE '\bskipped=[1-9]|\.\.\. skipped' /tmp/taunt.log; then
             echo "::error::a Taunt pin SKIPPED; they must never skip"
+            exit 1
+          fi
+
+      # The `-transform` ident seam. A gen3 randbats forme is NICKNAMED after its base
+      # species (`data/random-battles/gen3/teams.ts:619`), and `-transform` carries idents,
+      # so a `Deoxys-Defense` announced itself as `Deoxys`; `belief.py` recorded that off
+      # the ident while reading the ACTOR's species from the tracked belief, and
+      # `engine_world._apply_transform` then refused every world. 24 truth-rejected
+      # decisions on census control block runE-ctrl512-s4-r1000.
+      #
+      # WHY THIS STEP EXISTS: this workflow names modules one by one and nothing in CI
+      # discovers `tests/`, so a NEW module is invisible by default -- the fix would ship
+      # with a battery that no job runs. Same hole the two steps above each document.
+      #
+      # READ BEFORE TRUSTING A GREEN. 33 of the 37 execute here; 4 SKIP, and the skip count
+      # is pinned EXACTLY rather than forbidden. The 3 are the producer-side reads --
+      # `teams.ts`, `sim/pokemon.ts` and the gen3 randbat pool reachability census (13
+      # forme carriers, 7 Transform carriers out of 1682) and the forme NAMING LAW the
+      # belief-side bound relies on (1516/1516 entries) -- and CI builds no Showdown
+      # checkout, the same honest gap the spread-gate and Encore steps record. A FIFTH
+      # skip means a behavioural pin quietly acquired a Showdown dependency, which is how a
+      # battery goes vacuous while still printing OK. Per-METHOD decorators keep the
+      # reported total at 37 in both environments; a class-level skip would collapse to one
+      # entry and drop the total to 33, defeating the count guard.
+      - name: Transform forme-ident belief and world-construction pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_transform_forme_ident -v 2>&1 \
+            | tee /tmp/transformforme.log
+          if ! grep -qE 'Ran 37 tests' /tmp/transformforme.log; then
+            echo "::error::expected 37 tests; the suite shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE '\bskipped=4\b' /tmp/transformforme.log; then
+            echo "::error::expected exactly 4 skips (the Showdown-checkout reads)"
             exit 1
           fi
 
@@ -1429,8 +1477,16 @@ jobs:
           # invariant plus six debug_assert!s in tree.rs. A mass-gate workflow running
           # the crate in the one profile where its mass assertion does not exist is the
           # defect this job is named after. Found by review of #1083.
+          # --no-fail-fast IS LOAD-BEARING, and its absence was measured rather than
+          # suspected. cargo stops after the first failing TARGET, so with one failing lib
+          # test only 4 of 36 binaries ran: measured on this tree by applying a single
+          # fail-open mutant, 4 binaries with the flag absent versus 36 with it present. Every
+          # renderer pin named in the loop below lives in a target that never executed, so the
+          # step reported one failure and 32 binaries' worth of verdicts were never rendered.
+          # `grep -rn "no-fail-fast"` had no hits anywhere in the tracked tree.
           RUSTFLAGS="-C debug-assertions=yes" \
-            cargo test --release --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            cargo test --release --no-fail-fast \
+              --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
             | tee /tmp/cargo.log
           if grep -qE '^test result: FAILED' /tmp/cargo.log; then
             echo "::error::a crate suite failed"
@@ -1580,8 +1636,20 @@ jobs:
           # NO behavioural pin: all eight stayed green with it deleted, and so did this suite at
           # 459, `--test test_gen3`, the engine lib suite, test_branch_mass_reconstruction and
           # test_collapsed_arm_mass_oracle. The two added tests reach the guard's decline path.
-          if [ "${passed:-0}" -lt 461 ]; then
-            echo "::error::expected >= 461 crate tests, got ${passed:-0}"
+          #
+          # RAISED 461 -> 519. The 461 was the exact head total when it was written and was
+          # then left unraised across subsequent PRs, so by the time this change arrived the
+          # suite passed 517 and the floor would have absorbed the deletion of 56 tests --
+          # including every fixture the Sleep-Talk zero-heal guard depends on. That is the
+          # same blindness the paragraphs above describe, arriving for the fifth time, and it
+          # is why the floor is only meaningful when it EQUALS the current total.
+          #   measured on this tree: 519 summed `test result: ok` passes across 36 binaries,
+          #   `cargo test --release --no-fail-fast`, 0 failures. Identical under
+          #   `--features model` (519, and the executed test-NAME sets are equal in both
+          #   directions), which is why the model step below asserts the same number.
+          # Anyone adding a test raises this line. That is the intended cost.
+          if [ "${passed:-0}" -lt 519 ]; then
+            echo "::error::expected >= 519 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
@@ -1662,7 +1730,13 @@ jobs:
                      a_protect_blocked_sleep_talk_callee_renders_the_exact_protect_line \
                      without_the_protect_volatile_no_protect_line_is_invented \
                      a_full_hp_absorb_activation_is_never_dressed_as_protect \
-                     protect_plus_an_absorb_ability_refuses_rather_than_guessing \
+                     protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing \
+                     protect_plus_an_absorb_ability_with_no_convertible_callee_renders \
+                     the_callee_scan_covers_candidates_after_the_second_match \
+                     events::none_matched_shape_tests::the_bypassing_callee_still_refuses \
+                     events::none_matched_shape_tests::the_bypassing_producer_set_is_derived_from_every_gate \
+                     events::none_matched_shape_tests::only_an_opponent_targeted_positive_heal_can_reach_the_absorb_no_op \
+                     events::none_matched_shape_tests::no_move_in_the_table_natively_heals_the_opponent \
                      events::none_matched_shape_tests::the_protect_marker_renders_only_when_the_state_proves_it \
                      events::none_matched_shape_tests::the_protect_marker_is_defender_side_and_zero_amount_only \
                      events::none_matched_shape_tests::the_absorb_guard_covers_exactly_the_zero_heal_producers \
@@ -1714,6 +1788,99 @@ jobs:
               exit 1
             }
           done
+
+      - name: The abort seam under `--features model` -- COMPILE COVERAGE PLUS ONE BEHAVIOURAL RUNG
+        run: |
+          set -o pipefail
+          # WHY THIS STEP EXISTS. `tree.rs:305`'s abort gate is `allow(dead_code)` without the
+          # `model` cargo feature, so every crate step above compiles the channel THIS
+          # PR's class travels on out of the build entirely -- report 4 section 4.1, in the CI
+          # config rather than in a measurement run. `model.rs` is likewise never compiled, and
+          # the named `abort_telemetry::*` pins above are source-text assertions over
+          # `include_str!("model.rs")` precisely because of that.
+          #
+          # WHAT IT BUYS, STATED EXACTLY, because overclaiming here would be the same defect in
+          # the other direction. The FIRST revision of this step bought compile coverage and
+          # nothing else, and review proved it: the executed test-NAME set was IDENTICAL with
+          # and without the feature -- 519 names both ways, `comm` empty in both directions --
+          # so no CI test observed an abort under either setting, and section 4.1 was NOT
+          # discharged by adding the flag.
+          #
+          # `tree::model_abort_seam_tests` is the answer to that, and it is deliberately narrow.
+          # It is `cfg`-gated on the feature, so the two builds are now OBSERVABLY different --
+          # 520 tests here against 519 on the plain step -- and it asserts the gated seam
+          # actually REJECTS and that the error carries the predicate the census keys
+          # `world_failure_reasons` by. Null-worlded: replacing the seam's condition with
+          # `if false` reddens exactly that test.
+          #
+          # ⚠ STILL NOT DISCHARGED, and this comment is where a reader will look. The abort
+          # channel is exercised at the SEAM only. Nothing in CI drives a search over a world
+          # and observes `worlds_searched < worlds_constructed`; that needs the
+          # truth-differential harness and its model artifacts and is not a CI job. Treat
+          # "the abort channel is covered in CI" as FALSE and this as one rung of it.
+          #
+          # THE LIBRARY-PATH TRAP, found by running it. `build.rs` embeds an rpath for the
+          # maturin-built cdylib only, so `cargo test --features model` binaries do not get it
+          # and abort at load with SIGABRT. cargo then prints `error: test failed` and NO
+          # `test result: FAILED` line, so a step grepping only for that line would pass on a
+          # run where nothing executed. `set -o pipefail` is what actually catches it; the
+          # library path is what prevents it.
+          python -m pip install --quiet torch==2.12.1 \
+            --index-url https://download.pytorch.org/whl/cpu
+          LIBTORCH_USE_PYTORCH=1 LIBTORCH_BYPASS_VERSION_CHECK=1 \
+            LD_LIBRARY_PATH="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')" \
+            RUSTFLAGS="-C debug-assertions=yes" \
+            cargo test --release --no-fail-fast --features model \
+              --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            | tee /tmp/cargo-model.log
+          if grep -qE '^test result: FAILED' /tmp/cargo-model.log; then
+            echo "::error::a crate suite failed under --features model"
+            exit 1
+          fi
+          model_tests=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo-model.log \
+            | grep -oE '[0-9]+' | paste -sd+ - | bc)
+          # 520, not 519, and the DIFFERENCE is the point: `tree::model_abort_seam_tests` exists
+          # only on this build. Equal floors would mean the two steps could not tell each other
+          # apart, which is the state review found. Measured: plain 519, model 520.
+          if [ "${model_tests:-0}" -lt 520 ]; then
+            echo "::error::expected >= 520 crate tests under --features model, got ${model_tests:-0}"
+            exit 1
+          fi
+          # And name the gated pin, because a total can be restored by unrelated tests -- the
+          # lesson the plain step's own comment records.
+          gated=tree::model_abort_seam_tests::the_gated_abort_seam_rejects_an_attribution_unsafe_branch_with_its_predicate
+          grep -qxE "test $gated \.\.\. ok" /tmp/cargo-model.log || {
+            echo "::error::the model-gated abort-seam pin did not run"
+            exit 1
+          }
+
+      - name: The production-read pin runs at all -- build the native module and run it
+        run: |
+          set -o pipefail
+          # `events.rs` names `tests/test_crate_protect_marker_state_reads.py` as THE pin for
+          # the three state facts the Sleep Talk zero-heal guard reads, and no CI job ran it.
+          # Adding it to a module list alone would not have been enough: the module is
+          # `skipIf(pokezero_search is None)` and no job builds the native module, so it would
+          # have SKIPPED and reported green -- an instrument that cannot report failure.
+          # So the wheel is built first, and the skip is made loud below.
+          maturin build --release --manifest-path rust/pokezero-search/Cargo.toml --out /tmp/wheels
+          python -m pip install --quiet --force-reinstall --no-deps /tmp/wheels/*.whl
+          python -c "import pokezero_search; print('native module ok')"
+          python -m unittest tests.test_crate_protect_marker_state_reads -v 2>&1 \
+            | tee /tmp/protectread.log
+          # A SKIP HERE IS A FAILURE. The module's whole value is that it exercises the
+          # production READ, which every crate unit test passes in as a literal.
+          if grep -qE 'skipped|OK \(skipped' /tmp/protectread.log; then
+            echo "::error::the production-read pin SKIPPED; the native module was not importable"
+            exit 1
+          fi
+          # EXACT, in the shape #1204's scan pairs -- a `>=` comparison is unpairable and
+          # showed up as a NEW blind spot in `test_the_guard_scan_coverage_triple_is_re_derived`
+          # the moment this step was added. That gate is the reason this line is a literal.
+          if ! grep -qE 'Ran 13 tests' /tmp/protectread.log; then
+            echo "::error::the production-read pin did not run all 13 tests"
+            exit 1
+          fi
 
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check

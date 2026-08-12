@@ -422,6 +422,21 @@ def _fold_public_lines(lines: Sequence[str]) -> Any:
 #: inside `fold_step_lines` -- not to this set.)
 _CURE_TAGS = ("-curestatus", "-cureteam")
 
+#: The two HP tag families, named for the protocol FIELD that carries the
+#: condition, and DERIVED from the two parser functions that decide which field
+#: that is -- `test_public_projection.SetClosureTests
+#: .test_the_hp_tag_families_are_derived_from_the_parsers_own_fields`.
+#:
+#: Both were duplicated as inline tuples at fold site 3 until this comment was
+#: written, and the duplicates were the defect: an exhaustive per-element sweep
+#: over this module scored 25 survivors, and 8 of them were the two inline copies
+#: below. Dropping `-heal` from `observed_toxic_multiplier`'s copy of
+#: `_HP_TAGS_FIELD3` left the whole suite green while a Leftovers heal stopped
+#: updating `last_hp` and took `observed_toxic_multiplier` from 2 to None --
+#: Leftovers is the most common item in the format, so that one token silences
+#: the `toxic_count` axis, which is #1209's ONLY coverage. Same shape #1222 fixed
+#: for `-heal` in `_TOXIC_RAMP_RESET_TAGS`. **Every site now reads these names,
+#: so the derivation governs all of them; do not re-inline a copy.**
 _HP_TAGS_FIELD3 = ("-damage", "-heal", "-sethp")
 _HP_TAGS_FIELD4 = ("switch", "drag", "replace")
 
@@ -1206,7 +1221,7 @@ def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
         slot = parts[2].split(":", 1)[0].strip()[:2]
         if slot not in ("p1", "p2"):
             continue
-        if tag in ("switch", "drag", "replace") and len(parts) >= 5:
+        if tag in _HP_TAGS_FIELD4 and len(parts) >= 5:
             value, _token = _parse_condition(parts[4])
             last_hp[slot] = value
             maxhp[slot] = _condition_maxhp(parts[4]) or maxhp.get(slot, 0)
@@ -1230,7 +1245,7 @@ def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
             if tag == "-cureteam" or _is_active_protocol_ident(parts[2]):
                 multiplier[slot] = None
             continue
-        if tag not in ("-damage", "-heal", "-sethp") or len(parts) < 4:
+        if tag not in _HP_TAGS_FIELD3 or len(parts) < 4:
             continue
         value, _token = _parse_condition(parts[3])
         maxhp[slot] = _condition_maxhp(parts[3]) or maxhp.get(slot, 0)
@@ -1555,6 +1570,33 @@ _ENGINE_BOOST_ATTR = {
 _BOOST_ALIAS = {"atk": "atk", "def": "def", "spa": "spa", "spd": "spd",
                 "spe": "spe", "accuracy": "accuracy", "evasion": "evasion"}
 
+#: The boost tags `fold_lines_onto_summary` dispatches on, hoisted out of the
+#: function body because an inline tuple is the shape whose element deletion
+#: survives (report 4 section 4.4). No upstream spells either set out, so both
+#: are pinned in BOTH directions -- must-contain and must-not-contain -- in
+#: `test_public_projection.SetClosureTests`.
+#:
+#: `_BOOST_WRITE_TAGS` carry a stat key in field 3 and an amount in field 4;
+#: `-setboost` ASSIGNS the stage while the other two add a signed delta, which is
+#: why the branch re-tests it by name. Deleting `-setboost` from the inline copy
+#: was green while Belly Drum's `-setboost atk 6` folded to 0.
+_BOOST_WRITE_TAGS = ("-boost", "-unboost", "-setboost")
+
+#: `_BOOST_CLEAR_TAGS` zero the ACTING side's stages only. **`-clearallboost` --
+#: Haze -- must NOT be a member, and the pin says so explicitly:** adding it here
+#: would let this branch claim the line ahead of the `-clearallboost` arm, so
+#: Haze would clear one side instead of both. That is fail-OPEN on the render
+#: arm, because the un-cleared side then matches a world whose boosts Haze
+#: actually removed -- the strictly-more-conservative mutant that report 4
+#: section 4.4 says to write.
+#:
+#: DISCLOSED APPROXIMATION, not a claim: `-clearnegativeboost` zeroes only the
+#: negative stages and `-invertboost` negates them; this branch zeroes everything
+#: for all three. Neither tag exists in gen 3, so the approximation is
+#: unreachable on this census block. Both are pinned lexically; only
+#: `-clearboost`, which IS exact, is also pinned behaviourally.
+_BOOST_CLEAR_TAGS = ("-clearboost", "-clearnegativeboost", "-invertboost")
+
 
 def pre_state_summary(state: Any, slot_sides: Mapping[str, str]) -> dict[str, Any]:
     """The world's pre-branch state in exactly `post_state_summary`'s shape.
@@ -1617,7 +1659,7 @@ def fold_lines_onto_summary(
         slot = parts[2].split(":", 1)[0].strip()[:2]
         if slot not in out:
             continue
-        if tag in ("switch", "drag", "replace") and len(parts) >= 5:
+        if tag in _HP_TAGS_FIELD4 and len(parts) >= 5:
             species = _norm(str(parts[3]).split(",", 1)[0])
             candidates = [
                 index for index, name in enumerate(out[slot]["species"]) if name == species
@@ -1629,7 +1671,7 @@ def fold_lines_onto_summary(
             # engine emits reset_boosts instructions for it.
             out[slot]["boosts"] = {key: 0 for key in _BOOST_KEYS}
             _write_active(slot, value, _ENGINE_STATUS.get(token, "none"))
-        elif tag in ("-damage", "-heal", "-sethp") and len(parts) >= 4:
+        elif tag in _HP_TAGS_FIELD3 and len(parts) >= 4:
             value, token = _parse_condition(parts[3])
             _write_active(slot, value, _ENGINE_STATUS.get(token) if token else None)
         elif tag == "-status" and len(parts) >= 4:
@@ -1641,7 +1683,7 @@ def fold_lines_onto_summary(
                     mon["status"] = "none"
         elif tag == "faint":
             _write_active(slot, 0, None)
-        elif tag in ("-boost", "-unboost", "-setboost") and len(parts) >= 5:
+        elif tag in _BOOST_WRITE_TAGS and len(parts) >= 5:
             key = _BOOST_ALIAS.get(parts[3].strip())
             if key is None:
                 continue
@@ -1655,7 +1697,7 @@ def fold_lines_onto_summary(
             else:
                 delta = amount if tag == "-boost" else -amount
                 out[slot]["boosts"][key] = max(-6, min(6, current + delta))
-        elif tag in ("-clearboost", "-clearnegativeboost", "-invertboost"):
+        elif tag in _BOOST_CLEAR_TAGS:
             out[slot]["boosts"] = {key: 0 for key in _BOOST_KEYS}
         elif tag == "-clearallboost":
             for other in out:

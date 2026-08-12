@@ -452,6 +452,32 @@ impl Tables {
     /// `CategoryVocabulary.encode`: pad 0 for empty, direct row lookup, else
     /// the deterministic blake2b-8 OOV bucket.
     fn vocab_encode(&self, value: &str) -> i32 {
+        // Empty cells short-circuit BEFORE `normalize_category`. `Grid::finish` maps EVERY cell
+        // of a token_count x categorical_width grid through here and most cells are never
+        // populated, so the empty majority was paying for a call it could not use.
+        //
+        // NOT an allocation saving, despite how it looks: `normalize_category` is
+        // `value.trim().to_lowercase()`, and on `""` that is `String::with_capacity(0)` --
+        // `RawVec::NEW`, no malloc (measured: 0 allocs / 1000 calls on `""`). What is saved is
+        // the call, the `trim` scan, and the String construct/drop: ~2.2 ns per empty cell.
+        //
+        // The win therefore scales with cell count, and differs sharply by schema. Per-cell
+        // costs are measured per schema and are not identical, so they are quoted separately
+        // rather than folded into one average:
+        //   v2.2  151 x 51 = 7701 cells                              unmeasured
+        //   v3     87 x 51 = 4437 cells (4300 empty @ 2.35 ns) -> 10.1 us/leaf, median -8.5%
+        //   v4     23 x 41 =  943 cells ( 828 empty @ 2.17 ns) ->  1.8 us/leaf, median -2.0%
+        //
+        // At v4 that is inside the harness noise floor (placebo arm: -0.87%), so the v4 figure
+        // is "not resolvable", not "a small win".
+        //
+        // Byte-identical by construction: the guard fires only for `""`, the one `&str` that is
+        // `is_empty()`, and `normalize_category("")` is `""`, which the emptiness check below
+        // already maps to 0. Every other input -- whitespace-only, non-ASCII, anything `trim` or
+        // `to_lowercase` could change -- is not `is_empty()` and takes the unchanged path.
+        if value.is_empty() {
+            return 0;
+        }
         let normalized = normalize_category(value);
         if normalized.is_empty() {
             return 0;

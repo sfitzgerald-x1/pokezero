@@ -127,22 +127,26 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`3d8215d631d95edb…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`c200387c007f2d12…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
-legitimate, and it has now happened **three times**. Restricting `git log 7fcd9e19..HEAD` to **all** of
+legitimate, and it has now happened **four times**. Restricting `git log 7fcd9e19..HEAD` to **all** of
 the fingerprint's inputs — the 74 gen3 patches, `poke-engine-gen3-patches.txt`,
 `poke-engine-base-source.json`, the 11 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
-exactly three commits. ⚠ **The `input` column is DERIVED, and the third row was wrong on
+exactly four commits. ⚠ **The `input` column is DERIVED, and the third row was wrong on
 first write** — it carried `+403 −74`, which was neither this file's numstat nor any other
 figure in the tree. `git diff --numstat <base> <head> -- rust/pokezero-search/src/events.rs`
 is the derivation, and it returns the same pair against `83efbede`, `a6249971` and the
-merge-base alike. ⚠ Note also what moved the row's FINGERPRINT last: a `#[cfg(test)]`-only
+merge-base alike. ⚠ Note what moved the **#1211** row's FINGERPRINT: a `#[cfg(test)]`-only
 addition. `compute_fingerprint` hashes crate SOURCES, so `t1.head_fingerprint` moved while
 the shipped `.so` stayed byte-identical at `dd3658e4b52bd49e` — the stamp tracks the source
 tree, not the artifact, and a reader must not infer a rebuilt binary from a moved stamp.
+**#1221 is the contrasting case, and the pair is why the stamp cannot be read either way:**
+23 of its 26 lines are comment, but the other 3 are a live guard in `vocab_encode`, so there
+the `.so` really did change. A moved stamp implies a moved source tree and nothing more; to
+learn whether the artifact moved, hash the artifact.
 The column is NOT pinned by
 `tests/test_terminal_disposition_register.py`; pinning it needs a stable base, which
 `git show --numstat <commit> -- <path>` gives once a row's commit has landed, and that is
@@ -154,11 +158,14 @@ above.
 | `21f484d4` (#1197) | `rust/pokezero-search/src/leaf.rs`, +31 lines | `9517aab98d56a9ba…` |
 | `578287e7` (#1207) | `rust/pokezero-search/src/priors.rs`, +91 −4 | `236d1cac8a784898…` |
 | #1211 | `rust/pokezero-search/src/events.rs`, +420 −50 | `028a4c52a4ad9fe7…` |
-| ⚠ UNMERGED `scott/opponent-prior-observability` | `priors.rs`, `model.rs`, `leaf.rs` (seat-attributed prior telemetry, the test-only vector hook, doc corrections) | `3d8215d631d95edb…` |
+| #1221 | `rust/pokezero-search/src/encoder.rs`, +26 −0 | `2ec5bfd1c7292ed6…` |
+| ⚠ UNMERGED `scott/opponent-prior-observability` | `priors.rs`, `model.rs`, `leaf.rs` (seat-attributed prior telemetry, the test-only vector hook, doc corrections) | `c200387c007f2d12…` |
 
 The last row is the only one keyed by a BRANCH rather than a merged commit or PR, and is marked so
 deliberately: every other row records a build that landed, and a mixed-provenance table gets quoted
-later as "this shipped". Drop that row if the branch does not merge.
+later as "this shipped". Drop that row if the branch does not merge. Its fingerprint is the value
+after merging `origin/main` (which brought #1221 into the same crate), so it is neither the branch's
+pre-merge `3d8215d631d95edb…` nor main's `2ec5bfd1c7292ed6…`.
 
 ⚠ **And the second landed while this register was in review**, three days after C153's build. That
 is not an aside: it is T1's argument, live. C151 §3 deferred the terminal sweep precisely because
@@ -487,8 +494,9 @@ defect did not exist on either of their trees.** A typed `25` would have shipped
 Where CI gates on the merge, **local green and CI green are different measurements**; §6 declares
 that coupling and the assertion carries the fix in its own failure message.
 
-**Every measurement behind T2–T6 predates the head build**, and none is at `3d8215d631d95edb` —
-nor at `9517aab98d56a9ba`, the build this document was reconciled against two merges ago. Read the
+**Every measurement behind T2–T6 predates the head build**, and none is at `c200387c007f2d12` —
+nor at `3d8215d631d95edb`, `2ec5bfd1c7292ed6`, `028a4c52a4ad9fe7` or `9517aab98d56a9ba`, the builds
+this document was reconciled against at the preceding merges. Read the
 table in T1 before quoting that as a re-sweep scope: T3, T4 and T5 rest on an engine build; **T2 and
 T6 build no engine at all** and carry no `engine_fingerprint`.
 
@@ -681,7 +689,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.roll_window_holdout_fraction` | 0.899 % |
 | `bar.support_gated_dev` | 8.689 % |
 | `bar.support_gated_holdout` | 9.185 % |
-| `base.expected_counter_artifacts` | 402 |
+| `base.expected_counter_artifacts` | 403 |
 | `base.expected_sweep_artifacts` | 115 |
 | `base.patch_stack` | 74 |
 | `base.section3_rows` | 82 |
@@ -703,7 +711,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.head_fingerprint` | 3d8215d631d95edb |
+| `t1.head_fingerprint` | c200387c007f2d12 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
@@ -721,12 +729,12 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t3.speed_ties_order_le_10` | 20 |
 | `t3.speed_ties_perish` | 4 |
 | `t3.speed_ties_with_a_leftovers_winner` | 24 |
-| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:5525 |
+| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:5767 |
 | `t4.boundary` | 1000513/121 |
 | `t4.branch_miss_pct` | 100.00 |
 | `t4.engine_component` | itemleftovers |
 | `t4.heal_mismatch_rows_in_the_wide_census` | 2 |
-| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:5597 |
+| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:5839 |
 | `t4.leftovers_truncated_consumers` | 1 |
 | `t4.leftovers_truncated_references` | 2 |
 | `t4.observed_component` | heal |
