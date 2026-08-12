@@ -663,8 +663,13 @@ masks_section = {
     "dual_schema_story": {
         "current_default": (
             f"{OBSERVATION_SCHEMA_VERSION} (fresh-selection default, derived from "
-            "pokezero.observation.OBSERVATION_SCHEMA_VERSION at extraction time; "
-            "v2.2 holds the slot since 2026-07-08 after the schedule-uncompressed reads)"
+            "pokezero.observation.OBSERVATION_SCHEMA_VERSION at extraction time. This is the "
+            "one line in this dump that tracks the default rather than a named schema; the "
+            "encode itself is pinned to V2_2_REPLAY_OBSERVATION_SPEC above. The trailing prose "
+            "used to name v2.2 and its promotion date as literals, so after the v4 rotation the "
+            "sentence read 'v4 ... v2.2 holds the slot' -- half derived, half hardcoded, and "
+            "self-contradicting. Promotion history belongs in the schema constants' own "
+            "comments, not restated here.)"
         ),
         "v2": "151 tokens x 121 numeric x 39 categorical; per-action transition tokens; accepts pre-#509 checkpoints and stays byte-identical to the pre-v2.1 encoder (119-column relic family floors lower by design)",
         "v2.1": "151 tokens x 140 numeric x 39 categorical; adds defender identity on move transition rows, per-bucket revealed-move PP-validity bits, substitute HP fraction, per-mon pinned Tier-2 CB/investment surface",
