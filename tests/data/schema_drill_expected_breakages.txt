@@ -13,3 +13,11 @@ test_observation_spec_v2_1.py::SpecTableTest::test_schema_keyed_censuses
 # Fingerprint stamping: the payload HASHES the observation schema, so the fingerprint must move
 # when the default does. A fingerprint that survived a schema rotation would be the bug.
 test_linear_policy.py::LinearPolicyTest::test_linear_feature_fingerprint_payload_tracks_extractor_source_and_schemas
+# The committed token-format dump carries `dual_schema_story.current_default`, whose documented
+# purpose is "derived from pokezero.observation.OBSERVATION_SCHEMA_VERSION at extraction time".
+# An artifact whose job is to RECORD the default necessarily changes when the default changes;
+# a dump that survived a rotation would be stale, which is the defect this test exists to catch.
+# The encode in that extractor is pinned to V2_2_REPLAY_OBSERVATION_SPEC and does not move --
+# only this one documentation line does, which is why it qualifies as class (iii) rather than
+# as an unmigrated site.
+test_token_format_doc.py::TokenFormatDocSelfValidationTest::test_committed_dump_matches_live_regeneration_byte_for_byte
