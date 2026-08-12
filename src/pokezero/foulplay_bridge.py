@@ -523,6 +523,11 @@ class ControlledFoulPlayConfig:
     # every recorded result was produced under; a float r is the KataGo-style
     # reduction off the parent mean in the acting seat's own frame.
     engine_fpu_reduction: float | None = None
+    # Per-decision override telemetry (docs/mcts_value_gap_investigation_20260811.md
+    # section 2): does the search play the raw policy head's argmax or not?
+    # Default OFF -- it appends a positional to the native call, so an image that
+    # predates it refuses every world rather than ignoring the flag.
+    engine_override_telemetry: bool = False
     device: str | None = None
     temperature: float = 1.0
     cpuct: float = 1.25
@@ -1562,6 +1567,11 @@ class ControlledFoulPlayBenchmarkResult:
                 # reduction it ran at, so the value belongs in the cell's
                 # identity block and not only in the launch command.
                 "fpu_reduction": self.config.engine_fpu_reduction,
+                # Same standing again: an override RATE read off a shard that
+                # never measured one is the reading this block exists to prevent.
+                # `policy_stats.search_override_unmeasured` says how much of the
+                # denominator was lost; this says whether the instrument ran.
+                "override_telemetry": self.config.engine_override_telemetry,
                 # The searcher's own telemetry. `search_wall_per_searched_decision`
                 # is lifted to the top of this block because it, not
                 # policy_timing.average_elapsed_seconds, is what the 20 s/turn
@@ -3342,6 +3352,7 @@ def _build_policy(
                 model_priors=config.engine_model_priors,
                 use_opponent_priors=config.engine_opponent_priors,
                 fpu_reduction=config.engine_fpu_reduction,
+                override_telemetry=config.engine_override_telemetry,
             ),
         )
 
@@ -4843,6 +4854,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
                              "native search: an unvisited child is priced at the parent "
                              "mean in that seat's frame minus this value, clamped to "
                              "[0, 1] (default: the flat 0.5 every recorded result used).")
+    parser.add_argument("--engine-override-telemetry", action="store_true",
+                        help="Per searched decision, record the raw policy head's root "
+                             "argmax beside the search's own choice, so the shard reports "
+                             "an override rate on its own denominator "
+                             "(policy_stats.model_override_decisions / "
+                             "override_measured_decisions) instead of leaving unmeasurable "
+                             "decisions to read as agreement. Needs an image whose crate "
+                             "accepts `arm_priors` (the per-arm prior column).")
     parser.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, mps.")
     parser.add_argument("--temperature", type=float, default=1.0, help="Checkpoint policy softmax temperature.")
     parser.add_argument("--cpuct", type=float, default=1.25, help="Root PUCT exploration constant.")
@@ -5171,6 +5190,7 @@ def _config_from_args(
         engine_model_priors=not getattr(args, "no_engine_model_priors", False),
         engine_opponent_priors=getattr(args, "engine_opponent_priors", False),
         engine_fpu_reduction=getattr(args, "engine_fpu_reduction", None),
+        engine_override_telemetry=getattr(args, "engine_override_telemetry", False),
         device=args.device,
         temperature=args.temperature,
         cpuct=args.cpuct,

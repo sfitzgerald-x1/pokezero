@@ -395,6 +395,22 @@ class EngineMctsConfig:
     # flag-off must be the search every recorded result was produced under, and
     # that equivalence is asserted bit-for-bit, not argued.
     fpu_reduction: float | None = None
+    # Per-decision override telemetry: does search play something other than the
+    # raw policy head's argmax? Pure measurement -- it asks the crate for the
+    # per-arm `prior` column and reads it; nothing on the search's path changes,
+    # and flag-off is byte-identical for that reason rather than by recomputation.
+    #
+    # It also turns on the absorption the plan's offline legs were blocked on:
+    # the root Q/visit gaps between the top two arms (H2) and the in-tree
+    # opponent's top arm (H4), both of which the crate already emitted and this
+    # module discarded.
+    #
+    # Default OFF like every other new axis here, and for one more reason
+    # besides: turning it on appends a positional to the native call, so a stale
+    # image would refuse every world (`native_override_telemetry_unsupported`).
+    # An on-by-default field would make a Python-only update break a running
+    # image.
+    override_telemetry: bool = False
     # Opt-in safe STOP rule. A tree may stop at a completed batch only after
     # this floor and only when the unspent simulations cannot change its root
     # visit argmax. Multi-world aggregation applies a second safety bound.
@@ -439,6 +455,15 @@ class EngineMctsConfig:
                 )
         elif self.early_stop:
             raise ValueError("early_stop is supported only with leaf_eval='model'.")
+        if self.override_telemetry and self.leaf_eval != "model":
+            # Refused rather than silently zero. The measurement needs the
+            # model's root priors, which only the model path computes, so on any
+            # other leaf_eval every counter would read 0 -- indistinguishable
+            # from "search never overrides the model", which is the exact
+            # always-reads-zero failure this counter exists to avoid.
+            raise ValueError(
+                "override_telemetry is supported only with leaf_eval='model'."
+            )
         if self.fpu_reduction is not None and not 0.0 <= self.fpu_reduction <= 1.0:
             # Refused here as well as in the crate: Q is a win probability, so a
             # negative reduction is a first-play BONUS -- the opposite of the
@@ -642,6 +667,72 @@ _CHOICES_UNMAPPED_CAUSES = (
     # spells out that the 14th is reachable only through the degradation.
     _CAUSE_UNCLASSIFIED,
 )
+
+
+#: Why a SEARCHED decision could not be scored for a model override. Closed and
+#: greppable, for the same reason `_CHOICES_UNMAPPED_CAUSES` is: an override rate
+#: whose denominator excluded some decisions is only readable if the excluded set
+#: can be named, and these five have different owners entirely.
+_OVERRIDE_UNMEASURED_NO_PRIORS = "no_root_priors"
+_OVERRIDE_UNMEASURED_ARMS_ABSENT = "prior_arms_absent"
+_OVERRIDE_UNMEASURED_ARMS_MISALIGNED = "prior_arms_misaligned"
+_OVERRIDE_UNMEASURED_PARTIAL_WORLDS = "priors_missing_in_some_worlds"
+_OVERRIDE_UNMEASURED_UNMAPPED = "model_choice_unmapped"
+_OVERRIDE_UNMEASURED_CAUSES = (
+    # The crate priced no root priors for this decision: `model_priors` off, or a
+    # root the prior path refused (an option list the action map could not
+    # resolve, a prior row that underflowed, a root with a single forced
+    # `MoveChoice::None`). The model has no argmax here to disagree with, and
+    # calling that agreement would understate the override rate.
+    _OVERRIDE_UNMEASURED_NO_PRIORS,
+    # Priors are present but unpaired: `root_priors` is there and the arms carry
+    # no `prior` column. That is a STALE IMAGE running new Python -- the crate
+    # emits the column whenever the flag reaches it -- and it is the one cause
+    # that means "the measurement is not installed", not "this decision resisted
+    # measurement".
+    _OVERRIDE_UNMEASURED_ARMS_ABSENT,
+    # Names and values disagree in LENGTH. Defensive: the crate writes both off
+    # one stat vector, so this cannot happen without a crate bug -- but pairing
+    # them anyway would silently attribute one arm's prior to another arm, which
+    # is a wrong answer rather than a missing one.
+    _OVERRIDE_UNMEASURED_ARMS_MISALIGNED,
+    # SOME searched worlds priced root priors and some did not. The model's
+    # decision-level argmax is the prior mass aggregated the same way visits are,
+    # so a subset aggregate is a different quantity from the one the rate claims
+    # to measure. Refused rather than approximated.
+    _OVERRIDE_UNMEASURED_PARTIAL_WORLDS,
+    # The model's argmax display does not name any legal request action. The
+    # search's own choice mapped (or the decision would have fallen back), so
+    # this is a real engine/request vocabulary gap confined to the arm the model
+    # liked most -- and it is NOT counted in `unmapped_choices`, by design: this
+    # probe must not move a counter a stop condition reads.
+    _OVERRIDE_UNMEASURED_UNMAPPED,
+)
+
+
+#: Forkable disagreement addresses retained per policy. The fork probe
+#: (section 4b) samples ~50; 64 covers it with headroom while keeping the block
+#: small enough to ride in every shard report. Overflow is COUNTED
+#: (`override_disagreement_addresses_dropped`), never silently dropped -- a
+#: truncated sample that looks complete is how a coverage claim goes wrong.
+_OVERRIDE_DISAGREEMENT_ADDRESSES = 64
+
+#: Per-decision root rows retained per policy. A 100-game shard makes a few
+#: thousand decisions, so this holds a whole ordinary cell; past it the block
+#: truncates and `root_decision_rows_dropped` says by how much. Sized against the
+#: shard, not the campaign: at ~200 bytes a row this is a ~800 KB ceiling, next to
+#: the ~124 KB the fallback address store is bounded at.
+_ROOT_DECISION_ROWS = 4096
+
+
+def _registered_override_cause(cause: str) -> str:
+    """Degrade an unregistered override-unmeasured cause, same rule as below.
+
+    Separate vocabulary, separate degradation: folding these into
+    `_CHOICES_UNMAPPED_CAUSES` would put a telemetry token into the closed set a
+    campaign stop condition is defined on.
+    """
+    return cause if cause in _OVERRIDE_UNMEASURED_CAUSES else _CAUSE_UNCLASSIFIED
 
 
 def _registered_cause_or_unclassified(cause: str) -> str:
@@ -881,6 +972,86 @@ class EngineMctsStats:
     depth_reached_sum: int = 0
     depth_reached_max: int = 0
     depth_reached_histogram: Counter = field(default_factory=Counter)
+    # Override telemetry (config.override_telemetry; zero when it is off, and
+    # zero on every non-model leaf_eval, which is why the config refuses that
+    # combination instead of reporting it as "search never overrides").
+    #
+    # THE DENOMINATOR IS EXPORTED, not left to be derived. The question these
+    # answer is "how often does search play something other than the model's own
+    # argmax", and its denominator is NOT `searched_decisions`: a decision whose
+    # model argmax could not be determined must not be counted as agreement.
+    #   override_measured_decisions + search_override_unmeasured == searched_decisions
+    # holds whenever the flag is on, and a consumer that subtracts instead of
+    # reading `override_measured_decisions` gets the same number -- the identity
+    # is pinned by test rather than assumed.
+    override_measured_decisions: int = 0
+    model_override_decisions: int = 0
+    # The honesty half, and the one that matters most: searched decisions where
+    # the model's argmax is UNKNOWN (priors off, a root the crate refused to
+    # price, a display the request does not name, a stale image). Silently
+    # booking these as "no override" is how an override rate reads low for a
+    # reason that has nothing to do with search.
+    search_override_unmeasured: int = 0
+    # WHY it could not be measured. Same argument as `choices_unmapped_causes`:
+    # one opaque count cannot be acted on, and the causes above have entirely
+    # different owners. Closed token set -- see `_OVERRIDE_UNMEASURED_CAUSES`.
+    search_override_unmeasured_causes: Counter = field(default_factory=Counter)
+    # ADDRESSES for the disagreements, not just their count. The fork probe
+    # (docs/mcts_value_gap_investigation_20260811.md section 4b) has to REPLAY
+    # ~50 specific disagreement decisions and play both continuations, which
+    # needs (battle_id, round, seat) plus the two action indices; a rate cannot
+    # be forked. Same lesson as `fallback_samples`: aggregate counts with no
+    # addresses left era 57 unable to reproduce any of the 7,498 events it
+    # counted.
+    #
+    # FIRST-N, deliberately, and biased toward the shard's early battles: the
+    # unbiased alternative is reservoir sampling, and the only rng in reach is
+    # the decision rng whose draws seed the belief worlds -- consuming from it
+    # would CHANGE THE SEARCH. A biased sample of forkable addresses beats an
+    # unbiased perturbation of the thing being measured. Overflow is counted,
+    # never silent.
+    override_disagreements: list[dict[str, Any]] = field(default_factory=list)
+    override_disagreement_addresses_dropped: int = 0
+    # H2's measurement, absorbed from arms the crate already emitted: how far
+    # apart are the ROOT VALUES of the two arms search is choosing between? If
+    # those gaps sit inside leaf-eval noise, search has nothing to act on and a
+    # deeper tree only sharpens an estimate of "these are the same".
+    #
+    # ONE denominator for both gaps, because both are computed on exactly the
+    # decisions that had two arms with visits -- a decision with a single arm has
+    # no gap of either kind, and giving them separate sample counts would invite
+    # dividing one by the other's.
+    root_arm_gap_samples: int = 0
+    root_q_gap_sum: float = 0.0
+    root_q_gap_histogram: Counter = field(default_factory=Counter)
+    # The visit-share gap over the same two arms. The crate already computes a
+    # leader/runner-up visit pair (`early_stop_leader_visits`) unconditionally and
+    # emits it -- and it is NOT what is absorbed here, deliberately: that pair is
+    # computed for `early_stop_side_one`, a positional whose default is True, so
+    # on a p2 decision made through the pre-cascade call it describes the
+    # OPPONENT's arms. Deriving the gap from the acting seat's own entries has no
+    # seat parameter to get wrong.
+    root_visit_gap_sum: float = 0.0
+    root_visit_gap_histogram: Counter = field(default_factory=Counter)
+    # H4's predictor side, also pure absorption: the in-tree opponent's top arm
+    # was in every report and never read. These are the DENOMINATORS for the
+    # offline join against the #1188 opponent journal (which holds FoulPlay's
+    # actually-submitted moves per round); the arms themselves ride in
+    # `root_decision_rows`, since accuracy cannot be computed here -- the policy
+    # never sees what FoulPlay played.
+    opponent_top_arm_decisions: int = 0
+    # Decisions whose opponent seat was priced from the model rather than left
+    # uniform. Zero whenever `use_opponent_priors` is off, which is the flag-off
+    # twin -- so H4's model-prior leg is measurable only in the flag-on arm, while
+    # its tree-visit leg is measurable in both.
+    opponent_prior_arm_decisions: int = 0
+    # PER-DECISION rows, the only channel by which per-decision search state
+    # reaches a shard: the bridge aggregates decision metadata into counts and
+    # keeps no per-round copy of it. Capped, because a shard summary's size must
+    # not be set by however many decisions a run happens to make; overflow is
+    # counted, never silent.
+    root_decision_rows: list[dict[str, Any]] = field(default_factory=list)
+    root_decision_rows_dropped: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -1006,6 +1177,27 @@ class EngineMctsStats:
                 str(depth): count
                 for depth, count in sorted(self.depth_reached_histogram.items())
             },
+            "override_measured_decisions": self.override_measured_decisions,
+            "model_override_decisions": self.model_override_decisions,
+            "search_override_unmeasured": self.search_override_unmeasured,
+            "search_override_unmeasured_causes": dict(
+                self.search_override_unmeasured_causes
+            ),
+            "override_disagreements": [dict(row) for row in self.override_disagreements],
+            "override_disagreement_addresses_dropped": (
+                self.override_disagreement_addresses_dropped
+            ),
+            "root_arm_gap_samples": self.root_arm_gap_samples,
+            "root_q_gap_sum": self.root_q_gap_sum,
+            "root_q_gap_histogram": dict(sorted(self.root_q_gap_histogram.items())),
+            "root_visit_gap_sum": self.root_visit_gap_sum,
+            "root_visit_gap_histogram": dict(
+                sorted(self.root_visit_gap_histogram.items())
+            ),
+            "opponent_top_arm_decisions": self.opponent_top_arm_decisions,
+            "opponent_prior_arm_decisions": self.opponent_prior_arm_decisions,
+            "root_decision_rows": [dict(row) for row in self.root_decision_rows],
+            "root_decision_rows_dropped": self.root_decision_rows_dropped,
         }
         if self.depth_reached_samples:
             payload["depth_reached_mean"] = (
@@ -1031,6 +1223,22 @@ class EngineMctsStats:
         if self.collision_traversals:
             payload["collision_leaf_rate"] = (
                 self.collision_leaf_repeats / self.collision_traversals
+            )
+        if self.root_arm_gap_samples:
+            payload["root_q_gap_mean"] = (
+                self.root_q_gap_sum / self.root_arm_gap_samples
+            )
+            payload["root_visit_gap_mean"] = (
+                self.root_visit_gap_sum / self.root_arm_gap_samples
+            )
+        if self.override_measured_decisions:
+            # Only on its OWN denominator, and only when that denominator exists.
+            # `model_override_decisions / searched_decisions` is the wrong number
+            # -- it dilutes by however many decisions were unmeasurable -- and a
+            # 0.0 emitted with the flag off is a claim ("search never overrides")
+            # rather than an absence.
+            payload["model_override_rate"] = (
+                self.model_override_decisions / self.override_measured_decisions
             )
         if self.searched_decisions:
             payload["iterations_per_searched_decision"] = (
@@ -1079,6 +1287,12 @@ def native_search_args(
       opponent head on by accident while the FPU stays off. The cascade below is
       written as three widening conditions, not three independent ones, so that
       cannot happen.
+    * `override_telemetry` follows `fpu_reduction`, one slot further out again.
+      Asking for the arm names must materialize all three earlier slots, or a
+      `True` lands in `fpu_reduction` -- which the crate's validator ACCEPTS
+      (`1.0` is in range) and which would change selection, turning a pure
+      telemetry flag into a search change. The widest condition, therefore, and
+      first.
 
     `sims` overrides `config.search_sims` for ONE call: #1009 concentrates
     duplicate belief worlds into a single deeper search, so a collapsed record
@@ -1100,12 +1314,24 @@ def native_search_args(
         config.model_priors,
     ]
     fpu_reduction = getattr(config, "fpu_reduction", None)
-    if early_stop_min_sims or config.use_opponent_priors or fpu_reduction is not None:
+    override_telemetry = bool(getattr(config, "override_telemetry", False))
+    if (
+        early_stop_min_sims
+        or config.use_opponent_priors
+        or fpu_reduction is not None
+        or override_telemetry
+    ):
         search_args.extend([early_stop_min_sims, record["side_key"] == "side_one"])
-    if config.use_opponent_priors or fpu_reduction is not None:
+    if config.use_opponent_priors or fpu_reduction is not None or override_telemetry:
         search_args.append(bool(config.use_opponent_priors))
-    if fpu_reduction is not None:
-        search_args.append(float(fpu_reduction))
+    if fpu_reduction is not None or override_telemetry:
+        # `None` is the crate's own default for this slot, so materializing it to
+        # reach the slot behind it changes nothing -- unlike the two booleans
+        # above, whose default is False and whose materialized value is the
+        # config's.
+        search_args.append(None if fpu_reduction is None else float(fpu_reduction))
+    if override_telemetry:
+        search_args.append(True)
     return search_args
 
 
@@ -1236,6 +1462,266 @@ def opponent_request_order(context, party_species) -> list[str] | None:
     if sorted(current_order) != list(range(len(party))):
         return None
     return [party[index] for index in current_order]
+
+
+def _leading_choice(weights: Mapping[str, float]) -> Optional[str]:
+    """First strict maximum in insertion order, or None on an empty mapping.
+
+    The SAME rule `_map_choices` applies to the visit aggregate. Every weighting
+    compared anywhere in this file goes through it, so a tie resolves on the same
+    side for all of them: a tie-break that differed between the model's priors
+    and the search's visits would manufacture an override out of a tie, which is
+    exactly how an override rate acquires a floor it did not earn.
+    """
+    best: Optional[str] = None
+    best_weight = 0.0
+    for choice, weight in weights.items():
+        if weight > best_weight:
+            best_weight = weight
+            best = choice
+    return best
+
+
+def _leading_pair(weights: Mapping[str, float]) -> list[str]:
+    """The top two choices by weight, insertion order breaking ties, 0-2 long."""
+    ordered = sorted(
+        enumerate(weights.items()), key=lambda pair: (-pair[1][1], pair[0])
+    )
+    return [choice for _position, (choice, weight) in ordered[:2] if weight > 0.0]
+
+
+def _gap_bucket(gap: float) -> str:
+    """A 0.01-wide bucket label for a gap in [0, 1].
+
+    Bucketed rather than raw, for the reason `depth_reached_histogram` is: a
+    per-decision value keyed raw would mint a key per decision and the block
+    would grow with the run. Two decimals is finer than any leaf-eval noise floor
+    H2 could plausibly compare against.
+    """
+    return f"{max(0.0, min(1.0, gap)):.2f}"
+
+
+@dataclass(frozen=True)
+class _RootArmAggregate:
+    """The root's arms, pooled across a decision's searched worlds.
+
+    Pooled the SAME way the visit aggregate that picks the action is: each world
+    normalized, then summed over RECORDS, so a duplicated belief completion
+    weighs its multiplicity on every quantity here. Anything else would compare
+    differently-pooled numbers -- a per-world vote, or one world's arms, answers
+    a question about a world rather than about the decision that was played.
+    """
+
+    #: Acting seat, summed per-world visit shares (totals to the record count).
+    visit_share: Counter
+    #: Acting seat, visit-share-weighted mean Q per arm, in the ACTING seat's
+    #: frame. See `_aggregate_root_arms` on the frame flip.
+    arm_q: dict[str, float]
+    #: Acting seat, summed per-world prior shares. Empty when unmeasurable.
+    prior_share: Counter
+    #: Opponent seat, the same two shares. The opponent's arms are in the report
+    #: and were never absorbed; they are H4's whole predictor side.
+    opponent_visit_share: Counter
+    opponent_prior_share: Counter
+    #: Why the acting seat's prior aggregate cannot be used, or None.
+    prior_cause: Optional[str]
+
+
+def _aggregate_root_arms(world_runs: Sequence[Mapping[str, Any]]) -> _RootArmAggregate:
+    """Pool both seats' root arms over a decision's world reports.
+
+    PURE. It moves no counter, which is what lets the override probe run on every
+    searched decision without disturbing `unmapped_choices` /
+    `choices_unmapped_causes` -- campaign stop-condition terms that the early-stop
+    path's probe call already inflates.
+
+    MEASURABILITY IS NOT INFERRED FROM THE PRIOR VALUES on the acting seat. When
+    the crate's root prior path falls back, `MoveStats::prior` keeps the uniform
+    `1/n` it was constructed with, which in a report is indistinguishable from a
+    model prior that happens to be flat -- so reading the arms alone would return
+    a confident argmax (the first arm, on the tie-break) for a decision where the
+    model expressed nothing, and the honesty counter would read zero while the
+    whole measurement was fiction. `root_priors` is `null` exactly when the path
+    did not resolve, so it is the authority; the arms only supply the pairing the
+    visit-sorted entries destroy, and the two are CROSS-CHECKED as multisets so a
+    pairing bug cannot pass as a value.
+
+    The OPPONENT seat has no such authority -- the crate exports no
+    `root_opponent_priors` -- so uniformity is the only available signal there and
+    it is used as one: all-equal arms are refused rather than argmaxed.
+    """
+    visit_share: Counter = Counter()
+    prior_share: Counter = Counter()
+    opponent_visit_share: Counter = Counter()
+    opponent_prior_share: Counter = Counter()
+    q_weight: Counter = Counter()
+    q_weighted: Counter = Counter()
+    worlds_without_priors = 0
+    arms_absent = 0
+    arms_misaligned = 0
+    for record in world_runs:
+        report = record["report"]
+        side_key = record["side_key"]
+        acting_side_one = side_key == "side_one"
+        entries = report.get(side_key) or []
+        total = max(sum(entry["visits"] for entry in entries), 1)
+        for entry in entries:
+            choice = entry["move"]
+            share = entry["visits"] / total
+            visit_share[choice] += share
+            # THE FRAME FLIP. `stats_to_json` prints `MoveStats::mean()` raw for
+            # both seats, and `finalize` accumulates the side-ONE-absolute
+            # expectation into both stat vectors (side two's virtual loss is
+            # replaced with `expectation - 1.0`, netting the same sum) -- the
+            # reflection lives in `puct`, at selection time, not in storage. So a
+            # p2 decision's arms come out in the opponent's frame, and a Q gap
+            # pooled across seats without this flip would average a win
+            # probability against a loss probability.
+            q_acting = entry["q"] if acting_side_one else 1.0 - entry["q"]
+            q_weight[choice] += share
+            q_weighted[choice] += share * q_acting
+        opponent_entries = report.get(
+            "side_two" if acting_side_one else "side_one"
+        ) or []
+        opponent_total = max(sum(entry["visits"] for entry in opponent_entries), 1)
+        for entry in opponent_entries:
+            opponent_visit_share[entry["move"]] += entry["visits"] / opponent_total
+        root_priors = report.get("root_priors")
+        if root_priors is None:
+            worlds_without_priors += 1
+            continue
+        arm_priors = [entry.get("prior") for entry in entries]
+        if any(prior is None for prior in arm_priors):
+            arms_absent += 1
+            continue
+        if sorted(f"{prior:.6f}" for prior in arm_priors) != sorted(
+            f"{prior:.6f}" for prior in root_priors
+        ):
+            # Values that do not answer to the authority. Defensive -- the crate
+            # writes both off one vector -- but pairing them anyway would file one
+            # arm's prior under another arm's name, which is a WRONG argmax rather
+            # than a missing one.
+            arms_misaligned += 1
+            continue
+        prior_total = sum(arm_priors) or 1.0
+        for entry, prior in zip(entries, arm_priors):
+            prior_share[entry["move"]] += prior / prior_total
+        if len(opponent_entries) >= 2:
+            opponent_arm_priors = [entry.get("prior") for entry in opponent_entries]
+            if not any(prior is None for prior in opponent_arm_priors) and (
+                len(set(f"{prior:.6f}" for prior in opponent_arm_priors)) > 1
+            ):
+                opponent_prior_total = sum(opponent_arm_priors) or 1.0
+                for entry, prior in zip(opponent_entries, opponent_arm_priors):
+                    opponent_prior_share[entry["move"]] += prior / opponent_prior_total
+    # PRECEDENCE, from "the instrument is not installed" outwards to "this
+    # decision resisted measurement". A stale image reports `prior_arms_absent`
+    # on every decision, and that diagnosis must not hide behind a partial-worlds
+    # count that is only its symptom.
+    prior_cause: Optional[str] = None
+    if arms_absent:
+        prior_cause = _OVERRIDE_UNMEASURED_ARMS_ABSENT
+    elif arms_misaligned:
+        prior_cause = _OVERRIDE_UNMEASURED_ARMS_MISALIGNED
+    elif worlds_without_priors and worlds_without_priors == len(world_runs):
+        prior_cause = _OVERRIDE_UNMEASURED_NO_PRIORS
+    elif worlds_without_priors:
+        prior_cause = _OVERRIDE_UNMEASURED_PARTIAL_WORLDS
+    elif not prior_share:
+        # No worlds at all, or arms with no prior mass. Named rather than left to
+        # produce an empty argmax.
+        prior_cause = _OVERRIDE_UNMEASURED_NO_PRIORS
+    return _RootArmAggregate(
+        visit_share=visit_share,
+        arm_q={
+            choice: q_weighted[choice] / weight
+            for choice, weight in q_weight.items()
+            if weight > 0.0
+        },
+        prior_share=Counter() if prior_cause is not None else prior_share,
+        opponent_visit_share=opponent_visit_share,
+        opponent_prior_share=opponent_prior_share,
+        prior_cause=prior_cause,
+    )
+
+
+@dataclass(frozen=True)
+class _ChoiceVocabulary:
+    """One decision's request action space, keyed by the engine's display names.
+
+    Built once per decision by `EngineMctsPolicy._choice_vocabulary`; `action_index`
+    is PURE, so a caller that is only measuring (the override telemetry) can
+    translate a display without moving a counter that a stop condition reads.
+    """
+
+    move_index_by_id: dict[str, int]
+    hidden_power_index: Optional[int]
+    switch_index_by_species: dict[str, int]
+    switch_index_by_canonical: dict[str, int]
+    forced_struggle_index: Optional[int]
+    # Recorded for `_classify_unmapped`, which has to tell "the engine proposed a
+    # move and NO move was legal" from "a DIFFERENT move was legal".
+    any_legal_move: bool
+    any_legal_switch: bool
+
+    def action_index(self, choice: str) -> Optional[int]:
+        """The request action index an engine display names, or None."""
+        index: Optional[int] = None
+        if choice.startswith("switch "):
+            species = normalize_id(choice[len("switch "):])
+            index = self.switch_index_by_species.get(species)
+            if index is None:
+                index = self.switch_index_by_canonical.get(
+                    canonical_gen3_randbat_species_id(species)
+                )
+        else:
+            move_id = normalize_id(choice)
+            index = self.move_index_by_id.get(move_id)
+            if index is None and move_id.startswith("hiddenpower"):
+                # Engine ids are typed+BP; the request reports plain "hiddenpower".
+                index = self.hidden_power_index
+            if index is None and move_id in _ENGINE_FORCED_NO_MOVE_IDS:
+                # The crate displays MoveChoice::None as "No Move" for a slot the engine has
+                # locked -- a recharge turn is the case that reaches here. Showdown's request
+                # for that turn offers exactly one candidate, and it is named `recharge`, so
+                # the two vocabularies describe the same forced action under different names
+                # and the lookup above misses.
+                #
+                # `depth_tactics_probe.py` already carried this translation ("No Move" ->
+                # "none"); `_map_choices` never got it, so before this the decision fell to
+                # `_fallback(..., "choices_unmapped")` -- a counter this file states at
+                # :673-675 must be zero independently of the fallback rate, and with the cause
+                # mislabelled `all_unmapped_legality_mismatch`. It only became reachable once
+                # `_recharging_slots` went symmetric and these worlds started building at all.
+                index = self.move_index_by_id.get(_RECHARGE_REQUEST_MOVE_ID)
+                if index is None:
+                    # SECOND vocabulary gap behind the SAME engine token: Struggle. The engine
+                    # has no Struggle arm to enumerate -- `MoveChoice` is Move/Switch/None and
+                    # gen3 `get_all_options` never synthesizes one -- so when
+                    # `add_available_moves` adds nothing (every slot at 0 PP or disabled) and
+                    # `add_switches` adds nothing (no live bench, or trapped), the terminal
+                    # `if options.len() == 0 { push(MoveChoice::None) }` guard fires and the
+                    # crate renders "No Move". Showdown, at the same state, substitutes the
+                    # Struggle pseudo-move (`sim/pokemon.ts` `getMoveRequestData`: `else if
+                    # (!moves.length) moves = [{ move: 'Struggle', id: 'struggle' }]`). One
+                    # forced action, two names -- the recharge case one paragraph up, again.
+                    #
+                    # `forced_struggle_index`, NOT a bare `move_index_by_id.get("struggle")`:
+                    # the admission test above is what distinguishes the SUBSTITUTED
+                    # pseudo-move from a real Struggle move slot, and what keeps the
+                    # engine-vs-request switch disagreement countable. Read it there.
+                    #
+                    # Recharge FIRST and Struggle only as the fallthrough, but the order is
+                    # documentation, not disambiguation: the two can never both be offered.
+                    # `getMoveRequestData` reaches the Struggle substitution ONLY when
+                    # `getMoves` returned an EMPTY list, and a `recharge` lock makes `getMoves`
+                    # return the one-element `[{Recharge}]` -- non-empty, so the substitution
+                    # is unreachable on a recharge turn. Offering NEITHER is the ordinary turn,
+                    # and there both lookups miss and the choice stays unmapped, which is
+                    # correct: "No Move" against a request with real moves is a genuine
+                    # engine/request disagreement, not a naming one.
+                    index = self.forced_struggle_index
+        return index
 
 
 class EngineMctsPolicy:
@@ -2273,6 +2759,13 @@ class EngineMctsPolicy:
                 reason = (
                     f"native_early_stop_unsupported: {detail}"
                     if early_stop_min_sims and isinstance(error, TypeError)
+                    # The telemetry flag appends a positional, so a stale image
+                    # rejects the call outright -- as a TypeError, from the same
+                    # arity mismatch the early-stop flag hit. Named, because
+                    # "every world failed" against a rebuilt-Python/old-image pod
+                    # is otherwise indistinguishable from a search defect.
+                    else f"native_override_telemetry_unsupported: {detail}"
+                    if config.override_telemetry and isinstance(error, TypeError)
                     else detail
                 )
                 # Unsafe renderer branches abort the native world before a
@@ -2552,6 +3045,15 @@ class EngineMctsPolicy:
         if action_index is None:
             return self._fallback(context, rng, "choices_unmapped")
         self.stats.searched_decisions += 1
+        # AFTER `searched_decisions`, so the two counters this telemetry
+        # partitions can never be incremented on different sets of decisions.
+        override = (
+            self._record_root_telemetry(
+                context, world_runs, aggregated, action_index
+            )
+            if config.override_telemetry
+            else None
+        )
         return PolicyDecision(
             action_index=action_index,
             policy_id=self.policy_id,
@@ -2585,9 +3087,193 @@ class EngineMctsPolicy:
                         "full_budget_replays": full_budget_replays,
                         "simulations_saved": simulations_saved,
                     },
+                    # Present only with the flag on, so a flag-off decision's
+                    # metadata is exactly what it has always been. The shard's
+                    # aggregate lives in `policy_stats`; this is the per-decision
+                    # row, which is what the fork probe forks on.
+                    **({"override": override} if override is not None else {}),
                 }
             },
         )
+
+    def _record_root_telemetry(
+        self,
+        context: PolicyContext,
+        world_runs: list[dict[str, Any]],
+        aggregated: Mapping[str, float],
+        search_action_index: int,
+    ) -> dict[str, Any]:
+        """Absorb this searched decision's ROOT state: override, gaps, opponent arm.
+
+        One pass, one row, three hypotheses. The investigation plan's offline
+        legs were blocked on the same thing and not on three different things:
+        the crate emits the root's arms with their visits, values and (with
+        `arm_priors`) their priors, and the Python boundary absorbed only the
+        visit aggregate and threw the rest away. So this is mostly ABSORPTION,
+        not new measurement --
+
+          * override (H1/section 2): the model's argmax vs the search's, as
+            ACTION INDICES;
+          * the top-1/top-2 root Q and visit-share gaps (H2): whether the value
+            head separates the two arms search is actually choosing between;
+          * the in-tree opponent's top arm (H4): the predictor side of "does the
+            opponent we search against play what FoulPlay plays", which joins to
+            the #1188 opponent journal on (battle_id, round).
+
+        Every exit either scores the override or names a cause: no searched
+        decision is left out of both counters, which is what the plan's
+        denominator (`overrides / (searched - unmeasured)`) rests on.
+        """
+        arms = _aggregate_root_arms(world_runs)
+        worlds = max(len(world_runs), 1)
+        # --- the override, on action indices -------------------------------
+        cause: Optional[str] = arms.prior_cause
+        model_choice: Optional[str] = None
+        model_action: Optional[int] = None
+        if cause is None:
+            model_choice = _leading_choice(arms.prior_share)
+            vocabulary = self._choice_vocabulary(context)
+            model_action = (
+                None if vocabulary is None or model_choice is None
+                else vocabulary.action_index(model_choice)
+            )
+            if model_action is None:
+                # `_map_choices` already returned an index for this decision, so
+                # the candidate list exists and the search's own choice mapped:
+                # what failed is this arm specifically.
+                cause = _OVERRIDE_UNMEASURED_UNMAPPED
+        model_override: Optional[bool] = None
+        if cause is not None:
+            self.stats.search_override_unmeasured += 1
+            self.stats.search_override_unmeasured_causes[
+                _registered_override_cause(cause)
+            ] += 1
+        else:
+            self.stats.override_measured_decisions += 1
+            # ACTION INDICES, not displays. The engine and the request name the
+            # same forced action differently ("No Move" / `recharge` /
+            # `struggle`, typed Hidden Power / plain `hiddenpower`), so comparing
+            # displays reports a pure naming difference as an override -- the
+            # translation `_ChoiceVocabulary` exists for. Both sides go through
+            # it, so only a real change of action can move this counter.
+            model_override = model_action != search_action_index
+            if model_override:
+                self.stats.model_override_decisions += 1
+                self._record_override_address(
+                    context, model_action, search_action_index, model_choice
+                )
+        # --- the two top-arm gaps (H2) ------------------------------------
+        leaders = _leading_pair(aggregated)
+        q_gap: Optional[float] = None
+        visit_gap: Optional[float] = None
+        if len(leaders) == 2:
+            first, second = leaders
+            first_q, second_q = arms.arm_q.get(first), arms.arm_q.get(second)
+            # `aggregated` sums a per-world share, so it totals to the record
+            # count; dividing puts the gap back on [0, 1] and makes a w1 cell
+            # comparable to a w4 one.
+            visit_gap = (aggregated[first] - aggregated[second]) / worlds
+            if first_q is not None and second_q is not None:
+                # ABSOLUTE. The visit leader can hold the LOWER value -- that is
+                # PUCT tracking the prior, which is H1's finding and not H2's --
+                # and folding both cases into one signed histogram would let them
+                # cancel. The sign stays recoverable from the row, which carries
+                # both values.
+                q_gap = abs(first_q - second_q)
+                self.stats.root_arm_gap_samples += 1
+                self.stats.root_q_gap_sum += q_gap
+                self.stats.root_q_gap_histogram[_gap_bucket(q_gap)] += 1
+                self.stats.root_visit_gap_sum += visit_gap
+                self.stats.root_visit_gap_histogram[_gap_bucket(visit_gap)] += 1
+        # --- the in-tree opponent's arm (H4) ------------------------------
+        opponent_choice = _leading_choice(arms.opponent_visit_share)
+        if opponent_choice is not None:
+            self.stats.opponent_top_arm_decisions += 1
+        opponent_prior_choice = (
+            _leading_choice(arms.opponent_prior_share)
+            if self._config.use_opponent_priors and arms.opponent_prior_share
+            else None
+        )
+        if opponent_prior_choice is not None:
+            self.stats.opponent_prior_arm_decisions += 1
+        row = {
+            "battle_id": str(getattr(context, "battle_id", "?")),
+            "round": getattr(context, "decision_round_index", None),
+            "seat": str(getattr(context, "player_id", "?")),
+            "model_argmax": model_action,
+            "search_argmax": search_action_index,
+            "model_override": model_override,
+            "unmeasured_cause": cause,
+            "model_choice": model_choice,
+            # The two arms the search ranked first and second, with the values it
+            # ranked them on, in the ACTING seat's frame. This is H2's raw datum;
+            # the histograms above are its summary.
+            "top_arms": [
+                {
+                    "move": choice,
+                    "visit_share": round(aggregated[choice] / worlds, 6),
+                    "q": (
+                        None if arms.arm_q.get(choice) is None
+                        else round(arms.arm_q[choice], 6)
+                    ),
+                }
+                for choice in leaders
+            ],
+            # H4's predictor side. `opponent_prior_arm` is present only when the
+            # opponent seat was actually priced from the model -- see
+            # `_aggregate_root_arms` on why uniform priors are refused here.
+            "opponent_top_arm": opponent_choice,
+            "opponent_prior_arm": opponent_prior_choice,
+        }
+        if len(self.stats.root_decision_rows) < _ROOT_DECISION_ROWS:
+            self.stats.root_decision_rows.append(row)
+        else:
+            # Non-zero means the per-decision block is TRUNCATED -- the
+            # aggregates above are not, so an H4 join over a truncated shard must
+            # use its own row count as the denominator, never
+            # `searched_decisions`.
+            self.stats.root_decision_rows_dropped += 1
+        return {
+            "model_argmax": model_action,
+            "search_argmax": search_action_index,
+            "model_override": model_override,
+            "unmeasured_cause": cause,
+            "model_choice": model_choice,
+            "root_q_gap": None if q_gap is None else round(q_gap, 6),
+            "root_visit_gap": None if visit_gap is None else round(visit_gap, 6),
+            "opponent_top_arm": opponent_choice,
+        }
+
+    def _record_override_address(
+        self,
+        context: PolicyContext,
+        model_action: int,
+        search_action_index: int,
+        model_choice: Optional[str],
+    ) -> None:
+        """Retain a forkable address for one disagreement, or count the overflow.
+
+        SEPARATE from `root_decision_rows` even though those carry the same
+        fields, and for the reason `fallback_samples` is keyed per class: both
+        stores truncate first-N, so a run long enough to fill the row block would
+        keep only the disagreements that happened early. A store that fills ONLY
+        on the rare event cannot be crowded out by the common one.
+        """
+        if len(self.stats.override_disagreements) >= _OVERRIDE_DISAGREEMENT_ADDRESSES:
+            # Non-zero means the sample is INCOMPLETE, and truncated toward the
+            # shard's early battles; `model_override_decisions` remains the count.
+            self.stats.override_disagreement_addresses_dropped += 1
+            return
+        self.stats.override_disagreements.append({
+            # (battle_id, round, seat) is what replay needs -- the battle id
+            # carries the seed, so the fork probe can reach this exact decision.
+            "battle_id": str(getattr(context, "battle_id", "?")),
+            "round": getattr(context, "decision_round_index", None),
+            "seat": str(getattr(context, "player_id", "?")),
+            "model_argmax": model_action,
+            "search_argmax": search_action_index,
+            "model_choice": model_choice,
+        })
 
     # Gen 3 pool's only recharge move; the recharge turn itself is public.
     _RECHARGE_MOVES = frozenset({"hyperbeam"})
@@ -2927,16 +3613,26 @@ class EngineMctsPolicy:
                     break
         return blocked, encored, removed, overridden, transformed
 
-    def _map_choices(
-        self, context: PolicyContext, aggregated: Mapping[str, float]
-    ) -> Optional[int]:
+    def _choice_vocabulary(self, context: PolicyContext) -> Optional[_ChoiceVocabulary]:
+        """The request's action space, indexed the way an engine display names it.
+
+        Extracted from `_map_choices` for ONE reason: the override telemetry has
+        to translate a SECOND engine display -- the model's prior argmax -- into
+        an action index, and `_map_choices` cannot be called twice per decision
+        without its counters double-counting. `unmapped_choices` and
+        `choices_unmapped_causes` are campaign stop-condition terms
+        (`choices_unmapped` is required at zero independently of the fallback
+        rate), and the early-stop path's probe call already inflates the second
+        one -- a documented wart. A telemetry probe that fired on EVERY searched
+        decision would make both counters unreadable, so the translation is pure
+        and the counting stays in `_map_choices`.
+        """
         candidates = context.observation.metadata.get("action_candidates")
         # `str` and `bytes` ARE Sequences, so `isinstance(candidates, Sequence)` alone lets a
         # stringified metadata field walk straight past this guard and land in the POLICY
         # bucket below -- defeating the purpose of the one token that exists to say "this is
         # plumbing, not a game state". Review found exactly that.
         if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
-            self.stats.choices_unmapped_causes[_CAUSE_NO_ACTION_CANDIDATES] += 1
             return None
         mask = context.observation.legal_action_mask
 
@@ -3025,65 +3721,28 @@ class EngineMctsPolicy:
         if not any_legal_switch and list(move_index_by_id) == [_STRUGGLE_REQUEST_MOVE_ID]:
             forced_struggle_index = move_index_by_id[_STRUGGLE_REQUEST_MOVE_ID]
 
+        return _ChoiceVocabulary(
+            move_index_by_id=move_index_by_id,
+            hidden_power_index=hidden_power_index,
+            switch_index_by_species=switch_index_by_species,
+            switch_index_by_canonical=switch_index_by_canonical,
+            forced_struggle_index=forced_struggle_index,
+            any_legal_move=any_legal_move,
+            any_legal_switch=any_legal_switch,
+        )
+
+    def _map_choices(
+        self, context: PolicyContext, aggregated: Mapping[str, float]
+    ) -> Optional[int]:
+        vocabulary = self._choice_vocabulary(context)
+        if vocabulary is None:
+            self.stats.choices_unmapped_causes[_CAUSE_NO_ACTION_CANDIDATES] += 1
+            return None
         best_index: Optional[int] = None
         best_weight = 0.0
         mapped_any = False
         for choice, weight in aggregated.items():
-            index: Optional[int] = None
-            if choice.startswith("switch "):
-                species = normalize_id(choice[len("switch "):])
-                index = switch_index_by_species.get(species)
-                if index is None:
-                    index = switch_index_by_canonical.get(
-                        canonical_gen3_randbat_species_id(species)
-                    )
-            else:
-                move_id = normalize_id(choice)
-                index = move_index_by_id.get(move_id)
-                if index is None and move_id.startswith("hiddenpower"):
-                    # Engine ids are typed+BP; the request reports plain "hiddenpower".
-                    index = hidden_power_index
-                if index is None and move_id in _ENGINE_FORCED_NO_MOVE_IDS:
-                    # The crate displays MoveChoice::None as "No Move" for a slot the engine has
-                    # locked -- a recharge turn is the case that reaches here. Showdown's request
-                    # for that turn offers exactly one candidate, and it is named `recharge`, so
-                    # the two vocabularies describe the same forced action under different names
-                    # and the lookup above misses.
-                    #
-                    # `depth_tactics_probe.py` already carried this translation ("No Move" ->
-                    # "none"); `_map_choices` never got it, so before this the decision fell to
-                    # `_fallback(..., "choices_unmapped")` -- a counter this file states at
-                    # :673-675 must be zero independently of the fallback rate, and with the cause
-                    # mislabelled `all_unmapped_legality_mismatch`. It only became reachable once
-                    # `_recharging_slots` went symmetric and these worlds started building at all.
-                    index = move_index_by_id.get(_RECHARGE_REQUEST_MOVE_ID)
-                    if index is None:
-                        # SECOND vocabulary gap behind the SAME engine token: Struggle. The engine
-                        # has no Struggle arm to enumerate -- `MoveChoice` is Move/Switch/None and
-                        # gen3 `get_all_options` never synthesizes one -- so when
-                        # `add_available_moves` adds nothing (every slot at 0 PP or disabled) and
-                        # `add_switches` adds nothing (no live bench, or trapped), the terminal
-                        # `if options.len() == 0 { push(MoveChoice::None) }` guard fires and the
-                        # crate renders "No Move". Showdown, at the same state, substitutes the
-                        # Struggle pseudo-move (`sim/pokemon.ts` `getMoveRequestData`: `else if
-                        # (!moves.length) moves = [{ move: 'Struggle', id: 'struggle' }]`). One
-                        # forced action, two names -- the recharge case one paragraph up, again.
-                        #
-                        # `forced_struggle_index`, NOT a bare `move_index_by_id.get("struggle")`:
-                        # the admission test above is what distinguishes the SUBSTITUTED
-                        # pseudo-move from a real Struggle move slot, and what keeps the
-                        # engine-vs-request switch disagreement countable. Read it there.
-                        #
-                        # Recharge FIRST and Struggle only as the fallthrough, but the order is
-                        # documentation, not disambiguation: the two can never both be offered.
-                        # `getMoveRequestData` reaches the Struggle substitution ONLY when
-                        # `getMoves` returned an EMPTY list, and a `recharge` lock makes `getMoves`
-                        # return the one-element `[{Recharge}]` -- non-empty, so the substitution
-                        # is unreachable on a recharge turn. Offering NEITHER is the ordinary turn,
-                        # and there both lookups miss and the choice stays unmapped, which is
-                        # correct: "No Move" against a request with real moves is a genuine
-                        # engine/request disagreement, not a naming one.
-                        index = forced_struggle_index
+            index = vocabulary.action_index(choice)
             if index is None:
                 self.stats.unmapped_choices[choice] += 1
                 continue
@@ -3096,11 +3755,13 @@ class EngineMctsPolicy:
                 _registered_cause_or_unclassified(_classify_unmapped(
                     aggregated=aggregated,
                     mapped_any=mapped_any,
-                    any_legal_move=any_legal_move,
-                    any_legal_switch=any_legal_switch,
+                    any_legal_move=vocabulary.any_legal_move,
+                    any_legal_switch=vocabulary.any_legal_switch,
                 ))
             ] += 1
         return best_index
+
+
 
     def _fallback(
         self, context: PolicyContext, rng: random.Random, reason: str

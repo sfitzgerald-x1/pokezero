@@ -512,8 +512,8 @@ fn batched_search_core<E: BatchLeafEval>(
         elapsed,
         completed as f64 / elapsed,
         1.0 / elapsed,
-        stats_to_json(&s1_stats),
-        stats_to_json(&s2_stats),
+        stats_to_json(&s1_stats, false),
+        stats_to_json(&s2_stats, false),
     ))
 }
 
@@ -637,6 +637,9 @@ fn multiply_batched_core<E: BatchLeafEval>(
         seed,
         "torchscript",
         &extra,
+        // The one-ply template-observation path: no caller measures overrides
+        // off it, and its reports are pinned byte for byte by the POC gates.
+        false,
     ))
 }
 
@@ -786,6 +789,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     early_stop_min_sims: usize,
     early_stop_side_one: bool,
     fpu_reduction: Option<f32>,
+    arm_priors: bool,
     lossy_subcases: &mut crate::abort_telemetry::LossySubcaseLedger,
 ) -> PyResult<String> {
     let mut state = parse_state(state_str)?;
@@ -1310,6 +1314,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         seed,
         "torchscript",
         &extra,
+        arm_priors,
     ))
 }
 
@@ -1630,7 +1635,12 @@ impl NativeLeafModel {
     /// list (never reflected -- see `LeafContext::opponent_action_map`).
     /// Returns the search report as JSON (with `encoder: "native_leaf"`,
     /// lossy-render accounting, and `root_priors`/`prior_branches`/
-    /// `prior_fallbacks` telemetry). Runs with the GIL released.
+    /// `prior_fallbacks` telemetry). With `arm_priors` every root arm entry on
+    /// BOTH seats also carries its `prior` — the only way a caller can say WHICH
+    /// move the raw policy head would play (the entries are visit-sorted, so the
+    /// `root_priors` vector cannot be paired with them positionally), and the
+    /// only surface on which the OPPONENT seat's applied priors are visible at
+    /// all. Runs with the GIL released.
     #[pyo3(signature = (
         state_str,
         iterations,
@@ -1655,6 +1665,11 @@ impl NativeLeafModel {
         // the flat-0.5 first-play urgency every recorded result was produced
         // under; see `crate::fpu_value`.
         fpu_reduction = None,
+        // Same rule again, one slot further out still. PURE TELEMETRY: it adds
+        // one column to each root arm's report entry and touches nothing the
+        // search reads, so flag-off is byte-identical for a reason stronger than
+        // a recomputation -- there is no new code on the search's path at all.
+        arm_priors = false,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -1676,6 +1691,7 @@ impl NativeLeafModel {
         early_stop_side_one: bool,
         use_opponent_priors: bool,
         fpu_reduction: Option<f32>,
+        arm_priors: bool,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -1750,6 +1766,7 @@ impl NativeLeafModel {
                     early_stop_min_sims,
                     early_stop_side_one,
                     fpu_reduction,
+                    arm_priors,
                     lossy_subcases,
                 )
             })

@@ -372,18 +372,33 @@ pub(crate) fn puct_search_with_eval<E: LeafEval>(
     Ok((s1_stats, s2_stats, elapsed))
 }
 
-fn stats_to_json(stats: &[MoveStats]) -> String {
+/// `with_prior` adds each arm's PUCT prior to its entry, and is off for every
+/// caller that has not asked for it: this block's bytes are compared across
+/// eras, and a column present on every report would have made every historical
+/// one a new artifact (the argument `multiply_report_json`'s `fpu_field` makes).
+///
+/// The prior is what makes an arm's identity measurable from a report at all.
+/// Entries are VISIT-SORTED, so entry i is not option i and the `root_priors`
+/// vector cannot be paired with them positionally; carrying the value on the
+/// entry is the only pairing that survives the sort.
+fn stats_to_json(stats: &[MoveStats], with_prior: bool) -> String {
     let mut order: Vec<usize> = (0..stats.len()).collect();
     order.sort_by(|&a, &b| stats[b].visits.cmp(&stats[a].visits));
     let entries: Vec<String> = order
         .iter()
         .map(|&index| {
             let stat = &stats[index];
+            let prior = if with_prior {
+                format!(",\"prior\":{:.6}", stat.prior)
+            } else {
+                String::new()
+            };
             format!(
-                "{{\"move\":\"{}\",\"visits\":{},\"q\":{:.6}}}",
+                "{{\"move\":\"{}\",\"visits\":{},\"q\":{:.6}{}}}",
                 json_escape(&stat.display),
                 stat.visits,
-                stat.mean()
+                stat.mean(),
+                prior
             )
         })
         .collect();
@@ -422,8 +437,8 @@ fn puct_search(state_str: &str, iterations: usize, c_puct: f32, seed: u64) -> Py
         seed,
         elapsed,
         iterations_per_s,
-        stats_to_json(&s1_stats),
-        stats_to_json(&s2_stats),
+        stats_to_json(&s1_stats, false),
+        stats_to_json(&s2_stats, false),
     ))
 }
 

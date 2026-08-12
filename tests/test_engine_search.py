@@ -3825,6 +3825,613 @@ class WorldCollapseTest(unittest.TestCase):
         )
 
 
+class RootDecisionTelemetryTest(unittest.TestCase):
+    """The override / Q-gap / opponent-arm counters, on constructed reports.
+
+    Every case here is a report whose ANSWER IS ARITHMETIC: the visit block and
+    the prior block are written to disagree (or agree) by construction, so a
+    counter that fires when they agree, or fails to when they differ, is a wrong
+    number and not a judgement call. That is the bar this file's other telemetry
+    is held to (`test_depth_reached_is_measured_not_the_configured_cap`), and the
+    reason the honesty counter gets four cases of its own: an unmeasurable
+    decision silently booked as agreement is indistinguishable, in a shard, from
+    a search that never overrides the model.
+
+    These drive the real `_search_model` through the fake native, so the counting
+    site, the aggregation and the choice translation are all the production ones.
+    """
+
+    _Native = EarlyStopPolicyIntegrationTests._Native
+    _context = staticmethod(EarlyStopPolicyIntegrationTests._context)
+
+    @staticmethod
+    def _report(
+        arms: "list[tuple[str, int, float, float | None]]",
+        *,
+        root_priors: "list[float] | None",
+        opponent: "list[tuple[str, int, float, float | None]]" = (),
+    ) -> dict:
+        """One world report: `(move, visits, q, prior)` per arm, per seat.
+
+        `prior=None` omits the column, which is what a pre-`arm_priors` image
+        produces; `root_priors=None` is the crate's own "the prior path did not
+        resolve" signal. The two are INDEPENDENT here on purpose -- the pairing
+        between them is what the honesty cases exercise.
+        """
+
+        def entries(rows):
+            out = []
+            for move, visits, q, prior in rows:
+                entry = {"move": move, "visits": visits, "q": q}
+                if prior is not None:
+                    entry["prior"] = prior
+                out.append(entry)
+            return out
+
+        completed = sum(row[1] for row in arms)
+        return {
+            "iterations": completed,
+            "requested_iterations": completed,
+            "remaining_iterations": 0,
+            "early_stopped": False,
+            "model_evals": completed,
+            "lossy_renders": 0,
+            "attribution_unsafe_renders": 0,
+            "prior_fallbacks": 0,
+            "root_priors": root_priors,
+            "side_one": entries(arms),
+            "side_two": entries(opponent),
+        }
+
+    @staticmethod
+    def _world(label: str):
+        return (
+            SimpleNamespace(
+                party_species={"p1": ("rattata",), "p2": ("chansey",)},
+                slot_sides={"p1": "side_one"},
+            ),
+            SimpleNamespace(to_string=lambda: label),
+        )
+
+    def _policy(self, *, telemetry: bool = True, opponent_priors: bool = False):
+        policy = object.__new__(EngineMctsPolicy)
+        policy.policy_id = "override-telemetry-test"
+        policy._config = EngineMctsConfig(
+            worlds=2,
+            leaf_eval="model",
+            model_path="model.pt",
+            checkpoint_path="checkpoint.pt",
+            tables_path="tables.json",
+            search_sims=100,
+            search_batch=10,
+            override_telemetry=telemetry,
+            use_opponent_priors=opponent_priors,
+        )
+        policy._tables_json = "{}"
+        policy.stats = EngineMctsStats()
+        policy._world_failures_before = {}
+        return policy
+
+    def _run(self, policy, reports, worlds=None, context=None):
+        native = self._Native(reports)
+        fake_module = SimpleNamespace(
+            FoldState=SimpleNamespace(from_payload=lambda _payload: object())
+        )
+        with (
+            patch.dict(sys.modules, {"pokezero_search": fake_module}),
+            patch.object(EngineMctsPolicy, "_native", return_value=native),
+            patch.object(
+                EngineMctsPolicy, "_validate_model_root_observation", return_value=None
+            ),
+            patch.object(EngineMctsPolicy, "_root_inputs_json", return_value="{}"),
+        ):
+            decision = policy._search_model(
+                self._context() if context is None else context,
+                [self._world("world-a")] if worlds is None else worlds,
+                SimpleNamespace(to_payload=lambda: {}),
+                random.Random(7),
+            )
+        return decision, native
+
+    # -- the counter FIRES -----------------------------------------------------
+
+    def test_an_override_fires_when_the_model_prefers_the_other_arm(self) -> None:
+        """Visits say alpha (action 0); priors say beta (action 1). Provably a
+        disagreement, so the counter must fire and name both actions."""
+        policy = self._policy()
+        decision, _ = self._run(
+            policy,
+            [self._report(
+                [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+                root_priors=[0.2, 0.8],
+            )],
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(decision.action_index, 0, "the search's own choice is alpha")
+        self.assertEqual(stats["model_override_decisions"], 1)
+        self.assertEqual(stats["override_measured_decisions"], 1)
+        self.assertEqual(stats["search_override_unmeasured"], 0)
+        self.assertEqual(stats["model_override_rate"], 1.0)
+        block = decision.metadata["engine_mcts"]["override"]
+        self.assertEqual((block["model_argmax"], block["search_argmax"]), (1, 0))
+        self.assertIs(block["model_override"], True)
+        # The forkable address, which is the whole point of retaining it.
+        self.assertEqual(stats["override_disagreements"], [{
+            "battle_id": "early-stop-test",
+            "round": 0,
+            "seat": "p1",
+            "model_argmax": 1,
+            "search_argmax": 0,
+            "model_choice": "beta",
+        }])
+
+    def test_agreement_does_not_fire(self) -> None:
+        """Same visits, priors moved onto the SAME arm: measured, not an override.
+
+        The mirror of the case above and not a weaker version of it: a counter
+        that reads 100% is as broken as one that reads 0%, and only the pair
+        separates them.
+        """
+        policy = self._policy()
+        decision, _ = self._run(
+            policy,
+            [self._report(
+                [("alpha", 60, 0.5, 0.8), ("beta", 40, 0.5, 0.2)],
+                root_priors=[0.8, 0.2],
+            )],
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["model_override_decisions"], 0)
+        self.assertEqual(stats["override_measured_decisions"], 1)
+        self.assertEqual(stats["search_override_unmeasured"], 0)
+        self.assertEqual(stats["model_override_rate"], 0.0)
+        self.assertIs(
+            decision.metadata["engine_mcts"]["override"]["model_override"], False
+        )
+        self.assertEqual(stats["override_disagreements"], [])
+
+    def test_the_priors_decide_the_model_argmax_not_the_visits(self) -> None:
+        """A visit-ordering change alone must not move the model's argmax.
+
+        Same priors, reversed visit block. `stats_to_json` sorts entries by
+        visits, so a reader that took "the first entry" or "the entry with the
+        most visits" as the model's answer would pass every test above and
+        silently report the SEARCH's choice twice -- an override rate pinned at
+        zero by construction.
+        """
+        policy = self._policy()
+        self._run(
+            policy,
+            [self._report(
+                [("beta", 90, 0.5, 0.1), ("alpha", 10, 0.5, 0.9)],
+                root_priors=[0.1, 0.9],
+            )],
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["model_override_decisions"], 1, "beta played, alpha liked")
+        self.assertEqual(stats["override_disagreements"][0]["model_choice"], "alpha")
+
+    # -- the HONESTY counter fires ---------------------------------------------
+
+    def test_a_decision_with_no_root_priors_is_unmeasured_not_agreement(self) -> None:
+        """`model_priors=False`, or any root the prior path refused.
+
+        The visit block still names an arm, so the tempting reading is "the model
+        agreed". It did not express anything.
+        """
+        policy = self._policy()
+        decision, _ = self._run(
+            policy,
+            [self._report([("alpha", 60, 0.5, 0.5), ("beta", 40, 0.5, 0.5)],
+                          root_priors=None)],
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["search_override_unmeasured"], 1)
+        self.assertEqual(stats["override_measured_decisions"], 0)
+        self.assertEqual(stats["model_override_decisions"], 0)
+        self.assertNotIn("model_override_rate", stats, "no denominator, no rate")
+        self.assertEqual(
+            stats["search_override_unmeasured_causes"], {"no_root_priors": 1}
+        )
+        block = decision.metadata["engine_mcts"]["override"]
+        self.assertIsNone(block["model_argmax"])
+        self.assertIsNone(block["model_override"], "never False on an unmeasured read")
+
+    def test_uniform_arm_priors_do_not_manufacture_a_model_argmax(self) -> None:
+        """The defect this counter exists to avoid, made concrete.
+
+        A refused root prior path leaves `MoveStats::prior` at the uniform `1/n`
+        it was CONSTRUCTED with, and in a report that is indistinguishable from a
+        model prior that happens to be flat. An implementation that read the arms
+        alone would return a confident argmax here -- the first arm, on the
+        tie-break -- and book the decision as measured agreement. The authority is
+        `root_priors`, which is null exactly when the path did not resolve.
+        """
+        policy = self._policy()
+        self._run(
+            policy,
+            [self._report(
+                # Uniform, and the arm order deliberately puts a DIFFERENT arm
+                # first from the one the visits chose, so a fabricated argmax
+                # would even read as an override.
+                [("beta", 40, 0.5, 0.5), ("alpha", 60, 0.5, 0.5)],
+                root_priors=None,
+            )],
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["override_measured_decisions"], 0)
+        self.assertEqual(stats["model_override_decisions"], 0)
+        self.assertEqual(
+            stats["search_override_unmeasured_causes"], {"no_root_priors": 1}
+        )
+
+    def test_a_stale_image_is_named_rather_than_read_as_agreement(self) -> None:
+        """Priors resolved, arms unnamed: new Python against an old crate."""
+        policy = self._policy()
+        self._run(
+            policy,
+            [self._report([("alpha", 60, 0.5, None), ("beta", 40, 0.5, None)],
+                          root_priors=[0.2, 0.8])],
+        )
+        self.assertEqual(
+            policy.stats.to_dict()["search_override_unmeasured_causes"],
+            {"prior_arms_absent": 1},
+        )
+
+    def test_priors_that_disagree_with_the_authority_are_refused(self) -> None:
+        """Arms whose priors are not `root_priors`' multiset.
+
+        Defensive -- the crate writes both off one stat vector -- but a pairing
+        bug would file one arm's prior under another arm's name, and that is a
+        WRONG argmax rather than a missing one.
+        """
+        policy = self._policy()
+        self._run(
+            policy,
+            [self._report([("alpha", 60, 0.5, 0.5), ("beta", 40, 0.5, 0.5)],
+                          root_priors=[0.2, 0.8])],
+        )
+        self.assertEqual(
+            policy.stats.to_dict()["search_override_unmeasured_causes"],
+            {"prior_arms_misaligned": 1},
+        )
+
+    def test_a_partly_priced_decision_is_refused_not_approximated(self) -> None:
+        """Two worlds, one priced. A subset aggregate is a different quantity."""
+        policy = self._policy()
+        self._run(
+            policy,
+            [
+                self._report([("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+                             root_priors=[0.2, 0.8]),
+                self._report([("alpha", 60, 0.5, 0.5), ("beta", 40, 0.5, 0.5)],
+                             root_priors=None),
+            ],
+            worlds=[self._world("world-a"), self._world("world-b")],
+        )
+        self.assertEqual(
+            policy.stats.to_dict()["search_override_unmeasured_causes"],
+            {"priors_missing_in_some_worlds": 1},
+        )
+
+    def test_an_unmappable_model_arm_is_unmeasured_and_leaves_the_stop_counters_alone(
+        self,
+    ) -> None:
+        """The model's top arm names no legal request action.
+
+        And the counter that must NOT move: `unmapped_choices` /
+        `choices_unmapped_causes` are campaign stop-condition terms, so a probe
+        that ran on every searched decision and touched them would make both
+        unreadable.
+        """
+        policy = self._policy()
+        self._run(
+            policy,
+            [self._report(
+                [("alpha", 60, 0.5, 0.2), ("nosuchmove", 40, 0.5, 0.8)],
+                root_priors=[0.2, 0.8],
+            )],
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(
+            stats["search_override_unmeasured_causes"], {"model_choice_unmapped": 1}
+        )
+        self.assertEqual(stats["unmapped_choices"], {"nosuchmove": 1},
+                         "counted once, by _map_choices, not twice")
+        self.assertEqual(stats["choices_unmapped_causes"], {})
+
+    def test_the_denominator_identity_holds_across_a_mixed_run(self) -> None:
+        """`measured + unmeasured == searched_decisions`, which is what the
+        plan's denominator (`overrides / (searched - unmeasured)`) rests on."""
+        policy = self._policy()
+        # An override, an unmeasured, an agreement, an unmeasured. The arm priors
+        # and `root_priors` are moved TOGETHER: they are the same numbers in the
+        # crate, and a test that varied one alone would exercise the misalignment
+        # guard instead of the case it names.
+        for alpha_prior, beta_prior, priced in (
+            (0.2, 0.8, True), (0.5, 0.5, False), (0.8, 0.2, True), (0.5, 0.5, False),
+        ):
+            self._run(
+                policy,
+                [self._report(
+                    [("alpha", 60, 0.5, alpha_prior), ("beta", 40, 0.5, beta_prior)],
+                    root_priors=[alpha_prior, beta_prior] if priced else None,
+                )],
+            )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["searched_decisions"], 4)
+        self.assertEqual(
+            stats["override_measured_decisions"] + stats["search_override_unmeasured"],
+            stats["searched_decisions"],
+        )
+        self.assertEqual(stats["model_override_decisions"], 1)
+
+    def test_a_naming_difference_is_not_an_override(self) -> None:
+        """Two displays, one action index: not a change of move.
+
+        The engine and the request name the same action differently in three
+        places (typed Hidden Power vs plain `hiddenpower`, `MoveChoice::None` vs
+        `recharge`/`struggle`), which is what `_ChoiceVocabulary` translates. An
+        implementation comparing DISPLAYS reports this as an override. The two
+        Hidden Power arms are synthetic -- a real mon carries one -- so this pins
+        the translation rather than a reachable state.
+        """
+        policy = self._policy()
+        candidates = [
+            {"action_index": 0, "kind": "move", "legal": True, "move_id": "hiddenpower"},
+            {"action_index": 1, "kind": "move", "legal": True, "move_id": "beta"},
+        ]
+        context = SimpleNamespace(
+            observation=_FakeObservation(
+                (True, True, False, False, False, False, False, False, False),
+                candidates,
+            ),
+            public_materialization_state=SimpleNamespace(
+                replay=SimpleNamespace(turn_number=1)
+            ),
+            player_id="p1",
+            battle_id="naming",
+            decision_round_index=2,
+        )
+        self._run(
+            policy,
+            [self._report(
+                [("hiddenpowergrass70", 60, 0.5, 0.2),
+                 ("hiddenpowerice70", 40, 0.5, 0.8)],
+                root_priors=[0.2, 0.8],
+            )],
+            context=context,
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["override_measured_decisions"], 1)
+        self.assertEqual(stats["model_override_decisions"], 0,
+                         "both arms are action 0; nothing was overridden")
+
+    def test_a_tie_resolves_the_same_way_on_both_sides(self) -> None:
+        """Equal visits and equal priors: not an override, under any tie-break.
+
+        The arms are named so that an insertion-order rule and a name-order rule
+        disagree, which is how a tie-break mismatch between the two aggregates
+        would show up: as a floor under the override rate that nothing earned.
+        """
+        policy = self._policy()
+        candidates = [
+            {"action_index": 0, "kind": "move", "legal": True, "move_id": "alpha"},
+            {"action_index": 1, "kind": "move", "legal": True, "move_id": "zeta"},
+        ]
+        context = SimpleNamespace(
+            observation=_FakeObservation(
+                (True, True, False, False, False, False, False, False, False),
+                candidates,
+            ),
+            public_materialization_state=SimpleNamespace(
+                replay=SimpleNamespace(turn_number=1)
+            ),
+            player_id="p1",
+            battle_id="tie",
+            decision_round_index=1,
+        )
+        self._run(
+            policy,
+            [self._report(
+                [("alpha", 50, 0.5, 0.5), ("zeta", 50, 0.5, 0.5)],
+                root_priors=[0.5, 0.5],
+            )],
+            context=context,
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["override_measured_decisions"], 1)
+        self.assertEqual(stats["model_override_decisions"], 0)
+
+    # -- flag off --------------------------------------------------------------
+
+    def test_the_flag_off_records_nothing_and_calls_the_pre_flag_arity(self) -> None:
+        policy = self._policy(telemetry=False)
+        decision, native = self._run(
+            policy,
+            [self._report([("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+                          root_priors=[0.2, 0.8])],
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["searched_decisions"], 1)
+        for key in (
+            "override_measured_decisions",
+            "model_override_decisions",
+            "search_override_unmeasured",
+            "root_arm_gap_samples",
+            "opponent_top_arm_decisions",
+        ):
+            self.assertEqual(stats[key], 0, key)
+        self.assertEqual(stats["root_decision_rows"], [])
+        self.assertNotIn("override", decision.metadata["engine_mcts"])
+        # The 12-positional pre-flag call, byte for byte: nothing after
+        # `model_priors` is materialized, so a stale image is unaffected.
+        self.assertEqual(len(native.calls[0]), 12)
+
+    def test_the_flag_on_appends_exactly_one_positional_past_fpu(self) -> None:
+        policy = self._policy()
+        _decision, native = self._run(
+            policy,
+            [self._report([("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+                          root_priors=[0.2, 0.8])],
+        )
+        call = native.calls[0]
+        self.assertEqual(len(call), 17)
+        # The cascade must materialize every earlier slot at its DEFAULT, or the
+        # True lands in `fpu_reduction` -- which the crate accepts as a valid
+        # reduction and which changes selection.
+        self.assertEqual(call[12], 0, "early_stop_min_sims")
+        self.assertIs(call[13], True, "early_stop_side_one (p1 on side_one)")
+        self.assertIs(call[14], False, "use_opponent_priors")
+        self.assertIsNone(call[15], "fpu_reduction")
+        self.assertIs(call[16], True, "arm_priors")
+
+    def test_the_config_refuses_the_flag_where_it_cannot_be_measured(self) -> None:
+        with self.assertRaisesRegex(ValueError, "leaf_eval='model'"):
+            EngineMctsConfig(leaf_eval="hp_fraction_crate", override_telemetry=True)
+
+    # -- H2: the two top-arm gaps ---------------------------------------------
+
+    def test_the_q_and_visit_gaps_are_measured_over_the_top_two_arms(self) -> None:
+        policy = self._policy()
+        decision, _ = self._run(
+            policy,
+            [self._report(
+                [("alpha", 75, 0.62, 0.5), ("beta", 25, 0.55, 0.5)],
+                root_priors=[0.5, 0.5],
+            )],
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["root_arm_gap_samples"], 1)
+        self.assertAlmostEqual(stats["root_q_gap_mean"], 0.07, places=6)
+        self.assertAlmostEqual(stats["root_visit_gap_mean"], 0.5, places=6)
+        self.assertEqual(stats["root_q_gap_histogram"], {"0.07": 1})
+        self.assertEqual(stats["root_visit_gap_histogram"], {"0.50": 1})
+        block = decision.metadata["engine_mcts"]["override"]
+        self.assertAlmostEqual(block["root_q_gap"], 0.07, places=6)
+        row = stats["root_decision_rows"][0]
+        self.assertEqual([arm["move"] for arm in row["top_arms"]], ["alpha", "beta"])
+        self.assertAlmostEqual(row["top_arms"][0]["q"], 0.62, places=6)
+
+    def test_a_p2_decision_reports_q_in_the_acting_seats_frame(self) -> None:
+        """`finalize` accumulates the side-ONE-absolute expectation into BOTH stat
+        vectors, and `stats_to_json` prints it unreflected, so a p2 decision's
+        arms arrive in the opponent's frame. Pooling seats without the flip
+        averages a win probability against a loss probability."""
+        policy = self._policy()
+        context = self._context()
+        context.player_id = "p2"
+        world = (
+            SimpleNamespace(
+                party_species={"p1": ("rattata",), "p2": ("chansey",)},
+                slot_sides={"p2": "side_two"},
+            ),
+            SimpleNamespace(to_string=lambda: "world-a"),
+        )
+        report = self._report([], root_priors=[0.5, 0.5])
+        report["side_one"] = []
+        report["side_two"] = [
+            {"move": "alpha", "visits": 75, "q": 0.62, "prior": 0.5},
+            {"move": "beta", "visits": 25, "q": 0.55, "prior": 0.5},
+        ]
+        self._run(policy, [report], worlds=[world], context=context)
+        row = policy.stats.to_dict()["root_decision_rows"][0]
+        self.assertAlmostEqual(row["top_arms"][0]["q"], 1.0 - 0.62, places=6)
+        self.assertAlmostEqual(row["top_arms"][1]["q"], 1.0 - 0.55, places=6)
+        # The gap is flip-invariant, which is exactly why the row carries the
+        # values: the histogram alone cannot witness the frame.
+        self.assertAlmostEqual(
+            policy.stats.to_dict()["root_q_gap_mean"], 0.07, places=6
+        )
+
+    def test_a_single_armed_decision_contributes_no_gap(self) -> None:
+        policy = self._policy()
+        self._run(
+            policy,
+            [self._report([("alpha", 100, 0.5, 1.0)], root_priors=[1.0])],
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["root_arm_gap_samples"], 0)
+        self.assertNotIn("root_q_gap_mean", stats)
+        self.assertEqual(stats["override_measured_decisions"], 1, "still measurable")
+
+    # -- H4: the in-tree opponent's arm ---------------------------------------
+
+    def test_the_opponent_seats_top_arm_is_absorbed(self) -> None:
+        policy = self._policy()
+        decision, _ = self._run(
+            policy,
+            [self._report(
+                [("alpha", 60, 0.5, 0.8), ("beta", 40, 0.5, 0.2)],
+                root_priors=[0.8, 0.2],
+                opponent=[("opp-slow", 30, 0.5, None), ("opp-fast", 70, 0.5, None)],
+            )],
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["opponent_top_arm_decisions"], 1)
+        self.assertEqual(
+            decision.metadata["engine_mcts"]["override"]["opponent_top_arm"], "opp-fast"
+        )
+        self.assertEqual(stats["root_decision_rows"][0]["opponent_top_arm"], "opp-fast")
+        self.assertIsNone(stats["root_decision_rows"][0]["opponent_prior_arm"])
+        self.assertEqual(stats["opponent_prior_arm_decisions"], 0)
+
+    def test_the_opponents_model_prior_arm_needs_the_flag_and_a_non_uniform_row(
+        self,
+    ) -> None:
+        """Uniform opponent priors are REFUSED rather than argmaxed.
+
+        The crate exports no `root_opponent_priors`, so unlike the acting seat
+        there is no authority saying whether that seat was priced from the model.
+        A flat row is what a refused opponent seat leaves behind, and taking its
+        argmax would report a fabricated prediction for H4 to score.
+        """
+        uniform = [("opp-slow", 30, 0.5, 0.5), ("opp-fast", 70, 0.5, 0.5)]
+        priced = [("opp-slow", 30, 0.5, 0.9), ("opp-fast", 70, 0.5, 0.1)]
+        for opponent_priors, opponent, expected in (
+            (False, priced, None),
+            (True, uniform, None),
+            (True, priced, "opp-slow"),
+        ):
+            with self.subTest(opponent_priors=opponent_priors):
+                policy = self._policy(opponent_priors=opponent_priors)
+                self._run(
+                    policy,
+                    [self._report(
+                        [("alpha", 60, 0.5, 0.8), ("beta", 40, 0.5, 0.2)],
+                        root_priors=[0.8, 0.2],
+                        opponent=opponent,
+                    )],
+                )
+                stats = policy.stats.to_dict()
+                self.assertEqual(
+                    stats["root_decision_rows"][0]["opponent_prior_arm"], expected
+                )
+                self.assertEqual(
+                    stats["opponent_prior_arm_decisions"], 0 if expected is None else 1
+                )
+
+    # -- bounded stores --------------------------------------------------------
+
+    def test_both_per_decision_stores_are_bounded_and_count_their_overflow(self) -> None:
+        policy = self._policy()
+        reports = [self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)], root_priors=[0.2, 0.8]
+        ) for _ in range(3)]
+        with (
+            patch("pokezero.engine_search._OVERRIDE_DISAGREEMENT_ADDRESSES", 1),
+            patch("pokezero.engine_search._ROOT_DECISION_ROWS", 2),
+        ):
+            for report in reports:
+                self._run(policy, [report])
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["model_override_decisions"], 3, "the COUNT is complete")
+        self.assertEqual(len(stats["override_disagreements"]), 1)
+        self.assertEqual(stats["override_disagreement_addresses_dropped"], 2)
+        self.assertEqual(len(stats["root_decision_rows"]), 2)
+        self.assertEqual(stats["root_decision_rows_dropped"], 1)
+
+
 class WorldCacheKeyTest(unittest.TestCase):
     def test_the_seed_is_excluded(self) -> None:
         from pokezero.engine_search import world_cache_key

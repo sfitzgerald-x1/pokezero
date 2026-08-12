@@ -109,6 +109,17 @@ class DefaultsAreOffTest(unittest.TestCase):
 FOLD = object()
 
 
+#: The override-telemetry tests are the only ones here that cannot use the
+#: default evaluator: the config REFUSES that flag outside `leaf_eval='model'`,
+#: because the measurement needs root priors no other leaf evaluator computes and
+#: would otherwise report a silent zero.
+_MODEL_CONFIG = {
+    "leaf_eval": "model",
+    "model_path": "m.pt",
+    "checkpoint_path": "c.pt",
+    "tables_path": "t.json",
+}
+
 class NativeCallContractTest(unittest.TestCase):
     """The positional call the crate receives, captured without running search.
 
@@ -245,6 +256,39 @@ class NativeCallContractTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 EngineMctsConfig(fpu_reduction=bad)
 
+    def test_override_telemetry_alone_materializes_the_three_slots_it_sits_behind(
+        self,
+    ) -> None:
+        # `override_telemetry` is one slot past `fpu_reduction`, which is one past
+        # `use_opponent_priors`, which is two past the early-stop pair. The
+        # dangerous shift is one slot: `True` landing in `fpu_reduction` is
+        # ACCEPTED by the crate's validator (1.0 is in range) and changes
+        # selection, so a pure-telemetry flag would silently become a search
+        # change -- and the flag-off differential would still pass, because it
+        # never sets the flag.
+        args = self._captured_args(**_MODEL_CONFIG, override_telemetry=True)
+        self.assertEqual(len(args), 17)
+        self.assertEqual(args[12], 0, "early_stop_min_sims at its default")
+        self.assertIs(args[13], True, "early_stop_side_one for a side_one record")
+        self.assertIs(args[14], False, "the opponent flag must stay off")
+        self.assertIsNone(args[15], "fpu_reduction must be its own default, not True")
+        self.assertIs(args[16], True)
+
+    def test_override_telemetry_does_not_disturb_the_knobs_in_front_of_it(self) -> None:
+        # Every earlier slot keeps the value it has without the flag, so a cell
+        # measured with the telemetry on is the same search as the cell without.
+        with_flag = self._captured_args(
+            **_MODEL_CONFIG,
+            override_telemetry=True,
+            use_opponent_priors=True,
+            fpu_reduction=0.3,
+        )
+        without = self._captured_args(
+            **_MODEL_CONFIG, use_opponent_priors=True, fpu_reduction=0.3
+        )
+        self.assertEqual(with_flag[:16], without)
+        self.assertEqual(len(with_flag), 17)
+
     def test_flag_lands_in_the_slot_the_crate_declares(self) -> None:
         # Guards the positional assembly against a crate signature change.
         try:
@@ -260,14 +304,20 @@ class NativeCallContractTest(unittest.TestCase):
             inspect.signature(native.search_batched_multi_encoded).parameters
         )
         params = [p for p in params if p not in ("self", "/")]
-        self.assertEqual(params[-1], "fpu_reduction")
+        self.assertEqual(params[-1], "arm_priors")
         self.assertEqual(
-            params[-4:-1],
-            ["early_stop_min_sims", "early_stop_side_one", "use_opponent_priors"],
+            params[-5:-1],
+            [
+                "early_stop_min_sims",
+                "early_stop_side_one",
+                "use_opponent_priors",
+                "fpu_reduction",
+            ],
         )
         # Index check against the assembly above: 12 leading positionals.
         self.assertEqual(params.index("use_opponent_priors"), 14)
         self.assertEqual(params.index("fpu_reduction"), 15)
+        self.assertEqual(params.index("arm_priors"), 16)
 
 
 if __name__ == "__main__":

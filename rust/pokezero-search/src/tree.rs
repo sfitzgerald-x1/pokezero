@@ -948,6 +948,11 @@ pub(crate) fn multiply_search_with_eval<E: LeafEval>(
     })
 }
 
+/// `arm_priors` is threaded rather than read off `cfg`: it changes only what the
+/// report SAYS, and putting it in `MultiPlyConfig` would put a reporting knob in
+/// the struct whose fields are the search's semantics -- where a future
+/// `cfg`-derived cache key or equality check would treat two identical searches
+/// as different ones.
 pub(crate) fn multiply_report_json(
     outcome: &MultiPlyOutcome,
     iterations: usize,
@@ -955,6 +960,7 @@ pub(crate) fn multiply_report_json(
     seed: u64,
     evaluator_name: &str,
     extra_fields: &str,
+    arm_priors: bool,
 ) -> String {
     let root = &outcome.tree.decisions[0];
     let root_visits: u32 = root.s1_stats.iter().map(|s| s.visits).sum();
@@ -1004,8 +1010,8 @@ pub(crate) fn multiply_report_json(
         root_value,
         if extra_fields.is_empty() { "" } else { "," },
         extra_fields,
-        stats_to_json(&root.s1_stats),
-        stats_to_json(&root.s2_stats),
+        stats_to_json(&root.s1_stats, arm_priors),
+        stats_to_json(&root.s2_stats, arm_priors),
     )
 }
 
@@ -1085,6 +1091,9 @@ pub(crate) fn puct_search_multi(
         seed,
         "hp_fraction",
         "",
+        // Uniform by construction on this path -- there is no model to price the
+        // arms -- so the column would be a constant 1/n on every entry.
+        false,
     ))
 }
 
