@@ -12,7 +12,9 @@ the forcing.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
+import json
 import random
 import sys
 import tempfile
@@ -866,9 +868,314 @@ class ArtifactIdentityTests(unittest.TestCase):
         self.assertEqual(identity["checkpoint"]["path"], "/nonexistent/ckpt.pt")
 
     def test_unset_artifacts_are_omitted_rather_than_stamped_as_null(self) -> None:
+        """Helper-level contract only -- NOT a production guard.
+
+        ``main()`` makes all three of --model-path/--checkpoint/--tables required in run
+        mode, so a shard with an artifact unset is not reachable through the CLI
+        (dropping --checkpoint exits 1 before this code runs). This pins the helper's
+        behaviour for the report/merge paths, which read shards rather than args; do not
+        read it as evidence that an unstamped run is possible.
+        """
+
         from truth_differential_census import artifact_identity
 
         self.assertEqual(artifact_identity(self._args()), {})
+
+    def test_the_digest_covers_the_whole_file_not_a_prefix(self) -> None:
+        """M4: a prefix digest passes tiny fixtures and is worthless on a 40 MB .pt.
+
+        Every other fixture here is 2-22 bytes, so ``read(1024)`` -- or any chunked read
+        that forgets to loop -- would satisfy them. This one is larger than any plausible
+        chunk size AND differs only in its final byte, so a digest that stops early
+        cannot tell the two apart.
+        """
+
+        from truth_differential_census import artifact_identity
+
+        size = 3 * 1024 * 1024
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "big.pt"
+            path.write_bytes(b"\x00" * size + b"A")
+            first = artifact_identity(self._args(checkpoint=str(path)))
+            path.write_bytes(b"\x00" * size + b"B")
+            second = artifact_identity(self._args(checkpoint=str(path)))
+
+        self.assertEqual(first["checkpoint"]["bytes"], size + 1)
+        self.assertNotEqual(
+            first["checkpoint"]["sha256"],
+            second["checkpoint"]["sha256"],
+            "the digest ignored the tail of the file -- it is a prefix, not a whole-file hash",
+        )
+
+
+@dataclasses.dataclass
+class _StubConfig:
+    """Stands in for the search config dataclasses that ``dataclasses.asdict`` walks."""
+
+    leaf_eval: str = "model"
+    checkpoint_path: str | None = None
+
+
+class _StubProbe:
+    def __init__(self, errors: list[str] | None = None) -> None:
+        self.errors = errors or []
+
+
+class _StubStats:
+    def to_dict(self) -> dict[str, Any]:
+        return {"worlds_constructed": 1, "worlds_searched": 1}
+
+
+class _StubPolicy:
+    def __init__(self) -> None:
+        self.stats = _StubStats()
+
+
+class ShardPayloadEmissionTests(unittest.TestCase):
+    """The artifact stamp has to reach the PAYLOAD, not just exist as a helper.
+
+    Deleting the one line that put ``artifact_identity`` in the shard used to pass the
+    entire suite, because the tests only exercised the pure helper. That is provenance
+    that exists only in a unit test.
+    """
+
+    def _payload(self, artifacts: dict[str, Any]) -> dict[str, Any]:
+        from truth_differential_census import build_shard_payload
+
+        return build_shard_payload(
+            args=argparse.Namespace(tag="t", checkpoint="c", model_path="m", tables="b"),
+            artifacts=artifacts,
+            driver_config=_StubConfig(leaf_eval="hp_fraction_crate"),
+            truth_config=_StubConfig(leaf_eval="model", checkpoint_path="c"),
+            witness={"pokezero_search_model_feature": True},
+            child_witness={"pokezero_search_model_feature": True},
+            mismatches={},
+            plan={"source_hash": "abc123"},
+            wall_seconds=1.5,
+            per_game=[],
+            probes={"p1": _StubProbe()},
+            driver_policies={"p1": _StubPolicy()},
+            truth_policies={"p1": _StubPolicy()},
+            records=[],
+            aggregate=lambda records: {"decisions_seen": len(records)},
+        )
+
+    def test_the_written_payload_carries_the_artifact_identity_block(self) -> None:
+        artifacts = {"checkpoint": {"path": "c", "sha256": "deadbeef", "bytes": 3}}
+        payload = self._payload(artifacts)
+
+        # Asserted on the SERIALISED form, the way a consumer reads a shard, so that
+        # deleting `"artifact_identity": artifacts` from the payload fails here.
+        self.assertIn("artifact_identity", payload)
+        self.assertEqual(payload["artifact_identity"], artifacts)
+        round_tripped = json.loads(json.dumps(payload, sort_keys=True, default=str))
+        self.assertEqual(round_tripped["artifact_identity"]["checkpoint"]["sha256"], "deadbeef")
+
+    def test_the_payload_still_carries_the_pre_existing_witness_keys(self) -> None:
+        """The extraction of build_shard_payload must not have dropped anything."""
+
+        payload = self._payload({})
+        for key in (
+            "schema",
+            "config",
+            "driver_config",
+            "truth_config",
+            "identity_witness",
+            "identity_witness_child_neutral_cwd",
+            "identity_witness_mismatches",
+            "artifact_identity",
+            "plan_source_hash",
+            "wall_seconds",
+            "per_game",
+            "instrument_errors",
+            "instrument_error_count",
+            "driver_stats",
+            "truth_stats",
+            "summary",
+            "records",
+        ):
+            self.assertIn(key, payload)
+        self.assertEqual(payload["schema"], "truth-differential-census-shard/v1")
+        self.assertEqual(payload["plan_source_hash"], "abc123")
+
+
+class MergedArtifactIdentityTests(unittest.TestCase):
+    """A per-shard stamp that the merge drops re-creates the asymmetry one layer up.
+
+    ``--mode report`` is what gets published, so merging shards from two different
+    checkpoints must not be silent -- that is precisely the co-ranking of two baselines
+    the stamp exists to prevent.
+    """
+
+    def _shard(self, tmp: Path, name: str, **kwargs: object) -> Path:
+        payload: dict[str, Any] = {
+            "schema": "truth-differential-census-shard/v1",
+            "records": [],
+            "per_game": [{"ok": True}],
+        }
+        payload.update(kwargs)
+        path = tmp / name
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def _stamped(self, digest: str) -> dict[str, Any]:
+        return {
+            "checkpoint": {"path": f"/art/{digest}.pt", "sha256": digest, "bytes": 4},
+            "model_path": {"path": "/art/model_ts.pt", "sha256": "m" * 8, "bytes": 4},
+            "tables": {"path": "/art/tables.json", "sha256": "t" * 8, "bytes": 4},
+        }
+
+    def test_merge_propagates_the_stamp_onto_every_shard(self) -> None:
+        from truth_differential_census import merge_shards
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            paths = [
+                self._shard(tmp, "a.json", artifact_identity=self._stamped("aaaa1111")),
+                self._shard(tmp, "b.json", artifact_identity=self._stamped("aaaa1111")),
+            ]
+            summary = merge_shards(paths)
+
+        self.assertIn("artifact_identity", json.dumps(summary))
+        for shard in summary["shards"]:
+            self.assertEqual(shard["artifact_identity"]["checkpoint"]["sha256"], "aaaa1111")
+        self.assertEqual(summary["artifact_identity_mismatches"], {})
+
+    def test_merging_two_different_checkpoints_is_flagged(self) -> None:
+        from truth_differential_census import merge_shards
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            paths = [
+                self._shard(tmp, "v22.json", artifact_identity=self._stamped("aaaa1111")),
+                self._shard(tmp, "v3.json", artifact_identity=self._stamped("bbbb2222")),
+            ]
+            summary = merge_shards(paths)
+
+        mismatches = summary["artifact_identity_mismatches"]
+        self.assertEqual(mismatches["checkpoint"], ["aaaa1111", "bbbb2222"])
+        # The artifacts that DO agree must not be reported, same as the witness pattern.
+        self.assertNotIn("model_path", mismatches)
+        self.assertNotIn("tables", mismatches)
+
+    def test_mixing_pre_stamp_and_stamped_shards_is_flagged_not_silent(self) -> None:
+        """The salvaged v3 shards are pre-stamp; merging them with a v2.2 shard is the
+        live risk, and a path is not an identity, so it may not read as agreement."""
+
+        from truth_differential_census import merge_shards
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            paths = [
+                self._shard(tmp, "new.json", artifact_identity=self._stamped("aaaa1111")),
+                self._shard(
+                    tmp,
+                    "old.json",
+                    truth_config={
+                        "checkpoint_path": "/gone/v3hist-k64-iteration-2657.pt",
+                        "model_path": "/gone/model_ts.pt",
+                        "tables_path": "/gone/encoder_tables.json",
+                    },
+                ),
+            ]
+            summary = merge_shards(paths)
+
+        mismatches = summary["artifact_identity_mismatches"]
+        self.assertIn("checkpoint", mismatches)
+        self.assertIn(
+            "unstamped:/gone/v3hist-k64-iteration-2657.pt", mismatches["checkpoint"]
+        )
+        old = next(s for s in summary["shards"] if s["path"].endswith("old.json"))
+        self.assertTrue(old["artifact_identity"]["checkpoint"]["unstamped"])
+        self.assertIsNone(old["artifact_identity"]["checkpoint"]["sha256"])
+
+    def test_a_disagreement_in_any_one_artifact_is_caught(self) -> None:
+        """Each of the three artifacts must be compared, not just the checkpoint.
+
+        Dropping `tables` (or `model_path`) from the comparison tuple survived a battery
+        whose fixtures only ever varied the checkpoint -- a tables swap changes the
+        encoder layout the model reads, so it is a baseline change too.
+        """
+
+        from truth_differential_census import merge_shards
+
+        for key in ("checkpoint", "model_path", "tables"):
+            with self.subTest(artifact=key):
+                base = self._stamped("aaaa1111")
+                other = self._stamped("aaaa1111")
+                other[key] = dict(other[key], sha256="ffff9999")
+                with tempfile.TemporaryDirectory() as raw:
+                    tmp = Path(raw)
+                    summary = merge_shards(
+                        [
+                            self._shard(tmp, "a.json", artifact_identity=base),
+                            self._shard(tmp, "b.json", artifact_identity=other),
+                        ]
+                    )
+                self.assertEqual(
+                    sorted(summary["artifact_identity_mismatches"]),
+                    [key],
+                    f"a {key}-only disagreement was not reported",
+                )
+
+    def test_a_globbed_in_report_summary_does_not_fake_a_mismatch(self) -> None:
+        """Regression: `--shards <dir>/*.json` globs a previous report's summary.json.
+
+        The salvaged censusB directory is exactly this shape -- 16 shards plus one
+        summary.json -- and counting the summary's missing artifact set as a third
+        distinct value raised the cross-baseline alarm on a uniform census.
+        """
+
+        from truth_differential_census import merge_shards
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            shards = [
+                self._shard(tmp, "shard-0.json", artifact_identity=self._stamped("aaaa1111")),
+                self._shard(tmp, "shard-1.json", artifact_identity=self._stamped("aaaa1111")),
+            ]
+            summary_path = tmp / "summary.json"
+            summary_path.write_text(
+                json.dumps({"shards": [], "truth_rejected_decisions": 0}), encoding="utf-8"
+            )
+            summary = merge_shards([*shards, summary_path])
+
+        self.assertEqual(
+            summary["artifact_identity_mismatches"],
+            {},
+            "a report summary globbed in beside the shards must not read as a second baseline",
+        )
+        # ...but it must not be invisible either.
+        self.assertEqual(summary["non_shard_inputs"], [str(summary_path)])
+
+    def test_the_queue_says_when_a_number_spans_two_baselines(self) -> None:
+        from truth_differential_census import render_queue
+
+        mixed = render_queue(
+            {
+                "truth_probed_decisions": 10,
+                "truth_rejection_rate": 0.0,
+                "shards": [{"path": "a.json", "artifact_identity": {}}],
+                "artifact_identity_mismatches": {"checkpoint": ["aaaa1111", "bbbb2222"]},
+            },
+            commands=["cmd"],
+            title="T",
+        )
+        clean = render_queue(
+            {
+                "truth_probed_decisions": 10,
+                "truth_rejection_rate": 0.0,
+                "shards": [{"path": "a.json", "artifact_identity": {}}],
+                "artifact_identity_mismatches": {},
+            },
+            commands=["cmd"],
+            title="T",
+        )
+
+        self.assertIn("DO NOT SHARE ONE ARTIFACT SET", mixed)
+        self.assertIn("aaaa1111", mixed)
+        self.assertIn("bbbb2222", mixed)
+        self.assertNotIn("DO NOT SHARE ONE ARTIFACT SET", clean)
 
 
 class WitnessCompletenessTests(unittest.TestCase):
