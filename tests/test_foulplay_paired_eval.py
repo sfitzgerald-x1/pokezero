@@ -50,6 +50,8 @@ def args(**overrides) -> argparse.Namespace:
         engine_oracle_belief=False,
         opponent_journal=None,
         engine_early_stop=False,
+        engine_depth_min=None,
+        engine_worlds_min=None,
         engine_early_stop_min_sims=None,
         engine_model_path=None,
         engine_tables_path=None,
@@ -302,6 +304,67 @@ class SelectionKnobForwardingTest(unittest.TestCase):
         ])
         self.assertEqual(parsed.engine_fpu_reduction, 0.2)
         self.assertEqual(parsed.engine_c_puct, 0.8)
+
+
+class DynamicRangeIdentityTest(unittest.TestCase):
+    """Dynamic depth/world RANGES, which the owner specified as "min N max M".
+
+    `--depth` and `--worlds` remain the maxima; the floors turn each axis dynamic.
+    The id renders the range, so a cell reads as the budget policy it is.
+    """
+
+    def test_the_fixed_id_is_unchanged_when_no_floor_is_set(self) -> None:
+        # The compatibility claim, as a literal: every banked fixed-budget cell
+        # must keep byte-for-byte the id it already has.
+        self.assertEqual(_DRIVER.config_id_for(args()), "d4-s1024-b64-w4@ckpt")
+
+    def test_a_depth_range_renders_as_a_range(self) -> None:
+        # "depth 3 min 6 max, everything else the same"
+        self.assertEqual(
+            _DRIVER.config_id_for(args(depth=6, engine_depth_min=3)),
+            "d3-6-s1024-b64-w4@ckpt",
+        )
+
+    def test_a_worlds_range_renders_as_a_range(self) -> None:
+        # "worlds 2 min 16 max, depth 2 min 6 max"
+        self.assertEqual(
+            _DRIVER.config_id_for(
+                args(depth=6, engine_depth_min=2, worlds=16, engine_worlds_min=2)),
+            "d2-6-s1024-b64-w2-16@ckpt",
+        )
+
+    def test_two_ranges_sharing_a_cap_do_not_pool(self) -> None:
+        # d3-6 and d5-6 are different budget policies with the same maximum. If
+        # the id ignored the floor they would merge and each would be reported as
+        # the other's control.
+        self.assertNotEqual(
+            _DRIVER.config_id_for(args(depth=6, engine_depth_min=3)),
+            _DRIVER.config_id_for(args(depth=6, engine_depth_min=5)),
+        )
+
+    def test_a_floor_equal_to_the_cap_pools_with_the_fixed_cell(self) -> None:
+        # min == max IS the fixed budget, so it must land on the fixed id rather
+        # than acquire a cell of its own with no control behind it.
+        self.assertEqual(
+            _DRIVER.config_id_for(args(depth=4, engine_depth_min=4)),
+            _DRIVER.config_id_for(args()),
+        )
+
+    def test_both_floors_reach_the_child(self) -> None:
+        argv = _DRIVER.bridge_argv(
+            args(depth=6, engine_depth_min=3, worlds=16, engine_worlds_min=2), seat="p1")
+        self.assertEqual(argv[argv.index("--engine-depth-min") + 1], "3")
+        self.assertEqual(argv[argv.index("--engine-worlds-min") + 1], "2")
+
+    def test_unset_floors_leave_the_child_argv_unchanged(self) -> None:
+        argv = _DRIVER.bridge_argv(args(), seat="p1")
+        self.assertNotIn("--engine-depth-min", argv)
+        self.assertNotIn("--engine-worlds-min", argv)
+
+    def test_the_report_builder_stays_in_lockstep(self) -> None:
+        report = (REPO_ROOT / "scripts" / "foulplay_power_report.py").read_text()
+        self.assertIn('depth_min=cell.get("depth_min")', report)
+        self.assertIn('worlds_min=cell.get("worlds_min")', report)
 
 
 class DynamicBudgetPassthroughTest(unittest.TestCase):

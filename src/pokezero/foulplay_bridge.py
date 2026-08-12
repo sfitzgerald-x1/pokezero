@@ -562,6 +562,15 @@ class ControlledFoulPlayConfig:
     # `early_stop_accepted_decisions`, never `early_stop_triggered_worlds`: a stop
     # whose cross-world aggregate is not lock-clean is REPLAYED at full budget
     # (fail-open), and a replayed stop saves nothing.
+    # DYNAMIC RANGES (docs/dynamic-search-budget-plan-20260812.md). `engine_depth`
+    # and `engine_worlds` stay the MAXIMA; these are the floors, and setting either
+    # turns that axis dynamic -- the decision is searched at the floor and escalated
+    # toward the cap only while its aggregate choice is still ambiguous.
+    #
+    # "depth 3 min 6 max" is engine_depth_min=3 with engine_depth=6.
+    # "worlds 2 min 16 max" is engine_worlds_min=2 with engine_worlds=16.
+    engine_depth_min: int | None = None
+    engine_worlds_min: int | None = None
     engine_early_stop: bool = False
     #: Floor before the lock is consulted at all. `None` means "the crate/config
     #: default" (64) and is materialized only when early stop is on, so an unset
@@ -650,6 +659,23 @@ class ControlledFoulPlayConfig:
                 f"(got {self.policy_mode!r}); it injects through "
                 "EngineMctsPolicy's fixed_override hook, which no other policy has."
             )
+        for _name, _floor, _cap, _capname in (
+            ("engine_depth_min", self.engine_depth_min, self.engine_depth, "engine_depth"),
+            ("engine_worlds_min", self.engine_worlds_min, self.engine_worlds, "engine_worlds"),
+        ):
+            if _floor is None:
+                continue
+            if self.policy_mode != "engine-mcts":
+                # Refused, not ignored: the ladder lives in the native search, so
+                # elsewhere the cell would claim a dynamic budget it never ran.
+                raise ValueError(
+                    f"{_name} requires policy_mode='engine-mcts' (got {self.policy_mode!r})."
+                )
+            if not 0 < _floor <= _cap:
+                raise ValueError(
+                    f"{_name} must be in 1..={_capname} "
+                    f"(got {_floor} with {_capname}={_cap})."
+                )
         if self.engine_early_stop and self.policy_mode != "engine-mcts":
             # Refused rather than ignored, same reasoning as the oracle arm: the
             # stop rule lives in the native search, so under 'raw' or 'root-puct'
@@ -1654,6 +1680,8 @@ class ControlledFoulPlayBenchmarkResult:
                 # rule of this campaign.
                 "oracle_belief": self.config.engine_oracle_belief,
                 "early_stop": self.config.engine_early_stop,
+                "depth_min": self.config.engine_depth_min,
+                "worlds_min": self.config.engine_worlds_min,
                 "early_stop_min_sims": (
                     self.config.engine_early_stop_min_sims
                     if self.config.engine_early_stop
@@ -3449,6 +3477,8 @@ def _build_policy(
                 # feature is on, so the dataclass default (64) stands for an
                 # unset cell and the config validator sees a coherent pair.
                 early_stop=config.engine_early_stop,
+                depth_min=config.engine_depth_min,
+                worlds_min=config.engine_worlds_min,
                 **(
                     {"early_stop_min_sims": config.engine_early_stop_min_sims}
                     if config.engine_early_stop
@@ -5097,6 +5127,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
                              "injected through EngineMctsPolicy's fixed_override hook. "
                              "engine-mcts only. Fails the game rather than falling back to a "
                              "sampled world.")
+    parser.add_argument("--engine-depth-min", type=int, default=None,
+                        help="DYNAMIC DEPTH floor. --engine-depth stays the MAX; with this "
+                             "set the decision is searched at this depth and deepened one "
+                             "ply at a time only while its aggregate choice is ambiguous. "
+                             "'depth 3 min 6 max' is --engine-depth-min 3 --engine-depth 6.")
+    parser.add_argument("--engine-worlds-min", type=int, default=None,
+                        help="DYNAMIC WORLDS floor. --engine-worlds stays the MAX; with this "
+                             "set the decision starts at this many belief worlds and doubles "
+                             "toward the cap while still ambiguous. Walked BEFORE depth, "
+                             "because adding a world does not invalidate the worlds already "
+                             "searched and raising depth does.")
     parser.add_argument("--engine-early-stop", action="store_true",
                         help="DYNAMIC per-decision budget "
                              "(docs/dynamic-search-budget-plan-20260812.md). A world "
@@ -5442,6 +5483,8 @@ def _config_from_args(
         engine_fpu_reduction=getattr(args, "engine_fpu_reduction", None),
         engine_override_telemetry=getattr(args, "engine_override_telemetry", False),
         engine_early_stop=getattr(args, "engine_early_stop", False),
+        engine_depth_min=getattr(args, "engine_depth_min", None),
+        engine_worlds_min=getattr(args, "engine_worlds_min", None),
         engine_early_stop_min_sims=getattr(args, "engine_early_stop_min_sims", None),
         engine_oracle_belief=getattr(args, "engine_oracle_belief", False),
         device=args.device,

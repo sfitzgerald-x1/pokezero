@@ -348,6 +348,8 @@ def main(argv=None) -> int:
                 # it has already happened once, on the checkpoint tag.
                 early_stop=bool(cell.get("early_stop")),
                 early_stop_min_sims=cell.get("early_stop_min_sims"),
+                depth_min=cell.get("depth_min"),
+                worlds_min=cell.get("worlds_min"),
             )
 
         for cell in campaign.get("cells", []):

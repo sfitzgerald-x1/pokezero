@@ -416,6 +416,18 @@ class EngineMctsConfig:
     # visit argmax. Multi-world aggregation applies a second safety bound.
     early_stop: bool = False
     early_stop_min_sims: int = 64
+    # DYNAMIC BUDGET LADDER (docs/dynamic-search-budget-plan-20260812.md).
+    #
+    # `search_depth` and `worlds` remain the MAXIMA, unchanged in meaning. These
+    # are the floors, and setting either turns that axis dynamic: the decision is
+    # searched at the floor and escalated toward the cap only while its aggregate
+    # choice is still ambiguous. Both unset is today's fixed budget exactly -- one
+    # rung, one search per world, byte-identical positionals.
+    #
+    # "depth 3 min 6 max" is depth_min=3 with search_depth=6; "worlds 2 min 16
+    # max" is worlds_min=2 with worlds=16.
+    depth_min: int | None = None
+    worlds_min: int | None = None
     # Debug cross-check: per decision, batch-refold the whole public log
     # (production's per-observe path, turn_merged.extract_transition_products)
     # and compare its surfaces against the live incremental fold's products.
@@ -453,8 +465,25 @@ class EngineMctsConfig:
                 raise ValueError(
                     "early_stop_min_sims must be in 1..=search_sims when early_stop is enabled."
                 )
+            if self.depth_min is not None and not 0 < self.depth_min <= self.search_depth:
+                raise ValueError(
+                    "depth_min must be in 1..=search_depth when set "
+                    f"(got {self.depth_min} with search_depth={self.search_depth})."
+                )
+            if self.worlds_min is not None and not 0 < self.worlds_min <= self.worlds:
+                raise ValueError(
+                    "worlds_min must be in 1..=worlds when set "
+                    f"(got {self.worlds_min} with worlds={self.worlds})."
+                )
         elif self.early_stop:
             raise ValueError("early_stop is supported only with leaf_eval='model'.")
+        elif self.depth_min is not None or self.worlds_min is not None:
+            # Same standing as early_stop: the ladder re-invokes the native model
+            # search, so outside leaf_eval='model' it would do nothing and the
+            # cell would claim a dynamic budget it never had.
+            raise ValueError(
+                "depth_min/worlds_min are supported only with leaf_eval='model'."
+            )
         if self.override_telemetry and self.leaf_eval != "model":
             # Refused rather than silently zero. The measurement needs the
             # model's root priors, which only the model path computes, so on any
@@ -960,6 +989,14 @@ class EngineMctsStats:
     early_stop_accepted_decisions: int = 0
     early_stop_full_budget_replays: int = 0
     early_stop_sims_saved: int = 0
+    # Dynamic budget ladder. `rungs_run` counts SEARCH PASSES, so it exceeds
+    # `decisions` whenever the ladder escalates -- that is the cost, made visible
+    # rather than hidden. `settled_early` is the applied counter: decisions the
+    # ladder finished below its cap.
+    ladder_rungs_run: int = 0
+    ladder_escalations: int = 0
+    ladder_settled_early: int = 0
+    ladder_decisions: int = 0
     fold_advanced_lines: int = 0
     fold_cross_checks: int = 0
     fold_cross_check_failures: int = 0
@@ -1173,6 +1210,10 @@ class EngineMctsStats:
             "early_stop_accepted_decisions": self.early_stop_accepted_decisions,
             "early_stop_full_budget_replays": self.early_stop_full_budget_replays,
             "early_stop_sims_saved": self.early_stop_sims_saved,
+            "ladder_rungs_run": self.ladder_rungs_run,
+            "ladder_escalations": self.ladder_escalations,
+            "ladder_settled_early": self.ladder_settled_early,
+            "ladder_decisions": self.ladder_decisions,
             "fold_advanced_lines": self.fold_advanced_lines,
             "fold_cross_checks": self.fold_cross_checks,
             "fold_cross_check_failures": self.fold_cross_check_failures,
@@ -1270,6 +1311,7 @@ def native_search_args(
     rust_fold,
     early_stop_min_sims: int,
     sims: int | None = None,
+    depth: int | None = None,
 ) -> list:
     """The positional argument list for `search_batched_multi_encoded`.
 
@@ -1303,6 +1345,12 @@ def native_search_args(
       telemetry flag into a search change. The widest condition, therefore, and
       first.
 
+    `depth` overrides `config.search_depth` for ONE call: the dynamic budget
+    ladder searches a decision at `depth_min` first and escalates toward the cap,
+    so one decision issues several calls differing only in this positional.
+    `None` means "use the configured cap", which keeps the list byte-identical
+    for every fixed-budget caller.
+
     `sims` overrides `config.search_sims` for ONE call: #1009 concentrates
     duplicate belief worlds into a single deeper search, so a collapsed record
     is searched at multiplicity x the per-world budget. `None` means "use the
@@ -1316,7 +1364,7 @@ def native_search_args(
         root_inputs,
         record["ctx_json"],
         rust_fold,
-        config.search_depth,
+        config.search_depth if depth is None else depth,
         config.c_puct,
         record["seed"],
         config.deep_ko_split,
@@ -1770,6 +1818,12 @@ class EngineMctsPolicy:
         # Test/scenario hook: bypass belief sampling and use this override as
         # every world (custom-game sweeps where the catalog cannot sample).
         self._fixed_override = fixed_override
+        # Ladder scratch state, owned by `_search_ladder` and read by
+        # `_search_model`. Instance attributes rather than parameters so
+        # `_search_model`'s signature -- which several tests and the fallback
+        # taxonomy key on -- does not move.
+        self._ladder_depth_override: int | None = None
+        self._ladder_locked = False
         # Measurement hook (fallback burndown plan 4 §3, direction 2): called
         # once per SUCCESSFULLY CONSTRUCTED world with the exact
         # `(context, EngineWorld, poke_engine.State)` triple search is about to
@@ -1996,7 +2050,7 @@ class EngineMctsPolicy:
         self.stats.worlds_constructed += len(worlds)
 
         if self._config.leaf_eval == "model":
-            return self._search_model(context, worlds, live_fold, rng)
+            return self._search_ladder(context, worlds, live_fold, rng)
         if self._config.leaf_eval == "hp_fraction_crate":
             return self._search_hp_fraction_crate(context, worlds, rng)
 
@@ -2699,6 +2753,91 @@ class EngineMctsPolicy:
         }
         self._absorb_lossy_subcases({"lossy_subcases": counts})
 
+    def _budget_ladder(self, available_worlds: int) -> list[tuple[int, int]]:
+        """Escalation rungs as (worlds, depth), cheapest first.
+
+        Both floors unset yields ONE rung at the configured caps, so the
+        fixed-budget path is unchanged.
+
+        Worlds are walked before depth, and by doubling. Both choices are about
+        cost: a worlds rung buys independent belief samples, while a depth rung
+        re-searches from scratch (a depth-3 tree is not a prefix of a depth-6
+        one), so the cheap axis is exhausted first; and doubling turns a 2..16
+        range into four rungs instead of fifteen. Depth then advances one ply at a
+        time, because each ply is a full re-search and overshooting is the
+        expensive mistake.
+        """
+        cfg = self._config
+        depth_cap = int(cfg.search_depth)
+        worlds_cap = max(1, min(int(cfg.worlds), available_worlds))
+        depth_floor = (
+            depth_cap if cfg.depth_min is None else max(1, min(int(cfg.depth_min), depth_cap))
+        )
+        worlds_floor = (
+            worlds_cap if cfg.worlds_min is None else max(1, min(int(cfg.worlds_min), worlds_cap))
+        )
+        rungs: list[tuple[int, int]] = []
+        w = worlds_floor
+        while True:
+            rungs.append((w, depth_floor))
+            if w >= worlds_cap:
+                break
+            w = min(worlds_cap, w * 2)
+        for d in range(depth_floor + 1, depth_cap + 1):
+            rungs.append((worlds_cap, d))
+        return rungs
+
+    def _search_ladder(
+        self,
+        context: PolicyContext,
+        worlds: list[tuple[EngineWorld, Any]],
+        live_fold: Any,
+        rng: random.Random,
+    ) -> PolicyDecision:
+        """Run `_search_model` up the budget ladder, stopping once settled.
+
+        A thin wrapper on purpose. `_search_model` is long, heavily reviewed and
+        carries the fallback taxonomy; escalation is expressed by CALLING it
+        again with a smaller world prefix and a depth override rather than by
+        restructuring its loops, so every failure shape it already handles keeps
+        handling itself.
+
+        The cost this pays for that safety, stated rather than buried: a worlds
+        rung re-searches the worlds it already searched, because the reuse would
+        have to live inside `_search_model`. So the ladder's saving comes from
+        stopping BELOW the cap, not from incremental reuse, and
+        `ladder_rungs_run` is the honest cost denominator.
+
+        "Settled" is the same cross-world lock the early-stop path uses, so the
+        word means one thing in this file: the aggregate visit leader is
+        unambiguous, and escalating cannot change the mapped action.
+        """
+        ladder = self._budget_ladder(len(worlds))
+        self.stats.ladder_decisions += 1
+        decision: Optional[PolicyDecision] = None
+        for index, (stage_worlds, stage_depth) in enumerate(ladder):
+            self._ladder_depth_override = stage_depth
+            self._ladder_locked = False
+            try:
+                decision = self._search_model(
+                    context, worlds[:stage_worlds], live_fold, rng
+                )
+            finally:
+                self._ladder_depth_override = None
+            self.stats.ladder_rungs_run += 1
+            if index + 1 >= len(ladder):
+                break
+            # A fallback is not an unsettled decision -- escalating a decision
+            # that failed for a taxonomy reason would just fail again, louder.
+            if decision is None or decision.policy_id != self.policy_id:
+                break
+            if getattr(self, "_ladder_locked", False):
+                self.stats.ladder_settled_early += 1
+                break
+            self.stats.ladder_escalations += 1
+        assert decision is not None  # a ladder always has at least one rung
+        return decision
+
     def _search_model(
         self,
         context: PolicyContext,
@@ -2745,6 +2884,7 @@ class EngineMctsPolicy:
             early_stop_min_sims: int,
             sims: int | None = None,
             weight: int = 1,
+            depth: int | None = None,
         ) -> Optional[dict]:
             try:
                 search_args = native_search_args(
@@ -2755,6 +2895,7 @@ class EngineMctsPolicy:
                     rust_fold=rust_fold,
                     early_stop_min_sims=early_stop_min_sims,
                     sims=sims,
+                    depth=depth,
                 )
                 report = json.loads(
                     native.search_batched_multi_encoded(*search_args)
@@ -2932,7 +3073,13 @@ class EngineMctsPolicy:
                 # The whole point: N draws of one completion buy N x the sims on
                 # ONE tree, not N cold restarts. Total compute is unchanged.
                 sims = config.search_sims * multiplicity
-            report = run_world(lead, stop_floor, sims, multiplicity)
+            report = run_world(
+                lead, stop_floor, sims, multiplicity,
+                # getattr, not attribute access: the policy is constructed by
+                # several paths in this codebase and its tests, and a ladder that
+                # is not running must not require its scratch state to exist.
+                depth=getattr(self, "_ladder_depth_override", None),
+            )
             if report is None:
                 continue
             # Both counters move ONLY on a search that returned a report, and
@@ -3024,6 +3171,13 @@ class EngineMctsPolicy:
                     final_runs.append(record)
                 world_runs = final_runs
                 self.stats.early_stop_full_budget_replays += full_budget_replays
+        # The ladder's stop signal. Computed for EVERY decision on this path, not
+        # only when a world stopped early, because the ladder needs it whether or
+        # not early stop is on -- and computed with the SAME helper the early-stop
+        # acceptance uses, so "settled" means one thing in this file.
+        self._ladder_locked = bool(world_runs) and _locked_aggregate_choice(
+            [(record["side_key"], record["report"]) for record in world_runs]
+        ) is not None
         self.stats.search_wall_seconds += time.perf_counter() - search_started
 
         if replay_failed:

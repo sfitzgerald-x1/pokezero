@@ -129,6 +129,8 @@ def search_config_id(
     oracle_belief: bool = False,
     early_stop: bool = False,
     early_stop_min_sims: int | None = None,
+    depth_min: int | None = None,
+    worlds_min: int | None = None,
 ) -> str:
     """The search-arm cell identity, over primitives rather than a Namespace.
 
@@ -138,7 +140,12 @@ def search_config_id(
     reports true, and the non-starvation rule silently never fires. That already
     happened once on the checkpoint tag.
     """
-    base = f"d{depth}-s{sims}-b{batch}-w{worlds}"
+    # A dynamic axis renders as its RANGE, so the id reads as the budget policy
+    # it is: d3-6 is "min 3, max 6", d6 is the fixed cap. Two ranges with the same
+    # cap are different searches and must not pool.
+    depth_label = f"{depth}" if depth_min is None or int(depth_min) >= int(depth) else f"{int(depth_min)}-{depth}"
+    worlds_label = f"{worlds}" if worlds_min is None or int(worlds_min) >= int(worlds) else f"{int(worlds_min)}-{worlds}"
+    base = f"d{depth_label}-s{sims}-b{batch}-w{worlds_label}"
     # Each of these changes search SEMANTICS, so each is part of the cell
     # identity: two cells differing only by one of them must not merge, or an
     # experimental arm is pooled into its own control.
@@ -227,6 +234,8 @@ def config_id_for(args: argparse.Namespace) -> str:
         oracle_belief=args.engine_oracle_belief,
         early_stop=args.engine_early_stop,
         early_stop_min_sims=args.engine_early_stop_min_sims,
+        depth_min=args.engine_depth_min,
+        worlds_min=args.engine_worlds_min,
     )
 
 
@@ -286,6 +295,10 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
             argv.append("--engine-oracle-belief")
         # Same "only when set" rule. Both IN config_id: they change how many
         # simulations a decision gets, which is the search itself.
+        if args.engine_depth_min is not None:
+            argv += ["--engine-depth-min", str(args.engine_depth_min)]
+        if args.engine_worlds_min is not None:
+            argv += ["--engine-worlds-min", str(args.engine_worlds_min)]
         if args.engine_early_stop:
             argv.append("--engine-early-stop")
             if args.engine_early_stop_min_sims is not None:
@@ -458,6 +471,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "sampled-belief twin is the SAME cell with this flag off, so run "
                          "both on the same seed band. Carries a `+oracle-belief` fragment "
                          "in config_id: this one does change the search.")
+    ap.add_argument("--engine-depth-min", type=int, default=None,
+                    help="DYNAMIC DEPTH floor; --depth stays the max. 'depth 3 min 6 max' "
+                         "is --engine-depth-min 3 --depth 6. Renders as d3-6 in config_id.")
+    ap.add_argument("--engine-worlds-min", type=int, default=None,
+                    help="DYNAMIC WORLDS floor; --worlds stays the max. Renders as w2-16.")
     ap.add_argument("--engine-early-stop", action="store_true",
                     help="DYNAMIC per-decision budget "
                          "(docs/dynamic-search-budget-plan-20260812.md): stop a world "

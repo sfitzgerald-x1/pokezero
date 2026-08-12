@@ -32,6 +32,7 @@ from pokezero.engine_search import (  # noqa: E402
     _bounded_reason_detail,
     _latch_encoder_tables_to_model_config,
     _locked_aggregate_choice,
+    native_search_args,
 )
 
 
@@ -4452,3 +4453,100 @@ class WorldCacheKeyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class BudgetLadderTest(unittest.TestCase):
+    """The dynamic budget ladder (docs/dynamic-search-budget-plan-20260812.md).
+
+    `search_depth` and `worlds` stay the MAXIMA; `depth_min` / `worlds_min` are the
+    floors that turn each axis dynamic. What is pinned here is the ladder's SHAPE
+    and its no-op property, because the no-op is what keeps every banked
+    fixed-budget cell comparable.
+    """
+
+    def _policy(self, **cfg):
+        base = dict(
+            leaf_eval="model", worlds=4, search_sims=1024, search_batch=64,
+            search_depth=6, model_path="/tmp/m.pt", checkpoint_path="/tmp/c.pt",
+            tables_path="/tmp/t.json",
+        )
+        base.update(cfg)
+        policy = EngineMctsPolicy.__new__(EngineMctsPolicy)
+        policy._config = EngineMctsConfig(**base)
+        return policy
+
+    def test_both_floors_unset_is_exactly_one_rung_at_the_caps(self) -> None:
+        # The no-op property. A fixed-budget cell must issue one search per world
+        # at the configured cap, byte for byte as before.
+        self.assertEqual(self._policy()._budget_ladder(4), [(4, 6)])
+
+    def test_depth_floor_walks_one_ply_at_a_time(self) -> None:
+        # "depth 3 min 6 max" -> depth_min=3, search_depth=6. One ply per rung
+        # because each rung is a full re-search; overshooting is the costly error.
+        self.assertEqual(
+            self._policy(depth_min=3)._budget_ladder(4),
+            [(4, 3), (4, 4), (4, 5), (4, 6)],
+        )
+
+    def test_worlds_floor_doubles_and_precedes_depth(self) -> None:
+        # "worlds 2 min 16 max, depth 2 min 6 max". Worlds first because adding a
+        # world does not invalidate the worlds already searched while raising
+        # depth does; doubling so 2..16 is four rungs, not fifteen.
+        self.assertEqual(
+            self._policy(worlds=16, worlds_min=2, depth_min=2)._budget_ladder(16),
+            [(2, 2), (4, 2), (8, 2), (16, 2), (16, 3), (16, 4), (16, 5), (16, 6)],
+        )
+
+    def test_the_ladder_never_exceeds_the_worlds_actually_sampled(self) -> None:
+        # Belief sampling can return fewer worlds than configured (retry budget),
+        # and a rung asking for worlds that do not exist would search a short
+        # prefix while claiming the full count.
+        self.assertEqual(
+            self._policy(worlds=16, worlds_min=2, depth_min=6)._budget_ladder(3),
+            [(2, 6), (3, 6)],
+        )
+
+    def test_a_floor_equal_to_its_cap_is_one_rung(self) -> None:
+        self.assertEqual(self._policy(depth_min=6, worlds_min=4)._budget_ladder(4), [(4, 6)])
+
+    def test_floors_are_refused_outside_the_model_path(self) -> None:
+        # The ladder re-invokes the NATIVE model search; elsewhere it would do
+        # nothing and the cell would claim a dynamic budget it never had.
+        with self.assertRaises(ValueError):
+            EngineMctsConfig(leaf_eval="hp_fraction", worlds=4, depth_min=2)
+
+    def test_a_floor_above_its_cap_is_refused(self) -> None:
+        for kwargs in ({"depth_min": 7}, {"worlds_min": 5}, {"depth_min": 0}):
+            with self.subTest(**kwargs):
+                with self.assertRaises(ValueError):
+                    EngineMctsConfig(
+                        leaf_eval="model", worlds=4, search_sims=1024, search_batch=64,
+                        search_depth=6, model_path="/tmp/m.pt",
+                        checkpoint_path="/tmp/c.pt", tables_path="/tmp/t.json",
+                        **kwargs,
+                    )
+
+    def test_the_depth_override_reaches_the_native_positionals(self) -> None:
+        # The ladder is only real if the rung's depth actually lands in the call.
+        cfg = EngineMctsConfig(
+            leaf_eval="model", worlds=4, search_sims=1024, search_batch=64,
+            search_depth=6, model_path="/tmp/m.pt", checkpoint_path="/tmp/c.pt",
+            tables_path="/tmp/t.json", depth_min=3,
+        )
+        record = {"state_str": "s", "ctx_json": "{}", "seed": 1, "side_key": "side_one"}
+        at_cap = native_search_args(
+            cfg, record, tables_json="{}", root_inputs="{}", rust_fold=None,
+            early_stop_min_sims=0)
+        at_rung = native_search_args(
+            cfg, record, tables_json="{}", root_inputs="{}", rust_fold=None,
+            early_stop_min_sims=0, depth=3)
+        # Positional 7 is search_depth; 8 is c_puct. Asserted by INDEX on purpose
+        # -- this list is a positional contract with the crate, and the file's own
+        # comments record a near-miss where a knob landed one slot over and
+        # silently truncated the budget.
+        self.assertEqual(at_cap[7], 6)
+        self.assertEqual(at_rung[7], 3)
+        # And nothing else moved: a rung differs from the cap in ONE positional.
+        self.assertEqual(
+            [i for i, (a, b) in enumerate(zip(at_cap, at_rung)) if a != b], [7]
+        )
+
