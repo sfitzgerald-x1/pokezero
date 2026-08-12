@@ -45,7 +45,12 @@ VENV="$REPO/.venv/bin/python"
 # compared equal. The visible symptom was a test appearing in BOTH "unexpected breakages" and
 # "expected but did not break" -- impossible, and the tell that the comparison, not the tree,
 # was broken. Strips the status word and any leading path through the last `tests/`.
-_norm_id() { sed -E 's|^(FAILED|ERROR)[[:space:]]+||; s|^.*/tests/||; s|^tests/||'; }
+# Delimiter is '#', not '|': the first cut wrote s|^(FAILED|ERROR)...| and sed read the
+# alternation's pipe as the closing delimiter -- "RE error: parentheses not balanced", printed
+# to stderr while the pipeline carried on and produced EMPTY normalised files. Empty files
+# compare as "0 breakages", which is indistinguishable from a pass. A scoring bug that fails
+# toward PASS is the worst kind, and this one did.
+_norm_id() { sed -E 's#^(FAILED|ERROR)[[:space:]]+##; s#^.*/tests/##; s#^tests/##'; }
 
 drill_targets() {
   local root="$1"
@@ -245,11 +250,17 @@ done
 # because the breakage moves into setUpClass. Same broken tests, different pytest bucket; not
 # something the rotation caused. Two bugs were here at once: the sed also assumed a leading
 # `/tests/` and produced "ERROR ERROR ..." for relative paths.
-_norm() { sed -E 's|^(ERROR|FAILED) +||; s|^.*/tests/|tests/|' "$1" | sort -u; }
+_norm() { sed -E 's#^(ERROR|FAILED)[[:space:]]+##; s#^.*/tests/##; s#^tests/##' "$1" | sort -u; }
 grep -E '^(ERROR|FAILED) ' "$BASE/BASE.txt" > "$WT/base_broken.raw" || true
 grep '^ERROR ' "$WT/DRILL.txt" > "$WT/rot_err.raw" || true
 _norm "$WT/base_broken.raw" > "$WT/base_broken.txt"
 _norm "$WT/rot_err.raw" > "$WT/rot_err.txt"
+# Empty normalised output means the normaliser broke, not that the tree is clean. The sed
+# delimiter bug produced exactly this and it scored as a PASS.
+if [ -s "$WT/DRILL.txt" ] && grep -q '^FAILED' "$WT/DRILL.txt" && [ ! -s "$WT/rotated.txt" ]; then
+  echo "ABORT: the run has FAILED lines but normalisation produced nothing -- scorer is broken."
+  exit 5
+fi
 NEW_ERR=$(comm -13 "$WT/base_broken.txt" "$WT/rot_err.txt")
 if [ -n "$NEW_ERR" ]; then
   echo "ABORT: the rotated run has ERRORs the baseline does not -- the suite did not measure:"
