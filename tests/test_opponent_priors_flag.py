@@ -203,10 +203,19 @@ class NativeCallContractTest(unittest.TestCase):
             inspect.signature(native.search_batched_multi_encoded).parameters
         )
         params = [p for p in params if p not in ("self", "/")]
-        self.assertEqual(params[-1], "use_opponent_priors")
-        self.assertEqual(params[-3:-1], ["early_stop_min_sims", "early_stop_side_one"])
-        # Index check against the assembly above: 12 leading positionals.
+        # `use_opponent_priors` is no longer last: `debug_prior_vectors` was
+        # appended AFTER it (model.rs pyo3 signature). What this guard exists to
+        # catch is the flag landing in the WRONG SLOT -- review once measured a
+        # version where it silently occupied `early_stop_min_sims` and truncated
+        # the search budget -- so the assertions pin its INDEX and the identity
+        # of the slots on either side of it, which is the property that broke.
         self.assertEqual(params.index("use_opponent_priors"), 14)
+        self.assertEqual(params[13], "early_stop_side_one")
+        self.assertEqual(params[12], "early_stop_min_sims")
+        # The test-only vector hook sits after it and must stay last, so a future
+        # positional append cannot displace `use_opponent_priors` unnoticed.
+        self.assertEqual(params[-1], "debug_prior_vectors")
+        self.assertEqual(params[15], "debug_prior_vectors")
 
 
 if __name__ == "__main__":

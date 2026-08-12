@@ -818,6 +818,14 @@ class EngineMctsStats:
     # applied cleanly -- which makes a paired opponent-priors delta unreadable:
     # a flat result could mean "priors do not help" or "priors never ran".
     # These four say which. Report the APPLIED RATE beside any such delta.
+    #
+    # SCOPE: BRANCH-LEVEL. RootPriorResolution carries no seat-attributed
+    # applied/refused (priors.rs header section 3), so a root opponent
+    # application is counted here nowhere and a root opponent REFUSAL is
+    # invisible to opponent_priors_refused. In practice the root and branch
+    # paths share one order source and refuse together, so a wholly-refusing map
+    # still shows up -- but the rate below is the rate over BRANCHES, not over
+    # every opponent node, and should not be quoted as the latter.
     opponent_priors_applied: int = 0
     opponent_priors_refused: int = 0
     acting_priors_applied: int = 0
@@ -955,6 +963,7 @@ class EngineMctsStats:
             "opponent_priors_refused": self.opponent_priors_refused,
             "acting_priors_applied": self.acting_priors_applied,
             "acting_priors_refused": self.acting_priors_refused,
+            # Branch-level; the root is not attributed. See the field docs.
             "opponent_priors_applied_rate": (
                 self.opponent_priors_applied
                 / (self.opponent_priors_applied + self.opponent_priors_refused)

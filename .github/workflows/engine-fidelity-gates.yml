@@ -43,6 +43,8 @@ jobs:
             scripts/vendor_poke_engine_src.sh
             scripts/engine_behavioral_probes.py
             scripts/engine_build_fingerprint.py
+            src/pokezero/engine_search.py
+            tests/test_opponent_prior_telemetry.py
             scripts/verify_poke_engine_source.py
             third_party/poke-engine-base-source.json
             tests/test_branch_mass_reconstruction.py
@@ -515,6 +517,37 @@ jobs:
       # CI -- a module-wide "must not skip" assertion would be a false gate, and a
       # module-wide count would go green on a skip. Deleting either pin makes the
       # unittest invocation itself fail to resolve, which is the point.
+      # Opponent-prior application telemetry. Runs here because it needs NO
+      # crate: it asserts the Python boundary -- that the opponent's applied /
+      # refused counts reach the shard SEPARATELY from the both-seat aggregates,
+      # and that the applied rate uses the opponent's own denominator. The
+      # defect it guards is the one that made a paired opponent-priors delta
+      # unreadable: `prior_fallbacks` sums both seats, so a run where the
+      # opponent map refused every branch looks identical to one where it
+      # applied cleanly.
+      #
+      # NOT covered here, and deliberately named rather than left implicit: the
+      # crate-side guards for the same feature -- tests/test_opponent_priors_flag.py
+      # (the native-call slot contract), tests/test_model_priors_search.py (the
+      # M9 branch-order fixture and the opponent-head oracles) and
+      # tests/test_opponent_action_mapping.py -- all require the model feature,
+      # i.e. a libtorch and a built wheel. NO workflow in this repo builds that
+      # today, so adding them here would produce "OK (skipped=N)", which this
+      # file elsewhere records as having read green against an empty venv.
+      # Closing that gap means torch in CI and is its own change.
+      - name: Opponent-prior seat-attribution telemetry
+        run: |
+          set -o pipefail
+          python -m unittest -v tests.test_opponent_prior_telemetry 2>&1 | tee /tmp/opppriors.log
+          if ! grep -qE 'Ran 6 tests' /tmp/opppriors.log; then
+            echo "::error::expected 6 opponent-prior telemetry tests; the set shrank or grew"
+            exit 1
+          fi
+          if grep -qE 'skipped=' /tmp/opppriors.log; then
+            echo "::error::a skip here reads as a pass; these tests need no crate and must run"
+            exit 1
+          fi
+
       - name: Contact-ability wake-ordering pins
         run: |
           set -o pipefail

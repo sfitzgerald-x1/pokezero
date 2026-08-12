@@ -83,6 +83,7 @@
 //! | branch: `opponent_action_map` -> `self_action_map`   | KILLED  |
 //! | round: the two seats' pending map lists swapped      | KILLED  |
 //! | branch: `opponent_prefix()` -> `self_prefix()`       | KILLED (white-box) |
+//! | branch: chained parent order -> root order (M9')     | KILLED (white-box) |
 //!
 //! TWO FINDINGS THE TABLE COMPRESSES, both of which cost a wrong answer first.
 //!
@@ -156,6 +157,20 @@
 //!    The reason an outcome oracle could never do this: the mutation reshapes
 //!    the tree, and a reshaped tree launders every outcome. The order itself
 //!    does not launder.
+//!
+//!    M9' -- THE SIBLING ONE PLY DOWN, found by review of the M9 fix and killed
+//!    with it. `model.rs` reads the parent's opponent order two ways: `None =>
+//!    root_opponent_order()` for ply-2 seams, `Some(key) => rec.opponent_order`
+//!    for deeper ones. The M9 fixture runs at `max_depth=2`, where only depth-0
+//!    seams build an opponent map, so it exercises the first arm ONLY --
+//!    replacing the second with `root_opponent_order()` (freezing the chain from
+//!    ply 3 down) left all 18 tests in the two prior files green. That is not
+//!    academic: `foulplay_paired_eval.py` defaults `--depth 4`, so production
+//!    takes the chaining arm at seams of depth 1 and 2.
+//!    `test_a_deeper_seam_chains_the_parent_branch_order_not_the_root` runs at
+//!    `max_depth=3` and counts transpositions from the root: a chained order is
+//!    two or more swaps away, a frozen one can only ever be one. Verified by
+//!    mutation -- it fails (1 >= 2) while the other twelve pass.
 //!
 //!    A per-seat DIGEST of the gathered vectors (`PriorResolution::opponent_digest`,
 //!    surfaced as `opponent_prior_digest`) ships alongside as the cheap
@@ -777,9 +792,26 @@ mod tests {
             fold_prior_digest(fold_prior_digest(0, 0, &perturbed), 1, &b)
         );
 
-        // "Nothing gathered" is zero and nothing gathered folds to it.
-        assert_eq!(0u64, 0u64);
+        // Anything gathered leaves the "nothing gathered" sentinel behind.
         assert_ne!(fold_prior_digest(0, 0, &a), 0);
+    }
+
+    /// The CROSS-ROUND fold had no test at all; only the per-vector one did.
+    #[test]
+    fn the_round_digest_fold_is_order_sensitive_too() {
+        let (x, y) = (0x1111_2222_3333_4444u64, 0x5555_6666_7777_8888u64);
+        assert_ne!(
+            fold_digest_u64(fold_digest_u64(0, 0, x), 1, y),
+            fold_digest_u64(fold_digest_u64(0, 0, y), 1, x),
+            "two rounds folded in the other order must not collide"
+        );
+        assert_eq!(
+            fold_digest_u64(fold_digest_u64(0, 0, x), 1, y),
+            fold_digest_u64(fold_digest_u64(0, 0, x), 1, y),
+        );
+        // Position participates: the same value at a different round differs.
+        assert_ne!(fold_digest_u64(0, 0, x), fold_digest_u64(0, 7, x));
+        assert_ne!(fold_digest_u64(0, 0, x), 0);
     }
 
     /// Counts only, as a tuple in a fixed order:

@@ -29,9 +29,6 @@ import argparse
 import json
 import sys
 from collections import Counter, defaultdict
-
-# Engine action layout: indices 0..3 are moves, 4.. are switches.
-ACTION_SWITCH_BASE = 4
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -45,9 +42,11 @@ import pokezero_search  # noqa: E402
 
 from pokezero.env import BattleStartOverride  # noqa: E402
 from pokezero.dex import load_showdown_dex_cached  # noqa: E402
+from pokezero.actions import is_move_action
 from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
     battle_spec_from_payload,
+    _self_request_is_struggle_only,
     unpack_team,
 )
 from pokezero.golden_corpus import (  # noqa: E402
@@ -244,13 +243,32 @@ def run_corpus(corpus_dir: Path, tables_json: str, verbose: bool) -> dict[str, A
         # mis-permuted map necessarily has >= 1 move option on both sides, so it
         # can never take this branch. Counted under its own reason so it is
         # visible in the census rather than silently dropped.
+        # `move_display` renders a switch as "switch {species}" WITH A SPACE and a
+        # move as the bare id; without the space `Choices::SWITCHEROO` would be
+        # misread as a switch and could MANUFACTURE this skip.
         engine_move_options = [
-            display for display, _ in interior if not str(display).startswith("switch")
+            display for display, _ in interior if not str(display).startswith("switch ")
         ]
         recorded_move_indices = {
-            index for index in recorded if index < ACTION_SWITCH_BASE
+            index for index in recorded if is_move_action(index)
         }
-        if not engine_move_options and recorded_move_indices:
+        # POSITIVE test, conjoined with the surface shape. The shape alone ("no
+        # engine moves, mask names a move") is a PROXY: any world defect that
+        # empties the move surface -- a PP mis-derivation, a wrong `disabled`
+        # fold, a mis-derived transform target -- would land here and be excused,
+        # which is the same misattribution this file was fixed for, pointed the
+        # other way. `_self_request_is_struggle_only` is engine_world's own
+        # payload-side reader of Showdown's Struggle branch, and a Struggle
+        # request publishes exactly one move row, so `== {0}` pins it further.
+        struggle_request = _self_request_is_struggle_only(
+            (payload.get("sides") or {}).get(row.player_id),
+            payload.get("selfActiveMoves"),
+        )
+        if (
+            not engine_move_options
+            and recorded_move_indices == {0}
+            and struggle_request
+        ):
             counts["skip:engine_unsupported:struggle_only_surface"] += 1
             continue
 

@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`028a4c52a4ad9fe7…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`3d8215d631d95edb…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -154,6 +154,7 @@ above.
 | `21f484d4` (#1197) | `rust/pokezero-search/src/leaf.rs`, +31 lines | `9517aab98d56a9ba…` |
 | `578287e7` (#1207) | `rust/pokezero-search/src/priors.rs`, +91 −4 | `236d1cac8a784898…` |
 | #1211 | `rust/pokezero-search/src/events.rs`, +420 −50 | `028a4c52a4ad9fe7…` |
+| opponent-prior observability | `priors.rs`, `model.rs`, `leaf.rs` (seat-attributed prior telemetry, the test-only vector hook, doc corrections) | `3d8215d631d95edb…` |
 
 ⚠ **And the second landed while this register was in review**, three days after C153's build. That
 is not an aside: it is T1's argument, live. C151 §3 deferred the terminal sweep precisely because
@@ -482,7 +483,7 @@ defect did not exist on either of their trees.** A typed `25` would have shipped
 Where CI gates on the merge, **local green and CI green are different measurements**; §6 declares
 that coupling and the assertion carries the fix in its own failure message.
 
-**Every measurement behind T2–T6 predates the head build**, and none is at `028a4c52a4ad9fe7` —
+**Every measurement behind T2–T6 predates the head build**, and none is at `3d8215d631d95edb` —
 nor at `9517aab98d56a9ba`, the build this document was reconciled against two merges ago. Read the
 table in T1 before quoting that as a re-sweep scope: T3, T4 and T5 rest on an engine build; **T2 and
 T6 build no engine at all** and carry no `engine_fingerprint`.
@@ -565,9 +566,9 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 42 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure. The workflow holds **30** lines containing the unittest
-invocation, of which **one is a comment**, so there are **29 executable** invocation sites at this
-head; the scan resolves **29** of them and leaves **none** unresolved. **This step is among the
+rather than inherited from #1205's figure. The workflow holds **31** lines containing the unittest
+invocation, of which **one is a comment**, so there are **30 executable** invocation sites at this
+head; the scan resolves **30** of them and leaves **none** unresolved. **This step is among the
 resolved ones** — the number is not restated here, because a fourth copy of it is a fourth thing to
 go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 42 from the module's AST
 and matches the guard. All three numbers are **re-derived by the pin** rather than typed.
@@ -698,7 +699,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.head_fingerprint` | 028a4c52a4ad9fe7 |
+| `t1.head_fingerprint` | 3d8215d631d95edb |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

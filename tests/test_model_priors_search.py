@@ -350,6 +350,7 @@ class _EncodedSearchFixture:
         ctx_json: str | None = None,
         use_opponent_priors: bool | None = None,
         debug_prior_vectors: bool = False,
+        max_depth: int = 2,
         position: dict | None = None,
     ) -> dict:
         position = self.position if position is None else position
@@ -362,7 +363,7 @@ class _EncodedSearchFixture:
             position["row_inputs"],
             position["ctx"] if ctx_json is None else ctx_json,
             fold,
-            2,  # max_depth
+            max_depth,
             1.4,
             seed,
             True,
@@ -978,6 +979,83 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
             # And the priors were gathered under it -- an evolved order nothing
             # gathered under would not protect the campaign.
             self.assertGreater(len(entry["priors"]), 0)
+
+    def test_a_deeper_seam_chains_the_parent_branch_order_not_the_root(self) -> None:
+        """M9': the CHAINING arm, one ply below the mutant the sibling test kills.
+
+        `model.rs` reads the parent's opponent order two ways:
+
+            None      => leaf_ctx.root_opponent_order()      <- ply-2 seams
+            Some(key) => rec.opponent_order.clone()          <- deeper seams
+
+        At `max_depth=2` the opponent map is only built where
+        `seam.depth + 1 < max_depth`, so ONLY depth 0 qualifies and only the
+        first arm ever runs. Independent review demonstrated the consequence:
+        replacing the `Some(key)` arm with `root_opponent_order()` -- freezing
+        the chain at the root from ply 3 down, the same defect class as M9 one
+        level deeper -- left all 18 tests in the two prior files GREEN.
+
+        This matters at the depth the campaign actually runs.
+        `foulplay_paired_eval.py` defaults `--depth 4`, so production builds
+        opponent maps at seams of depth 0, 1 and 2 and DOES take the chaining
+        arm. A census reading "clean" for that channel would be wrong.
+
+        The assertion is the same shape as the ply-2 one and equally white-box:
+        at `max_depth=3` there are seams below ply 2, and an order reached by
+        chaining through a parent that already switched must show MORE than one
+        accumulated swap away from the root. A frozen chain can only ever be one
+        swap from the root (the root's own evolution), so counting the swaps
+        separates them.
+        """
+        ctx_json = self._ctx_with_opponent_order()
+        root_order = json.loads(ctx_json)["opponent_request_order"]
+
+        report = self._search(
+            sims=96,
+            batch=1,
+            seed=5,
+            model_priors=True,
+            ctx_json=ctx_json,
+            use_opponent_priors=True,
+            debug_prior_vectors=True,
+            max_depth=3,
+        )
+        vectors = report["opponent_prior_vectors"]
+        self.assertIsNotNone(vectors)
+
+        def swaps_from_root(order: list[str]) -> int:
+            """Minimum transpositions taking `root_order` to `order`."""
+            position = {name: index for index, name in enumerate(root_order)}
+            perm = [position[name] for name in order]
+            seen, cycles = [False] * len(perm), 0
+            for start in range(len(perm)):
+                if seen[start]:
+                    continue
+                cycles += 1
+                node = start
+                while not seen[node]:
+                    seen[node] = True
+                    node = perm[node]
+            return len(perm) - cycles
+
+        orders = [
+            entry["opponent_order"]
+            for entry in vectors
+            if entry["opponent_order"] is not None
+        ]
+        self.assertGreater(len(orders), 0, "no opponent order was recorded at all")
+        for order in orders:
+            self.assertEqual(sorted(order), sorted(root_order))
+
+        deepest = max(swaps_from_root(order) for order in orders)
+        self.assertGreaterEqual(
+            deepest,
+            2,
+            "every recorded opponent order is at most ONE swap from the root, so "
+            "no order was chained through a parent that had already switched -- "
+            "the deeper seams are reading the root order instead of their "
+            "parent's, which is M9 one ply down",
+        )
 
     def test_the_order_channel_is_inert_while_the_flag_is_off(self) -> None:
         """Flag-off equivalence is the campaign's anchor: cell A's numbers were
