@@ -536,8 +536,8 @@ jobs:
             echo "::error::the schema-default gate SKIPPED -- the ledger could not measure the tree"
             exit 1
           fi
-          if ! grep -qE 'Ran 12 tests' /tmp/schemagate.log; then
-            echo "::error::expected 12 tests across the ledger gate and the selector; suite changed"
+          if ! grep -qE 'Ran 13 tests' /tmp/schemagate.log; then
+            echo "::error::expected 13 tests across the ledger gate and the selector; suite changed"
             exit 1
           fi
 
