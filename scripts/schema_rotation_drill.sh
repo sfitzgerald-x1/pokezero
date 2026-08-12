@@ -11,6 +11,12 @@
 # nobody names is the only clean probe, and it is also the real future event this must make free.
 #
 # Usage:  bash scripts/schema_rotation_drill.sh [worktree-path]
+#
+# NO --ignore list. It previously skipped the three modules that could not be COLLECTED under
+# the 3.11 venv, so the drill scored a suite with three files silently absent -- the same
+# narrowed denominator this whole program exists to retire, inside its own acceptance check.
+# Those modules are collectable again (the c153 f-string fix), and if any file ever becomes
+# uncollectable the run now fails on the ERROR guard instead of quietly shrinking.
 #         DRILL_SCOPE=fast   ...  scope to the files that have ever broken + the expected set.
 #         DRILL_SHAPE=differ ...  EXPERIMENTAL, NOT SOUND YET. See the warning below.
 #
@@ -174,10 +180,7 @@ PY
 "$VENV" -c "import sys; sys.path.insert(0,'$WT/src'); from pokezero.observation import OBSERVATION_SCHEMA_VERSION as v; print('  default is now:', v)" || exit 3
 
 find "$WT/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
-PYTHONPATH="$WT/src" "$VENV" -m pytest $(drill_targets "$WT") -q -p no:randomly \
-  --ignore="$WT/tests/test_terminal_disposition_register.py" \
-  --ignore="$WT/tests/test_unreachable_readjudication.py" \
-  --ignore="$WT/tests/test_wide_seed_negative_census.py" > "$WT/DRILL.txt" 2>&1
+PYTHONPATH="$WT/src" "$VENV" -m pytest $(drill_targets "$WT") -q -p no:randomly > "$WT/DRILL.txt" 2>&1
 
 echo "== result =="
 tail -1 "$WT/DRILL.txt"
@@ -221,10 +224,7 @@ git -C "$REPO" worktree remove --force "$BASE" 2>/dev/null
 git -C "$REPO" worktree add -q --detach "$BASE" "$BASE_REF" || exit 3
 echo "$(git -C "$REPO" rev-parse "$BASE_REF") ${DRILL_SCOPE:-full}" > "$BASE/BASE.sha"
 find "$BASE/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
-PYTHONPATH="$BASE/src" "$VENV" -m pytest $(drill_targets "$BASE") -q -p no:randomly \
-  --ignore="$BASE/tests/test_terminal_disposition_register.py" \
-  --ignore="$BASE/tests/test_unreachable_readjudication.py" \
-  --ignore="$BASE/tests/test_wide_seed_negative_census.py" > "$BASE/BASE.txt" 2>&1
+PYTHONPATH="$BASE/src" "$VENV" -m pytest $(drill_targets "$BASE") -q -p no:randomly > "$BASE/BASE.txt" 2>&1
 grep '^FAILED' "$BASE/BASE.txt" | _norm_id | sort -u > "$WT/baseline.txt"
 echo "  baseline failures (NOT attributable to the rotation): $(wc -l < "$WT/baseline.txt" | tr -d ' ')"
 fi
