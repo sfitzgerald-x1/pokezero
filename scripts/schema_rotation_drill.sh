@@ -271,8 +271,14 @@ PYTHONPATH="$WT/src" "$VENV" -m pytest $(drill_targets "$WT") -q -p no:randomly 
 
 echo "== result =="
 tail -1 "$WT/DRILL.txt"
-echo "-- breakages by file --"
-grep '^FAILED' "$WT/DRILL.txt" | sed 's|.*/tests/||; s|::.*||' | sort | uniq -c | sort -rn
+# The HUMAN-readable summary must use the same normaliser as the scorer. This line kept both
+# defects the scorer had already had fixed: it grepped ^FAILED only (blind to SUBFAILED) and
+# assumed absolute paths -- so it printed 14 directly beneath a summary line saying 18, with every
+# entry retaining an unstripped "FAILED tests/" prefix. A reader trusts the readable half.
+echo "-- raw failures by file (pre-subtraction; see the scored verdict below) --"
+grep -E '^(FAILED|SUBFAILED)' "$WT/DRILL.txt" | _norm_id | sed 's|::.*||' | sort | uniq -c | sort -rn
+_raw=$(grep -cE '^(FAILED|SUBFAILED)' "$WT/DRILL.txt" || true)
+echo "   raw total: $_raw  (must equal the summary's failure count; cross-checked below)"
 # BASELINE. Without it the drill counts pre-existing failures as breakages: the first scored
 # run charged `test_roll_enumeration_scope` to the rotation when it actually fails on the 3.11
 # f-string defect in c153, and would have kept charging it forever. A breakage is a test that
@@ -304,7 +310,7 @@ BASE="${DRILL_BASELINE:-${WT%/}-baseline}"
 # from `fast` reused under `full`, would silently subtract the wrong set -- and a wrong
 # subtraction is invisible, it just makes the residue look smaller than it is.
 if [ "${DRILL_BASELINE_REUSE:-0}" = "1" ] && [ -f "$BASE/BASE.sha" ] \
-   && [ "$(cat "$BASE/BASE.sha")" = "$(git -C "$REPO" rev-parse "$BASE_REF") ${DRILL_SCOPE:-full}" ]; then
+   && [ "$(cat "$BASE/BASE.sha")" = "$(git -C "$REPO" rev-parse "$BASE_REF") ${DRILL_SCOPE:-full} ${DRILL_SHAPE:-identical} $("$VENV" -c 'import sys;print(sys.version.split()[0])')" ]; then
   echo "  reusing baseline at $(cat "$BASE/BASE.sha" | cut -c1-8)"
   grep -E '^(FAILED|SUBFAILED)' "$BASE/BASE.txt" | _norm_id | sort -u > "$WT/baseline.txt"
   echo "  baseline failures (NOT attributable to the rotation): $(wc -l < "$WT/baseline.txt" | tr -d ' ')"
@@ -313,11 +319,33 @@ fi
 if [ "${SKIP_BASELINE:-0}" != "1" ]; then
 git -C "$REPO" worktree remove --force "$BASE" 2>/dev/null
 git -C "$REPO" worktree add -q --detach "$BASE" "$BASE_REF" || exit 3
-echo "$(git -C "$REPO" rev-parse "$BASE_REF") ${DRILL_SCOPE:-full}" > "$BASE/BASE.sha"
 find "$BASE/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
-PYTHONPATH="$BASE/src" "$VENV" -m pytest $(drill_targets "$BASE") -q -p no:randomly > "$BASE/BASE.txt" 2>&1
-grep -E '^(FAILED|SUBFAILED)' "$BASE/BASE.txt" | _norm_id | sort -u > "$WT/baseline.txt"
-echo "  baseline failures (NOT attributable to the rotation): $(wc -l < "$WT/baseline.txt" | tr -d ' ')"
+
+# TWO baseline runs, and only the INTERSECTION is subtracted. A single run let a flaky test earn a
+# permanent excuse: `test_bench_apply_reverse_returns_positive_rate` failed in one baseline, passed
+# 5/5 in isolation and passed in the rotated arm -- so it silently entered the blind set, where any
+# genuine breakage of that test would have been excused with no signal. A test that fails in only
+# one of two identical runs is unstable, not pre-existing, and is DROPPED from the excuse list so a
+# real breakage still surfaces.
+for _run in 1 2; do
+  find "$BASE/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
+  PYTHONPATH="$BASE/src" "$VENV" -m pytest $(drill_targets "$BASE") -q -p no:randomly \
+    > "$BASE/BASE.$_run.txt" 2>&1
+  grep -E '^(FAILED|SUBFAILED)' "$BASE/BASE.$_run.txt" | _norm_id | sort -u > "$BASE/b$_run.txt"
+done
+cp "$BASE/BASE.2.txt" "$BASE/BASE.txt"          # the summary guards read the second run
+comm -12 "$BASE/b1.txt" "$BASE/b2.txt" > "$WT/baseline.txt"     # stable failures only
+_unstable=$(comm -3 "$BASE/b1.txt" "$BASE/b2.txt" | grep -c . || true)
+echo "  baseline failures, STABLE across two runs (subtracted): $(wc -l < "$WT/baseline.txt" | tr -d ' ')"
+if [ "${_unstable:-0}" -gt 0 ]; then
+  echo "  UNSTABLE across the two baseline runs, NOT subtracted ($_unstable) -- a flake must not"
+  echo "  become a permanent excuse; a real breakage in these would otherwise be invisible:"
+  comm -3 "$BASE/b1.txt" "$BASE/b2.txt" | sed 's/^/    /' | head
+fi
+# Stamp written AFTER both runs complete, and covering everything that changes the baseline. The
+# first version wrote it BEFORE pytest, so an interrupted baseline was reusable and
+# indistinguishable from a finished one; and it omitted DRILL_SHAPE and the interpreter.
+echo "$(git -C "$REPO" rev-parse "$BASE_REF") ${DRILL_SCOPE:-full} ${DRILL_SHAPE:-identical} $("$VENV" -c 'import sys;print(sys.version.split()[0])')" > "$BASE/BASE.sha"
 fi
 
 # The summary's failure count MUST equal the number of ids we scored. They disagreed by 4 once
@@ -443,6 +471,13 @@ if [ "$NM" -gt 0 ]; then
   echo "EXPECTED-BUT-DID-NOT-BREAK ($NM) -- these pins are no longer pinning:"
   printf '%s\n' "$MISSING" | sed 's/^/  /'
 fi
+echo
+echo "-- BLIND SET: $(wc -l < "$WT/baseline.txt" | tr -d ' ') stable baseline failures + $(wc -l < "$WT/artifacts.txt" | tr -d ' ') source-mutation artifacts --"
+echo "   A genuine breakage of any of these would be subtracted and invisible. Printed rather"
+echo "   than implied, because an unexamined excuse list is where a real defect hides."
+sed 's/^/     /' "$WT/baseline.txt" | head -12
+[ "$(wc -l < "$WT/baseline.txt")" -gt 12 ] && echo "     ... and $(( $(wc -l < "$WT/baseline.txt") - 12 )) more"
+echo
 _mode="scope=${DRILL_SCOPE:-full} shape=${DRILL_SHAPE:-identical} rotated=$_rot_tot baseline=$_base_tot"
 if [ "$NU" -eq 0 ] && [ "$NM" -eq 0 ]; then
   if [ "${DRILL_SHAPE:-identical}" != "identical" ] || [ "${DRILL_SCOPE:-full}" != "full" ]; then
