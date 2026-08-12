@@ -770,6 +770,15 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     deep_ko_split: bool,
     model_priors: bool,
     use_opponent_priors: bool,
+    // TEST-ONLY observable. When set, the report carries every OPPONENT prior
+    // vector parked on a branch, with the child decision node's depth. It
+    // exists because M9 (`branch: opponent_prefix() -> self_prefix()`) is
+    // invisible to every outcome-based oracle -- budget raising is concordant,
+    // no equality oracle exists over the permutations, and a tied-pair
+    // statistic passes by coincidence -- since a reshaped tree launders any
+    // outcome. A white-box read of the applied vector does not launder.
+    // Default OFF and last in the signature: production reports are unchanged.
+    debug_prior_vectors: bool,
     leaf_ctx: &crate::leaf::LeafContext,
     event_ctx: &crate::events::EventContext,
     root_fold: &crate::fold::FoldStateInner,
@@ -1223,6 +1232,38 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         counters,
         elapsed_s,
     };
+    // Walked once, only when asked. The vectors are already parked on the
+    // branches by `resolve_pending_priors`, so this reads state that exists
+    // rather than instrumenting the hot path.
+    let opponent_prior_vectors_json = if debug_prior_vectors {
+        let mut entries: Vec<String> = Vec::new();
+        for (chance_index, chance) in outcome.tree.chances.iter().enumerate() {
+            for (branch_index, branch) in chance.branches.iter().enumerate() {
+                let Some((side_one, priors)) = branch.child_opponent_priors.as_ref() else {
+                    continue;
+                };
+                let depth = branch
+                    .child
+                    .map(|child| outcome.tree.decisions[child].depth)
+                    .unwrap_or(u8::MAX);
+                entries.push(format!(
+                    "{{\"chance\":{},\"branch\":{},\"child_depth\":{},\"side_one\":{},\"priors\":[{}]}}",
+                    chance_index,
+                    branch_index,
+                    depth,
+                    side_one,
+                    priors
+                        .iter()
+                        .map(|p| format!("{p:.6}"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ));
+            }
+        }
+        format!("[{}]", entries.join(","))
+    } else {
+        "null".to_string()
+    };
     let root_priors_json = match &root_priors {
         None => "null".to_string(),
         Some(priors) => format!(
@@ -1237,7 +1278,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"lossy_subcases\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
-         \"prior_fallbacks\":{},\"opponent_priors_applied\":{},\"opponent_priors_refused\":{},\"acting_priors_applied\":{},\"acting_priors_refused\":{},\"opponent_prior_digest\":\"{:016x}\",\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
+         \"prior_fallbacks\":{},\"opponent_priors_applied\":{},\"opponent_priors_refused\":{},\"acting_priors_applied\":{},\"acting_priors_refused\":{},\"opponent_prior_digest\":\"{:016x}\",\"opponent_prior_vectors\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
          \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
@@ -1264,6 +1305,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         // integer range of a double, and a digest silently rounded by a JSON
         // parser is worse than no digest at all.
         opponent_prior_digest,
+        opponent_prior_vectors_json,
         encode_nanos as f64 / 1e9,
         model_nanos as f64 / 1e9,
         tree_nanos as f64 / 1e9,
@@ -1632,6 +1674,10 @@ impl NativeLeafModel {
         // byte-for-byte unaffected: flag-off must be the uniform-opponent
         // search every recorded result was produced under.
         use_opponent_priors = false,
+        // TEST-ONLY. Default OFF and after `use_opponent_priors`, so no
+        // existing caller changes shape. See the core function's docstring for
+        // why an outcome-based oracle cannot replace it.
+        debug_prior_vectors = false,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -1652,6 +1698,7 @@ impl NativeLeafModel {
         early_stop_min_sims: usize,
         early_stop_side_one: bool,
         use_opponent_priors: bool,
+        debug_prior_vectors: bool,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -1715,6 +1762,7 @@ impl NativeLeafModel {
                     deep_ko_split,
                     model_priors,
                     use_opponent_priors,
+                    debug_prior_vectors,
                     &leaf_ctx,
                     &event_ctx,
                     &fold,
