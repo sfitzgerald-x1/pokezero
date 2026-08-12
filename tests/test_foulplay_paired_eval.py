@@ -49,6 +49,8 @@ def args(**overrides) -> argparse.Namespace:
         engine_override_telemetry=False,
         engine_oracle_belief=False,
         opponent_journal=None,
+        engine_early_stop=False,
+        engine_early_stop_min_sims=None,
         engine_model_path=None,
         engine_tables_path=None,
         foulplay_root=None,
@@ -300,6 +302,97 @@ class SelectionKnobForwardingTest(unittest.TestCase):
         ])
         self.assertEqual(parsed.engine_fpu_reduction, 0.2)
         self.assertEqual(parsed.engine_c_puct, 0.8)
+
+
+class DynamicBudgetPassthroughTest(unittest.TestCase):
+    """The dynamic per-decision budget (docs/dynamic-search-budget-plan-20260812.md).
+
+    The stop rule itself is pre-existing and was LATENT: `EngineMctsConfig.early_stop`
+    defaulted False and no harness could reach it, which `events.rs:2388` states in as
+    many words. What is new is reachability, so what is pinned here is the chain and
+    the cell identity -- NOT the rule, which `tree.rs::root_visit_lock_is_strict_about_
+    remaining_simulations` already covers.
+
+    Unlike the override-telemetry flag this one DOES change the search: it changes how
+    many simulations a decision receives. So it must SPLIT the cell, and the test that
+    matters most is the one asserting it does.
+    """
+
+    def test_the_flag_reaches_the_child_when_set(self) -> None:
+        self.assertIn(
+            "--engine-early-stop",
+            _DRIVER.bridge_argv(args(engine_early_stop=True), seat="p1"),
+        )
+
+    def test_unset_leaves_the_child_argv_unchanged(self) -> None:
+        argv = _DRIVER.bridge_argv(args(), seat="p1")
+        self.assertNotIn("--engine-early-stop", argv)
+        self.assertNotIn("--engine-early-stop-min-sims", argv)
+
+    def test_the_floor_is_forwarded_only_with_the_switch(self) -> None:
+        argv = _DRIVER.bridge_argv(
+            args(engine_early_stop=True, engine_early_stop_min_sims=256), seat="p1")
+        self.assertIn("--engine-early-stop-min-sims", argv)
+        self.assertEqual(argv[argv.index("--engine-early-stop-min-sims") + 1], "256")
+
+    def test_the_raw_arm_carries_it_not(self) -> None:
+        # The raw arm runs no search, so there is no budget to make dynamic.
+        self.assertNotIn(
+            "--engine-early-stop",
+            _DRIVER.bridge_argv(args(arm="raw", engine_early_stop=True), seat="p1"),
+        )
+
+    def test_it_IS_part_of_config_id(self) -> None:
+        # The opposite of the telemetry flag, and the reason is the measurement:
+        # early-stop-on against the same config off is the whole experiment, so
+        # pooling them would erase it.
+        self.assertNotEqual(
+            _DRIVER.config_id_for(args(engine_early_stop=True)),
+            _DRIVER.config_id_for(args()),
+        )
+        self.assertEqual(
+            _DRIVER.config_id_for(args(engine_early_stop=True)),
+            "d4-s1024-b64-w4+early-stop@ckpt",
+        )
+
+    def test_the_default_floor_pools_with_an_unset_floor(self) -> None:
+        # A cell that spells out the bridge default must land on the same id as a
+        # cell that leaves it unset, or one budget policy acquires two cells.
+        self.assertEqual(
+            _DRIVER.config_id_for(args(
+                engine_early_stop=True,
+                engine_early_stop_min_sims=_DRIVER.BRIDGE_DEFAULT_EARLY_STOP_MIN_SIMS)),
+            _DRIVER.config_id_for(args(engine_early_stop=True)),
+        )
+
+    def test_two_floors_do_not_pool(self) -> None:
+        ids = {
+            _DRIVER.config_id_for(args(engine_early_stop=True,
+                                       engine_early_stop_min_sims=n))
+            for n in (128, 256, 512)
+        }
+        self.assertEqual(len(ids), 3, ids)
+
+    def test_the_id_builders_stay_in_lockstep(self) -> None:
+        # scripts/foulplay_power_report.cid_of builds this same id from a campaign
+        # cell dict, and search_config_id's own docstring warns that the two
+        # drifting apart is a SILENT failure -- the reference matches no shard, so
+        # the rule that depends on it never fires. It has happened once already.
+        import inspect
+
+        sig = inspect.signature(_DRIVER.search_config_id).parameters
+        self.assertIn("early_stop", sig)
+        self.assertIn("early_stop_min_sims", sig)
+        report = (REPO_ROOT / "scripts" / "foulplay_power_report.py").read_text()
+        self.assertIn("early_stop=bool(cell.get(\"early_stop\"))", report)
+        self.assertIn("early_stop_min_sims=cell.get(\"early_stop_min_sims\")", report)
+
+    def test_the_bridge_declares_both_flags(self) -> None:
+        # Read FROM the bridge rather than retyped: a divergence renders a shard
+        # that dies on its own argument after the pod has claimed its GPUs.
+        bridge = (REPO_ROOT / "src" / "pokezero" / "foulplay_bridge.py").read_text()
+        self.assertIn('"--engine-early-stop"', bridge)
+        self.assertIn('"--engine-early-stop-min-sims"', bridge)
 
 
 class OpponentJournalPassthroughTest(unittest.TestCase):

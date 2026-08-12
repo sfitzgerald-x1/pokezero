@@ -342,6 +342,12 @@ def main(argv=None) -> int:
                 fpu_reduction=cell.get("fpu_reduction"),
                 c_puct=cell.get("c_puct"),
                 oracle_belief=bool(cell.get("oracle_belief")),
+                # Kept in lockstep with the driver's builder deliberately. The
+                # shared docstring warns that these two drifting apart is a
+                # SILENT failure -- the reference simply matches no shard -- and
+                # it has already happened once, on the checkpoint tag.
+                early_stop=bool(cell.get("early_stop")),
+                early_stop_min_sims=cell.get("early_stop_min_sims"),
             )
 
         for cell in campaign.get("cells", []):

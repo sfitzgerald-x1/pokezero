@@ -223,6 +223,67 @@ class TruthReachesThePackerTest(unittest.TestCase):
         self.assertIn("p2", str(failure))
 
 
+class DynamicBudgetConfigTest(unittest.TestCase):
+    """`--engine-early-stop` at the config boundary (dynamic-search-budget plan).
+
+    The stop rule is pre-existing and covered crate-side; these pin the two things
+    that were missing and that fail QUIETLY rather than loudly:
+
+    * the flag is refused where it would reach nothing, and
+    * a min-sims floor cannot be set without the feature that reads it -- an inert
+      knob that looks set is how a cell gets mislabelled as a budget policy it
+      never ran.
+    """
+
+    def _config(self, **overrides):
+        base = dict(
+            checkpoint=Path("/tmp/ckpt.pt"),
+            showdown_root=Path("/tmp/showdown"),
+            policy_mode="engine-mcts",
+            engine_model_path=Path("/tmp/model_ts.pt"),
+            engine_tables_path=Path("/tmp/tables.json"),
+        )
+        base.update(overrides)
+        return ControlledFoulPlayConfig(**base)
+
+    def test_the_default_is_off(self) -> None:
+        cfg = self._config()
+        self.assertFalse(cfg.engine_early_stop)
+        self.assertIsNone(cfg.engine_early_stop_min_sims)
+
+    def test_engine_mcts_accepts_it(self) -> None:
+        cfg = self._config(engine_early_stop=True)
+        self.assertTrue(cfg.engine_early_stop)
+
+    def test_it_is_refused_where_it_would_reach_nothing(self) -> None:
+        # The stop rule lives in the native search; under raw the flag would reach
+        # nothing and the shard would claim a dynamic budget it never had.
+        for mode in ("raw", "root-puct"):
+            with self.subTest(mode=mode):
+                with self.assertRaises(ValueError) as caught:
+                    self._config(policy_mode=mode, engine_early_stop=True)
+                self.assertIn("engine_early_stop", str(caught.exception))
+
+    def test_a_floor_without_the_feature_is_refused(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            self._config(engine_early_stop_min_sims=128)
+        self.assertIn("requires engine_early_stop", str(caught.exception))
+
+    def test_a_floor_above_the_budget_is_refused_at_the_cli_boundary(self) -> None:
+        # Mirrors EngineMctsConfig's own validator so the refusal lands before the
+        # pod claims its GPUs rather than after.
+        with self.assertRaises(ValueError):
+            self._config(engine_early_stop=True, engine_sims=64,
+                         engine_early_stop_min_sims=65)
+        with self.assertRaises(ValueError):
+            self._config(engine_early_stop=True, engine_early_stop_min_sims=0)
+
+    def test_a_floor_inside_the_budget_is_accepted(self) -> None:
+        cfg = self._config(engine_early_stop=True, engine_sims=1024,
+                           engine_early_stop_min_sims=1024)
+        self.assertEqual(cfg.engine_early_stop_min_sims, 1024)
+
+
 @requires_showdown("the truth source is only verifiable against real randbat teams")
 class TruthSourceAgainstRealBattlesTest(unittest.TestCase):
     """The plan's asserted premise, measured on real battles rather than fixtures.

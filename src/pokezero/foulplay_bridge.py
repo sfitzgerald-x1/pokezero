@@ -541,6 +541,32 @@ class ControlledFoulPlayConfig:
     # sampled world: an oracle arm that silently contains sampled decisions reads
     # as "truth does not help", which is exactly the finding §4a exists to make.
     engine_oracle_belief: bool = False
+    # DYNAMIC SEARCH BUDGET (docs/dynamic-search-budget-plan-20260812.md).
+    #
+    # The per-decision budget is otherwise FIXED: every decision spends
+    # `engine_sims` simulations whether the choice was settled after 64 or is
+    # genuinely contested at 16,384. With this on, a world stops once the root
+    # visit leader can no longer be overtaken -- `top - runner_up > remaining`
+    # (`rust/pokezero-search/src/tree.rs:160` `root_visit_lock`), evaluated on the
+    # ACTING seat's arms. Sound by construction for a visit-argmax policy: no
+    # further simulation can change which arm holds the most visits.
+    #
+    # The machinery is entirely pre-existing and was LATENT -- `events.rs:2388`
+    # says so in as many words -- because `EngineMctsConfig.early_stop` defaulted
+    # False and no harness could reach it. These two fields are the reachability,
+    # not the mechanism.
+    #
+    # This DOES change the search (it changes how many simulations a decision
+    # gets), so like engine_oracle_belief and unlike engine_override_telemetry it
+    # is part of the cell's identity upstream. Read the saving off
+    # `early_stop_accepted_decisions`, never `early_stop_triggered_worlds`: a stop
+    # whose cross-world aggregate is not lock-clean is REPLAYED at full budget
+    # (fail-open), and a replayed stop saves nothing.
+    engine_early_stop: bool = False
+    #: Floor before the lock is consulted at all. `None` means "the crate/config
+    #: default" (64) and is materialized only when early stop is on, so an unset
+    #: cell renders the argv it rendered before these flags existed.
+    engine_early_stop_min_sims: int | None = None
     device: str | None = None
     temperature: float = 1.0
     cpuct: float = 1.25
@@ -624,6 +650,33 @@ class ControlledFoulPlayConfig:
                 f"(got {self.policy_mode!r}); it injects through "
                 "EngineMctsPolicy's fixed_override hook, which no other policy has."
             )
+        if self.engine_early_stop and self.policy_mode != "engine-mcts":
+            # Refused rather than ignored, same reasoning as the oracle arm: the
+            # stop rule lives in the native search, so under 'raw' or 'root-puct'
+            # the flag reaches nothing and the shard would report a dynamic-budget
+            # arm that spent a fixed budget.
+            raise ValueError(
+                "engine_early_stop requires policy_mode='engine-mcts' "
+                f"(got {self.policy_mode!r}); the stop rule is the native "
+                "search's root visit lock, which no other policy consults."
+            )
+        if self.engine_early_stop_min_sims is not None:
+            if not self.engine_early_stop:
+                # A min-sims floor without the feature is silently inert, and an
+                # inert knob that looks set is how a cell gets mislabelled.
+                raise ValueError(
+                    "engine_early_stop_min_sims requires engine_early_stop; "
+                    "on its own it configures a feature that is off."
+                )
+            if not 0 < self.engine_early_stop_min_sims <= self.engine_sims:
+                # Mirrors EngineMctsConfig's own validator (engine_search.py) so
+                # the refusal happens at the CLI boundary rather than after the
+                # pod has claimed its GPUs.
+                raise ValueError(
+                    "engine_early_stop_min_sims must be in 1..=engine_sims "
+                    f"(got {self.engine_early_stop_min_sims} with "
+                    f"engine_sims={self.engine_sims})."
+                )
         if self.opponent_journal not in OPPONENT_JOURNAL_MODES:
             raise ValueError(
                 "opponent_journal must be one of "
@@ -1600,6 +1653,12 @@ class ControlledFoulPlayBenchmarkResult:
                 # witnessed from shard telemetry, not job labels" is a standing
                 # rule of this campaign.
                 "oracle_belief": self.config.engine_oracle_belief,
+                "early_stop": self.config.engine_early_stop,
+                "early_stop_min_sims": (
+                    self.config.engine_early_stop_min_sims
+                    if self.config.engine_early_stop
+                    else None
+                ),
                 # The searcher's own telemetry. `search_wall_per_searched_decision`
                 # is lifted to the top of this block because it, not
                 # policy_timing.average_elapsed_seconds, is what the 20 s/turn
@@ -3386,6 +3445,16 @@ def _build_policy(
                 use_opponent_priors=config.engine_opponent_priors,
                 fpu_reduction=config.engine_fpu_reduction,
                 override_telemetry=config.engine_override_telemetry,
+                # Dynamic budget. `early_stop_min_sims` is passed only when the
+                # feature is on, so the dataclass default (64) stands for an
+                # unset cell and the config validator sees a coherent pair.
+                early_stop=config.engine_early_stop,
+                **(
+                    {"early_stop_min_sims": config.engine_early_stop_min_sims}
+                    if config.engine_early_stop
+                    and config.engine_early_stop_min_sims is not None
+                    else {}
+                ),
             ),
         )
 
@@ -5028,6 +5097,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
                              "injected through EngineMctsPolicy's fixed_override hook. "
                              "engine-mcts only. Fails the game rather than falling back to a "
                              "sampled world.")
+    parser.add_argument("--engine-early-stop", action="store_true",
+                        help="DYNAMIC per-decision budget "
+                             "(docs/dynamic-search-budget-plan-20260812.md). A world "
+                             "stops once the root visit leader can no longer be "
+                             "overtaken (top - runner_up > remaining), evaluated on the "
+                             "ACTING seat's arms -- sound by construction for a "
+                             "visit-argmax policy. engine-mcts and leaf_eval=model only. "
+                             "Read the saving off early_stop_accepted_decisions, NOT "
+                             "early_stop_triggered_worlds: a stop whose cross-world "
+                             "aggregate is not lock-clean is replayed at full budget and "
+                             "saves nothing.")
+    parser.add_argument("--engine-early-stop-min-sims", type=int, default=None,
+                        help="Simulations to spend before the lock is consulted at all. "
+                             "Requires --engine-early-stop; must be in 1..=engine sims. "
+                             "Unset means the EngineMctsConfig default (64).")
     parser.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, mps.")
     parser.add_argument("--temperature", type=float, default=1.0, help="Checkpoint policy softmax temperature.")
     parser.add_argument("--cpuct", type=float, default=1.25, help="Root PUCT exploration constant.")
@@ -5357,6 +5441,8 @@ def _config_from_args(
         engine_opponent_priors=getattr(args, "engine_opponent_priors", False),
         engine_fpu_reduction=getattr(args, "engine_fpu_reduction", None),
         engine_override_telemetry=getattr(args, "engine_override_telemetry", False),
+        engine_early_stop=getattr(args, "engine_early_stop", False),
+        engine_early_stop_min_sims=getattr(args, "engine_early_stop_min_sims", None),
         engine_oracle_belief=getattr(args, "engine_oracle_belief", False),
         device=args.device,
         temperature=args.temperature,

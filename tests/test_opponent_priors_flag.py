@@ -95,6 +95,12 @@ class DefaultsAreOffTest(unittest.TestCase):
             arm="search", depth=4, sims=1024, batch=64, worlds=4,
             opponent_priors=False, engine_fpu_reduction=None, engine_c_puct=None,
             engine_oracle_belief=False,
+            # config_id_for reads its knobs by DIRECT attribute access, on purpose:
+            # a Namespace predating a knob must raise rather than be handed the
+            # default id and merged into the control. So adding a knob to the
+            # driver legitimately breaks a hand-built Namespace here, and the fix
+            # is to name the knob -- not to soften the driver to getattr.
+            engine_early_stop=False, engine_early_stop_min_sims=None,
             checkpoint="/c/k0.pt",
         )
         self.assertEqual(

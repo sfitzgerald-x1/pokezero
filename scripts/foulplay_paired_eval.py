@@ -66,6 +66,11 @@ FOULPLAY_SEARCH_TIME_MS = 1000
 # control's id rather than on an id of its own with no games behind it.
 BRIDGE_DEFAULT_C_PUCT = 1.4
 
+# EngineMctsConfig's own early-stop floor, mirrored for the same reason as the
+# c_puct default above: a cell that spells 64 out must land on the same id as a
+# cell that leaves it unset, or one budget policy acquires two cells.
+BRIDGE_DEFAULT_EARLY_STOP_MIN_SIMS = 64
+
 # The full FoulPlay-family thread pin. Unpinned BLAS in a CPU-capped pod is a
 # ~10x thrash, and it lands on the FoulPlay side, which silently weakens the
 # opponent. Mirrors foundation/foulplay-k8s-probe.sh.
@@ -122,6 +127,8 @@ def search_config_id(
     fpu_reduction: float | None = None,
     c_puct: float | None = None,
     oracle_belief: bool = False,
+    early_stop: bool = False,
+    early_stop_min_sims: int | None = None,
 ) -> str:
     """The search-arm cell identity, over primitives rather than a Namespace.
 
@@ -171,6 +178,23 @@ def search_config_id(
         # searches the TRUE hidden state. §4a's whole reading is truth-arm vs
         # sampled-arm, so pooling them would erase the experiment.
         base = f"{base}+oracle-belief"
+    if early_stop:
+        # IN the id, unlike --engine-override-telemetry above, because this
+        # changes how many simulations a decision receives -- i.e. the search
+        # itself. The whole measurement is early-stop-on against the same config
+        # off, so pooling them would erase the experiment exactly as pooling the
+        # oracle arm with its sampled twin would.
+        #
+        # The floor is carried too, and only when it differs from the default:
+        # two cells that stop at different minimum budgets are two budget
+        # policies, not one. A cell that names the default keeps the plain
+        # `+early-stop` id so it pools with a cell that left it unset.
+        base = f"{base}+early-stop"
+        if (
+            early_stop_min_sims is not None
+            and int(early_stop_min_sims) != BRIDGE_DEFAULT_EARLY_STOP_MIN_SIMS
+        ):
+            base = f"{base}{int(early_stop_min_sims)}"
     if fpu_reduction is not None:
         # `is not None`, never truthiness: `Some(0.0)` prices an unvisited arm
         # at the parent mean, which is NOT the legacy flat 0.5 that `None` is.
@@ -201,6 +225,8 @@ def config_id_for(args: argparse.Namespace) -> str:
         fpu_reduction=args.engine_fpu_reduction,
         c_puct=args.engine_c_puct,
         oracle_belief=args.engine_oracle_belief,
+        early_stop=args.engine_early_stop,
+        early_stop_min_sims=args.engine_early_stop_min_sims,
     )
 
 
@@ -258,6 +284,13 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
         # belief the search runs on, which is the one thing §4a varies.
         if args.engine_oracle_belief:
             argv.append("--engine-oracle-belief")
+        # Same "only when set" rule. Both IN config_id: they change how many
+        # simulations a decision gets, which is the search itself.
+        if args.engine_early_stop:
+            argv.append("--engine-early-stop")
+            if args.engine_early_stop_min_sims is not None:
+                argv += ["--engine-early-stop-min-sims",
+                         str(args.engine_early_stop_min_sims)]
     # OUTSIDE the search block on purpose: the opponent journal records FoulPlay's
     # own decoded choice, which exists in every arm including raw. Scoping it to
     # search arms would make the raw anchor the one cell whose opponent moves
@@ -425,6 +458,18 @@ def build_parser() -> argparse.ArgumentParser:
                          "sampled-belief twin is the SAME cell with this flag off, so run "
                          "both on the same seed band. Carries a `+oracle-belief` fragment "
                          "in config_id: this one does change the search.")
+    ap.add_argument("--engine-early-stop", action="store_true",
+                    help="DYNAMIC per-decision budget "
+                         "(docs/dynamic-search-budget-plan-20260812.md): stop a world "
+                         "once the root visit leader cannot be overtaken. Sound by "
+                         "construction for a visit-argmax policy. This CHANGES the "
+                         "search, so it carries a `+early-stop` fragment in config_id "
+                         "and will not pool with its own control.")
+    ap.add_argument("--engine-early-stop-min-sims", type=int, default=None,
+                    help="Simulations before the lock is consulted. Requires "
+                         "--engine-early-stop. Unset means the bridge default "
+                         f"({BRIDGE_DEFAULT_EARLY_STOP_MIN_SIMS}), which renders the "
+                         "plain `+early-stop` id so it pools with an unset cell.")
     ap.add_argument("--opponent-journal", default=None,
                     choices=("off", "addressed", "full"),
                     help="what the opponent journal EMITS. The bridge already RECORDS "
