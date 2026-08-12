@@ -2166,6 +2166,70 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                         category, "substitute_health_provenance_contradiction"
                     )
 
+    def test_public_materialization_restores_a_really_depleted_substitute(self) -> None:
+        """`exact` from a REAL public chronology, not a rewritten provenance triple.
+
+        Seismic Toss is one of gen 3's four fixed-damage moves, so a non-breaking hit with it
+        makes the depletion public. This is the only Substitute test here whose provenance the
+        parser derived end to end, which is what makes it evidence that the payload contract
+        and the arithmetic agree rather than that my rewrite helper matches my resolver.
+        """
+
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Snorlax",
+                            ability="Immunity",
+                            moves=("Substitute", "Harden"),
+                            level=100,
+                        ),
+                    )
+                ),
+                "p2": pack_team(
+                    (
+                        FixturePokemon(
+                            species="Hitmonlee",
+                            ability="Limber",
+                            moves=("Seismic Toss", "Harden"),
+                            level=100,
+                        ),
+                    )
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as search_env:
+            source.reset_with_start_override(seed=6101, start_override=start_override)
+            source.step({"p1": 0, "p2": 1})  # Substitute up, opponent Hardens.
+            source.step({"p1": 1, "p2": 0})  # Seismic Toss hits the Substitute.
+            materialization = source.public_materialization_state("p1")
+
+            # Derived by the parser from public protocol alone.
+            self.assertEqual(materialization.replay.substitute_health_state["p1"], "exact")
+            depletion = materialization.replay.substitute_depletion["p1"]
+            self.assertEqual(depletion, 100)  # Seismic Toss at level 100.
+            self.assertIn("substitute", materialization.replay.volatiles["p1"])
+
+            search_env.materialize_public_world(
+                state=materialization, start_override=start_override, seed=6101
+            )
+            snapshot = search_env.snapshot()
+            substitute = _active_substitute_from_snapshot(snapshot, "p1")
+            assert substitute is not None
+            maxhp = _active_maxhp_from_snapshot(snapshot, "p1")
+            self.assertEqual(substitute["hp"], maxhp // 4 - depletion)
+            # Concretely: 461 // 4 == 115 initial, minus 100 == 15 remaining.
+            self.assertEqual(substitute["hp"], 15)
+            # And it must agree with the source world it was reconstructed from.
+            self.assertEqual(
+                _active_substitute_from_snapshot(source.snapshot(), "p1")["hp"],
+                substitute["hp"],
+            )
+
     def test_public_materialization_restores_an_exact_depleted_substitute(self) -> None:
         """`exact` subtracts public fixed-damage depletion from the SAMPLED initial HP."""
 
