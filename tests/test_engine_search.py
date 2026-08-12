@@ -4456,17 +4456,18 @@ if __name__ == "__main__":
     unittest.main()
 
 class BudgetLadderTest(unittest.TestCase):
-    """The dynamic budget ladder (docs/dynamic-search-budget-plan-20260812.md).
+    """The rung ladder (docs/dynamic-search-budget-plan-20260812.md).
 
-    `search_depth` and `worlds` stay the MAXIMA; `depth_min` / `worlds_min` are the
-    floors that turn each axis dynamic. What is pinned here is the ladder's SHAPE
-    and its no-op property, because the no-op is what keeps every banked
-    fixed-budget cell comparable.
+    `search_sims` is the TOTAL budget for a decision, split across belief worlds:
+    16,384 over 4 worlds is 4,096 each. Worlds step DOWN one at a time and sims per
+    world rise to keep that total constant, so those rungs are compute-neutral --
+    they trade belief breadth for depth-fill. Depth advances only after the current
+    depth SATURATES, which is what the rising sims buy.
     """
 
     def _policy(self, **cfg):
         base = dict(
-            leaf_eval="model", worlds=4, search_sims=1024, search_batch=64,
+            leaf_eval="model", worlds=4, search_sims=16384, search_batch=16,
             search_depth=6, model_path="/tmp/m.pt", checkpoint_path="/tmp/c.pt",
             tables_path="/tmp/t.json",
         )
@@ -4475,43 +4476,36 @@ class BudgetLadderTest(unittest.TestCase):
         policy._config = EngineMctsConfig(**base)
         return policy
 
-    def test_both_floors_unset_is_exactly_one_rung_at_the_caps(self) -> None:
-        # The no-op property. A fixed-budget cell must issue one search per world
-        # at the configured cap, byte for byte as before.
-        self.assertEqual(self._policy()._budget_ladder(4), [(4, 6)])
+    def test_both_floors_unset_is_one_rung_at_the_caps(self) -> None:
+        # The no-op property: a fixed cell is one rung, and its per-world sims are
+        # the budget split across its worlds exactly as before the ladder existed.
+        self.assertEqual(self._policy(search_depth=4)._budget_rungs(4), [(4, 4096, 4)])
 
-    def test_depth_floor_walks_one_ply_at_a_time(self) -> None:
-        # "depth 3 min 6 max" -> depth_min=3, search_depth=6. One ply per rung
-        # because each rung is a full re-search; overshooting is the costly error.
-        self.assertEqual(
-            self._policy(depth_min=3)._budget_ladder(4),
-            [(4, 3), (4, 4), (4, 5), (4, 6)],
-        )
+    def test_worlds_step_down_by_one_and_sims_rise_to_hold_the_total(self) -> None:
+        # The owner's example: 16k across 4w is 4k each; dropping to 3w scales sims
+        # up proportionally. One world at a time, not halving.
+        rungs = self._policy(worlds=4, worlds_min=2, depth_min=3)._budget_rungs(4)
+        self.assertEqual(rungs[:3], [(4, 4096, 3), (3, 5461, 3), (2, 8192, 3)])
+        for worlds, sims, _ in rungs[:3]:
+            self.assertLessEqual(worlds * sims, 16384)  # never exceeds the budget
 
-    def test_worlds_floor_doubles_and_precedes_depth(self) -> None:
-        # "worlds 2 min 16 max, depth 2 min 6 max". Worlds first because adding a
-        # world does not invalidate the worlds already searched while raising
-        # depth does; doubling so 2..16 is four rungs, not fifteen.
-        self.assertEqual(
-            self._policy(worlds=16, worlds_min=2, depth_min=2)._budget_ladder(16),
-            [(2, 2), (4, 2), (8, 2), (16, 2), (16, 3), (16, 4), (16, 5), (16, 6)],
-        )
+    def test_depth_rungs_come_last_and_use_the_concentrated_allocation(self) -> None:
+        # Depth advances at the MOST concentrated allocation, because that is the
+        # one with the sims to fill the new plies.
+        rungs = self._policy(worlds=4, worlds_min=2, depth_min=4)._budget_rungs(4)
+        self.assertEqual(rungs[-2:], [(2, 8192, 5), (2, 8192, 6)])
 
-    def test_the_ladder_never_exceeds_the_worlds_actually_sampled(self) -> None:
-        # Belief sampling can return fewer worlds than configured (retry budget),
-        # and a rung asking for worlds that do not exist would search a short
-        # prefix while claiming the full count.
-        self.assertEqual(
-            self._policy(worlds=16, worlds_min=2, depth_min=6)._budget_ladder(3),
-            [(2, 6), (3, 6)],
-        )
+    def test_the_ladder_never_asks_for_worlds_that_were_not_sampled(self) -> None:
+        rungs = self._policy(worlds=16, worlds_min=2, depth_min=6)._budget_rungs(3)
+        self.assertEqual([w for w, _, _ in rungs], [3, 2])
 
     def test_a_floor_equal_to_its_cap_is_one_rung(self) -> None:
-        self.assertEqual(self._policy(depth_min=6, worlds_min=4)._budget_ladder(4), [(4, 6)])
+        self.assertEqual(
+            self._policy(search_depth=6, depth_min=6, worlds_min=4)._budget_rungs(4),
+            [(4, 4096, 6)],
+        )
 
     def test_floors_are_refused_outside_the_model_path(self) -> None:
-        # The ladder re-invokes the NATIVE model search; elsewhere it would do
-        # nothing and the cell would claim a dynamic budget it never had.
         with self.assertRaises(ValueError):
             EngineMctsConfig(leaf_eval="hp_fraction", worlds=4, depth_min=2)
 
@@ -4520,16 +4514,37 @@ class BudgetLadderTest(unittest.TestCase):
             with self.subTest(**kwargs):
                 with self.assertRaises(ValueError):
                     EngineMctsConfig(
-                        leaf_eval="model", worlds=4, search_sims=1024, search_batch=64,
-                        search_depth=6, model_path="/tmp/m.pt",
+                        leaf_eval="model", worlds=4, search_sims=16384,
+                        search_batch=16, search_depth=6, model_path="/tmp/m.pt",
                         checkpoint_path="/tmp/c.pt", tables_path="/tmp/t.json",
                         **kwargs,
                     )
 
-    def test_the_depth_override_reaches_the_native_positionals(self) -> None:
-        # The ladder is only real if the rung's depth actually lands in the call.
+    def test_the_default_threshold_is_near_full_not_a_majority(self) -> None:
+        # A deeper search that did not fill the shallower depth can be WORSE than
+        # the shallower one, so the licence to deepen is near-full saturation. A
+        # majority threshold would deepen on half-filled trees.
         cfg = EngineMctsConfig(
-            leaf_eval="model", worlds=4, search_sims=1024, search_batch=64,
+            leaf_eval="model", worlds=4, search_sims=16384, search_batch=16,
+            search_depth=6, model_path="/tmp/m.pt", checkpoint_path="/tmp/c.pt",
+            tables_path="/tmp/t.json", depth_min=3,
+        )
+        self.assertGreaterEqual(cfg.ladder_saturation, 0.9)
+
+    def test_the_saturation_threshold_is_validated(self) -> None:
+        for bad in (-0.1, 1.5):
+            with self.subTest(threshold=bad):
+                with self.assertRaises(ValueError):
+                    EngineMctsConfig(
+                        leaf_eval="model", worlds=4, search_sims=16384,
+                        search_batch=16, search_depth=6, model_path="/tmp/m.pt",
+                        checkpoint_path="/tmp/c.pt", tables_path="/tmp/t.json",
+                        depth_min=3, ladder_saturation=bad,
+                    )
+
+    def test_the_depth_override_reaches_the_native_positionals(self) -> None:
+        cfg = EngineMctsConfig(
+            leaf_eval="model", worlds=4, search_sims=16384, search_batch=16,
             search_depth=6, model_path="/tmp/m.pt", checkpoint_path="/tmp/c.pt",
             tables_path="/tmp/t.json", depth_min=3,
         )
@@ -4540,13 +4555,11 @@ class BudgetLadderTest(unittest.TestCase):
         at_rung = native_search_args(
             cfg, record, tables_json="{}", root_inputs="{}", rust_fold=None,
             early_stop_min_sims=0, depth=3)
-        # Positional 7 is search_depth; 8 is c_puct. Asserted by INDEX on purpose
-        # -- this list is a positional contract with the crate, and the file's own
-        # comments record a near-miss where a knob landed one slot over and
-        # silently truncated the budget.
+        # Positional 7 is search_depth, 8 is c_puct. Asserted by INDEX because this
+        # list is a positional contract with the crate and this file records a
+        # near-miss where a knob landed one slot over.
         self.assertEqual(at_cap[7], 6)
         self.assertEqual(at_rung[7], 3)
-        # And nothing else moved: a rung differs from the cap in ONE positional.
         self.assertEqual(
             [i for i, (a, b) in enumerate(zip(at_cap, at_rung)) if a != b], [7]
         )

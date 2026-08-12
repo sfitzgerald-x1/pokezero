@@ -456,14 +456,29 @@ class EngineMctsConfig:
     # max" is worlds_min=2 with worlds=16.
     depth_min: int | None = None
     worlds_min: int | None = None
-    #: Visit-share margin below which a decision counts as CONTESTED and the depth
-    #: axis escalates. Not the early-stop visit lock: that predicate compares the
+    #: Visit-share margin below which a decision counts as CONTESTED and the ladder
+    #: keeps escalating. Not the early-stop visit lock: that predicate compares the
     #: leader's edge against UNSPENT simulations, so after a rung has run to
     #: completion `remaining` is 0 and it is satisfied by any unique leader --
     #: measured at 447 of 447 decisions, which collapsed the ladder to its floor.
-    #: A margin asks the different question the depth axis needs: is the leader's
-    #: advantage big enough that another ply is unlikely to overturn it?
     ladder_margin: float = 0.25
+    #: Share of a rung's worlds that must reach the depth ceiling (D-1, since
+    #: `depth_reached == cap` is unreachable by construction) before DEPTH is
+    #: allowed to advance. NEAR-FULL by default, deliberately: a deeper search that
+    #: did not fully fill the shallower depth can be WORSE than the shallower one,
+    #: because the extra plies are explored too thinly to be backed up reliably.
+    #: Depth marches forward on saturation pressure alone, so this threshold is the
+    #: only thing standing between the ladder and a thin deep tree.
+    #:
+    #: This is the rule that makes the ladder coherent. Depth is meaningless
+    #: relative to an unfilled budget: measured on this campaign's own canary,
+    #: s1024 at depth 4 saturates (96.7% of samples at D-1) while the SAME budget
+    #: at depth 6 reaches its ceiling on 4.8% -- so deepening without the sims to
+    #: fill the new plies buys a thinly-populated deep tree and pays ~2x per
+    #: decision for it. Depth therefore waits until the current depth is actually
+    #: saturated, and saturation is bought by scaling WORLDS DOWN, which funds more
+    #: sims per world at constant total compute.
+    ladder_saturation: float = 0.9
     # Debug cross-check: per decision, batch-refold the whole public log
     # (production's per-observe path, turn_merged.extract_transition_products)
     # and compare its surfaces against the live incremental fold's products.
@@ -505,6 +520,10 @@ class EngineMctsConfig:
                 raise ValueError(
                     "depth_min must be in 1..=search_depth when set "
                     f"(got {self.depth_min} with search_depth={self.search_depth})."
+                )
+            if not 0.0 <= self.ladder_saturation <= 1.0:
+                raise ValueError(
+                    f"ladder_saturation must be in 0.0..=1.0 (got {self.ladder_saturation})."
                 )
             if not 0.0 <= self.ladder_margin <= 1.0:
                 raise ValueError(
@@ -1037,6 +1056,11 @@ class EngineMctsStats:
     ladder_escalations: int = 0
     ladder_settled_early: int = 0
     ladder_decisions: int = 0
+    #: Decisions that stopped because depth WANTED to advance but the current depth
+    #: was not saturated. The gate firing is the feature working, not a failure --
+    #: but a cell where this dominates never deepened, and its range is decorative.
+    ladder_unsaturated_stops: int = 0
+    ladder_depth_rungs: int = 0
     fold_advanced_lines: int = 0
     fold_cross_checks: int = 0
     fold_cross_check_failures: int = 0
@@ -1254,6 +1278,8 @@ class EngineMctsStats:
             "ladder_escalations": self.ladder_escalations,
             "ladder_settled_early": self.ladder_settled_early,
             "ladder_decisions": self.ladder_decisions,
+            "ladder_unsaturated_stops": self.ladder_unsaturated_stops,
+            "ladder_depth_rungs": self.ladder_depth_rungs,
             "fold_advanced_lines": self.fold_advanced_lines,
             "fold_cross_checks": self.fold_cross_checks,
             "fold_cross_check_failures": self.fold_cross_check_failures,
@@ -2793,38 +2819,49 @@ class EngineMctsPolicy:
         }
         self._absorb_lossy_subcases({"lossy_subcases": counts})
 
-    def _budget_ladder(self, available_worlds: int) -> list[tuple[int, int]]:
-        """Escalation rungs as (worlds, depth), cheapest first.
+    def _budget_rungs(self, available_worlds: int) -> list[tuple[int, int, int]]:
+        """Escalation rungs as (worlds, sims_per_world, depth).
 
-        Both floors unset yields ONE rung at the configured caps, so the
-        fixed-budget path is unchanged.
+        `search_sims` is the TOTAL simulation budget for a decision, divided across
+        the belief worlds -- 16,384 across 4 worlds is 4,096 per world. So dropping
+        a world does not reduce the work, it CONCENTRATES it: 4w x 4,096 and
+        3w x 5,461 are the same 16,384 spent two ways, the first buying belief
+        breadth and the second buying depth-fill.
 
-        Worlds are walked before depth, and by doubling. Both choices are about
-        cost: a worlds rung buys independent belief samples, while a depth rung
-        re-searches from scratch (a depth-3 tree is not a prefix of a depth-6
-        one), so the cheap axis is exhausted first; and doubling turns a 2..16
-        range into four rungs instead of fifteen. Depth then advances one ply at a
-        time, because each ply is a full re-search and overshooting is the
-        expensive mistake.
+        The rule, as the owner specified it:
+
+        * worlds step DOWN one at a time, from `worlds` to `worlds_min`, and sims
+          per world rise to keep the total constant. These rungs are compute-neutral.
+        * depth MUST NOT advance until the current depth is SATURATED -- and rising
+          sims is what buys that saturation. When it happens, depth bumps by one.
+
+        Measured justification for the gate, from this campaign's own canary: at
+        1,024 sims per world, depth 4 saturates (96.7% of samples at D-1) while the
+        same budget at depth 6 reaches its ceiling on 4.8%. Deepening ahead of
+        saturation buys a thinly-populated tree and pays ~2x per decision for it.
         """
         cfg = self._config
         depth_cap = int(cfg.search_depth)
-        worlds_cap = max(1, min(int(cfg.worlds), available_worlds))
+        worlds_start = max(1, min(int(cfg.worlds), available_worlds))
+        budget = int(cfg.search_sims)
         depth_floor = (
             depth_cap if cfg.depth_min is None else max(1, min(int(cfg.depth_min), depth_cap))
         )
         worlds_floor = (
-            worlds_cap if cfg.worlds_min is None else max(1, min(int(cfg.worlds_min), worlds_cap))
+            worlds_start
+            if cfg.worlds_min is None
+            else max(1, min(int(cfg.worlds_min), worlds_start))
         )
-        rungs: list[tuple[int, int]] = []
-        w = worlds_floor
-        while True:
-            rungs.append((w, depth_floor))
-            if w >= worlds_cap:
-                break
-            w = min(worlds_cap, w * 2)
+        rungs: list[tuple[int, int, int]] = []
+        for w in range(worlds_start, worlds_floor - 1, -1):
+            # At least one sim per world, and integer division so the total is
+            # never exceeded -- a rung must not quietly cost more than the budget.
+            rungs.append((w, max(1, budget // w), depth_floor))
+        # Then depth, one ply per rung, at the most concentrated allocation -- the
+        # one that has the sims to fill the new plies.
+        final_worlds, final_sims, _ = rungs[-1]
         for d in range(depth_floor + 1, depth_cap + 1):
-            rungs.append((worlds_cap, d))
+            rungs.append((final_worlds, final_sims, d))
         return rungs
 
     def _search_ladder(
@@ -2852,18 +2889,19 @@ class EngineMctsPolicy:
         word means one thing in this file: the aggregate visit leader is
         unambiguous, and escalating cannot change the mapped action.
         """
-        ladder = self._budget_ladder(len(worlds))
+        ladder = self._budget_rungs(len(worlds))
         self.stats.ladder_decisions += 1
         decision: Optional[PolicyDecision] = None
-        for index, (stage_worlds, stage_depth) in enumerate(ladder):
+        for index, (stage_worlds, stage_sims, stage_depth) in enumerate(ladder):
             self._ladder_depth_override = stage_depth
-            self._ladder_locked = False
+            self._ladder_sims_override = stage_sims
             try:
                 decision = self._search_model(
                     context, worlds[:stage_worlds], live_fold, rng
                 )
             finally:
                 self._ladder_depth_override = None
+                self._ladder_sims_override = None
             self.stats.ladder_rungs_run += 1
             if index + 1 >= len(ladder):
                 break
@@ -2871,20 +2909,31 @@ class EngineMctsPolicy:
             # that failed for a taxonomy reason would just fail again, louder.
             if decision is None or decision.policy_id != self.policy_id:
                 break
-            # Per axis: the next rung only earns its cost if it can reduce the
-            # uncertainty that is actually present. A worlds rung is pointless once
-            # the worlds agree; a depth rung is pointless once the leader's margin
-            # is comfortable. Stop when the NEXT rung has nothing to offer.
-            next_worlds, next_depth = ladder[index + 1]
-            adds_worlds = next_worlds > stage_worlds
-            adds_depth = next_depth > stage_depth
-            worth_it = (
-                (adds_worlds and not getattr(self, "_ladder_worlds_agree", True))
-                or (adds_depth and not getattr(self, "_ladder_margin_met", False))
-            )
-            if not worth_it:
-                self.stats.ladder_settled_early += 1
-                break
+            next_worlds, next_sims, next_depth = ladder[index + 1]
+            if next_depth > stage_depth:
+                # DEPTH MARCHES ON SATURATION PRESSURE ALONE. Not on how contested
+                # the decision looks: a deeper search that did not fill the
+                # shallower depth explores the new plies too thinly to back them up,
+                # and can be worse than the depth below it. So the ONLY licence to
+                # deepen is near-full saturation of the depth already being run.
+                #
+                # This is also what makes the ladder self-limiting: the budget is
+                # fixed, so each extra ply is harder to saturate than the last, and
+                # the climb stops on its own when the tree stops filling.
+                if not getattr(self, "_ladder_saturated", False):
+                    self.stats.ladder_unsaturated_stops += 1
+                    break
+                self.stats.ladder_depth_rungs += 1
+            elif next_worlds < stage_worlds:
+                # A world is dropped once the belief has told us what it can -- the
+                # owner's "enough information to drop to 3w". Per-world leaders
+                # agreeing is that signal: more draws of a belief every draw already
+                # agrees on cannot buy more information, so the budget is better
+                # spent concentrating what remains.
+                if not getattr(self, "_ladder_worlds_agree", True):
+                    self.stats.ladder_settled_early += 1
+                    break
+            self.stats.ladder_escalations += 1
             self.stats.ladder_escalations += 1
         assert decision is not None  # a ladder always has at least one rung
         return decision
@@ -3124,6 +3173,12 @@ class EngineMctsPolicy:
                 # The whole point: N draws of one completion buy N x the sims on
                 # ONE tree, not N cold restarts. Total compute is unchanged.
                 sims = config.search_sims * multiplicity
+            ladder_sims = getattr(self, "_ladder_sims_override", None)
+            if ladder_sims is not None:
+                # The rung's PER-WORLD budget, still scaled by multiplicity so a
+                # collapsed group keeps searching one tree at N x its share -- the
+                # #1009 property, preserved under the ladder.
+                sims = ladder_sims * multiplicity
             report = run_world(
                 lead, stop_floor, sims, multiplicity,
                 # getattr, not attribute access: the policy is constructed by
@@ -3241,6 +3296,21 @@ class EngineMctsPolicy:
         #   the same belief cannot improve.
         self._ladder_margin_met = False
         self._ladder_worlds_agree = True
+        # SATURATION: the share of this rung's worlds whose tree reached the depth
+        # ceiling. D-1, not the cap: `depth_reached == cap` is unreachable by
+        # construction (tree.rs:487/553), so a saturated depth-6 search reports 5.
+        ceiling = max(
+            0,
+            int(getattr(self, "_ladder_depth_override", None) or config.search_depth) - 1,
+        )
+        reached = [
+            int(r["report"]["max_depth_reached"])
+            for r in world_runs
+            if r.get("report", {}).get("max_depth_reached") is not None
+        ]
+        self._ladder_saturated = bool(reached) and (
+            sum(1 for x in reached if x >= ceiling) / len(reached)
+        ) >= float(config.ladder_saturation)
         if world_runs:
             shares: Counter[str] = Counter()
             per_world_leaders: list[str] = []
