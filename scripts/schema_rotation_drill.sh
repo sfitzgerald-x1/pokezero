@@ -190,19 +190,23 @@ grep '^FAILED' "$WT/DRILL.txt" | sed 's|.*/tests/||; s|::.*||' | sort | uniq -c 
 # run charged `test_roll_enumeration_scope` to the rotation when it actually fails on the 3.11
 # f-string defect in c153, and would have kept charging it forever. A breakage is a test that
 # passes UNROTATED and fails ROTATED -- anything else is noise being attributed to this class.
-# BASELINE COMMIT. Taking the baseline at HEAD is only valid when HEAD is UNROTATED. On a branch
-# that already rotated the default, a HEAD baseline makes the drill measure "current default ->
-# synthetic", never "old default -> new default", and every real cost of the actual rotation is
-# subtracted as "pre-existing". That inverted the first defect this drill was built to fix:
-# instead of charging pre-existing failures to the rotation, it charged the rotation's failures
-# to "pre-existing". Set DRILL_BASELINE_REF to the pre-rotation commit for a rotation PR.
+# BASELINE COMMIT: HEAD, and that is CORRECT for this drill -- an earlier warning here claimed
+# otherwise and was wrong.
+#
+# This drill answers one question: "if the default rotates to a schema NOTHING names, does
+# anything except the class-(iii) readers notice?" That question is asked FROM the current state,
+# so the baseline must be the current state. A pre-rotation baseline cannot answer it, and it
+# cannot even be constructed coherently: the class-(iii) tests assert which schema currently
+# holds the slot, so on any tree whose default differs they are already red, get subtracted, and
+# report as "pins no longer pinning" -- the drill's own contradiction signal, fired by the
+# measurement setup rather than by a defect.
+#
+# The DIFFERENT question -- "did rotating v2.2 -> v4 break anything?" -- is not this drill's job
+# and must not be inferred from it. It is answered by running the full suite on the rotated tree
+# and on the pre-rotation commit and diffing the failure SETS. That was done: byte-identical to
+# main's 8 pre-existing failures. Keep the two separate; conflating them is how the earlier
+# warning came to demand an impossible baseline.
 BASE_REF="${DRILL_BASELINE_REF:-HEAD}"
-if [ "$BASE_REF" = "HEAD" ] && ! git -C "$REPO" show HEAD:src/pokezero/observation.py \
-     | grep -q "^OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V2_2"; then
-  echo "WARNING: HEAD is already rotated, so a HEAD baseline hides the rotation's own cost."
-  echo "         Set DRILL_BASELINE_REF=<pre-rotation commit> to measure the real rotation."
-  echo "         Proceeding measures 'current default -> synthetic' ONLY."
-fi
 echo "== baseline: $BASE_REF, same interpreter, default NOT rotated =="
 # Derived FROM $WT, never a sibling guess. The old default was "$WT/../schema-drill-baseline",
 # which force-removed an unrelated real directory when the drill was invoked as documented.
