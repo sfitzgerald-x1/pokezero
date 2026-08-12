@@ -410,8 +410,25 @@ class GoldenCorpusLiveSmokeTest(unittest.TestCase):
             )
             self.assertTrue(report.ok, report.mismatches)
             self.assertEqual(report.rows_validated, verification.decisions)
-            self.assertEqual(verification.array_shapes["categorical_ids"], (151, 51))
-            self.assertEqual(verification.array_shapes["numeric_features"], (151, 155))
+            # Derived from the spec this run actually generated under, not retyped. The
+            # generation here is FLAGLESS, so it follows the fresh-selection default -- which is
+            # the property being smoke-tested ("a default collect produces a verifiable
+            # corpus"), not any particular layout. The literals `(151, 51)` / `(151, 155)`
+            # restated v2.2's shape in a second place and turned the v4 rotation into four
+            # hand-copied numbers to chase. A sibling test in this file already made exactly
+            # this fix and recorded the same reasoning; this one was missed.
+            from pokezero.observation import OBSERVATION_SCHEMA_VERSION
+            from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC
+
+            _live_spec = DEFAULT_REPLAY_OBSERVATION_SPEC
+            self.assertEqual(
+                verification.array_shapes["categorical_ids"],
+                (_live_spec.token_count, _live_spec.categorical_feature_count),
+            )
+            self.assertEqual(
+                verification.array_shapes["numeric_features"],
+                (_live_spec.token_count, _live_spec.numeric_feature_count),
+            )
             self.assertEqual(verification.array_shapes["legal_action_mask"], (ACTION_COUNT,))
 
             corpus = load_golden_corpus(out_dir)
@@ -431,7 +448,12 @@ class GoldenCorpusLiveSmokeTest(unittest.TestCase):
             seats = {row.player_id for row in game.rows}
             self.assertEqual(seats, {"p1", "p2"})
             for row in game.rows:
-                self.assertEqual(row.observation_schema_version, "pokezero.observation.v2.2")
+                # The row records whatever schema PRODUCED it, and this generation is flagless,
+                # so that is the fresh-selection default -- asserted against the constant rather
+                # than a literal. Naming "v2.2" here was a second statement of the default's
+                # identity hidden inside a live-smoke test, and it is the flagless case, so it
+                # tracks the default by definition.
+                self.assertEqual(row.observation_schema_version, OBSERVATION_SCHEMA_VERSION)
                 self.assertTrue(bool(row.arrays.legal_action_mask[row.chosen_action_index]))
                 self.assertIn("belief_view", row.observation_metadata)
                 self.assertEqual(row.public_materialization["selfPlayer"], row.player_id)
