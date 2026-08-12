@@ -12245,3 +12245,124 @@ mod prelude_active_slot_tests {
         }
     }
 }
+
+/// The `divergence_shape` NO-OP LABEL FIX, pinned AT ITS PRODUCTION CALL SITE.
+///
+/// # Why this module exists, and what it replaces
+///
+/// The label fix (#1241) made `divergence_shape` answer `None` for a no-op branch and made
+/// `identify_sleep_talk_called` skip those with `filter_map`, so `shape_empty` stopped appearing
+/// on every `none_matched` the gen3 pool can produce. Its only END-TO-END witness was one
+/// assertion in `tests/gen3_sleeptalk_party_cure_prelude_boundary.rs` that observed the emitted
+/// slug set as exactly `{none_matched:shape_length}` through a live render — and the
+/// active-slot guard beside this module CLOSED the only class that reached it, retiring that
+/// assertion.
+///
+/// Independent review demonstrated that the remaining pins were not a replacement. They hold
+/// the CLASSIFIER (`divergence_shape(&[], &[dmg(30)]) == None`) and not the CALL SITE, and the
+/// difference is measurable: mutate the call site from
+/// `.filter_map(|b| divergence_shape(..))` to
+/// `.map(|b| divergence_shape(..).unwrap_or(NoneMatchedShape::Empty))` and on `main` exactly one
+/// test dies — the retired one — while on the guarded head that mutant SURVIVED the whole
+/// suite. So the guard silently un-pinned the fix it shipped beside. This module is the
+/// replacement.
+///
+/// # And it is a replacement IN KIND, not in degree — stated rather than glossed
+///
+/// The retired assertion watched a LIVE RENDER. This one calls `identify_sleep_talk_called`
+/// directly. That is a genuine reduction: a unit call cannot notice a break in the path from
+/// the renderer to the probe. It is not a free choice — the class is no longer reachable from
+/// any state this repo can construct, which is the whole point of the guard, so no live render
+/// can observe the set any more. Verified rather than assumed: BOTH benched-sleeper layouts
+/// (bench below the active, and bench above it) now render without refusing at all.
+/// What this module does buy is the exact mutant above, which nothing else kills.
+#[cfg(test)]
+mod none_matched_shape_call_site {
+    use super::*;
+    use poke_engine::instruction::{DamageInstruction, HealInstruction};
+    use poke_engine::state::{PokemonMoveIndex, PokemonStatus};
+
+    /// A Rest-asleep Sleep Talk user whose callees are REST — which regenerates a single EMPTY
+    /// branch while already asleep, and is in ALL 70 of the pool's Sleep Talk variants — and
+    /// SWORDSDANCE, which regenerates one NON-EMPTY branch. The tail matches neither and has a
+    /// length no candidate produces, so the scan reaches `NoneMatched` and the shape set is
+    /// decided entirely by whether the no-op is skipped.
+    fn probe_shapes() -> NoneMatchedShapes {
+        let mut state = State::default();
+        state.side_one.get_active().status = PokemonStatus::SLEEP;
+        state.side_one.get_active().rest_turns = 2;
+        for (slot, move_id) in [
+            (PokemonMoveIndex::M0, Choices::SLEEPTALK),
+            (PokemonMoveIndex::M1, Choices::REST),
+            (PokemonMoveIndex::M2, Choices::SWORDSDANCE),
+            (PokemonMoveIndex::M3, Choices::NONE),
+        ] {
+            state.side_one.get_active().replace_move(slot, move_id);
+        }
+
+        let mut outer = poke_engine::choices::MOVES
+            .get(&Choices::SLEEPTALK)
+            .unwrap()
+            .clone();
+        outer.move_id = Choices::SLEEPTALK;
+
+        // Two instructions, so no one-instruction candidate branch can be length-equal to it,
+        // and a Damage/Heal pair neither REST nor SWORDSDANCE can produce a prefix of.
+        let tail = [
+            Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 30,
+            }),
+            Instruction::Heal(HealInstruction {
+                side_ref: SideReference::SideOne,
+                heal_amount: 10,
+            }),
+        ];
+        let probe = identify_sleep_talk_called(
+            &mut state,
+            SideReference::SideOne,
+            &Choice::default(),
+            &outer,
+            &tail,
+            false,
+            NoneMatchedTailOrigin {
+                segment: &tail,
+                cursor: 0,
+            },
+        );
+        match probe.ident {
+            SleepTalkIdent::NoneMatched(shapes) => shapes,
+            SleepTalkIdent::Matched(choice) => panic!(
+                "this fixture must reach the NoneMatched arm or it pins nothing; it matched {:?}",
+                choice.move_id
+            ),
+            SleepTalkIdent::Ambiguous => {
+                panic!("this fixture must reach the NoneMatched arm; it was Ambiguous")
+            }
+        }
+    }
+
+    /// **THE ASSERTION THE GUARD RETIRED, RESTORED AT THE CALL SITE.**
+    ///
+    /// The set must be `{Length}` EXACTLY. `shape_empty` must be ABSENT even though a candidate
+    /// (REST, asleep) contributed nothing but a no-op branch — that absence is the whole of the
+    /// label fix, and asserting the exact set rather than "contains Length" is what makes this a
+    /// test of the fix rather than a description of it.
+    #[test]
+    fn a_no_op_candidate_contributes_no_shape_at_the_production_call_site() {
+        assert_eq!(
+            probe_shapes(),
+            one_shape(NoneMatchedShape::Length),
+            "the emitted set must be {{Length}} alone; a no-op branch must contribute nothing"
+        );
+    }
+
+    /// The same fact stated on the SLUG, because the slug is what the census counts and what a
+    /// world-failure reason is keyed by. A regression that preserved the enum while changing the
+    /// emitted token would pass the assertion above and fail here.
+    #[test]
+    fn the_emitted_slug_set_names_shape_length_alone() {
+        let slugs: Vec<&str> = probe_shapes().iter().map(|s| s.token()).collect();
+        assert_eq!(slugs, vec!["shape_length"], "emitted shape tokens");
+    }
+}

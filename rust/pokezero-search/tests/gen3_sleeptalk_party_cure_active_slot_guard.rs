@@ -34,14 +34,22 @@
 //!
 //! # What is deliberately NOT fixed here
 //!
-//! When there is no benched statused member at all, the callee's first instruction is the
-//! ACTIVE's own clear, and this guard cannot separate that from a genuine wake by index — the
-//! index is the same. The prelude still eats it and the render still drops the callee's
-//! `|move|..|[from] Sleep Talk` line silently. That is a DIFFERENT defect with a different
-//! symptom (a dropped line, never a refusal) and a far wider blast radius, and it wants its
-//! own change and its own census. `the_no_benched_member_case_is_a_known_remaining_gap` pins
-//! it as a KNOWN gap so it cannot be mistaken for fixed, and so that fixing it has a test to
-//! turn.
+//! Whenever the ACTIVE's own clear is the FIRST clear in the cure's walk, this guard cannot
+//! separate that clear from a genuine wake — the index is the same — so the prelude still eats
+//! it and the render still drops the callee's `|move|..|[from] Sleep Talk` line, silently.
+//!
+//! ⚠ **That condition is WIDER than "no benched statused member", which is how an earlier
+//! revision of this note stated it.** Independent review supplied the second layout: a benched
+//! statused member at a HIGHER slot index than the active is walked AFTER the active, so the
+//! active's own clear still leads. Both layouts are pinned below —
+//! `the_active_first_walk_is_a_known_remaining_gap_with_no_bench` and
+//! `..._with_a_higher_slot_bench` — because a gap fixture that pins one of two layouts invites
+//! the reader to believe the other is fixed.
+//!
+//! This is a DIFFERENT defect with a different symptom (a dropped line, never a refusal) and a
+//! far wider blast radius, so it wants its own change and its own census. Closing it needs a
+//! second, independent predicate (a wake cannot arrive after the sleep gate has already fired),
+//! which is measured on the PR and closes BOTH layouts.
 
 use poke_engine::choices::Choices;
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
@@ -67,16 +75,28 @@ const CALLEE_LINE: &str = "|move|p1a: Sleeper|healbell|p1a: Sleeper|[from] Sleep
 /// Reverse the slots and the mechanism does not fire, which is why the ordering has its own
 /// pin below.
 fn party_cure_sleeper(bench_status: PokemonStatus) -> State {
+    party_cure_sleeper_at(PokemonIndex::P1, PokemonIndex::P0, bench_status)
+}
+
+/// The same fixture with the two slots named, so the WALK ORDER can be varied. `active` before
+/// `bench` puts a non-active clear at the head of the callee's instructions (the defect this
+/// change fixes); `bench` after `active` puts the ACTIVE's own clear there instead (the gap it
+/// does not).
+fn party_cure_sleeper_at(
+    active_index: PokemonIndex,
+    bench_index: PokemonIndex,
+    bench_status: PokemonStatus,
+) -> State {
     let mut state = State::default();
 
-    state.side_one.active_index = PokemonIndex::P1;
-    for index in [PokemonIndex::P0, PokemonIndex::P1] {
+    state.side_one.active_index = active_index;
+    for index in [active_index, bench_index] {
         let pkmn = &mut state.side_one.pokemon[index];
         pkmn.maxhp = 300;
         pkmn.hp = 300;
         pkmn.speed = 500;
     }
-    let bench = &mut state.side_one.pokemon[PokemonIndex::P0];
+    let bench = &mut state.side_one.pokemon[bench_index];
     bench.status = bench_status;
     if bench_status == PokemonStatus::SLEEP {
         // Rest sleep, not natural sleep. This is the LATCH: `DecrementRestTurns` applies to
@@ -189,18 +209,29 @@ fn render(state: &mut State, branch: &StateInstructions) -> RenderedEvents {
 
 /// The branch carrying the callee: the one that clears the ACTIVE's own sleep.
 fn branch_curing_the_active(generated: &[StateInstructions]) -> &StateInstructions {
+    branch_curing_slot(generated, PokemonIndex::P1)
+}
+
+/// Parameterised on the slot, because the two gap layouts put the active at different indices and
+/// a finder hardcoded to `P1` silently found nothing for one of them.
+fn branch_curing_slot(
+    generated: &[StateInstructions],
+    active_index: PokemonIndex,
+) -> &StateInstructions {
     generated
         .iter()
         .find(|branch| {
             branch.instruction_list.iter().any(|ins| {
                 matches!(ins, Instruction::ChangeStatus(change)
                     if change.side_ref == SideReference::SideOne
-                        && change.pokemon_index == PokemonIndex::P1
+                        && change.pokemon_index == active_index
                         && change.old_status == PokemonStatus::SLEEP
                         && change.new_status == PokemonStatus::NONE)
             })
         })
-        .unwrap_or_else(|| panic!("no branch clears the active's own sleep: {generated:?}"))
+        .unwrap_or_else(|| {
+            panic!("no branch clears {active_index:?}'s own sleep: {generated:?}")
+        })
 }
 
 fn branch_with<'a>(
@@ -462,36 +493,71 @@ fn the_party_cure_clears_the_benched_slot_before_the_actives_own() {
     );
 }
 
-/// **KNOWN REMAINING GAP, pinned so it cannot be mistaken for fixed.**
+/// **KNOWN REMAINING GAP, LAYOUT 1 OF 2 — no benched statused member at all.**
 ///
-/// With no benched statused member, the callee's first instruction is the ACTIVE's own clear.
-/// The guard cannot separate that from a genuine wake — the index is identical — so the
-/// prelude still consumes it and the callee line is still dropped. The render is WRONG here
-/// and it does not refuse, which is why this is a pinned gap rather than a footnote.
+/// The callee's first instruction is the ACTIVE's own clear, which this guard cannot separate
+/// from a genuine wake because the index is identical. The prelude still consumes it and the
+/// callee line is still dropped. The render is WRONG here and it does not refuse, which is why
+/// this is a pinned gap rather than a footnote.
 ///
-/// This assertion is deliberately written to fail when the gap is CLOSED. Closing it needs a
-/// second, independent predicate (the wake cannot arrive after the sleep gate has already
-/// fired), which changes rendering on a far more common path and wants its own census.
+/// Written to FAIL WHEN THE GAP CLOSES. Closing it needs a second, independent predicate (a wake
+/// cannot arrive after the sleep gate has already fired), which changes rendering on a far more
+/// common path and wants its own census.
 #[test]
-fn the_no_benched_member_case_is_a_known_remaining_gap() {
-    let mut state = party_cure_sleeper(PokemonStatus::NONE);
+fn the_active_first_walk_is_a_known_remaining_gap_with_no_bench() {
+    assert_gap(
+        party_cure_sleeper(PokemonStatus::NONE),
+        PokemonIndex::P1,
+        "no benched statused member",
+    );
+}
+
+/// **KNOWN REMAINING GAP, LAYOUT 2 OF 2 — a benched sleeper at a HIGHER slot than the active.**
+///
+/// Supplied by independent review, and it is the reason the gap's condition is *"the active's own
+/// clear leads the cure's walk"* rather than *"there is no benched statused member"*. The cure
+/// walks `pokemon_index_iter()` in slot order, so a bench ABOVE the active is cured AFTER it —
+/// the active's own clear still comes first, and the prelude still eats it.
+///
+/// Pinning only layout 1 would have invited the reader to believe this one was fixed. It is not,
+/// and it is identical on `main`: the guard changes nothing here in either direction.
+#[test]
+fn the_active_first_walk_is_a_known_remaining_gap_with_a_higher_slot_bench() {
+    assert_gap(
+        party_cure_sleeper_at(PokemonIndex::P0, PokemonIndex::P2, PokemonStatus::SLEEP),
+        PokemonIndex::P0,
+        "benched sleeper ABOVE the active",
+    );
+}
+
+/// The shared body of the two gap pins: the callee line is missing AND nothing refuses.
+///
+/// Both halves matter. The missing line is the defect; the absent refusal is why it is dangerous,
+/// and it is what keeps this gap invisible to the census.
+fn assert_gap(mut state: State, active_index: PokemonIndex, layout: &str) {
     let generated = branches(&mut state);
-    let branch = branch_curing_the_active(&generated).clone();
+    let branch = branch_curing_slot(&generated, active_index).clone();
     let rendered = render(&mut state, &branch);
 
+    // ON THE MOVE NAME, not on `CALLEE_LINE`. The two layouts put the active at different slots,
+    // so their idents differ, and asserting the ABSENCE of a fully-identful line would pass for
+    // the wrong reason the moment the ident changed — an absence assertion has to be checked
+    // against the loosest form of the thing it claims is missing.
     assert!(
-        !rendered.lines.iter().any(|l| l == CALLEE_LINE),
-        "THE KNOWN GAP JUST CLOSED. This is good news, not a failure — but it means a second \
-         predicate landed, and the PR body's scope statement plus this test must be updated \
-         together. lines {:?}",
+        !rendered.lines.iter().any(|l| l.contains("healbell")),
+        "THE KNOWN GAP JUST CLOSED for the {layout} layout. This is good news, not a failure — \
+         but it means a second predicate landed, and the module doc's scope statement plus both \
+         gap pins must be updated together. lines {:?}",
         rendered.lines
     );
-    // And it is SILENT, which is the part that makes it worth a pin: no refusal marks it.
+    // The positive fixtures assert the exact identful line, so the loose form above cannot hide a
+    // change in the line's SHAPE — only in whether the callee is named at all.
+    let _ = CALLEE_LINE;
     assert_eq!(
         none_matched(&rendered),
         Vec::<String>::new(),
-        "if this gap ever starts refusing instead, it becomes visible to the census and this \
-         pin must be revisited: {:?}",
+        "the {layout} gap is SILENT, and that is the part worth pinning: if it ever starts \
+         refusing instead it becomes visible to the census and these pins must be revisited: {:?}",
         rendered.attribution_unsafe
     );
 }
