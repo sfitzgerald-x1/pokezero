@@ -258,7 +258,16 @@ if [ "${_summary_failed:-0}" -ne "${_scored:-0}" ]; then
   exit 6
 fi
 
-EXPECTED="$REPO/tests/data/schema_drill_expected_breakages.txt"
+# Rubric comes from the WORKTREE (committed HEAD), not the live tree. Reading it from $REPO let
+# the pass condition and the code under test come from different revisions: checking out an
+# unrelated branch mid-run made the file vanish, `expected` became 0, and all 8 legitimate
+# class-(iii) breakages reported as UNEXPECTED. Predicted by review before it happened.
+EXPECTED="$WT/tests/data/schema_drill_expected_breakages.txt"
+if [ ! -f "$EXPECTED" ]; then
+  echo "ABORT: no expected-breakages file at $EXPECTED -- there is no pass condition to score"
+  echo "       against, and scoring without one reports every legitimate breakage as unexpected."
+  exit 7
+fi
 # Collection ERRORs and a non-zero-but-no-FAILED run are both "the suite did not measure what
 # it claims". Scoring only ^FAILED made a module-level import failure read as "6 pins no longer
 # pinning" rather than "nothing ran" -- the exact symptom this drill hit twice.
@@ -307,7 +316,7 @@ fi
 # Subtract the baseline, THEN the source-mutation artifacts. Both are "not attributable to the
 # default moving", but for different reasons, and they are kept in different files so a real
 # conflation cannot hide behind the word "expected".
-ARTIFACTS="$REPO/tests/data/schema_drill_source_mutation_artifacts.txt"
+ARTIFACTS="$WT/tests/data/schema_drill_source_mutation_artifacts.txt"
 grep -vE '^\s*(#|$)' "$ARTIFACTS" 2>/dev/null | sort -u > "$WT/artifacts.txt" || : > "$WT/artifacts.txt"
 comm -23 "$WT/rotated.txt" "$WT/baseline.txt" > "$WT/attributable.txt"
 comm -23 "$WT/attributable.txt" "$WT/artifacts.txt" > "$WT/actual.txt"
