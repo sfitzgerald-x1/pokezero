@@ -501,6 +501,36 @@ jobs:
       # including src/pokezero/engine_env.py, which runs pokezero_search.env_step and is
       # reached by the pokezero-rollout console script. With an enabler there a real
       # search process came back ENUMERATED and this step still read `Ran 14 tests OK`.
+      # pyproject declares requires-python >= 3.11, but every job here pins 3.12, so nothing
+      # compared the code against its own declared floor. One file used a backslash inside an
+      # f-string (legal 3.12+, SyntaxError on 3.11) and the breach was invisible in both
+      # directions: CI could not see it, and locally it failed COLLECTION for three test modules
+      # plus one script -- which read as "four files you work around", while the suite silently
+      # measured 116 tests and 1398 subtests fewer than it appeared to. Two artifacts rotted
+      # inside those modules before a 3.12 run happened to catch it.
+      #
+      # No pure-Python guard is possible: PEP 701 removed the restriction from CPython's parser,
+      # so ast.parse(feature_version=(3,11)) on 3.12 ACCEPTS what 3.11 rejects. Hence ruff.
+      # Exit 2 (cannot run) is a failure here too -- a check that skips is not a check.
+      - name: Python floor syntax gate
+        run: |
+          set -o pipefail
+          python -m pip install --quiet ruff
+          python scripts/check_python_floor_syntax.py 2>&1 | tee /tmp/floorsyntax.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -eq 2 ]; then
+            echo "::error::the floor-syntax gate could not run (exit 2) -- not treated as green"
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::tracked file(s) use syntax newer than requires-python declares"
+            exit 1
+          fi
+          if ! grep -q 'every tracked .py file parses on' /tmp/floorsyntax.log; then
+            echo "::error::gate exited 0 without its success line -- output shape changed"
+            exit 1
+          fi
+
       - name: Roll-enumeration scope gate
         run: |
           set -o pipefail
