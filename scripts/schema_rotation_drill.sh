@@ -56,7 +56,7 @@ VENV="$REPO/.venv/bin/python"
 # to stderr while the pipeline carried on and produced EMPTY normalised files. Empty files
 # compare as "0 breakages", which is indistinguishable from a pass. A scoring bug that fails
 # toward PASS is the worst kind, and this one did.
-_norm_id() { sed -E 's#^(FAILED|ERROR)[[:space:]]+##; s#^.*/tests/##; s#^tests/##'; }
+_norm_id() { sed -E 's#^(FAILED|ERROR|SUBFAILED)(\([^)]*\))?[[:space:]]+##; s#^.*/tests/##; s#^tests/##'; }
 
 drill_targets() {
   local root="$1"
@@ -219,7 +219,7 @@ BASE="${DRILL_BASELINE:-${WT%/}-baseline}"
 if [ "${DRILL_BASELINE_REUSE:-0}" = "1" ] && [ -f "$BASE/BASE.sha" ] \
    && [ "$(cat "$BASE/BASE.sha")" = "$(git -C "$REPO" rev-parse "$BASE_REF") ${DRILL_SCOPE:-full}" ]; then
   echo "  reusing baseline at $(cat "$BASE/BASE.sha" | cut -c1-8)"
-  grep '^FAILED' "$BASE/BASE.txt" | _norm_id | sort -u > "$WT/baseline.txt"
+  grep -E '^(FAILED|SUBFAILED)' "$BASE/BASE.txt" | _norm_id | sort -u > "$WT/baseline.txt"
   echo "  baseline failures (NOT attributable to the rotation): $(wc -l < "$WT/baseline.txt" | tr -d ' ')"
   SKIP_BASELINE=1
 fi
@@ -229,8 +229,19 @@ git -C "$REPO" worktree add -q --detach "$BASE" "$BASE_REF" || exit 3
 echo "$(git -C "$REPO" rev-parse "$BASE_REF") ${DRILL_SCOPE:-full}" > "$BASE/BASE.sha"
 find "$BASE/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
 PYTHONPATH="$BASE/src" "$VENV" -m pytest $(drill_targets "$BASE") -q -p no:randomly > "$BASE/BASE.txt" 2>&1
-grep '^FAILED' "$BASE/BASE.txt" | _norm_id | sort -u > "$WT/baseline.txt"
+grep -E '^(FAILED|SUBFAILED)' "$BASE/BASE.txt" | _norm_id | sort -u > "$WT/baseline.txt"
 echo "  baseline failures (NOT attributable to the rotation): $(wc -l < "$WT/baseline.txt" | tr -d ' ')"
+fi
+
+# The summary's failure count MUST equal the number of ids we scored. They disagreed by 4 once
+# (18 vs 14, pytest-subtests) and the shortfall was silent. This makes any future missed bucket
+# -- a new pytest reporter prefix, a plugin -- a hard failure instead of a quiet undercount.
+_summary_failed=$(grep -oE '^[0-9]+ failed' "$WT/DRILL.txt" | head -1 | grep -oE '[0-9]+' || echo 0)
+_scored=$(grep -cE '^(FAILED|SUBFAILED)' "$WT/DRILL.txt" || true)
+if [ "${_summary_failed:-0}" -ne "${_scored:-0}" ]; then
+  echo "ABORT: pytest reported ${_summary_failed} failures but only ${_scored} were scored."
+  echo "       A reporter bucket is unaccounted for; the score would be an undercount."
+  exit 6
 fi
 
 EXPECTED="$REPO/tests/data/schema_drill_expected_breakages.txt"
@@ -255,7 +266,7 @@ done
 # something the rotation caused. Two bugs were here at once: the sed also assumed a leading
 # `/tests/` and produced "ERROR ERROR ..." for relative paths.
 _norm() { sed -E 's#^(ERROR|FAILED)[[:space:]]+##; s#^.*/tests/##; s#^tests/##' "$1" | sort -u; }
-grep -E '^(ERROR|FAILED) ' "$BASE/BASE.txt" > "$WT/base_broken.raw" || true
+grep -E '^(ERROR|FAILED|SUBFAILED)' "$BASE/BASE.txt" > "$WT/base_broken.raw" || true
 grep '^ERROR ' "$WT/DRILL.txt" > "$WT/rot_err.raw" || true
 _norm "$WT/base_broken.raw" > "$WT/base_broken.txt"
 _norm "$WT/rot_err.raw" > "$WT/rot_err.txt"
@@ -265,7 +276,11 @@ if [ -n "$NEW_ERR" ]; then
   printf '%s\n' "$NEW_ERR" | sed 's/^/  /' | head
   exit 4
 fi
-grep '^FAILED' "$WT/DRILL.txt" | _norm_id | sort -u > "$WT/rotated.txt"
+# SUBFAILED too. pytest-subtests reports a failing subtest as `SUBFAILED(param) <id>` and counts
+# it in the summary's "N failed", but it does NOT emit a `FAILED` line. Grepping ^FAILED alone hid
+# 4 real failures behind an 18-vs-14 discrepancy between the summary and the scored set -- the
+# eighth instrument defect here, and another that hides failures rather than inventing them.
+grep -E '^(FAILED|SUBFAILED)' "$WT/DRILL.txt" | _norm_id | sort -u > "$WT/rotated.txt"
 # Empty normalised output means the normaliser broke, not that the tree is clean -- the sed
 # delimiter bug produced exactly that and it scored as a PASS. Placed AFTER rotated.txt is
 # written: the first cut of this guard sat six lines too early and tested a file that did not
@@ -275,7 +290,15 @@ if grep -q '^FAILED' "$WT/DRILL.txt" && [ ! -s "$WT/rotated.txt" ]; then
   echo "ABORT: the run has FAILED lines but normalisation produced nothing -- scorer is broken."
   exit 5
 fi
-comm -23 "$WT/rotated.txt" "$WT/baseline.txt" > "$WT/actual.txt"
+# Subtract the baseline, THEN the source-mutation artifacts. Both are "not attributable to the
+# default moving", but for different reasons, and they are kept in different files so a real
+# conflation cannot hide behind the word "expected".
+ARTIFACTS="$REPO/tests/data/schema_drill_source_mutation_artifacts.txt"
+grep -vE '^\s*(#|$)' "$ARTIFACTS" 2>/dev/null | sort -u > "$WT/artifacts.txt" || : > "$WT/artifacts.txt"
+comm -23 "$WT/rotated.txt" "$WT/baseline.txt" > "$WT/attributable.txt"
+comm -23 "$WT/attributable.txt" "$WT/artifacts.txt" > "$WT/actual.txt"
+_art=$(comm -12 "$WT/attributable.txt" "$WT/artifacts.txt" | grep -c . || true)
+[ "${_art:-0}" -gt 0 ] && echo "  source-mutation artifacts subtracted: $_art"
 grep -vE '^\s*(#|$)' "$EXPECTED" | sort -u > "$WT/expected.txt"
 
 UNEXPECTED=$(comm -23 "$WT/actual.txt" "$WT/expected.txt")
