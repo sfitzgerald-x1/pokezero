@@ -122,6 +122,15 @@ FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V4,)
 # silently routed any unlisted schema to the unprojected legacy path.
 V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V3,)
 
+# Schemas carrying the v2.1 block set forward (PP-validity bits, sub HP, per-mon pinned Tier-2
+# conclusions) -- every current-state surface that survives a region trim. Everything except v2.
+V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS = (
+    OBSERVATION_SCHEMA_VERSION_V2_1,
+    OBSERVATION_SCHEMA_VERSION_V2_2,
+    OBSERVATION_SCHEMA_VERSION_V3,
+    OBSERVATION_SCHEMA_VERSION_V4,
+)
+
 
 def schema_with(
     *,

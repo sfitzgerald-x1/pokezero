@@ -38,6 +38,9 @@ from .observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     DEFAULT_OBSERVATION_FEATURE_MASKS,
     FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
+    V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS,
+    TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
+    GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
     V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS,
     FIELD_TOKEN_COUNT,
     OBSERVATION_SCHEMA_VERSION,
@@ -4318,8 +4321,11 @@ def observation_from_player_state(
     # v3-era writer (it means "grouped-layout lineage", not "exactly v3") and ``schema_v4`` gates
     # the pack columns on top. A v3 spec therefore never touches a pack column, and a v4 spec
     # writes the complete v3 surface — the two projections differ, never the semantics they share.
-    schema_v4 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V4
-    schema_v3 = schema_v4 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V3
+    # Membership, not identity: these gates already MEAN properties -- the comment above says
+    # `schema_v3` means "grouped-layout lineage", not "exactly v3" -- so they now say so. An
+    # identity gate silently excludes every future schema with the same property.
+    schema_v4 = spec.schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS
+    schema_v3 = spec.schema_version in GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS
     if schema_v4 and spec.numeric_feature_count != _V4_NUMERIC_FEATURE_COUNT:
         raise ValueError(
             "observation encode: the grouped v4 layout requires exactly "
@@ -4379,17 +4385,11 @@ def observation_from_player_state(
     # TURN-MERGED is a property of the TRANSITION REGION, and v4 has none — so v4 is a
     # grouped-layout (v3-lineage) schema that is NOT turn-merged. Keeping these two axes
     # separate is what lets v4 write every v3 current-state signal while encoding no history.
-    schema_turn_merged = (not schema_v4) and (
-        schema_v3 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
-    )
+    schema_turn_merged = spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
     # v2.2 carries every v2.1 block forward unchanged; only the transition surface differs. v4
     # keeps those blocks too (PP-validity bits, sub HP, the per-mon pinned Tier-2 conclusions —
     # all current-state surfaces that survive the region trim).
-    schema_v2_1 = (
-        schema_turn_merged
-        or schema_v4
-        or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
-    )
+    schema_v2_1 = spec.schema_version in V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS
     if schema_turn_merged and state.transition_tokens and not state.turn_merged_tokens:
         raise ValueError(
             "observation encode: a v2.2 (turn-merged) spec requires the state's "
