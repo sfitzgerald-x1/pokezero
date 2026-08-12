@@ -5168,9 +5168,9 @@ fn identify_sleep_talk_called(
             // `ambiguous_unrenderable` from one opaque key into a ranked family list.
             // `filter_map`, because `divergence_shape` now answers `None` for a NO-OP branch
             // and a no-op is evidence about no candidate. Skipping it is the whole of the
-            // label fix: without it `shape_empty` appeared on essentially every decision this
-            // pool can produce (12 of 33 callees emit an empty branch while asleep) and the
-            // token carried no bits.
+            // label fix: without it `shape_empty` appeared on every decision this pool can
+            // produce and the token carried no bits. See `divergence_shape` for the two
+            // measurements behind that, both taken first-hand.
             for shape in generated
                 .iter()
                 .filter_map(|branch| divergence_shape(branch.instruction_list.as_slice(), tail))
@@ -5189,6 +5189,19 @@ fn identify_sleep_talk_called(
         // emptiness alone would report the first when the second happened -- the exact
         // conflation `NoCandidates` was split out of `Empty` to remove, re-entered from the
         // other side.
+        //
+        // ⚠ THIS IS A SECOND LABEL CHANGE AND IT RELABELS AN EXISTING CASE, so it is called
+        // out rather than left to be discovered. Before this, `shapes.is_empty()` alone
+        // seeded `NoCandidates`, so "candidates EXISTED but every one generated zero branches"
+        // reported `shape_no_candidates` -- a token whose own doc says "there was nothing to
+        // look at", which was false for it. It now reports `shape_empty`, whose new meaning
+        // ("no candidate contributed anything classifiable") is exactly that case. So the
+        // change is not only the removal of a vacuous token: one pre-existing case moves
+        // buckets, into the bucket that describes it.
+        //
+        // Not observed in the captured population -- all 36 decisions carried a classifiable
+        // branch -- so this arm is recorded as a correctness fix to the labelling, with no
+        // measurement behind its frequency.
         None if candidate_count == 0 => {
             let mut only = NoneMatchedShapes::default();
             only.insert(NoneMatchedShape::NoCandidates);
@@ -5785,12 +5798,24 @@ fn nearest_divergence<'a>(
 /// that can whiff, not that this candidate is nearer to or farther from the tail than any
 /// other.
 ///
-/// It used to return `Empty` here, and the consequence was measurable rather than
-/// theoretical: **12 of the 33 callees reachable on the gen3 randbats pool produce an empty
-/// branch while the user is asleep**, so `shape_empty` was present on essentially every
-/// `none_matched` decision this pool can produce and carried ZERO bits. The observed set
-/// `{shape_empty, shape_length}` reduces to `{shape_length}` -- one token, and the one that
-/// names something.
+/// It used to return `Empty` here, and the consequence was measured, not argued. Two figures,
+/// both derived first-hand from the census plan (`variant_count: 1682`,
+/// `source_hash f9e35e1fddae5064`) and from the live capture:
+///
+///   1. **REST IS IN ALL 70 OF THE POOL'S SLEEP TALK VARIANTS**, 70 of 70, and Rest
+///      regenerated while the user is already asleep produces an EMPTY branch. So every
+///      `none_matched` this pool can produce carries at least one no-op branch by
+///      construction -- there is no subset of the pool on which `shape_empty` discriminates.
+///      (30 distinct non-Sleep-Talk callees span those 70 variants; 210 callee slots.)
+///   2. **In the live capture it was present on 36 of 36 refusals and separated none of
+///      them.** The whole observed set was `{shape_empty, shape_length}` on all 36.
+///
+/// So the set reduces to `{shape_length}` -- one token, and the one that names something.
+///
+/// An earlier revision of this comment cited "12 of 33 callees", which was carried in from a
+/// brief rather than derived here; 33 does not reproduce (the operative count is 30, since
+/// `get_sleep_talk_choices` filters only Sleep Talk and `NONE`) and the numerator was never
+/// measured at all. Replaced with figures this repo can re-derive.
 ///
 /// LABEL ONLY. `sleeptalk_refusal_is_unsafe` answers `NoneMatched(_) => true` regardless of
 /// the shape set, so nothing here can turn a refused branch into a searched one, or the
@@ -11708,9 +11733,9 @@ mod none_matched_shape_tests {
     ///
     /// It answers `None` rather than `Empty` because an empty branch is a NO-OP -- a miss, a
     /// type immunity, Rest while already asleep, a callee blocked by a Protect that moved
-    /// second -- and 12 of the 33 callees reachable on the gen3 randbats pool produce one
-    /// while the user is asleep. Reporting it made `shape_empty` present on essentially every
-    /// `none_matched` decision the pool can produce, carrying zero bits.
+    /// second -- and REST IS IN ALL 70 of the pool's Sleep Talk variants, so every
+    /// `none_matched` the pool can produce carries one by construction. Reporting it made
+    /// `shape_empty` universal and therefore worth zero bits.
     #[test]
     fn an_empty_branch_is_not_reported_as_containment() {
         assert_eq!(divergence_shape(&[], &[dmg(30)]), None);

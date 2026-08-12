@@ -5,8 +5,8 @@
 //!
 //! This class was measured **unreachable from every turn-start state the repo could
 //! construct** -- 0 `none_matched` in 1,341,623 rendered branches over three sweeps -- while
-//! firing in the production tree. It was captured live at production budget
-//! (`/Users/scott/workspace/agents/none-matched-dump/`, seed 9900068, 36 of 36 decisions
+//! firing in the production tree. It was captured live at production budget (the
+//! `none-matched-dump` capture directory, off-repo; seed 9900068, 36 of 36 decisions
 //! identical in shape) and the capture names the mechanism. These fixtures are that
 //! mechanism, written as the two-sided measurement the sweeps could not make: one state that
 //! produces the class and one that differs in a SINGLE fact and does not.
@@ -35,6 +35,22 @@
 //! A suffix is not a prefix in either direction, so the containment split cannot see it and
 //! the class reports `shape_length` -- "a genuinely different transition" -- for a transition
 //! that is exactly right and a phase boundary that is off by one instruction.
+//!
+//! # THE GUARD ALREADY EXISTS, ONE FUNCTION AWAY
+//!
+//! The missing conjunct is not new logic. `active_status_transition` (`src/events.rs`, ~1,400
+//! lines above the arm) already compares
+//! `state.get_side_immutable(&change.side_ref).active_index == change.pokemon_index` -- and the
+//! wake arm CALLS it, on this very instruction, to decide whether to record a transition. It
+//! correctly answers "not the active" and records nothing; the arm then consumes and applies
+//! the instruction anyway. So the discriminator is computed, consulted for one purpose, and
+//! discarded for the other. Applying the existing check at the second site is the whole of the
+//! eventual fix.
+//!
+//! That is the campaign's recurring shape: the value was public, and the consumer refused to
+//! read it. Recorded here rather than acted on -- the same arm sets `prelude.woke_up` and
+//! `sleep_gate_seen`, which gate the `|cant|..|slp` emission, so guarding it is a
+//! render-behaviour change that needs its own PR, review and census arm.
 //!
 //! # NOT branch merging
 //!
@@ -193,10 +209,10 @@ fn a_benched_asleep_party_member_makes_the_sleep_talk_tail_non_containable() {
     // `shape_empty` is ABSENT, and its absence is the whole of the `divergence_shape` label
     // fix landing in this same change. `REST` is a callee here and regenerates a single EMPTY
     // branch (Rest while already asleep), so before the fix this set was
-    // `{shape_empty, shape_length}` -- and `shape_empty` was present on every `none_matched`
-    // decision the gen3 randbats pool can produce (12 of 33 callees emit an empty branch
-    // while the user is asleep), carrying zero bits. Reverting the fix turns this assertion
-    // red, which is what makes it a test of the fix rather than a description of it.
+    // `{shape_empty, shape_length}` -- and Rest is in ALL 70 of the pool's Sleep Talk
+    // variants, so `shape_empty` was present on every `none_matched` that pool can produce,
+    // carrying zero bits. Reverting the fix turns this assertion red, which is what makes it
+    // a test of the fix rather than a description of it.
     assert_eq!(
         none_matched_reasons(&rendered),
         vec![format!("{NONE_MATCHED}:shape_length")],
