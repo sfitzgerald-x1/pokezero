@@ -895,8 +895,12 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 && !output.opponent_priors.is_empty()
                 && !is_single_none(&opponent_options)
             {
-                // Root: no branch lines yet, so the unevolved party order is
-                // correct here by construction.
+                // Root: the SUPPLIED order (ctx["opponent_request_order"]),
+                // unevolved because no branch lines have been applied yet.
+                // "Unevolved" is the whole claim here -- it is emphatically not
+                // that an engine PARTY order would do; that base is fail-open
+                // past the opponent's first switch. See
+                // `LeafContext::root_opponent_order`.
                 Some(leaf_ctx.opponent_action_map(&state, &opponent_options, None, None, false)?)
             } else {
                 None
@@ -1246,12 +1250,33 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     .child
                     .map(|child| outcome.tree.decisions[child].depth)
                     .unwrap_or(u8::MAX);
+                // The ORDER this branch gathered under is the thing M9 changes,
+                // and emitting it turns the mutant test from a statistic into
+                // an equality: a ply-2 branch whose line switched the opponent
+                // must carry the EVOLVED order, and under the mutant it carries
+                // the root order instead. Without this the test would have to
+                // re-derive the map to infer the order from the vector.
+                let order_json = match fold_by_branch
+                    .get(&(chance_index, branch_index))
+                    .and_then(|fold| fold.opponent_order.as_ref())
+                {
+                    Some(order) => format!(
+                        "[{}]",
+                        order
+                            .iter()
+                            .map(|name| format!("\"{name}\""))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ),
+                    None => "null".to_string(),
+                };
                 entries.push(format!(
-                    "{{\"chance\":{},\"branch\":{},\"child_depth\":{},\"side_one\":{},\"priors\":[{}]}}",
+                    "{{\"chance\":{},\"branch\":{},\"child_depth\":{},\"side_one\":{},\"opponent_order\":{},\"priors\":[{}]}}",
                     chance_index,
                     branch_index,
                     depth,
                     side_one,
+                    order_json,
                     priors
                         .iter()
                         .map(|p| format!("{p:.6}"))

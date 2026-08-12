@@ -349,6 +349,7 @@ class _EncodedSearchFixture:
         early_stop_side_one: bool = True,
         ctx_json: str | None = None,
         use_opponent_priors: bool | None = None,
+        debug_prior_vectors: bool = False,
         position: dict | None = None,
     ) -> dict:
         position = self.position if position is None else position
@@ -373,6 +374,15 @@ class _EncodedSearchFixture:
         # keeps making the historical 14-positional call byte for byte.
         if use_opponent_priors is not None:
             args.append(use_opponent_priors)
+        # Positional, so it can only be appended once the flag before it is
+        # present. Callers that ask for vectors must also state the flag.
+        if debug_prior_vectors:
+            if use_opponent_priors is None:
+                raise AssertionError(
+                    "debug_prior_vectors is positional after use_opponent_priors; "
+                    "pass the flag explicitly"
+                )
+            args.append(True)
         return json.loads(self.native.search_batched_multi_encoded(*args))
 
     # -- opponent-seat helpers (used only by OpponentPriorsEncodedSearchTest) --
@@ -864,6 +874,110 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
         self.assertEqual(on["root_priors"], off["root_priors"])
         self.assertEqual(on["side_one"], off["side_one"])
         self.assertEqual(on["side_two"], off["side_two"])
+
+    def test_a_branch_that_switches_the_opponent_evolves_its_request_order(self) -> None:
+        """M9: `branch: opponent_prefix() -> self_prefix()` in model.rs.
+
+        THE MUTANT. Swapping the prefix makes the opponent's per-branch order
+        evolution match SELF switch lines, which name the SELF party's species.
+        Those never appear in the opponent's order, so `evolve_self_order`
+        matches nothing and the order silently FREEZES at its root value --
+        correct until the opponent's first in-tree switch and a permutation from
+        then on. It is the B2 defect one ply down.
+
+        WHY THIS TEST IS WHITE-BOX, which is not a style choice. Three
+        outcome-based routes are already dead (priors.rs module header section
+        2, and the fallback burndown):
+
+        * raising the budget -- the mutant is concordant with baseline at sims
+          in {48, 96, 192, 512, 1024} x batch in {1, 8} x 4 seeds, and the true
+          head's own discordance band is 48-192, so above it the TRUE head
+          reads as the mutant;
+        * an equality oracle over the visit order -- provably nonexistent, all
+          720 permutations enumerated and none satisfies both the root and the
+          evolved order;
+        * a tied-pair statistic -- passes by coincidence.
+
+        All three fail for one reason: they observe the mutant through search
+        OUTCOMES, and a reshaped tree launders any outcome. `prior_branches`
+        cannot serve either -- it sums both seats over the whole search and
+        moves in both directions between HEAD and M9 (256->260, 258->196).
+
+        So this reads the order the branch actually gathered under, through the
+        `debug_prior_vectors` hook, and asserts it EVOLVED. Under the mutant no
+        branch evolves and the assertion fails deterministically -- not
+        statistically, and not at one budget.
+
+        WHAT IT ASSERTS, in order of strength:
+        1. some ply-2 branch carries an order differing from the root's;
+        2. that difference is exactly the slot-0 swap a switch-in performs, and
+           the species brought to slot 0 came from the root order rather than
+           from anywhere else -- so a mutation that scrambled the order rather
+           than freezing it would also fail;
+        3. the branch that evolved also has an applied prior vector, so the
+           evolved order is the one priors were actually gathered under, which
+           is the property the campaign depends on.
+        """
+        ctx_json = self._ctx_with_opponent_order()
+        root_order = json.loads(ctx_json)["opponent_request_order"]
+
+        report = self._search(
+            sims=48,
+            batch=1,
+            seed=5,
+            model_priors=True,
+            ctx_json=ctx_json,
+            use_opponent_priors=True,
+            debug_prior_vectors=True,
+        )
+
+        vectors = report["opponent_prior_vectors"]
+        self.assertIsNotNone(
+            vectors, "the debug hook must emit when asked; null means it was off"
+        )
+        # child_depth 1 is a ply-2 decision node: the root sits at depth 0 and
+        # `max_depth=2` stops expansion at depth+1 >= 2. Branches whose child
+        # does not exist yet carry the u8::MAX sentinel and are not ply-2.
+        ply_two = [entry for entry in vectors if entry["child_depth"] == 1]
+        self.assertGreater(
+            len(ply_two), 0, "the fixture must reach ply 2 or it cannot see this mutant"
+        )
+
+        evolved = [
+            entry
+            for entry in ply_two
+            if entry["opponent_order"] is not None
+            and entry["opponent_order"] != root_order
+        ]
+        self.assertGreater(
+            len(evolved),
+            0,
+            "no ply-2 branch evolved the opponent's request order: the order is "
+            "frozen at its root value, which is exactly what M9 produces",
+        )
+
+        # The difference must be a switch-in, not arbitrary scrambling: the
+        # species now at slot 0 came from the root order, and swapping it back
+        # with whatever the root had at slot 0 restores the root exactly.
+        for entry in evolved:
+            order = entry["opponent_order"]
+            self.assertEqual(
+                sorted(order), sorted(root_order), "an evolved order is a permutation"
+            )
+            switched_in = order[0]
+            self.assertIn(switched_in, root_order)
+            slot = root_order.index(switched_in)
+            restored = list(order)
+            restored[0], restored[slot] = restored[slot], restored[0]
+            self.assertEqual(
+                restored,
+                root_order,
+                "the evolved order must differ from the root by exactly the "
+                f"slot-0 swap that switching in {switched_in} performs",
+            )
+            # And the priors were gathered under it -- an evolved order nothing
+            # gathered under would not protect the campaign.
+            self.assertGreater(len(entry["priors"]), 0)
 
     def test_the_order_channel_is_inert_while_the_flag_is_off(self) -> None:
         """Flag-off equivalence is the campaign's anchor: cell A's numbers were

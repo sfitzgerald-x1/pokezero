@@ -1984,17 +1984,29 @@ impl LeafContext {
     /// Two conventions differ from the self side, both forced by the opponent
     /// being BELIEF state rather than known state:
     ///
-    /// * **Display order.** Same shape as the self side, different base. The
-    ///   root base is the sampled world's ENGINE PARTY order (the only base
-    ///   that resolves engine `Switch(party)` indices), and it is then evolved
-    ///   through the branch's switches by `evolve_self_order` with
-    ///   `opponent_prefix()`, exactly as the self order is. Measured on the
-    ///   golden corpus, that reproduces the opponent seat's own request order
-    ///   — which is the head's training label space
-    ///   (`rollout.py::_opponent_action_index`). Two nearby wrong answers,
-    ///   both tried and both measured: `md["opponent_team"]` is the partial
-    ///   belief view and resolves almost nothing, and the unevolved party
-    ///   order is correct only until the opponent's first switch.
+    /// * **Display order.** Same shape as the self side, different base — and
+    ///   the base is NOT derived here. It is the order Python supplies as
+    ///   `ctx["opponent_request_order"]`, read back through
+    ///   [`LeafContext::root_opponent_order`]; when Python cannot determine it,
+    ///   the key is absent and the action map REFUSES rather than guessing.
+    ///   From that base the order is evolved through the branch's switches by
+    ///   `evolve_self_order` with `opponent_prefix()`, exactly as the self
+    ///   order is, and the evolution is pinned by
+    ///   `test_a_branch_that_switches_the_opponent_evolves_its_request_order`.
+    ///
+    ///   HISTORY, because this doc asserted the opposite through four rounds
+    ///   and the wrong version is the more plausible one. Deriving the root
+    ///   base from the sampled world's ENGINE PARTY order was tried and
+    ///   measured against the head's training label space
+    ///   (`rollout.py::_opponent_action_index`); it agrees only while the seat
+    ///   has switched at most once and transposes from the second switch
+    ///   onward, so it is fail-OPEN — a confidently wrong prior, neither
+    ///   counted nor visible. That is what `root_opponent_order`'s own
+    ///   docstring below records and what commits "Fix B2 at the root: pass
+    ///   the opponent's request order in from Python" and "Fail closed in the
+    ///   crate when the opponent request order is absent" replaced. The other
+    ///   nearby wrong answer, also tried: `md["opponent_team"]` is the partial
+    ///   belief view and resolves almost nothing.
     /// * **PP base.** The self side can correct a switched-in mon's stale
     ///   cached PP from the public charging ledger (`self_ledger_uses`). There
     ///   is no such ledger for the opponent, so its base falls back to the

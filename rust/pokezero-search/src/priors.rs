@@ -82,7 +82,7 @@
 //! | branch: opponent options are the acting options      | KILLED  |
 //! | branch: `opponent_action_map` -> `self_action_map`   | KILLED  |
 //! | round: the two seats' pending map lists swapped      | KILLED  |
-//! | branch: `opponent_prefix()` -> `self_prefix()`       | **MISSED** |
+//! | branch: `opponent_prefix()` -> `self_prefix()`       | KILLED (white-box) |
 //!
 //! TWO FINDINGS THE TABLE COMPRESSES, both of which cost a wrong answer first.
 //!
@@ -109,8 +109,8 @@
 //!    ONE wheel agree on everything else (24/24), which is what makes the
 //!    filtered comparison a differential rather than a fudge.
 //!
-//! 2. WHAT IS STILL UNCOVERED, and it is in the channel the campaign's
-//!    label-space half depends on. Swapping `leaf_ctx.opponent_prefix()` for
+//! 2. HOW M9 WAS FINALLY KILLED, after three outcome-based routes failed.
+//!    Swapping `leaf_ctx.opponent_prefix()` for
 //!    `self_prefix()` in the opponent's per-branch order evolution is MISSED by
 //!    every test above. Self switch lines name the SELF party's species, which
 //!    never appear in the opponent's order, so `evolve_self_order` matches
@@ -134,12 +134,34 @@
 //!    is no invariant there to pin, only a golden number that any legitimate
 //!    change to the tree would also break.
 //!
-//!    THE FIX DIRECTION, so the next reader does not chase the wrong one: a
-//!    crate field carrying a DIGEST of the opponent's gathered prior vectors in
-//!    resolution order, per seat. Not an applied count — a count is exactly the
-//!    summed-scalar shape that fails above. A per-seat digest is order- and
-//!    value-sensitive, so a frozen opponent order changes it while a
-//!    legitimately reshaped tree that gathers the same vectors does not.
+//!    WHAT KILLED IT (2026-08-11). Not a statistic and not a golden number: a
+//!    WHITE-BOX read of the order each branch actually gathered under. The
+//!    `debug_prior_vectors` hook on `search_batched_multi_encoded` emits every
+//!    parked OPPONENT vector with its chance/branch identity, the child
+//!    decision node's depth, and the opponent order from that branch's
+//!    `BranchFold`. `test_a_branch_that_switches_the_opponent_evolves_its_request_order`
+//!    (tests/test_model_priors_search.py) then asserts that some ply-2 branch
+//!    carries an order differing from the root's, that the difference is
+//!    exactly the slot-0 swap a switch-in performs, and that priors were
+//!    gathered under it.
+//!
+//!    Measured on the committed fixture at sims=48, batch=1, seed=5: 11 ply-2
+//!    branches, 9 of them evolved, root
+//!    `[typhlosion, smeargle, absol, vaporeon, sharpedo, deoxysdefense]`
+//!    evolving to `[sharpedo, smeargle, absol, vaporeon, typhlosion, ...]`.
+//!    Under M9 that count is 0 and the test fails deterministically, while all
+//!    ELEVEN pre-existing tests in that file still pass -- which is the whole
+//!    point: the new test discriminates exactly where they are blind.
+//!
+//!    The reason an outcome oracle could never do this: the mutation reshapes
+//!    the tree, and a reshaped tree launders every outcome. The order itself
+//!    does not launder.
+//!
+//!    A per-seat DIGEST of the gathered vectors (`PriorResolution::opponent_digest`,
+//!    surfaced as `opponent_prior_digest`) ships alongside as the cheap
+//!    production-side signal -- order- and value-sensitive, so a frozen order
+//!    moves it while a legitimately reshaped tree gathering the same vectors in
+//!    the same order does not. It is NOT what kills M9; the fixture above is.
 //!
 //! 3. A SEPARATE, SMALLER GAP on the ROOT side, which is NOT M9's cause and is
 //!    recorded here only so it is not rediscovered as one.
