@@ -258,6 +258,14 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
         # belief the search runs on, which is the one thing §4a varies.
         if args.engine_oracle_belief:
             argv.append("--engine-oracle-belief")
+    # OUTSIDE the search block on purpose: the opponent journal records FoulPlay's
+    # own decoded choice, which exists in every arm including raw. Scoping it to
+    # search arms would make the raw anchor the one cell whose opponent moves
+    # cannot be read, and raw is a comparator in this campaign, not a spectator.
+    # Same "only when set" rule as the knobs above, so an unset cell renders the
+    # byte-identical child argv it rendered before this flag existed.
+    if args.opponent_journal is not None:
+        argv += ["--opponent-journal", args.opponent_journal]
     if args.device:
         argv += ["--device", args.device]
     return argv
@@ -417,6 +425,22 @@ def build_parser() -> argparse.ArgumentParser:
                          "sampled-belief twin is the SAME cell with this flag off, so run "
                          "both on the same seed band. Carries a `+oracle-belief` fragment "
                          "in config_id: this one does change the search.")
+    ap.add_argument("--opponent-journal", default=None,
+                    choices=("off", "addressed", "full"),
+                    help="what the opponent journal EMITS. The bridge already RECORDS "
+                         "FoulPlay's decoded choice every round in every mode but 'off'; "
+                         "the mode decides only what survives into the shard JSON. "
+                         "'addressed' (the bridge default) keeps the prefix up to a "
+                         "battle's last refusal address and NOTHING when the battle has "
+                         "no address -- so on a healthy shard it emits nothing, which is "
+                         "why the header can read recorded_decisions=35 beside "
+                         "emitted_decisions=0. Pass 'full' when the question needs "
+                         "FoulPlay's ACTUAL moves per round "
+                         "(docs/mcts_value_gap_investigation_20260811.md H4). "
+                         "OBSERVATIONAL: recording is unconditional, retention happens "
+                         "at result-build time after the battle is over, so this cannot "
+                         "reach the search. Not part of config_id; the shard reports the "
+                         "mode in its `opponent_journal` header.")
     ap.add_argument("--checkpoint-tag", default=None,
                     help="explicit short label for this checkpoint (e.g. k0). Keeps cells "
                          "distinct when two checkpoints share a filename, which the "

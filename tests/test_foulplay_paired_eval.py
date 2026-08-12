@@ -48,6 +48,7 @@ def args(**overrides) -> argparse.Namespace:
         engine_c_puct=None,
         engine_override_telemetry=False,
         engine_oracle_belief=False,
+        opponent_journal=None,
         engine_model_path=None,
         engine_tables_path=None,
         foulplay_root=None,
@@ -299,6 +300,97 @@ class SelectionKnobForwardingTest(unittest.TestCase):
         ])
         self.assertEqual(parsed.engine_fpu_reduction, 0.2)
         self.assertEqual(parsed.engine_c_puct, 0.8)
+
+
+class OpponentJournalPassthroughTest(unittest.TestCase):
+    """H4 was CANNOT RUN because the moves it needs were recorded and then dropped.
+
+    The bridge decodes FoulPlay's choice every round in every mode but "off", but
+    the DEFAULT mode "addressed" retains only the prefix up to a battle's last
+    refusal address and returns an empty tuple when a battle has none. On a healthy
+    shard almost no battle has one, so this campaign's own s2048 canary produced a
+    journal header reading `recorded_decisions: 35` beside `emitted_decisions: 0`
+    and `games_with_journal: 0`. Nothing errored; the measurement simply was not
+    there. Only "full" emits the moves, and before this the driver could not ask
+    for it -- the same one-layer-up gap that would have killed the override probe.
+
+    Observational, so it is pinned in both directions like the telemetry flag: it
+    must REACH the bridge, and it must NOT enter config_id.
+    """
+
+    def test_the_mode_reaches_the_child_when_set(self) -> None:
+        argv = _DRIVER.bridge_argv(args(opponent_journal="full"), seat="p1")
+        self.assertIn("--opponent-journal", argv)
+        self.assertEqual(argv[argv.index("--opponent-journal") + 1], "full")
+
+    def test_unset_leaves_the_child_argv_unchanged(self) -> None:
+        self.assertNotIn("--opponent-journal", _DRIVER.bridge_argv(args(), seat="p1"))
+
+    def test_the_raw_arm_carries_it_too(self) -> None:
+        # NOT scoped to search arms: FoulPlay's own choice exists in every arm, and
+        # raw is a comparator in the value-gap campaign rather than a spectator.
+        # This is the one passthrough here that must survive arm == "raw".
+        self.assertIn(
+            "--opponent-journal",
+            _DRIVER.bridge_argv(args(arm="raw", opponent_journal="full"), seat="p1"),
+        )
+
+    def test_the_real_cli_parses_it_and_forwards_it(self) -> None:
+        ns = _DRIVER.build_parser().parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+            "--arm", "search", "--seed-start", "1", "--pairs", "2",
+            "--out", "/tmp/shard.json", "--opponent-journal", "full",
+        ])
+        self.assertEqual(ns.opponent_journal, "full")
+        self.assertIn("--opponent-journal", _DRIVER.bridge_argv(ns, seat="p2"))
+
+    def test_the_cli_default_is_unset_not_addressed(self) -> None:
+        # Unset must mean "say nothing", not "say the bridge default out loud":
+        # an explicit --opponent-journal addressed would change the child argv of
+        # every banked cell and break byte-identity with the shards already on disk.
+        ns = _DRIVER.build_parser().parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+            "--arm", "search", "--seed-start", "1", "--pairs", "2",
+            "--out", "/tmp/shard.json",
+        ])
+        self.assertIsNone(ns.opponent_journal)
+
+    def test_a_bad_mode_is_refused_by_the_parser(self) -> None:
+        with self.assertRaises(SystemExit):
+            _DRIVER.build_parser().parse_args([
+                "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+                "--arm", "search", "--seed-start", "1", "--pairs", "2",
+                "--out", "/tmp/shard.json", "--opponent-journal", "everything",
+            ])
+
+    def test_the_bridge_declares_the_flag_and_the_modes_agree(self) -> None:
+        # The driver's choices must be the bridge's modes, read from the bridge
+        # rather than retyped -- a divergence here renders a shard that dies on
+        # its own argument after the pod is scheduled.
+        from pokezero.foulplay_bridge import OPPONENT_JOURNAL_MODES
+
+        action = next(
+            a for a in _DRIVER.build_parser()._actions
+            if a.dest == "opponent_journal"
+        )
+        self.assertEqual(tuple(action.choices), tuple(OPPONENT_JOURNAL_MODES))
+
+    def test_it_is_not_part_of_config_id(self) -> None:
+        # Emission-only: recording is unconditional and retention is decided after
+        # the battle is over, so two cells differing only in journal mode are the
+        # same search and MUST pool.
+        self.assertEqual(
+            _DRIVER.config_id_for(args(opponent_journal="full")),
+            _DRIVER.config_id_for(args()),
+        )
+        # And structurally: the id builder takes no journal parameter at all, so
+        # there is no way for a future caller to thread one in by accident.
+        import inspect
+
+        self.assertNotIn(
+            "journal",
+            str(inspect.signature(_DRIVER.search_config_id)),
+        )
 
 
 class OverrideTelemetryPassthroughTest(unittest.TestCase):
