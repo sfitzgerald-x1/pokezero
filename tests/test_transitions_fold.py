@@ -43,6 +43,8 @@ from pokezero.transitions_fold import (
     FoldState,
 )
 from pokezero.turn_merged import extract_transition_products
+from pokezero.observation import schema_with
+from pokezero.showdown import observation_spec_for_schema
 
 
 def _integration_root() -> Path | None:
@@ -262,6 +264,21 @@ class FoldAnnotatedSurfaceTest(unittest.TestCase):
                 showdown_root=_integration_root(),
                 set_belief_source=True,
                 feature_masks=ObservationFeatureMasks(tier2_investment=True),
+                # A TURN-MERGED schema, by property. This test compares the fold's
+                # `turn_merged_*` products against the encoder's, and v4 is not turn-merged --
+                # so the fold produced tokens the encode did not and the diff read
+                # "(TurnMergedToken(...),) != ()". An earlier attempt pinned all three
+                # LocalShowdownConfig sites in this file to a version and left the two product
+                # sources inconsistent; the property is what both sides actually require.
+                #
+                # BOTH properties are named. `turn_merged=True` alone resolves newest-first to
+                # v3, whose grouped column layout the tier2 CB-pinned assertions below do not
+                # share -- "CB-pinned column mismatch for salamence". Adding
+                # `grouped_layout=False` pins v2.2 without naming it: turn-merged products AND
+                # the v2-family column layout, which is what this test is actually about.
+                observation_spec=observation_spec_for_schema(
+                    schema_with(turn_merged=True, grouped_layout=False)
+                ),
             )
         )
         try:
