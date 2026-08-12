@@ -138,6 +138,9 @@ def schema_with(
         "grouped_layout": grouped_layout,
         "feature_pack": feature_pack,
     }
+    # Keyword-only with no **kwargs, deliberately: a `**_ignored` signature would silently drop a
+    # misspelled constraint (`turn_mergd=False`) and return a schema that does not satisfy what
+    # the caller asked for -- a quieter version of the very defect this function replaces.
     if all(v is None for v in wanted.values()):
         raise ValueError(
             "schema_with() needs at least one property. With none, it would be a spelling of "

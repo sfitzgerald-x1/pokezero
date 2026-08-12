@@ -285,6 +285,18 @@ jobs:
             # touches nothing else -- so without this line the gate that would object
             # is not even a trigger.
             tests/test_roll_enumeration_scope.py
+            # The schema-default gate and everything it depends on. 288 of its 391 rows live in
+            # tests/ and scripts/, and neither path is broad in this filter -- so a PR that adds a
+            # default reader THERE triggered no workflow at all. Worse, the gate's own artifacts
+            # were unlisted, so a PR that regenerated or deleted the allowlist tripped nothing:
+            # the same "a guard nothing runs" shape this file already records twice above, and the
+            # exact failure the header calls forbidden.
+            scripts/schema_default_ledger.py
+            scripts/schema_identity_gate_scan.py
+            tests/test_schema_default_ledger.py
+            tests/test_schema_with_selector.py
+            tests/data/schema_default_allowlist.json
+            src/pokezero/observation.py
             .github/workflows/engine-fidelity-gates.yml
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -510,12 +522,14 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_schema_default_ledger tests.test_schema_with_selector -v \
             2>&1 | tee /tmp/schemagate.log
-          if grep -qE 'skipped|SKIP' /tmp/schemagate.log; then
+          # Parse the SUMMARY, not the whole -v log: `grep skipped` over verbose output would
+          # trip on any future test name or docstring containing the word.
+          if tail -5 /tmp/schemagate.log | grep -qE 'skipped=[0-9]+|OK \(skipped'; then
             echo "::error::the schema-default gate SKIPPED -- the ledger could not measure the tree"
             exit 1
           fi
-          if ! grep -qE 'Ran 9 tests' /tmp/schemagate.log; then
-            echo "::error::expected 9 tests across the ledger gate and the selector; suite changed"
+          if ! grep -qE 'Ran 12 tests' /tmp/schemagate.log; then
+            echo "::error::expected 12 tests across the ledger gate and the selector; suite changed"
             exit 1
           fi
 

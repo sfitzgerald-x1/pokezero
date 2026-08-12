@@ -10,6 +10,7 @@ problem -- a remedy advertised in a gate's error message with nothing pinning it
 """
 from __future__ import annotations
 
+import re
 import unittest
 
 from pokezero.observation import (
@@ -101,6 +102,37 @@ class SchemaWithTest(unittest.TestCase):
         self.assertEqual(schema_with(turn_merged=True), OBSERVATION_SCHEMA_VERSION_V3)
         self.assertNotEqual(schema_with(turn_merged=True), OBSERVATION_SCHEMA_VERSION_V2_2)
         self.assertEqual(schema_with(feature_pack=True), OBSERVATION_SCHEMA_VERSION_V4)
+
+    def test_the_supported_tuple_is_ascending_so_reversed_really_means_newest(self) -> None:
+        """The whole "newest" contract rests on SUPPORTED being in ascending order.
+
+        Nothing pinned it. Reordering the tuple left every selector test green, because the
+        oracle in this file iterates the same `reversed(SUPPORTED_...)` and moves WITH the
+        mutation -- a self-referential oracle. A chronologically-appended v2.3 would silently
+        re-aim every property-selected caller, which is the class of silent re-aiming
+        `schema_with` exists to remove.
+        """
+        def _key(version: str) -> tuple[int, ...]:
+            tail = version.rsplit(".", 1)[-1] if version.count(".") > 2 else version.split(".")[-1]
+            digits = re.findall(r"\d+", version.removeprefix("pokezero.observation.v"))
+            return tuple(int(d) for d in digits) or (0,)
+
+        keys = [_key(v) for v in SUPPORTED_OBSERVATION_SCHEMA_VERSIONS]
+        self.assertEqual(
+            keys, sorted(keys),
+            "SUPPORTED_OBSERVATION_SCHEMA_VERSIONS is not ascending, so `reversed()` no longer "
+            f"means newest-first and every schema_with() answer moves: {list(SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)}",
+        )
+
+    def test_a_misspelled_constraint_is_a_TypeError_not_a_silent_drop(self) -> None:
+        """Keyword-only, no **kwargs: a typo must fail loudly.
+
+        A `**_ignored` signature survives every other test here while returning a schema that
+        does not satisfy the caller's actual intent -- a quieter instance of the defect this
+        function replaces.
+        """
+        with self.assertRaises(TypeError):
+            schema_with(transition_region=True, turn_mergd=False)  # type: ignore[call-arg]
 
     def test_the_transition_count_table_agrees_with_the_spec_table(self) -> None:
         """`REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA` is a SECOND copy of spec data.

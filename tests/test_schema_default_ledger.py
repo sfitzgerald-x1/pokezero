@@ -24,21 +24,23 @@ REPO = Path(__file__).resolve().parents[1]
 # tests/data, not corpus/: corpus/ is gitignored, so an allowlist there is invisible to
 # everyone else and the gate silently cannot run. Caught by `git add` refusing the path.
 ALLOWLIST = REPO / "tests" / "data" / "schema_default_allowlist.json"
+# The most rows the allowlist has ever legitimately held. Only ever lowered.
+HIGH_WATER_MARK = 391
 LEDGER = REPO / "scripts" / "schema_default_ledger.py"
 
 
 def _derive() -> list[dict]:
     """Re-derive from the tree. Never read a cached count -- that is the error being retired."""
-    # 3.12+: the script only parses, and one tracked file uses a backslash inside an f-string
-    # expression, which is a SyntaxError on 3.11. It exits 2 rather than under-reporting.
     proc = subprocess.run(
         [sys.executable, str(LEDGER), "--json"], capture_output=True, text=True
     )
     if proc.returncode == 2:
         raise unittest.SkipTest(
-            "ledger reported UNPARSED files under this interpreter, so the denominator is "
-            "incomplete; run the suite on 3.12+. Skipping is correct here ONLY because the "
-            "script fails loudly -- a silently short count would not be caught."
+            "the ledger reported UNPARSED file(s), so the denominator is incomplete and there "
+            "is nothing valid to compare. Fix the unparsable file. (Until #1239 this fired "
+            "routinely because one tracked file could not be parsed on 3.11 and the advice was "
+            "'use 3.12+'; that is no longer true, and on any interpreter a SKIP here now means a "
+            "genuinely broken file rather than a known-tolerated one.)"
         )
     if proc.returncode != 0:
         raise AssertionError(f"ledger derivation failed:\n{proc.stderr}")
@@ -96,6 +98,22 @@ class SchemaDefaultLedgerTest(unittest.TestCase):
             + "\n  ".join(stale[:20]),
         )
 
+    def test_the_allowlist_can_only_shrink_from_its_high_water_mark(self) -> None:
+        """A CEILING, not just an equality. The other tests compare the tree to the allowlist, so
+        adding a site AND regenerating the allowlist keeps them agreeing and passes -- which is
+        exactly the move that would quietly grow the exposure this file exists to bound. The
+        high-water mark makes growth an explicit, reviewable edit to this number.
+        """
+        rows = len(json.loads(ALLOWLIST.read_text()))
+        self.assertLessEqual(
+            rows,
+            HIGH_WATER_MARK,
+            f"the allowlist grew to {rows} rows, above the {HIGH_WATER_MARK} recorded here. "
+            "Migrating sites is the intended direction. If a NEW default reader is genuinely "
+            "legitimate, raise this number in the same commit and justify it in the PR body -- "
+            "regenerating the allowlist alone keeps every other test in this file green.",
+        )
+
     def test_the_burndown_count_is_pinned(self) -> None:
         """A visible number, so progress and regression are both legible in the diff.
 
@@ -107,7 +125,7 @@ class SchemaDefaultLedgerTest(unittest.TestCase):
             len(_derive()),
             len(json.loads(ALLOWLIST.read_text())),
             "the derived site count and the allowlist have diverged; regenerate with "
-            "`python3.12 scripts/schema_default_ledger.py --json > "
+            "`.venv/bin/python scripts/schema_default_ledger.py --json > "
             "tests/data/schema_default_allowlist.json` and justify every added row.",
         )
 

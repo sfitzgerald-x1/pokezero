@@ -36,7 +36,6 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-_DEPTH: dict[tuple[int, int], int] = {}
 CONST = "OBSERVATION_SCHEMA_VERSION"
 DEFAULT_SPEC = "DEFAULT_REPLAY_OBSERVATION_SPEC"
 # DERIVED, not hardcoded. The first version listed three call names by hand and therefore
@@ -115,18 +114,21 @@ def enclosing(tree: ast.AST) -> dict[int, str]:
     """
     owner: dict[int, str] = {}
 
-    def visit(node: ast.AST, depth: int) -> None:
+    def visit(node: ast.AST) -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             for ln in range(node.lineno, (node.end_lineno or node.lineno) + 1):
-                # deeper scope overwrites shallower; equal depth cannot overlap
-                prev = owner.get(ln)
-                if prev is None or depth >= _DEPTH.get((id(tree), ln), -1):
-                    owner[ln] = node.name
-                    _DEPTH[(id(tree), ln)] = depth
+                # Unconditional assignment is enough: pre-order visits the shallowest scope
+                # first, so a deeper one always overwrites it. A first cut carried a module-level
+                # `_DEPTH` dict keyed on `(id(tree), lineno)` to compare depths -- dead weight
+                # (the short-circuit meant the depth was never actually read), ~10 MB leaked per
+                # scan, and keyed on the `id()` of trees that get freed and reused: 23 id-reuse
+                # events across 524 files. Removing the guard clause it hid behind mis-owned 8
+                # files, which is how it looked load-bearing.
+                owner[ln] = node.name
         for child in ast.iter_child_nodes(node):
-            visit(child, depth + 1)
+            visit(child)
 
-    visit(tree, 0)
+    visit(tree)
     return owner
 
 
@@ -141,10 +143,14 @@ def sites_in(path: Path) -> list[dict]:
     owner = enclosing(tree)
     found: list[dict] = []
 
-    def add(node, kind):
-        found.append(
-            {"file": rel, "line": node.lineno, "kind": kind, "owner": owner.get(node.lineno, "<module>")}
-        )
+    def add(node, kind, unclosed=None):
+        row = {"file": rel, "line": node.lineno, "kind": kind,
+               "owner": owner.get(node.lineno, "<module>")}
+        if unclosed:
+            # Which default-bearing kwarg is still unnamed. Without this a row says "this call
+            # reaches a default" without saying through which of several routes.
+            row["unclosed"] = unclosed
+        found.append(row)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id == CONST and rel not in DEFINITION_SITES:
@@ -155,9 +161,17 @@ def sites_in(path: Path) -> list[dict]:
             fn = node.func
             name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
             kwargs = {k.arg for k in node.keywords if k.arg}
-            if name in SURFACES and not (SURFACES[name] & kwargs):
+            # EACH-OF, not any-of. `SURFACES[name] & kwargs` scored a call safe if it passed ANY
+            # of the surface's default-bearing kwargs, so a `compact_category(numeric_feature_
+            # count=..., ...)` that never named a schema counted as migrated while still taking
+            # the process-wide default. 43 sites were hidden that way -- and 41 of them pin a
+            # WIDTH and default the SCHEMA, which is precisely the shape of the two production
+            # bugs (#1227 token_count, #1228 the feature widths) this ledger cites as its reason
+            # to exist. A site is only safe once EVERY route to a global is closed.
+            unclosed = SURFACES.get(name, frozenset()) - kwargs
+            if name in SURFACES and unclosed:
                 # One kind per surface so a new surface cannot quietly join an existing bucket.
-                add(node, f"implicit:{name}")
+                add(node, f"implicit:{name}", sorted(unclosed))
     return found
 
 

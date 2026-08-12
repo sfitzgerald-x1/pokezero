@@ -66,8 +66,12 @@ it, not during the next rotation.
 
 Rows key as a **multiset** on `file::owner::kind`:
 
-- Not a set — that let a diff migrate one site and add another at the same key, which is what an
-  ordinary PR looks like. A `Counter` difference catches a key whose count grew.
+- Not a set — that let a plain ADDITION at an existing key pass unseen. A `Counter` difference
+  catches a key whose count grew (verified: 391 → 392 reddens; invisible to a set).
+  **What it does NOT close:** migrating one site and adding another under the *same*
+  `file::owner::kind` leaves the count unchanged and passes. 28 keys carry more than one row, the
+  largest 4. An earlier version of this document claimed the multiset closed that case; it does
+  not, and saying so was worse than the gap.
 - Not including the line number — that made the allowlist interpreter-dependent (`ast` reports a
   different `lineno` for the same multi-line call across versions) and broke CI with an
   off-by-one.
@@ -86,8 +90,8 @@ Two different measures, both needed:
 
 - **N** — how many sites *could* conflate. A site that takes the default and genuinely does not
   care is counted, correctly: the day it starts caring, nothing warns anyone.
-- **A rotation** — how many *actually do*, today. That is what `scripts/schema_rotation_drill.sh`
-  measures.
+- **A rotation** — how many *actually do*, today. Measuring that means rotating the default and
+  counting what breaks; the harness for it is not part of this PR.
 
 Claiming the class is dead on a rotation result alone repeats the original mistake: a true number
 answering a narrower question than the one asked.
