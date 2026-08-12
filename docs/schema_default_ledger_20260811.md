@@ -152,7 +152,7 @@ Left deliberately unclassified pending a proper read, rather than guessed into c
   schema? That is a behavioural question, not a naming one.
 
 
-## Confirmed NOT this class: test_fallback_replay_end_to_end (7)
+## RETRACTED: "Confirmed NOT this class: test_fallback_replay_end_to_end (7)"
 
 Pinning the observation spec at all three `LocalShowdownConfig` sites to v2.2 changed nothing:
 still 7 failures, same messages. Reverted rather than kept -- a fix that fixes nothing is worse
@@ -163,11 +163,16 @@ is empty and six tests die on `self.specs[0]` while the seventh reports "this se
 no refusals, so the chain was never exercised". The refusals are construction-side, which is
 consistent with them not moving when the encode spec is named.
 
-So this is a genuine behavioural difference under v4, not a naming defect, and it belongs in
-bucket C. It needs a real investigation: what does the default schema reach that changes world
-construction or search? Candidates not yet eliminated -- the model config's widths feeding the
-policy, or `EngineMctsConfig` reaching the default indirectly. Recorded as open rather than
-folded into the mechanical bucket, which is where it would have been hidden.
+**This conclusion was WRONG and is retracted.** Independent verification ran these 7 on `main`
+and they fail there identically -- `IndexError: list index out of range` at
+`test_fallback_replay_end_to_end.py:260`, both trees. They are PRE-EXISTING failures with no
+connection to v4 at all.
+
+The reasoning error: I observed that pinning the spec did not fix them and concluded "therefore
+a genuine v4 behavioural difference". The alternative -- "therefore not caused by v4" -- was
+never tested, and testing it costs one command (`git stash; pytest; git stash pop`), which I had
+already used earlier in the same session for exactly this purpose. Ruling a hypothesis out is
+not the same as ruling the alternative in.
 
 
 ## Phase D worklist: the 33 unexpected breakages
