@@ -183,22 +183,38 @@ LS = "src/pokezero/local_showdown.py"
 ES = "src/pokezero/engine_search.py"
 ETD = "scripts/engine_transition_differential.py"
 
-# Anchor/needle literals hoisted OUT of their f-string expressions. A backslash inside an
-# f-string expression is legal on 3.12+ and a SyntaxError on 3.11. The venv is 3.11, so this
-# file could not be imported there and took THREE test modules down with it via collection
-# failure -- invisible in CI, which pins 3.12, and invisible locally because those three
-# modules were then excluded from every sweep. Hoisting keeps both interpreters working.
-_LIT_1 = 'return "skip_lossy", ["every branch rendered lossy"]'
-_LIT_2 = 'if verdict == "skip_lossy":'
-_LIT_3 = 'counts[f"divergence_class:'
-_LIT_4 = 'if "mapper produced no usable branch" in body:'
-_LIT_5 = 'row["restSleepActiveRefundPending"] = True'
-_LIT_6 = 'row["restSleepProvenanceUnrepresentable"] = True'
-_LIT_7 = 'if bool(row.get("restSleepAttemptUnsettled")):'
-_LIT_8 = 'if bool(row.get("restSleepActiveRefundPending")):'
-_LIT_9 = 'row["restSleepAttemptUnsettled"] = True'
-_LIT_10 = '"deferredOpponentActions": deferred_actions'
-
+# Anchor needles hoisted OUT of their f-string expressions. A backslash inside an f-string
+# expression is legal on 3.12+ and a SyntaxError on 3.11. The venv is 3.11, so this file could
+# not be imported there, which failed COLLECTION for three test modules and made
+# `scripts/c154_unreachable_readjudication.py` unrunnable too -- four consumers. Invisible in CI
+# (all five jobs pin 3.12) and invisible locally, because the three modules were then excluded
+# from every sweep. `pyproject.toml` declares `requires-python = ">=3.11"`, so the file was in
+# breach of the project's own floor.
+#
+# NAMED, not numbered. `_anchor`'s docstring below spends twenty lines arguing that an unnamed
+# citation is a wrong citation waiting to happen; positional `_LIT_N` names would have imported
+# exactly that problem into the fix. Each needle says which write or read it locates, so a
+# reader at the use site 250 lines below does not have to come back here to decode it.
+#: the `skip_lossy` verdict's return site in the differential
+_NEEDLE_SKIP_LOSSY_RETURN = 'return "skip_lossy", ["every branch rendered lossy"]'
+#: the run loop's `continue` on that verdict -- BEFORE the classifier
+_NEEDLE_SKIP_LOSSY_BRANCH = 'if verdict == "skip_lossy":'
+#: truncated on purpose: the f-string prefix of the counter key
+_NEEDLE_DIVERGENCE_CLASS_COUNT = 'counts[f"divergence_class:'
+#: the classifier's own test of a body no code produces
+_NEEDLE_NO_USABLE_BRANCH_TEST = 'if "mapper produced no usable branch" in body:'
+#: read at 4 sites: local_showdown sets the pending flag
+_NEEDLE_LS_ACTIVE_REFUND_SET = 'row["restSleepActiveRefundPending"] = True'
+#: read at 2 sites: the unrepresentable-provenance write
+_NEEDLE_LS_PROVENANCE_UNREP = 'row["restSleepProvenanceUnrepresentable"] = True'
+#: engine_world reads the unsettled flag
+_NEEDLE_EW_ATTEMPT_UNSETTLED = 'if bool(row.get("restSleepAttemptUnsettled")):'
+#: engine_world reads the refund-pending flag
+_NEEDLE_EW_ACTIVE_REFUND = 'if bool(row.get("restSleepActiveRefundPending")):'
+#: local_showdown sets the unsettled flag
+_NEEDLE_LS_ATTEMPT_UNSETTLED = 'row["restSleepAttemptUnsettled"] = True'
+#: the deferred-actions row field
+_NEEDLE_DEFERRED_OPP_ACTIONS = '"deferredOpponentActions": deferred_actions'
 
 
 # ---------------------------------------------------------------------------
@@ -453,17 +469,17 @@ STRUCTURAL_DIVERGENCE_CLASSES = {
     "mapper_lossy": (
         "`evaluate_boundary_strict` returns the verdict `skip_lossy` carrying the trigger "
         "body \"every branch rendered lossy\" at "
-        f"`{ETD}:{_anchor(ETD, _LIT_1)}`, "
+        f"`{ETD}:{_anchor(ETD, _NEEDLE_SKIP_LOSSY_RETURN)}`, "
         "and the run loop `continue`s at the `verdict == \"skip_lossy\"` branch at "
-        f"`:{_anchor(ETD, _LIT_2)}` -- BEFORE the "
-        f"`divergence_class:` line at `:{_anchor(ETD, _LIT_3)}`, which "
+        f"`:{_anchor(ETD, _NEEDLE_SKIP_LOSSY_BRANCH)}` -- BEFORE the "
+        f"`divergence_class:` line at `:{_anchor(ETD, _NEEDLE_DIVERGENCE_CLASS_COUNT)}`, which "
         "runs only under `verdict == \"diverged\"`. The classifier can never be handed the "
         "body that returns this class."
     ),
     "no_usable_branch": (
         "The trigger body \"mapper produced no usable branch\" is produced by NO CODE in the "
         "repository: the only occurrence on any execution path is the classifier's own test "
-        f"of it at `{ETD}:{_anchor(ETD, _LIT_4)}`, "
+        f"of it at `{ETD}:{_anchor(ETD, _NEEDLE_NO_USABLE_BRANCH_TEST)}`, "
         "so no input can make `classify_divergence` return this class. Stated as 'no "
         "producer' rather than 'nowhere in the repository', which a first draft wrote and "
         "its own commit falsified -- the phrase then also appeared in this docstring and in "
@@ -554,11 +570,11 @@ CENSUS_CANNOT_REACH = {
         "when a row has `restSleepActiveRefundPending` and NO `restSleepAttempts`. ⚠ The "
         "naive reading -- that live rows always carry the counts -- is WRONG: "
         "`local_showdown._apply_rest_sleep_provenance` sets the pending flag at "
-        f"`{LS}:{_anchor(LS, _LIT_5)}` and then "
-        f"`continue`s at `:{_anchor_after(LS, _LIT_6, _anchor(LS, _LIT_5)) + 1}` "
+        f"`{LS}:{_anchor(LS, _NEEDLE_LS_ACTIVE_REFUND_SET)}` and then "
+        f"`continue`s at `:{_anchor_after(LS, _NEEDLE_LS_PROVENANCE_UNREP, _anchor(LS, _NEEDLE_LS_ACTIVE_REFUND_SET)) + 1}` "
         "without writing them. What closes the path is the ORDER of the tests: that same "
         "branch sets `restSleepProvenanceUnrepresentable` at "
-        f"`:{_anchor_after(LS, _LIT_6, _anchor(LS, _LIT_5))}`, and "
+        f"`:{_anchor_after(LS, _NEEDLE_LS_PROVENANCE_UNREP, _anchor(LS, _NEEDLE_LS_ACTIVE_REFUND_SET))}`, and "
         f"`_hp_and_status` raises on THAT at "
         f"`{EW}:{_raise_line(EW, 'rest_sleep_provenance_unrepresentable', 1)}`, before it ever "
         f"reaches `:{_raise_line(EW, 'rest_sleep_refund_pending_precounts_legacy')}`. The "
@@ -572,14 +588,14 @@ CENSUS_CANNOT_REACH = {
         f"Raised at `{EW}:{_raise_line(EW, 'rest_sleep_refund_pending_unsplit_legacy')}` only "
         "when a row carries the pre-split `restSleepRefundPending` flag and NEITHER "
         "producer flag -- and `_hp_and_status` tests both producer flags first, at "
-        f"`:{_anchor(EW, _LIT_7)}` and "
-        f"`:{_anchor(EW, _LIT_8)}`. "
+        f"`:{_anchor(EW, _NEEDLE_EW_ATTEMPT_UNSETTLED)}` and "
+        f"`:{_anchor(EW, _NEEDLE_EW_ACTIVE_REFUND)}`. "
         "`_mark_legacy_rest_refund_pending` has exactly TWO call sites in "
         f"`local_showdown.py` (`:{_anchor(LS, '_mark_legacy_rest_refund_pending(row)', 1)}` "
         f"and `:{_anchor(LS, '_mark_legacy_rest_refund_pending(row)', 2)}`) and each is "
         "preceded on the same row by a producer flag "
-        f"(`restSleepAttemptUnsettled` at `:{_anchor(LS, _LIT_9)}`, "
-        f"`restSleepActiveRefundPending` at `:{_anchor(LS, _LIT_5)}`), "
+        f"(`restSleepAttemptUnsettled` at `:{_anchor(LS, _NEEDLE_LS_ATTEMPT_UNSETTLED)}`, "
+        f"`restSleepActiveRefundPending` at `:{_anchor(LS, _NEEDLE_LS_ACTIVE_REFUND_SET)}`), "
         "so a live row always trips an earlier branch. Reachable only by replaying a "
         "pre-split corpus. Same canary: zero is the designed value, not an unmeasured "
         "absence."
@@ -598,7 +614,7 @@ CENSUS_CANNOT_REACH = {
         '`payload.get("deferredOpponentActions") or payload.get("deferredOpponentActionPriors")`. '
         "The payload always CARRIES both keys -- "
         "`local_showdown._public_materialization_payload` emits them at "
-        f"`{LS}:{_anchor(LS, _LIT_10)}` -- so a "
+        f"`{LS}:{_anchor(LS, _NEEDLE_DEFERRED_OPP_ACTIONS)}` -- so a "
         "claim that it never carries them would be false. They are always EMPTY, and the "
         "closure is a frame HIGHER than a first draft placed it: the payload that reaches "
         "this raise is not one the differential builds at all. `world_battle_spec` "
