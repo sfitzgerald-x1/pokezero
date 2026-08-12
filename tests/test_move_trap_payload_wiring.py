@@ -19,8 +19,9 @@ WHY A NEW PAYLOAD KEY RATHER THAN A `volatiles` ENTRY. The two lanes exist for a
 `tuple(sorted(TRACKED_VOLATILES))` -- so adding `trapped` MINTS a `volatile:trapped` vocab row
 and shifts the ids of every alphabetically-later volatile, unfreezing v3 tensors that already
 carry this fact as the numeric column NUMERIC_MEANLOOK_TRAP. Separately, the Node bridge's
-`applyPublicVolatiles` throws on any id outside STATIC_PUBLIC_VOLATILES (of which
-TRACKED_VOLATILES is a 6-of-38 subset, not a mirror) and could not rebuild the linked `trapper`
+`applyPublicVolatiles` throws on any id it has no explicit construction for -- STATIC_PUBLIC_VOLATILES
+plus the two ids with dedicated arms, `leechseed` (needs a public source side) and `substitute`
+(needs the public health-provenance triple) -- and could not rebuild the linked `trapper`
 volatile on the source mon anyway. A dedicated key is the established shape for a parser fact
 the WORLD lane needs its own copy of -- `truantPhase` and `stallCounter` are already exactly
 that. (They reach the observation too, by other routes; what makes them the right precedent is
