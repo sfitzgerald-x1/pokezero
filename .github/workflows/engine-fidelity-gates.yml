@@ -45,6 +45,8 @@ jobs:
             scripts/engine_build_fingerprint.py
             src/pokezero/engine_search.py
             tests/test_opponent_prior_telemetry.py
+            tests/test_opponent_prior_fixture_pins.py
+            tests/test_model_priors_search.py
             scripts/verify_poke_engine_source.py
             third_party/poke-engine-base-source.json
             tests/test_branch_mass_reconstruction.py
@@ -545,6 +547,28 @@ jobs:
           fi
           if grep -qE 'skipped=' /tmp/opppriors.log; then
             echo "::error::a skip here reads as a pass; these tests need no crate and must run"
+            exit 1
+          fi
+
+      # The two mutation fixtures that kill M9 and M9' need the model feature,
+      # which NO workflow builds -- and `cargo test` at the step below omits
+      # --features model, so the Rust-side priors:: tests are not compiled here
+      # either. Both kills are therefore enforced by nothing automated. These
+      # pins need no crate: they read the fixture module as an AST and assert
+      # both fixtures exist, are not @skip-ped, and still contain the specific
+      # assertion that does the killing. Verified to redden on deletion AND on
+      # defanging the reduction, and to stay green on an unmodified tree -- a
+      # pin that fires on correct code is as useless as one that never fires.
+      - name: Opponent-prior mutation fixtures still exist and still assert
+        run: |
+          set -o pipefail
+          python -m unittest -v tests.test_opponent_prior_fixture_pins 2>&1 | tee /tmp/oppfix.log
+          if ! grep -qE 'Ran 4 tests' /tmp/oppfix.log; then
+            echo "::error::expected 4 fixture pins; the set shrank or grew"
+            exit 1
+          fi
+          if grep -qE 'skipped=' /tmp/oppfix.log; then
+            echo "::error::a skip here reads as a pass; these pins need no crate"
             exit 1
           fi
 

@@ -154,7 +154,11 @@ above.
 | `21f484d4` (#1197) | `rust/pokezero-search/src/leaf.rs`, +31 lines | `9517aab98d56a9ba…` |
 | `578287e7` (#1207) | `rust/pokezero-search/src/priors.rs`, +91 −4 | `236d1cac8a784898…` |
 | #1211 | `rust/pokezero-search/src/events.rs`, +420 −50 | `028a4c52a4ad9fe7…` |
-| opponent-prior observability | `priors.rs`, `model.rs`, `leaf.rs` (seat-attributed prior telemetry, the test-only vector hook, doc corrections) | `3d8215d631d95edb…` |
+| ⚠ UNMERGED `scott/opponent-prior-observability` | `priors.rs`, `model.rs`, `leaf.rs` (seat-attributed prior telemetry, the test-only vector hook, doc corrections) | `3d8215d631d95edb…` |
+
+The last row is the only one keyed by a BRANCH rather than a merged commit or PR, and is marked so
+deliberately: every other row records a build that landed, and a mixed-provenance table gets quoted
+later as "this shipped". Drop that row if the branch does not merge.
 
 ⚠ **And the second landed while this register was in review**, three days after C153's build. That
 is not an aside: it is T1's argument, live. C151 §3 deferred the terminal sweep precisely because
@@ -566,9 +570,9 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 42 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure. The workflow holds **31** lines containing the unittest
-invocation, of which **one is a comment**, so there are **30 executable** invocation sites at this
-head; the scan resolves **30** of them and leaves **none** unresolved. **This step is among the
+rather than inherited from #1205's figure. The workflow holds **32** lines containing the unittest
+invocation, of which **one is a comment**, so there are **31 executable** invocation sites at this
+head; the scan resolves **31** of them and leaves **none** unresolved. **This step is among the
 resolved ones** — the number is not restated here, because a fourth copy of it is a fourth thing to
 go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 42 from the module's AST
 and matches the guard. All three numbers are **re-derived by the pin** rather than typed.

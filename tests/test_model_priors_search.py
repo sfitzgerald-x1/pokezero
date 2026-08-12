@@ -1000,12 +1000,34 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
         opponent maps at seams of depth 0, 1 and 2 and DOES take the chaining
         arm. A census reading "clean" for that channel would be wrong.
 
-        The assertion is the same shape as the ply-2 one and equally white-box:
-        at `max_depth=3` there are seams below ply 2, and an order reached by
-        chaining through a parent that already switched must show MORE than one
-        accumulated swap away from the root. A frozen chain can only ever be one
-        swap from the root (the root's own evolution), so counting the swaps
-        separates them.
+        The assertion is white-box and counts transpositions: an order reached by
+        chaining through a parent that already switched shows MORE than one
+        accumulated swap from the root, while a frozen chain can only ever be
+        one (the root's own evolution).
+
+        THE CONTROL THAT PREMISE RESTS ON, measured rather than assumed. Review
+        ran the same fixture at `max_depth=2`, where the chaining arm CANNOT
+        execute (`seam.depth + 1 < cfg.max_depth` admits only depth 0), and got
+        163 recorded orders with a maximum of ONE swap. At `max_depth=3` there
+        are 332 orders and 22 reach two swaps -- visibly two composed slot-0
+        transpositions, e.g. root `[typhlosion, smeargle, absol, vaporeon,
+        sharpedo, ...]` -> `[vaporeon, smeargle, absol, sharpedo, typhlosion,
+        ...]` is `0<->4` then `0<->3`. So the oracle rests on a measured control
+        and a 22-entry margin, not on a margin of one.
+
+        The premise is fixture-measured, not structural: one branch whose
+        `rendered.lines` carried TWO opponent switch lines (an opponent U-turn
+        then a Roar/Whirlwind drag in the same turn) would let a depth-0 seam
+        reach two swaps alone and this oracle would false-negative. The
+        `max_depth=2` control is what rules that out here.
+
+        WHERE THE EVIDENCE SITS: all 22 of the >=2-swap entries carry
+        `child_depth == 255`, the "child does not exist yet" sentinel -- their
+        orders still come from the chaining arm via `fold_by_branch`, so the
+        kill is valid, but the assertion does NOT land on materialized ply-3
+        nodes and should not be read as doing so. That is fail-closed: if the
+        fixture stopped producing sentinel entries this test goes RED, not
+        vacuously green.
         """
         ctx_json = self._ctx_with_opponent_order()
         root_order = json.loads(ctx_json)["opponent_request_order"]
@@ -1046,6 +1068,22 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
         self.assertGreater(len(orders), 0, "no opponent order was recorded at all")
         for order in orders:
             self.assertEqual(sorted(order), sorted(root_order))
+
+        # Pin where the contributing evidence lives, so a future reader does not
+        # assume it comes from materialized ply-3 children.
+        contributing = [
+            entry
+            for entry in vectors
+            if entry["opponent_order"] is not None
+            and swaps_from_root(entry["opponent_order"]) >= 2
+        ]
+        for entry in contributing:
+            self.assertIn(
+                entry["child_depth"],
+                (2, 255),
+                "a >=2-swap order must come from a ply-3 seam or a not-yet-"
+                "materialized branch, not from a shallower node",
+            )
 
         deepest = max(swaps_from_root(order) for order in orders)
         self.assertGreaterEqual(

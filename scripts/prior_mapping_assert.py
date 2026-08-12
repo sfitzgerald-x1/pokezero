@@ -42,7 +42,7 @@ import pokezero_search  # noqa: E402
 
 from pokezero.env import BattleStartOverride  # noqa: E402
 from pokezero.dex import load_showdown_dex_cached  # noqa: E402
-from pokezero.actions import is_move_action
+from pokezero.actions import is_move_action  # noqa: E402
 from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
     battle_spec_from_payload,
@@ -245,21 +245,28 @@ def run_corpus(corpus_dir: Path, tables_json: str, verbose: bool) -> dict[str, A
         # visible in the census rather than silently dropped.
         # `move_display` renders a switch as "switch {species}" WITH A SPACE and a
         # move as the bare id; without the space `Choices::SWITCHEROO` would be
-        # misread as a switch and could MANUFACTURE this skip.
+        # misread as a switch and could MANUFACTURE this skip. See the
+        # conjunction below for what actually authorises the skip.
         engine_move_options = [
             display for display, _ in interior if not str(display).startswith("switch ")
         ]
         recorded_move_indices = {
             index for index in recorded if is_move_action(index)
         }
-        # POSITIVE test, conjoined with the surface shape. The shape alone ("no
-        # engine moves, mask names a move") is a PROXY: any world defect that
-        # empties the move surface -- a PP mis-derivation, a wrong `disabled`
-        # fold, a mis-derived transform target -- would land here and be excused,
-        # which is the same misattribution this file was fixed for, pointed the
-        # other way. `_self_request_is_struggle_only` is engine_world's own
-        # payload-side reader of Showdown's Struggle branch, and a Struggle
-        # request publishes exactly one move row, so `== {0}` pins it further.
+        # THREE-WAY conjunction, and all three clauses are load-bearing.
+        #
+        # The surface shape alone ("no engine moves, mask names a move") is only
+        # a PROXY for the claim: any world defect that empties the move surface
+        # -- a PP mis-derivation, a wrong `disabled` fold, a mis-derived
+        # transform target -- would land here and be excused, which is the same
+        # misattribution this file was fixed for, pointed the other way. Review
+        # exercised exactly that: an all-pp-zero row with nothing disabled now
+        # returns False below and surfaces as interior_set_mismatch, which is
+        # the honest classification.
+        #
+        # So it is conjoined with engine_world's own payload-side reader of
+        # Showdown's Struggle branch, and with `== {0}` -- a Struggle request
+        # publishes exactly one move row.
         struggle_request = _self_request_is_struggle_only(
             (payload.get("sides") or {}).get(row.player_id),
             payload.get("selfActiveMoves"),
