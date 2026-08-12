@@ -812,6 +812,21 @@ class EngineMctsStats:
     lossy_subcase_renders: Counter = field(default_factory=Counter)
     attribution_unsafe_renders: int = 0
     prior_fallbacks: int = 0
+    # SEAT-ATTRIBUTED, and deliberately NOT folded into prior_fallbacks above.
+    # That aggregate sums both seats, so a run in which the opponent map refused
+    # every single time is indistinguishable in it from one where the priors
+    # applied cleanly -- which makes a paired opponent-priors delta unreadable:
+    # a flat result could mean "priors do not help" or "priors never ran".
+    # These four say which. Report the APPLIED RATE beside any such delta.
+    opponent_priors_applied: int = 0
+    opponent_priors_refused: int = 0
+    acting_priors_applied: int = 0
+    acting_priors_refused: int = 0
+    # Order- and value-sensitive fold over the opponent's gathered prior
+    # vectors. A count cannot see a pure REORDERING of the same vectors, which
+    # is exactly what a frozen opponent request order produces; this can.
+    # Hex string end to end -- a u64 does not survive a JSON double.
+    opponent_prior_digests: list = field(default_factory=list)
     early_stop_triggered_worlds: int = 0
     early_stop_accepted_decisions: int = 0
     early_stop_full_budget_replays: int = 0
@@ -936,6 +951,20 @@ class EngineMctsStats:
             "lossy_subcase_renders": dict(self.lossy_subcase_renders),
             "attribution_unsafe_renders": self.attribution_unsafe_renders,
             "prior_fallbacks": self.prior_fallbacks,
+            "opponent_priors_applied": self.opponent_priors_applied,
+            "opponent_priors_refused": self.opponent_priors_refused,
+            "acting_priors_applied": self.acting_priors_applied,
+            "acting_priors_refused": self.acting_priors_refused,
+            "opponent_priors_applied_rate": (
+                self.opponent_priors_applied
+                / (self.opponent_priors_applied + self.opponent_priors_refused)
+                if (self.opponent_priors_applied + self.opponent_priors_refused)
+                else None
+            ),
+            # Distinct digests seen. One value means every search gathered the
+            # opponent's vectors in the same order; more than one is normal
+            # across differing positions and is not itself a defect signal.
+            "opponent_prior_digests": sorted(set(self.opponent_prior_digests)),
             "early_stop_triggered_worlds": self.early_stop_triggered_worlds,
             "early_stop_accepted_decisions": self.early_stop_accepted_decisions,
             "early_stop_full_budget_replays": self.early_stop_full_budget_replays,
@@ -2252,6 +2281,19 @@ class EngineMctsPolicy:
                 report.get("attribution_unsafe_renders") or 0
             )
             self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
+            self.stats.opponent_priors_applied += int(
+                report.get("opponent_priors_applied") or 0
+            )
+            self.stats.opponent_priors_refused += int(
+                report.get("opponent_priors_refused") or 0
+            )
+            self.stats.acting_priors_applied += int(report.get("acting_priors_applied") or 0)
+            self.stats.acting_priors_refused += int(report.get("acting_priors_refused") or 0)
+            digest = report.get("opponent_prior_digest")
+            # "0000000000000000" means nothing was gathered; recording it would
+            # make "the opponent half never ran" look like a legitimate digest.
+            if digest and str(digest).strip("0"):
+                self.stats.opponent_prior_digests.append(str(digest))
             return report
 
         for world, state in worlds:

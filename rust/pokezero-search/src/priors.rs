@@ -395,6 +395,23 @@ pub(crate) struct PriorResolution {
     pub opponent_digest: u64,
 }
 
+/// FNV-1a fold of one already-computed digest into a running one.
+///
+/// Used to chain per-round opponent digests across a search. Kept beside
+/// [`fold_prior_digest`] and using the same constants so the two cannot drift.
+#[cfg_attr(not(feature = "model"), allow(dead_code))]
+pub(crate) fn fold_digest_u64(digest: u64, position: usize, value: u64) -> u64 {
+    const PRIME: u64 = 0x1000_0000_01b3;
+    let mut acc = if digest == 0 { 0xcbf2_9ce4_8422_2325 } else { digest };
+    for byte in (position as u64).to_le_bytes() {
+        acc = (acc ^ u64::from(byte)).wrapping_mul(PRIME);
+    }
+    for byte in value.to_le_bytes() {
+        acc = (acc ^ u64::from(byte)).wrapping_mul(PRIME);
+    }
+    acc
+}
+
 /// FNV-1a fold of one prior vector into a running digest, position included.
 ///
 /// Position matters: two resolutions that gather the same multiset of vectors

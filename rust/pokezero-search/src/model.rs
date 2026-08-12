@@ -810,6 +810,16 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     // model vs fallbacks to uniform (unmapped option / underflow / mismatch).
     let mut prior_branches = 0usize;
     let mut prior_fallbacks = 0usize;
+    // Seat-attributed, never folded into the two above. The both-seat sums
+    // cannot answer "did the opponent half run", which is the question a
+    // paired opponent-priors delta depends on.
+    let mut opponent_priors_applied = 0usize;
+    let mut opponent_priors_refused = 0usize;
+    let mut acting_priors_applied = 0usize;
+    let mut acting_priors_refused = 0usize;
+    // Order- and value-sensitive fold over the opponent's gathered vectors,
+    // chained across rounds in resolution order.
+    let mut opponent_prior_digest = 0u64;
     // Per-phase wall attribution (plan deliverable 4: "Do not estimate a
     // missing phase by subtracting an assumed model cost"). Every phase is
     // measured directly:
@@ -1145,6 +1155,20 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             );
             prior_branches += resolved.applied;
             prior_fallbacks += resolved.fallbacks;
+            opponent_priors_applied += resolved.opponent_applied;
+            opponent_priors_refused += resolved.opponent_fallbacks;
+            acting_priors_applied += resolved.acting_applied;
+            acting_priors_refused += resolved.acting_fallbacks;
+            // Chain the rounds: this round's digest folds onto the last, so the
+            // whole search carries one order-sensitive value rather than a
+            // per-round one that a reshaped tree could reorder freely.
+            if resolved.opponent_digest != 0 {
+                opponent_prior_digest = crate::priors::fold_digest_u64(
+                    opponent_prior_digest,
+                    completed,
+                    resolved.opponent_digest,
+                );
+            }
             // SEAT ORIENTATION. The model's value is SELF-relative: every leaf
             // observation is encoded from `leaf_ctx`'s own seat (SELF /
             // OPPONENT token blocks), and the checkpoint's value target is +1
@@ -1213,7 +1237,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"lossy_subcases\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
-         \"prior_fallbacks\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
+         \"prior_fallbacks\":{},\"opponent_priors_applied\":{},\"opponent_priors_refused\":{},\"acting_priors_applied\":{},\"acting_priors_refused\":{},\"opponent_prior_digest\":\"{:016x}\",\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
          \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
@@ -1232,6 +1256,14 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         model_priors,
         prior_branches,
         prior_fallbacks,
+        opponent_priors_applied,
+        opponent_priors_refused,
+        acting_priors_applied,
+        acting_priors_refused,
+        // Hex string, not a JSON number: u64 exceeds the exactly-representable
+        // integer range of a double, and a digest silently rounded by a JSON
+        // parser is worse than no digest at all.
+        opponent_prior_digest,
         encode_nanos as f64 / 1e9,
         model_nanos as f64 / 1e9,
         tree_nanos as f64 / 1e9,
