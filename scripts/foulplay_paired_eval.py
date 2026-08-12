@@ -339,17 +339,58 @@ def main(argv=None) -> int:
     # A wrong gather does not fail. It returns a confident paired delta and the
     # campaign reads "opponent priors do not help" off a permutation. Cells B
     # and E stay refused until the §8 in-image gate trio clears them.
-    if args.opponent_priors:
-        raise SystemExit(
-            "--opponent-priors is REFUSED pending review. The switch-ordering "
-            "defect is fixed -- the opponent's request order is now computed "
-            "from its switch history and passed through ctx, pinned by a "
-            "three-switch test the golden corpus could not provide -- but the "
-            "fix has not cleared independent review, and nothing has run "
-            "against a real checkpoint. Four prior attempts each looked correct "
-            "under their own tests. Lift this only after review passes and the "
-            "section 8 in-image gate confirms applied priors end to end."
-        )
+    # --opponent-priors was REFUSED here from the switch-ordering fix until
+    # 2026-08-12. The refusal is kept below as history rather than deleted,
+    # because its reasons are the checklist that lifted it, and a future reader
+    # deciding whether to trust a flag-on number needs to see what was required.
+    #
+    #   "The fix has not cleared independent review"
+    #     -> Two adversarial review rounds on
+    #        scott/opponent-prior-observability. Round one returned NOT SAFE and
+    #        found six defects, two of them blockers introduced by that branch: a
+    #        red native-call-contract guard, and a stale head fingerprint in the
+    #        C155 register that failed CI. Round two verified every fix by
+    #        measurement -- re-running both mutations itself -- and signed off.
+    #
+    #   "Nothing has run against a real checkpoint"
+    #     -> Still true of THIS gate, and deliberately so: the evidence below is
+    #        white-box and fixture-based. The first flag-on cell against a real
+    #        checkpoint is the run this lift enables, and its applied-rate must
+    #        be published with it.
+    #
+    #   "Four prior attempts each looked correct under their own tests"
+    #     -> This is the one that mattered, and it is why the bar was a MUTATION
+    #        rather than a passing suite. M9 (branch: opponent_prefix() ->
+    #        self_prefix()) is killed by
+    #        test_a_branch_that_switches_the_opponent_evolves_its_request_order:
+    #        applying the mutation fails it deterministically while all eleven
+    #        pre-existing tests in that file still pass. Review then found M9'
+    #        -- the same defect one ply down, in the chaining arm, uncovered and
+    #        biting at the --depth 4 this driver defaults to -- now killed by
+    #        test_a_deeper_seam_chains_the_parent_branch_order_not_the_root.
+    #        Both recorded KILLED in priors.rs's census, and pinned against
+    #        deletion by tests/test_opponent_prior_fixture_pins.py, because no
+    #        workflow builds the model feature and the kills were otherwise
+    #        enforced by nothing.
+    #
+    #   "the section 8 in-image gate confirms applied priors end to end"
+    #     -> scripts/prior_mapping_assert.py exits 0 on a REGENERATED corpus at
+    #        fingerprint 3d8215d631d95edb: 782/782 random battery, 390/390
+    #        scenarios, 0 diverged. Getting there fixed two real defects in the
+    #        gate itself (it omitted the transformed_slots production passes, and
+    #        two of four approximation flags) and refused 12 rows gen3 provably
+    #        cannot express -- it has no Struggle arm in get_all_options -- under
+    #        skip:engine_unsupported:struggle_only_surface. END TO END, measured
+    #        in-image: flag off gives opponent_priors_applied 0 and a zero
+    #        digest; flag on gives 335 applied, 0 refused, a 100% applied rate
+    #        and digest 6ebae0c1fa3cb45e.
+    #
+    # WHAT IS STILL NOT GUARANTEED, so the lift does not read as more than it is:
+    # the applied rate is BRANCH-level (RootPriorResolution is not
+    # seat-attributed, so root refusals are invisible to it), and gen3 still
+    # cannot express a Struggle-only surface. Any flag-on result must be
+    # published WITH its applied rate -- a delta whose priors may not have
+    # applied is the exact false conclusion this refusal existed to prevent.
 
     # HARD STOP before any game. A stale build does not error, it produces a
     # plausible number -- same standing as in mcts_acceptance_h2h.
