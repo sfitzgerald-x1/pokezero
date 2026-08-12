@@ -430,6 +430,53 @@ violated it three times; the rule is not self-executing just because it is writt
 - registration in EVERY schema-keyed table, **hard-failing** on one it does not know about
 - both directions checked: unexpected breakages AND pins that have stopped pinning
 
+
+## Post-verification cleanup
+
+An independent verification refuted the headline result. Everything it found is fixed; the
+findings are recorded here because several were in the INSTRUMENTS, and an instrument that lies
+is worse than no instrument.
+
+### The refutation, and what was actually wrong
+
+| finding | status |
+|---|---|
+| ledger denominator was 3 hardcoded call names, missing 186 sites | FIXED -- derived from signature defaults; true N was **283**, not 97 |
+| gate bypassable: 97 rows collapsed to 74 keys | FIXED -- key includes line |
+| gate never executed (skips on 3.11, in no workflow) | FIXED -- wired into the 3.12 job, where a SKIP is a failure |
+| drill baseline taken at an already-rotated HEAD | FIXED -- `DRILL_BASELINE_REF`, plus a loud warning |
+| drill scored only `^FAILED`, never `^ERROR` or the exit code | FIXED -- aborts on either |
+| drill force-removed an unnamed sibling directory | FIXED -- path derived from the worktree |
+| two `== V4` identity gates the table-scan could not see | FIXED -- and a guard for them found **four more** |
+| 21 fixtures left internally incoherent | FIXED -- at the two dataclass defaults, not the 21 sites |
+| 10 real regressions vs main | FIXED -- all ten |
+| "fallback_replay is a v4 behavioural difference" | **RETRACTED** -- fails identically on main |
+
+### "202 -> 97" was measured against a population I chose
+
+The ledger counted three call names. `LocalShowdownConfig.observation_spec` alone has 132
+callers, none counted. This is the program's own error class -- a denominator chosen rather than
+enumerated -- committed inside the instrument built to retire it, and it survived because the
+figure reproduced perfectly every time it was re-derived. Reproducibility is not validity.
+
+Real trajectory, all by `python3.12 scripts/schema_default_ledger.py`:
+
+    main                             283
+    after the migration              283 -> 213
+    (of which 70 came from two dataclass default lines, not 70 edits)
+
+### The lesson the guards taught
+
+Every guard added after a defect immediately found more instances than inspection had:
+
+- the identity-gate guard found 4 gates beyond the 2 found by reading
+- the `only_shrinks` check named all 67 stale allowlist rows
+- the ledger's exit-2 refused a clean denominator under 3.11
+- `git add` refused the gitignored allowlist that would have made the gate unrunnable
+
+None depended on remembering. That is the only mechanism in this effort with a clean record --
+including against its author.
+
 ## Burndown protocol
 
 A slice resumes by **re-running the command**, never by recall. A row is retired when the
