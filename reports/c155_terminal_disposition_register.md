@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`32b0c3e3c09d23d1…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`e7fa22786c38b190…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -165,6 +165,7 @@ above.
 | C157 review round 2 | `rust/pokezero-search/src/events.rs` (absorb predicate + per-conjunct battery) | `e9d4ac708d6efe69…` |
 | C157 review round 3 | `rust/pokezero-search/src/events.rs` (Leech Seed Grass immunity) | `8926a6bc2beaf9a2…` |
 | C157 review round 4 | `rust/pokezero-search/src/events.rs` (latent-divergence note) | `32b0c3e3c09d23d1…` |
+| `none_matched` capture + `divergence_shape` no-op label | `rust/pokezero-search/src/events.rs` (gated `none_matched` dump, `divergence_shape` -> `Option`) | `e7fa22786c38b190…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -527,8 +528,8 @@ defect did not exist on either of their trees.** A typed `25` would have shipped
 Where CI gates on the merge, **local green and CI green are different measurements**; §6 declares
 that coupling and the assertion carries the fix in its own failure message.
 
-**Every measurement behind T2–T6 predates the head build**, and none is at `32b0c3e3c09d23d1` —
-nor at `8926a6bc2beaf9a2`, `e9d4ac708d6efe69`, `0975c5f29bdf8253`, `ec4ff0349eab7fdd`,
+**Every measurement behind T2–T6 predates the head build**, and none is at `e7fa22786c38b190` —
+nor at `32b0c3e3c09d23d1`, `8926a6bc2beaf9a2`, `e9d4ac708d6efe69`, `0975c5f29bdf8253`, `ec4ff0349eab7fdd`,
 `44dcfca90130ed91`, `2ec5bfd1c7292ed6`, `028a4c52a4ad9fe7` or `9517aab98d56a9ba`, the builds
 this document was reconciled against at the four preceding merges plus this branch's own earlier heads. Read the
 table in T1 before quoting that as a re-sweep scope: T3, T4 and T5 rest on an engine build; **T2 and
@@ -745,7 +746,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.head_fingerprint` | 32b0c3e3c09d23d1 |
+| `t1.head_fingerprint` | e7fa22786c38b190 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
@@ -763,12 +764,12 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t3.speed_ties_order_le_10` | 20 |
 | `t3.speed_ties_perish` | 4 |
 | `t3.speed_ties_with_a_leftovers_winner` | 24 |
-| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:6108 |
+| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:6481 |
 | `t4.boundary` | 1000513/121 |
 | `t4.branch_miss_pct` | 100.00 |
 | `t4.engine_component` | itemleftovers |
 | `t4.heal_mismatch_rows_in_the_wide_census` | 2 |
-| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:6180 |
+| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:6553 |
 | `t4.leftovers_truncated_consumers` | 1 |
 | `t4.leftovers_truncated_references` | 2 |
 | `t4.observed_component` | heal |
