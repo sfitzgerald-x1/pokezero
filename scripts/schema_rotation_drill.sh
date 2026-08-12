@@ -39,6 +39,14 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WT="${1:-/tmp/schema-v5-drill}"
 VENV="$REPO/.venv/bin/python"
 
+# ONE normaliser for every comparison. The previous `sed 's|.*/tests/||'` assumed pytest
+# printed ABSOLUTE paths; when it printed relative ones the pattern did not match, so
+# `actual.txt` held "FAILED tests/x.py::y" while `expected.txt` held "x.py::y" and NOTHING
+# compared equal. The visible symptom was a test appearing in BOTH "unexpected breakages" and
+# "expected but did not break" -- impossible, and the tell that the comparison, not the tree,
+# was broken. Strips the status word and any leading path through the last `tests/`.
+_norm_id() { sed -E 's|^(FAILED|ERROR)[[:space:]]+||; s|^.*/tests/||; s|^tests/||'; }
+
 drill_targets() {
   local root="$1"
   if [ "${DRILL_SCOPE:-full}" = "fast" ]; then
@@ -199,7 +207,7 @@ BASE="${DRILL_BASELINE:-${WT%/}-baseline}"
 if [ "${DRILL_BASELINE_REUSE:-0}" = "1" ] && [ -f "$BASE/BASE.sha" ] \
    && [ "$(cat "$BASE/BASE.sha")" = "$(git -C "$REPO" rev-parse "$BASE_REF") ${DRILL_SCOPE:-full}" ]; then
   echo "  reusing baseline at $(cat "$BASE/BASE.sha" | cut -c1-8)"
-  grep '^FAILED' "$BASE/BASE.txt" | sed 's|.*/tests/||' | sort -u > "$WT/baseline.txt"
+  grep '^FAILED' "$BASE/BASE.txt" | _norm_id | sort -u > "$WT/baseline.txt"
   echo "  baseline failures (NOT attributable to the rotation): $(wc -l < "$WT/baseline.txt" | tr -d ' ')"
   SKIP_BASELINE=1
 fi
@@ -212,7 +220,7 @@ PYTHONPATH="$BASE/src" "$VENV" -m pytest $(drill_targets "$BASE") -q -p no:rando
   --ignore="$BASE/tests/test_terminal_disposition_register.py" \
   --ignore="$BASE/tests/test_unreachable_readjudication.py" \
   --ignore="$BASE/tests/test_wide_seed_negative_census.py" > "$BASE/BASE.txt" 2>&1
-grep '^FAILED' "$BASE/BASE.txt" | sed 's|.*/tests/||' | sort -u > "$WT/baseline.txt"
+grep '^FAILED' "$BASE/BASE.txt" | _norm_id | sort -u > "$WT/baseline.txt"
 echo "  baseline failures (NOT attributable to the rotation): $(wc -l < "$WT/baseline.txt" | tr -d ' ')"
 fi
 
@@ -248,7 +256,7 @@ if [ -n "$NEW_ERR" ]; then
   printf '%s\n' "$NEW_ERR" | sed 's/^/  /' | head
   exit 4
 fi
-grep '^FAILED' "$WT/DRILL.txt" | sed 's|.*/tests/||' | sort -u > "$WT/rotated.txt"
+grep '^FAILED' "$WT/DRILL.txt" | _norm_id | sort -u > "$WT/rotated.txt"
 comm -23 "$WT/rotated.txt" "$WT/baseline.txt" > "$WT/actual.txt"
 grep -vE '^\s*(#|$)' "$EXPECTED" | sort -u > "$WT/expected.txt"
 
