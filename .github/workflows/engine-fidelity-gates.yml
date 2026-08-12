@@ -500,6 +500,25 @@ jobs:
       # hardcoded five-tuple left 22 of 37 engine-touching modules outside every probe --
       # including src/pokezero/engine_env.py, which runs pokezero_search.env_step and is
       # reached by the pokezero-rollout console script. With an enabler there a real
+      # The schema-default gate is worthless if it never runs, and it did not: it was authored
+      # with no workflow step, so "fails at authorship" meant "fails for whoever remembers to run
+      # it". A SKIP is treated as a FAILURE here -- the gate skips when the ledger reports an
+      # unparsable file, and on this job that means something else broke, not that the check is
+      # inapplicable.
+      - name: Schema-default conflation gate
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_schema_default_ledger tests.test_schema_with_selector -v \
+            2>&1 | tee /tmp/schemagate.log
+          if grep -qE 'skipped|SKIP' /tmp/schemagate.log; then
+            echo "::error::the schema-default gate SKIPPED -- the ledger could not measure the tree"
+            exit 1
+          fi
+          if ! grep -qE 'Ran 9 tests' /tmp/schemagate.log; then
+            echo "::error::expected 9 tests across the ledger gate and the selector; suite changed"
+            exit 1
+          fi
+
       # search process came back ENUMERATED and this step still read `Ran 14 tests OK`.
       - name: Roll-enumeration scope gate
         run: |
