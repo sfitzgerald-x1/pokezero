@@ -1,0 +1,190 @@
+{
+  "_README": "Recorded run of scripts/mutate_zero_heal_guard.py. Regenerate with that script; tests/test_zero_heal_guard_mutation_battery.py holds this to the harness's own MUTANTS table and to EXPECTED_EQUIVALENT, so a hand edit or a stale re-run is loud. NEVER edit by hand to make the gate pass.",
+  "applied": 14,
+  "events_rs_sha256": "5ca47df2c8a1ba61045b3676aa1fee0c86f58df1860f39d30da2a044fae1fded",
+  "expected_equivalent": {
+    "open_flag_true_on_empty_candidate_list": "Unreachable arm. Measured against a control: with the sleeper's only move being Sleep Talk the engine emits one branch, the 50% 'nothing happened' arm, and no branch carrying a callee tail -- so no branch exists on which the flag is consulted. The two-callee control emits the second branch and does refuse.",
+    "open_scan_only_matching_candidates": "Equivalent on the Ambiguous arm: if producer 2 fired, the callee that fired is the one that generated this tail, so it matches by construction and a matching-only scan cannot miss it. Scoped in SleepTalkProbe's doc, which also records that the argument is FALSE as stated on NoneMatched and what bounds it there."
+  },
+  "harness_sha256": "fb256241c59231c39d06a219e4e8397a24a6d0aaca0a3729760e8f28bd75c336",
+  "killed": 12,
+  "mutants": [
+    {
+      "detail": "",
+      "direction": "fail-open",
+      "killers": [
+        "events::none_matched_shape_tests::only_an_opponent_targeted_positive_heal_can_reach_the_absorb_no_op",
+        "events::none_matched_shape_tests::the_bypassing_callee_still_refuses",
+        "protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing",
+        "test_a_full_hp_absorber_with_a_convertible_callee_still_refuses",
+        "test_one_hp_below_full_is_the_boundary",
+        "test_the_callee_scan_covers_candidates_after_the_second_match",
+        "test_volt_absorb_has_no_bypassing_producer_in_gen3",
+        "the_callee_scan_covers_candidates_after_the_second_match"
+      ],
+      "name": "open_predicate_always_false",
+      "status": "KILLED"
+    },
+    {
+      "detail": "",
+      "direction": "fail-open",
+      "killers": [
+        "events::none_matched_shape_tests::no_move_in_the_table_natively_heals_the_opponent",
+        "events::none_matched_shape_tests::only_an_opponent_targeted_positive_heal_can_reach_the_absorb_no_op",
+        "events::none_matched_shape_tests::the_bypassing_callee_still_refuses",
+        "protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing",
+        "test_a_full_hp_absorber_with_a_convertible_callee_still_refuses",
+        "test_one_hp_below_full_is_the_boundary",
+        "test_the_callee_scan_covers_candidates_after_the_second_match",
+        "test_volt_absorb_has_no_bypassing_producer_in_gen3",
+        "the_callee_scan_covers_candidates_after_the_second_match"
+      ],
+      "name": "open_target_user_not_opponent",
+      "status": "KILLED"
+    },
+    {
+      "detail": "",
+      "direction": "fail-open",
+      "killers": [
+        "events::none_matched_shape_tests::only_an_opponent_targeted_positive_heal_can_reach_the_absorb_no_op",
+        "events::none_matched_shape_tests::the_bypassing_callee_still_refuses",
+        "protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing",
+        "test_a_full_hp_absorber_with_a_convertible_callee_still_refuses",
+        "test_one_hp_below_full_is_the_boundary",
+        "test_the_callee_scan_covers_candidates_after_the_second_match",
+        "test_volt_absorb_has_no_bypassing_producer_in_gen3",
+        "the_callee_scan_covers_candidates_after_the_second_match"
+      ],
+      "name": "open_amount_gt_one",
+      "status": "KILLED"
+    },
+    {
+      "detail": "",
+      "direction": "fail-open",
+      "killers": [
+        "test_the_callee_scan_covers_candidates_after_the_second_match",
+        "the_callee_scan_covers_candidates_after_the_second_match"
+      ],
+      "name": "open_early_return_on_second_match",
+      "status": "KILLED"
+    },
+    {
+      "detail": "",
+      "direction": "fail-open",
+      "killers": [],
+      "name": "open_scan_only_matching_candidates",
+      "status": "SURVIVED"
+    },
+    {
+      "detail": "",
+      "direction": "fail-safe-shaped, listed with the open set because review proposed it",
+      "killers": [],
+      "name": "open_flag_true_on_empty_candidate_list",
+      "status": "SURVIVED"
+    },
+    {
+      "detail": "",
+      "direction": "fail-safe (= pre-PR)",
+      "killers": [
+        "protect_plus_an_absorb_ability_with_no_convertible_callee_renders",
+        "test_a_full_hp_absorber_with_unconvertible_callees_now_renders",
+        "test_the_full_hp_reclaim_is_counted_under_its_own_token",
+        "test_volt_absorb_is_read_the_same_way"
+      ],
+      "name": "safe_revert_the_conjunct",
+      "status": "KILLED"
+    },
+    {
+      "detail": "",
+      "direction": "fail-safe",
+      "killers": [
+        "events::none_matched_shape_tests::no_move_in_the_table_natively_heals_the_opponent",
+        "events::none_matched_shape_tests::only_an_opponent_targeted_positive_heal_can_reach_the_absorb_no_op",
+        "events::none_matched_shape_tests::the_bypassing_callee_still_refuses",
+        "protect_plus_an_absorb_ability_with_no_convertible_callee_renders",
+        "test_a_full_hp_absorber_with_unconvertible_callees_now_renders",
+        "test_the_full_hp_reclaim_is_counted_under_its_own_token",
+        "test_volt_absorb_is_read_the_same_way"
+      ],
+      "name": "safe_predicate_always_true",
+      "status": "KILLED"
+    },
+    {
+      "detail": "",
+      "direction": "fail-safe (= pre-#1211)",
+      "killers": [
+        "protect_plus_an_absorb_ability_with_no_convertible_callee_renders",
+        "test_a_full_hp_absorber_with_unconvertible_callees_now_renders",
+        "test_absorb_ability_with_hp_headroom_now_renders",
+        "test_the_full_hp_reclaim_is_counted_under_its_own_token",
+        "test_the_reclaimed_render_is_counted_under_its_own_token",
+        "test_volt_absorb_is_read_the_same_way"
+      ],
+      "name": "safe_ability_presence_only",
+      "status": "KILLED"
+    },
+    {
+      "detail": "",
+      "direction": "fail-safe",
+      "killers": [
+        "a_protect_blocked_sleep_talk_callee_renders_the_exact_protect_line",
+        "protect_plus_an_absorb_ability_with_no_convertible_callee_renders",
+        "test_a_full_hp_absorber_with_unconvertible_callees_now_renders",
+        "test_a_non_absorb_ability_is_not_treated_as_one",
+        "test_absorb_ability_with_hp_headroom_now_renders",
+        "test_no_absorb_ability_renders_the_marker",
+        "test_the_fixture_actually_reaches_the_marker",
+        "test_the_full_hp_reclaim_is_counted_under_its_own_token",
+        "test_the_reclaimed_render_is_counted_under_its_own_token",
+        "test_volt_absorb_is_read_the_same_way"
+      ],
+      "name": "safe_hardcode_absorb_possible",
+      "status": "KILLED"
+    },
+    {
+      "detail": "",
+      "direction": "fail-safe",
+      "killers": [
+        "events::none_matched_shape_tests::only_an_opponent_targeted_positive_heal_can_reach_the_absorb_no_op"
+      ],
+      "name": "safe_amount_ge_zero",
+      "status": "KILLED"
+    },
+    {
+      "detail": "",
+      "direction": "counter",
+      "killers": [
+        "events::tests::the_live_subcase_slugs_are_all_in_vocabulary",
+        "protect_plus_an_absorb_ability_with_no_convertible_callee_renders",
+        "test_the_full_hp_reclaim_is_counted_under_its_own_token",
+        "test_volt_absorb_is_read_the_same_way"
+      ],
+      "name": "counter_collapsed_into_headroom",
+      "status": "KILLED"
+    },
+    {
+      "detail": "",
+      "direction": "counter",
+      "killers": [
+        "events::tests::the_live_subcase_slugs_are_all_in_vocabulary"
+      ],
+      "name": "counter_deleted_for_the_new_arm",
+      "status": "KILLED"
+    },
+    {
+      "detail": "",
+      "direction": "refactor",
+      "killers": [
+        "a_sleeptalk_callee_is_identified_when_the_defender_does_not_read_hp",
+        "events::tests::every_sleeptalk_attribution_names_the_callee_the_engine_used",
+        "rest_sleep_talk_keeps_the_same_sleep_and_confusion_gate_order",
+        "still_asleep_sleep_talk_runs_confusion_before_the_called_move",
+        "the_defenders_move_no_longer_breaks_sleeptalk_attribution"
+      ],
+      "name": "refactor_match_count_gt_zero",
+      "status": "KILLED"
+    }
+  ],
+  "never_applied": 0,
+  "survived": 2
+}
