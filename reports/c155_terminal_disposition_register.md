@@ -682,7 +682,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.roll_window_holdout_fraction` | 0.899 % |
 | `bar.support_gated_dev` | 8.689 % |
 | `bar.support_gated_holdout` | 9.185 % |
-| `base.expected_counter_artifacts` | 402 |
+| `base.expected_counter_artifacts` | 403 |
 | `base.expected_sweep_artifacts` | 115 |
 | `base.patch_stack` | 74 |
 | `base.section3_rows` | 82 |
