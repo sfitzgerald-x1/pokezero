@@ -49,6 +49,7 @@ from pokezero.evaluation import PromotionGateConfig
 from pokezero.promotion import PROMOTION_REGISTRY_SCHEMA_VERSION, load_promotion_registry
 from pokezero.run_audit import RunAuditConfig, RunAuditFailure
 from pokezero.rollout import RolloutConfig
+from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2_2
 
 
 def _entity_test_model_config(**overrides):
@@ -5509,6 +5510,10 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 env_factory=OneTurnEnv,
                 rollout_config=RolloutConfig(max_decision_rounds=5),
                 model_config=TransformerPolicyConfig.compact_category(
+                    # v2.2, same reason as the cache-chunk smoke below: OneTurnEnv's hand-built
+                    # ObservationSpec is 151 tokens from the v2-family constants regardless of
+                    # what it stamps, so the config has to describe that layout.
+                    observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
                     category_vocab=tuple(range(1, 17)),
                     category_oov_buckets=4,
                     policy_id="entity-smoke",
@@ -5554,6 +5559,11 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 env_factory=OneTurnEnv,
                 rollout_config=RolloutConfig(max_decision_rounds=5),
                 model_config=TransformerPolicyConfig.compact_category(
+                    # v2.2: OneTurnEnv builds its observations from a hand-built ObservationSpec,
+                    # whose token_count comes from the v2-FAMILY module constants (151) whatever
+                    # schema it stamps. Left to the default this config resolved to v4's 23 and
+                    # the pair mismatched -- "row_categorical_ids shape does not match".
+                    observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
                     category_vocab=tuple(range(1, 17)),
                     category_oov_buckets=4,
                     policy_id="entity-cache-smoke",
