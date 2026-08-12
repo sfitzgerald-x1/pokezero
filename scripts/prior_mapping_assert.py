@@ -29,6 +29,9 @@ import argparse
 import json
 import sys
 from collections import Counter, defaultdict
+
+# Engine action layout: indices 0..3 are moves, 4.. are switches.
+ACTION_SWITCH_BASE = 4
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -223,6 +226,34 @@ def run_corpus(corpus_dir: Path, tables_json: str, verbose: bool) -> dict[str, A
             )
             if legal
         }
+        # ENGINE CANNOT EXPRESS A STRUGGLE-ONLY SURFACE (gen3). When every move
+        # is blocked -- Taunt on a mon whose only move is a status move is the
+        # corpus case -- Showdown offers Struggle and marks a MOVE index legal.
+        # `gen3::State::get_all_options` has no Struggle arm at all (the move
+        # exists in `choices.rs` with gen3 typing and recoil, but option
+        # generation never emits it), so the engine offers switches alone.
+        #
+        # No action map can reconcile that: the option the mask names is absent
+        # from the option list being mapped. Counting it as a mapping mismatch
+        # attributes an engine capability gap to the map, which is the same
+        # misattribution `transformed_slots` was causing above.
+        #
+        # The predicate is deliberately narrow, and narrow in a way that cannot
+        # hide a permutation defect: it fires ONLY when the engine offers zero
+        # move options while the recorded mask names at least one move. A
+        # mis-permuted map necessarily has >= 1 move option on both sides, so it
+        # can never take this branch. Counted under its own reason so it is
+        # visible in the census rather than silently dropped.
+        engine_move_options = [
+            display for display, _ in interior if not str(display).startswith("switch")
+        ]
+        recorded_move_indices = {
+            index for index in recorded if index < ACTION_SWITCH_BASE
+        }
+        if not engine_move_options and recorded_move_indices:
+            counts["skip:engine_unsupported:struggle_only_surface"] += 1
+            continue
+
         problems: list[str] = []
         interior_indices = [index for _, index in interior]
         if None in interior_indices:
