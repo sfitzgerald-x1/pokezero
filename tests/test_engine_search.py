@@ -32,6 +32,7 @@ from pokezero.engine_search import (  # noqa: E402
     _bounded_reason_detail,
     _latch_encoder_tables_to_model_config,
     _locked_aggregate_choice,
+    _world_visit_shares,
     native_search_args,
 )
 
@@ -4550,3 +4551,75 @@ class BudgetLadderTest(unittest.TestCase):
             [i for i, (a, b) in enumerate(zip(at_cap, at_rung)) if a != b], [7]
         )
 
+
+class LadderEscalationCriterionTest(unittest.TestCase):
+    """The criterion that decides whether a rung is worth paying for.
+
+    This exists because the FIRST criterion was wrong in a way only a canary
+    caught. `_locked_aggregate_choice` compares the leader's visit edge against
+    UNSPENT simulations -- correct mid-search, where the early-stop path uses it.
+    Called after a rung has run to completion, `remaining` is 0 and it degenerates
+    to "is there a unique leader": satisfied on 447 of 447 canary decisions, so the
+    ladder stopped at its floor every time and a "dynamic 3..6" cell was really a
+    fixed depth-3 cell wearing a range in its name.
+
+    So each axis is tested on the uncertainty it can actually reduce, and these
+    pin that the criterion DISCRIMINATES rather than merely returning a value.
+    """
+
+    @staticmethod
+    def _report(pairs):
+        return {"side_one": [{"move": m, "visits": v} for m, v in pairs]}
+
+    def test_visit_shares_normalise_across_unequal_budgets(self) -> None:
+        # A collapsed group runs at multiplicity x sims, so raw visits would let
+        # one world outvote the others purely by having had a bigger budget.
+        small = _world_visit_shares("side_one", self._report([("a", 60), ("b", 40)]))
+        large = _world_visit_shares("side_one", self._report([("a", 600), ("b", 400)]))
+        self.assertEqual(small, large)
+        self.assertAlmostEqual(small["a"], 0.6)
+
+    def test_an_unreadable_report_is_None_not_an_empty_dict(self) -> None:
+        # None must be distinguishable from "read it, found nothing": the caller
+        # skips the former and would otherwise treat a broken world as unanimous.
+        self.assertIsNone(_world_visit_shares("side_one", {}))
+        self.assertIsNone(_world_visit_shares("side_one", {"side_one": "nope"}))
+        self.assertIsNone(
+            _world_visit_shares("side_one", self._report([("a", -1)]))
+        )
+        self.assertIsNone(_world_visit_shares("side_one", self._report([("a", 0)])))
+
+    def test_the_old_predicate_is_degenerate_on_a_completed_rung(self) -> None:
+        # The bug itself, pinned so it cannot come back. A completed search has
+        # requested == iterations, so remaining is 0 and ANY unique leader locks --
+        # even a leader ahead by a single visit out of a thousand.
+        completed = {
+            "requested_iterations": 1000,
+            "iterations": 1000,
+            "side_one": [{"move": "a", "visits": 501}, {"move": "b", "visits": 499}],
+        }
+        self.assertEqual(
+            _locked_aggregate_choice([("side_one", completed)]), "a"
+        )
+        # Whereas the margin criterion sees a 0.2% edge for what it is.
+        shares = _world_visit_shares("side_one", completed)
+        ordered = sorted(shares.values(), reverse=True)
+        self.assertLess(ordered[0] - ordered[1], 0.25)
+
+    def test_a_comfortable_leader_clears_the_default_margin(self) -> None:
+        shares = _world_visit_shares(
+            "side_one", self._report([("a", 700), ("b", 200), ("c", 100)])
+        )
+        ordered = sorted(shares.values(), reverse=True)
+        self.assertGreaterEqual(ordered[0] - ordered[1], 0.25)
+
+    def test_the_margin_is_validated(self) -> None:
+        for bad in (-0.1, 1.5):
+            with self.subTest(margin=bad):
+                with self.assertRaises(ValueError):
+                    EngineMctsConfig(
+                        leaf_eval="model", worlds=4, search_sims=1024,
+                        search_batch=16, search_depth=6, model_path="/m",
+                        checkpoint_path="/c", tables_path="/t",
+                        depth_min=3, ladder_margin=bad,
+                    )

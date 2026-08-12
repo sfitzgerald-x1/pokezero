@@ -227,6 +227,34 @@ def _latch_encoder_tables_to_model_config(tables_json: str, model_config: Any) -
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+def _world_visit_shares(
+    side_key: str, report: Mapping[str, Any]
+) -> Optional[dict[str, float]]:
+    """One world's per-arm visit SHARES, or None if the report cannot be read.
+
+    Shares, not raw visits, so worlds searched at different budgets (a collapsed
+    group runs at multiplicity x sims) weigh equally -- the same normalisation
+    `_locked_aggregate_choice` applies, minus its unspent-simulation bound, which
+    is meaningless once a rung has run to completion.
+    """
+    entries = report.get(side_key)
+    if not isinstance(entries, Sequence):
+        return None
+    visits: dict[str, int] = {}
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            return None
+        choice = str(entry.get("move") or "")
+        count = int(entry.get("visits", -1))
+        if not choice or count < 0:
+            return None
+        visits[choice] = visits.get(choice, 0) + count
+    total = sum(visits.values())
+    if total <= 0:
+        return None
+    return {choice: count / total for choice, count in visits.items()}
+
+
 def _locked_aggregate_choice(
     world_reports: Sequence[tuple[str, Mapping[str, Any]]],
 ) -> Optional[str]:
@@ -428,6 +456,14 @@ class EngineMctsConfig:
     # max" is worlds_min=2 with worlds=16.
     depth_min: int | None = None
     worlds_min: int | None = None
+    #: Visit-share margin below which a decision counts as CONTESTED and the depth
+    #: axis escalates. Not the early-stop visit lock: that predicate compares the
+    #: leader's edge against UNSPENT simulations, so after a rung has run to
+    #: completion `remaining` is 0 and it is satisfied by any unique leader --
+    #: measured at 447 of 447 decisions, which collapsed the ladder to its floor.
+    #: A margin asks the different question the depth axis needs: is the leader's
+    #: advantage big enough that another ply is unlikely to overturn it?
+    ladder_margin: float = 0.25
     # Debug cross-check: per decision, batch-refold the whole public log
     # (production's per-observe path, turn_merged.extract_transition_products)
     # and compare its surfaces against the live incremental fold's products.
@@ -469,6 +505,10 @@ class EngineMctsConfig:
                 raise ValueError(
                     "depth_min must be in 1..=search_depth when set "
                     f"(got {self.depth_min} with search_depth={self.search_depth})."
+                )
+            if not 0.0 <= self.ladder_margin <= 1.0:
+                raise ValueError(
+                    f"ladder_margin must be in 0.0..=1.0 (got {self.ladder_margin})."
                 )
             if self.worlds_min is not None and not 0 < self.worlds_min <= self.worlds:
                 raise ValueError(
@@ -2831,7 +2871,18 @@ class EngineMctsPolicy:
             # that failed for a taxonomy reason would just fail again, louder.
             if decision is None or decision.policy_id != self.policy_id:
                 break
-            if getattr(self, "_ladder_locked", False):
+            # Per axis: the next rung only earns its cost if it can reduce the
+            # uncertainty that is actually present. A worlds rung is pointless once
+            # the worlds agree; a depth rung is pointless once the leader's margin
+            # is comfortable. Stop when the NEXT rung has nothing to offer.
+            next_worlds, next_depth = ladder[index + 1]
+            adds_worlds = next_worlds > stage_worlds
+            adds_depth = next_depth > stage_depth
+            worth_it = (
+                (adds_worlds and not getattr(self, "_ladder_worlds_agree", True))
+                or (adds_depth and not getattr(self, "_ladder_margin_met", False))
+            )
+            if not worth_it:
                 self.stats.ladder_settled_early += 1
                 break
             self.stats.ladder_escalations += 1
@@ -3171,13 +3222,42 @@ class EngineMctsPolicy:
                     final_runs.append(record)
                 world_runs = final_runs
                 self.stats.early_stop_full_budget_replays += full_budget_replays
-        # The ladder's stop signal. Computed for EVERY decision on this path, not
-        # only when a world stopped early, because the ladder needs it whether or
-        # not early stop is on -- and computed with the SAME helper the early-stop
-        # acceptance uses, so "settled" means one thing in this file.
-        self._ladder_locked = bool(world_runs) and _locked_aggregate_choice(
-            [(record["side_key"], record["report"]) for record in world_runs]
-        ) is not None
+        # THE LADDER'S STOP SIGNAL, per axis.
+        #
+        # NOT `_locked_aggregate_choice`. That predicate compares the leader's
+        # visit edge against UNSPENT simulations, which is exactly right where the
+        # early-stop path uses it -- mid-search, at a batch boundary. Here the rung
+        # has already run to completion, so `remaining` is 0 and the lock is
+        # satisfied by any unique leader: measured at 447 of 447 canary decisions,
+        # which made the ladder stop at its floor every time and turned a "dynamic
+        # 3..6" cell into a fixed depth-3 cell wearing a range in its name.
+        #
+        # So each axis now tests the uncertainty it can actually reduce:
+        #
+        # * DEPTH resolves how close the decision is, so it escalates while the
+        #   leader's aggregate visit-share margin is under `ladder_margin`.
+        # * WORLDS resolve belief uncertainty, so they escalate while the
+        #   per-world leaders DISAGREE. Unanimity is the signal more samples of
+        #   the same belief cannot improve.
+        self._ladder_margin_met = False
+        self._ladder_worlds_agree = True
+        if world_runs:
+            shares: Counter[str] = Counter()
+            per_world_leaders: list[str] = []
+            for record in world_runs:
+                side = _world_visit_shares(record["side_key"], record["report"])
+                if side is None:
+                    continue
+                for move, share in side.items():
+                    shares[move] += share
+                per_world_leaders.append(max(side, key=lambda m: side[m]))
+            if shares and per_world_leaders:
+                ordered = shares.most_common()
+                n_worlds = len(per_world_leaders)
+                lead = ordered[0][1] / n_worlds
+                runner = (ordered[1][1] / n_worlds) if len(ordered) > 1 else 0.0
+                self._ladder_margin_met = (lead - runner) >= float(config.ladder_margin)
+                self._ladder_worlds_agree = len(set(per_world_leaders)) <= 1
         self.stats.search_wall_seconds += time.perf_counter() - search_started
 
         if replay_failed:
