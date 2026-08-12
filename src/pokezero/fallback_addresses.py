@@ -176,7 +176,8 @@ class FallbackAddress:
         """The replay coordinates, independent of which class recorded them.
 
         ``source`` is part of the locator and must not be dropped. ``battle_id`` is
-        ``f"{prefix}-{seed}"`` (`foulplay_bridge.py:2699`) and carries the seed and
+        ``f"{prefix}-{seed}"`` (`foulplay_bridge._run_single_game`'s
+        ``battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"``) and carries the seed and
         nothing else -- no arm, depth, sims or checkpoint. A depth/arm grid reuses
         one ``seed_start`` across shards, so ``(battle_id, round, seat)`` alone
         collides across genuinely different search configurations and undercounts
