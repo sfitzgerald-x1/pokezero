@@ -2956,8 +2956,8 @@ fn render_move_phase(
     // larger half and `|[miss]|` stays correct.
     //
     // KNOWN UNPINNED AT THIS CALL SITE, measured rather than assumed: deleting the
-    // `no_effect_hit_outweighs_miss` conjunct SURVIVES the whole crate suite (37 binaries,
-    // `cargo test --no-fail-fast`, 0 failures). It cannot be pinned by a fixture, and the
+    // `no_effect_hit_outweighs_miss` conjunct SURVIVES the whole crate suite -- 36 binaries,
+    // 524 passed, 0 failures, `cargo test --no-fail-fast`, RE-MEASURED with #1234 merged. It cannot be pinned by a fixture, and the
     // reason is a property of the move table rather than of the tests — NO move in
     // `poke_engine::choices::MOVES`, in any generation, is an opponent-target volatile
     // Status move at or below 50% accuracy, so no `Choice` the renderer can be handed
