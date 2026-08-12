@@ -238,7 +238,17 @@ class ObservationSpec:
     numeric_feature_count: int
     opponent_tendency_stats_token_count: int = OPPONENT_TENDENCY_STATS_TOKEN_COUNT
     transition_token_count: int = TRANSITION_TOKEN_COUNT
-    schema_version: str = OBSERVATION_SCHEMA_VERSION
+    # v2.2, NOT the global default. A hand-built spec computes `token_count` from the v2-FAMILY
+    # module constants above (FIELD/SELF/OPPONENT/ACTION_CANDIDATE plus the two per-instance
+    # counts, which themselves default to v2-family values), so its SHAPE is 151/128 whatever
+    # this field says. Defaulting the stamp to the global default therefore produced a spec
+    # claiming v4 while carrying v2.2's shape -- internally incoherent, and silently so, since
+    # `validate()` accepts it. 21 test fixtures were in that state after the rotation.
+    #
+    # Real v3/v4 specs come from `REPLAY_OBSERVATION_SPECS_BY_SCHEMA`, which passes
+    # `schema_version` explicitly, so this default is reachable only by hand construction --
+    # exactly the case that must be coherent by default rather than by remembering.
+    schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2
 
     @property
     def token_count(self) -> int:
@@ -389,7 +399,12 @@ class PokeZeroObservationV0:
     legal_action_mask: Any
     perspective: ObservationPerspective | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
-    schema_version: str = OBSERVATION_SCHEMA_VERSION
+    # v2.2, for the same reason as `ObservationSpec.schema_version` above and necessarily in
+    # step with it: `validate()` refuses an observation whose stamp differs from the spec's, so
+    # a hand-built pair has to agree. Production observations come from the encoder, which sets
+    # this explicitly from the spec it encoded under; this default is reachable only by hand
+    # construction, which is precisely where coherence must be automatic.
+    schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2
 
     def validate(self, spec: ObservationSpec) -> None:
         require_current_observation_schema(self.schema_version, context="observation")

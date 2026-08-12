@@ -210,12 +210,6 @@
     "owner": "main"
   },
   {
-    "file": "scripts/refusal_recorder_cost.py",
-    "line": 61,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_Context"
-  },
-  {
     "file": "scripts/shaping_ranker.py",
     "line": 228,
     "kind": "default-spec",
@@ -588,18 +582,6 @@
     "owner": "_BridgeFixtureSession"
   },
   {
-    "file": "src/pokezero/teacher_scenarios.py",
-    "line": 562,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation"
-  },
-  {
-    "file": "tests/test_batch_replay.py",
-    "line": 46,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation"
-  },
-  {
     "file": "tests/test_belief_coherence.py",
     "line": 293,
     "kind": "implicit:LocalShowdownConfig",
@@ -610,42 +592,6 @@
     "line": 25,
     "kind": "implicit:compact_category",
     "owner": "_tiny_config"
-  },
-  {
-    "file": "tests/test_bootstrap.py",
-    "line": 38,
-    "kind": "implicit:ObservationSpec",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_bootstrap.py",
-    "line": 39,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_cache_concat.py",
-    "line": 44,
-    "kind": "implicit:ObservationSpec",
-    "owner": "<module>"
-  },
-  {
-    "file": "tests/test_cache_concat.py",
-    "line": 51,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_collection.py",
-    "line": 61,
-    "kind": "implicit:ObservationSpec",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_collection.py",
-    "line": 62,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "observation"
   },
   {
     "file": "tests/test_collection.py",
@@ -666,64 +612,10 @@
     "owner": "CrateTorchScriptParityTest"
   },
   {
-    "file": "tests/test_dataset.py",
-    "line": 40,
-    "kind": "implicit:ObservationSpec",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_dataset.py",
-    "line": 41,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_dataset.py",
-    "line": 814,
-    "kind": "implicit:ObservationSpec",
-    "owner": "DatasetTest"
-  },
-  {
-    "file": "tests/test_dataset.py",
-    "line": 817,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "DatasetTest"
-  },
-  {
-    "file": "tests/test_dataset.py",
-    "line": 866,
-    "kind": "implicit:ObservationSpec",
-    "owner": "DatasetTest"
-  },
-  {
-    "file": "tests/test_dataset.py",
-    "line": 869,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "DatasetTest"
-  },
-  {
     "file": "tests/test_determinization.py",
     "line": 76,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "integration_config"
-  },
-  {
-    "file": "tests/test_determinization.py",
-    "line": 134,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_context"
-  },
-  {
-    "file": "tests/test_determinization.py",
-    "line": 370,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "Gen3RandbatBeliefStartOverrideTest"
-  },
-  {
-    "file": "tests/test_distributed_training.py",
-    "line": 43,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation"
   },
   {
     "file": "tests/test_engine_env.py",
@@ -766,18 +658,6 @@
     "line": 1358,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "TrickSwapOverrideLiveTests"
-  },
-  {
-    "file": "tests/test_env.py",
-    "line": 10,
-    "kind": "implicit:ObservationSpec",
-    "owner": "_observation"
-  },
-  {
-    "file": "tests/test_env.py",
-    "line": 11,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation"
   },
   {
     "file": "tests/test_export_model.py",
@@ -997,38 +877,8 @@
   },
   {
     "file": "tests/test_foulplay_bridge.py",
-    "line": 160,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "FoulPlayBridgeTest"
-  },
-  {
-    "file": "tests/test_foulplay_bridge.py",
     "line": 737,
     "kind": "default-spec",
-    "owner": "FoulPlayBridgeTest"
-  },
-  {
-    "file": "tests/test_foulplay_bridge.py",
-    "line": 738,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "FoulPlayBridgeTest"
-  },
-  {
-    "file": "tests/test_foulplay_bridge.py",
-    "line": 869,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "FoulPlayBridgeTest"
-  },
-  {
-    "file": "tests/test_foulplay_bridge.py",
-    "line": 1447,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "FoulPlayBridgeTest"
-  },
-  {
-    "file": "tests/test_foulplay_bridge.py",
-    "line": 2518,
-    "kind": "implicit:PokeZeroObservationV0",
     "owner": "FoulPlayBridgeTest"
   },
   {
@@ -1056,24 +906,6 @@
     "owner": "WrappedTrajectoryIdentityTests"
   },
   {
-    "file": "tests/test_hazard_audit.py",
-    "line": 44,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation"
-  },
-  {
-    "file": "tests/test_linear_policy.py",
-    "line": 38,
-    "kind": "implicit:ObservationSpec",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_linear_policy.py",
-    "line": 39,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "observation"
-  },
-  {
     "file": "tests/test_linear_policy.py",
     "line": 221,
     "kind": "bare-const",
@@ -1095,30 +927,6 @@
     "file": "tests/test_linear_policy.py",
     "line": 559,
     "kind": "implicit:LinearPolicyModel",
-    "owner": "LinearPolicyTest"
-  },
-  {
-    "file": "tests/test_linear_policy.py",
-    "line": 566,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "LinearPolicyTest"
-  },
-  {
-    "file": "tests/test_linear_policy.py",
-    "line": 588,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "LinearPolicyTest"
-  },
-  {
-    "file": "tests/test_linear_policy.py",
-    "line": 610,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "LinearPolicyTest"
-  },
-  {
-    "file": "tests/test_linear_policy.py",
-    "line": 631,
-    "kind": "implicit:PokeZeroObservationV0",
     "owner": "LinearPolicyTest"
   },
   {
@@ -1174,12 +982,6 @@
     "line": 117,
     "kind": "implicit:compact_category",
     "owner": "CompactCheckpointRoundTripTests"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 137,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "observation"
   },
   {
     "file": "tests/test_neural_policy.py",
@@ -1242,82 +1044,10 @@
     "owner": "_write_loadable_fake_checkpoint"
   },
   {
-    "file": "tests/test_neural_selfplay.py",
-    "line": 6227,
-    "kind": "implicit:ObservationSpec",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_neural_selfplay.py",
-    "line": 6228,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_observation.py",
-    "line": 28,
-    "kind": "implicit:ObservationSpec",
-    "owner": "ObservationSpecTest"
-  },
-  {
     "file": "tests/test_observation.py",
     "line": 53,
     "kind": "bare-const",
     "owner": "ObservationSpecTest"
-  },
-  {
-    "file": "tests/test_observation.py",
-    "line": 67,
-    "kind": "implicit:ObservationSpec",
-    "owner": "ObservationSpecTest"
-  },
-  {
-    "file": "tests/test_observation.py",
-    "line": 93,
-    "kind": "implicit:ObservationSpec",
-    "owner": "ObservationSpecTest"
-  },
-  {
-    "file": "tests/test_observation.py",
-    "line": 94,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "ObservationSpecTest"
-  },
-  {
-    "file": "tests/test_observation.py",
-    "line": 105,
-    "kind": "implicit:ObservationSpec",
-    "owner": "ObservationSpecTest"
-  },
-  {
-    "file": "tests/test_observation.py",
-    "line": 106,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "ObservationSpecTest"
-  },
-  {
-    "file": "tests/test_observation.py",
-    "line": 118,
-    "kind": "implicit:ObservationSpec",
-    "owner": "ObservationSpecTest"
-  },
-  {
-    "file": "tests/test_observation.py",
-    "line": 119,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "ObservationSpecTest"
-  },
-  {
-    "file": "tests/test_observation.py",
-    "line": 150,
-    "kind": "implicit:ObservationSpec",
-    "owner": "ObservationPerspectiveTest"
-  },
-  {
-    "file": "tests/test_observation.py",
-    "line": 151,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "ObservationPerspectiveTest"
   },
   {
     "file": "tests/test_observation_schema_flag.py",
@@ -1410,46 +1140,10 @@
     "owner": "BeliefSetSourceGateTest"
   },
   {
-    "file": "tests/test_opponent_journal.py",
-    "line": 95,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation"
-  },
-  {
     "file": "tests/test_poke_engine_outcomes.py",
     "line": 1015,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "integration_config"
-  },
-  {
-    "file": "tests/test_policy.py",
-    "line": 21,
-    "kind": "implicit:ObservationSpec",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_policy.py",
-    "line": 22,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_public_prefix_evaluator.py",
-    "line": 25,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation"
-  },
-  {
-    "file": "tests/test_refusal_records.py",
-    "line": 129,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_Context"
-  },
-  {
-    "file": "tests/test_refutation_mining.py",
-    "line": 60,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation"
   },
   {
     "file": "tests/test_region_trim.py",
@@ -1483,20 +1177,8 @@
   },
   {
     "file": "tests/test_replay_branching.py",
-    "line": 46,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation"
-  },
-  {
-    "file": "tests/test_replay_branching.py",
     "line": 56,
     "kind": "default-spec",
-    "owner": "_observation_with_recent_event_token"
-  },
-  {
-    "file": "tests/test_replay_branching.py",
-    "line": 74,
-    "kind": "implicit:PokeZeroObservationV0",
     "owner": "_observation_with_recent_event_token"
   },
   {
@@ -1512,88 +1194,16 @@
     "owner": "_observation_with_numeric_feature"
   },
   {
-    "file": "tests/test_replay_branching.py",
-    "line": 153,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation_with_numeric_feature"
-  },
-  {
-    "file": "tests/test_replay_import.py",
-    "line": 27,
-    "kind": "implicit:ObservationSpec",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_replay_import.py",
-    "line": 28,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_rollout.py",
-    "line": 10,
-    "kind": "implicit:ObservationSpec",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_rollout.py",
-    "line": 11,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_search.py",
-    "line": 29,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation"
-  },
-  {
-    "file": "tests/test_search_benchmark.py",
-    "line": 19,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation"
-  },
-  {
     "file": "tests/test_search_depth_tactics.py",
     "line": 87,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "DepthTacticsSuite"
   },
   {
-    "file": "tests/test_search_policy.py",
-    "line": 41,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation"
-  },
-  {
-    "file": "tests/test_selfplay.py",
-    "line": 44,
-    "kind": "implicit:ObservationSpec",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_selfplay.py",
-    "line": 45,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "observation"
-  },
-  {
     "file": "tests/test_selfplay.py",
     "line": 587,
     "kind": "bare-const",
     "owner": "SelfPlayTest"
-  },
-  {
-    "file": "tests/test_shaping.py",
-    "line": 39,
-    "kind": "implicit:ObservationSpec",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_shaping.py",
-    "line": 40,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "observation"
   },
   {
     "file": "tests/test_shaping_provenance.py",
@@ -1632,18 +1242,6 @@
     "owner": "MonotoneConsistencySweepTest"
   },
   {
-    "file": "tests/test_trajectory.py",
-    "line": 9,
-    "kind": "implicit:ObservationSpec",
-    "owner": "observation"
-  },
-  {
-    "file": "tests/test_trajectory.py",
-    "line": 10,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "observation"
-  },
-  {
     "file": "tests/test_transitions_fold.py",
     "line": 162,
     "kind": "implicit:LocalShowdownConfig",
@@ -1678,23 +1276,5 @@
     "line": 57,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "_integration_config"
-  },
-  {
-    "file": "tests/test_value_calibration.py",
-    "line": 34,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "_observation"
-  },
-  {
-    "file": "tests/test_value_calibration.py",
-    "line": 375,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "ValueCalibrationTest"
-  },
-  {
-    "file": "tests/test_value_calibration.py",
-    "line": 386,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "ValueCalibrationTest"
   }
 ]
