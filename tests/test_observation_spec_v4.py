@@ -232,21 +232,29 @@ class V4EncodeTestBase(unittest.TestCase):
 class V4SchemaTableTest(unittest.TestCase):
     """The schema table, the CLI choice, and the specs the two resolve to."""
 
-    def test_v4_is_supported_grouped_feature_packed_not_turn_merged_and_IS_the_default(self) -> None:
-        # v4 took the fresh default on 2026-08-10. The prior rule -- "adding a schema must never
-        # move the fresh default" -- guarded arms mid-campaign against a silent rotation; it is
-        # retired here rather than broken, because v4 is what every arm already runs and the
-        # default was naming a schema nothing collects under.
+    def test_v4_IS_the_default(self) -> None:
+        """ONE assertion, on the default's identity, and nothing else.
+
+        Split from a test that also asserted `SUPPORTED[-1]` and the exact contents of
+        `FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS`. The acceptance drill mutates BOTH of those
+        tuples to inject its synthetic schema, so the test broke on them regardless of whether
+        this assertion still held -- and the drill's "this pin has stopped pinning" detector could
+        never fire for it. Verified before the split: deleting this line left the test red anyway.
+
+        v4 took the fresh default on 2026-08-10. The prior rule -- "adding a schema must never
+        move the fresh default" -- guarded arms mid-campaign against a silent rotation; retired
+        rather than broken, because v4 is what every arm already runs.
+        """
         self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V4)
+
+    def test_v4_is_supported_grouped_feature_packed_and_not_turn_merged(self) -> None:
+        """v4's PROPERTIES -- independent of which schema currently holds the default slot."""
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V4, SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)
-        self.assertEqual(SUPPORTED_OBSERVATION_SCHEMA_VERSIONS[-1], OBSERVATION_SCHEMA_VERSION_V4)
         # V4 keeps v3's grouped projection but is NOT turn-merged — it has no transition
         # region for a turn-merged surface to live in.
         self.assertNotIn(OBSERVATION_SCHEMA_VERSION_V4, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V4, GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS)
-        self.assertEqual(
-            FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS, (OBSERVATION_SCHEMA_VERSION_V4,)
-        )
+        self.assertIn(OBSERVATION_SCHEMA_VERSION_V4, FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS)
 
     def test_cli_choice_and_spec_resolution(self) -> None:
         self.assertEqual(

@@ -1,13 +1,17 @@
 # Class-(iii) tests: their SUBJECT is the default's identity, so rotating the default MUST
 # break them. This file is the drill's pass condition -- the breakage set must equal it exactly.
 #
-# A test belongs here only if it asserts *which schema is currently default*. A test that
+# A test belongs here only if it asserts *which schema is currently default* -- AND NOTHING ELSE.
+# Two entries used to also assert tuples the drill mutates (SUPPORTED, FEATURE_PACK), so they
+# broke on the mutation whether or not their default assertion bound, and the
+# EXPECTED-BUT-DID-NOT-BREAK detector -- the only guard against a pin silently going stale -- could
+# never fire for them. Both were split; a row here must be a single-assertion identity pin. A test that
 # merely uses the default is NOT class (iii); it is an unmigrated site and belongs in the
 # ledger instead. Keeping that line sharp is the whole point: this file is the one place the
 # migration could be silently declared finished by relabelling failures as expected.
-test_observation.py::ObservationSpecTest::test_schema_version_is_v2_2_with_v2_v2_1_v3_v4_supported_and_v1_legacy
+test_observation.py::ObservationSpecTest::test_the_fresh_artifact_default_is_v4
 test_observation_spec_v3.py::SchemaTableTest::test_v3_is_supported_but_not_the_default
-test_observation_spec_v4.py::V4SchemaTableTest::test_v4_is_supported_grouped_feature_packed_not_turn_merged_and_IS_the_default
+test_observation_spec_v4.py::V4SchemaTableTest::test_v4_IS_the_default
 test_turn_merged_encode.py::SchemaTableTest::test_v2_2_is_a_supported_schema_entry_and_the_default
 test_observation_spec_v2_1.py::SpecTableTest::test_schema_keyed_censuses
 # Fingerprint stamping: the payload HASHES the observation schema, so the fingerprint must move
