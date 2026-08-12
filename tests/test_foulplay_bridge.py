@@ -747,6 +747,12 @@ class FoulPlayBridgeTest(unittest.TestCase):
             token_type_ids=tuple(0 for _ in range(spec.token_count)),
             attention_mask=tuple(True for _ in range(spec.token_count)),
             legal_action_mask=tuple(index == 0 for index in range(ACTION_COUNT)),
+            # Stamp the spec this observation was BUILT from. Every shape above already derives
+            # from `spec`; leaving the stamp to the class default made the one field that names
+            # the schema the only one not taken from it, and the test below asserts exactly that
+            # they agree. It passed only while the class default and `spec` happened to be the
+            # same schema.
+            schema_version=spec.schema_version,
             metadata={
                 "belief_view": {
                     "self_slot": "p1",
