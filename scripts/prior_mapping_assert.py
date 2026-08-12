@@ -64,6 +64,41 @@ from golden_encoder_backends import row_inputs_from_decision_row  # noqa: E402
 from differential_denominator import check_denominator, gate as denominator_gate
 
 
+def transformed_slots_from_metadata(metadata, player_id: str) -> dict[str, str]:
+    """The publicly-Transformed actives, mirroring production's own derivation.
+
+    `EngineMctsPolicy._public_effect_signals` builds exactly this from the
+    observation's belief view and hands it to `battle_spec_from_payload` as
+    `transformed_slots`; `engine_world._apply_transform` then replaces the
+    transformed active's moveset with the copied one.
+
+    This gate did not pass it, and so constructed a DIFFERENT world than
+    production does: a transformed Ditto kept its own two-move surface while
+    the recorded request mask carried the copied moves, which surfaces as
+    `interior_set_mismatch` and reads as a mapping defect when it is a world
+    defect. Recharge and Truant were already threaded here for the same reason;
+    Transform was the one left out.
+    """
+    out: dict[str, str] = {}
+    belief_view = (metadata or {}).get("belief_view")
+    if not isinstance(belief_view, Mapping):
+        return out
+    opponent_slot = "p2" if player_id == "p1" else "p1"
+    for slot, rows in (
+        (opponent_slot, belief_view.get("opponent_pokemon")),
+        (player_id, belief_view.get("self_pokemon")),
+    ):
+        for mon in rows or ():
+            if not isinstance(mon, Mapping) or not mon.get("active"):
+                continue
+            if not mon.get("transformed"):
+                continue
+            target = str(mon.get("transform_species") or "")
+            if target:
+                out[slot] = target
+    return out
+
+
 def run_corpus(corpus_dir: Path, tables_json: str, verbose: bool) -> dict[str, Any]:
     corpus = load_golden_corpus(corpus_dir)
     dex = load_showdown_dex_cached(DEFAULT_SHOWDOWN_ROOT)
@@ -114,6 +149,12 @@ def run_corpus(corpus_dir: Path, tables_json: str, verbose: bool) -> dict[str, A
             row.player_id,
         )
         truant = truant_loaf_slots(history_at_row.get(array_row_index) or [], payload, teams)
+        transformed = transformed_slots_from_metadata(
+            anchor_observation_metadata(
+                decisions.get((row.battle_id, row.decision_round_index, row.player_id))
+            ),
+            row.player_id,
+        )
 
         override = BattleStartOverride(player_teams={"p1": packed["p1"], "p2": packed["p2"]})
         try:
@@ -121,10 +162,26 @@ def run_corpus(corpus_dir: Path, tables_json: str, verbose: bool) -> dict[str, A
                 payload,
                 override,
                 dex=dex,
+                # All four approximation flags, matching the PRODUCTION policy's
+                # defaults (EngineMctsConfig: every one of these is True). The
+                # gate previously passed only the first two and left the other
+                # two at battle_spec_from_payload's False default, so it built a
+                # world under different fidelity settings than the code it is
+                # asserting -- and then attributed the difference to the map.
+                #
+                # approximate_hidden_duration_volatiles is the one that matters
+                # here: it is what withdraws `taunt` from the supported set
+                # (engine_world.py ~1309), so a taunted row raises
+                # `volatile_unsupported` and SKIPS. That skip is the documented
+                # fail-closed boundary -- Taunt's age is not publicly derivable
+                # today and no seed is right -- not a row being excused.
                 approximate_sleep_turns=True,
                 approximate_substitute_health=True,
+                approximate_partial_trap_turns=True,
+                approximate_hidden_duration_volatiles=True,
                 recharging_slots=tuple(recharging),
                 truant_slots=tuple(truant),
+                transformed_slots=transformed,
             )
             state = build_poke_engine_state(world.spec)
         except EngineWorldUnsupported as error:
