@@ -41,6 +41,16 @@
 # Exit 0 = the class is dead. Nonzero = breakages beyond the legitimate readers; see the diff.
 set -uo pipefail
 
+# Run from a COPY. Bash reads a script incrementally from a byte offset, so editing this file
+# while a run is in flight shifts the remaining bytes and the running shell dies mid-script with
+# a bogus syntax error -- which happened, and invalidated a 35-minute run. Re-execing from an
+# immutable snapshot makes the run immune to edits in the working tree.
+if [ "${DRILL_REEXEC:-0}" != "1" ]; then
+  _snap="$(mktemp -t schema_rotation_drill)" || exit 3
+  cat "${BASH_SOURCE[0]}" > "$_snap"
+  DRILL_REEXEC=1 exec bash "$_snap" "$@"
+fi
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WT="${1:-/tmp/schema-v5-drill}"
 VENV="$REPO/.venv/bin/python"
