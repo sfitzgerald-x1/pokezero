@@ -48,9 +48,33 @@
 //! eventual fix.
 //!
 //! That is the campaign's recurring shape: the value was public, and the consumer refused to
-//! read it. Recorded here rather than acted on -- the same arm sets `prelude.woke_up` and
-//! `sleep_gate_seen`, which gate the `|cant|..|slp` emission, so guarding it is a
-//! render-behaviour change that needs its own PR, review and census arm.
+//! read it.
+//!
+//! **ACTED ON.** The paragraph above used to end "recorded here rather than acted on ... guarding
+//! it is a render-behaviour change that needs its own PR, review and census arm". That PR is the
+//! one that edited this file: the conjunct is applied at the second site, as
+//! `changes_the_active_slot`, on the wake arm AND on the thaw arm beside it. The thaw arm needed
+//! it too, and needed it more -- eating a benched THAW left the active's own clear next in line
+//! for the wake arm, so both were consumed and the render dropped the callee's `|move|` line
+//! with no refusal at all, which is the silent half of the same defect.
+//!
+//! Consequence for this file, stated because a fixture whose subject is fixed is the easiest
+//! place in a repo to leave a lie: the positive test below **no longer observes the class**,
+//! because the class is gone. It has been TURNED rather than deleted. This file's third test
+//! FORESAW the two converging -- it warns that the two tests above it "would then simply agree
+//! with each other" -- and that foresight is why turning is the right action; it is NOT an
+//! instruction to turn this particular test, and an earlier revision of this note claimed it
+//! was. See `tests/gen3_sleeptalk_party_cure_active_slot_guard.rs` for the guard's own
+//! two-sided pins.
+//!
+//! ⚠ **The `divergence_shape` no-op label fix DID lose its end-to-end pin here, and an earlier
+//! revision of this note wrongly said it did not.** Its classifier-level pin
+//! (`divergence_shape(&[], &[dmg(30)]) == None`) does NOT hold the CALL SITE, which is where
+//! the fix's observable effect lives: independent review mutated
+//! `.filter_map(..)` to `.map(.. .unwrap_or(NoneMatchedShape::Empty))` and killed exactly the
+//! assertion retired below on `main`, while surviving the whole suite here. The replacement is
+//! `mod none_matched_shape_call_site` in `src/events.rs`, which pins the emitted set at the
+//! production call site.
 //!
 //! # NOT branch merging
 //!
@@ -60,10 +84,14 @@
 //! merged, and the callee IS identifiable -- the renderer regenerates its transition
 //! correctly and compares it against a mis-cut tail.
 //!
-//! # Why the refusal is still CORRECT
+//! # Why the refusal WAS correct, and why removing it is not a relaxation
 //!
-//! `NoneMatched` proves neither the transition nor the slicing, and these fixtures do not
-//! relax it. They pin the CAUSE so that the label stops pointing at the wrong owner.
+//! `NoneMatched` proved neither the transition nor the slicing, so refusing was right for as
+//! long as the slicing was wrong. The guard does not relax the refusal -- it removes the
+//! refusal's CAUSE. The callee is now identified by the same byte-exact match that always
+//! governed it, on a tail that is finally cut in the right place, and the render emits the
+//! callee's own `|move|..|[from] Sleep Talk` line. `attribution_unsafe` stays empty because
+//! nothing was guessed.
 
 use poke_engine::choices::Choices;
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
@@ -184,50 +212,79 @@ fn none_matched_reasons(rendered: &pokezero_search::events::RenderedEvents) -> V
     found
 }
 
-/// **THE CLASS, REACHED FROM A CONSTRUCTED STATE.**
+/// **THE CLASS, CLOSED, FROM THE SAME CONSTRUCTED STATE.**
 ///
 /// One benched asleep party member below the active is the whole precondition. No opposing
 /// Sleep Talk carrier, no long game, no sampled world: the census's
 /// `lapras-2-variant-5` + `machamp-2-variant-5` CO-OCCURRENCE requirement is a condition on
 /// REACHING this position over 731 games, not a condition on the mechanism -- this state has
-/// neither carrier and produces the class.
+/// neither carrier and used to produce the class.
+///
+/// **THIS ASSERTION WAS TURNED, NOT DELETED.** It read `assert!(rendered.is_attribution_unsafe())`
+/// plus the exact slug set `{none_matched:shape_length}`. The state, the branch selection and
+/// the two-sided structure are unchanged; only the expected verdict moved, from "refuses, with
+/// this exact label" to "does not refuse, and names the callee".
+///
+/// ⚠ **The authority for turning it is weaker than an earlier revision of this comment claimed,
+/// and the misreading is recorded rather than quietly fixed.** The line *"THIS is the assertion
+/// that should move -- not the two above"* sits on
+/// `the_callee_emits_a_non_active_status_clear_ahead_of_the_actives_own`, refers to ITSELF, and
+/// explicitly EXCLUDES the two tests above it -- of which this is the first. The designated
+/// assertion is byte-unchanged. What that note really provides is FORESIGHT: it says that if the
+/// prelude arm grew the guard, the two tests above would "simply agree with each other", which is
+/// exactly what happened and is why turning beats deleting. It is not an instruction to turn
+/// this test.
+///
+/// The retired half WAS the label fix's end-to-end witness, and that loss is real. It is
+/// replaced at the call site by `mod none_matched_shape_call_site` in `src/events.rs`; see that
+/// module for why the replacement is in kind rather than in degree.
 #[test]
-fn a_benched_asleep_party_member_makes_the_sleep_talk_tail_non_containable() {
+fn a_benched_asleep_party_member_no_longer_makes_the_tail_non_containable() {
     let mut state = party_cure_sleeper(true);
     let generated = branches(&mut state);
     let branch = callee_branch(&generated).clone();
     let rendered = render(&mut state, &branch);
 
-    assert!(
-        rendered.is_attribution_unsafe(),
-        "the branch must refuse: {:?} / lines {:?}",
+    assert_eq!(
+        none_matched_reasons(&rendered),
+        Vec::<String>::new(),
+        "the class must be GONE, not relabelled: subcases {:?}, reasons {:?}, lines {:?}",
+        rendered.lossy_subcases,
         rendered.attribution_unsafe,
         rendered.lines
     );
-    // THE EXACT SLUG SET, not merely non-empty -- because the set is the deliverable.
-    //
-    // `shape_empty` is ABSENT, and its absence is the whole of the `divergence_shape` label
-    // fix landing in this same change. `REST` is a callee here and regenerates a single EMPTY
-    // branch (Rest while already asleep), so before the fix this set was
-    // `{shape_empty, shape_length}` -- and Rest is in ALL 70 of the pool's Sleep Talk
-    // variants, so `shape_empty` was present on every `none_matched` that pool can produce,
-    // carrying zero bits. Reverting the fix turns this assertion red, which is what makes it
-    // a test of the fix rather than a description of it.
-    assert_eq!(
-        none_matched_reasons(&rendered),
-        vec![format!("{NONE_MATCHED}:shape_length")],
-        "the refusal must be `none_matched` with `shape_length` ALONE: subcases {:?}, \
-         reasons {:?}",
-        rendered.lossy_subcases,
+    assert!(
+        !rendered.is_attribution_unsafe(),
+        "nothing may remain attribution-unsafe: {:?}",
         rendered.attribution_unsafe
+    );
+    // AND THE RENDER MUST START COUNTING WHAT IT STOPPED REFUSING. A change that silenced the
+    // refusal without emitting the callee's own line would be a regression wearing a fix's
+    // clothes, which is the failure mode #1157 shipped.
+    assert!(
+        rendered
+            .lines
+            .iter()
+            .any(|l| l == "|move|p1a: Sleeper|healbell|p1a: Sleeper|[from] Sleep Talk"),
+        "the identified callee must be rendered: lines {:?}",
+        rendered.lines
     );
 }
 
-/// **THE CONTROL, differing in ONE fact.** Wake the bench and the class disappears.
+/// **NO LONGER A CONTROL, AND SAYING SO IS THE POINT.** Wake the bench: the class does not fire
+/// here either.
 ///
-/// This is what makes the fixture above a measurement rather than an assertion: it is the
-/// null world. Without it, "the class fires here" is consistent with the class firing on
-/// every Sleep Talk render, which is exactly what the earlier sweeps could not rule out.
+/// ⚠ This comment used to read *"THE CONTROL, differing in ONE fact ... it is the null world"*,
+/// and that was true only while the test above it asserted PRESENCE. Both tests now assert
+/// ABSENCE, so this one is a strict subset of that one and contrasts with nothing -- which is
+/// precisely the "a test that passes in both worlds is not a test" failure this file's module doc
+/// claims to guard against. Left in place as an INVARIANCE check (the guard must not have
+/// introduced a refusal on the no-benched-sleeper path) and relabelled so it cannot be read as
+/// evidence for anything.
+///
+/// The real null world for the test above now lives in
+/// `tests/gen3_sleeptalk_party_cure_active_slot_guard.rs`, whose fixtures each name the mutant
+/// that turns them red, and in the mutation matrix on the PR.
 #[test]
 fn the_same_state_with_no_benched_sleeper_identifies_the_callee() {
     let mut state = party_cure_sleeper(false);

@@ -254,13 +254,33 @@ fn active_status_transition(
     state: &State,
     change: &ChangeStatusInstruction,
 ) -> Option<ActiveStatusTransition> {
-    (state.get_side_immutable(&change.side_ref).active_index == change.pokemon_index).then_some(
-        ActiveStatusTransition {
-            line_offset: 0,
-            side: side_usize(change.side_ref),
-            new_status: change.new_status,
-        },
-    )
+    changes_the_active_slot(state, change).then_some(ActiveStatusTransition {
+        line_offset: 0,
+        side: side_usize(change.side_ref),
+        new_status: change.new_status,
+    })
+}
+
+/// Does this `ChangeStatus` land on the slot that is CURRENTLY ON THE FIELD for
+/// its own side?
+///
+/// `ChangeStatus` carries a `pokemon_index` and the party-wide cures
+/// (`Choices::HEALBELL`, `Choices::AROMATHERAPY`) emit one per statused party
+/// member — so `side_ref` alone does NOT mean "the mon that is acting". Every
+/// status change the ENGINE emits for a wake, a thaw or a self-inflicted status
+/// carries `current_active_index`
+/// (`gen3/generate_instructions.rs::generate_instructions_from_existing_status_conditions`),
+/// so this predicate separates "the acting mon's own status moved" from "a
+/// benched party member was cured".
+///
+/// Extracted rather than inlined because it now has TWO consumers that must not
+/// drift: [`active_status_transition`], which decides whether a status change is
+/// worth recording as a public transition, and `consume_move_prelude`'s
+/// wake/thaw arms, which decide whether a status change belongs to the PRE-MOVE
+/// phase at all. The second consumer is the one this predicate was missing: see
+/// the arms' own comments.
+fn changes_the_active_slot(state: &State, change: &ChangeStatusInstruction) -> bool {
+    state.get_side_immutable(&change.side_ref).active_index == change.pokemon_index
 }
 
 impl RenderedEvents {
@@ -1678,8 +1698,27 @@ fn consume_move_prelude(
                 sim.apply(ins);
                 *cursor += 1;
             }
+            // ON THE ACTIVE SLOT ONLY. `side_ref` alone is not enough: gen3's
+            // party-wide cures walk `pokemon_index_iter()` in SLOT ORDER
+            // (`gen3/choice_effects.rs`, `Choices::HEALBELL` /
+            // `Choices::AROMATHERAPY`) and emit a `ChangeStatus { SLEEP -> NONE }`
+            // for every statused party member — so when a BENCHED member below
+            // the active is asleep, the FIRST instruction of a Sleep Talk
+            // callee's own transition is a status clear on a NON-ACTIVE slot.
+            // Without this predicate the arm ate it as "the sleeper woke up",
+            // which broke the callee identification in `identify_sleep_talk_called`
+            // twice over: the tail was cut one instruction too late, AND
+            // `sim.apply` had already cured the bench, so re-running the
+            // candidate cure regenerated a SHORTER list. The regenerated branch
+            // came out equal to `tail[1..]` — a proper SUFFIX, which the
+            // containment split cannot see either way, so a transition that was
+            // exactly right was refused as `none_matched:shape_length`.
+            //
+            // A genuine wake cannot be excluded by this: every wake the engine
+            // emits here carries `current_active_index`.
             Instruction::ChangeStatus(change)
                 if change.side_ref == side
+                    && changes_the_active_slot(sim.state, change)
                     && change.old_status == PokemonStatus::SLEEP
                     && change.new_status == PokemonStatus::NONE =>
             {
@@ -1695,8 +1734,17 @@ fn consume_move_prelude(
                     out.active_status_transitions.push(transition);
                 }
             }
+            // Same predicate, same reason: a party-wide cure clears a benched
+            // FREEZE too, and this arm had the identical defect. It presents
+            // differently and worse — the benched thaw was eaten, which left the
+            // ACTIVE's own clear next in line for the wake arm above, so BOTH
+            // status changes were consumed, the callee regenerated an empty
+            // transition and the render silently dropped
+            // `|move|..|healbell|..|[from] Sleep Talk` with NO refusal at all.
+            // Guarding only the SLEEP arm would leave that silent drop standing.
             Instruction::ChangeStatus(change)
                 if change.side_ref == side
+                    && changes_the_active_slot(sim.state, change)
                     && change.old_status == PokemonStatus::FREEZE
                     && change.new_status == PokemonStatus::NONE =>
             {
@@ -12012,5 +12060,309 @@ mod no_effect_hit_dominance {
             checked += 1;
         }
         assert_eq!(checked, 5, "the family loop must not pass over zero moves");
+    }
+}
+
+/// Both directions of the active-slot predicate on `consume_move_prelude`'s wake and thaw
+/// arms, pinned on the FLAG and the CURSOR rather than on a rendered line.
+///
+/// The end-to-end fixtures live in `tests/gen3_sleeptalk_party_cure_active_slot_guard.rs` and
+/// are the ones that matter to the census. They cannot pin these two facts directly, because
+/// both flags are only observable downstream and one of them is not observable at all in the
+/// benched case:
+///
+///   * `prelude.woke_up` gates `|cant|..|slp` — but every state in which the engine puts a
+///     benched clear in the prelude has ALREADY emitted the sleep gate by then, so the
+///     benched direction has no rendered consequence to assert. It is asserted here on the
+///     returned `MovePrelude` instead.
+///   * `sleep_gate_seen` gates the "asleep with no wake instructions at all" fallback, which
+///     ALSO requires the un-consumed remainder to be immobilization markers only. A benched
+///     clear left in the tail breaks that second condition, so both worlds suppress the
+///     fallback and the flag's value is genuinely unobservable for a benched clear. That is
+///     recorded rather than papered over with a test that would pass either way: the flag is
+///     assigned on the same two lines as `woke_up`, and `woke_up` is pinned below in both
+///     directions.
+///
+/// `cursor` is the OTHER half of the defect and is pinned in both directions here too: it is
+/// fault 1 (the tail cut one instruction too late) measured at its source.
+#[cfg(test)]
+mod prelude_active_slot_tests {
+    use super::*;
+    use poke_engine::state::{PokemonIndex, PokemonMoveIndex};
+
+    fn ctx() -> EventContext {
+        EventContext {
+            species: [
+                vec!["Bench".to_string(), "Sleeper".to_string()],
+                vec!["Opponent".to_string()],
+            ],
+            turn: 1,
+            hp_percent: [false, false],
+        }
+    }
+
+    /// Side one's active at `P1`, with `P0` benched. Both alive, so the prelude's
+    /// attacker/defender liveness short-circuits do not fire.
+    fn state_with_active_at_p1() -> State {
+        let mut state = State::default();
+        state.side_one.active_index = PokemonIndex::P1;
+        for index in [PokemonIndex::P0, PokemonIndex::P1] {
+            let pkmn = &mut state.side_one.pokemon[index];
+            pkmn.maxhp = 300;
+            pkmn.hp = 300;
+        }
+        let active = state.side_one.get_active();
+        active.status = PokemonStatus::SLEEP;
+        active.rest_turns = 1;
+        active.replace_move(PokemonMoveIndex::M0, Choices::TACKLE);
+        let defender = state.side_two.get_active();
+        defender.maxhp = 300;
+        defender.hp = 300;
+        state
+    }
+
+    fn clear(index: PokemonIndex, old: PokemonStatus) -> Instruction {
+        Instruction::ChangeStatus(ChangeStatusInstruction {
+            side_ref: SideReference::SideOne,
+            pokemon_index: index,
+            old_status: old,
+            new_status: PokemonStatus::NONE,
+        })
+    }
+
+    /// Run the prelude over a one-instruction segment and report what it did with it.
+    fn run(segment: &[Instruction]) -> (bool, usize, Vec<String>) {
+        let mut state = state_with_active_at_p1();
+        let mut out = RenderedEvents::default();
+        let mut cursor = 0usize;
+        let mut choice = poke_engine::choices::MOVES
+            .get(&Choices::TACKLE)
+            .unwrap()
+            .clone();
+        choice.move_id = Choices::TACKLE;
+        let prelude = {
+            let mut sim = Sim::new(&mut state, [false, false]);
+            let prelude = consume_move_prelude(
+                &mut sim,
+                SideReference::SideOne,
+                &choice,
+                segment,
+                &mut cursor,
+                &ctx(),
+                &mut out,
+            );
+            sim.finish();
+            prelude
+        };
+        (prelude.woke_up, cursor, out.lines)
+    }
+
+    /// MUST FIRE. The acting mon's own wake is consumed by the prelude and sets `woke_up`,
+    /// which is what keeps the following `DecrementRestTurns` from fabricating
+    /// `|cant|..|slp` on a turn the mon actually moves.
+    #[test]
+    fn the_actives_own_wake_is_consumed_and_sets_woke_up() {
+        let segment = [clear(PokemonIndex::P1, PokemonStatus::SLEEP)];
+        let (woke_up, cursor, lines) = run(&segment);
+        assert!(woke_up, "the active's own wake must set woke_up");
+        assert_eq!(cursor, 1, "and must be consumed by the prelude");
+        assert!(lines.is_empty(), "a wake emits no line of its own: {lines:?}");
+    }
+
+    /// MUST NOT FIRE. A BENCHED party member's clear is not this mon's wake. Leaving the
+    /// cursor at 0 is the whole fix: the instruction stays in the tail, where the callee
+    /// identification can match it, and the state stays un-cured so the candidate
+    /// regeneration reproduces it.
+    #[test]
+    fn a_benched_members_clear_is_neither_consumed_nor_a_wake() {
+        let segment = [clear(PokemonIndex::P0, PokemonStatus::SLEEP)];
+        let (woke_up, cursor, lines) = run(&segment);
+        assert!(
+            !woke_up,
+            "a benched party member being cured is not the acting mon waking up"
+        );
+        assert_eq!(
+            cursor, 0,
+            "the benched clear must stay in the TAIL — consuming it is fault 1"
+        );
+        assert!(lines.is_empty(), "and it must not render a line: {lines:?}");
+    }
+
+    /// MUST FIRE, thaw arm.
+    #[test]
+    fn the_actives_own_thaw_is_consumed() {
+        let segment = [clear(PokemonIndex::P1, PokemonStatus::FREEZE)];
+        let (_, cursor, lines) = run(&segment);
+        assert_eq!(cursor, 1, "the active's own thaw must be consumed");
+        assert!(lines.is_empty(), "a thaw emits no line of its own: {lines:?}");
+    }
+
+    /// MUST NOT FIRE, thaw arm. Guarding only the SLEEP arm leaves this one open, and it is
+    /// the worse of the two: the benched thaw being eaten pulls the active's own clear into
+    /// the wake arm behind it, so the callee line is dropped with no refusal to mark it.
+    #[test]
+    fn a_benched_members_thaw_is_not_consumed() {
+        let segment = [clear(PokemonIndex::P0, PokemonStatus::FREEZE)];
+        let (_, cursor, lines) = run(&segment);
+        assert_eq!(cursor, 0, "the benched thaw must stay in the TAIL");
+        assert!(lines.is_empty(), "and must not render a line: {lines:?}");
+    }
+
+    /// The predicate itself, in both directions and on both sides, so a mutant that pointed
+    /// it at the WRONG side would die here rather than only in a render fixture.
+    #[test]
+    fn changes_the_active_slot_reads_the_changes_own_side() {
+        let mut state = state_with_active_at_p1();
+        state.side_two.active_index = PokemonIndex::P0;
+
+        for (index, want) in [(PokemonIndex::P1, true), (PokemonIndex::P0, false)] {
+            let change = ChangeStatusInstruction {
+                side_ref: SideReference::SideOne,
+                pokemon_index: index,
+                old_status: PokemonStatus::SLEEP,
+                new_status: PokemonStatus::NONE,
+            };
+            assert_eq!(
+                changes_the_active_slot(&state, &change),
+                want,
+                "side one active is P1, asked about {index:?}"
+            );
+        }
+        // Same index, other side, opposite answer: the predicate must read
+        // `change.side_ref`, not a captured side.
+        for (index, want) in [(PokemonIndex::P0, true), (PokemonIndex::P1, false)] {
+            let change = ChangeStatusInstruction {
+                side_ref: SideReference::SideTwo,
+                pokemon_index: index,
+                old_status: PokemonStatus::SLEEP,
+                new_status: PokemonStatus::NONE,
+            };
+            assert_eq!(
+                changes_the_active_slot(&state, &change),
+                want,
+                "side two active is P0, asked about {index:?}"
+            );
+        }
+    }
+}
+
+/// The `divergence_shape` NO-OP LABEL FIX, pinned AT ITS PRODUCTION CALL SITE.
+///
+/// # Why this module exists, and what it replaces
+///
+/// The label fix (#1241) made `divergence_shape` answer `None` for a no-op branch and made
+/// `identify_sleep_talk_called` skip those with `filter_map`, so `shape_empty` stopped appearing
+/// on every `none_matched` the gen3 pool can produce. Its only END-TO-END witness was one
+/// assertion in `tests/gen3_sleeptalk_party_cure_prelude_boundary.rs` that observed the emitted
+/// slug set as exactly `{none_matched:shape_length}` through a live render — and the
+/// active-slot guard beside this module CLOSED the only class that reached it, retiring that
+/// assertion.
+///
+/// Independent review demonstrated that the remaining pins were not a replacement. They hold
+/// the CLASSIFIER (`divergence_shape(&[], &[dmg(30)]) == None`) and not the CALL SITE, and the
+/// difference is measurable: mutate the call site from
+/// `.filter_map(|b| divergence_shape(..))` to
+/// `.map(|b| divergence_shape(..).unwrap_or(NoneMatchedShape::Empty))` and on `main` exactly one
+/// test dies — the retired one — while on the guarded head that mutant SURVIVED the whole
+/// suite. So the guard silently un-pinned the fix it shipped beside. This module is the
+/// replacement.
+///
+/// # And it is a replacement IN KIND, not in degree — stated rather than glossed
+///
+/// The retired assertion watched a LIVE RENDER. This one calls `identify_sleep_talk_called`
+/// directly. That is a genuine reduction: a unit call cannot notice a break in the path from
+/// the renderer to the probe. It is not a free choice — the class is no longer reachable from
+/// any state this repo can construct, which is the whole point of the guard, so no live render
+/// can observe the set any more. Verified rather than assumed: BOTH benched-sleeper layouts
+/// (bench below the active, and bench above it) now render without refusing at all.
+/// What this module does buy is the exact mutant above, which nothing else kills.
+#[cfg(test)]
+mod none_matched_shape_call_site {
+    use super::*;
+    use poke_engine::instruction::{DamageInstruction, HealInstruction};
+    use poke_engine::state::{PokemonMoveIndex, PokemonStatus};
+
+    /// A Rest-asleep Sleep Talk user whose callees are REST — which regenerates a single EMPTY
+    /// branch while already asleep, and is in ALL 70 of the pool's Sleep Talk variants — and
+    /// SWORDSDANCE, which regenerates one NON-EMPTY branch. The tail matches neither and has a
+    /// length no candidate produces, so the scan reaches `NoneMatched` and the shape set is
+    /// decided entirely by whether the no-op is skipped.
+    fn probe_shapes() -> NoneMatchedShapes {
+        let mut state = State::default();
+        state.side_one.get_active().status = PokemonStatus::SLEEP;
+        state.side_one.get_active().rest_turns = 2;
+        for (slot, move_id) in [
+            (PokemonMoveIndex::M0, Choices::SLEEPTALK),
+            (PokemonMoveIndex::M1, Choices::REST),
+            (PokemonMoveIndex::M2, Choices::SWORDSDANCE),
+            (PokemonMoveIndex::M3, Choices::NONE),
+        ] {
+            state.side_one.get_active().replace_move(slot, move_id);
+        }
+
+        let mut outer = poke_engine::choices::MOVES
+            .get(&Choices::SLEEPTALK)
+            .unwrap()
+            .clone();
+        outer.move_id = Choices::SLEEPTALK;
+
+        // Two instructions, so no one-instruction candidate branch can be length-equal to it,
+        // and a Damage/Heal pair neither REST nor SWORDSDANCE can produce a prefix of.
+        let tail = [
+            Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 30,
+            }),
+            Instruction::Heal(HealInstruction {
+                side_ref: SideReference::SideOne,
+                heal_amount: 10,
+            }),
+        ];
+        let probe = identify_sleep_talk_called(
+            &mut state,
+            SideReference::SideOne,
+            &Choice::default(),
+            &outer,
+            &tail,
+            false,
+            NoneMatchedTailOrigin {
+                segment: &tail,
+                cursor: 0,
+            },
+        );
+        match probe.ident {
+            SleepTalkIdent::NoneMatched(shapes) => shapes,
+            SleepTalkIdent::Matched(choice) => panic!(
+                "this fixture must reach the NoneMatched arm or it pins nothing; it matched {:?}",
+                choice.move_id
+            ),
+            SleepTalkIdent::Ambiguous => {
+                panic!("this fixture must reach the NoneMatched arm; it was Ambiguous")
+            }
+        }
+    }
+
+    /// **THE ASSERTION THE GUARD RETIRED, RESTORED AT THE CALL SITE.**
+    ///
+    /// The set must be `{Length}` EXACTLY. `shape_empty` must be ABSENT even though a candidate
+    /// (REST, asleep) contributed nothing but a no-op branch — that absence is the whole of the
+    /// label fix, and asserting the exact set rather than "contains Length" is what makes this a
+    /// test of the fix rather than a description of it.
+    #[test]
+    fn a_no_op_candidate_contributes_no_shape_at_the_production_call_site() {
+        assert_eq!(
+            probe_shapes(),
+            one_shape(NoneMatchedShape::Length),
+            "the emitted set must be {{Length}} alone; a no-op branch must contribute nothing"
+        );
+    }
+
+    /// The same fact stated on the SLUG, because the slug is what the census counts and what a
+    /// world-failure reason is keyed by. A regression that preserved the enum while changing the
+    /// emitted token would pass the assertion above and fail here.
+    #[test]
+    fn the_emitted_slug_set_names_shape_length_alone() {
+        let slugs: Vec<&str> = probe_shapes().iter().map(|s| s.token()).collect();
+        assert_eq!(slugs, vec!["shape_length"], "emitted shape tokens");
     }
 }
