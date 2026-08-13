@@ -264,6 +264,127 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
                 )
 
 
+class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
+    """Every way to DECLARE a defaulted field must derive its surface.
+
+    This matters more than `sites_in`'s spelling coverage, and for six rounds it had none. A missed
+    read loses one row; a missed DECLARATION loses the surface and with it EVERY call site --
+    `LocalShowdownConfig` alone is 133 of the 391. So an under-derived surface is the single largest
+    way this denominator can be wrong, and `derive_surfaces` recognised exactly one spelling while
+    `sites_in` accumulated four. The round-5 alias fix was applied to `sites_in` and never here.
+
+    Review quantified it end to end: with the same defaulted field and ten identical constructions,
+    the plain annotated spelling moved N by +11 (1 declaration + 10 callers) while
+    `field(default=GLOBAL)`, an aliased global, and an un-annotated attribute each moved it by +1 --
+    the ten callers invisible. Combined with a relative import even the +1 vanished.
+    """
+
+    PROBES = [
+        ("annotated default (the only spelling derived before round 7)",
+         "from pokezero.observation import OBSERVATION_SCHEMA_VERSION\n"
+         "class Surf:\n    v: str = OBSERVATION_SCHEMA_VERSION\n"),
+        ("UN-annotated class attribute (ast.Assign, not AnnAssign)",
+         "from pokezero.observation import OBSERVATION_SCHEMA_VERSION\n"
+         "class Surf:\n    v = OBSERVATION_SCHEMA_VERSION\n"),
+        ("aliased global -- the round-5 fix, never applied to this function",
+         "from pokezero.observation import OBSERVATION_SCHEMA_VERSION as SV\n"
+         "class Surf:\n    v: str = SV\n"),
+        ("dataclasses field(default=...) -- 201 `field(default` uses in src/",
+         "from dataclasses import field\n"
+         "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "class Surf:\n    v: object = field(default=DEFAULT_REPLAY_OBSERVATION_SPEC)\n"),
+        ("field(default_factory=lambda: ...)",
+         "from dataclasses import field\n"
+         "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "class Surf:\n"
+         "    v: object = field(default_factory=lambda: DEFAULT_REPLAY_OBSERVATION_SPEC)\n"),
+        ("module-qualified, one level",
+         "from pokezero import observation\n"
+         "class Surf:\n    v: str = observation.OBSERVATION_SCHEMA_VERSION\n"),
+        ("module-qualified, DOTTED base -- the one-level bug, left in this function for a round",
+         "import pokezero.observation\n"
+         "class Surf:\n"
+         "    v: str = pokezero.observation.OBSERVATION_SCHEMA_VERSION\n"),
+        ("the VALUE side, dotted base",
+         "import pokezero.showdown\n"
+         "class Surf:\n"
+         "    v: int = pokezero.showdown.DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count\n"),
+        ("a function parameter default, not a class field",
+         "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "def surf_fn(spec=DEFAULT_REPLAY_OBSERVATION_SPEC):\n    return spec\n"),
+        ("a keyword-only parameter default",
+         "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "def surf_fn(*, spec=DEFAULT_REPLAY_OBSERVATION_SPEC):\n    return spec\n"),
+    ]
+
+    NEGATIVES = [
+        ("a per-version constant, deliberately not a surface",
+         "from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V4\n"
+         "class Surf:\n    v: str = OBSERVATION_SCHEMA_VERSION_V4\n"),
+        ("an unrelated default",
+         "class Surf:\n    v: int = 7\n"),
+        ("field() with no default at all",
+         "from dataclasses import field\n"
+         "class Surf:\n    v: object = field(init=False)\n"),
+    ]
+
+    def _surfaces_with(self, source: str) -> dict:
+        """Re-derive SURFACES with a probe module dropped into src/pokezero/.
+
+        Inside `src/` because `derive_surfaces()` only scans there -- which is itself one of the
+        documented open routes. Untracked and deleted in the `finally`, so the committed
+        denominator cannot move.
+        """
+        import importlib.util
+
+        probe = REPO / "src" / "pokezero" / f"_surface_probe_{id(source):x}.py"
+        try:
+            probe.write_text(source, encoding="utf-8")
+            spec = importlib.util.spec_from_file_location(f"_ledger_surf_{id(source):x}", LEDGER)
+            module = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+            return dict(module.SURFACES)
+        finally:
+            probe.unlink(missing_ok=True)
+
+    def test_every_declaration_spelling_derives_its_surface(self) -> None:
+        for label, source in self.PROBES:
+            with self.subTest(spelling=label):
+                surfaces = self._surfaces_with(source)
+                name = "Surf" if "class Surf" in source else "surf_fn"
+                self.assertIn(
+                    name, surfaces,
+                    f"{label}: the surface was NOT derived, so every call site of it is invisible "
+                    f"to the ledger. Derived surfaces: {sorted(surfaces)}",
+                )
+                self.assertEqual(
+                    surfaces[name], {"v"} if name == "Surf" else {"spec"},
+                    f"{label}: derived the surface but not the defaulted field name.",
+                )
+
+    def test_unrelated_declarations_do_not_derive_a_surface(self) -> None:
+        for label, source in self.NEGATIVES:
+            with self.subTest(spelling=label):
+                surfaces = self._surfaces_with(source)
+                self.assertNotIn(
+                    "Surf", surfaces,
+                    f"{label}: derived a surface it should not have. Over-derivation inflates N "
+                    "through every call site of a class that does not default to the global.",
+                )
+
+    def test_the_probes_do_not_disturb_the_committed_surface_set(self) -> None:
+        before = self._surfaces_with("x = 1\n")
+        for _, source in self.PROBES:
+            self._surfaces_with(source)
+        self.assertEqual(
+            sorted(before), sorted(self._surfaces_with("x = 1\n")),
+            "the probes changed the derived surface set; one leaked into src/.",
+        )
+        leftover = sorted(p.name for p in (REPO / "src" / "pokezero").glob("_surface_probe_*.py"))
+        self.assertEqual(leftover, [], f"probe files left behind: {leftover}")
+
+
 class LedgerSeesEverySpellingTest(unittest.TestCase):
     """Every way to spell a read of the global default must produce a row.
 
@@ -303,9 +424,26 @@ class LedgerSeesEverySpellingTest(unittest.TestCase):
         ("arbitrarily deep base",
          "import pokezero\n"
          "def f():\n    return pokezero.a.b.c.DEFAULT_REPLAY_OBSERVATION_SPEC\n", 1),
+        # A REAL module outside the old hand-listed ("observation", "showdown") pair. An earlier
+        # revision of this probe named `replay`, which does not exist in src/pokezero/ -- so once
+        # the matcher started resolving module names against the filesystem the probe correctly
+        # scored 0 and the test caught its own fiction. A probe naming a module that cannot be
+        # imported proves nothing about a spelling.
         ("`from pokezero import <mod>` outside the old hand-listed pair",
-         "from pokezero import replay\n"
-         "def f():\n    return replay.OBSERVATION_SCHEMA_VERSION\n", 1),
+         "from pokezero import local_showdown\n"
+         "def f():\n    return local_showdown.OBSERVATION_SCHEMA_VERSION\n", 1),
+        ("RELATIVE `from . import <mod>`  (round-7 escape; live in the package)",
+         "from . import observation\n"
+         "def f():\n    return observation.OBSERVATION_SCHEMA_VERSION\n", 1),
+        ("relative and aliased",
+         "from . import observation as O\n"
+         "def f():\n    return O.OBSERVATION_SCHEMA_VERSION\n", 1),
+        ("relative, one level up",
+         "from .. import showdown as S\n"
+         "def f():\n    return S.DEFAULT_REPLAY_OBSERVATION_SPEC\n", 1),
+        ("relative import of the global itself, aliased",
+         "from .observation import OBSERVATION_SCHEMA_VERSION as SV\n"
+         "def f():\n    return SV\n", 1),
         ("two reads on one line are two sites",
          "import pokezero\n"
          "def f():\n"
@@ -327,6 +465,17 @@ class LedgerSeesEverySpellingTest(unittest.TestCase):
          "    return OBSERVATION_SCHEMA_VERSION_LOCAL\n"),
         ("a string mentioning the constant",
          "def f():\n    return 'OBSERVATION_SCHEMA_VERSION'\n"),
+        # A POKEZERO-rooted lookalike. Every other negative is rooted outside the package (numpy),
+        # so nothing guarded the over-match direction for a name imported FROM pokezero: the
+        # ImportFrom branch adds every imported name to module_roots, classes included, so
+        # `ObservationSpec.OBSERVATION_SCHEMA_VERSION` scored a row. Zero live occurrences, but
+        # this file calls over-matching "the same failure as under-matching" and must test it.
+        ("a class imported from pokezero, not a module",
+         "from pokezero.observation import ObservationSpec\n"
+         "def f():\n    return ObservationSpec.OBSERVATION_SCHEMA_VERSION\n"),
+        ("a module that does not exist in the tree",
+         "from pokezero import not_a_real_module\n"
+         "def f():\n    return not_a_real_module.OBSERVATION_SCHEMA_VERSION\n"),
     ]
 
     def _rows_for(self, source: str) -> list[dict]:

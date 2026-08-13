@@ -75,34 +75,134 @@ GLOBALS = {CONST, DEFAULT_SPEC}
 EXTRA_CONSTRUCTORS = {"TransformerPolicyConfig": ["compact_category"]}
 
 
+def dotted_segments(node: ast.AST) -> list[str]:
+    """["a", "b", "c"] for `a.b.c`; [] if the chain is not a pure Name/Attribute path.
+
+    Returned leftmost-first. Used to find a global ANYWHERE in an attribute chain: checking only
+    the outermost `.attr` or only the leftmost Name both miss `mod.GLOBAL.attribute`, which is how
+    the two live width defaults at neural_policy.py:245-246 would be spelled module-qualified.
+    """
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return []
+    parts.append(node.id)
+    return list(reversed(parts))
+
+
+def is_pokezero_submodule(node: ast.ImportFrom, name: str) -> bool:
+    """Is `name` in `from <node.module> import <name>` a pokezero SUBMODULE, or just a name?
+
+    Derived from the filesystem, not from the name's shape. `from pokezero import observation`
+    binds a module; `from pokezero.observation import ObservationSpec` binds a class, and
+    registering the latter as a module base turned `ObservationSpec.OBSERVATION_SCHEMA_VERSION`
+    into a row. Guessing by capitalisation would be another enumeration from memory.
+
+    Relative imports resolve against `src/pokezero/`: inside this package `from . import X` and
+    `from .. import X` can only mean a pokezero module, and the deepest `node.level` in the tree
+    is 1, so treating any relative level as rooted at the package is exact here rather than
+    approximate.
+    """
+    if node.level > 0:
+        package = REPO / "src" / "pokezero"
+    else:
+        parts = (node.module or "").split(".")
+        package = REPO / "src" / Path(*parts)
+    return (package / f"{name}.py").is_file() or (package / name / "__init__.py").is_file()
+
+
+def base_root(node: ast.AST) -> str | None:
+    """Leftmost Name of a pure Name/Attribute chain: `a.b.c` -> "a", `f().b` -> None.
+
+    Walking to the ROOT rather than testing `isinstance(node.value, ast.Name)` is what makes an
+    arbitrarily deep base match. The one-level test could only see `O.GLOBAL`, so every dotted
+    base -- `pokezero.observation.GLOBAL`, `pokezero.showdown.GLOBAL.numeric_feature_count` --
+    read the default with the denominator unmoved and the authorship gate green.
+    """
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
 def derive_surfaces() -> dict[str, set[str]]:
-    """{callable name -> kwargs that silently default to the global default}."""
+    """{callable name -> kwargs that silently default to the global default}.
+
+    SPELLING COVERAGE MATTERS MORE HERE THAN IN `sites_in`. A missed read in `sites_in` loses one
+    row; a missed DECLARATION here loses the surface, and with it every one of its call sites --
+    `LocalShowdownConfig` alone is 133 of the 391. So an under-derived surface is the largest
+    single way this denominator can be wrong, and for six rounds this function recognised exactly
+    one spelling (`name: T = GLOBAL`) while `sites_in` accumulated four. The round-5 alias fix was
+    applied to `sites_in` and never here.
+
+    Spellings now handled, each pinned by SurfaceDerivationSeesEverySpellingTest:
+      name: T = GLOBAL                          the original
+      name = GLOBAL                             un-annotated (ast.Assign, not AnnAssign)
+      name: T = ALIAS                           `from ... import GLOBAL as ALIAS`
+      name: T = field(default=GLOBAL)           dataclasses -- 201 `field(default` uses in src/
+      name: T = field(default_factory=lambda: GLOBAL)
+      name: T = mod.GLOBAL / pkg.mod.GLOBAL     module-qualified, at any depth
+      name: T = GLOBAL.attribute                the value side (2 live sites)
+    """
     found: dict[str, set[str]] = {}
+    # Aliases for the globals, resolved across all of src/ rather than per file: a surface is
+    # declared in one module, and a scan that missed the alias silently de-derived it.
+    alias_to_global: dict[str, str] = {}
+    for path in (REPO / "src").rglob("*.py"):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for a in node.names:
+                    if a.name in GLOBALS and a.asname:
+                        alias_to_global[a.asname] = a.name
 
     def dflt_name(node):
+        # `field(default=GLOBAL)` / `field(default_factory=lambda: GLOBAL)`. A dataclass field
+        # wrapper is the single most likely spelling for a NEW surface in this codebase, and it
+        # was invisible: the default sits inside a Call, so neither arm below ever saw it.
+        if isinstance(node, ast.Call):
+            fn = node.func
+            fname = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+            if fname == "field":
+                for kw in node.keywords:
+                    if kw.arg == "default":
+                        return dflt_name(kw.value)
+                    if kw.arg == "default_factory" and isinstance(kw.value, ast.Lambda):
+                        return dflt_name(kw.value.body)
+            return None
         if isinstance(node, ast.Name):
-            return node.id
+            return alias_to_global.get(node.id, node.id)
         if isinstance(node, ast.Attribute):
-            # BOTH sides. `DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count` puts the
-            # global on the VALUE side (2 sites: neural_policy.py:245-246);
-            # `observation.OBSERVATION_SCHEMA_VERSION` puts it on the ATTR side.
+            # EVERY segment of the chain, not just the two ends. `a.b.GLOBAL.attr` puts the
+            # global in the middle, so neither `node.attr` (the outermost) nor `base_root`
+            # (the leftmost) finds it: the first cut of this fix walked to the root and returned
+            # `pokezero`. Collect the whole dotted path and check each name, which is the only
+            # form that does not depend on where in the chain the global happens to sit.
             #
-            # The ATTR-side arm currently matches ZERO sites. It was added with a comment claiming
-            # the spelling was "an idiom used 31 times in this repo", which is false in two ways:
-            # no default anywhere in src/ is written module-qualified, and no dotted read of either
-            # global exists in the tree at all --
-            #   git grep -hoE '\w+\.(OBSERVATION_SCHEMA_VERSION|DEFAULT_REPLAY_OBSERVATION_SPEC)\b' \
-            #     -- '*.py' | wc -l   ->   0
-            # The 31 appears to have been a garbled recollection of the aliased module import,
-            # which is 24 (see docs/schema_default_ledger.md). The arm is KEPT -- a surface with
-            # a module-qualified default would otherwise be derived-blind, and this file's whole
-            # thesis is that unmeasured spellings are how the denominator goes wrong -- but it is a
-            # guard against a spelling that does not occur yet, not a fix for observed sites. It is
-            # pinned by test_schema_default_ledger.py, not by this prose.
-            if node.attr in GLOBALS:
-                return node.attr
-            if isinstance(node.value, ast.Name):
-                return node.value.id
+            # This replaced two hand-written arms, one per end of the chain. The outer arm --
+            # matching `node.attr` -- shipped with a comment claiming its spelling was "an idiom
+            # used 31 times in this repo" and that it was "pinned by test_schema_default_ledger.py".
+            # Both were false. The count was 0, not 31: no dotted read of either global exists
+            # anywhere in the tree (see docs/schema_default_ledger.md for the derivation and for
+            # the grep/AST reconciliation). And deleting the arm outright left the whole gate GREEN,
+            # so it was pinned by nothing -- a false claim about coverage, in the file whose thesis
+            # is that unpinned prose stales.
+            #
+            # Both are now true of the code as written: the walk below is exercised by
+            # SurfaceDerivationSeesEverySpellingTest, which probes the one-level, dotted-base and
+            # value-side forms and was kill-confirmed against this line, and the prose no longer
+            # quotes a prevalence figure. Kept because a surface DECLARED module-qualified would
+            # otherwise be derive-blind, which costs every one of its call sites -- 133 for the
+            # largest surface. It is a guard against a spelling that has not landed, and that is
+            # now what it says it is.
+            for segment in dotted_segments(node):
+                resolved = alias_to_global.get(segment, segment)
+                if resolved in GLOBALS:
+                    return resolved
         return None
 
     for path in (REPO / "src").rglob("*.py"):
@@ -113,9 +213,18 @@ def derive_surfaces() -> dict[str, set[str]]:
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 for st in node.body:
+                    # AnnAssign AND Assign. An un-annotated class attribute is ordinary Python and
+                    # declared a surface this function could not see.
                     if isinstance(st, ast.AnnAssign) and st.value is not None:
-                        if dflt_name(st.value) in GLOBALS and isinstance(st.target, ast.Name):
-                            found.setdefault(node.name, set()).add(st.target.id)
+                        targets = [st.target]
+                    elif isinstance(st, ast.Assign):
+                        targets = st.targets
+                    else:
+                        continue
+                    if dflt_name(st.value) in GLOBALS:
+                        for target in targets:
+                            if isinstance(target, ast.Name):
+                                found.setdefault(node.name, set()).add(target.id)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 a = node.args
                 pairs = list(zip(a.args[-len(a.defaults):] if a.defaults else [], a.defaults))
@@ -176,19 +285,6 @@ def enclosing(tree: ast.AST) -> dict[int, str]:
     return owner
 
 
-def base_root(node: ast.AST) -> str | None:
-    """Leftmost Name of a pure Name/Attribute chain: `a.b.c` -> "a", `f().b` -> None.
-
-    Walking to the ROOT rather than testing `isinstance(node.value, ast.Name)` is what makes an
-    arbitrarily deep base match. The one-level test could only see `O.GLOBAL`, so every dotted
-    base -- `pokezero.observation.GLOBAL`, `pokezero.showdown.GLOBAL.numeric_feature_count` --
-    read the default with the denominator unmoved and the authorship gate green.
-    """
-    while isinstance(node, ast.Attribute):
-        node = node.value
-    return node.id if isinstance(node, ast.Name) else None
-
-
 def sites_in(path: Path) -> list[dict]:
     rel = str(path.relative_to(REPO))
     try:
@@ -216,17 +312,36 @@ def sites_in(path: Path) -> list[dict]:
             for a in node.names:
                 if a.name in (CONST, DEFAULT_SPEC) and a.asname:
                     alias_to_global[a.asname] = a.name
-                elif node.module and node.module.startswith("pokezero"):
-                    # `from pokezero import observation [as O]`. Not restricted to a hand-listed
-                    # pair of module names: that list was ("observation", "showdown"), so
-                    # `from pokezero import replay` was blind, and the whole point of this map is
-                    # that the set of spellings is not something to enumerate from memory.
-                    module_roots.add(a.asname or a.name)
+                elif node.level > 0 or (node.module and node.module.startswith("pokezero")):
+                    # `from pokezero import observation [as O]`, and `from . import observation`.
+                    #
+                    # `node.level > 0` FIRST, because a relative import has `node.module is None`
+                    # -- so `startswith("pokezero")` never fired and every read through a
+                    # relatively-imported module was invisible. That was still an enumeration
+                    # from memory, this time of ABSOLUTE import syntax, three lines below a
+                    # comment disclaiming exactly that. And the idiom is live inside the package
+                    # (src/pokezero/linear_policy.py:24, src/pokezero/selfplay.py:17), a stronger
+                    # occurrence record than either spelling found in round 6.
+                    #
+                    # Any relative import counts: inside this package, `from . import X` and
+                    # `from .. import X` can only resolve to pokezero modules.
+                    #
+                    # But ONLY if the imported name is actually a MODULE. `from pokezero.observation
+                    # import ObservationSpec` binds a CLASS, and registering it made
+                    # `ObservationSpec.OBSERVATION_SCHEMA_VERSION` score a row -- an OVER-match,
+                    # which inflates the denominator and is the same failure as under-matching: the
+                    # figure stops meaning what it says. Resolved against the filesystem rather
+                    # than by guessing from the name's case or depth, so the answer is derived.
+                    if is_pokezero_submodule(node, a.name):
+                        module_roots.add(a.asname or a.name)
         elif isinstance(node, ast.Import):
             for a in node.names:
-                # `import pokezero` -- no dot -- binds the package and re-exports both globals
-                # via __all__. The previous `startswith("pokezero.")` test registered NOTHING for
-                # it, making the public spelling the one the ledger could not see.
+                # `import pokezero` -- no dot -- binds the package, which re-exports
+                # OBSERVATION_SCHEMA_VERSION via __all__. (An earlier version of this comment said
+                # "both globals"; DEFAULT_REPLAY_OBSERVATION_SPEC is neither in __all__ nor an
+                # attribute of the package -- `hasattr(pokezero, ...)` is False. The narrower claim
+                # is the true one.) The previous `startswith("pokezero.")` test registered NOTHING
+                # for the bare form, making the public spelling the one the ledger could not see.
                 if a.name == "pokezero" or a.name.startswith("pokezero."):
                     module_roots.add(a.asname or a.name.split(".")[0])
 

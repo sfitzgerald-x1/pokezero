@@ -40,43 +40,75 @@ without an established denominator and two of them from hand-picked file lists.
 
 A default can be reached as a bare name, an alias, or a module attribute at any depth:
 
-    OBSERVATION_SCHEMA_VERSION                    # bare
-    SV                                            # from ... import ... as SV
-    O.OBSERVATION_SCHEMA_VERSION                  # import pokezero.observation as O
+    OBSERVATION_SCHEMA_VERSION                        # bare
+    SV                                                # from ... import ... as SV
+    O.OBSERVATION_SCHEMA_VERSION                      # import pokezero.observation as O
     pokezero.observation.OBSERVATION_SCHEMA_VERSION   # import pokezero.observation
-    pokezero.OBSERVATION_SCHEMA_VERSION           # import pokezero  (the PUBLIC spelling: the
-                                                  #   constant is in pokezero.__all__)
+    pokezero.OBSERVATION_SCHEMA_VERSION               # import pokezero  (the PUBLIC spelling --
+                                                      #   this constant is in pokezero.__all__;
+                                                      #   DEFAULT_REPLAY_OBSERVATION_SPEC is not)
+    observation.OBSERVATION_SCHEMA_VERSION            # from . import observation  (RELATIVE)
 
 Only the first was matched originally. **Each of the others was demonstrated to add default reads
 with N unchanged and the gate green** — the same defect class as the any-of bug: *a denominator
-blind to a spelling*. It recurred three times (round 2 any-of, round 5 the alias, round 6 the
-dotted base and the bare package import) for one reason: each fix was verified once by hand and
-pinned by no test. The enumeration now lives in
-`tests/test_schema_default_ledger.py::LedgerSeesEverySpellingTest` — 10 positive spellings and 4
-lookalike negatives, so over-matching fails too — and four mutants of the matcher were confirmed to
-redden it.
+blind to a spelling*.
 
-Two figures in this section were previously wrong and are corrected here:
+It recurred **four** times, and the reason is the same every time: each fix was verified once by
+hand and pinned by no test, so the next edit to the matcher reopened it.
 
-| claim | stated | derived | how |
+| round | spelling |
+|---|---|
+| 2 | any-of surface matching |
+| 5 | `from ... import GLOBAL as ALIAS` |
+| 6 | a dotted base, and bare `import pokezero` (the public spelling) |
+| 7 | `from . import <mod>` — **relative**, and live in the package |
+
+Round 7's is the strongest occurrence record of the four: relative imports are already used inside
+the package (`src/pokezero/linear_policy.py:24`, `src/pokezero/selfplay.py:17`), whereas dotted reads
+of these globals appear **0** times anywhere. Its cause was also the most embarrassing —
+`node.module.startswith("pokezero")` is `None` for a relative import, so the branch never fired,
+three lines below a comment disclaiming exactly that kind of enumeration-from-memory.
+
+The enumeration now lives in `tests/test_schema_default_ledger.py`:
+`LedgerSeesEverySpellingTest` (14 positive spellings, 6 lookalike negatives) and
+`SurfaceDerivationSeesEverySpellingTest` (10 declaration spellings, 3 negatives). Over-matching is
+tested too, because an inflated denominator is the same defect as a deflated one — and that test
+immediately caught a live one: every name imported from a pokezero module was registered as a module
+base, so `ObservationSpec.OBSERVATION_SCHEMA_VERSION` scored a row. Module-vs-name is now resolved
+against the filesystem rather than guessed from capitalisation.
+
+#### The figures in this section, and the greps that disagree
+
+Three previously-stated numbers were wrong. Corrected, with the command for each:
+
+| claim | stated | derived | command |
 |---|---|---|---|
-| `import pokezero.<mod> as <alias>` in the tree | 31 | **24** | `ast.Import` walk over `git ls-files '*.py'` — 524 files, 0 unparsed |
-| any dotted read of either global | (implied nonzero) | **0** | `git grep -hoE '\w+\.(OBSERVATION_SCHEMA_VERSION\|DEFAULT_REPLAY_OBSERVATION_SPEC)\b' -- '*.py' \| wc -l` |
-| module-qualified *defaults* in `src/` — the attr-side arm's stated motive | "31 times" | **0** | follows from the above: no dotted read exists, so none is a default |
+| `import pokezero.<mod> as <alias>` in the tree | 31 | **24** | `ast.Import` walk over `git ls-files -z '*.py'` — 524 files, 0 unparsed |
+| any dotted read of either global | implied nonzero | **0** | `git grep -hoE '\w+\.(OBSERVATION_SCHEMA_VERSION\|DEFAULT_REPLAY_OBSERVATION_SPEC)\b' -- '*.py' \| wc -l` |
+| module-qualified *defaults* in `src/` — the motive given for one matcher arm | "31 times" | **0** | follows from the row above: no dotted read exists, so none is a default |
 
-Grep gives **27** for the first row, not 24. The gap is not a judgement call: all three grep-only hits
-are prose *about* the idiom rather than uses of it — `scripts/schema_default_ledger.py:81` and `:189`
-(comments) and `tests/test_schema_default_ledger.py:165` (a probe source string). Conversely a
-`^`-anchored grep gives **0** bare `import pokezero` against the AST's 3, because all three are
-indented inside functions. The AST count is the one to quote; where the two disagree the difference
-is attributed above rather than resolved by preferring a number.
+Grep disagrees with the AST, and the reconciliation is the point — an earlier revision quoted "27"
+with no command, cited three line numbers that were all wrong, and named the wrong file set:
 
-No dotted read of either global exists in the tree today; bare `import pokezero` occurs 3 times
-(`scripts/hc_depth_grid.py:135`, `src/pokezero/public_projection.py:2283`,
-`src/pokezero/truth_differential.py:912`). The matcher covers these spellings as *guards against a
-spelling that has not landed yet*, which is the honest reason to keep them — not, as the earlier
-text implied, as a fix for sites already there. Aliases are resolved per file, so the reported kind
-is the *global*, not the local name.
+```
+   24  real imports                          ast.Import walk over tracked .py
+ +  2  prose inside .py files                scripts/schema_default_ledger.py:300   (a comment)
+                                             tests/test_schema_default_ledger.py:413 (a probe string)
+ = 26  git grep ... -- '*.py' | wc -l
+ +  1  this document's own spelling table    docs/schema_default_ledger.md:45
+ = 27  git grep ... | wc -l   (every tracked file)
+```
+
+Every grep-only hit is prose *about* the idiom rather than a use of it — one comment, one probe
+string, and one line of this file counting itself. Conversely a `^`-anchored grep reports **0** bare
+`import pokezero` against the AST's **3** (`scripts/hc_depth_grid.py:135`,
+`src/pokezero/public_projection.py:2283`, `src/pokezero/truth_differential.py:912`), because all
+three are indented inside functions. **The AST count is the one to quote**, and where the tools
+disagree the difference is attributed line by line rather than settled by preferring a number.
+
+The matcher covers the spellings with zero live occurrences as *guards against a spelling that has
+not landed*, which is the honest reason to keep them — not, as earlier text implied, as a fix for
+sites already there.
 
 ### Surfaces are DERIVED, not listed
 
@@ -88,6 +120,21 @@ derived and a new surface is counted the day it is written.
 
 Alternate constructors cannot be derived (they do not re-declare the field), so
 `EXTRA_CONSTRUCTORS` names them and **hard-fails** if its owner stops defaulting to a global.
+
+**Spelling coverage matters more here than for reads.** A missed read loses one row; a missed
+*declaration* loses the surface and with it every call site — `LocalShowdownConfig` alone is 133 of
+the 391. For six rounds this function recognised exactly one spelling (`name: T = GLOBAL`) while the
+read matcher accumulated four, and the round-5 alias fix was applied to the read matcher and never
+here. Quantified: with the same defaulted field and ten constructions, the plain spelling moved N by
++11 (1 declaration + 10 callers) while `field(default=GLOBAL)`, an aliased global, and an
+un-annotated attribute each moved it by **+1** — the ten callers invisible. Combined with a relative
+import, even the +1 vanished.
+
+Six spellings now derive, all pinned: annotated, un-annotated (`ast.Assign`), aliased,
+`field(default=…)` (**201** `field(default` uses in `src/`), `field(default_factory=lambda: …)`, and
+module-qualified at any depth. The last of those needed a whole-chain walk rather than checking the
+two ends: `a.b.GLOBAL.attr` puts the global in the middle, where neither the outermost `.attr` nor
+the leftmost root finds it.
 
 ### It fails loudly, in every mode
 
