@@ -3313,6 +3313,159 @@ class WorldAbortRateTests(unittest.TestCase):
         policy.stats.decisions = 1
         self.assertEqual(policy.stats.to_dict()["fallback_rate"], 0.0)
 
+    def _ladder_policy(self, *, fail_at=None, override_at=(), fixed=False, rows=True):
+        """A policy whose fake `_search_model` writes the surfaces under test."""
+        from pokezero.policy import PolicyDecision
+
+        harness = EarlyStopPolicyIntegrationTests()
+        policy = harness._policy(early_stop=False)
+        cfg = dict(search_depth=3, search_sims=100)
+        if not fixed:
+            cfg.update(depth_min=2, worlds_min=1)
+        policy._config = replace(policy._config, **cfg)
+        policy.stats = EngineMctsStats()
+        policy.policy_id = "engine-mcts"
+        policy.rungs = []
+
+        def _fake_search_model(context, worlds, live_fold, rng):
+            index = len(policy.rungs)
+            policy.rungs.append(index)
+            if rows:
+                policy.stats.root_decision_rows.append({"rung_marker": index})
+            if index in override_at:
+                policy.stats.override_measured_decisions += 1
+                policy.stats.model_override_decisions += 1
+                policy.stats.override_disagreements.append({"rung_marker": index})
+            if index == fail_at:
+                policy.stats.fallback_decisions += 1
+                return PolicyDecision(action_index=8, policy_id=policy.policy_id)
+            policy._ladder_saturated = False
+            policy._ladder_worlds_agree = True
+            return PolicyDecision(action_index=0, policy_id=policy.policy_id)
+
+        policy._search_model = _fake_search_model
+        return policy
+
+    def test_a_superseded_rungs_override_address_is_dropped(self) -> None:
+        # THE THIRD SURFACE of the same defect. The counters were rewound and then
+        # the rows were stamped; the ADDRESSES were missed both times. An override
+        # address is a forkable `(battle_id, round, seat)` replay handle, so one left
+        # by a discarded rung makes the shard claim an override the returned decision
+        # did not make -- and a fork probe replaying it lands on a decision that
+        # agreed with the model. Found in review.
+        policy = self._ladder_policy(override_at=(0,))
+        policy._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                              object(), random.Random(0))
+        self.assertEqual(policy.rungs, [0, 1], "the ladder escalated past rung 0")
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["model_override_decisions"], 0, "rung 1 agreed")
+        self.assertEqual(stats["override_disagreements"], [],
+                         "an address for a discarded rung is a forkable lie")
+        self.assertEqual(stats["override_addresses_superseded"], 1, "and it is counted")
+
+    def test_the_winning_rungs_override_address_is_kept(self) -> None:
+        # The other direction, or the fix above would just be "delete everything".
+        policy = self._ladder_policy(override_at=(1,))
+        policy._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                              object(), random.Random(0))
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["model_override_decisions"], 1)
+        self.assertEqual([r["rung_marker"] for r in stats["override_disagreements"]], [1])
+        self.assertEqual(stats["override_addresses_superseded"], 0)
+
+    def test_a_fixed_cell_carries_no_ladder_stamp(self) -> None:
+        # `_search_ladder` is the dispatch for EVERY model decision, so an
+        # unconditional stamp put `ladder_rung`/`ladder_superseded` on a FIXED cell's
+        # rows -- changing the banked row schema on the one branch whose central
+        # promise is that a fixed cell is untouched, and contradicting this module's
+        # own docstring and the deploy analyzer's. Found in review.
+        policy = self._ladder_policy(fixed=True)
+        policy._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                              object(), random.Random(0))
+        self.assertEqual(policy.rungs, [0], "a fixed cell is one rung")
+        row = policy.stats.root_decision_rows[0]
+        self.assertNotIn("ladder_rung", row)
+        self.assertNotIn("ladder_superseded", row)
+
+    def test_a_dynamic_cell_does_carry_the_stamp(self) -> None:
+        # The control for the test above: the stamp must be present exactly when the
+        # cell is dynamic, or "absent" proves nothing.
+        policy = self._ladder_policy()
+        policy._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                              object(), random.Random(0))
+        for row in policy.stats.root_decision_rows:
+            self.assertIn("ladder_superseded", row)
+
+    def test_a_rung_zero_fallback_is_counted_as_unsearched(self) -> None:
+        # And NOT as recovered. Moving the recovered increment outside its
+        # `last_good is not None` guard survived the whole suite: under that change a
+        # run where every decision fell back at rung 0 emits fallback_rate 0.0 with
+        # fallback_decisions == decisions -- a fully contaminated cell reading
+        # perfectly clean, the inverse of the failure the counter was added for.
+        policy = self._ladder_policy(fail_at=0)
+        policy._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                              object(), random.Random(0))
+        policy.stats.decisions = 1
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["ladder_recovered_fallbacks"], 0,
+                         "there was no earlier rung to recover to")
+        self.assertEqual(stats["ladder_unsearched_decisions"], 1)
+        self.assertEqual(stats["fallback_rate"], 1.0,
+                         "an unrecovered fallback must still be charged")
+
+    def test_the_recovered_counter_is_emitted_not_just_netted(self) -> None:
+        # "Both numbers are emitted so the taxonomy stays whole" was unpinned:
+        # emitting a hard 0 while the rate still netted survived the suite.
+        policy = self._ladder_policy(fail_at=1)
+        policy._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                              object(), random.Random(0))
+        policy.stats.decisions = 1
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["ladder_recovered_fallbacks"], 1)
+        self.assertEqual(stats["fallback_decisions"], 1, "the gross count is intact")
+        self.assertEqual(stats["fallback_rate"], 0.0)
+        self.assertEqual(stats["ladder_unsearched_decisions"], 0)
+
+    def test_the_ladder_identity_has_three_terms_not_two(self) -> None:
+        # `ladder_decisions` counts a decision that fell back at rung 0 and the
+        # override ledger cannot, so `measured + unmeasured == ladder_decisions` is
+        # FALSE -- yet this module and the campaign JSON both asserted it and claimed
+        # it was tested. A consumer deriving `unmeasured := ladder_decisions -
+        # measured` overcounts by exactly the rung-0 fallbacks. Found in review.
+        good = self._ladder_policy(override_at=(1,))
+        good._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                            object(), random.Random(0))
+        bad = self._ladder_policy(fail_at=0)
+        bad._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                           object(), random.Random(0))
+        for name, policy, unsearched in (("searched", good, 0), ("fell back", bad, 1)):
+            with self.subTest(decision=name):
+                st = policy.stats.to_dict()
+                self.assertEqual(st["ladder_unsearched_decisions"], unsearched)
+                self.assertEqual(
+                    st["override_measured_decisions"]
+                    + st["search_override_unmeasured"]
+                    + st["ladder_unsearched_decisions"],
+                    st["ladder_decisions"],
+                )
+
+    def test_a_ladder_cell_that_never_searched_reports_no_wall_at_all(self) -> None:
+        # `ladder_decisions` is charged BEFORE the first rung runs, so a cell whose
+        # every decision fell back at rung 0 still had a non-zero denominator and
+        # emitted a wall -- the FALLBACK wall -- which the power report's cap read as
+        # a PASS at 0.30s. A cell whose latency is entirely unknown must read
+        # UNEVALUABLE. Found in review.
+        stats = EngineMctsStats()
+        stats.decisions = stats.ladder_decisions = 1000
+        stats.searched_decisions = 0
+        stats.search_wall_seconds = 300.0
+        payload = stats.to_dict()
+        self.assertNotIn("search_wall_per_ladder_decision", payload)
+        self.assertNotIn("search_wall_per_searched_decision", payload)
+        # And it reappears the moment anything was actually searched.
+        stats.searched_decisions = 2000
+        self.assertIn("search_wall_per_ladder_decision", stats.to_dict())
+
     def test_the_stop_floor_is_untouched_when_there_is_no_rung(self) -> None:
         # And a fixed cell keeps the configured floor exactly, so the clamp cannot
         # change what a banked cell measured.

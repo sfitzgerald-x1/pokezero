@@ -1101,6 +1101,22 @@ class EngineMctsStats:
     #: SUCCESSFUL rung's decision, so this is also the count of decisions whose
     #: escalation was abandoned.
     ladder_fallback_rungs: int = 0
+    #: Addresses dropped because the rung that produced them was superseded. An
+    #: override address is a forkable replay handle, so one from a discarded rung
+    #: makes the shard claim an override the returned decision did not make.
+    #: Non-zero is EXPECTED on a dynamic cell; it is emitted so the drop is never
+    #: silent, since `override_disagreements` is also capped and a reader must be
+    #: able to tell the two losses apart.
+    override_addresses_superseded: int = 0
+    #: Decisions whose per-decision ROW is unrecoverable because the row cap filled
+    #: between an earlier rung and the winning one: the decision has rows in the
+    #: shard, none of which passes the `ladder_superseded` filter. At most one per
+    #: shard, biased toward escalating decisions.
+    ladder_decision_rows_lost: int = 0
+    #: Ladder decisions where NO rung produced a searched answer, i.e. rung 0 fell
+    #: back. These are in `ladder_decisions` but contribute nothing to the override
+    #: ledger, which is why the ladder identity needs them as a third term.
+    ladder_unsearched_decisions: int = 0
     #: Of those, the ones where an EARLIER rung had already produced a searched
     #: answer, so the decision the engine returned was a real search and not a
     #: fallback. `_fallback` has already charged `fallback_decisions` by then and
@@ -1142,17 +1158,36 @@ class EngineMctsStats:
     # reading `override_measured_decisions` gets the same number -- the identity
     # is pinned by test rather than assumed.
     #
-    # ON A LADDER CELL the right-hand side is `ladder_decisions`, not
-    # `searched_decisions`. Both counters are charged inside `_search_model`, which
-    # a ladder calls once per rung, so an escalating decision would otherwise vote
-    # several times and the rate would come out weighted by how far each decision
-    # climbed -- and incomparable to a fixed cell's, which is the comparison the
-    # override study is entirely about. `_search_ladder` therefore REWINDS all
-    # three to the winning rung's contribution, so each decision contributes
-    # exactly one vote and both forms of the identity are pinned by test.
-    # `search_override_unmeasured_causes` is deliberately NOT rewound: it is a
-    # diagnostic taxonomy rather than a rate denominator, and a cause a discarded
-    # rung hit is still a cause the run really encountered.
+    # ON A LADDER CELL the identity is
+    #   override_measured_decisions + search_override_unmeasured
+    #     + ladder_unsearched_decisions == ladder_decisions
+    # -- THREE terms, not two. Both counters are charged inside `_search_model`,
+    # which a ladder calls once per rung, so an escalating decision would otherwise
+    # vote several times and the rate would come out weighted by how far each
+    # decision climbed -- and incomparable to a fixed cell's, which is the
+    # comparison the override study is entirely about. `_search_ladder` therefore
+    # REWINDS the ledger to the winning rung's contribution, so each decision
+    # contributes exactly one vote.
+    #
+    # The third term is the correction review forced: `ladder_decisions` counts a
+    # decision that fell back at rung 0, and the override ledger cannot, so the
+    # two-term form is simply false and a consumer deriving
+    # `unmeasured := ladder_decisions - measured` overcounts by exactly the rung-0
+    # fallbacks. Both forms are pinned by test.
+    # THE RULE FOR ALL FOUR OVERRIDE SURFACES, stated once because review found the
+    # first two rewound and the other two not, with nothing saying which:
+    #
+    #   * a COUNT or an ADDRESS is a claim about the decision the engine RETURNED,
+    #     so it is rewound to the winning rung -- `override_measured_decisions`,
+    #     `model_override_decisions`, `search_override_unmeasured` and
+    #     `override_disagreements`. An address from a discarded rung is worse than a
+    #     miscount: it is forkable, so a probe replays it and finds a decision the
+    #     engine did not override.
+    #   * a CAUSE TAXONOMY is a claim about what the run encountered, so it is not
+    #     rewound -- `search_override_unmeasured_causes`. A cause a discarded rung
+    #     hit is still a cause that happened, and it is nobody's denominator.
+    #
+    # Anything added here must say which of the two it is.
     override_measured_decisions: int = 0
     model_override_decisions: int = 0
     # The honesty half, and the one that matters most: searched decisions where
@@ -1248,6 +1283,9 @@ class EngineMctsStats:
                 else 0.0
             ),
             "ladder_recovered_fallbacks": self.ladder_recovered_fallbacks,
+            "override_addresses_superseded": self.override_addresses_superseded,
+            "ladder_decision_rows_lost": self.ladder_decision_rows_lost,
+            "ladder_unsearched_decisions": self.ladder_unsearched_decisions,
             "removed_item_decisions": self.removed_item_decisions,
             "item_override_decisions": self.item_override_decisions,
             "worlds_attempted": self.worlds_attempted,
@@ -1461,10 +1499,19 @@ class EngineMctsStats:
             payload["search_wall_per_searched_decision"] = (
                 self.search_wall_seconds / self.searched_decisions
             )
-        if self.ladder_decisions:
+        if self.ladder_decisions and self.searched_decisions:
+            # `searched_decisions` in the guard, NOT just `ladder_decisions`. The
+            # latter is charged BEFORE the first rung runs, so a ladder cell whose
+            # every decision fell back at rung 0 still had a non-zero
+            # `ladder_decisions` and therefore still emitted a wall -- the FALLBACK
+            # wall -- which the power report's cap then read as a PASS. That undid
+            # `test_missing_gate_field_is_unevaluable_not_a_pass`: a cell whose
+            # latency is entirely unknown must read UNEVALUABLE, never a pass at
+            # 0.30s. Found in review.
+            #
             # The COST DENOMINATOR for any cross-cell comparison. A ladder decision
             # may run several rungs, so these are the only ladder rates that mean
-            # "per decision the engine was asked to make". Found in review.
+            # "per decision the engine was asked to make".
             payload["iterations_per_ladder_decision"] = (
                 self.total_iterations / self.ladder_decisions
             )
@@ -3080,7 +3127,29 @@ class EngineMctsPolicy:
         # makes the list lossy -- they are STAMPED, so a consumer can take the
         # decision's own row and a cost analysis can still see every rung.
         rung_row_spans: list[tuple[int, int]] = []
+        # `None`, not 0, and the difference is load-bearing on an assumption worth
+        # stating: every `_fallback` site in `_search_model` returns BEFORE
+        # `_record_root_telemetry` appends, so no rung can both append a row and
+        # fail. Default 0 therefore looks equivalent today -- but a fallback added
+        # after the append would make a fully-fallen-back decision's row read as THE
+        # decision row. `None` fails the comparison instead. Raised in review as an
+        # equivalent mutant; recorded because the equivalence is a property of the
+        # other function, not of this one.
         winning_row_span: Optional[int] = None
+        # AND THE ADDRESSES, which are the third surface of the same defect. An
+        # override address is forkable -- `(battle_id, round, seat)` is a complete
+        # replay handle -- so one left behind by a discarded rung makes the shard
+        # claim an override the returned decision did not make, and a fork probe
+        # replaying it lands on a decision that agreed with the model. Unlike the
+        # ROWS, which are real searches worth keeping for cost analysis, an address
+        # is purely a claim about the decision, so the superseded ones are DROPPED
+        # (counted, never silently).
+        disagreements_at_decision_start = len(self.stats.override_disagreements)
+        disagreement_spans: list[tuple[int, int]] = []
+        winning_disagreement_span: Optional[int] = None
+        dynamic = (
+            self._config.depth_min is not None or self._config.worlds_min is not None
+        )
         for index, (stage_worlds, stage_sims, stage_depth) in enumerate(ladder):
             # Snapshot BEFORE the rung so a fallback raised inside it is visible,
             # and reset the per-rung signals so a stale one cannot license an
@@ -3089,6 +3158,7 @@ class EngineMctsPolicy:
             fallbacks_before = self.stats.fallback_decisions
             override_before_rung = _override_ledger()
             rows_before_rung = len(self.stats.root_decision_rows)
+            disagreements_before_rung = len(self.stats.override_disagreements)
             self._ladder_saturated = False
             self._ladder_worlds_agree = True
             self._ladder_depth_override = stage_depth
@@ -3101,6 +3171,9 @@ class EngineMctsPolicy:
                 self._ladder_depth_override = None
                 self._ladder_sims_override = None
             rung_row_spans.append((rows_before_rung, len(self.stats.root_decision_rows)))
+            disagreement_spans.append(
+                (disagreements_before_rung, len(self.stats.override_disagreements))
+            )
             self.stats.ladder_rungs_run += 1
             if index:
                 # Rung 0's worlds were already charged at the dispatch point, with
@@ -3131,6 +3204,7 @@ class EngineMctsPolicy:
                 now - before for now, before in zip(_override_ledger(), override_before_rung)
             )
             winning_row_span = len(rung_row_spans) - 1
+            winning_disagreement_span = len(disagreement_spans) - 1
             if index + 1 >= len(ladder):
                 break
             next_worlds, next_sims, next_depth = ladder[index + 1]
@@ -3170,12 +3244,49 @@ class EngineMctsPolicy:
             start + delta
             for start, delta in zip(override_at_decision_start, winning_rung_delta)
         )
-        # Stamp the rows. `ladder_superseded` is the field a per-decision analysis
-        # must filter on; `ladder_rung` is what a cost analysis reads instead.
-        for rung_index, (start, stop) in enumerate(rung_row_spans):
-            for row in self.stats.root_decision_rows[start:stop]:
-                row["ladder_rung"] = rung_index
-                row["ladder_superseded"] = rung_index != winning_row_span
+        # DROP the superseded addresses, keeping the winning rung's.
+        if len(self.stats.override_disagreements) > disagreements_at_decision_start:
+            keep = self.stats.override_disagreements[:disagreements_at_decision_start]
+            if winning_disagreement_span is not None:
+                start, stop = disagreement_spans[winning_disagreement_span]
+                keep.extend(self.stats.override_disagreements[start:stop])
+            self.stats.override_addresses_superseded += (
+                len(self.stats.override_disagreements) - len(keep)
+            )
+            self.stats.override_disagreements[:] = keep
+        # Stamp the rows -- but ONLY on a dynamic cell. `_search_ladder` is the
+        # dispatch for EVERY model decision, so an unconditional stamp put
+        # `ladder_rung`/`ladder_superseded` on a FIXED cell's rows, changing the
+        # banked row schema on the one branch whose central promise is that a fixed
+        # cell is untouched, and contradicting this module's own docstring. Found in
+        # review.
+        #
+        # `ladder_superseded` is the field a per-decision analysis must filter on;
+        # `ladder_rung` is what a cost analysis reads instead.
+        if dynamic:
+            for rung_index, (start, stop) in enumerate(rung_row_spans):
+                for row in self.stats.root_decision_rows[start:stop]:
+                    row["ladder_rung"] = rung_index
+                    row["ladder_superseded"] = rung_index != winning_row_span
+            if winning_row_span is not None and not (
+                rung_row_spans[winning_row_span][1] - rung_row_spans[winning_row_span][0]
+            ) and any(stop > start for start, stop in rung_row_spans):
+                # THE CAP STRADDLED THIS DECISION. `_ROOT_DECISION_ROWS` filled
+                # between an earlier rung and the winning one, so the decision has
+                # rows in the shard and NONE of them passes the superseded filter --
+                # it vanishes from every per-decision statistic while
+                # `root_decision_rows_dropped` reports only a dropped rung. At most
+                # one decision per shard, and biased toward escalating ones, so it is
+                # counted rather than left to be inferred.
+                self.stats.ladder_decision_rows_lost += 1
+        if last_good is None:
+            # NO rung produced a searched answer. Counted because the ladder identity
+            # needs it: `measured + unmeasured == ladder_decisions` is FALSE here --
+            # `ladder_decisions` includes this decision and the override ledger does
+            # not, so the true identity carries this as a third term. Review found
+            # both this module and the campaign JSON asserting the two-term form and
+            # claiming it was tested.
+            self.stats.ladder_unsearched_decisions += 1
         assert decision is not None  # a ladder always has at least one rung
         return decision
 

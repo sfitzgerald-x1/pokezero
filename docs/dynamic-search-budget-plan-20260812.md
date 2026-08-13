@@ -78,6 +78,31 @@ uncollapsed worlds, where the wrong factor is ×1.
 4 of 20). The four that survived the last round were N1, N2a, N2b and N3 — every one a
 place where a *rule* rather than its plumbing was unguarded.
 
+## 0e. WHAT A THIRD REVIEW ROUND FOUND — the same defect on its third and fourth surface
+
+Round 2's fixes held. Round 3 found nine more, and the pattern is the one worth
+carrying out of this exercise: **the N8 override defect had four surfaces, and each
+round fixed one more of them.** Counters (round 2), rows (found while briefing round
+3), addresses (round 3). A fix aimed at one surface of a defect is not a fix.
+
+| # | finding | why it mattered | resolution |
+|---|---|---|---|
+| NEW-1 | the rewind left the override **ADDRESSES** | `override_disagreements` is a forkable `(battle_id, round, seat)` replay handle. One left by a discarded rung makes the shard report zero overrides while carrying an address claiming one — and a fork probe replaying it lands on a decision the engine did **not** override | superseded addresses are dropped and counted in `override_addresses_superseded`; the module now states ONE rule for all four surfaces — a count or an address is a claim about the returned decision and is rewound, a cause taxonomy is a claim about the run and is not |
+| NEW-2 | `mcts/analyze_seltune.py` was a **stale consumer** of both N3 and N4 | it computes `s/dec` from `searched_decisions` (the per-rung field N3's own docstring says must never be read on a dynamic cell) and recomputes `fallback_rate` from raw counters, re-charging recovered fallbacks. `analyze_value_gap.py` and `foulplay_power_report.py` were updated; this one was missed | `ladder_sdec` and `rungs/dec` printed beside `s/dec`, blank on a fixed cell; `fallback_rate` nets `ladder_recovered_fallbacks`; the three ladder counters are aggregated |
+| NEW-3 | N3's fix **re-opened** "UNEVALUABLE is never a PASS" | `ladder_decisions` is charged BEFORE the first rung, so a cell whose every decision fell back at rung 0 still emitted a wall — the *fallback* wall — and the cap read it as `PASS - mean 0.30s` where it used to read UNEVALUABLE | the ladder wall is emitted only when `searched_decisions > 0` |
+| NEW-4 | **FIXED cells were being stamped** | `_search_ladder` is the dispatch for every model decision, so the unconditional stamp put `ladder_rung`/`ladder_superseded` on a fixed cell's rows — changing the banked row schema on the one branch whose central promise is that a fixed cell is untouched, and contradicting two docstrings consumers are told to rely on | stamped only when the cell is dynamic; **both directions** pinned, since the mutant that stamped everything and the one that stamped nothing had both survived |
+| NEW-5 | the recovered-fallback **producer** was untested | moving the increment outside its `last_good is not None` guard survived all 574 tests: a run where every decision fell back at rung 0 would emit `fallback_rate 0.0` with `fallback_decisions == decisions` — a fully contaminated cell reading perfectly clean, the inverse of the failure the counter was added for. The only test set the fields by hand. **N2's lesson repeating on a counter introduced by the N2 round** | tests drive `_search_ladder`; the emitted counter is pinned as well as the netted rate |
+| NEW-6 | the documented ladder identity was **false**, and this campaign's JSON asserted it was tested | `ladder_decisions` counts a decision that fell back at rung 0 and the override ledger cannot, so `measured + unmeasured == ladder_decisions` fails and a consumer deriving `unmeasured := ladder_decisions − measured` overcounts by exactly the rung-0 fallbacks | `ladder_unsearched_decisions` emitted as the third term; both forms pinned; the JSON claim corrected |
+| NEW-7 | `decision_rows()` **failed open** | `row.get("ladder_superseded")` → `None` → falsy → kept. Every shard banked before the stamp existed has a non-zero `ladder_decisions` and unstamped rows, so re-analysing one silently restored full rung-weighting with no diagnostic | refuses a dynamic shard whose rows carry no stamp |
+| NEW-8 | the row cap can **delete the straddling decision** | variant 2 runs up to 19 rungs per decision against a 4,096-row cap, so at the boundary a decision can have rows in the shard and none passing the filter — a systematic bias toward escalating decisions | counted as `ladder_decision_rows_lost` |
+| NEW-9 / M23 | two of four override surfaces rewound, two not, with no stated rule; and `winning_row_span`'s `None` default rests on an equivalence in *another* function | — | the rule is stated once; the equivalence is recorded where it is relied on |
+
+**Mutation screen: 36 seeded across three rounds, 36 killed.** The honest progression
+is what matters: 7 of 9 surviving → 0 of 15 → **4 of 20** → 0 of 25 → **4 more found by
+round 3** → 0 of 36. Twice a round closed at zero survivors and the next round found
+more, both times because the screen was aimed at plumbing rather than at rules, or at
+one surface of a defect rather than all of them.
+
 ## 1. What "dynamic" means here, and why this target
 
 **Today the per-decision budget is fixed.** Every decision spends `search_sims`
