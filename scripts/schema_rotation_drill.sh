@@ -168,8 +168,23 @@ if _m21 is None:
 s = s[:_m21.end(1)] + "\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL," + s[_m21.end(1):]
 s = re.sub(r'^(\s*)OBSERVATION_SCHEMA_VERSION_V4: (V4_TRANSITION_TOKEN_COUNT,)$',
            r'\1OBSERVATION_SCHEMA_VERSION_V4: \2\n\1OBSERVATION_SCHEMA_VERSION_V5_DRILL: \2', s, count=1, flags=re.M)
-s = s.replace("OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V4",
-              "OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V5_DRILL")
+# Rotate WHATEVER the current default is, not a hardcoded v4. The previous line replaced the
+# literal `= OBSERVATION_SCHEMA_VERSION_V4`, which matches 0 times on any tree whose default is
+# not already v4 -- so the default never rotated, and precondition 1 aborted at exit 8. That made
+# the drill unrunnable until the rotation itself had landed, which is backwards: the drill exists
+# to decide whether the rotation is safe, so it must run BEFORE it, on the tree as it stands.
+#
+# Anchored on the definition line, so it cannot match a per-version constant or a comment.
+_mdef = re.search(r'^OBSERVATION_SCHEMA_VERSION = (OBSERVATION_SCHEMA_VERSION_V\w+)$', s, re.M)
+if _mdef is None:
+    raise SystemExit(
+        "drill: could not locate the default definition line "
+        "`OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_<V>`. The injection cannot "
+        "rotate a default it cannot find, and rotating nothing would score a PASS against an "
+        "unrotated tree."
+    )
+print(f"drill: rotating the default away from {_mdef.group(1)}")
+s = s[:_mdef.start()] + "OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V5_DRILL" + s[_mdef.end():]
 open(p, "w").write(s)
 
 q = f"{wt}/src/pokezero/showdown.py"
