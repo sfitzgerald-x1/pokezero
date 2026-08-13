@@ -60,8 +60,14 @@ def _assigned_names(tree: ast.AST) -> dict[int, str]:
         if not targets:
             continue
         name = next((t.id for t in targets if isinstance(t, ast.Name)), None)
-        if name and isinstance(node.value, (ast.Set, ast.List, ast.Tuple, ast.Dict)):
-            out[id(node.value)] = name
+        if not name:
+            continue
+        val = node.value
+        # `X = frozenset({...})` / `tuple([...])`: the container is the call's first argument.
+        if isinstance(val, ast.Call) and val.args:
+            val = val.args[0]
+        if isinstance(val, (ast.Set, ast.List, ast.Tuple, ast.Dict)):
+            out[id(val)] = name
     return out
 
 
@@ -116,7 +122,13 @@ def containers() -> list[tuple[str, int, tuple[str, ...], str]]:
                 # >= 2 members, and EVERY member a schema name in ONE convention. A single name is an
                 # ordinary comparison, and a mixed container is not a schema table.
                 rel = str(path.relative_to(REPO))
-                var = names.get(id(node), "<inline>")
+                # LINE-QUALIFIED when there is no assignment target. A bare "<inline>" collided two genuinely
+                # different argparse tuples in neural_cli.py (train at :467, iterate at :1951) into ONE
+                # classification row -- so a third was classified for free, and the injection, which runs
+                # once per row, inserted the synthetic schema TWICE into each. Also resolve through call
+                # wrappers: `frozenset({...})` / `tuple([...])` put the container inside a Call, so
+                # `_EXPORTABLE_TABLE_SCHEMAS` -- one of the nine historical misses -- was "<inline>" too.
+                var = names.get(id(node)) or f"<inline:{node.lineno}>"
                 if len(vals) >= 2 and (vals <= SHORT or vals <= FULL):
                     found.add((rel, node.lineno, tuple(sorted(vals)), var))
                 elif len(consts) >= 2 and not vals:
@@ -176,6 +188,16 @@ def main() -> int:
         print("  classifications with NO matching container (stale rows):")
         for path, members, var in unused:
             print(f"    {path}  {var}  {list(members)}")
+
+    # G6: `--check` printed "19 containers / 18 classified" and then "every container is classified",
+    # exit 0 -- a contradiction it stated and ignored. Every container must have its OWN row, so the
+    # counts must be equal; a shared row is a free-rider, which is how G3/G4 hid.
+    if len(found) != len(spec):
+        print()
+        print(f"ABORT: {len(found)} container(s) but {len(spec)} classification row(s). Every container "
+              "needs its own row -- a shared row means one is classified by another's decision, which "
+              "is how a new table gets registered for free.")
+        return 15
 
     if not args.check:
         return 0

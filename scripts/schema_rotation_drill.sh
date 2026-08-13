@@ -459,6 +459,17 @@ for _raw in open(_census):
     _kind, _path, _members = _parts[0], _parts[1], _parts[2]
     if _kind == "REGISTER":
         _reg_targets.append((_path, sorted(_members.split(","))))
+# DEDUPED on (file, members). The substitution below is FILE-WIDE -- it rewrites every occurrence of
+# the anchor literal in one pass -- so running it once per ROW double-inserted when two containers in
+# one file share a member set. Live, not hypothetical: neural_cli.py has two argparse tuples with the
+# same choices (train at :467, iterate at :1951) and each ended up with `"v5-drill", "v5-drill"`.
+# Caught by review; my own check missed it because `grep -c` counts LINES, and both insertions were on
+# the same line.
+_seen_reg = set()
+_reg_targets = [
+    t for t in _reg_targets
+    if not (( t[0], tuple(t[1]) ) in _seen_reg or _seen_reg.add(( t[0], tuple(t[1]) )))
+]
 if not _reg_targets:
     raise SystemExit(
         "drill: the container census lists no REGISTER rows. Either the file is empty or its format "
@@ -1135,21 +1146,36 @@ MSG = "unsupported observation layout schema"
 #
 # pytest prefixes traceback and exception lines in a FAILURES section with "E ". Requiring the match
 # there means the exclusion is justified by the exception the test actually raised.
-# Attached to an EXCEPTION TYPE, not merely on an `E ` line. Requiring `E ` alone was still not
-# enough: pytest prints a custom assertion MESSAGE on an `E ` line too, so the review probe
-# (`assertEqual(..., "context: unsupported observation layout schema")`) was still excluded. The Rust
-# dispatch surfaces as `E   ValueError: unsupported observation layout schema "..."`, so the rule is
-# that the message must follow an `<SomethingError>:` / `<SomethingException>:` token.
+# ANCHORED IMMEDIATELY AFTER `ValueError:`, which is the only thing the Rust bridge raises
+# (rust/pokezero-search/src/encoder.rs raises PyValueError, surfacing as ValueError). Two weaker rules
+# were tried and both were defeated by review:
 #
-# RESIDUAL, stated rather than left implicit: a test that genuinely RAISES an exception whose message
-# contains this string is still excluded. That is much narrower than "mentions it anywhere" and is
-# arguably correct -- it IS the error. What is now impossible is excluding a test on the strength of
-# an assertion message, a docstring, or a captured log.
-E_LINE = re.compile(r'^E\s+[A-Za-z_][A-Za-z_.]*(?:Error|Exception):\s.*' + re.escape(MSG), re.M)
-parts = re.split(r'\n_+ (\S+) _+\n', text)
+#   `MSG in body`                     any mention anywhere -- assertion message, captured log, a test
+#                                     ABOUT the error.
+#   `^E\s+<Type>(Error|Exception):`   `AssertionError` satisfies the type token, and REAL pytest
+#                                     renders a custom assertion message on ONE line as
+#                                     `E   AssertionError: 1 != 2 : <msg>`. So assertion messages were
+#                                     still excluded, and the outcome depended on pytest's diff
+#                                     line-wrapping rather than on cause.
+#
+# My kill-confirm for the second rule reported "assertion-message probe -> kept" and was WRONG,
+# because I tested it against a two-line render I invented instead of pytest's actual one-line output.
+# The probe data was the defect, not the rule under test.
+#
+# Anchored means `ValueError: <MSG>` with nothing between -- an assertion message reaches MSG only
+# after `AssertionError: ... : `, so it cannot match.
+E_LINE = re.compile(r'^E\s+ValueError:\s*' + re.escape(MSG), re.M)
+# The splitter accepts headers containing SPACES. pytest-subtests emits
+# `___ Cls.test (i=1) ___`, which `(\S+)` cannot match, so those bodies MERGED INTO THE PRECEDING
+# SECTION -- and an innocent naming breakage was excluded because the NEXT section raised the Rust
+# error. 77 files under tests/ use subTest, including test_engine_env.py, which is this exclusion's
+# own target population. The captured name is normalised: the ` (i=1)` subtest tail and any `[param]`
+# tail are stripped so it matches the `Class.test` form the filter compares against.
+parts = re.split(r'\n_+ (.+?) _+\n', text)
 ids = []
 for i in range(1, len(parts), 2):
-    name = parts[i]
+    name = re.sub(r'\s*\(.*\)$', '', parts[i].strip())
+    name = re.sub(r'\[.*\]$', '', name)
     body = parts[i + 1] if i + 1 < len(parts) else ""
     if E_LINE.search(body):
         ids.append(name)
