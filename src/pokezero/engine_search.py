@@ -1093,6 +1093,14 @@ class EngineMctsStats:
     #: NOT settled, so keeping the breadth is worth more than concentrating it.
     ladder_worlds_disagree_stops: int = 0
     ladder_decisions: int = 0
+    #: Whether this run's cells were DYNAMIC. Emitted because `ladder_decisions > 0`
+    #: is not the same question and using it as one broke a consumer: `_search_ladder`
+    #: is the dispatch for EVERY model decision, so a FIXED cell also has
+    #: `ladder_decisions == decisions` -- while carrying no row stamps, since round 3
+    #: correctly made stamping conditional. The deploy analyzer's "is this fixed?"
+    #: test was `ladder_decisions == 0`, so on this build it refused every fixed cell,
+    #: including all five of the value-gap campaign it is named for. Found in review.
+    ladder_dynamic: bool = False
     #: Decisions that stopped because depth WANTED to advance but the current depth
     #: was not saturated. The gate firing is the feature working, not a failure --
     #: but a cell where this dominates never deepened, and its range is decorative.
@@ -1410,6 +1418,8 @@ class EngineMctsStats:
             "ladder_escalations": self.ladder_escalations,
             "ladder_worlds_disagree_stops": self.ladder_worlds_disagree_stops,
             "ladder_decisions": self.ladder_decisions,
+            # The predicate a consumer must branch on. NOT `ladder_decisions > 0`.
+            "ladder_dynamic": self.ladder_dynamic,
             "ladder_unsaturated_stops": self.ladder_unsaturated_stops,
             "ladder_fallback_rungs": self.ladder_fallback_rungs,
             "ladder_depth_rungs": self.ladder_depth_rungs,
@@ -1499,15 +1509,20 @@ class EngineMctsStats:
             payload["search_wall_per_searched_decision"] = (
                 self.search_wall_seconds / self.searched_decisions
             )
-        if self.ladder_decisions and self.searched_decisions:
-            # `searched_decisions` in the guard, NOT just `ladder_decisions`. The
-            # latter is charged BEFORE the first rung runs, so a ladder cell whose
-            # every decision fell back at rung 0 still had a non-zero
-            # `ladder_decisions` and therefore still emitted a wall -- the FALLBACK
-            # wall -- which the power report's cap then read as a PASS. That undid
-            # `test_missing_gate_field_is_unevaluable_not_a_pass`: a cell whose
-            # latency is entirely unknown must read UNEVALUABLE, never a pass at
-            # 0.30s. Found in review.
+        # COVERAGE, not "at least one rung searched". `ladder_decisions` is charged
+        # BEFORE the first rung runs, so a cell whose decisions nearly all fell back
+        # at rung 0 still had a non-zero denominator and emitted a wall -- the
+        # FALLBACK wall -- which the power report's cap read as a PASS. Gating on
+        # `searched_decisions > 0` fixed the 100% case and left the 99.99% one:
+        # review measured one searched rung against 10,000 decisions reporting 0.3 ms
+        # and passing a 20 s cap. The requirement is that MOST decisions the engine
+        # was asked to make actually reached a search.
+        _searchable = self.ladder_decisions - self.ladder_unsearched_decisions
+        if (
+            self.ladder_decisions
+            and self.searched_decisions
+            and _searchable >= 0.9 * self.ladder_decisions
+        ):
             #
             # The COST DENOMINATOR for any cross-cell comparison. A ladder decision
             # may run several rungs, so these are the only ladder rates that mean
@@ -1625,11 +1640,19 @@ def native_search_args(
 #: test refuses it.
 #:
 #: What is deliberately NOT here, and why:
-#:   * `depth_reached_*`, `model_evals`, `total_iterations`, every `*_wall_seconds`,
-#:     `worlds_searched`, `world_search_attempts`, the `collision_*` family --
-#:     measures of WORK. A rung really did that work; summing it across rungs is
-#:     what a cost analysis wants and `ladder_rungs_per_decision` is how a reader
-#:     divides it.
+#:   * `model_evals`, `total_iterations`, every `*_wall_seconds`, `worlds_searched`,
+#:     `world_search_attempts`, the `collision_*` family -- measures of WORK. A rung
+#:     really did that work; summing it across rungs is what a cost analysis wants
+#:     and `ladder_rungs_per_decision` is how a reader divides it.
+#:   * `depth_reached_*` -- work too, and per WORLD rather than per decision, so
+#:     rewinding them would break the histogram's relationship to
+#:     `total_iterations`. BUT A STATED LIMITATION COMES WITH THEM: on a dynamic cell
+#:     `depth_reached_mean` is a mixture over rungs run at DIFFERENT depth caps, so
+#:     it is not "how deep did search get" for a decision -- the early, shallow,
+#:     most-numerous rungs dominate it. Read it against
+#:     `ladder_rungs_per_decision`, and use `ladder_depth_rungs` against
+#:     `ladder_unsaturated_stops` to ask whether depth actually advanced. Raised in
+#:     review; recorded rather than silently inherited.
 #:   * `search_override_unmeasured_causes`, `world_failure_reasons`,
 #:     `fallback_reasons` -- CAUSE TAXONOMIES. A cause a discarded rung hit is still
 #:     a cause the run encountered, and none is anyone's denominator.
@@ -1651,6 +1674,24 @@ LADDER_PER_DECISION_CLAIMS = (
     "opponent_prior_arm_decisions",
     # "decisions where a stop was accepted" -- one per decision, not one per rung.
     "early_stop_accepted_decisions",
+)
+
+#: The same class, for claims held in a Counter rather than a number. They need a
+#: SEPARATE mechanism and that is the whole reason this tuple exists: the generic
+#: rewind snapshots with `getattr`, which for a mutable returns a REFERENCE, so
+#: `now - before` compares the object with itself and the rewind is a silent no-op.
+#: Review demonstrated it -- appending a histogram to the scalar tuple above raised
+#: no error, changed nothing, and passed every test.
+#:
+#: These are the SIXTH surface of the same defect. `root_q_gap_histogram` is
+#: incremented on the same line block as `root_q_gap_sum`, from the same datum, once
+#: per rung -- so rewinding the sum and not the histogram left
+#: `sum(histogram.values()) == root_arm_gap_samples` false, and the published H2 mean
+#: per-decision while the quartiles read off the histogram stayed per-rung. Two
+#: surfaces disagreeing is the failure this module names in its own comments.
+LADDER_PER_DECISION_CLAIM_HISTOGRAMS = (
+    "root_q_gap_histogram",
+    "root_visit_gap_histogram",
 )
 
 #: Hard floor for a dynamic ladder's depth. Depth 1 is a one-ply search, which is
@@ -2096,6 +2137,10 @@ class EngineMctsPolicy:
         self._ladder_sims_override: int | None = None
         self._ladder_saturated = False
         self._ladder_worlds_agree = True
+        #: Per-rung staging for override ADDRESSES. `None` means "no ladder running",
+        #: which is the state every non-model path and every direct `_search_model`
+        #: caller sees, so those commit straight through the cap as they always did.
+        self._ladder_pending_addresses: Optional[list[dict[str, Any]]] = None
         # Measurement hook (fallback burndown plan 4 §3, direction 2): called
         # once per SUCCESSFULLY CONSTRUCTED world with the exact
         # `(context, EngineWorld, poke_engine.State)` triple search is about to
@@ -3134,8 +3179,15 @@ class EngineMctsPolicy:
         ladder to its floor and made a "dynamic 3..6" cell a fixed depth-3 cell
         wearing a range in its name.
         """
+        # DYNAMIC = either floor set, which is exactly the condition `_budget_rungs`
+        # branches on. Computed first because three things below depend on it.
+        dynamic = (
+            self._config.depth_min is not None or self._config.worlds_min is not None
+        )
         ladder = self._budget_rungs(len(worlds))
         self.stats.ladder_decisions += 1
+        if dynamic:
+            self.stats.ladder_dynamic = True
         decision: Optional[PolicyDecision] = None
         last_good: Optional[PolicyDecision] = None
         # THE OVERRIDE RATE IS ABOUT THE DECISION, NOT THE RUNGS. `_search_model`
@@ -3150,7 +3202,19 @@ class EngineMctsPolicy:
                 getattr(self.stats, name) for name in LADDER_PER_DECISION_CLAIMS
             )
 
+        def _histogram_ledger() -> tuple[Counter, ...]:
+            # COPIES. `getattr` on a Counter hands back the live object, so a
+            # snapshot that is not copied is the same object the rung then mutates.
+            return tuple(
+                Counter(getattr(self.stats, name))
+                for name in LADDER_PER_DECISION_CLAIM_HISTOGRAMS
+            )
+
         override_at_decision_start = _override_ledger()
+        histograms_at_decision_start = _histogram_ledger()
+        winning_histogram_delta: tuple[Counter, ...] = tuple(
+            Counter() for _ in LADDER_PER_DECISION_CLAIM_HISTOGRAMS
+        )
         # The WINNING rung's contribution, as a delta. Not its cumulative total:
         # taking the total after the last successful rung keeps every earlier rung's
         # vote too, which is the bug in a subtler form.
@@ -3182,12 +3246,10 @@ class EngineMctsPolicy:
         # ROWS, which are real searches worth keeping for cost analysis, an address
         # is purely a claim about the decision, so the superseded ones are DROPPED
         # (counted, never silently).
-        disagreements_at_decision_start = len(self.stats.override_disagreements)
-        disagreement_spans: list[tuple[int, int]] = []
-        winning_disagreement_span: Optional[int] = None
-        dynamic = (
-            self._config.depth_min is not None or self._config.worlds_min is not None
-        )
+        # STAGED per rung rather than appended, so a rung the ladder discards cannot
+        # consume one of the 64 cap slots -- see `_record_override_address`.
+        winning_rung_addresses: list[dict[str, Any]] = []
+        total_staged_addresses = 0
         for index, (stage_worlds, stage_sims, stage_depth) in enumerate(ladder):
             # Snapshot BEFORE the rung so a fallback raised inside it is visible,
             # and reset the per-rung signals so a stale one cannot license an
@@ -3195,8 +3257,9 @@ class EngineMctsPolicy:
             # recomputes them.
             fallbacks_before = self.stats.fallback_decisions
             override_before_rung = _override_ledger()
+            histograms_before_rung = _histogram_ledger()
             rows_before_rung = len(self.stats.root_decision_rows)
-            disagreements_before_rung = len(self.stats.override_disagreements)
+            self._ladder_pending_addresses = []
             self._ladder_saturated = False
             self._ladder_worlds_agree = True
             self._ladder_depth_override = stage_depth
@@ -3209,9 +3272,9 @@ class EngineMctsPolicy:
                 self._ladder_depth_override = None
                 self._ladder_sims_override = None
             rung_row_spans.append((rows_before_rung, len(self.stats.root_decision_rows)))
-            disagreement_spans.append(
-                (disagreements_before_rung, len(self.stats.override_disagreements))
-            )
+            staged_addresses = self._ladder_pending_addresses or []
+            self._ladder_pending_addresses = None
+            total_staged_addresses += len(staged_addresses)
             self.stats.ladder_rungs_run += 1
             if index:
                 # Rung 0's worlds were already charged at the dispatch point, with
@@ -3241,8 +3304,12 @@ class EngineMctsPolicy:
             winning_rung_delta = tuple(
                 now - before for now, before in zip(_override_ledger(), override_before_rung)
             )
+            winning_histogram_delta = tuple(
+                now - before
+                for now, before in zip(_histogram_ledger(), histograms_before_rung)
+            )
             winning_row_span = len(rung_row_spans) - 1
-            winning_disagreement_span = len(disagreement_spans) - 1
+            winning_rung_addresses = list(staged_addresses)
             if index + 1 >= len(ladder):
                 break
             next_worlds, next_sims, next_depth = ladder[index + 1]
@@ -3278,16 +3345,26 @@ class EngineMctsPolicy:
             LADDER_PER_DECISION_CLAIMS, override_at_decision_start, winning_rung_delta
         ):
             setattr(self.stats, name, start + delta)
-        # DROP the superseded addresses, keeping the winning rung's.
-        if len(self.stats.override_disagreements) > disagreements_at_decision_start:
-            keep = self.stats.override_disagreements[:disagreements_at_decision_start]
-            if winning_disagreement_span is not None:
-                start, stop = disagreement_spans[winning_disagreement_span]
-                keep.extend(self.stats.override_disagreements[start:stop])
-            self.stats.override_addresses_superseded += (
-                len(self.stats.override_disagreements) - len(keep)
-            )
-            self.stats.override_disagreements[:] = keep
+        for name, start, hist_delta in zip(
+            LADDER_PER_DECISION_CLAIM_HISTOGRAMS,
+            histograms_at_decision_start,
+            winning_histogram_delta,
+        ):
+            # In place, because callers may hold a reference to the Counter, and
+            # `Counter.__sub__` already drops non-positive entries so the rebuild
+            # cannot leave a phantom zero bucket.
+            live = getattr(self.stats, name)
+            live.clear()
+            live.update(start + hist_delta)
+        # COMMIT only the winning rung's addresses, through the cap. Everything a
+        # superseded rung staged is counted and discarded without ever having taken a
+        # slot, so the cap is spent on decisions rather than on rungs.
+        self._ladder_pending_addresses = None
+        for address in winning_rung_addresses:
+            self._commit_override_address(address)
+        self.stats.override_addresses_superseded += (
+            total_staged_addresses - len(winning_rung_addresses)
+        )
         # Stamp the rows -- but ONLY on a dynamic cell. `_search_ladder` is the
         # dispatch for EVERY model decision, so an unconditional stamp put
         # `ladder_rung`/`ladder_superseded` on a FIXED cell's rows, changing the
@@ -3992,12 +4069,13 @@ class EngineMctsPolicy:
         keep only the disagreements that happened early. A store that fills ONLY
         on the rare event cannot be crowded out by the common one.
         """
-        if len(self.stats.override_disagreements) >= _OVERRIDE_DISAGREEMENT_ADDRESSES:
-            # Non-zero means the sample is INCOMPLETE, and truncated toward the
-            # shard's early battles; `model_override_decisions` remains the count.
-            self.stats.override_disagreement_addresses_dropped += 1
-            return
-        self.stats.override_disagreements.append({
+        # STAGED when a ladder is running, so a rung the ladder is about to discard
+        # cannot consume a cap slot. Appending eagerly meant a 4-rung decision that
+        # overrode on every rung burned four slots, charged three of them to
+        # `..._addresses_dropped`, and could lose the WINNING rung's address while
+        # free slots remained -- measured at 62 pre-existing addresses. Found in
+        # review. The cap is applied at commit time in `_search_ladder`.
+        address = {
             # (battle_id, round, seat) is what replay needs -- the battle id
             # carries the seed, so the fork probe can reach this exact decision.
             "battle_id": str(getattr(context, "battle_id", "?")),
@@ -4006,7 +4084,25 @@ class EngineMctsPolicy:
             "model_argmax": model_action,
             "search_argmax": search_action_index,
             "model_choice": model_choice,
-        })
+        }
+        staging = getattr(self, "_ladder_pending_addresses", None)
+        if staging is not None:
+            staging.append(address)
+            return
+        self._commit_override_address(address)
+
+    def _commit_override_address(self, address: dict[str, Any]) -> None:
+        """Apply the first-N cap to one address. The single point that can drop."""
+        if len(self.stats.override_disagreements) >= _OVERRIDE_DISAGREEMENT_ADDRESSES:
+            # Non-zero means the sample is INCOMPLETE, and truncated toward the
+            # shard's early battles; `model_override_decisions` remains the count,
+            # so the invariant a reader can rely on is
+            #   len(override_disagreements) + override_disagreement_addresses_dropped
+            #     == model_override_decisions
+            # and NOT `len == count`, which the cap makes unsatisfiable.
+            self.stats.override_disagreement_addresses_dropped += 1
+            return
+        self.stats.override_disagreements.append(address)
 
     # Gen 3 pool's only recharge move; the recharge turn itself is public.
     _RECHARGE_MOVES = frozenset({"hyperbeam"})

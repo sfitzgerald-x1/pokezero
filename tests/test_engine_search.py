@@ -28,6 +28,7 @@ from pokezero.engine_search import (  # noqa: E402
     EngineSearchFallbackError,
     _ABORT_LOSSY_SUBCASES_ATTR,
     _FALLBACK_SAMPLE_KEY_CEILING,
+    _OVERRIDE_DISAGREEMENT_ADDRESSES,
     _FALLBACK_SAMPLES_PER_CLASS,
     _REASON_DETAIL_LIMIT,
     _bounded_reason_detail,
@@ -3336,7 +3337,13 @@ class WorldAbortRateTests(unittest.TestCase):
             if index in override_at:
                 policy.stats.override_measured_decisions += 1
                 policy.stats.model_override_decisions += 1
-                policy.stats.override_disagreements.append({"rung_marker": index})
+                # Through the STAGING path the real recorder uses, so the test
+                # exercises the cap-slot behaviour rather than bypassing it.
+                staging = getattr(policy, "_ladder_pending_addresses", None)
+                if staging is not None:
+                    staging.append({"rung_marker": index})
+                else:
+                    policy._commit_override_address({"rung_marker": index})
             if index == fail_at:
                 policy.stats.fallback_decisions += 1
                 return PolicyDecision(action_index=8, policy_id=policy.policy_id)
@@ -3467,6 +3474,186 @@ class WorldAbortRateTests(unittest.TestCase):
             with self.subTest(claim=name):
                 self.assertIn(name, fields)
 
+    def test_the_gap_histograms_are_rewound_with_their_own_sums(self) -> None:
+        """THE SIXTH SURFACE. `root_q_gap_histogram` is incremented on the same line
+        block as `root_q_gap_sum`, from the same datum, once per rung -- so rewinding
+        the sum and not the histogram left `sum(histogram.values())` and
+        `root_arm_gap_samples` disagreeing, the published H2 mean per-decision and the
+        quartiles read off the histogram per-rung. Two surfaces disagreeing is the
+        failure this module names in its own comments.
+        """
+        from pokezero.engine_search import (
+            LADDER_PER_DECISION_CLAIM_HISTOGRAMS,
+            LADDER_PER_DECISION_CLAIMS,
+        )
+        from pokezero.policy import PolicyDecision
+
+        harness = EarlyStopPolicyIntegrationTests()
+        policy = harness._policy(early_stop=False)
+        policy._config = replace(policy._config, depth_min=2, worlds_min=1,
+                                 search_depth=3, search_sims=100)
+        policy.stats = EngineMctsStats()
+        policy.policy_id = "engine-mcts"
+        rungs = []
+
+        def _fake_search_model(context, worlds, live_fold, rng):
+            rungs.append(len(worlds))
+            for name in LADDER_PER_DECISION_CLAIMS:
+                setattr(policy.stats, name, getattr(policy.stats, name) + 1)
+            for name in LADDER_PER_DECISION_CLAIM_HISTOGRAMS:
+                getattr(policy.stats, name)["0.00-0.05"] += 1
+            policy._ladder_saturated = False
+            policy._ladder_worlds_agree = True
+            return PolicyDecision(action_index=0, policy_id=policy.policy_id)
+
+        policy._search_model = _fake_search_model
+        policy._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                              object(), random.Random(0))
+        self.assertEqual(rungs, [2, 1])
+        for name in LADDER_PER_DECISION_CLAIM_HISTOGRAMS:
+            with self.subTest(histogram=name):
+                self.assertEqual(dict(getattr(policy.stats, name)), {"0.00-0.05": 1})
+        # THE INVARIANT a reader checks: the mean's denominator and the distribution
+        # must describe the same population.
+        self.assertEqual(
+            sum(policy.stats.root_q_gap_histogram.values()),
+            policy.stats.root_arm_gap_samples,
+        )
+
+    def test_a_mutable_claim_cannot_be_put_in_the_scalar_list(self) -> None:
+        # The MECHANISM defect behind the surface above, and the reason there are two
+        # lists. The generic rewind snapshots with `getattr`, which for a Counter
+        # returns a REFERENCE -- so `now - before` compares the object with itself and
+        # the rewind is a silent no-op. Review appended a histogram to the scalar
+        # tuple: no error, no effect, every test still green. So the scalar list is
+        # type-checked, and the mutable ones have their own copy-and-restore path.
+        from pokezero.engine_search import (
+            LADDER_PER_DECISION_CLAIM_HISTOGRAMS,
+            LADDER_PER_DECISION_CLAIMS,
+        )
+
+        empty = EngineMctsStats()
+        for name in LADDER_PER_DECISION_CLAIMS:
+            with self.subTest(claim=name):
+                self.assertIsInstance(
+                    getattr(empty, name), (int, float),
+                    "a mutable claim belongs in LADDER_PER_DECISION_CLAIM_HISTOGRAMS; "
+                    "the scalar rewind cannot express it and fails SILENTLY",
+                )
+        for name in LADDER_PER_DECISION_CLAIM_HISTOGRAMS:
+            with self.subTest(histogram=name):
+                self.assertIsInstance(getattr(empty, name), Counter)
+        self.assertEqual(
+            LADDER_PER_DECISION_CLAIM_HISTOGRAMS,
+            ("root_q_gap_histogram", "root_visit_gap_histogram"),
+            "pinned as a literal for the same reason the scalar list is",
+        )
+
+    def test_a_superseded_rung_does_not_consume_an_address_cap_slot(self) -> None:
+        # The cap is 64 and is spent on DECISIONS, not rungs. Appending eagerly meant
+        # a 4-rung decision that overrode on every rung burned four slots, charged
+        # three to `..._addresses_dropped`, and could lose the WINNING rung's address
+        # while free slots remained -- measured in review at 62 pre-existing
+        # addresses. Found in review.
+        policy = self._ladder_policy(override_at=(0, 1))
+        for i in range(_OVERRIDE_DISAGREEMENT_ADDRESSES - 2):
+            policy.stats.override_disagreements.append({"pre": i})
+        policy._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                              object(), random.Random(0))
+        stats = policy.stats.to_dict()
+        addresses = stats["override_disagreements"]
+        self.assertEqual(len(addresses), _OVERRIDE_DISAGREEMENT_ADDRESSES - 1,
+                         "one slot spent, for one decision")
+        self.assertEqual(addresses[-1]["rung_marker"], 1, "the WINNING rung's address")
+        self.assertEqual(stats["override_addresses_superseded"], 1)
+        self.assertEqual(stats["override_disagreement_addresses_dropped"], 0,
+                         "a superseded rung must not be charged as an overflow")
+        # THE INVARIANT, and it is `len + dropped == count`, never `len == count`:
+        # the list is capped and the count is not.
+        self.assertEqual(
+            len(addresses) + stats["override_disagreement_addresses_dropped"],
+            stats["model_override_decisions"] + (_OVERRIDE_DISAGREEMENT_ADDRESSES - 2),
+        )
+
+    def test_the_rows_lost_counter_fires_only_on_a_straddled_decision(self) -> None:
+        # Untested until review pointed it out: deleting the increment, doubling it,
+        # and dropping the `any(stop > start)` clause all survived the whole suite.
+        # That last one matters -- without it, a decision where the cap was ALREADY
+        # full (so no rung ever produced a row) is miscounted as straddled.
+        policy = self._ladder_policy(override_at=(), rows=False)
+        policy._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                              object(), random.Random(0))
+        self.assertEqual(policy.stats.ladder_decision_rows_lost, 0,
+                         "no rows at all is not a straddle")
+        # And the straddle itself: rung 0 appends, rung 1 (the winner) does not.
+        from pokezero.policy import PolicyDecision
+
+        straddle = self._ladder_policy()
+        seen = []
+
+        def _straddling(context, worlds, live_fold, rng):
+            index = len(seen)
+            seen.append(index)
+            if index == 0:
+                straddle.stats.root_decision_rows.append({"rung_marker": 0})
+            else:
+                straddle.stats.root_decision_rows_dropped += 1
+            straddle._ladder_saturated = False
+            straddle._ladder_worlds_agree = True
+            return PolicyDecision(action_index=0, policy_id=straddle.policy_id)
+
+        straddle._search_model = _straddling
+        straddle._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                                object(), random.Random(0))
+        self.assertEqual(straddle.stats.ladder_decision_rows_lost, 1)
+        self.assertEqual(
+            [r for r in straddle.stats.root_decision_rows if not r["ladder_superseded"]],
+            [], "the decision has a row and none of them is THE row",
+        )
+
+    def test_a_single_axis_cell_is_still_dynamic(self) -> None:
+        # `dynamic` is `depth_min is not None OR worlds_min is not None`, and every
+        # other test sets BOTH -- so `or` -> `and`, and dropping the worlds term,
+        # both survived. Either makes a single-axis cell emit UNSTAMPED dynamic rows,
+        # which the deploy analyzer then refuses. `_budget_rungs` fully supports
+        # single-axis, so this is reachable through a cell key today.
+        for kwargs in ({"depth_min": 2}, {"worlds_min": 1}):
+            with self.subTest(**kwargs):
+                harness = EarlyStopPolicyIntegrationTests()
+                policy = harness._policy(early_stop=False)
+                policy._config = replace(policy._config, search_depth=3,
+                                         search_sims=100, **kwargs)
+                policy.stats = EngineMctsStats()
+                policy.policy_id = "engine-mcts"
+
+                from pokezero.policy import PolicyDecision
+
+                def _fake(context, worlds, live_fold, rng, _p=policy):
+                    _p.stats.root_decision_rows.append({"m": 0})
+                    _p._ladder_saturated = False
+                    _p._ladder_worlds_agree = True
+                    return PolicyDecision(action_index=0, policy_id=_p.policy_id)
+
+                policy._search_model = _fake
+                policy._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                                      object(), random.Random(0))
+                self.assertTrue(policy.stats.to_dict()["ladder_dynamic"])
+                self.assertIn("ladder_superseded", policy.stats.root_decision_rows[0])
+
+    def test_a_fixed_cell_reports_ladder_decisions_but_not_dynamic(self) -> None:
+        # THE MERGE BLOCKER. `_search_ladder` is the dispatch for every model
+        # decision, so a FIXED cell reports `ladder_decisions == decisions` while
+        # carrying no stamps. The deploy analyzer's "is this fixed?" test was
+        # `ladder_decisions == 0`, so on this build it refused every fixed cell --
+        # including all five cells of the value-gap campaign it is named for. The
+        # predicate is `ladder_dynamic`. Found in review.
+        policy = self._ladder_policy(fixed=True)
+        policy._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                              object(), random.Random(0))
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["ladder_decisions"], 1, "it did go through the ladder")
+        self.assertFalse(stats["ladder_dynamic"], "but it is NOT a dynamic cell")
+
     def test_work_counters_are_deliberately_not_rewound(self) -> None:
         # The other half of the rule, or "rewind everything" would pass the test
         # above. A rung really did its iterations and its wall, and a cost analysis
@@ -3571,7 +3758,15 @@ class WorldAbortRateTests(unittest.TestCase):
         bad = self._ladder_policy(fail_at=0)
         bad._search_ladder(object(), [(object(), object()) for _ in range(2)],
                            object(), random.Random(0))
-        for name, policy, unsearched in (("searched", good, 0), ("fell back", bad, 1)):
+        # A FIXED cell too: `ladder_decisions` is non-zero there as well, so the
+        # identity has to hold on both. `if last_good is None` -> `or not dynamic`
+        # survived until this subTest existed.
+        fixed = self._ladder_policy(fixed=True, override_at=(0,))
+        fixed._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                             object(), random.Random(0))
+        for name, policy, unsearched in (
+            ("searched", good, 0), ("fell back", bad, 1), ("fixed cell", fixed, 0)
+        ):
             with self.subTest(decision=name):
                 st = policy.stats.to_dict()
                 self.assertEqual(st["ladder_unsearched_decisions"], unsearched)
@@ -3581,6 +3776,28 @@ class WorldAbortRateTests(unittest.TestCase):
                     + st["ladder_unsearched_decisions"],
                     st["ladder_decisions"],
                 )
+
+    def test_a_cell_that_barely_searched_also_reports_no_wall(self) -> None:
+        # The 99.99% case, which gating on `searched_decisions > 0` left open: review
+        # measured ONE searched rung against 10,000 ladder decisions reporting a
+        # 0.3 ms wall and passing a 20 s cap -- the same "unevaluable read as a pass"
+        # the 100% case was fixed for, one decision short of it. The gate is COVERAGE:
+        # most decisions the engine was asked to make must have reached a search.
+        stats = EngineMctsStats()
+        stats.decisions = stats.ladder_decisions = 10000
+        stats.ladder_unsearched_decisions = 9999
+        stats.searched_decisions = 1
+        stats.search_wall_seconds = 3.0
+        self.assertNotIn("search_wall_per_ladder_decision", stats.to_dict())
+        # At full coverage it is emitted, or the gate would block every real cell.
+        stats.ladder_unsearched_decisions = 0
+        self.assertAlmostEqual(
+            stats.to_dict()["search_wall_per_ladder_decision"], 0.0003
+        )
+        # And a 5% fallback rate -- realistic, and inside the 2% health gate's
+        # neighbourhood -- must still report, or the gate is unusable.
+        stats.ladder_unsearched_decisions = 500
+        self.assertIn("search_wall_per_ladder_decision", stats.to_dict())
 
     def test_a_ladder_cell_that_never_searched_reports_no_wall_at_all(self) -> None:
         # `ladder_decisions` is charged BEFORE the first rung runs, so a cell whose

@@ -103,6 +103,35 @@ round 3** → 0 of 36. Twice a round closed at zero survivors and the next round
 more, both times because the screen was aimed at plumbing rather than at rules, or at
 one surface of a defect rather than all of them.
 
+## 0f. ROUND 4 — a MERGE BLOCKER created by a round-3 fix, and the sixth surface
+
+Round 4 found a defect that only existed because of round 3: the two round-3 fixes
+were correct separately and broke each other.
+
+| # | finding | why it mattered | resolution |
+|---|---|---|---|
+| **R4-1** | **MERGE BLOCKER.** `ladder_decisions` is charged for EVERY model decision — `_search_ladder` is the dispatch — so a **fixed** cell reports `ladder_decisions == decisions` while carrying no row stamps, because round 3 correctly made stamping conditional. The deploy analyzer's "is this fixed?" test was `ladder_decisions == 0`, true only for shards banked *before* the feature | `analyze_value_gap.py` would `SystemExit` on the first seat of the first shard of **all five** value-gap cells — the campaign the file is named for. Verified: `ladder_decisions = 1`, `rows stamped = False`, refusal raised | the engine emits `ladder_dynamic`; every consumer branches on that. `ladder_decisions > 0` is not the same question |
+| **R4-3** | a **SIXTH surface**: `root_q_gap_histogram` / `root_visit_gap_histogram` | incremented on the same line block as `root_q_gap_sum`, from the same datum, once per rung. Rewinding the sum and not the histogram left `sum(histogram) == root_arm_gap_samples` **false** — the published H2 mean per-decision, the quartiles read off the histogram per-rung. Two surfaces disagreeing is the failure this module names in its own comments | `LADDER_PER_DECISION_CLAIM_HISTOGRAMS`, with its own mechanism |
+| **R4-4** | the generic rewind **cannot express a Counter, and no-ops silently if you try** | `getattr` on a mutable returns a REFERENCE, so `now - before` compares the object with itself. Review appended a histogram to the scalar tuple: no error, no effect, every test green. **The obvious fix for R4-3 would have done nothing** | copy-snapshot and restore for mutables; the scalar list is now type-asserted, so a mutable put there fails loudly |
+| **R4-5** | the wall gate fixed 100% fallback, not 99.99% | one searched rung against 10,000 decisions reported 0.3 ms and passed a 20 s cap — the same "unevaluable read as a pass" it was raised for, one decision short | gated on COVERAGE (≥90% of decisions reached a search), not on `> 0` |
+| **R4-6** | superseded rungs **consumed address cap slots** | the 64-slot cap is meant to be spent on decisions. A 4-rung decision overriding on every rung burned four slots, charged three as overflow, and could lose the **winning** rung's address while free slots remained | addresses are STAGED per rung and only the winner's are committed through the cap. And the reading rule I had written — `len(addresses) == model_override_decisions` — is **unsatisfiable** by construction; it is `len + dropped == count` |
+| **R4-2** | the refusal was `SystemExit` inside a per-shard loop, and probed with `any` | one bad seat aborted the whole run and reported nothing for 200 good shards; and `any` passed a doc where only SOME rows were stamped, so the unstamped remainder silently rung-weighted — the guard's own failure wearing a green light | non-fatal `_UnstampedShard`, skip-and-tally, `all` not `any`, non-zero exit with the count |
+| **R4-7 / R4-8 / R4-9 / R4-10** | `ladder_decision_rows_lost` untested (3 survivors); `dynamic` untested on a **single-axis** cell (2 survivors — either mutant makes a worlds-only cell emit unstamped dynamic rows, which R4-1 then refuses); the three-term identity untested on a fixed cell; `analyze_seltune` labelled fixed cells as having a ladder | — | all covered; the single-axis case is reachable through a cell key today even though all three current cells set both floors |
+| `depth_reached_mean` | correctly left as WORK, but the limitation was undocumented | on a dynamic cell it mixes rungs run at **different depth caps**, so the shallow, most-numerous rungs dominate it — it is not "how deep did search get" for a decision | stated in the exclusion block, with `ladder_depth_rungs` vs `ladder_unsaturated_stops` named as the question to ask instead |
+
+**Mutation screen: 55 seeded across four rounds, 55 killed.** Progression: 7/9 surviving
+→ 0/15 → 4/20 → 0/25 → 4 more → 0/36 → **6/11 in round 4** → 0/55.
+
+**The pattern, stated once because it is the transferable finding.** One defect —
+per-rung accounting read as per-decision — had **six** surfaces: counters, rows,
+addresses, consumers, H2's gap sums, and the gap histograms. Four review rounds each
+found one or two more. What finally closed it was not another patch but *enumerating
+the class* (`LADDER_PER_DECISION_CLAIMS`) and pinning the enumeration by literal — and
+even that needed a second mechanism, because the first one silently no-ops on the
+mutable members. A fix aimed at one surface of a defect is not a fix; and a
+zero-survivor mutation screen means only that the screen and the code share a blind
+spot.
+
 ## 1. What "dynamic" means here, and why this target
 
 **Today the per-decision budget is fixed.** Every decision spends `search_sims`
