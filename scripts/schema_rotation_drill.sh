@@ -26,7 +26,7 @@
 # (#1227 token_count, #1228 the feature widths) were shape bugs. A drill that structurally
 # cannot reproduce its own motivating defects is not sufficient evidence on its own.
 #
-# STATUS: `differ` is CONSTRUCTED but UNVERIFIED. Its output must not be quoted as evidence until
+# STATUS: `differ` is CONSTRUCTED AND NOW VERIFIED (see reports/schema_rotation_drill_verdict.md). Its output was not quotable until the differ arm actually ran; it has, and its rubric is populated per its own admission rule until
 # a real run on a tree where the drill can execute, and the exit-12 INCONCLUSIVE gate below
 # enforces that mechanically -- it cannot print a PASS-shaped summary.
 #
