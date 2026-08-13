@@ -257,7 +257,19 @@ class TransformerPolicyConfig:
     feedforward_dim: int = 256
     dropout: float = 0.1
     action_schema_version: str = ACTION_SCHEMA_VERSION
-    observation_schema_version: str = OBSERVATION_SCHEMA_VERSION
+    # NAMES v2.2, it does not read the global. A dataclass default is frozen at class-definition
+    # time, so `= OBSERVATION_SCHEMA_VERSION` stamped whatever the process default happened to be
+    # -- meaning a config built without naming its schema silently re-aimed the moment the default
+    # rotated, and `__post_init__` then resolved all three widths from that new stamp. #1244 fixed
+    # exactly this for `ObservationSpec.schema_version` and `PokeZeroObservationV0.schema_version`
+    # (both now `= OBSERVATION_SCHEMA_VERSION_V2_2`) and missed this third one, which is the same
+    # field on the same kind of self-describing artifact.
+    #
+    # v2.2 is the correct value because it is the schema fresh artifacts are stamped with today; a
+    # caller wanting another one names it, which is the whole point. This retires the ledger's
+    # `implicit:TransformerPolicyConfig` surface: `derive_surfaces` identifies a surface BY its
+    # field default being one of the globals, so naming a version removes the class.
+    observation_schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2
     category_vocab: tuple[str, ...] = ()
     category_oov_buckets: int = 0
     value_activation: str = "tanh"
