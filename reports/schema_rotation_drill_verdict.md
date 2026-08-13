@@ -69,13 +69,56 @@ fresh artifact get" — the legitimate question — and the rubric simply does n
 - `test_observation_spec_v2_1.py::ConfigDualSchemaTest::test_observation_spec_from_model_config_resolves_schema_and_width`
   compares two whole `ObservationSpec`s that differ only in `schema_version`.
 
+## The shape half: now COVERED, and one site wide
+
+`DRILL_SHAPE=differ` has been run to completion on the same tree, full scope, three arms. It was
+previously "constructed but unverified" and is no longer.
+
+```
+raw failures, rotated (differ)    43
+subtracted, stable baseline       12   (0 unstable)
+subtracted, ADDING a schema        8
+subtracted, compiled Rust         10
+attributable                      13
+expected (shape rubric)            8   ->  0 MISSING: no dead pins
+UNEXPECTED                         5
+```
+
+The two arms' attributable sets differ by **exactly one id**:
+
+| arm | attributable | sanctioned | unexplained |
+|---|---|---|---|
+| identical | 12 | 7 | 5 |
+| differ | 13 | 8 | 5 (the same 5) |
+
+The one extra is
+`test_observation_spec_v2_1.py::ConfigDualSchemaTest::test_from_dict_width_defaults_are_schema_keyed`,
+which restores a config with `numeric_feature_count` REMOVED and asserts it takes its schema's width
+default -- 155 for the fresh default, under the comment "The fresh default config is v2.2-stamped;
+its schema-keyed width default is 155." Its subject is what WIDTH a fresh artifact gets: it ANSWERS
+"nobody said" for the width, which is the shape analogue of class (iii). It breaks under `differ`
+(154) and not under `identical` (155), so it is the one breakage the identical arm structurally
+cannot produce.
+
+**The honest reading of "one site wide" is not that the arm is powerful — it is that almost nothing
+in this suite pins the default's width.** That is worth knowing either way, and it is the first time
+it has been measured rather than assumed.
+
+That the SAME five sites are unexplained in both arms is itself evidence: they break on a naming
+change alone, so they are naming failures, not shape conflations, and they belong to the residue
+above rather than to a second population.
+
+The differ rubric was committed EMPTY until this run, and the run that produced it aborted at exit 7
+("the expected-breakages file has no entries") for exactly that reason -- the emptiness working as
+designed, refusing a scored verdict without a stated pass condition. It is populated per its own
+admission rule: one row at a time, each with its demonstration recorded, and the five unexplained
+sites deliberately NOT admitted, because an entry justified by "it broke" rather than by what it
+asserts is the laundering the emptiness was protecting against.
+
 ## What this claim does NOT cover
 
-- **The shape half.** The synthetic schema is shape-identical to the OUTGOING DEFAULT by design, so a
-  site hardcoding that schema's width sees no change in this arm. `DRILL_SHAPE=differ` is the arm for
-  that half; its preconditions pass and `PRECONDITION 3` proves it discriminates (a width pin passes
-  under `identical`, fails under `differ`), but a full scored `differ` run has not been done. Until it
-  has, the shape half is **UNCOVERED**.
+- **The shape half is now covered** -- see the section above. Its coverage is ONE site wide, which is a
+  fact about the suite rather than about the arm.
 - **The compiled Rust encoder.** `rust/pokezero-search/src/encoder.rs` dispatches on schema version in
   compiled code. This drill edits Python in a worktree and never rebuilds the crate, so 10
   `EngineEnvTest` failures are excluded by cause. Anything the rotation would break *inside* the

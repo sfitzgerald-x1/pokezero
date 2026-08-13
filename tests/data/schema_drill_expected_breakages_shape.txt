@@ -10,8 +10,64 @@
 # behaviour, or let a real SHAPE conflation hide behind an entry admitted for the naming run. That
 # second one is the whole reason the naming rubric carries an admission rule.
 #
-# UNPOPULATED ON PURPOSE. This mode has never produced a trustworthy run -- its first scored
-# attempt put a test in both "unexpected" and "did-not-break", and the census-floor defect meant
-# every encode raised at the validator. Populating this file from a run whose premise was broken
-# would launder that. The intended first use is: run it, read every breakage, and admit only the
-# ones demonstrated to be legitimate width-naming, one at a time, with the demonstration recorded.
+# WAS UNPOPULATED ON PURPOSE, and the note said the intended first use is: "run it, read every
+# breakage, and admit only the ones demonstrated to be legitimate width-naming, one at a time, with
+# the demonstration recorded." That is what happened, and it happened only after the causes that made
+# earlier attempts untrustworthy were closed: the both-buckets symptom (an inert `_norm_id`, `\$`
+# matching a literal dollar), the census-floor defect (the floor now narrows WITH the width, both
+# derived from the outgoing default), and the arm cloning v4 while the outgoing default was v2.2.
+#
+# The run this is derived from: DRILL_SHAPE=differ, full scope, three arms, on the tree with #1244
+# landed. 43 raw failures, minus 12 stable baseline (two runs intersected, 0 unstable), minus 8
+# control (caused by ADDING a schema, not by rotating), minus 10 native-Rust excluded by cause
+# = 13 attributable. That run ABORTED at exit 7 -- "the expected-breakages file has no entries" --
+# which is this file's emptiness working as designed: no scored verdict without a stated pass
+# condition.
+
+# ---------------------------------------------------------------------------------------------
+# (1) THE SEVEN IDENTITY PINS. A width change also moves the version string -- v5-drill is not v2.2 --
+# so every class-(iii) pin breaks here too. Listed rather than included by reference, so this file is
+# a complete pass condition on its own and cannot silently diverge from a file it points at.
+test_observation.py::ObservationSpecTest::test_the_fresh_artifact_default_is_v2_2
+test_observation_spec_v3.py::SchemaTableTest::test_v2_2_IS_the_default_not_v3
+test_observation_spec_v4.py::V4SchemaTableTest::test_v2_2_IS_the_default_not_v4
+test_turn_merged_encode.py::SchemaTableTest::test_v2_2_IS_the_default
+test_observation_spec_v2_1.py::SpecTableTest::test_v2_2_IS_the_fresh_default
+test_linear_policy.py::LinearPolicyTest::test_linear_feature_fingerprint_payload_tracks_extractor_source_and_schemas
+test_token_format_doc.py::TokenFormatDocSelfValidationTest::test_committed_dump_matches_live_regeneration_byte_for_byte
+
+# ---------------------------------------------------------------------------------------------
+# (2) THE SHAPE PIN. One row, and it is the entire reason this arm exists -- the only breakage the
+# `identical` arm structurally cannot produce.
+#
+# DEMONSTRATION, as this file's admission rule requires:
+#   test_from_dict_width_defaults_are_schema_keyed restores a TransformerPolicyConfig with
+#   `numeric_feature_count` REMOVED from the payload, and asserts the restored config takes its
+#   schema's width default -- 121 for v2, 140 for v2.1, and for the fresh default 155, under the
+#   comment "The fresh default config is v2.2-stamped; its schema-keyed width default is 155."
+#   Its subject is what WIDTH a fresh artifact gets. It ANSWERS "nobody said" for the width rather
+#   than consuming that answer, which is the shape analogue of class (iii) exactly.
+#   Under `differ` the default's width is 154 and it breaks. Under `identical` it is 155 and it does
+#   not. Admitted as legitimate width-naming.
+#
+# Measured, not assumed -- the two arms' attributable sets differ by exactly this one id:
+#   identical  12 attributable  ->  7 sanctioned + 5 unexplained
+#   differ     13 attributable  ->  8 sanctioned + 5 unexplained  (the same 5)
+# So the shape half of the class is COVERED rather than merely constructed, and its coverage is ONE
+# site wide on this tree. That is a small number and it is the real one; the honest reading is that
+# almost nothing in this suite pins the default's width, not that the arm is powerful.
+test_observation_spec_v2_1.py::ConfigDualSchemaTest::test_from_dict_width_defaults_are_schema_keyed
+
+# ---------------------------------------------------------------------------------------------
+# NOT ADMITTED, deliberately: the five sites both arms leave unexplained.
+#   test_foulplay_bridge.py::...::test_capture_writes_p1_only_rollouts_and_preserves_partial_output
+#   test_golden_corpus.py::...::test_one_game_generates_a_verifiable_corpus
+#   test_observation_schema_flag.py::...::test_collect_and_train_v2_2_end_to_end_and_cross_checks
+#   test_observation_spec_v2_1.py::...::test_fresh_config_stamps_v2_2_and_its_width
+#   test_observation_spec_v2_1.py::...::test_observation_spec_from_model_config_resolves_schema_and_width
+# They break in BOTH arms, so they are NAMING failures, not shape failures, and they belong to the
+# identity verdict's residue (reports/schema_rotation_drill_verdict.md): two are class-(iii) sites
+# missing from the identity rubric, one is a genuine conflation (a hardcoded version literal checked
+# against default-collected rows), two are unadjudicated. Admitting them here would be the exact
+# laundering this file's emptiness protected against -- an entry justified by "it broke" rather than
+# by what it asserts.
