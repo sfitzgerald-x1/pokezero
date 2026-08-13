@@ -13,7 +13,7 @@ test_observation.py::ObservationSpecTest::test_the_fresh_artifact_default_is_v4
 test_observation_spec_v3.py::SchemaTableTest::test_v3_is_not_the_default
 test_observation_spec_v4.py::V4SchemaTableTest::test_v4_IS_the_default
 test_turn_merged_encode.py::SchemaTableTest::test_v2_2_IS_the_default
-test_observation_spec_v2_1.py::SpecTableTest::test_schema_keyed_censuses
+test_observation_spec_v2_1.py::SpecTableTest::test_v2_2_IS_the_fresh_default
 # Fingerprint stamping: the payload HASHES the observation schema, so the fingerprint must move
 # when the default does. A fingerprint that survived a schema rotation would be the bug.
 test_linear_policy.py::LinearPolicyTest::test_linear_feature_fingerprint_payload_tracks_extractor_source_and_schemas
@@ -31,10 +31,11 @@ test_token_format_doc.py::TokenFormatDocSelfValidationTest::test_committed_dump_
 # them -- a pin sharing a test with membership assertions breaks under a rotation for either
 # reason, so deleting the pin leaves the test still breaking and the dead-pin detector blind.
 #
-# Measured against this base, not assumed: THREE rows asserted tuples the drill mutates, not the
-# two the task described. The third is
-# `test_observation_spec_v2_1.py::SpecTableTest::test_schema_keyed_censuses`, which asserts a
-# census table rather than a schema-membership tuple -- a different split, left for the rebase.
+# Measured against this base, not assumed: THREE rows mixed a read of the process default with
+# assertions a rotation does not touch, not the two the task described. All three are now split.
+# I first judged the third (`test_schema_keyed_censuses`) to be "a different split with a different
+# risk" and deferred it; it was the same split, carrying TWO default reads rather than one.
+# Deferring on a guess was the error, not the judgement.
 #
 # And TWO rows name methods that exist nowhere under tests/ on this base
 # (`test_the_fresh_artifact_default_is_v4`, `test_v4_IS_the_default`), because this rubric was
