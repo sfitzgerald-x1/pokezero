@@ -21,6 +21,7 @@ Two things are pinned here:
 """
 from __future__ import annotations
 
+import re
 import unittest
 
 from pokezero import observation as obs
@@ -406,6 +407,80 @@ class EachGateSiteReadsItsOwnTupleTest(unittest.TestCase):
                     "exists to deny.",
                 )
 
+    # Which BODY each tuple guards. Counting tuples per function does not see a swap of the two
+    # branch bodies with the tuples left in place -- review demonstrated exactly that:
+    #     if schema_version in V3_PROJECTION_...:   return v4_numeric_index(...)
+    #     if schema_version in FEATURE_PACK_...:    return v3_numeric_index(...)
+    # 18 tests / 92 subtests still passed. Per-function counts are unchanged ({FEATURE_PACK: 1,
+    # V3_PROJECTION: 1}), these functions assign no gate variables so EXPECTED_ASSIGNMENTS has no
+    # purchase, and the synthetic-schema test compares against v4, which moved with it. The file
+    # asserted THAT each site reads two named tuples and never WHICH branch each tuple guards --
+    # which is the "v4 uses the v3 projection" claim this change exists to deny.
+    EXPECTED_BODIES = {
+        ("numeric_index_for_schema", "FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS"): {
+            "v4_numeric_index"},
+        ("numeric_index_for_schema", "V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS"): {
+            "v3_numeric_index"},
+        ("numeric_index_if_present_for_schema", "FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS"): {
+            "V4_DROPPED_LEGACY_NUMERIC_INDICES"},
+        ("numeric_index_if_present_for_schema", "V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS"): {
+            "V3_DROPPED_LEGACY_NUMERIC_INDICES", "V4_ONLY_NUMERIC_INDICES"},
+    }
+
+    def test_each_tuple_guards_the_body_belonging_to_its_own_projection(self) -> None:
+        import ast
+        from pathlib import Path
+
+        source = (Path(__file__).resolve().parents[1] / "src/pokezero/showdown.py").read_text(
+            encoding="utf-8"
+        )
+        tree = ast.parse(source)
+        found: dict[tuple[str, str], set[str]] = {}
+        for function in ast.walk(tree):
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(function):
+                if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+                    continue
+                tuples = {
+                    c.id
+                    for op, c in zip(node.test.ops, node.test.comparators)
+                    if isinstance(op, ast.In) and isinstance(c, ast.Name)
+                    and c.id.endswith("_OBSERVATION_SCHEMA_VERSIONS")
+                }
+                if not tuples:
+                    continue
+                # Every NAME the guarded body mentions, so the assertion is about what the branch
+                # reaches rather than about its exact statement shape.
+                body_names = {
+                    n.id for stmt in node.body for n in ast.walk(stmt) if isinstance(n, ast.Name)
+                }
+                for tuple_name in tuples:
+                    key = (function.name, tuple_name)
+                    found.setdefault(key, set()).update(body_names)
+
+        for key, expected in self.EXPECTED_BODIES.items():
+            with self.subTest(function=key[0], tuple=key[1]):
+                self.assertIn(key, found, f"{key[0]} no longer gates on {key[1]}")
+                missing = expected - found[key]
+                self.assertEqual(
+                    missing, set(),
+                    f"the branch guarded by {key[1]} in {key[0]} does not reach {sorted(missing)}. "
+                    f"It reaches {sorted(found[key])}. Swapping two branch bodies leaves every "
+                    "count and every tuple name unchanged, so only this assertion sees it -- and "
+                    "the result asserts that one projection's schemas use the other's indices.",
+                )
+                # And it must NOT reach the sibling projection's body.
+                for other_key, other_expected in self.EXPECTED_BODIES.items():
+                    if other_key[0] != key[0] or other_key == key:
+                        continue
+                    crossed = other_expected & found[key]
+                    self.assertEqual(
+                        crossed, set(),
+                        f"the branch guarded by {key[1]} also reaches {sorted(crossed)}, which "
+                        f"belongs to {other_key[1]}. The two projections have been crossed.",
+                    )
+
     def test_no_other_function_gates_on_a_property_tuple_unnoticed(self) -> None:
         """A new gate site must be added to EXPECTED deliberately, not appear silently."""
         unexpected = sorted(set(self._membership_reads()) - set(self.EXPECTED))
@@ -557,6 +632,10 @@ class NoNewIdentityGateTest(unittest.TestCase):
         "OBSERVATION_SCHEMA_VERSION",
     }
 
+    # The schema namespace. Any string literal containing it is naming a schema, however it is
+    # assembled -- which is what catches a concatenation that matches no complete version string.
+    VERSION_NAMESPACE = "pokezero.observation."
+
     # The version STRINGS. A gate can name a schema without naming a constant, and the scanner saw
     # only `ast.Name`, so `== "pokezero.observation.v4"` was invisible.
     VERSION_LITERALS = {
@@ -601,23 +680,82 @@ class NoNewIdentityGateTest(unittest.TestCase):
                     found |= names_in(element)
             return found
 
+        tree = ast.parse(source)
+
+        # Local ALIASES of a version constant. `_V4 = OBSERVATION_SCHEMA_VERSION_V4` then `== _V4`
+        # is an identity gate whose token is not in VERSION_CONSTANTS. Collected first so the
+        # sweep below can resolve them.
+        aliases: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                if isinstance(target, ast.Name) and names_in(node.value) & (
+                    self.VERSION_CONSTANTS | self.VERSION_LITERALS
+                ):
+                    aliases.add(target.id)
+
         def offends(node) -> bool:
-            tokens = names_in(node)
-            return bool(tokens & self.VERSION_CONSTANTS) or bool(tokens & self.VERSION_LITERALS)
+            """Any version token ANYWHERE in this operand, however it is spelled.
+
+            Falls back to `ast.unparse` rather than enumerating node types. The type-by-type version
+            missed a subscript (`SUPPORTED[-1]`), a call (`frozenset({V4})`), a concatenation
+            (`"pokezero.observation." + "v4"`), and a local alias -- four more spellings after four
+            had already been added, which is the point at which enumerating node types stops being
+            the right approach.
+            """
+            text = ast.unparse(node)
+            if any(re.search(rf"\b{re.escape(t)}\b", text)
+                   for t in self.VERSION_CONSTANTS | aliases):
+                return True
+            if any(lit in text for lit in self.VERSION_LITERALS):
+                return True
+            # The literal PREFIX, not only whole version strings. `"pokezero.observation." + "v4"`
+            # unparses to two fragments and matches no complete literal, so a concatenation slipped
+            # through. Any string mentioning the schema namespace is naming a schema.
+            if self.VERSION_NAMESPACE in text:
+                return True
+            # INDEXING a schema tuple yields one specific version, so it is an identity gate even
+            # though the tuple name is the approved form. `in SUPPORTED_...` (no subscript) is
+            # legitimate -- "is this a supported schema" -- and must stay unflagged, which is why
+            # this tests for a Subscript rather than for the name.
+            return any(
+                isinstance(inner, ast.Subscript)
+                and isinstance(inner.value, ast.Name)
+                and inner.value.id.endswith("_OBSERVATION_SCHEMA_VERSIONS")
+                for inner in ast.walk(node)
+            )
 
         hits: list[tuple[int, str]] = []
-        for node in ast.walk(ast.parse(source)):
-            if not isinstance(node, ast.Compare):
-                continue
-            for op, comparator in zip(node.ops, node.comparators):
-                if not isinstance(op, (ast.Eq, ast.NotEq, ast.In, ast.NotIn)):
-                    continue
-                # BOTH operands. `node.left` was never inspected, so simply writing the comparison
-                # the other way round defeated the scan.
-                if isinstance(op, (ast.Eq, ast.NotEq)):
-                    if offends(comparator) or offends(node.left):
+        for node in ast.walk(tree):
+            # `is` / `is not` -- ONE CHARACTER from `==`, and because both operands reference the
+            # same module constant it is True at runtime, so it is a working identity gate. It was
+            # absent from the operator filter entirely.
+            if isinstance(node, ast.Compare):
+                for op, comparator in zip(node.ops, node.comparators):
+                    if not isinstance(
+                        op, (ast.Eq, ast.NotEq, ast.Is, ast.IsNot, ast.In, ast.NotIn)
+                    ):
+                        continue
+                    if isinstance(op, (ast.Eq, ast.NotEq, ast.Is, ast.IsNot)):
+                        # BOTH operands: `node.left` was never inspected, so writing the comparison
+                        # the other way round defeated the scan.
+                        if offends(comparator) or offends(node.left):
+                            hits.append((node.lineno, ast.unparse(node)))
+                    elif offends(comparator):
                         hits.append((node.lineno, ast.unparse(node)))
-                elif offends(comparator):
+
+            # `match schema_version: case "pokezero.observation.v4":` -- no Compare node at all.
+            elif isinstance(node, ast.Match):
+                for case in node.cases:
+                    if offends(case.pattern):
+                        hits.append((case.pattern.lineno, f"case {ast.unparse(case.pattern)}"))
+
+            # `.startswith("pokezero.observation.v4")` / `.endswith(...)` -- not a comparison, and
+            # a prefix test on a version string is an identity gate with extra steps.
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in ("startswith", "endswith") and any(
+                    offends(arg) for arg in node.args
+                ):
                     hits.append((node.lineno, ast.unparse(node)))
         return hits
 
@@ -660,6 +798,29 @@ class NoNewIdentityGateTest(unittest.TestCase):
             "the MUTABLE DEFAULT": "x = spec.schema_version == OBSERVATION_SCHEMA_VERSION",
             "attribute form": "x = spec.schema_version == _obs.OBSERVATION_SCHEMA_VERSION_V4",
             "literal in a tuple": 'x = spec.schema_version in ("pokezero.observation.v3",)',
+            # Round-2 review found these ELEVEN more, four of them demonstrated as live gates
+            # injected into showdown.py that left this file at 18 passed / 92 subtests.
+            "`is` (True at runtime; one char from ==)":
+                "x = spec.schema_version is OBSERVATION_SCHEMA_VERSION_V4",
+            "`is not`": "x = spec.schema_version is not OBSERVATION_SCHEMA_VERSION_V3",
+            "a local alias of a version constant":
+                "_V4 = OBSERVATION_SCHEMA_VERSION_V4\nx = spec.schema_version == _V4",
+            "a subscript of the supported tuple":
+                "x = spec.schema_version == SUPPORTED_OBSERVATION_SCHEMA_VERSIONS[-1]",
+            "a call as the comparator":
+                "x = spec.schema_version in frozenset({OBSERVATION_SCHEMA_VERSION_V4})",
+            "startswith on a version literal":
+                'x = spec.schema_version.startswith("pokezero.observation.v4")',
+            "endswith on a version literal":
+                'x = spec.schema_version.endswith("pokezero.observation.v4")',
+            "match/case on a version literal":
+                'match spec.schema_version:\n    case "pokezero.observation.v4":\n        x = 1',
+            "a concatenated literal":
+                'x = spec.schema_version == "pokezero.observation." + "v4"',
+            "reversed with `is`":
+                "x = OBSERVATION_SCHEMA_VERSION_V4 is spec.schema_version",
+            "the mutable default via `is`":
+                "x = spec.schema_version is OBSERVATION_SCHEMA_VERSION",
         }
         for label, source in cases.items():
             with self.subTest(spelling=label):

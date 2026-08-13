@@ -4398,8 +4398,16 @@ def observation_from_player_state(
     # separate is what lets v4 write every v3 current-state signal while encoding no history.
     schema_turn_merged = spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
     # v2.2 carries every v2.1 block forward unchanged; only the transition surface differs. v4
-    # keeps those blocks too (PP-validity bits, sub HP, the per-mon pinned Tier-2 conclusions —
-    # all current-state surfaces that survive the region trim).
+    # keeps the PP-validity bits and substitute HP — the current-state surfaces that survive the
+    # region trim.
+    #
+    # NOT the per-mon pinned Tier-2 conclusions, which an earlier version of this comment listed
+    # here. v4 RETIRES those, as the block ~30 lines below says in caps, and the exclusion is
+    # spelled `schema_v2_1 and not schema_v4` for exactly that reason. The wrong rule mattered more
+    # than a wrong set would have: the set is checkable against the tuple, but a future schema's
+    # author deciding whether to join this lineage has only the rule, and this is where that
+    # decision gets made. See V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS in observation.py, which
+    # cites this site as its authority.
     # Stated as its own lineage rather than derived from the two gates above. The disjunction
     # `turn_merged or v4 or == V2_1` happened to enumerate the same four schemas, but it said so
     # by accident of which OTHER gates were true -- so changing an unrelated gate silently moved
