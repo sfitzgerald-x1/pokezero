@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+import ast
 import subprocess
 import sys
 import unittest
@@ -26,7 +27,7 @@ REPO = Path(__file__).resolve().parents[1]
 # everyone else and the gate silently cannot run. Caught by `git add` refusing the path.
 ALLOWLIST = REPO / "tests" / "data" / "schema_default_allowlist.json"
 # The most rows the allowlist has ever legitimately held. Only ever lowered.
-HIGH_WATER_MARK = 322
+HIGH_WATER_MARK = 249
 LEDGER = REPO / "scripts" / "schema_default_ledger.py"
 
 
@@ -194,6 +195,70 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
             found[name] = int(count)
         return found
 
+    def _rendered_kinds_table(self) -> str:
+        """The kinds table AS THE TOOL RENDERS IT. The docstring must contain this verbatim."""
+        proc = subprocess.run(
+            [sys.executable, str(LEDGER), "--render-kinds-table"], capture_output=True, text=True
+        )
+        if proc.returncode == 2:
+            raise unittest.SkipTest(
+                "the ledger reported UNPARSED file(s), so the counts are measured against an "
+                "incomplete denominator and comparing them to the docstring proves nothing."
+            )
+        self.assertEqual(
+            proc.returncode, 0,
+            f"`--render-kinds-table` exited {proc.returncode}.\n{proc.stderr[-2000:]}",
+        )
+        rendered = proc.stdout.rstrip("\n")
+        # NON-VACUITY, tied to a measurement rather than to a constant. `render_kinds_table` returns
+        # '' when the tool emits no non-surface kinds, and an empty docstring region would then
+        # compare equal to it -- assertEqual('', '') passes, which is the exact vacuity this file
+        # exists to prevent. The empty case is ALSO the migration's goal state (bare-const and
+        # default-spec burned down to 0), so it cannot simply be forbidden; it has to be
+        # DISTINGUISHED from a tool that produced nothing for any other reason.
+        rows = _derive()
+        kinds = sorted(
+            {r["kind"] for r in rows if not r["kind"].startswith("implicit:") and r["kind"] != "UNPARSED"}
+        )
+        lines = [l for l in rendered.split("\n") if l.strip()]
+        self.assertEqual(
+            len(lines), len(kinds),
+            f"the rendering has {len(lines)} row(s) but the tool emits {len(kinds)} non-surface "
+            f"kind(s) {kinds}. An empty or short rendering compared against an empty or short "
+            "docstring region would pass while checking nothing.",
+        )
+        return rendered
+
+    def _docstring_kinds_region(self) -> tuple[str, int, int]:
+        """(region, start, end) -- the docstring span the tool owns, blank lines dropped in `region`.
+
+        This is the region the tool owns. Extracting a REGION rather than matching rows means an
+        extra row, a duplicated row, a stale row, or a reformatted row all land inside it and all
+        show up as a diff.
+
+        The SPAN is returned alongside the text because the caller needs to look at everything
+        outside it. Computing "outside" as `doc.replace(region, "", 1)` was wrong: `region` has had
+        its blank lines dropped, so it is not necessarily a literal substring of the docstring, and a
+        single blank line inserted between two generated rows made the replace a no-op. Every kind
+        name then appeared "outside" and the test failed with a message naming the wrong cause --
+        the misdiagnosis class this file polices elsewhere. Slicing by index cannot do that.
+        """
+        doc = self._docstring()
+        try:
+            start = doc.index("is any of:")
+            start = doc.index("\n", start) + 1
+            end = doc.index("  implicit:", start)
+        except ValueError:
+            self.fail(
+                "the ledger docstring no longer has an `is any of:` ... `  implicit:` kinds table, "
+                "so this guard has nothing to compare. An empty region would make the comparison "
+                "vacuous, which is the failure mode this whole test exists to prevent."
+            )
+        return "\n".join(l for l in doc[start:end].split("\n") if l.strip()), start, end
+
+    def _docstring(self) -> str:
+        return ast.get_docstring(ast.parse(LEDGER.read_text(encoding="utf-8"))) or ""
+
     def _derived_counts(self) -> dict[str, int]:
         counts = Counter(
             row["kind"].split(":", 1)[1] for row in _derive() if row["kind"].startswith("implicit:")
@@ -232,15 +297,232 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
                     f"derives {derived[surface]}.",
                 )
 
+    def test_the_docstring_kinds_table_is_byte_equal_to_the_tool_rendering(self) -> None:
+        """The kinds table is GENERATED. Compare it byte-for-byte; do not parse it.
+
+        This replaces five rounds of narrowing a regex that tried to RECOGNISE a hand-written
+        table. Each round closed the escapes the previous reviewer named and left the next ones
+        open: first two reformats, then seventeen more -- an uppercase or capitalised kind name, an
+        underscore, a `*` or `-` bullet the table already uses elsewhere, a trailing colon in the
+        house style of the very next row, `[16]`, `n=16`, `(16 rows)` which this docstring itself
+        uses nine lines below, the count moved to the following line. Plus a containment check that
+        masked an unreadable row whenever its text was a substring of a readable one, and
+        last-write-wins on a duplicated row, so a WRONG count inserted above the right one was
+        discarded in silence.
+
+        A grammar cannot win that. Every version was one character from the next escape, and each
+        fix arrived with a claim that the property now held. So there is no grammar: the tool emits
+        the block, and the docstring region must equal it exactly. A reformat is a diff rather than
+        a disappearance. A duplicate row is a diff. A retired kind is a diff. A wrong count is a
+        diff. Regenerate with:
+
+            python scripts/schema_default_ledger.py --render-kinds-table
+        """
+        region, span_start, span_end = self._docstring_kinds_region()
+        self.assertEqual(
+            region, self._rendered_kinds_table(),
+            "the ledger docstring's kinds table is not byte-equal to what the tool renders.\n"
+            "Regenerate it:  python scripts/schema_default_ledger.py --render-kinds-table\n"
+            "This table is GENERATED, not hand-maintained -- any difference (a changed count, an "
+            "added or retired kind, a duplicated row, a reformatted row, stray prose inside the "
+            "region) is a real difference and none of them can hide from a byte comparison.",
+        )
+        # Byte-equality closes everything INSIDE the region and says nothing about outside it. That
+        # gap is not theoretical: retire a kind in the tool and MOVE its row above `is any of:` or
+        # below the `implicit:` block, and the stale count survives with this test green -- the
+        # "a stale row is stale wherever it sits" property failing again, now on region bounds
+        # instead of on grammar. Measured, both escapes were green before this check.
+        #
+        # Closed using the tool's OWN vocabulary as the source of truth: `KIND_DESCRIPTIONS` names
+        # every kind the ledger knows, including one whose count has reached zero, so a retired
+        # kind's name is still known here even though it no longer appears in the rows. Each such
+        # name must occur in the docstring ONLY inside the generated region.
+        doc = self._docstring()
+        outside = doc[:span_start] + doc[span_end:]  # by INDEX; see _docstring_kinds_region
+        stray = sorted(k for k in self._kind_vocabulary() if k in outside)
+        self.assertEqual(
+            stray, [],
+            f"kind name(s) {stray} appear in the ledger docstring OUTSIDE the generated kinds "
+            "table. Only the generated region may name a kind.\n"
+            "TWO WAYS TO HIT THIS, and the message cannot tell them apart, so both are listed:\n"
+            "  1. a retired kind's ROW was moved out of the region -- that is how a stale count "
+            "survives the byte comparison, and it is what this check exists for;\n"
+            "  2. ordinary PROSE mentions a kind by name. Also disallowed, and deliberately: prose "
+            "naming a kind beside a number is how every stale figure in this docstring got there. "
+            "Rewrite it without the name.\n"
+            "Naming both cases is the point -- an earlier version of this message asserted (1) only, "
+            "and sent a maintainer who had written prose looking for a row they had never moved.\n"
+            "KNOWN LIMIT, stated rather than implied: this uses the tool's KIND_DESCRIPTIONS as the "
+            "vocabulary, so a row whose kind has been deleted from KIND_DESCRIPTIONS *and* retired "
+            "from the emitted rows *and* moved out of the region would still escape. That is three "
+            "deliberate edits, and the first of them is the one to review.",
+        )
+        # THE SUMMARY WORD, which was unpinned prose. The docstring says "All EIGHT counts above are
+        # held" -- six surface rows plus the kind rows. Retire a kind, remove its row correctly and
+        # regenerate, and the sentence claims eight while seven exist: this docstring's own documented
+        # staling pattern, one level up from the rows it now pins. Derived from both halves so it
+        # tracks either changing.
+        surfaces = len(self._surfaces())
+        n_kinds = len([l for l in region.split("\n") if l.strip()])
+        total = surfaces + n_kinds
+        words = {
+            0: "ZERO", 1: "ONE", 2: "TWO", 3: "THREE", 4: "FOUR", 5: "FIVE", 6: "SIX",
+            7: "SEVEN", 8: "EIGHT", 9: "NINE", 10: "TEN", 11: "ELEVEN", 12: "TWELVE",
+        }
+        self.assertIn(
+            total, words,
+            f"{total} held counts, which this guard has no spelled word for. Add it -- do NOT fall "
+            "back to the digit, which is how a sibling guard in this file went inert.",
+        )
+        # The SET of counts stated, not "the right one appears somewhere". `assertIn` over the whole
+        # docstring detects a MISSING total and not a WRONG one: state EIGHT in the real sentence and
+        # plant "All NINE counts" in prose, and it passes. That is the identical weakness the surface
+        # guard in this file already had and had fixed, reintroduced one guard over -- so a wrong
+        # total is now caught wherever it sits, in exactly the form the right one takes.
+        # Case-insensitive, compared uppercased, and INTERSECTED WITH THIS GUARD'S OWN NUMBER
+        # VOCABULARY. `[A-Z]+` missed a wrong total written "All Nine counts", so it was widened to
+        # `[A-Za-z]+` -- which then swallowed any English word, so ordinary prose ("all the counts
+        # below come from one run", "All surface counts are parsed") was read as a STATED TOTAL and
+        # failed with a message telling the author they had stated a wrong total. They had stated no
+        # number at all. That is the misdiagnosis class, introduced by the commit whose purpose was
+        # to remove a misdiagnosing message -- and the sibling surface guard sixty lines below
+        # documents refusing exactly this broadening, which I did not read before widening.
+        #
+        # Intersecting with `words.values()` drops the false positives and keeps every kill EXCEPT
+        # one, named below: a wrong number word inside this guard's 0-12 vocabulary is still caught
+        # wherever it sits, and a sentence containing no number word is not a total at all.
+        #
+        # STATED NARROWNESS, because the sibling guard states its own and this one did not. Only
+        # `all <NUMBER-WORD-IN-0..12> counts` is recognised. These slip past while the correct total
+        # is also present:
+        #   "All of the NINE counts"      intervening words before the number
+        #   "NINE counts in total"        no leading `all`
+        #   "All TWENTY-NINE counts"      the hyphen breaks `[A-Za-z]+`
+        #   "All 9 counts"                digits, not a word
+        #   "All NINE derived counts"     any word between the number and `counts`
+        #   "All THIRTEEN counts"         a number word OUTSIDE this guard's 0-12 `words` map -- the
+        #       one case the intersection LOST relative to the un-intersected form, which caught it.
+        #       Kept anyway: `assertIn(total, words)` above hard-fails if the real total ever exceeds
+        #       12, so the uncaught case is a maintainer writing >12 when the truth is <=12 -- a gross
+        #       typo, not the staling drift this guard exists for. The alternative was a guard that
+        #       fails on ordinary English prose, which is strictly worse.
+        # The first five are deliberate: catching them means matching prose, which is the defect
+        # above. A total absent entirely still fails, since the empty set is not `{words[total]}`.
+        stated_totals = {
+            m.upper() for m in re.findall(r"(?i)all ([A-Za-z]+) counts", doc)
+        } & set(words.values())
+        self.assertEqual(
+            stated_totals, {words[total]},
+            f"the docstring must state 'All {words[total]} counts' and no other total -- {surfaces} "
+            f"surface row(s) plus {n_kinds} kind row(s) -- and it states "
+            f"{sorted(stated_totals) or 'none'}. It is the one figure in this table that describes "
+            "the table itself, and nothing held it until now.",
+        )
+        # NON-VACUITY, the case my own round-11 message overstated. `len(lines) == len(kinds)` binds a
+        # SHORT rendering; it does NOT bind empty-vs-empty, because 0 == 0. And an empty kinds table
+        # IS the migration's goal state, so it cannot simply be forbidden -- it has to be
+        # ACKNOWLEDGED, in the docstring, by a human. Round 11 printed a note instead, and pytest
+        # swallows stdout for passing tests, so the "announcement" was invisible exactly where it ran.
+        if n_kinds == 0:
+            self.assertIn(
+                "GOAL STATE REACHED", doc,
+                "the ledger emits no non-surface kinds -- every kind has burned down to zero, which "
+                "is this migration's goal state. Both sides of the byte comparison are then empty "
+                "and it proves nothing, so the docstring must say 'GOAL STATE REACHED' to record "
+                "that a human saw it. Without that, an empty table and a broken tool are "
+                "indistinguishable.\n"
+                "WRITE THE ACKNOWLEDGEMENT WITHOUT NAMING THE KINDS. Kind names may appear only "
+                "inside the generated table, and the stray-name check above will reject prose that "
+                "spells one -- an earlier version of this very message told you to write "
+                "'<kind> and <kind> have burned down to zero', which then failed for a reason that "
+                "had nothing to do with what you wrote.",
+            )
+
+    def _kind_vocabulary(self) -> list[str]:
+        """Every non-surface kind the ledger KNOWS, from its own KIND_DESCRIPTIONS."""
+        import importlib.util
+
+        _sweep_probe_residue()
+        spec = importlib.util.spec_from_file_location("_ledger_kinds", LEDGER)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        vocab = sorted(module.KIND_DESCRIPTIONS)
+        self.assertTrue(
+            vocab,
+            "the ledger has an empty KIND_DESCRIPTIONS, so this guard has no vocabulary and the "
+            "stray-row check below would pass over anything.",
+        )
+        return vocab
+
     def test_the_docstring_states_the_surface_count_it_actually_has(self) -> None:
         doc = LEDGER.read_text(encoding="utf-8")
         n = len(self._surfaces())
-        words = {7: "SEVEN", 8: "EIGHT", 9: "NINE"}
-        self.assertIn(
-            words.get(n, str(n)), doc.split('"""')[1],
-            f"there are {n} surfaces; the docstring does not say so. The previous text said "
-            "'seven derived surfaces' while listing an alternate constructor as derived and "
-            "omitting a derived surface with no open sites.",
+        # Spelled words only, and an unmapped count is a HARD FAILURE rather than a fallback to
+        # the digit. This guard was inert exactly once: the map covered 7/8/9, the count became
+        # SIX, `words.get(n, str(n))` degraded the assertion to `assertIn("6", docstring)`, and the
+        # only "6" in the docstring is the one inside `bare-const (16)` on an unrelated line. The
+        # docstring could have said EIGHT, or named no count at all, and this test stayed green
+        # while claiming to hold it. A digit is a substring of other digits; a word is not, which
+        # is the whole reason this guard spells the number.
+        words = {0: "ZERO", 1: "ONE", 2: "TWO", 3: "THREE", 4: "FOUR", 5: "FIVE",
+                 6: "SIX", 7: "SEVEN", 8: "EIGHT", 9: "NINE", 10: "TEN"}
+        if n not in words:
+            self.fail(
+                f"{n} surfaces, which this guard has no spelled word for. Add it to `words` -- do "
+                "NOT fall back to the digit, which is how this assertion went inert before."
+            )
+        # ANCHORED on the table sentence, not searched for anywhere in the docstring. `assertIn`
+        # over the whole text was the second inert version of this guard: the word only had to
+        # appear SOMEWHERE, and this docstring says EIGHT twice in prose ("WAS EIGHT", "All EIGHT
+        # counts above"). So a regression from six surfaces back to eight -- the exact prior value
+        # this docstring narrates -- passed with the table still reading "All SIX". Spelling the
+        # number fixed digit-substring matching and left prose-substring matching wide open: a word
+        # is not a substring of other numbers, but it is a substring of sentences containing it.
+        # SCOPED to the `implicit:` entry's own paragraph, not searched across the whole docstring.
+        # A phrase match over the full text was still defeatable: set the table to "All NINE" and
+        # plant "All SIX\n surfaces" in the WAS-EIGHT paragraph, and it passed. Scoping means prose
+        # elsewhere is not merely unlikely to collide, it is out of range.
+        #
+        # `\s+` rather than `\s*\n\s*`: requiring a line break between the word and "surfaces" made
+        # the guard fail on legitimate rewrapping, reporting that the table "does not say so" when
+        # it plainly did. A guard that fires on reflow gets edited out rather than obeyed.
+        body = doc.split('"""')[1]
+        try:
+            para = body[body.index("implicit:"):].split("\n\n")[0]
+        except ValueError:  # pragma: no cover - guarded so the scope cannot silently empty
+            self.fail(
+                "the ledger docstring no longer has an `implicit:` entry, so there is no surface "
+                "table paragraph to hold the count. An empty scope makes this assertion vacuous."
+            )
+        # Collect every count the paragraph states in the form `All <UPPERCASE-WORD> surfaces` and
+        # require the set to be exactly the right one. Asserting only that the correct phrase appears
+        # detects a MISSING count but not a WRONG one: with the table set to "All NINE surfaces" and
+        # "All SIX surfaces" appended lower in the same paragraph, the right phrase was present, so
+        # it passed while the table misstated the count. Deleting the blank line that terminates the
+        # paragraph widened the scope and did the same. A set comparison fails on the extra "NINE"
+        # regardless of where either phrase sits.
+        #
+        # SCOPE OF THIS GUARD, stated because the obvious reading is broader than the truth. It binds
+        # on POSITION and is narrow on SPELLING: only `All <UPPERCASE-WORD> surfaces` is recognised,
+        # so a wrong count written as "All nine surfaces", "All 9 surfaces", "All TWENTY-NINE
+        # surfaces", or -- the one worth knowing -- "All NINE derived surfaces", with any word
+        # between, is invisible while the correct phrase is also present. The intervening-adjective
+        # case is the same wording family as the original defect ("seven derived surfaces") that this
+        # guard's failure message cites. Broadening the pattern to catch them would start matching
+        # ordinary prose about surfaces, so the narrowness is deliberate rather than overlooked.
+        #
+        # The earlier "exactly once" requirement is deliberately GONE: a set comparison cannot see
+        # duplicates, so two correct occurrences now pass where they used to fail. Restating the
+        # right count is harmless; stating a wrong one is not, and that is what this now catches.
+        stated = set(re.findall(r"All ([A-Z]+)\s+surfaces\b", para))
+        self.assertEqual(
+            stated, {words[n]},
+            f"there are {n} surfaces, so the docstring's surface-table paragraph must state "
+            f"'All {words[n]} surfaces' and no other count; it states {sorted(stated) or 'none'}.\n"
+            f"  paragraph searched:\n{para}\n"
+            "The original text said 'seven derived surfaces' while listing an alternate "
+            "constructor as derived and omitting a derived surface with no open sites.",
         )
 
     RETIRED_KINDS = ("implicit-spec", "implicit-cfg")
