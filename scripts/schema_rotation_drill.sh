@@ -153,7 +153,17 @@ _norm_id() {
   #       the reason strip fired on the " -- 201" INSIDE the parameter and truncated the line.
   #
   # My self-test had five cases and none carried a paren or a dash in the parameter, so it passed
-  # while the normaliser mangled four real ids. The cases below are taken verbatim from a full run.
+  # while the normaliser mangled four real ids. Most cases below are verbatim from a full run; the two
+  # msg-form ones were CONSTRUCTED -- one of them in a shape the drill does not emit (absolute path, no
+  # reason suffix). Valid and useful cases, but labelled honestly, because a commit of mine claimed all
+  # of them were captured and that is the same "invented probe data" this file documents twice.
+  #
+  # KNOWN LIMIT of both SUBFAILED rules: the capture is greedy to the LAST closing delimiter followed
+  # by whitespace and a token, so a REASON containing `) ` or `] ` mangles the id -- e.g. a reason
+  # reading `Lists differ: [1] != [2]` at a wide terminal. Unreachable here today (real ids are
+  # 150-163 chars, so at 80 columns pytest truncates the reason away before the delimiter matters) and
+  # it fails toward FAIL, since a mangled id matches no rubric row and is reported rather than
+  # excused. Recorded because it is now true of the bracket form as well as the paren form.
   sed -E '
     s#^SUBFAILED\((.*)\)[[:space:]]+([^[:space:]]+).*$#\2[\1]#
     s#^SUBFAILED\[(.*)\][[:space:]]+([^[:space:]]+).*$#\2[\1]#
@@ -1020,9 +1030,12 @@ fi
 # Collection ERRORs and a non-zero-but-no-FAILED run are both "the suite did not measure what
 # it claims". Scoring only ^FAILED made a module-level import failure read as "6 pins no longer
 # pinning" rather than "nothing ran" -- the exact symptom this drill hit twice.
-# The CONTROL logs are in this list too. They were not, so a control run that died before pytest
-# printed a summary yielded an EMPTY failure set -- which subtracts nothing and silently turns
-# off the arm whose whole job is to prevent over-attribution.
+# DELIBERATELY only the rotated and baseline logs. The control logs are checked inside the control
+# loop, where they are written and where $CTRL is assigned. Listing them HERE expanded to
+# /nonexistent -- $CTRL is not set until 69 lines below -- so the check was skipped on every run,
+# and an earlier version of THIS COMMENT claimed they were in the list after the commit that removed
+# them: a comment asserting the opposite of its own code, which is the read-back trap that cost
+# three rounds on this one guard.
 for f in "$WT/DRILL.txt" "$BASE/BASE.txt"; do
   [ -f "$f" ] || continue
   if ! grep -qE '^[0-9]+ (passed|failed)' "$f"; then
@@ -1208,6 +1221,11 @@ for i in range(1, len(parts), 2):
     # siblings. Demonstrated by review against real pytest output; latent in v8 only because no
     # exclusion there had a sibling.
     name = re.sub(r'\s*\((.*)\)$', r'[\1]', parts[i].strip())
+    # ...and the MSG form, which pytest renders as `Cls.test [alpha]` -- a SPACE then SQUARE brackets.
+    # `_norm_id` was taught the square-bracket form and this sibling normaliser 1050 lines away was
+    # not, so a native key read `Cls.test [alpha]` while tail() produced `Cls.test[alpha]` and the
+    # exclusion matched nothing. Half a fix, in the commit titled "close the msg-form finding".
+    name = re.sub(r'\s+\[(.*)\]$', r'[\1]', name)
     body = parts[i + 1] if i + 1 < len(parts) else ""
     if E_LINE.search(body):
         ids.append(name)
