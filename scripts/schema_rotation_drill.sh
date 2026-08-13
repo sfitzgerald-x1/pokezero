@@ -183,7 +183,15 @@ git -C "$REPO" worktree add -q --detach "$WT" HEAD || exit 3
 cd "$WT" || exit 3
 export DRILL_WT="$WT"
 
-python3 - "$WT" <<'PY'
+# Written to a FILE and invoked twice -- once for the treatment arm, once for the control arm --
+# rather than duplicated or re-extracted from this script with sed. Re-extraction was the first cut:
+# it worked, and it meant the control arm's injection was a 226-line block located by two text
+# anchors, so any drift in either would have silently injected a PARTIAL registration and charged
+# the resulting breakages to the rotation. The two arms must run byte-identical injection code or
+# the subtraction between them means nothing.
+INJ="$(mktemp -t drill_inject)" || exit 3
+trap 'rm -f "$INJ"' EXIT
+cat > "$INJ" <<'PY'
 import pathlib, re, sys
 wt = sys.argv[1]
 p = f"{wt}/src/pokezero/observation.py"
@@ -234,10 +242,21 @@ if _mdef is None:
         "rotate a default it cannot find, and rotating nothing would score a PASS against an "
         "unrotated tree."
     )
+import os as _os  # noqa: E402 - needed here, before the control-arm branch below
 _out = _mdef.group(1)
 _suffix = _out[len("OBSERVATION_SCHEMA_VERSION_"):]
-print(f"drill: rotating the default away from {_out}")
-s = s[:_mdef.start()] + "OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V5_DRILL" + s[_mdef.end():]
+_control = _os.environ.get("DRILL_NO_ROTATE") == "1"
+if not _control:
+    print(f"drill: rotating the default away from {_out}")
+# DRILL_NO_ROTATE is the CONTROL ARM: register the synthetic schema exactly as the treatment does,
+# and leave the default alone. Anything that breaks in the control breaks because a schema was
+# ADDED, not because the default MOVED, and must not be charged to the rotation. Without this the
+# drill attributes both to the rotation -- see the control-subtraction block below for what that
+# cost.
+if _control:
+    print(f"drill: CONTROL ARM -- schema registered, default deliberately LEFT at {_out}")
+else:
+    s = s[:_mdef.start()] + "OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V5_DRILL" + s[_mdef.end():]
 
 # Mirror the OUTGOING DEFAULT's routing properties, computed rather than hardcoded. This replaces
 # four separate regex insertions that each added v5-drill wherever v4 appeared: GROUPED_LAYOUT,
@@ -379,9 +398,32 @@ if "OBSERVATION_SCHEMA_VERSION_V5_DRILL" not in t.split("REPLAY_OBSERVATION_SPEC
                "\\1\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL,\n    OBSERVATION_SCHEMA_VERSION_V4,\n    "
                + _out + ",", t, count=1, flags=re.M)
 open(q, "w").write(t)
-print("  synthetic v5-drill schema injected; default rotated to it")
+
+# `_EXPORTABLE_TABLE_SCHEMAS` in engine_env.py, keyed by SHORT names ("v2.2", "v3", "v4") rather
+# than full version strings -- which is exactly why every name-based search for schema-keyed
+# structures missed it. Unregistered, `_schema_for_encoder_tables` raises ValueError and the whole
+# of EngineEnvTest fails: 10 of the 19 "unexpected breakages" in the first scored run were this one
+# table. Fifth instance of the instrument manufacturing the failure it reports, and the second to
+# reach a verdict.
+_ee = f"{wt}/src/pokezero/engine_env.py"
+_et = open(_ee).read()
+_m_exp = re.search(r'^_EXPORTABLE_TABLE_SCHEMAS\s*=\s*frozenset\(\{(.*?)\}\)', _et, re.S | re.M)
+if _m_exp is None:
+    raise SystemExit(
+        "drill: could not locate _EXPORTABLE_TABLE_SCHEMAS in engine_env.py. It gates every "
+        "encoder-table export by SHORT schema name, and an unregistered synthetic schema makes "
+        "every env test fail on a ValueError the drill itself caused."
+    )
+_et = _et[:_m_exp.end(1)] + ', "v5-drill"' + _et[_m_exp.end(1):]
+open(_ee, "w").write(_et)
+print('  registered "v5-drill" in _EXPORTABLE_TABLE_SCHEMAS (short-name table)')
+print("  synthetic v5-drill schema injected; "
+      + ("default LEFT in place (control arm)" if _control else "default rotated to it"))
 PY
-[ $? -eq 0 ] || { echo "FAILED to inject the drill schema"; exit 3; }
+# `cat` to an empty file then `python3 emptyfile` exits 0, so an unchecked write turns disk-full
+# into a silent "injection succeeded, nothing injected" -- the same trap the snapshot copy guards.
+[ -s "$INJ" ] || { echo "ABORT: the injection script snapshot is empty"; exit 10; }
+python3 "$INJ" "$WT" || { echo "FAILED to inject the drill schema"; exit 3; }
 
 # PRECONDITION 0: no unlisted schema identity gate exists. A line-oriented grep used to do this
 # and caught 2 of 7 evasive forms -- it missed `!=`, `in (literal tuple)`, string literals, dict
@@ -804,7 +846,49 @@ fi
 # conflation cannot hide behind the word "expected".
 ARTIFACTS="$WT/tests/data/schema_drill_source_mutation_artifacts.txt"
 grep -vE '^\s*(#|$)' "$ARTIFACTS" 2>/dev/null | sort -u > "$WT/artifacts.txt" || : > "$WT/artifacts.txt"
-comm -23 "$WT/rotated.txt" "$WT/baseline.txt" > "$WT/attributable.txt"
+
+# ============================ CONTROL ARM: register, do NOT rotate ============================
+# The drill's question is "what breaks because the DEFAULT MOVED". Its injection does two things at
+# once: it ADDS a schema and it MOVES the default. Subtracting only the baseline attributes both to
+# the rotation, and the first scored run showed exactly what that costs -- among 19 "surviving
+# instances of the class" were tests whose subject is the schema INVENTORY and which break, wholly
+# correctly, on any new schema:
+#
+#   test_observation.py::...::test_the_supported_window_and_the_legacy_refusal   asserts the
+#       SUPPORTED tuple equals a specific 5-tuple; the drill appends a 6th.
+#   test_observation_spec_v4.py::...::test_v4_is_supported_...                   asserts
+#       SUPPORTED[-1] is v4; the drill appends after it.
+#   test_schema_with_selector.py::...::test_newest_first_is_deliberate_and_pinned  asserts
+#       schema_with() returns the newest; the synthetic schema IS the newest.
+#
+# Those are not conflations. A test that pins the supported inventory SHOULD break when a schema is
+# added -- that is a human acknowledging a new schema, and it is the opposite of a defect. Charging
+# them to the rotation inflates the verdict and buries whatever real conflations sit beside them.
+#
+# So: a third arm that runs the identical injection with the rotation SKIPPED. Anything red there is
+# caused by ADDING a schema. attributable = rotated - baseline - control.
+CTRL="${WT%/}-control"
+if [ "${DRILL_SKIP_CONTROL:-0}" = "1" ]; then
+  : > "$WT/control.txt"
+  echo "  CONTROL ARM SKIPPED (DRILL_SKIP_CONTROL=1) -- inventory pins will be charged to the"
+  echo "  rotation and the unexpected count is an OVER-estimate. Not a quotable verdict."
+else
+  echo "== control: schema registered, default NOT rotated =="
+  git -C "$REPO" worktree remove --force "$CTRL" 2>/dev/null || true
+  git -C "$REPO" worktree add -q --detach "$CTRL" HEAD || exit 3
+  DRILL_WT="$CTRL" DRILL_NO_ROTATE=1 python3 "$INJ" "$CTRL" || exit 3
+  find "$CTRL/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
+  PYTHONPATH="$CTRL/src" "$VENV" -m pytest $(drill_targets "$CTRL") -q -p no:randomly \
+    > "$CTRL/CONTROL.txt" 2>&1 || true
+  grep -E '^(FAILED|SUBFAILED)' "$CTRL/CONTROL.txt" | _norm_id | sort -u > "$WT/control_raw.txt"
+  comm -23 "$WT/control_raw.txt" "$WT/baseline.txt" > "$WT/control.txt"
+  echo "  control failures beyond baseline (caused by ADDING a schema, not by rotating): $(wc -l < "$WT/control.txt" | tr -d ' ')"
+  sed 's/^/    /' "$WT/control.txt" | head -12
+  [ "$(wc -l < "$WT/control.txt")" -gt 12 ] && echo "    ... and $(( $(wc -l < "$WT/control.txt") - 12 )) more"
+fi
+
+comm -23 "$WT/rotated.txt" "$WT/baseline.txt" > "$WT/attributable_pre_control.txt"
+comm -23 "$WT/attributable_pre_control.txt" "$WT/control.txt" > "$WT/attributable.txt"
 # Artifact matching is TEST-granular on purpose, while ids are SUBTEST-granular. A source-mutation
 # artifact (a citation-pinning test broken by the drill editing source) breaks in every subtest, so
 # listing 24 rows would be noise -- but the excusal has to be deliberate, not a side effect of
