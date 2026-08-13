@@ -210,6 +210,16 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         `bare-const` and `default-spec` to zero is the goal, and the burndown reaching it is
         exactly when `(16)`/`(50)` would silently become prose again. Reading rows from the
         docstring and kinds from the tool lets the comparison fail in BOTH directions.
+
+        WHAT UNSCOPING COST, recorded rather than discovered later. Searching the whole docstring
+        instead of the kinds table means a SECOND aligned table of counts -- entirely plausible in
+        this docstring's house style -- would be parsed as extra kinds and fail with names like
+        `per-version`/`supported-map` in the "docstring:" list. It fails CLOSED and the names point
+        straight at the cause, which is why the trade is worth taking; scoping failed OPEN.
+
+        The prose line carrying `(24)` and `(49)` is excluded because its first token is UPPERCASE,
+        and that is the ONLY thing excluding it -- its `(49)` IS line-final. An earlier version of
+        this comment claimed the counts were not line-final, which was wrong about `(49)`.
         """
         self._kinds_table()  # anchors must exist; fails loudly if the table is gone
         # Searched over the WHOLE docstring, not just the kinds table. Scoping to the table left the
@@ -217,22 +227,52 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         # below the `implicit:` anchor, and the row survives with its count unpinned again. A stale
         # row is stale wherever it is written.
         #
-        # A kind row: indented, a kind token (optionally backticked -- a retired kind's row read
-        # `` `bare-const` `` and became invisible to both sets, which was the same escape), two-or-
-        # more spaces of column gutter, then anything ending in a parenthesised count.
-        # `implicit:<Surface>` carries no count and is excluded by requiring one. Verified to match
-        # nothing else in this docstring: the `(24)`/`(49)` prose line begins with an uppercase token
-        # and its counts are not line-final.
-        doc = self._docstring()
+        # `[ \t]`, NOT `\s`. `\s` matches newlines, so neither "indented" nor "gutter" was actually
+        # enforced: the `bare-const` match span began with a borrowed '\n' from the preceding blank
+        # line, a column-0 line after a blank line matched, and a lone lowercase token on one line
+        # plus any later line ending in `(N)` formed a phantom row spanning the break. Not live in
+        # this docstring, but the grammar now means what the failure message says it means.
         found: dict[str, int] = {}
-        pattern = r"^\s+`?([a-z][a-z0-9-]*)`?\s{2,}.*?\((\d+)\)\s*$"
-        for name, count in re.findall(pattern, doc, re.M):
+        for name, count in re.findall(self.KIND_ROW_STRICT, self._docstring(), re.M):
             found[name] = int(count)
         return found
 
-    #: The row grammar, quoted in failure messages so a reformat that this parser cannot read is
-    #: reported as "not in the parsed form" rather than as "the count is missing".
+    #: A kind row the parser can READ: indented, kind token (optionally backticked -- a retired
+    #: kind's row read `` `bare-const` `` and became invisible to both sets), 2+ spaces of column
+    #: gutter, then a line-final parenthesised count. `implicit:<Surface>` carries no count and is
+    #: excluded by requiring one.
+    KIND_ROW_STRICT = r"^[ \t]+`?([a-z][a-z0-9-]*)`?[ \t]{2,}.*?\((\d+)\)[ \t]*$"
+    #: A line that LOOKS like a kind row but the strict grammar cannot read: one space of gutter, a
+    #: count that is not line-final, a trailing footnote marker. Deliberately looser on exactly the
+    #: axes a hand-reformat varies, and no looser -- it still requires a leading lowercase token and
+    #: a parenthesised number on the same line.
+    KIND_ROW_NEAR = r"^[ \t]*`?([a-z][a-z0-9-]*)`?[ \t]+.*?\((\d+)\)"
+    #: Quoted in failure messages so a reformat this parser cannot read is reported as "not in the
+    #: parsed form" rather than as "the count is missing".
     KIND_ROW_SHAPE = "indented, kind token (backticks optional), 2+ spaces, then a line-final (N)"
+
+    def _kind_rows_the_parser_cannot_read(self) -> list[str]:
+        """Lines shaped like a kind row that the STRICT grammar misses.
+
+        The stale-row property held for a row's POSITION and not for its FORM, and it failed OPEN.
+        A row the strict parser cannot read vanishes from `documented` entirely -- so retiring a
+        kind AND reformatting its row (collapse the gutter to one space, or append a footnote
+        marker after the count, which this table already does elsewhere with `*`) left the stale row
+        sitting there with its count unpinned and the test green. That is the A1/A2 escape again,
+        one gutter-width away.
+
+        Comparing the strict match set against this permissive one turns "the parser cannot read
+        this row" from silence into a failure, and it is what makes the headline property true of
+        form as well as position.
+        """
+        doc = self._docstring()
+        strict = {m.group(0).strip() for m in re.finditer(self.KIND_ROW_STRICT, doc, re.M)}
+        unreadable = []
+        for m in re.finditer(self.KIND_ROW_NEAR, doc, re.M):
+            line = m.group(0).strip()
+            if not any(line in s or s in line for s in strict):
+                unreadable.append(line)
+        return unreadable
 
     def _docstring(self) -> str:
         import ast as _ast
@@ -321,6 +361,19 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         rows = _derive()  # once; the helpers below take it rather than re-walking every file
         expected = self._non_surface_kinds(rows)
         documented = self._docstring_kind_counts()
+        # BEFORE the set comparison: a row the parser cannot read must not be able to disappear.
+        # Otherwise retiring a kind and reformatting its row leaves the stale count unpinned and
+        # this test green -- the escape fails OPEN, which is worse than the hole it replaced.
+        unreadable = self._kind_rows_the_parser_cannot_read()
+        self.assertEqual(
+            unreadable, [],
+            "line(s) in the ledger docstring are shaped like a kind-count row but are not in the "
+            f"form this guard parses ({self.KIND_ROW_SHAPE}):\n  "
+            + "\n  ".join(unreadable)
+            + "\nSuch a line is INVISIBLE to the comparison below, so a retired kind whose row was "
+            "reformatted would keep an unpinned count with this test still green. Either put the "
+            "row in the parsed form, or delete it.",
+        )
         # BOTH DIRECTIONS. Set equality, not "every emitted kind is documented": the one-directional
         # form let a kind the tool no longer emits keep a stale, unpinned docstring row, because
         # `documented` was itself built from the tool's vocabulary and so could never contain the
@@ -385,12 +438,26 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
                 "the ledger docstring no longer has an `implicit:` entry, so there is no surface "
                 "table paragraph to hold the count. An empty scope makes this assertion vacuous."
             )
-        # Collect EVERY count the paragraph states and require the set to be exactly the right one.
-        # Asserting only that the correct phrase appears detects a MISSING count but not a WRONG one:
-        # with the table set to "All NINE surfaces" and "All SIX surfaces" appended lower in the same
-        # paragraph, the right phrase was present, so it passed while the table misstated the count.
-        # Deleting the blank line that terminates the paragraph widened the scope and did the same.
-        # A set comparison fails on the extra "NINE" regardless of where either phrase sits.
+        # Collect every count the paragraph states in the form `All <UPPERCASE-WORD> surfaces` and
+        # require the set to be exactly the right one. Asserting only that the correct phrase appears
+        # detects a MISSING count but not a WRONG one: with the table set to "All NINE surfaces" and
+        # "All SIX surfaces" appended lower in the same paragraph, the right phrase was present, so
+        # it passed while the table misstated the count. Deleting the blank line that terminates the
+        # paragraph widened the scope and did the same. A set comparison fails on the extra "NINE"
+        # regardless of where either phrase sits.
+        #
+        # SCOPE OF THIS GUARD, stated because the obvious reading is broader than the truth. It binds
+        # on POSITION and is narrow on SPELLING: only `All <UPPERCASE-WORD> surfaces` is recognised,
+        # so a wrong count written as "All nine surfaces", "All 9 surfaces", "All TWENTY-NINE
+        # surfaces", or -- the one worth knowing -- "All NINE derived surfaces", with any word
+        # between, is invisible while the correct phrase is also present. The intervening-adjective
+        # case is the same wording family as the original defect ("seven derived surfaces") that this
+        # guard's failure message cites. Broadening the pattern to catch them would start matching
+        # ordinary prose about surfaces, so the narrowness is deliberate rather than overlooked.
+        #
+        # The earlier "exactly once" requirement is deliberately GONE: a set comparison cannot see
+        # duplicates, so two correct occurrences now pass where they used to fail. Restating the
+        # right count is harmless; stating a wrong one is not, and that is what this now catches.
         stated = set(re.findall(r"All ([A-Z]+)\s+surfaces\b", para))
         self.assertEqual(
             stated, {words[n]},
