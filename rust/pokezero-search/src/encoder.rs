@@ -5002,8 +5002,20 @@ mod cols_mapping {
         // template text as an unknown field. Truncating at the module marker is the fix, and the
         // anti-vacuity floor below is what keeps that truncation from silently hiding real sites.
         const WHOLE: &str = include_str!("encoder.rs");
-        const MARKER: &str = "mod cols_mapping {";
-        let src = &WHOLE[..WHOLE.find(MARKER).unwrap_or(WHOLE.len())];
+        // Leading newline is load-bearing: without it `find` matches this very string
+        // literal in its own declaration, so a renamed module still yields a cut (inside the
+        // test module) and `.expect` never fires -- which is exactly how the re-review
+        // mutant survived the first attempt at this fix. The declaration line reads
+        // `= "..."`, never a newline before `mod`, so only the real declaration matches.
+        const MARKER: &str = "\nmod cols_mapping {";
+        // `.expect`, NOT `unwrap_or(len)`: re-review renamed the module leaving MARKER stale,
+        // and the lint silently widened to scan its own templates and still passed -- green
+        // only by luck, because the `.cols.*` mentions in the comment above happen to carry no
+        // message. One added comment there turns that into a false failure.
+        let cut = WHOLE
+            .find(MARKER)
+            .expect("cols_mapping marker missing: the call-site lint would scan its own templates");
+        let src = &WHOLE[..cut];
         let by_field: std::collections::HashMap<&str, &str> =
             EXPECTED.iter().map(|(f, _, c)| (*f, *c)).collect();
 
@@ -5012,6 +5024,21 @@ mod cols_mapping {
         // `".cols."` found 33 of 125 and, worse, failed to BOUND the scan window, so a
         // bare-Option site ran on and read the next site's message -- which surfaced as a false
         // mismatch (num_opp_screens vs NUMERIC_TURN_COUNT). Skip whitespace after `.cols`.
+        // Blank out `//` comment text before scanning, preserving byte length so every offset
+        // below still indexes the real file. A cosmetic comment naming `.cols.<field>` between
+        // a field and its message otherwise reads as a site and fails loudly but blames the
+        // comment. If a string literal ever contained `//`, the effect is to make that site
+        // message-less, which the exact pin below turns into a loud failure naming it.
+        let scrubbed: String = src
+            .lines()
+            .map(|line| match line.find("//") {
+                Some(at) => format!("{}{}", &line[..at], " ".repeat(line.len() - at)),
+                None => line.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let src = scrubbed.as_str();
+
         let mut cursor = 0usize;
         let mut sites: Vec<(usize, String)> = Vec::new();
         while let Some(found) = src[cursor..].find(".cols") {
@@ -5034,6 +5061,7 @@ mod cols_mapping {
         }
 
         let mut checked = 0usize;
+        let mut msgless: Vec<&str> = Vec::new();
         for (index, (body_at, field)) in sites.iter().enumerate() {
             assert!(
                 by_field.contains_key(field.as_str()),
@@ -5046,8 +5074,9 @@ mod cols_mapping {
                 .unwrap_or(src.len());
             let window = &src[*body_at..stop.max(*body_at)];
             let Some(msg) = window.find("layout missing ") else {
-                // The 6 bare-Option sites (previously `num_col_opt`) carry no message, so the
-                // field name is all there is to check. Counted, not oracled.
+                // No message: recorded BY NAME so the assertion below pins exactly which sites
+                // are unoracled, rather than tolerating a count.
+                msgless.push(field.as_str());
                 continue;
             };
             let tail = &window[msg + "layout missing ".len()..];
@@ -5064,11 +5093,40 @@ mod cols_mapping {
             );
             checked += 1;
         }
-        // Anti-vacuity: the lint must actually have found the sites. 125 carry a message.
-        assert!(
-            checked >= 120,
-            "only {checked} call sites were cross-checked; the lint stopped seeing them, \
-             which is indistinguishable from having none to check"
+        // EXACT, not a floor. Re-review defeated `checked >= 120`: mismapping one call site AND
+        // breaking the `"layout missing "` prefix on it plus four others lands `checked` on exactly
+        // 120, the floor passes, and a mismapped production site ships green. The realistic trigger
+        // is factoring the repeated `ok_or_else` into a helper -- which the comment on `Layout::num`
+        // calls the imminent next change -- so coverage would drop silently exactly when a mismap
+        // could hide behind it.
+        //
+        // These 6 carry no message because they were `num_col_opt` (bare `Option`, no error path).
+        // Note WHICH 6: `num_self_screens`/`num_opp_screens` and
+        // `num_self_future_sight`/`num_opp_future_sight` are two self/opp PAIRS -- the most
+        // confusable mistake in this file -- and they are genuinely unoracled: swapping one for its
+        // sibling at its call site survives this lint. Only equivalence against the base commit
+        // excludes that, which is review-only. Recorded rather than papered over.
+        const UNORACLED: &[&str] = &[
+            "num_opp_future_sight",
+            "num_opp_screens",
+            "num_self_future_sight",
+            "num_self_screens",
+            "num_tier2_cb_pinned",
+            "num_tier2_investment_pinned",
+        ];
+        msgless.sort_unstable();
+        assert_eq!(
+            msgless, UNORACLED,
+            "the set of call sites with no error message changed. A site that lost its message is \
+             no longer oracled here, which is how a mismapping ships green."
+        );
+        assert_eq!(
+            checked,
+            sites.len() - UNORACLED.len(),
+            "{} of {} sites oracled; every site but the {} known message-less ones must be",
+            checked,
+            sites.len(),
+            UNORACLED.len()
         );
     }
 
