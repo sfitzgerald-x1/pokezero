@@ -1,5 +1,16 @@
 # The schema-rotation drill's verdict, with its scope
 
+> **AUTHORITATIVE RUN: v8**, the first whose scorer has no known path to drop a genuine breakage.
+> Two such paths (G1: the native exclusion matched any mention of the Rust message, including an
+> assertion message; G2: the section splitter could not parse pytest-subtests' spaced headers, so an
+> innocent test was excluded on its neighbour's exception) were found by independent review AFTER the
+> earlier run and closed before this one.
+>
+> **v8 reproduces the earlier verdict exactly** -- 12 attributable, 7 expected, 5 unexpected, the same
+> five ids, and no dead pins. So those two defects were LATENT in this tree: nothing here tripped
+> them. The earlier numbers were right, and there was no way to know that until the paths were shut.
+> That is the difference between a figure that happens to be true and one that has been measured.
+
 Run on the union of #1244 and #1247 (the tree that exists once both land), full scope, three arms.
 Command:
 
