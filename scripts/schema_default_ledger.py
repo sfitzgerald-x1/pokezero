@@ -100,10 +100,13 @@ def is_pokezero_submodule(node: ast.ImportFrom, name: str, *, importer: Path | N
     registering the latter as a module base turned `ObservationSpec.OBSERVATION_SCHEMA_VERSION`
     into a row. Guessing by capitalisation would be another enumeration from memory.
 
-    Relative imports resolve against `src/pokezero/`: inside this package `from . import X` and
-    `from .. import X` can only mean a pokezero module, and the deepest `node.level` in the tree
-    is 1, so treating any relative level as rooted at the package is exact here rather than
-    approximate.
+    A RELATIVE import resolves against the importing file's own package -- see the body. An earlier
+    version of this docstring asserted the opposite ("resolve against src/pokezero/ ... the deepest
+    node.level in the tree is 1, so treating any relative level as rooted at the package is exact
+    here rather than approximate"). Every clause of that was false, and the correction was written
+    as a comment eight lines below while the false text stayed. Deleted rather than annotated: two
+    contradicting statements in one function is worse than the wrong one alone, because a reader
+    who stops at the docstring never reaches the correction.
     """
     if node.level > 0:
         # Resolve against the IMPORTING file's package, walking up `node.level - 1` directories, and

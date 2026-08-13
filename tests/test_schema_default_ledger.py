@@ -444,6 +444,11 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
             with self.subTest(spelling=label):
                 surfaces = self._surfaces_with(source)
                 name = "Surf" if "class Surf" in source else "surf_fn"
+                # Derived from the skip list, not hardcoded to `__init__`. Narrowing the tuple to
+                # ("__init__",) left all three surface tests green while planting a phantom
+                # `__new__` surface -- two of the three names in the fix's own list were unpinned.
+                for dunder in ("__init__", "__new__", "__post_init__"):
+                    self.assertNotIn(dunder, surfaces, f"a phantom `{dunder}` surface was derived")
                 self.assertNotIn(
                     "__init__", surfaces,
                     "a phantom `__init__` surface was derived alongside the class. Keying a "
@@ -553,6 +558,15 @@ class LedgerSeesEverySpellingTest(unittest.TestCase):
         ("relative, one level up  (from inside a subpackage)",
          "from .. import showdown as S\n"
          "def f():\n    return S.DEFAULT_REPLAY_OBSERVATION_SPEC\n", 1, "mcts_eval"),
+        # `from .<module> import <name>` -- level > 0 WITH a non-None node.module. This is the ONLY
+        # form the round-9 resolution fix changes, and no probe used it, so reverting that fix left
+        # the entire gate green: N stayed 390, the allowlist stayed byte-identical, and all three
+        # surface tests passed. Moving the other relative probes into src/pokezero/ made them
+        # SURVIVE the fix; it did not make them BIND it. This file's own docstring diagnoses that
+        # exact failure -- "each fix was verified once by hand and pinned by no test".
+        ("relative import from a SUBPACKAGE  (`from .mcts_eval import lattice`)",
+         "from .mcts_eval import lattice\n"
+         "def f():\n    return lattice.OBSERVATION_SCHEMA_VERSION\n", 1),
         ("relative import of the global itself, aliased",
          "from .observation import OBSERVATION_SCHEMA_VERSION as SV\n"
          "def f():\n    return SV\n", 1),
@@ -585,6 +599,12 @@ class LedgerSeesEverySpellingTest(unittest.TestCase):
         ("a class imported from pokezero, not a module",
          "from pokezero.observation import ObservationSpec\n"
          "def f():\n    return ObservationSpec.OBSERVATION_SCHEMA_VERSION\n"),
+        # The negative half of the same form: `observation` is a NAME re-exported by the subpackage,
+        # not a submodule of it, so it must not become a module base. Before the round-9 fix this
+        # scored 1; the hardcoded `src/pokezero` root made it look like a module.
+        ("a NAME imported from a subpackage, not a module",
+         "from .mcts_eval import observation\n"
+         "def f():\n    return observation.OBSERVATION_SCHEMA_VERSION\n"),
         ("a module that does not exist in the tree",
          "from pokezero import not_a_real_module\n"
          "def f():\n    return not_a_real_module.OBSERVATION_SCHEMA_VERSION\n"),
