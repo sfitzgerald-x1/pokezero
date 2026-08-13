@@ -38,6 +38,10 @@ from .observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     DEFAULT_OBSERVATION_FEATURE_MASKS,
     FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
+    GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
+    TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
+    V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS,
+    V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS,
     FIELD_TOKEN_COUNT,
     OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2,
@@ -1225,9 +1229,14 @@ def numeric_index_for_schema(schema_version: str, legacy_index: int) -> int:
     """
 
     spec = observation_spec_for_schema(schema_version)
-    if schema_version == OBSERVATION_SCHEMA_VERSION_V4:
+    # Membership, not identity. `== V4` asks "is this THE feature-pack schema" and answers by
+    # naming one version, so any later schema sharing v4's projection silently falls through to
+    # the UNPROJECTED legacy path below and returns wrong-but-plausible indices instead of
+    # raising. Measured on a synthetic schema sharing v4's layout: 134 of 155 legacy indices
+    # disagreed, and all 50 dropped columns returned an index where they must return None.
+    if schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS:
         return v4_numeric_index(legacy_index)
-    if schema_version == OBSERVATION_SCHEMA_VERSION_V3:
+    if schema_version in V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS:
         return v3_numeric_index(legacy_index)
     if legacy_index < 0 or legacy_index >= spec.numeric_feature_count:
         raise ValueError(
@@ -1251,10 +1260,10 @@ def numeric_index_if_present_for_schema(
     case — every later column sits above its census, so the range check below already covers it.
     """
 
-    if schema_version == OBSERVATION_SCHEMA_VERSION_V4:
+    if schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS:
         if legacy_index in V4_DROPPED_LEGACY_NUMERIC_INDICES:
             return None
-    elif schema_version == OBSERVATION_SCHEMA_VERSION_V3:
+    elif schema_version in V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS:
         if (
             legacy_index in V3_DROPPED_LEGACY_NUMERIC_INDICES
             or legacy_index in V4_ONLY_NUMERIC_INDICES
@@ -4311,8 +4320,11 @@ def observation_from_player_state(
     # v3-era writer (it means "grouped-layout lineage", not "exactly v3") and ``schema_v4`` gates
     # the pack columns on top. A v3 spec therefore never touches a pack column, and a v4 spec
     # writes the complete v3 surface — the two projections differ, never the semantics they share.
-    schema_v4 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V4
-    schema_v3 = schema_v4 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V3
+    # Membership, not identity: these gates already MEAN properties -- the comment above says
+    # `schema_v3` means "grouped-layout lineage", not "exactly v3" -- so they now say so. An
+    # identity gate silently excludes every future schema that has the property.
+    schema_v4 = spec.schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS
+    schema_v3 = spec.schema_version in GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS
     if schema_v4 and spec.numeric_feature_count != _V4_NUMERIC_FEATURE_COUNT:
         raise ValueError(
             "observation encode: the grouped v4 layout requires exactly "
@@ -4372,17 +4384,15 @@ def observation_from_player_state(
     # TURN-MERGED is a property of the TRANSITION REGION, and v4 has none — so v4 is a
     # grouped-layout (v3-lineage) schema that is NOT turn-merged. Keeping these two axes
     # separate is what lets v4 write every v3 current-state signal while encoding no history.
-    schema_turn_merged = (not schema_v4) and (
-        schema_v3 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
-    )
+    schema_turn_merged = spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
     # v2.2 carries every v2.1 block forward unchanged; only the transition surface differs. v4
     # keeps those blocks too (PP-validity bits, sub HP, the per-mon pinned Tier-2 conclusions —
     # all current-state surfaces that survive the region trim).
-    schema_v2_1 = (
-        schema_turn_merged
-        or schema_v4
-        or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
-    )
+    # Stated as its own lineage rather than derived from the two gates above. The disjunction
+    # `turn_merged or v4 or == V2_1` happened to enumerate the same four schemas, but it said so
+    # by accident of which OTHER gates were true -- so changing an unrelated gate silently moved
+    # this one, and a new schema joined or missed this set as a side effect.
+    schema_v2_1 = spec.schema_version in V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS
     if schema_turn_merged and state.transition_tokens and not state.turn_merged_tokens:
         raise ValueError(
             "observation encode: a v2.2 (turn-merged) spec requires the state's "
@@ -8222,7 +8232,11 @@ def _attention_mask(
     mask.extend([opponent_tendency_stats_visible] * spec.opponent_tendency_stats_token_count)
     transition_stream = (
         state.turn_merged_tokens
-        if spec.schema_version in (OBSERVATION_SCHEMA_VERSION_V2_2, OBSERVATION_SCHEMA_VERSION_V3)
+        # Membership in the PROPERTY tuple, not a hand-listed pair. `(V2_2, V3)` is a spelling
+        # of "is this schema turn-merged", and TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS is exactly
+        # that set -- so a future turn-merged schema silently took the `transition_tokens` branch.
+        # Note this form is invisible to a scanner that greps only `== V<n>`.
+        if spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
         else state.transition_tokens
     )
     filled = min(
