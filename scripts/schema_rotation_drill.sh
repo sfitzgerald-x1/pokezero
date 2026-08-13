@@ -145,6 +145,11 @@ s = open(p).read()
 # shape difference would make breakages ambiguous between "reached the default" and "assumed a
 # layout". Identical shape means every breakage is unambiguously a naming failure.
 anchor = re.search(r'^OBSERVATION_SCHEMA_VERSION_V4\s*=.*$', s, re.M)
+if anchor is None:
+    raise SystemExit(
+        "drill: could not locate `OBSERVATION_SCHEMA_VERSION_V4 = ...` to anchor the synthetic "
+        "schema after. Without the anchor there is no v5-drill constant to rotate to."
+    )
 s = s[:anchor.end()] + '\nOBSERVATION_SCHEMA_VERSION_V5_DRILL = "pokezero.observation.v5-drill"' + s[anchor.end():]
 # Appended LAST, not first. `schema_with()` iterates `reversed(SUPPORTED)` to prefer the NEWEST
 # match, so inserting the synthetic schema at the front made it the oldest and `schema_with()`
@@ -190,6 +195,12 @@ open(p, "w").write(s)
 q = f"{wt}/src/pokezero/showdown.py"
 t = open(q).read()
 m = re.search(r'^REPLAY_OBSERVATION_SPECS_BY_SCHEMA[^=]*=\s*\{', t, re.M)
+if m is None:
+    raise SystemExit(
+        "drill: could not locate the REPLAY_OBSERVATION_SPECS_BY_SCHEMA literal in showdown.py. "
+        "An unregistered synthetic schema makes every spec lookup for it raise, and the whole "
+        "breakage set would be drill artifact rather than evidence."
+    )
 # Stamp the synthetic spec with its OWN version. Mapping v5-drill to V4_REPLAY_OBSERVATION_SPEC
 # left the table incoherent -- a spec stamped v4 reachable under the v5-drill key -- and
 # `test_spec_for_schema_is_loud_on_unknown_versions` caught it, correctly, as
