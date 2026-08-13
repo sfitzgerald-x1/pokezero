@@ -133,6 +133,60 @@ V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS = (
     OBSERVATION_SCHEMA_VERSION_V3,
     OBSERVATION_SCHEMA_VERSION_V4,
 )
+
+def schema_with(
+    *,
+    transition_region: bool | None = None,
+    turn_merged: bool | None = None,
+    grouped_layout: bool | None = None,
+    feature_pack: bool | None = None,
+) -> str:
+    """Return the newest supported schema having the requested properties.
+
+    Say what you NEED, not "whatever is currently default". A test that wants a history-window
+    budget needs a schema with a transition region -- it does not care which one, and it must
+    not silently become a v4 test (no region at all) the day the default rotates. That silent
+    re-aiming is the defect class this function exists to remove: it is what made a one-line
+    default rotation break 94 tests, and what hid two real production bugs (#1227 token_count,
+    #1228 feature widths) until the default finally moved.
+
+    Newest-first so a caller tracks forward as schemas land, rather than pinning the oldest
+    match forever. Raises rather than returning a default when nothing matches: an unsatisfiable
+    property set is an authorship error, and returning "the default" is exactly the behaviour
+    being retired.
+
+    Use a named version constant instead when the subject genuinely IS one version -- a
+    v2.2-census assertion wants `OBSERVATION_SCHEMA_VERSION_V2_2`, not a property query.
+    """
+    wanted = {
+        "transition_region": transition_region,
+        "turn_merged": turn_merged,
+        "grouped_layout": grouped_layout,
+        "feature_pack": feature_pack,
+    }
+    # Keyword-only with no **kwargs, deliberately: a `**_ignored` signature would silently drop a
+    # misspelled constraint (`turn_mergd=False`) and return a schema that does not satisfy what
+    # the caller asked for -- a quieter version of the very defect this function replaces.
+    if all(v is None for v in wanted.values()):
+        raise ValueError(
+            "schema_with() needs at least one property. With none, it would be a spelling of "
+            "'the current default', which is the conflation this function exists to remove."
+        )
+    for version in reversed(SUPPORTED_OBSERVATION_SCHEMA_VERSIONS):
+        have = {
+            "transition_region": REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA[version] > 0,
+            "turn_merged": version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
+            "grouped_layout": version in GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
+            "feature_pack": version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
+        }
+        if all(v is None or have[k] is v for k, v in wanted.items()):
+            return version
+    asked = ", ".join(f"{k}={v}" for k, v in wanted.items() if v is not None)
+    raise ValueError(
+        f"no supported observation schema has {asked}. Supported: "
+        f"{', '.join(SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)}."
+    )
+
 LEGACY_OBSERVATION_SCHEMA_VERSIONS = ("pokezero.observation.v1",)
 # Sentinel for artifacts whose payload carries NO observation schema version. For a one-way
 # door, absent means unknown/legacy and must refuse — never "assume current spec".
@@ -163,6 +217,15 @@ V3_TRANSITION_TOKEN_COUNT = 64
 # every forward is ~3.8x shorter; there is no transition_token_budget knob to mis-set; and a
 # v4 checkpoint cannot silently be fed synthesized history, because there is nowhere to put it.
 V4_TRANSITION_TOKEN_COUNT = 0
+
+REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA: dict[str, int] = {
+    OBSERVATION_SCHEMA_VERSION_V2: TRANSITION_TOKEN_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V2_1: TRANSITION_TOKEN_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V2_2: TRANSITION_TOKEN_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V3: V3_TRANSITION_TOKEN_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V4: V4_TRANSITION_TOKEN_COUNT,
+}
+
 
 
 @dataclass(frozen=True)
