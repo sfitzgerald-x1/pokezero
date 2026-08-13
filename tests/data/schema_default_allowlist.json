@@ -2095,13 +2095,13 @@
   },
   {
     "file": "tests/test_observation.py",
-    "line": 46,
+    "line": 48,
     "kind": "bare-const",
-    "owner": "test_schema_version_is_v2_2_with_v2_v2_1_v3_v4_supported_and_v1_legacy"
+    "owner": "test_the_fresh_artifact_default_is_v2_2"
   },
   {
     "file": "tests/test_observation.py",
-    "line": 60,
+    "line": 72,
     "kind": "implicit:ObservationSpec",
     "owner": "test_legacy_schema_version_is_refused_with_pinned_tag_message",
     "unclosed": [
@@ -2110,27 +2110,9 @@
   },
   {
     "file": "tests/test_observation.py",
-    "line": 86,
-    "kind": "implicit:ObservationSpec",
-    "owner": "test_observation_validates_fixed_shape",
-    "unclosed": [
-      "schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_observation.py",
-    "line": 87,
-    "kind": "implicit:PokeZeroObservationV0",
-    "owner": "test_observation_validates_fixed_shape",
-    "unclosed": [
-      "schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_observation.py",
     "line": 98,
     "kind": "implicit:ObservationSpec",
-    "owner": "test_observation_rejects_wrong_legal_mask_size",
+    "owner": "test_observation_validates_fixed_shape",
     "unclosed": [
       "schema_version"
     ]
@@ -2139,6 +2121,15 @@
     "file": "tests/test_observation.py",
     "line": 99,
     "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_observation_validates_fixed_shape",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 110,
+    "kind": "implicit:ObservationSpec",
     "owner": "test_observation_rejects_wrong_legal_mask_size",
     "unclosed": [
       "schema_version"
@@ -2147,6 +2138,15 @@
   {
     "file": "tests/test_observation.py",
     "line": 111,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_observation_rejects_wrong_legal_mask_size",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 123,
     "kind": "implicit:ObservationSpec",
     "owner": "test_observation_accepts_array_like_shapes",
     "unclosed": [
@@ -2155,7 +2155,7 @@
   },
   {
     "file": "tests/test_observation.py",
-    "line": 112,
+    "line": 124,
     "kind": "implicit:PokeZeroObservationV0",
     "owner": "test_observation_accepts_array_like_shapes",
     "unclosed": [
@@ -2164,7 +2164,7 @@
   },
   {
     "file": "tests/test_observation.py",
-    "line": 143,
+    "line": 155,
     "kind": "implicit:ObservationSpec",
     "owner": "test_observation_accepts_perspective_debug_metadata",
     "unclosed": [
@@ -2173,7 +2173,7 @@
   },
   {
     "file": "tests/test_observation.py",
-    "line": 144,
+    "line": 156,
     "kind": "implicit:PokeZeroObservationV0",
     "owner": "test_observation_accepts_perspective_debug_metadata",
     "unclosed": [
@@ -2227,19 +2227,19 @@
   },
   {
     "file": "tests/test_observation_spec_v2_1.py",
-    "line": 95,
+    "line": 122,
     "kind": "default-spec",
-    "owner": "test_schema_keyed_censuses"
+    "owner": "test_v2_2_IS_the_fresh_default"
   },
   {
     "file": "tests/test_observation_spec_v2_1.py",
-    "line": 96,
+    "line": 123,
     "kind": "bare-const",
-    "owner": "test_schema_keyed_censuses"
+    "owner": "test_v2_2_IS_the_fresh_default"
   },
   {
     "file": "tests/test_observation_spec_v2_1.py",
-    "line": 522,
+    "line": 540,
     "kind": "implicit:compact_category",
     "owner": "_config",
     "unclosed": [
@@ -2248,15 +2248,15 @@
   },
   {
     "file": "tests/test_observation_spec_v3.py",
-    "line": 350,
+    "line": 373,
     "kind": "bare-const",
-    "owner": "test_v3_is_supported_but_not_the_default"
+    "owner": "test_v2_2_IS_the_default_not_v3"
   },
   {
     "file": "tests/test_observation_spec_v4.py",
-    "line": 238,
+    "line": 248,
     "kind": "bare-const",
-    "owner": "test_v4_is_supported_turn_merged_grouped_and_feature_packed_but_not_the_default"
+    "owner": "test_v2_2_IS_the_default_not_v4"
   },
   {
     "file": "tests/test_online_client.py",
@@ -2659,9 +2659,9 @@
   },
   {
     "file": "tests/test_turn_merged_encode.py",
-    "line": 84,
+    "line": 97,
     "kind": "bare-const",
-    "owner": "test_v2_2_is_a_supported_schema_entry_and_the_default"
+    "owner": "test_v2_2_IS_the_default"
   },
   {
     "file": "tests/test_turn_merged_engine.py",
