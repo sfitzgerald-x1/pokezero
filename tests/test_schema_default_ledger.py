@@ -26,12 +26,31 @@ REPO = Path(__file__).resolve().parents[1]
 # everyone else and the gate silently cannot run. Caught by `git add` refusing the path.
 ALLOWLIST = REPO / "tests" / "data" / "schema_default_allowlist.json"
 # The most rows the allowlist has ever legitimately held. Only ever lowered.
-HIGH_WATER_MARK = 391
+HIGH_WATER_MARK = 390
 LEDGER = REPO / "scripts" / "schema_default_ledger.py"
+
+
+def _sweep_probe_residue() -> list[str]:
+    """Remove any probe file a crashed or interrupted run left in the live src/ tree.
+
+    Module-level and called by every reader, not just the writer. Review reproduced the failure and
+    so did I: a run killed mid-probe leaves `_surface_probe_*.py` behind, the next run derives an
+    extra surface from it, and the DOCSTRING test fails -- pointing at the docstring, which is fine.
+    A test whose failure names the wrong file is worse than a slow one.
+    """
+    swept = []
+    for stale in (REPO / "src" / "pokezero").glob("_surface_probe_*.py"):
+        swept.append(stale.name)
+        stale.unlink(missing_ok=True)
+    for stale in REPO.glob("_ledger_spelling_probe_*.py"):
+        swept.append(stale.name)
+        stale.unlink(missing_ok=True)
+    return swept
 
 
 def _derive() -> list[dict]:
     """Re-derive from the tree. Never read a cached count -- that is the error being retired."""
+    _sweep_probe_residue()
     proc = subprocess.run(
         [sys.executable, str(LEDGER), "--json"], capture_output=True, text=True
     )
@@ -171,6 +190,8 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
 
     def _surfaces(self) -> list[str]:
         import importlib.util
+
+        _sweep_probe_residue()
 
         spec = importlib.util.spec_from_file_location("_ledger_surfaces", LEDGER)
         module = importlib.util.module_from_spec(spec)
@@ -315,6 +336,31 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
         ("a keyword-only parameter default",
          "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
          "def surf_fn(*, spec=DEFAULT_REPLAY_OBSERVATION_SPEC):\n    return spec\n"),
+        # POSITIONAL-ONLY. `ast.arguments.defaults` covers posonlyargs + args COMBINED, so slicing
+        # `a.args` alone misaligned the pairing. Round 8's finding, and the only escape in this file
+        # that mis-ANSWERS rather than staying silent.
+        ("positional-only after a defaulted positional",
+         "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "def surf_fn(a=1, /, spec=DEFAULT_REPLAY_OBSERVATION_SPEC):\n    return spec\n"),
+        ("the global itself positional-only, with a plain kwarg after it",
+         "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "def surf_fn(spec=DEFAULT_REPLAY_OBSERVATION_SPEC, /, other=1):\n    return spec\n"),
+        ("positional-only, nothing after it",
+         "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "def surf_fn(spec=DEFAULT_REPLAY_OBSERVATION_SPEC, /):\n    return spec\n"),
+        # B4 spellings.
+        ("field(default_factory) wrapping the global in an expression",
+         "from dataclasses import field, replace\n"
+         "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "class Surf:\n"
+         "    v: object = field(\n"
+         "        default_factory=lambda: replace(DEFAULT_REPLAY_OBSERVATION_SPEC)\n    )\n"),
+        ("a class attribute inside a conditional block in the class body",
+         "import sys\n"
+         "from pokezero.observation import OBSERVATION_SCHEMA_VERSION\n"
+         "class Surf:\n"
+         "    if sys.version_info >= (3, 11):\n"
+         "        v: str = OBSERVATION_SCHEMA_VERSION\n"),
     ]
 
     NEGATIVES = [
@@ -326,6 +372,28 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
         ("field() with no default at all",
          "from dataclasses import field\n"
          "class Surf:\n    v: object = field(init=False)\n"),
+        # A module-qualified LOOKALIKE on an unrelated package. The declaration side had no
+        # module-root resolution at all, so this derived a surface -- and a spurious surface costs
+        # EVERY call site of that class name, the more expensive over-match direction.
+        ("a lookalike rooted outside pokezero",
+         "import numpy\n"
+         "class Surf:\n    v: str = numpy.OBSERVATION_SCHEMA_VERSION\n"),
+        # NOT tested as a negative, deliberately, and stated rather than dropped:
+        # `pokezero.not_a_module.OBSERVATION_SCHEMA_VERSION` DOES derive a surface. Resolution here
+        # is by chain ROOT, so anything rooted at a real pokezero module passes. Making it strict
+        # would mean resolving every segment of an arbitrary chain against the filesystem, and the
+        # payoff is only for code that raises AttributeError at import and therefore cannot reach
+        # the default at all. Over-matching unimportable code inflates nothing that runs. The
+        # blocker this negative set exists for -- a lookalike rooted OUTSIDE pokezero -- is above.
+        # A LOCAL VARIABLE in a method is not a field. Walking the whole ClassDef derived a bogus
+        # `default_spec` kwarg from `from_dict`'s local, moving N 390 -> 398 and rewriting the
+        # `unclosed` field of 101 rows -- which in a diff would have read as "eight new sites".
+        ("a local variable inside a method, not a field",
+         "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "class Surf:\n"
+         "    def build(self):\n"
+         "        default_spec = DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "        return default_spec\n"),
     ]
 
     def _surfaces_with(self, source: str) -> dict:
@@ -337,6 +405,10 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
         """
         import importlib.util
 
+        # Sweep any residue from a crashed or concurrent earlier run FIRST. A leaked probe in the
+        # live src/ tree reddens three unrelated tests, which review reproduced -- the failure then
+        # points at the wrong thing entirely.
+        _sweep_probe_residue()
         probe = REPO / "src" / "pokezero" / f"_surface_probe_{id(source):x}.py"
         try:
             probe.write_text(source, encoding="utf-8")
@@ -360,7 +432,11 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     surfaces[name], {"v"} if name == "Surf" else {"spec"},
-                    f"{label}: derived the surface but not the defaulted field name.",
+                    f"{label}: derived the surface but named {sorted(surfaces[name])} as the open "
+                    "route instead of the field that actually defaults. Naming the WRONG kwarg is "
+                    "worse than naming none: a call site scores CLOSED as soon as it passes that "
+                    "kwarg, which closes nothing -- and a positional-only parameter can never be "
+                    "closed by keyword at all.",
                 )
 
     def test_unrelated_declarations_do_not_derive_a_surface(self) -> None:
@@ -476,6 +552,14 @@ class LedgerSeesEverySpellingTest(unittest.TestCase):
         ("a module that does not exist in the tree",
          "from pokezero import not_a_real_module\n"
          "def f():\n    return not_a_real_module.OBSERVATION_SCHEMA_VERSION\n"),
+        # A WRITE is not a read. Without a ctx=Load gate the assignment target at
+        # `showdown.py:1143` scored a row, so N was 391 where the truth is 390 -- and that
+        # contradicted the docstring ("a read of"), DEFINITION_SITES's own rationale, and this
+        # file's insistence that over-matching is the same failure as under-matching.
+        ("an assignment TARGET, not a read",
+         "OBSERVATION_SCHEMA_VERSION = 'x'\n"),
+        ("an annotation with no value",
+         "OBSERVATION_SCHEMA_VERSION: str\n"),
     ]
 
     def _rows_for(self, source: str) -> list[dict]:

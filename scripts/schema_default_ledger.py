@@ -9,7 +9,7 @@ re-derivable rather than recalled.
 A "site reaching the global default" is any of:
 
   bare-const           a read of `OBSERVATION_SCHEMA_VERSION` itself                    (16)
-  default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                        (54)
+  default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                        (53)
   implicit:<Surface>   a call to <Surface> leaving at least one default-bearing kwarg unnamed,
                        one kind per surface so a new one cannot join an existing bucket. All EIGHT
                        surfaces, with provenance -- seven DERIVED from src/, one an alternate
@@ -126,6 +126,34 @@ def base_root(node: ast.AST) -> str | None:
     return node.id if isinstance(node, ast.Name) else None
 
 
+def class_body_statements(node: ast.ClassDef):
+    """Statements in a class body, descending through control flow but NOT into methods.
+
+    A class attribute inside `if TYPE_CHECKING:` or `if sys.version_info >= ...:` is a nested
+    statement, so scanning only `node.body` lost it. But plain `ast.walk(node)` goes too far the
+    other way -- it descends into METHOD bodies, and `from_dict` contains
+    `default_spec = REPLAY_OBSERVATION_SPECS_BY_SCHEMA.get(...)`, a LOCAL VARIABLE. Walking that
+    derived a bogus `default_spec` kwarg for TransformerPolicyConfig/compact_category, which moved N
+    from 390 to 398 and rewrote the `unclosed` field of 101 rows -- a false positive that would have
+    read as "eight new sites found" in the diff.
+
+    So: recurse through If/Try/With/For/While bodies, and stop at any nested scope.
+    """
+    stack = list(node.body)
+    while stack:
+        statement = stack.pop()
+        if isinstance(
+            statement,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
+        ):
+            continue  # a nested scope: its assignments are not this class's fields
+        yield statement
+        for field in ("body", "orelse", "finalbody"):
+            stack.extend(getattr(statement, field, []) or [])
+        for handler in getattr(statement, "handlers", []) or []:
+            stack.extend(handler.body)
+
+
 def derive_surfaces() -> dict[str, set[str]]:
     """{callable name -> kwargs that silently default to the global default}.
 
@@ -160,6 +188,28 @@ def derive_surfaces() -> dict[str, set[str]]:
                     if a.name in GLOBALS and a.asname:
                         alias_to_global[a.asname] = a.name
 
+    # Module roots visible anywhere in src/, for the same reason `sites_in` resolves them per file:
+    # without this the Attribute arm below accepted ANY chain containing a global token, so
+    # `numpy.OBSERVATION_SCHEMA_VERSION` as a class-attribute default derived a surface -- and a
+    # spuriously derived surface costs EVERY call site of that class name, which is the more
+    # expensive of the two over-match directions by this file's own 133-of-391 argument.
+    src_module_roots: set[str] = {"pokezero"}
+    for path in (REPO / "src").rglob("*.py"):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for a in node.names:
+                    if node.level > 0 or (node.module or "").startswith("pokezero"):
+                        if is_pokezero_submodule(node, a.name):
+                            src_module_roots.add(a.asname or a.name)
+            elif isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.name == "pokezero" or a.name.startswith("pokezero."):
+                        src_module_roots.add(a.asname or a.name.split(".")[0])
+
     def dflt_name(node):
         # `field(default=GLOBAL)` / `field(default_factory=lambda: GLOBAL)`. A dataclass field
         # wrapper is the single most likely spelling for a NEW surface in this codebase, and it
@@ -173,6 +223,15 @@ def derive_surfaces() -> dict[str, set[str]]:
                         return dflt_name(kw.value)
                     if kw.arg == "default_factory" and isinstance(kw.value, ast.Lambda):
                         return dflt_name(kw.value.body)
+                return None
+            # Any OTHER call: recurse into its arguments. `field(default_factory=lambda:
+            # GLOBAL.copy())` and `lambda: replace(GLOBAL, ...)` are the realistic factory idioms
+            # for a frozen spec, and returning None for a non-`field` Call lost the surface for all
+            # of them.
+            for arg in list(node.args) + [kw.value for kw in node.keywords]:
+                found_in_arg = dflt_name(arg)
+                if found_in_arg in GLOBALS:
+                    return found_in_arg
             return None
         if isinstance(node, ast.Name):
             return alias_to_global.get(node.id, node.id)
@@ -199,10 +258,15 @@ def derive_surfaces() -> dict[str, set[str]]:
             # otherwise be derive-blind, which costs every one of its call sites -- 133 for the
             # largest surface. It is a guard against a spelling that has not landed, and that is
             # now what it says it is.
-            for segment in dotted_segments(node):
-                resolved = alias_to_global.get(segment, segment)
-                if resolved in GLOBALS:
-                    return resolved
+            segments = dotted_segments(node)
+            # The chain must be rooted in something that can actually BE a pokezero module, or a
+            # lookalike on an unrelated object derives a surface.
+            if segments and (segments[0] in src_module_roots or segments[0] in GLOBALS
+                             or segments[0] in alias_to_global):
+                for segment in segments:
+                    resolved = alias_to_global.get(segment, segment)
+                    if resolved in GLOBALS:
+                        return resolved
         return None
 
     for path in (REPO / "src").rglob("*.py"):
@@ -212,7 +276,7 @@ def derive_surfaces() -> dict[str, set[str]]:
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
-                for st in node.body:
+                for st in class_body_statements(node):
                     # AnnAssign AND Assign. An un-annotated class attribute is ordinary Python and
                     # declared a surface this function could not see.
                     if isinstance(st, ast.AnnAssign) and st.value is not None:
@@ -225,9 +289,21 @@ def derive_surfaces() -> dict[str, set[str]]:
                         for target in targets:
                             if isinstance(target, ast.Name):
                                 found.setdefault(node.name, set()).add(target.id)
-            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
                 a = node.args
-                pairs = list(zip(a.args[-len(a.defaults):] if a.defaults else [], a.defaults))
+                # `posonlyargs + args`, because `ast.arguments.defaults` covers BOTH, combined.
+                # Slicing `a.args` alone misaligns the pairing, and this is the one escape in this
+                # file that does not merely under-count -- it names the WRONG kwarg:
+                #   def f(spec=GLOBAL, /, other=1)   ->  derived {'other'}
+                # so a call site scores CLOSED the moment it passes `other=`, which closes nothing,
+                # while `spec` is positional-only and can never be closed by keyword at all. The
+                # other three shapes lose the surface outright. 0 posonly functions exist in src/
+                # today (4208 scanned), but "has not landed" is not a defence for a matcher that
+                # actively mis-answers rather than one that stays silent.
+                positional = a.posonlyargs + a.args
+                pairs = (
+                    list(zip(positional[-len(a.defaults):], a.defaults)) if a.defaults else []
+                )
                 pairs += [(k, d) for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
                 for arg, d in pairs:
                     if dflt_name(d) in GLOBALS:
@@ -355,6 +431,20 @@ def sites_in(path: Path) -> list[dict]:
         found.append(row)
 
     for node in ast.walk(tree):
+        # `ctx=Load` -- only a READ is a read. Without it the ASSIGNMENT TARGET at
+        # `showdown.py:1143` (`DEFAULT_REPLAY_OBSERVATION_SPEC = ...`) scored a `default-spec` row,
+        # so N was 391 where the truth is 390. That contradicted three of this file's own claims at
+        # once: the docstring says `default-spec` is "a read of" the global; DEFINITION_SITES exists
+        # because "the file that DEFINES the default necessarily reads it" but names only
+        # observation.py, so the file defining the OTHER global got no exemption; and the doc
+        # insists over-matching is the same failure as under-matching. Exactly 2 non-Load
+        # occurrences of either global exist across all 524 tracked files -- observation.py:77
+        # (excluded) and showdown.py:1143 (was counted) -- so the over-count was exactly 1.
+        #
+        # Note the SAME line also carries a legitimate `bare-const` row: the subscript reads
+        # OBSERVATION_SCHEMA_VERSION. Only the Store target was spurious.
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            continue
         if isinstance(node, ast.Name) and rel not in DEFINITION_SITES and (
             node.id == CONST or alias_to_global.get(node.id) == CONST
         ):

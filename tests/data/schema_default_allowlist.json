@@ -835,12 +835,6 @@
   {
     "file": "src/pokezero/showdown.py",
     "line": 1143,
-    "kind": "default-spec",
-    "owner": "<module>"
-  },
-  {
-    "file": "src/pokezero/showdown.py",
-    "line": 1143,
     "kind": "bare-const",
     "owner": "<module>"
   },
