@@ -12,11 +12,11 @@ A "site reaching the global default" is any of:
   default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                (50)
   implicit:<Surface>   a call to <Surface> leaving at least one default-bearing kwarg unnamed,
                        one kind per surface so a new one cannot join an existing bucket. All FOUR
-                       surfaces, with provenance -- five DERIVED from src/, one an alternate
-                       constructor that cannot be (marked *):
+                       surfaces, and all four DERIVED from src/ -- the `*`-marked alternate-constructor
+                       row is gone, because `compact_category` stopped being one when
+                       TransformerPolicyConfig named its schema:
 
                          LocalShowdownConfig            135    LinearPolicyModel           3
-
                          observation_from_player_state    0    OnlineBattleAgent           2
 
                        WAS EIGHT. `ObservationSpec` (24 rows here) and `PokeZeroObservationV0` (49)
