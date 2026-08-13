@@ -417,8 +417,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_public_projection -v 2>&1 \
             | tee /tmp/pubproj.log
-          if ! grep -qE 'Ran 125 tests' /tmp/pubproj.log; then
-            echo "::error::expected 125 public-projection pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 130 tests' /tmp/pubproj.log; then
+            echo "::error::expected 130 public-projection pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. RenderBandWidthTests is the only thing pinning

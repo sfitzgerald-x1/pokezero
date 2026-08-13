@@ -1438,11 +1438,19 @@ def dropped_move_lines(
     no observed log in scope at all (no ``raw_line``, no ``public_events``), it
     counts REFUSALS. A line that is silently absent produces no refusal, so the
     only place in the tree where the fact is knowable is here.
+
+    THE TOKEN CARRIES NO ``|``, and that is not cosmetic. These strings become
+    census counter keys and mismatch predicates, and both are rendered into
+    GitHub-flavoured markdown tables by ``--mode report``. A raw pipe splits the
+    cell and GFM has no escape for it inside a code span, so a token spelled
+    ``|move|p1a|healbell`` silently ate the COUNT column of every row it
+    appeared in -- 13 rows unforced and thousands under the forcing. Named
+    ``move:<slot>:<id>`` instead.
     """
 
     deficit = move_announcements(observed_lines) - move_announcements(rendered_lines)
     return [
-        f"|move|{slot}|{move}"
+        f"move:{slot}:{move}"
         for (slot, move), count in sorted(deficit.items())
         for _ in range(count)
     ]
@@ -1574,13 +1582,42 @@ def render_projection_mismatch(
         reasons.extend(branch_reasons)
 
     if candidate_deficits:
-        # The reading a consumer wants is "was the observed narration produced by
-        # ANY accepted branch", so the boundary is judged on the SMALLEST deficit
-        # among the fold-matching branches. `min` on length and then on content so
-        # the choice is deterministic when two branches tie -- a tally that
-        # depends on engine enumeration order is not a tally.
-        dropped, lossy, branch_lines = min(
-            candidate_deficits, key=lambda item: (len(item[0]), item[0])
+        # THE LOSSY/CLEAN SPLIT IS A PROPERTY OF THE SET, NOT OF ONE SELECTED
+        # BRANCH, and the first revision got this wrong in the one direction that
+        # matters: it selected a single branch by `(len(deficit), deficit)` and
+        # then read `lossy` off whichever branch `min` happened to return. That
+        # key does not mention `lossy`, and `min` returns the FIRST minimal
+        # element -- so when a lossy and a clean branch tied on deficit, CRATE
+        # ENUMERATION ORDER decided whether the deficit became a verdict or was
+        # filed into the bucket that is never a verdict. Measured on the very
+        # 256-game block whose zero this instrument's headline rests on: 11 of
+        # the 53 marked boundaries had more than one matching branch, and at one
+        # of them FIVE branches all dropped `move:p2a:surf` while THREE of the
+        # five declared `lossy=[]`. A lossy sibling sat at index 0, so the axis
+        # stayed silent and the zero was contaminated. Same family as the
+        # enumeration-order defect the loop above already fixes; fixing it there
+        # and not here closed half of it.
+        #
+        # So the two populations are separated FIRST and each is reduced on its
+        # own. A branch that declared nothing was lost and still omitted an
+        # announced line is a verdict no matter what its siblings declared.
+        clean = [item[0] for item in candidate_deficits if not item[1]]
+        marked = [item[0] for item in candidate_deficits if item[1]]
+        # `min` on length and then on content, WITHIN each population, so the
+        # choice is deterministic when two branches of the same kind tie -- a
+        # tally that depends on engine enumeration order is not a tally.
+        def _smallest(deficits: list[list[str]]) -> list[str]:
+            return min(deficits, key=lambda d: (len(d), d)) if deficits else []
+
+        dropped = _smallest(clean)
+        dropped_marked = _smallest(marked)
+        # The narration claim is satisfied by any CLEAN branch that produced it,
+        # which is why an empty `clean` deficit silences the axis; but when there
+        # is no clean branch at all, every render of this boundary declared a
+        # loss and the omission is accounted for elsewhere.
+        branch_lines = next(
+            (item[2] for item in candidate_deficits if item[0] == dropped and not item[1]),
+            candidate_deficits[0][2],
         )
         diagnostics = {
             "branches": len(branches),
@@ -1600,18 +1637,25 @@ def render_projection_mismatch(
             # nothing" and must never be mistaken for it.
             "move_lines_compared": sum(move_announcements(observed_lines).values()),
             "matched_branches": len(candidate_deficits),
-            # DISJOINT, and that is the whole discrimination. A branch that is
-            # telemetry-only lossy is ALLOWED to omit a line --
-            # `sleeptalk_called_unidentified` renders the damage with no `|move|`
-            # owner on purpose -- so its deficit is MARKED, counted, and never a
-            # verdict. `move_lines_dropped` is what is left: a line absent from a
-            # render that claimed nothing was lost. The first revision published
-            # the same deficit under both keys, which reads as a doubled tally
-            # and hides exactly the distinction the axis rests on.
-            "move_lines_dropped": [] if lossy else dropped,
-            "move_lines_dropped_marked": dropped if lossy else [],
+            # SPLIT BY POPULATION. `matched_clean_branches` is what makes the two
+            # keys below readable: `move_lines_dropped == []` means something
+            # different when it is 0 out of 4 clean branches than when there were
+            # no clean branches to ask.
+            "matched_clean_branches": len(clean),
+            # DISJOINT BY CONSTRUCTION, not by selection -- and the difference is
+            # the whole review finding. A branch that is telemetry-only lossy is
+            # ALLOWED to omit a line (`sleeptalk_called_unidentified` renders the
+            # damage with no `|move|` owner on purpose), so the LOSSY population's
+            # deficit is MARKED, counted, and never a verdict. The CLEAN
+            # population's deficit is a line absent from a render that claimed
+            # nothing was lost, and it is a verdict regardless of what any lossy
+            # sibling declared. Each key is reduced over its own population, so
+            # neither can suppress the other and neither depends on enumeration
+            # order. A boundary may legitimately report BOTH.
+            "move_lines_dropped": dropped,
+            "move_lines_dropped_marked": dropped_marked,
         }
-        if dropped and not lossy:
+        if dropped:
             return self_consistency + [
                 ProjectionMismatch(
                     axis="render_move_line_dropped",
@@ -1619,10 +1663,10 @@ def render_projection_mismatch(
                     predicate="render_move_line_dropped:"
                     + ",".join(sorted(set(dropped))),
                     detail=_bounded(
-                        f"every one of {len(candidate_deficits)} branches that "
-                        f"folded equal omits {dropped}; observed "
+                        f"every one of {len(clean)} branches that folded equal and "
+                        f"declared no loss omits {dropped}; observed "
                         f"{sorted(move_announcements(observed_lines).elements())}, "
-                        f"closest render "
+                        f"closest clean render "
                         f"{sorted(move_announcements(branch_lines).elements())}"
                     ),
                 )

@@ -58,7 +58,7 @@ CTX = json.dumps({"p1": ["Bench", "Sleeper"], "p2": ["Opponent"], "turn": 1})
 #: The announcement the render must carry once the callee is identified. Sleep
 #: Talk's own line is separate; THIS is the called move, and it is the line the
 #: mis-cut prelude loses.
-CALLEE = "|move|p1a|healbell"
+CALLEE = "move:p1a:healbell"
 
 #: The reference log for this turn. `|-cureteam|` is deliberately absent: the
 #: renderer emits no protocol line for a fold-ignored cure, so including it would

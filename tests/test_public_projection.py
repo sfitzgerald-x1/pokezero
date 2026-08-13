@@ -2858,9 +2858,9 @@ class DroppedMoveLineTests(unittest.TestCase):
         # NAMED, not merely counted. A tally that cannot say WHICH line went
         # missing cannot be triaged, and the predicate is the queue key.
         self.assertEqual(
-            "render_move_line_dropped:|move|p1a|healbell", found[0].predicate
+            "render_move_line_dropped:move:p1a:healbell", found[0].predicate
         )
-        self.assertEqual(["|move|p1a|healbell"], diagnostics["move_lines_dropped"])
+        self.assertEqual(["move:p1a:healbell"], diagnostics["move_lines_dropped"])
         # THE DENOMINATOR. Two announcements were compared, not zero.
         self.assertEqual(2, diagnostics["move_lines_compared"])
 
@@ -2964,7 +2964,7 @@ class DroppedMoveLineTests(unittest.TestCase):
         self.assertEqual([], _axes(found))
         self.assertEqual([], diagnostics["move_lines_dropped"])
         self.assertEqual(
-            ["|move|p1a|healbell"], diagnostics["move_lines_dropped_marked"]
+            ["move:p1a:healbell"], diagnostics["move_lines_dropped_marked"]
         )
 
     def test_a_sibling_branch_that_carries_the_line_clears_the_verdict(self):
@@ -3033,6 +3033,136 @@ class DroppedMoveLineTests(unittest.TestCase):
         self.assertEqual(["render_move_line_dropped"], _axes(found))
         self.assertEqual(2, diagnostics["matched_branches"])
 
+    #: One branch that declares nothing lost and one that declares
+    #: `sleeptalk_called_unidentified`, both folding equal and both omitting the
+    #: SAME announcement. The pair is built once and used in both orders.
+    def _tied_pair(self, first_lossy):
+        events = list(self.RENDERED_WITHOUT_CALLEE)
+        lossy_branch = {
+            "events": events,
+            "lossy": ["sleeptalk_called_unidentified"],
+            "attribution_unsafe": False,
+        }
+        clean_branch = {"events": events, "lossy": [], "attribution_unsafe": False}
+        return (
+            [lossy_branch, clean_branch] if first_lossy else [clean_branch, lossy_branch]
+        )
+
+    def test_a_lossy_sibling_cannot_silence_a_clean_branchs_identical_deficit(self):
+        """⚠ THE REVIEW FINDING, and the reason the split moved to the SET.
+
+        The first revision selected ONE branch by `(len(deficit), deficit)` -- a
+        key that does not mention `lossy` -- and then read `lossy` off whatever
+        `min` returned. `min` returns the FIRST minimal element, so on a tie
+        CRATE ENUMERATION ORDER decided whether the deficit became a verdict or
+        was filed into the bucket that is never a verdict.
+
+        Not hypothetical: on the 256-game control block whose zero is this
+        instrument's headline, 11 of 53 marked boundaries had more than one
+        matching branch, and at one of them FIVE branches all omitted
+        `move:p2a:surf` while THREE declared `lossy=[]`. A lossy branch sat at
+        index 0, the axis stayed silent, and the published zero was wrong.
+
+        A render that declared nothing was lost and still omitted an announced
+        line is a verdict whatever its siblings declared.
+
+        NULL WORLD: reduce over the whole matching set again instead of per
+        population -- i.e. select with `(len, content)` and read `lossy` off the
+        winner -- and the `first_lossy=True` subtest goes red while
+        `first_lossy=False` stays green. That asymmetry IS the bug.
+        """
+
+        for first_lossy in (True, False):
+            # BOTH ORDERS, because order is the variable. A pin in one order
+            # passes for exactly the reason the defect existed.
+            with self.subTest(lossy_branch_first=first_lossy):
+                found, diagnostics = self._run(
+                    self._tied_pair(first_lossy), self.OBSERVED_CALLEE
+                )
+                self.assertEqual(["render_move_line_dropped"], _axes(found))
+                self.assertEqual(
+                    ["move:p1a:healbell"], diagnostics["move_lines_dropped"]
+                )
+                # And the lossy population still reports its own, because the two
+                # keys are now independent rather than a single value routed to
+                # one of two names.
+                self.assertEqual(
+                    ["move:p1a:healbell"], diagnostics["move_lines_dropped_marked"]
+                )
+                self.assertEqual(2, diagnostics["matched_branches"])
+                self.assertEqual(1, diagnostics["matched_clean_branches"])
+
+    def test_a_smaller_lossy_deficit_does_not_mask_a_larger_clean_one(self):
+        """The second shape the review found on the same block: the only CLEAN
+        branch drops TWO lines while a lossy sibling drops one. Reducing over the
+        merged set picks the lossy branch's single line, and the clean branch's
+        extra announcement is counted in NEITHER bucket -- it vanishes from the
+        run. Reducing per population reports both lines."""
+
+        observed = self.OBSERVED_CALLEE + [
+            "|move|p2a: Squirtle|Splash|p2a: Squirtle"
+        ]
+        branches = [
+            {
+                "events": list(self.RENDERED_WITHOUT_CALLEE)
+                + ["|move|p2a: Squirtle|splash||[still]"],
+                "lossy": ["sleeptalk_called_unidentified"],
+                "attribution_unsafe": False,
+            },
+            {
+                "events": list(self.RENDERED_WITHOUT_CALLEE),
+                "lossy": [],
+                "attribution_unsafe": False,
+            },
+        ]
+        found, diagnostics = self._run(branches, observed)
+        self.assertEqual(["render_move_line_dropped"], _axes(found))
+        self.assertEqual(
+            ["move:p1a:healbell", "move:p2a:splash"],
+            diagnostics["move_lines_dropped"],
+        )
+        self.assertEqual(
+            ["move:p1a:healbell"], diagnostics["move_lines_dropped_marked"]
+        )
+
+    def test_no_clean_branch_at_all_leaves_the_axis_silent(self):
+        """THE OTHER SIDE of the two pins above, and the null world for the
+        split. Widening to "the clean population decides" must not become "any
+        deficit fires": when EVERY matching branch declared a loss, there is no
+        render that claimed nothing was lost and the omission is accounted for by
+        the class that already counts it."""
+
+        found, diagnostics = self._run(
+            [
+                {
+                    "events": list(self.RENDERED_WITHOUT_CALLEE),
+                    "lossy": ["sleeptalk_called_unidentified"],
+                    "attribution_unsafe": False,
+                }
+            ],
+            self.OBSERVED_CALLEE,
+        )
+        self.assertEqual([], _axes(found))
+        self.assertEqual([], diagnostics["move_lines_dropped"])
+        self.assertEqual(0, diagnostics["matched_clean_branches"])
+        self.assertEqual(
+            ["move:p1a:healbell"], diagnostics["move_lines_dropped_marked"]
+        )
+
+    def test_the_counter_tokens_carry_no_pipe(self):
+        """These strings become census counter keys and mismatch predicates, and
+        both are rendered into GFM tables by `--mode report`. A raw `|` splits
+        the cell and a code span does NOT escape it, so the token
+        `|move|p1a|healbell` silently ate the count column of every row it
+        appeared in -- 13 rows unforced, thousands under the forcing. Pinned on
+        the token rather than on the report, because the report is one of several
+        consumers and the next one will not have a test."""
+
+        for token in dropped_move_lines(
+            self.OBSERVED_CALLEE, self.RENDERED_WITHOUT_CALLEE
+        ):
+            self.assertNotIn("|", token)
+
     def test_a_boundary_that_matched_nothing_publishes_a_zero_denominator(self):
         """The deficit is only read on a branch the fold ACCEPTED, so on an
         unmatched boundary the check does not run. It publishes an explicit 0
@@ -3048,6 +3178,35 @@ class DroppedMoveLineTests(unittest.TestCase):
             }
         ]
         found, diagnostics = self._run(branches, observed)
+        self.assertEqual(["render_unmatched_transition"], _axes(found))
+        self.assertEqual(0, diagnostics["move_lines_compared"])
+
+    def test_an_unrelated_disagreement_hides_the_same_drop(self):
+        """THE COVERAGE LIMIT, PINNED rather than described in a comment.
+
+        The deficit is read only on a branch the fold ACCEPTED. Take the boundary
+        from `test_a_silently_dropped_callee_line_is_caught` -- identical
+        announcements, identical drop -- and add one unrelated `|-damage|` to the
+        log that the render does not have. The boundary now reports
+        `render_unmatched_transition` and `move_lines_compared: 0`: LOUD, so
+        nothing is silently wrong, but the drop fact is recorded NOWHERE.
+
+        Measured on the 256-game control block: the deficit runs on 6,051 of
+        6,325 evaluated boundaries (95.7%) and 6,051 of 24,749 decisions (24.4%).
+        This test is what stops that number being quietly re-described as full
+        coverage.
+        """
+
+        found, diagnostics = self._run(
+            [
+                {
+                    "events": list(self.RENDERED_WITHOUT_CALLEE),
+                    "lossy": [],
+                    "attribution_unsafe": False,
+                }
+            ],
+            self.OBSERVED_CALLEE + ["|-damage|p2a: Squirtle|40/100"],
+        )
         self.assertEqual(["render_unmatched_transition"], _axes(found))
         self.assertEqual(0, diagnostics["move_lines_compared"])
 
