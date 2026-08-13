@@ -4,6 +4,7 @@ import unittest
 
 from pokezero.mcts_diagnostics import (
     root_puct_direct_materialization_rejection_category,
+    sanitize_root_puct_direct_materialization_rejection_categories,
     root_puct_first_observation_mismatch_path_counts,
     root_puct_fallback_category,
     root_puct_fallback_signature,
@@ -31,6 +32,72 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
             ),
             "materializer_error",
         )
+
+    def test_classifies_every_bridge_volatile_payload_failure_as_volatile_effects(self) -> None:
+        """Three of the bridge's four volatile errors say "volatile effect", singular.
+
+        The classifier tested only the plural, so `does not yet support volatile effect X`,
+        `received invalid volatile effect for X` and `received duplicate volatile effect X`
+        all fell through to `materializer_error`. That catch-all is where the Substitute
+        refusal hid: it WAS counted, but only as "something went wrong", so it could not be
+        ranked against the other classes a fallback campaign is burning down.
+        """
+
+        messages = (
+            "Materialize does not yet support volatile effect torment.",
+            "Materialize received invalid volatile effect for p1.",
+            "Materialize received invalid volatile effects for p1.",
+            "Materialize received duplicate volatile effect ingrain.",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                category = root_puct_direct_materialization_rejection_category(message)
+                self.assertEqual(category, "volatile_effects")
+                self.assertNotEqual(category, "materializer_error")
+                self.assertEqual(
+                    sanitize_root_puct_direct_materialization_rejection_categories({category: 1}),
+                    {category: 1},
+                )
+
+    def test_classifies_substitute_refusals_under_the_crate_lanes_own_names(self) -> None:
+        """The bridge lane and the crate lane must name one public fact identically.
+
+        These three strings are `engine_world.py`'s `EngineWorldUnsupported` reason codes.
+        Both lanes consume the same `substituteHealthState`/`substituteDepletion` payload
+        keys, so sharing the names lets an era aggregator ADD the two lanes' refusals of the
+        same fact instead of reading a bridge alias beside a crate alias.
+        """
+
+        cases = (
+            (
+                "Materialize cannot reconstruct unknown Substitute health for p1.",
+                "substitute_health_unknown",
+            ),
+            (
+                "Materialize found contradictory Substitute health provenance for p1: "
+                "state full cannot carry depletion 5.",
+                "substitute_health_provenance_contradiction",
+            ),
+            (
+                "Materialize sampled a p1 world whose initial Substitute HP 62 could not "
+                "survive public Substitute depletion 900.",
+                "substitute_depletion_world_incompatible",
+            ),
+        )
+        for message, expected in cases:
+            with self.subTest(expected=expected):
+                category = root_puct_direct_materialization_rejection_category(message)
+                self.assertEqual(category, expected)
+                # Not the catch-all it used to be, and not swallowed by the generic
+                # volatile arm that sits directly below these checks.
+                self.assertNotEqual(category, "materializer_error")
+                self.assertNotEqual(category, "volatile_effects")
+                # An unregistered category is dropped SILENTLY by the sanitizer, which is
+                # indistinguishable from never having refused at all.
+                self.assertEqual(
+                    sanitize_root_puct_direct_materialization_rejection_categories({category: 2}),
+                    {category: 2},
+                )
 
     def test_classifies_missing_sampled_world(self) -> None:
         self.assertEqual(

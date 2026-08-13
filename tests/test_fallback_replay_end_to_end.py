@@ -18,7 +18,8 @@ cannot make it pass.
 
 **It does NOT cover the search parameters, and an earlier version of this
 docstring claimed it did.** The refusals this band produces are construction-side
-(`no_worlds_constructed`), and `engine_search.py:1049-1101` reads only `worlds`,
+(`no_worlds_constructed`), and `EngineMctsPolicy._search`'s world-sampling
+`while len(worlds) < self._config.worlds` loop reads only `worlds`,
 `sample_retry_factor` and the four `approximate_*` flags before refusing -- never
 `search_sims`, `search_depth`, `c_puct`, `deep_ko_split` or `leaf_eval`. Deleting
 the override splat from `engine_config_for` left this suite green, twice,
