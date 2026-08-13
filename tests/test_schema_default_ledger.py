@@ -209,7 +209,32 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
             proc.returncode, 0,
             f"`--render-kinds-table` exited {proc.returncode}.\n{proc.stderr[-2000:]}",
         )
-        return proc.stdout.rstrip("\n")
+        rendered = proc.stdout.rstrip("\n")
+        # NON-VACUITY, tied to a measurement rather than to a constant. `render_kinds_table` returns
+        # '' when the tool emits no non-surface kinds, and an empty docstring region would then
+        # compare equal to it -- assertEqual('', '') passes, which is the exact vacuity this file
+        # exists to prevent. The empty case is ALSO the migration's goal state (bare-const and
+        # default-spec burned down to 0), so it cannot simply be forbidden; it has to be
+        # DISTINGUISHED from a tool that produced nothing for any other reason.
+        rows = _derive()
+        kinds = sorted(
+            {r["kind"] for r in rows if not r["kind"].startswith("implicit:") and r["kind"] != "UNPARSED"}
+        )
+        lines = [l for l in rendered.split("\n") if l.strip()]
+        self.assertEqual(
+            len(lines), len(kinds),
+            f"the rendering has {len(lines)} row(s) but the tool emits {len(kinds)} non-surface "
+            f"kind(s) {kinds}. An empty or short rendering compared against an empty or short "
+            "docstring region would pass while checking nothing.",
+        )
+        if not kinds:
+            print(
+                "\nNOTE: the ledger emits NO non-surface kinds -- `bare-const` and `default-spec` "
+                "have burned down to zero, which is this migration's goal state. The docstring's "
+                "kinds table is correctly empty. This is the one case where both sides of the "
+                "comparison are empty legitimately."
+            )
+        return rendered
 
     def _docstring_kinds_region(self) -> str:
         """The docstring lines between `is any of:` and the `implicit:` row, blank lines dropped.
@@ -293,14 +318,56 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
 
             python scripts/schema_default_ledger.py --render-kinds-table
         """
+        region = self._docstring_kinds_region()
         self.assertEqual(
-            self._docstring_kinds_region(), self._rendered_kinds_table(),
+            region, self._rendered_kinds_table(),
             "the ledger docstring's kinds table is not byte-equal to what the tool renders.\n"
             "Regenerate it:  python scripts/schema_default_ledger.py --render-kinds-table\n"
             "This table is GENERATED, not hand-maintained -- any difference (a changed count, an "
             "added or retired kind, a duplicated row, a reformatted row, stray prose inside the "
             "region) is a real difference and none of them can hide from a byte comparison.",
         )
+        # Byte-equality closes everything INSIDE the region and says nothing about outside it. That
+        # gap is not theoretical: retire a kind in the tool and MOVE its row above `is any of:` or
+        # below the `implicit:` block, and the stale count survives with this test green -- the
+        # "a stale row is stale wherever it sits" property failing again, now on region bounds
+        # instead of on grammar. Measured, both escapes were green before this check.
+        #
+        # Closed using the tool's OWN vocabulary as the source of truth: `KIND_DESCRIPTIONS` names
+        # every kind the ledger knows, including one whose count has reached zero, so a retired
+        # kind's name is still known here even though it no longer appears in the rows. Each such
+        # name must occur in the docstring ONLY inside the generated region.
+        doc = self._docstring()
+        outside = doc.replace(region, "", 1) if region else doc
+        stray = sorted(k for k in self._kind_vocabulary() if k in outside)
+        self.assertEqual(
+            stray, [],
+            f"kind name(s) {stray} appear in the ledger docstring OUTSIDE the generated kinds "
+            "table. Only the generated region may carry a kind's row and count; a copy anywhere "
+            "else is a figure nothing holds, and moving a retired kind's row out of the region is "
+            "exactly how a stale count survives this comparison.\n"
+            "KNOWN LIMIT, stated rather than implied: this uses the tool's KIND_DESCRIPTIONS as the "
+            "vocabulary, so a row whose kind has been deleted from KIND_DESCRIPTIONS *and* retired "
+            "from the emitted rows *and* moved out of the region would still escape. That is three "
+            "deliberate edits, and the first of them is the one to review.",
+        )
+
+    def _kind_vocabulary(self) -> list[str]:
+        """Every non-surface kind the ledger KNOWS, from its own KIND_DESCRIPTIONS."""
+        import importlib.util
+
+        _sweep_probe_residue()
+        spec = importlib.util.spec_from_file_location("_ledger_kinds", LEDGER)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        vocab = sorted(module.KIND_DESCRIPTIONS)
+        self.assertTrue(
+            vocab,
+            "the ledger has an empty KIND_DESCRIPTIONS, so this guard has no vocabulary and the "
+            "stray-row check below would pass over anything.",
+        )
+        return vocab
 
     def test_the_docstring_states_the_surface_count_it_actually_has(self) -> None:
         doc = LEDGER.read_text(encoding="utf-8")
