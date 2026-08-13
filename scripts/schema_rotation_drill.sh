@@ -26,13 +26,37 @@
 # (#1227 token_count, #1228 the feature widths) were shape bugs. A drill that structurally
 # cannot reproduce its own motivating defects is not sufficient evidence on its own.
 #
-# STATUS: `differ` is NOT sound yet and its output must not be used as evidence. Observed on
-# first run: a test appearing in BOTH "unexpected breakages" and "expected but did not break",
-# which is impossible if the comparison were correct. Two contributing causes are known -- the
-# seven pre-existing `fallback_replay` tests change pytest bucket (FAILED -> ERROR) under a
-# shape change, and the baseline reuse key covers (SHA, scope) but NOT shape -- and there may be
-# more. Left in the tree, clearly labelled, because the GAP it addresses is real: the default
-# probe structurally cannot catch a shape conflation. Fixing the scorer is the next task.
+# STATUS: `differ` is CONSTRUCTED but UNVERIFIED. Its output must not be quoted as evidence until
+# a real run on a tree where the drill can execute, and the exit-12 INCONCLUSIVE gate below
+# enforces that mechanically -- it cannot print a PASS-shaped summary.
+#
+# The distinction matters and the previous version of this note blurred it. It said differ was "NOT
+# sound" and named two open causes for the contradiction observed on its first run (a test appearing
+# in BOTH "unexpected breakages" and "expected but did not break"). All THREE causes now known are
+# closed, so a reader following that note would re-investigate fixed code:
+#
+#   the FAILED -> ERROR bucket change on the seven fallback_replay tests
+#       -- closed: `_norm_id` strips both prefixes, so the two buckets normalise to ONE id.
+#          Verified by feeding it a FAILED and an ERROR line for the same test.
+#   the baseline reuse key covering (SHA, scope) but not shape
+#       -- closed: the stamp is (SHA, scope, SHAPE, interpreter), written after both runs.
+#   the ACTUAL cause, which neither of those was
+#       -- closed: `_norm_id` retained pytest's ` - <reason>` suffix, so no id could ever match the
+#          rubric's bare ids. Every breakage landed in UNEXPECTED and every rubric row in MISSING,
+#          which IS "appearing in both". Found by adversarial review, not by me; I had attributed
+#          the symptom to relative-vs-absolute paths and declared it fixed.
+#
+# The construction is also complete on the census axis, which was the other half of the ask: the
+# differ spec narrows `numeric_feature_count` by one AND `_MINIMUM_NUMERIC_CENSUS_BY_SCHEMA` by one,
+# so the spec and its floor move together rather than the floor refusing the schema it describes;
+# and differ has its own pass condition, because the class-(iii) set does not apply under a width
+# change. Its rubric is committed EMPTY for that reason -- populating it from an unverified run
+# would launder a guess into a pin.
+#
+# So what remains is verification, not construction, and it needs a tree where the drill runs.
+# The acceptance test is specific: a canary asserting `numeric_feature_count == 132` must break
+# under the differ arm (131 columns there) and must not break under the identical arm. Until that
+# is observed, the shape half of the class is UNCOVERED and the honest verdict says so.
 #
 # `fast` exists because two full suites take ~22 minutes and get killed by most runners. It is
 # for ITERATION ONLY and is NOT the stop condition: a scoped drill cannot see a NEW breakage in
