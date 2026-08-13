@@ -388,15 +388,25 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         # to remove a misdiagnosing message -- and the sibling surface guard sixty lines below
         # documents refusing exactly this broadening, which I did not read before widening.
         #
-        # Intersecting with `words.values()` keeps every kill and drops the false positives: a wrong
-        # NUMBER WORD is still caught wherever it sits, and a sentence containing no number word is
-        # not a total at all.
+        # Intersecting with `words.values()` drops the false positives and keeps every kill EXCEPT
+        # one, named below: a wrong number word inside this guard's 0-12 vocabulary is still caught
+        # wherever it sits, and a sentence containing no number word is not a total at all.
         #
         # STATED NARROWNESS, because the sibling guard states its own and this one did not. Only
-        # `all <NUMBER-WORD> counts` is recognised. These still slip past while the correct total is
-        # also present: "All of the NINE counts", "NINE counts in total", "All TWENTY-NINE counts"
-        # (the hyphen breaks the word class), "All 9 counts", "All NINE derived counts" (any
-        # intervening word). Deliberate: catching them means matching prose, which is the defect
+        # `all <NUMBER-WORD-IN-0..12> counts` is recognised. These slip past while the correct total
+        # is also present:
+        #   "All of the NINE counts"      intervening words before the number
+        #   "NINE counts in total"        no leading `all`
+        #   "All TWENTY-NINE counts"      the hyphen breaks `[A-Za-z]+`
+        #   "All 9 counts"                digits, not a word
+        #   "All NINE derived counts"     any word between the number and `counts`
+        #   "All THIRTEEN counts"         a number word OUTSIDE this guard's 0-12 `words` map -- the
+        #       one case the intersection LOST relative to the un-intersected form, which caught it.
+        #       Kept anyway: `assertIn(total, words)` above hard-fails if the real total ever exceeds
+        #       12, so the uncaught case is a maintainer writing >12 when the truth is <=12 -- a gross
+        #       typo, not the staling drift this guard exists for. The alternative was a guard that
+        #       fails on ordinary English prose, which is strictly worse.
+        # The first five are deliberate: catching them means matching prose, which is the defect
         # above. A total absent entirely still fails, since the empty set is not `{words[total]}`.
         stated_totals = {
             m.upper() for m in re.findall(r"(?i)all ([A-Za-z]+) counts", doc)
