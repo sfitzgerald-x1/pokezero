@@ -296,7 +296,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         EVERY SUPPORTED SCHEMA, not just v2. An earlier revision hard-coded v2, so the bound was
         pinned on 1 of 5 schemas and SIX mutants survived, all leaving this file green at
-        364 passed / 36 subtests: the categorical bound applied for v2 only, the numeric bound for
+        364 passed / 36 subtests across the SIX files this PR verifies (this file alone is 218/33 at
+        that revision -- the scope matters, and an earlier revision of this sentence said "this
+        file" while quoting the six-file total): the categorical bound applied for v2 only, the numeric bound for
         v2 only, both for v2 only, the categorical bound bypassed for v4, the NUMERIC bound bypassed
         for v4, and both bounds bypassed for v2.1.
 
