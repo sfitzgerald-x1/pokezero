@@ -30,6 +30,21 @@ HIGH_WATER_MARK = 390
 LEDGER = REPO / "scripts" / "schema_default_ledger.py"
 
 
+def _constructor_names() -> tuple[str, ...]:
+    """The ledger's own CONSTRUCTOR_NAMES, read rather than mirrored.
+
+    A literal copy in this file is what left `__post_init__` unpinned: narrowing the gate's tuple to
+    drop only that name stayed green, while the comment claimed the assertion was derived from it.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_ledger_ctor_names", LEDGER)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return tuple(module.CONSTRUCTOR_NAMES)
+
+
 def _sweep_probe_residue() -> list[str]:
     """Remove any probe file a crashed or interrupted run left in the live src/ tree.
 
@@ -343,6 +358,12 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
          "class Surf:\n"
          "    def __new__(cls, spec=DEFAULT_REPLAY_OBSERVATION_SPEC):\n"
          "        return super().__new__(cls)\n"),
+        ("__post_init__, the third name in the gate's tuple -- previously unpinned",
+         "from dataclasses import dataclass\n"
+         "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "class Surf:\n"
+         "    def __post_init__(self, spec=DEFAULT_REPLAY_OBSERVATION_SPEC):\n"
+         "        self.spec = spec\n"),
         ("a keyword-only parameter default",
          "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
          "def surf_fn(*, spec=DEFAULT_REPLAY_OBSERVATION_SPEC):\n    return spec\n"),
@@ -444,17 +465,19 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
             with self.subTest(spelling=label):
                 surfaces = self._surfaces_with(source)
                 name = "Surf" if "class Surf" in source else "surf_fn"
-                # Derived from the skip list, not hardcoded to `__init__`. Narrowing the tuple to
-                # ("__init__",) left all three surface tests green while planting a phantom
-                # `__new__` surface -- two of the three names in the fix's own list were unpinned.
-                for dunder in ("__init__", "__new__", "__post_init__"):
-                    self.assertNotIn(dunder, surfaces, f"a phantom `{dunder}` surface was derived")
-                self.assertNotIn(
-                    "__init__", surfaces,
-                    "a phantom `__init__` surface was derived alongside the class. Keying a "
-                    "constructor on its own name makes every `Surf(...)` call site invisible AND "
-                    "scores rows on any literal `x.__init__(...)`.",
-                )
+                # READ from the ledger module's own tuple, not a literal mirroring it. The previous
+                # version claimed "derived from the skip list" while hardcoding
+                # ("__init__", "__new__", "__post_init__") -- a false statement about the test's own
+                # wiring, in the same category as the false docstring that blocked round 10, and it
+                # left `__post_init__` unpinned: narrowing the gate's tuple to drop only that name
+                # stayed green. Reading the tuple means the assertion cannot drift from the gate.
+                for dunder in sorted(_constructor_names()):
+                    self.assertNotIn(
+                        dunder, surfaces,
+                        f"a phantom `{dunder}` surface was derived alongside the class. Keying a "
+                        f"constructor on its own name makes every `Surf(...)` call site invisible "
+                        f"AND scores rows on any literal `x.{dunder}(...)`.",
+                    )
                 self.assertIn(
                     name, surfaces,
                     f"{label}: the surface was NOT derived, so every call site of it is invisible "
@@ -462,11 +485,11 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
                 )
                 # A CONSTRUCTOR probe declares `class Surf` and defaults `spec`, so keying the
                 # expectation on "is there a class" alone gave the wrong answer for it.
-                expected_field = (
-                    {"spec"}
-                    if ("def __init__" in source or "def __new__" in source or name == "surf_fn")
-                    else {"v"}
-                )
+                # The constructor list again read rather than mirrored -- the first version of this
+                # expectation named `__init__` and `__new__` only, so adding a `__post_init__` probe
+                # failed against correct code. Same defect as the assertion below, one line apart.
+                is_ctor = any(f"def {d}" in source for d in _constructor_names())
+                expected_field = {"spec"} if (is_ctor or name == "surf_fn") else {"v"}
                 self.assertEqual(
                     surfaces[name], expected_field,
                     f"{label}: derived the surface but named {sorted(surfaces[name])} as the open "

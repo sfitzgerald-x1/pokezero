@@ -70,6 +70,9 @@ DEFAULT_SPEC = "DEFAULT_REPLAY_OBSERVATION_SPEC"
 # attribute or parameter whose DEFAULT is one of GLOBALS, so a new surface is counted the day
 # it is written.
 GLOBALS = {CONST, DEFAULT_SPEC}
+# Named once so the gate and its test cannot disagree. The test previously mirrored this as a
+# literal and left `__post_init__` unpinned.
+CONSTRUCTOR_NAMES = ("__init__", "__new__", "__post_init__")
 # Alternate constructors do not re-declare the field, so they cannot be derived; they are
 # listed against the type they build and asserted to exist.
 EXTRA_CONSTRUCTORS = {"TransformerPolicyConfig": ["compact_category"]}
@@ -320,7 +323,7 @@ def derive_surfaces() -> dict[str, set[str]]:
                 for statement in node.body:
                     if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         continue
-                    if statement.name not in ("__init__", "__new__", "__post_init__"):
+                    if statement.name not in CONSTRUCTOR_NAMES:
                         continue
                     a = statement.args
                     positional = a.posonlyargs + a.args
@@ -346,7 +349,7 @@ def derive_surfaces() -> dict[str, set[str]]:
                 # ALSO register under their own name, leaving a phantom `__init__` surface that would
                 # score a row on any literal `x.__init__(...)` -- so the first half of this fix
                 # produced the right answer and kept the wrong one alongside it.
-                if node.name in ("__init__", "__new__", "__post_init__"):
+                if node.name in CONSTRUCTOR_NAMES:
                     continue
                 a = node.args
                 # `posonlyargs + args`, because `ast.arguments.defaults` covers BOTH, combined.
