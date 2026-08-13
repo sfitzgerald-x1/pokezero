@@ -15,6 +15,7 @@ from unittest.mock import patch
 from pokezero.category_vocab import build_category_vocabulary
 from pokezero.local_showdown import LocalShowdownConfig, env_config_from_checkpoint_provenance
 from pokezero.observation import (
+    OBSERVATION_SCHEMA_VERSION_V2_2,
     DEFAULT_OBSERVATION_FEATURE_MASKS,
     TRANSITION_TOKEN_COUNT,
     ObservationFeatureMasks,
@@ -107,6 +108,13 @@ def _save_k32_checkpoint(path: Path):
 
     config = TransformerPolicyConfig.compact_category(
         policy_id="k32-arm",
+        # Pin v2.2 rather than taking the process default. Every assertion in this module is
+        # about a k=32 history mask, which needs a transition region of at least 32 tokens;
+        # v2/v2.1/v2.2/v3 carry one and v4 does not ("carries no transition region, so
+        # transition_token_budget must be 0"). Reading the default made the whole module
+        # silently contingent on which schema held that slot -- the subject is the k32 latch,
+        # not the fresh default.
+        observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
         category_vocab=_K32_FIXTURE_VOCAB,
         category_oov_buckets=2,
         window_size=1,
@@ -311,6 +319,136 @@ class EnvConfigVocabResolutionTest(unittest.TestCase):
         self.assertIs(resolved, config)
 
 
+class TheDefaultEqualsExplicitConflationTest(unittest.TestCase):
+    """`env_config_from_checkpoint_provenance` infers "explicitly set" from "differs from default".
+
+    Found by rotating this module to v2 while reviewing a fixture PR, and reproducible at TODAY's
+    default with no rotation at all. Two of the function's three axes gate their train/eval hard
+    fail on a VALUE comparison against the process-wide default:
+
+        :203  resolved.feature_masks    != DEFAULT_OBSERVATION_FEATURE_MASKS
+        :226  resolved.observation_spec != DEFAULT_REPLAY_OBSERVATION_SPEC
+        :245  resolved.category_vocab   is not None          <- the correct pattern
+
+    Because `LocalShowdownConfig.feature_masks` and `.observation_spec` default to the VALUE rather
+    than to a `None` sentinel, a caller who explicitly names the schema or the masks that happen to
+    equal the current default is indistinguishable from a caller who named nothing -- and loses the
+    documented guard against evaluating a checkpoint on a schema it never trained on.
+
+    These are `expectedFailure` rather than skipped, and rather than absorbed into a fix here. The
+    fix is a `None` sentinel on both fields, which changes resolution semantics at all 133 sites
+    the ledger records as resolving through `observation_spec`; that is production work and this is
+    a test-fixture PR. But a follow-up with no test attached is how a finding gets lost, so the live
+    behaviour is captured here and will flip to an unexpected success -- a LOUD signal -- the moment
+    the sentinel lands.
+    """
+
+    @unittest.expectedFailure
+    def test_an_explicit_spec_equal_to_the_default_should_still_hard_fail(self) -> None:
+        from pokezero.showdown import (
+            DEFAULT_REPLAY_OBSERVATION_SPEC,
+            V2_1_REPLAY_OBSERVATION_SPEC,
+        )
+
+        config = LocalShowdownConfig(observation_spec=DEFAULT_REPLAY_OBSERVATION_SPEC)
+        with self.assertRaisesRegex(ValueError, "conflicts with the loaded checkpoint"):
+            env_config_from_checkpoint_provenance(
+                config, (), context="t", required_specs=V2_1_REPLAY_OBSERVATION_SPEC,
+                required_vocabs=VOCAB,
+            )
+
+    @unittest.expectedFailure
+    def test_explicit_masks_equal_to_the_default_should_still_hard_fail(self) -> None:
+        from pokezero.observation import DEFAULT_OBSERVATION_FEATURE_MASKS
+
+        config = LocalShowdownConfig(feature_masks=DEFAULT_OBSERVATION_FEATURE_MASKS)
+        with self.assertRaisesRegex(ValueError, "conflict with the loaded checkpoint"):
+            env_config_from_checkpoint_provenance(
+                config, K32_MASKS, context="t", required_vocabs=VOCAB,
+            )
+
+    def test_the_non_default_arms_do_hard_fail(self) -> None:
+        """Non-vacuity: the guard works when the value happens NOT to equal the default.
+
+        Without this the two expectedFailures above are satisfied by a function that never raises,
+        and the record would say "the guard is broken" when it might simply be absent.
+        """
+        from pokezero.observation import ObservationFeatureMasks
+        from pokezero.showdown import (
+            DEFAULT_REPLAY_OBSERVATION_SPEC,
+            REPLAY_OBSERVATION_SPECS_BY_SCHEMA,
+        )
+
+        # SELECTED against the live default, not hardcoded. An earlier version of this test named
+        # `V2_REPLAY_OBSERVATION_SPEC` as its "non-default" arm -- and under a v2 rotation that value
+        # IS the default, so the guard stops firing and this test fails with "ValueError not
+        # raised". That is this PR's own defect class, re-introduced inside the test whose stated job
+        # is to stop the two expectedFailures being misread. Worse, its failure mode is precisely
+        # the misreading it warns about: it would report "the guard is broken" when the guard was
+        # simply not applicable.
+        #
+        # Exactly one supported schema's spec equals the default at any time, and WHICH one depends
+        # on the rotation, so the only default-independent choice is to pick relative to the live
+        # value. Two distinct non-default specs are needed: one for the env, one for the checkpoint.
+        others = [
+            spec
+            for spec in REPLAY_OBSERVATION_SPECS_BY_SCHEMA.values()
+            if spec != DEFAULT_REPLAY_OBSERVATION_SPEC
+        ]
+        self.assertGreaterEqual(
+            len(others), 2,
+            "fewer than two non-default specs exist, so this arm cannot be constructed without "
+            "using the default itself -- which is the thing under test.",
+        )
+        env_spec, checkpoint_spec = others[0], others[1]
+        self.assertNotEqual(
+            env_spec, DEFAULT_REPLAY_OBSERVATION_SPEC,
+            "the env spec chosen for this arm equals the default; the guard would not fire and "
+            "this test would report a broken guard where there is merely no explicit value.",
+        )
+
+        with self.assertRaisesRegex(ValueError, "conflicts with the loaded checkpoint"):
+            env_config_from_checkpoint_provenance(
+                LocalShowdownConfig(observation_spec=env_spec),
+                (), context="t", required_specs=checkpoint_spec,
+                required_vocabs=VOCAB,
+            )
+        with self.assertRaisesRegex(ValueError, "conflict with the loaded checkpoint"):
+            env_config_from_checkpoint_provenance(
+                LocalShowdownConfig(
+                    feature_masks=ObservationFeatureMasks(transition_token_budget=64)
+                ),
+                K32_MASKS, context="t", required_vocabs=VOCAB,
+            )
+
+    def test_the_third_axis_uses_the_sentinel_and_is_therefore_correct(self) -> None:
+        """The fix already exists in this function, eleven lines below one of the defects."""
+        import ast
+        from pathlib import Path
+
+        source = (
+            Path(__file__).resolve().parents[1] / "src/pokezero/local_showdown.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        function = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef)
+            and n.name == "env_config_from_checkpoint_provenance"
+        )
+        sentinel_checks = [
+            ast.unparse(n) for n in ast.walk(function)
+            if isinstance(n, ast.Compare)
+            and any(isinstance(op, (ast.Is, ast.IsNot)) for op in n.ops)
+            and "resolved." in ast.unparse(n)
+        ]
+        self.assertTrue(
+            any("category_vocab" in c for c in sentinel_checks),
+            "the category_vocab axis no longer uses an `is not None` sentinel. It was the one "
+            f"correct example in this function and the model for fixing the other two. Found: "
+            f"{sentinel_checks}",
+        )
+
+
 class EnvConfigSpecResolutionTest(unittest.TestCase):
     """The dual-schema half of the latch: checkpoint-stamped observation specs resolve the
     env's encode schema + width with the same adopt/agree/conflict semantics as masks."""
@@ -414,6 +552,8 @@ class MaskDerivationTest(unittest.TestCase):
         from pokezero.neural_policy import TransformerPolicyConfig, feature_masks_from_model_config
 
         config = TransformerPolicyConfig.compact_category(
+            # v2.2: a budget of 32 needs a transition region, which v4 does not have.
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
             category_vocab=("species:a",),
             category_oov_buckets=2,
             stats_block_enabled=False,
@@ -427,8 +567,17 @@ class MaskDerivationTest(unittest.TestCase):
                 opponent_tendency_stats_block=False, exact_state=True, transition_token_budget=32
             ),
         )
+        # `DEFAULT_OBSERVATION_FEATURE_MASKS` is schema-AGNOSTIC: its
+        # `transition_token_budget` default is the v2-family `TRANSITION_TOKEN_COUNT` (128),
+        # and under v4 the budget is inert -- there is no region and the encoder never reads
+        # it (see `ObservationFeatureMasks.__post_init__`). A mask DERIVED from a config
+        # therefore only equals that constant for a schema whose region is 128, so this pins
+        # v2.2 rather than the fresh default. The subject is the derive/round-trip identity,
+        # not which schema currently holds the default slot.
         default_config = TransformerPolicyConfig.compact_category(
-            category_vocab=("species:a",), category_oov_buckets=2
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+            category_vocab=("species:a",),
+            category_oov_buckets=2,
         )
         self.assertEqual(
             feature_masks_from_model_config(default_config), DEFAULT_OBSERVATION_FEATURE_MASKS
@@ -447,6 +596,8 @@ class MaskDerivationTest(unittest.TestCase):
         from pokezero.policy import RandomLegalPolicy
 
         config = TransformerPolicyConfig.compact_category(
+            # v2.2: a budget of 32 needs a transition region, which v4 does not have.
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
             category_vocab=("species:a",), category_oov_buckets=2, transition_token_budget=32
         )
 

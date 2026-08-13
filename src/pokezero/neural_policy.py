@@ -242,11 +242,14 @@ class TransformerPolicyConfig:
     window_size: int = 1
     categorical_vocab_size: int = 2
     token_type_vocab_size: int = DEFAULT_TOKEN_TYPE_VOCAB_SIZE
-    categorical_feature_count: int = DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count
-    numeric_feature_count: int = DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count
-    # Resolved from ``observation_schema_version`` in ``__post_init__``. A dataclass-time
-    # default cannot safely read the global replay spec: the selected schema may differ from
-    # the process-wide fresh-artifact default (for example, a v2.2 config after a v4 rotation).
+    # All three widths resolve from ``observation_schema_version`` in ``__post_init__``. A
+    # dataclass-time default cannot safely read the global replay spec: the selected schema may
+    # differ from the process-wide fresh-artifact default (for example, a v2.2 config after a v4
+    # rotation). #1227 fixed ``token_count`` this way; the two feature widths carried the same
+    # defect and are fixed here, because ``token_count`` dying loudly was the only thing masking
+    # them -- once it resolved, a v4 config silently kept v2.2's 51/155 against v4's 41/132.
+    categorical_feature_count: int | None = None
+    numeric_feature_count: int | None = None
     token_count: int | None = None
     embedding_dim: int = 128
     transformer_layers: int = 2
@@ -422,10 +425,47 @@ class TransformerPolicyConfig:
             raise ValueError("categorical_vocab_size must be greater than 1.")
         if self.token_type_vocab_size <= 1:
             raise ValueError("token_type_vocab_size must be greater than 1.")
+        # Same resolution as `token_count` above, but a ONE-SIDED bound rather than an equality:
+        # a width may be narrower than its schema census, never wider.
+        #
+        # The narrow population is specific and small -- the v2 119-numeric relic family
+        # (`_MINIMUM_NUMERIC_CENSUS_BY_SCHEMA[v2] == 119` against a 121 census), numeric-only,
+        # v2-only, arriving through `from_dict` with an explicit value. It is NOT region trimming
+        # and NOT "projection": `scripts/convert_region_trim.py` writes only
+        # `transition_token_count` and `token_count` and never touches a width, and the grouped
+        # v3/v4 layouts demand EXACT widths at encode ("requires exactly 41 categorical columns").
+        # An earlier revision of this comment claimed both, which argued the next maintainer out
+        # of the upper bound below -- the very check that catches the bug this block exists to fix.
+        #
+        # `is None`, not a truthiness test: an explicit 0 must reach the positivity guard below
+        # and raise, not be silently treated as unset. The sibling `transition_token_count` uses 0
+        # as its unset sentinel, so the wrong idiom here is a live hazard, not a hypothetical.
+        if self.categorical_feature_count is None:
+            object.__setattr__(
+                self, "categorical_feature_count", schema_spec.categorical_feature_count
+            )
+        if self.numeric_feature_count is None:
+            object.__setattr__(
+                self, "numeric_feature_count", schema_spec.numeric_feature_count
+            )
         if self.categorical_feature_count <= 0:
             raise ValueError("categorical_feature_count must be positive.")
         if self.numeric_feature_count <= 0:
             raise ValueError("numeric_feature_count must be positive.")
+        if self.categorical_feature_count > schema_spec.categorical_feature_count:
+            raise ValueError(
+                f"categorical_feature_count {self.categorical_feature_count} exceeds the "
+                f"{self.observation_schema_version} census "
+                f"({schema_spec.categorical_feature_count}); a config cannot carry more columns "
+                "than its schema defines."
+            )
+        if self.numeric_feature_count > schema_spec.numeric_feature_count:
+            raise ValueError(
+                f"numeric_feature_count {self.numeric_feature_count} exceeds the "
+                f"{self.observation_schema_version} census "
+                f"({schema_spec.numeric_feature_count}); a config cannot carry more columns "
+                "than its schema defines."
+            )
         if self.token_count <= ACTION_CANDIDATE_TOKEN_OFFSET + ACTION_COUNT:
             raise ValueError("token_count must include action-candidate tokens.")
         if self.embedding_dim <= 0:
