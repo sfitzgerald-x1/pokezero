@@ -1213,7 +1213,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 35,
+    "line": 36,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_no_transformer_checkpoints_leaves_config_unchanged",
     "unclosed": [
@@ -1222,7 +1222,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 39,
+    "line": 40,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_default_env_adopts_the_checkpoint_masks",
     "unclosed": [
@@ -1231,7 +1231,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 44,
+    "line": 45,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_matching_masks_are_a_no_op",
     "unclosed": [
@@ -1240,7 +1240,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 53,
+    "line": 54,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_conflicting_checkpoints_hard_fail",
     "unclosed": [
@@ -1249,7 +1249,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 57,
+    "line": 58,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_explicit_env_override_conflicting_with_checkpoint_hard_fails",
     "unclosed": [
@@ -1258,7 +1258,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 64,
+    "line": 65,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_full_default_checkpoint_keeps_default_env",
     "unclosed": [
@@ -1267,16 +1267,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 108,
-    "kind": "implicit:compact_category",
-    "owner": "_save_k32_checkpoint",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
-    "line": 179,
+    "line": 187,
     "kind": "implicit:compact_category",
     "owner": "test_tokens_come_from_the_checkpoint_not_the_build",
     "unclosed": [
@@ -1285,7 +1276,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 202,
+    "line": 210,
     "kind": "implicit:compact_category",
     "owner": "test_a_build_that_inserted_a_token_does_not_shift_the_trained_rows",
     "unclosed": [
@@ -1294,7 +1285,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 241,
+    "line": 249,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_provenance_without_a_vocabulary_fails_closed",
     "unclosed": [
@@ -1303,7 +1294,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 249,
+    "line": 257,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_spec_only_provenance_also_fails_closed",
     "unclosed": [
@@ -1312,7 +1303,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 256,
+    "line": 264,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_no_provenance_at_all_is_still_a_no_op",
     "unclosed": [
@@ -1321,7 +1312,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 261,
+    "line": 269,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_default_env_adopts_the_checkpoint_vocabulary",
     "unclosed": [
@@ -1330,7 +1321,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 267,
+    "line": 275,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_agreeing_checkpoints_adopt_once",
     "unclosed": [
@@ -1339,7 +1330,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 274,
+    "line": 282,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_conflicting_vocabularies_hard_fail",
     "unclosed": [
@@ -1348,7 +1339,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 279,
+    "line": 287,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_explicit_env_vocabulary_conflicting_with_checkpoint_hard_fails",
     "unclosed": [
@@ -1357,7 +1348,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 303,
+    "line": 311,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_a_reordered_vocabulary_of_the_same_tokens_is_still_a_conflict",
     "unclosed": [
@@ -1366,7 +1357,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 307,
+    "line": 315,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_matching_vocabulary_is_a_no_op",
     "unclosed": [
@@ -1375,7 +1366,43 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 322,
+    "line": 353,
+    "kind": "default-spec",
+    "owner": "test_an_explicit_spec_equal_to_the_default_should_still_hard_fail"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 364,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_explicit_masks_equal_to_the_default_should_still_hard_fail",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 396,
+    "kind": "default-spec",
+    "owner": "test_the_non_default_arms_do_hard_fail"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 405,
+    "kind": "default-spec",
+    "owner": "test_the_non_default_arms_do_hard_fail"
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 418,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_the_non_default_arms_do_hard_fail",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 460,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_default_env_adopts_the_checkpoint_v2_spec",
     "unclosed": [
@@ -1384,7 +1411,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 350,
+    "line": 488,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_conflicting_schemas_hard_fail",
     "unclosed": [
@@ -1393,7 +1420,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 371,
+    "line": 509,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_masks_and_specs_resolve_together",
     "unclosed": [
@@ -1402,34 +1429,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 416,
-    "kind": "implicit:compact_category",
-    "owner": "test_feature_masks_from_model_config_round_trips",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
-    "line": 430,
-    "kind": "implicit:compact_category",
-    "owner": "test_feature_masks_from_model_config_round_trips",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
-    "line": 449,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_policy_sweep_finds_model_configs",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
-    "line": 578,
+    "line": 729,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_policy_spec_resolver_builds_k32_env_config",
     "unclosed": [
@@ -1438,7 +1438,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 596,
+    "line": 747,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_neural_cli_spec_mask_helper_covers_iterate_and_root_puct_paths",
     "unclosed": [
@@ -1447,7 +1447,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 605,
+    "line": 756,
     "kind": "implicit:compact_category",
     "owner": "test_neural_cli_spec_mask_helper_covers_iterate_and_root_puct_paths",
     "unclosed": [
@@ -1456,7 +1456,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 610,
+    "line": 761,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_neural_cli_spec_mask_helper_covers_iterate_and_root_puct_paths",
     "unclosed": [
@@ -1465,7 +1465,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 753,
+    "line": 904,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_policy_spec_resolver_builds_v2_env_config",
     "unclosed": [
@@ -1474,7 +1474,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 848,
+    "line": 999,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_v2_and_v2_1_checkpoints_in_one_env_hard_fail",
     "unclosed": [
@@ -1483,7 +1483,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 1106,
+    "line": 1257,
     "kind": "implicit:compact_category",
     "owner": "test_payload_missing_field_resolves_off",
     "unclosed": [
@@ -1492,7 +1492,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 1122,
+    "line": 1273,
     "kind": "implicit:compact_category",
     "owner": "test_explicit_value_round_trips_and_derives",
     "unclosed": [
@@ -1501,7 +1501,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 1151,
+    "line": 1302,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_env_adopts_tier2_off_and_conflicts_fail",
     "unclosed": [
@@ -1510,7 +1510,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 1156,
+    "line": 1307,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_env_adopts_tier2_off_and_conflicts_fail",
     "unclosed": [
@@ -1519,7 +1519,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 1172,
+    "line": 1323,
     "kind": "implicit:compact_category",
     "owner": "test_defaults_and_missing_field_resolve_off",
     "unclosed": [
@@ -1528,7 +1528,7 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 1188,
+    "line": 1339,
     "kind": "implicit:compact_category",
     "owner": "test_explicit_value_round_trips_and_derives",
     "unclosed": [
@@ -1798,16 +1798,7 @@
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 112,
-    "kind": "implicit:ObservationSpec",
-    "owner": "observation",
-    "unclosed": [
-      "schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 113,
+    "line": 122,
     "kind": "implicit:PokeZeroObservationV0",
     "owner": "observation",
     "unclosed": [
@@ -1816,7 +1807,7 @@
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 192,
+    "line": 204,
     "kind": "implicit:compact_category",
     "owner": "test_transformer_policy_config_defaults_match_replay_observation_shape",
     "unclosed": [
@@ -1825,25 +1816,25 @@
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 196,
+    "line": 208,
     "kind": "default-spec",
     "owner": "test_transformer_policy_config_defaults_match_replay_observation_shape"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 197,
+    "line": 209,
     "kind": "default-spec",
     "owner": "test_transformer_policy_config_defaults_match_replay_observation_shape"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 198,
+    "line": 210,
     "kind": "default-spec",
     "owner": "test_transformer_policy_config_defaults_match_replay_observation_shape"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 332,
+    "line": 344,
     "kind": "implicit:compact_category",
     "owner": "test_transformer_policy_config_refuses_zero_and_over_census_widths",
     "unclosed": [
@@ -1852,7 +1843,7 @@
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 336,
+    "line": 348,
     "kind": "implicit:compact_category",
     "owner": "test_transformer_policy_config_refuses_zero_and_over_census_widths",
     "unclosed": [
@@ -1861,16 +1852,7 @@
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 420,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_policy_config_loads_legacy_fields_with_compatible_defaults",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 432,
+    "line": 445,
     "kind": "implicit:TransformerPolicyConfig",
     "owner": "test_transformer_policy_config_requires_category_vocab",
     "unclosed": [
@@ -1879,738 +1861,165 @@
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 437,
-    "kind": "implicit:compact_category",
-    "owner": "test_validate_initial_model_config_detects_warm_start_vocab_mismatch",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 438,
-    "kind": "implicit:compact_category",
-    "owner": "test_validate_initial_model_config_detects_warm_start_vocab_mismatch",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 450,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_policy_config_validates_attention_shape",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 452,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_policy_config_validates_attention_shape",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 454,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_policy_config_validates_attention_shape",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 456,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_policy_config_validates_attention_shape",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 461,
-    "kind": "implicit:compact_category",
-    "owner": "test_zero_layer_transformer_policy_forward_smoke",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 468,
-    "kind": "implicit:ObservationSpec",
-    "owner": "test_zero_layer_transformer_policy_forward_smoke",
-    "unclosed": [
-      "schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 497,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_forward_accepts_compact_categorical_training_cache_rows",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 504,
-    "kind": "default-spec",
-    "owner": "test_transformer_forward_accepts_compact_categorical_training_cache_rows"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 548,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_forward_accepts_row_indexed_training_cache_windows",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 555,
-    "kind": "default-spec",
-    "owner": "test_transformer_forward_accepts_row_indexed_training_cache_windows"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 606,
-    "kind": "implicit:compact_category",
-    "owner": "test_zero_layer_row_indexed_forward_matches_dense_expansion",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 613,
-    "kind": "default-spec",
-    "owner": "test_zero_layer_row_indexed_forward_matches_dense_expansion"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 721,
-    "kind": "implicit:ObservationSpec",
-    "owner": "test_evaluate_transformer_observation_value_uses_configured_history_window",
-    "unclosed": [
-      "schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 722,
-    "kind": "implicit:compact_category",
-    "owner": "test_evaluate_transformer_observation_value_uses_configured_history_window",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 767,
-    "kind": "implicit:ObservationSpec",
-    "owner": "test_evaluate_transformer_observation_value_applies_calibration_transform",
-    "unclosed": [
-      "schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 768,
-    "kind": "implicit:compact_category",
-    "owner": "test_evaluate_transformer_observation_value_applies_calibration_transform",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 805,
-    "kind": "implicit:ObservationSpec",
-    "owner": "test_evaluate_transformer_observation_values_batches_and_calibrates",
-    "unclosed": [
-      "schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 806,
-    "kind": "implicit:compact_category",
-    "owner": "test_evaluate_transformer_observation_values_batches_and_calibrates",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 877,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_value_output_is_bounded_to_terminal_return_range",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 916,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_linear_value_activation_preserves_unbounded_outputs",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 949,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_gru_temporal_aggregator_forward_shapes",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 981,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_gru_temporal_aggregator_is_padding_invariant_per_row",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1031,
-    "kind": "implicit:ObservationSpec",
-    "owner": "test_evaluate_transformer_action_priors_masks_illegal_actions",
-    "unclosed": [
-      "schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1032,
-    "kind": "implicit:compact_category",
-    "owner": "test_evaluate_transformer_action_priors_masks_illegal_actions",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1073,
-    "kind": "implicit:ObservationSpec",
-    "owner": "test_transformer_evaluator_timing_splits_encoding_and_forward_work",
-    "unclosed": [
-      "schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1074,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_evaluator_timing_splits_encoding_and_forward_work",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1127,
-    "kind": "implicit:ObservationSpec",
-    "owner": "test_transformer_policy_records_value_estimate_on_decision",
-    "unclosed": [
-      "schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1128,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_policy_records_value_estimate_on_decision",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1183,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_policy_forward_fn_seam_preserves_decisions",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1186,
-    "kind": "implicit:ObservationSpec",
-    "owner": "test_transformer_policy_forward_fn_seam_preserves_decisions",
-    "unclosed": [
-      "schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1238,
-    "kind": "implicit:compact_category",
-    "owner": "test_remote_inference_policy_matches_local_over_http",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1297,
-    "kind": "implicit:compact_category",
-    "owner": "test_remote_config_serves_model_config_for_agent_construction",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1451,
-    "kind": "implicit:compact_category",
-    "owner": "_make_ckpt",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1518,
-    "kind": "implicit:compact_category",
-    "owner": "test_inference_forward_batch_matches_single",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1565,
-    "kind": "implicit:compact_category",
-    "owner": "test_inference_server_returns_400_on_malformed_forward_body",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1598,
-    "kind": "implicit:ObservationSpec",
-    "owner": "test_transformer_policy_drops_non_finite_value_estimate",
-    "unclosed": [
-      "schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 1599,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_policy_drops_non_finite_value_estimate",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 2657,
+    "line": 2730,
     "kind": "default-spec",
     "owner": "test_neural_cli_describe_is_import_safe_without_torch"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 3782,
+    "line": 3868,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_summary_out_persists_json"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 3782,
+    "line": 3868,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_summary_out_persists_json"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 3860,
+    "line": 3946,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_wires_raw_and_search_matchups"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 3860,
+    "line": 3946,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_wires_raw_and_search_matchups"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 4483,
+    "line": 4569,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 4484,
+    "line": 4570,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 4684,
+    "line": 4770,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_keeps_raw_priors_and_uses_explicit_value_checkpoint"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 4685,
+    "line": 4771,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_keeps_raw_priors_and_uses_explicit_value_checkpoint"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 4911,
+    "line": 4997,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 4912,
+    "line": 4998,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5048,
+    "line": 5134,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_defaults_root_prior_temperature_to_temperature"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5048,
+    "line": 5134,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_defaults_root_prior_temperature_to_temperature"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5106,
+    "line": 5192,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_average_checkpoint_opponent_action_scenarios"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5106,
+    "line": 5192,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_average_checkpoint_opponent_action_scenarios"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5228,
+    "line": 5314,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_policy_for_root_opponent_actions"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5228,
+    "line": 5314,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_policy_for_root_opponent_actions"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5319,
+    "line": 5405,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_opponent_for_leaf_rollouts"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5319,
+    "line": 5405,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_opponent_for_leaf_rollouts"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5397,
+    "line": 5483,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_sweep_leaf_depths"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5397,
+    "line": 5483,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_sweep_leaf_depths"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5479,
+    "line": 5565,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_tags_single_sweep_depth"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5479,
+    "line": 5565,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_tags_single_sweep_depth"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5544,
+    "line": 5630,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_benchmark_wires_checkpoint_callbacks_and_source_policies"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5545,
+    "line": 5631,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_benchmark_wires_checkpoint_callbacks_and_source_policies"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5713,
+    "line": 5799,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_counterfactual_wires_continuation_policies"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5714,
+    "line": 5800,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_counterfactual_wires_continuation_policies"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 5946,
-    "kind": "implicit:compact_category",
-    "owner": "test_neural_cli_value_calibration_includes_quality_gates_with_fit_out",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 6029,
-    "kind": "implicit:compact_category",
-    "owner": "test_neural_cli_value_calibration_can_save_calibrated_checkpoint",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 6102,
-    "kind": "implicit:compact_category",
-    "owner": "test_neural_cli_value_calibration_can_save_isotonic_calibrated_checkpoint",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 6156,
-    "kind": "implicit:compact_category",
-    "owner": "test_neural_cli_value_calibration_warns_on_collapsed_isotonic_transform",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 6215,
-    "kind": "implicit:compact_category",
-    "owner": "test_neural_cli_value_calibration_compare_reports_heldout_methods",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 6287,
-    "kind": "implicit:compact_category",
-    "owner": "test_neural_cli_value_calibration_compare_defaults_to_pearson_selection",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 6331,
-    "kind": "implicit:compact_category",
-    "owner": "test_neural_cli_value_calibration_compare_text_can_write_json_report",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 6423,
-    "kind": "implicit:compact_category",
-    "owner": "test_neural_cli_value_calibration_compare_skips_unavailable_selection_metric_rows",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 6486,
-    "kind": "implicit:compact_category",
-    "owner": "test_neural_cli_value_calibration_compare_rejects_all_unavailable_selection_metric",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 6947,
-    "kind": "implicit:compact_category",
-    "owner": "test_value_selection_restores_best_epoch_state",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 7046,
-    "kind": "implicit:compact_category",
-    "owner": "test_value_selection_can_restore_best_epoch_by_pearson_correlation",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 7782,
-    "kind": "implicit:compact_category",
-    "owner": "test_train_transformer_policy_records_annealed_epoch_learning_rates",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 7840,
-    "kind": "implicit:compact_category",
-    "owner": "test_train_transformer_policy_applies_max_grad_norm_clip",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 7897,
-    "kind": "implicit:compact_category",
-    "owner": "test_train_transformer_policy_bf16_autocast_runs_and_engages",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 7990,
-    "kind": "implicit:compact_category",
-    "owner": "test_torch_forward_train_save_load_and_policy_adapter_smoke",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 8027,
-    "kind": "implicit:compact_category",
-    "owner": "test_torch_forward_train_save_load_and_policy_adapter_smoke",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 8079,
-    "kind": "implicit:compact_category",
-    "owner": "test_train_transformer_policy_accepts_cache_backed_row_indexed_batches",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 8126,
-    "kind": "implicit:compact_category",
-    "owner": "test_train_transformer_policy_mixes_capped_auxiliary_batches",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 8160,
-    "kind": "implicit:compact_category",
-    "owner": "test_checkpoint_round_trips_belief_provenance",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 8245,
-    "kind": "implicit:compact_category",
-    "owner": "test_checkpoint_round_trips_ppo_diagnostic_metrics",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 8303,
-    "kind": "implicit:compact_category",
-    "owner": "_build_atomic_checkpoint_fixture",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 8394,
-    "kind": "implicit:compact_category",
-    "owner": "test_value_only_freeze_updates_value_head_only",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 8466,
-    "kind": "implicit:compact_category",
-    "owner": "test_train_transformer_policy_rejects_window_size_mismatch",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 8494,
-    "kind": "implicit:compact_category",
-    "owner": "test_train_transformer_policy_calls_epoch_callback",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 8685,
-    "kind": "implicit:compact_category",
-    "owner": "test_policy_forward_matches_manual_truncation",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 8692,
-    "kind": "default-spec",
-    "owner": "test_policy_forward_matches_manual_truncation"
   },
   {
     "file": "tests/test_neural_selfplay.py",
@@ -2932,7 +2341,7 @@
   },
   {
     "file": "tests/test_region_trim.py",
-    "line": 37,
+    "line": 45,
     "kind": "implicit:compact_category",
     "owner": "_config",
     "unclosed": [
