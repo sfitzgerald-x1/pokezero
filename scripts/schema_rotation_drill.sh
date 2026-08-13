@@ -457,6 +457,71 @@ print(f"  premise verified: synthetic schema is spec- and membership-equivalent 
       + (" (numeric width one narrower, as `differ` intends)" if _shape == "differ" else ""))
 PRE
 
+# PRECONDITION 3: the arm actually DISCRIMINATES, observed through pytest rather than inferred
+# from the data model. PRECONDITION 2 proves the specs differ as intended; it does not prove the
+# test suite can SEE that difference. This runs a throwaway canary that hardcodes the outgoing
+# default's numeric width -- a deliberate shape conflation, the exact defect the differ arm exists
+# to detect -- through the real collection/import/assert path:
+#
+#     identical  -> canary MUST PASS  (shape unchanged, so a width pin is untouched)
+#     differ     -> canary MUST FAIL  (one column narrower, so a width pin breaks)
+#
+# This is the acceptance test the differ arm was missing. It was previously unconstructible: while
+# the injection cloned v4, the arm-distinguishing width was v4's 132 against a v2.2 baseline of
+# 155, so a 132 canary failed at baseline, landed in the subtracted baseline set, and vanished from
+# BOTH arms -- which is why differ could be run and still prove nothing. Cloning the outgoing
+# default makes the discriminating width 155, which passes at baseline and under identical and
+# fails only under differ.
+#
+# The expected width is read from the UNMUTATED $REPO, not from the mutated worktree, so the canary
+# cannot be satisfied by the same edit it is meant to detect. The file is deleted immediately after,
+# before anything is scored, so it can never appear as a breakage.
+_canary="$WT/tests/test__drill_shape_canary.py"
+"$VENV" - "$REPO" "$WT" <<'PRE' || exit 11
+import os, re, subprocess, sys
+repo, wt = sys.argv[1], sys.argv[2]
+outgoing = open(wt + "/DRILL_OUTGOING.txt").read().strip()
+# Width of the outgoing default, read from the pristine checkout.
+code = (
+    "import sys; sys.path.insert(0, %r + '/src');"
+    "import pokezero.observation as o;"
+    "from pokezero.showdown import observation_spec_for_schema as s;"
+    "print(s(getattr(o, %r)).numeric_feature_count)" % (repo, outgoing)
+)
+w = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+if w.returncode != 0:
+    print("  CANARY SETUP FAILED reading the pristine width:", w.stderr.strip()[-400:]); sys.exit(11)
+width = int(w.stdout.strip())
+shape = os.environ.get("DRILL_SHAPE", "identical")
+path = wt + "/tests/test__drill_shape_canary.py"
+open(path, "w").write(
+    "import unittest\n"
+    "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC as D\n"
+    "class DrillShapeCanary(unittest.TestCase):\n"
+    "    def test_the_default_numeric_width_is_unchanged(self):\n"
+    f"        self.assertEqual(D.numeric_feature_count, {width})\n"
+)
+env = dict(os.environ, PYTHONPATH=wt + "/src")
+r = subprocess.run([sys.executable, "-m", "pytest", path, "-q", "-p", "no:randomly"],
+                   capture_output=True, text=True, env=env)
+os.remove(path)  # before ANYTHING is scored
+passed = r.returncode == 0
+want_pass = shape != "differ"
+print(f"  shape canary: pinned width {width} (from the pristine tree), "
+      f"shape={shape}, canary {'passed' if passed else 'failed'}")
+if passed != want_pass:
+    print(f"  CANARY DID NOT DISCRIMINATE: under shape={shape} the canary was expected to "
+          f"{'PASS' if want_pass else 'FAIL'} and it did not.")
+    print("  " + ("The identical arm changed the default's shape, so a breakage in it cannot be"
+                  " attributed to naming." if want_pass else
+                  "The differ arm did NOT change the default's observable shape, so it covers"
+                  " nothing that the identical arm does not -- the shape half is UNCOVERED."))
+    print(r.stdout[-1200:])
+    sys.exit(11)
+print(f"  arm discriminates: a width pin {'survives' if want_pass else 'breaks'} under shape={shape}")
+PRE
+rm -f "$_canary"
+
 # Validate the INSTRUMENT without paying for a verdict. Everything above is the injection and its
 # preconditions -- the part that decides whether a breakage can be attributed to naming at all --
 # and it runs in seconds, while the two suites below take ~22 minutes. Every instrument defect this
