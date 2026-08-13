@@ -124,7 +124,14 @@ def scan() -> list[dict]:
                 # registered when a schema is added, so it is reported for that reason.
                 form = "dict-keys"
             if form:
-                ln = getattr(node, "lineno", 0)
+                # `ast.match_case` has NO lineno, so this fell back to 0 -- and `owner.get(0)`
+                # returned "<module>", whose key collides with the showdown.py/observation.py
+                # `<module>` ALLOWLIST rows. So a live `match/case` gate in either file was excused
+                # and the scan exited 0: a fail-toward-PASS, since the drill's precondition 0 then
+                # never fires. Every match/case gate also reported at line 0, an unusable location.
+                ln = getattr(node, "lineno", 0) or getattr(
+                    getattr(node, "pattern", None), "lineno", 0
+                )
                 key = f"{rel}::{owner.get(ln, '<module>')}"
                 if key in ALLOWLIST:
                     continue

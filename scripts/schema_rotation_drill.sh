@@ -80,7 +80,19 @@ VENV="$REPO/.venv/bin/python"
 # excuses at test granularity when that is genuinely right, but the drill no longer does it by
 # accident.
 _norm_id() {
-  sed -E 's#^(FAILED|ERROR)[[:space:]]+##; s#^SUBFAILED\(([^)]*)\)[[:space:]]+(.*)$#\2[\1]#; s#^SUBFAILED[[:space:]]+##; s#(^|::)[^ ]*/tests/#\1#; s#^tests/##'
+  # The ` - <reason>` SUFFIX is stripped FIRST. pytest -q appends the assertion text to every
+  # FAILED/SUBFAILED line, so ids carried `... - AssertionError: 3 != 4` and could never match the
+  # rubric's bare ids: every breakage landed in UNEXPECTED and all 7 rubric rows in MISSING.
+  #
+  # That is exactly the "a test appears in BOTH unexpected breakages and expected-but-did-not-break"
+  # symptom this file's header attributes to relative-vs-absolute paths and declares fixed. The path
+  # normalisation was real but it was not the cause; this is. It also saturated
+  # EXPECTED-BUT-DID-NOT-BREAK, which the rubric header calls the only guard against a pin silently
+  # going stale -- so the dead-pin detector could not fire either.
+  #
+  # Width-dependent, too: pytest truncates the reason to the terminal width (80 in a pipe), so the
+  # unnormalised ids differed between a tty and a pipe.
+  sed -E 's#[[:space:]]+-[[:space:]].*\$##; s#^(FAILED|ERROR)[[:space:]]+##; s#^SUBFAILED\(([^)]*)\)[[:space:]]+(.*)\$#\2[\1]#; s#^SUBFAILED[[:space:]]+##; s#(^|::)[^ ]*/tests/#\1#; s#^tests/##'
 }
 
 drill_targets() {
@@ -212,7 +224,7 @@ PY
 # and caught 2 of 7 evasive forms -- it missed `!=`, `in (literal tuple)`, string literals, dict
 # keys, `is`, and match/case, and TWO live gates evaded it while it claimed none existed. The
 # scanner is AST-based, so the syntactic form is irrelevant.
-"$VENV" "$REPO/scripts/schema_identity_gate_scan.py" || {
+"$VENV" "$WT/scripts/schema_identity_gate_scan.py" || {
   echo "ABORT: an unlisted schema identity gate exists, so a breakage cannot be attributed to"
   echo "       NAMING -- the synthetic schema would route down a wrong branch."
   exit 13
@@ -327,7 +339,23 @@ BASE="${DRILL_BASELINE:-${WT%/}-baseline}"
 if [ "${DRILL_BASELINE_REUSE:-0}" = "1" ] && [ -f "$BASE/BASE.sha" ] \
    && [ "$(cat "$BASE/BASE.sha")" = "$(git -C "$REPO" rev-parse "$BASE_REF") ${DRILL_SCOPE:-full} ${DRILL_SHAPE:-identical} $("$VENV" -c 'import sys;print(sys.version.split()[0])')" ]; then
   echo "  reusing baseline at $(cat "$BASE/BASE.sha" | cut -c1-8)"
-  grep -E '^(FAILED|SUBFAILED)' "$BASE/BASE.txt" | _norm_id | sort -u > "$WT/baseline.txt"
+  # The STABLE intersection, persisted by the fresh path -- NOT run 2 alone. `BASE.txt` is a copy of
+  # BASE.2.txt, so subtracting it here reinstated the single-run baseline and with it the defect this
+  # drill closed: a flake in run 2 earns a permanent excuse for every reused run afterwards. And the
+  # reuse path printed no "UNSTABLE ... NOT subtracted" warning, so the excuse was silent. Worse, the
+  # header calls reuse the NORMAL path ("two full suites in one job exceeds most runners' patience"),
+  # so the closed defect lived on the path most runs take.
+  if [ ! -s "$BASE/baseline.stable.txt" ]; then
+    echo "ABORT: the cached baseline predates the stable-intersection format. Re-run without"
+    echo "       DRILL_BASELINE_REUSE=1 to regenerate it; a single-run baseline lets a flake"
+    echo "       earn a permanent excuse."
+    exit 11
+  fi
+  cp "$BASE/baseline.stable.txt" "$WT/baseline.txt"
+  if [ -s "$BASE/baseline.unstable.txt" ]; then
+    echo "  UNSTABLE across the two cached baseline runs, NOT subtracted:"
+    sed 's/^/    /' "$BASE/baseline.unstable.txt"
+  fi
   echo "  baseline failures (NOT attributable to the rotation): $(wc -l < "$WT/baseline.txt" | tr -d ' ')"
   SKIP_BASELINE=1
 fi
@@ -350,6 +378,9 @@ for _run in 1 2; do
 done
 cp "$BASE/BASE.2.txt" "$BASE/BASE.txt"          # the summary guards read the second run
 comm -12 "$BASE/b1.txt" "$BASE/b2.txt" > "$WT/baseline.txt"     # stable failures only
+# PERSISTED, so a reused run subtracts the same stable set rather than run 2 alone.
+cp "$WT/baseline.txt" "$BASE/baseline.stable.txt"
+comm -3 "$BASE/b1.txt" "$BASE/b2.txt" > "$BASE/baseline.unstable.txt"
 _unstable=$(comm -3 "$BASE/b1.txt" "$BASE/b2.txt" | grep -c . || true)
 echo "  baseline failures, STABLE across two runs (subtracted): $(wc -l < "$WT/baseline.txt" | tr -d ' ')"
 if [ "${_unstable:-0}" -gt 0 ]; then
@@ -492,6 +523,14 @@ grep -vE '^\s*(#|$)' "$EXPECTED" | sort -u > "$WT/expected.txt"
 # Present-but-all-comments is the same as absent, and combined with a no-op rotation it scored a
 # PASS. `-f` was not enough.
 [ -s "$WT/expected.txt" ] || { echo "ABORT: the expected-breakages file has no entries."; exit 7; }
+# Every rubric row must be a BARE id -- no spaces. A row carrying a reason suffix, or a stray
+# comment tail, can never match a normalised breakage, and the failure presents as "expected but did
+# not break", i.e. as a dead pin rather than as a malformed rubric.
+if grep -qE '[[:space:]]' "$WT/expected.txt"; then
+  echo "ABORT: rubric rows must be bare test ids with no whitespace. Offending rows:"
+  grep -nE '[[:space:]]' "$WT/expected.txt" | sed 's/^/  /'
+  exit 7
+fi
 
 UNEXPECTED=$(comm -23 "$WT/actual.txt" "$WT/expected.txt")
 MISSING=$(comm -13 "$WT/actual.txt" "$WT/expected.txt")
@@ -518,6 +557,12 @@ echo "   A genuine breakage of any of these would be subtracted and invisible. P
 echo "   than implied, because an unexamined excuse list is where a real defect hides."
 sed 's/^/     /' "$WT/baseline.txt" | head -12
 [ "$(wc -l < "$WT/baseline.txt")" -gt 12 ] && echo "     ... and $(( $(wc -l < "$WT/baseline.txt") - 12 )) more"
+# The ARTIFACTS half, printed too. It was counted in the header above and then never listed -- and
+# it is the half that excuses BY NAME at test granularity across every subtest, so it is the one
+# where an unexamined excuse would hide a real defect. The stated rationale applied to the other
+# list only.
+echo "   source-mutation artifacts (excused by name):"
+sed 's/^/     /' "$WT/artifacts.txt"
 echo
 _mode="scope=${DRILL_SCOPE:-full} shape=${DRILL_SHAPE:-identical} rotated=$_rot_tot baseline=$_base_tot"
 if [ "$NU" -eq 0 ] && [ "$NM" -eq 0 ]; then
