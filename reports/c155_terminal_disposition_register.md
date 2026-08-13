@@ -161,22 +161,35 @@ above.
 | #1221 | `rust/pokezero-search/src/encoder.rs`, +26 −0 | `2ec5bfd1c7292ed6…` |
 | `90f8e83d` (#1245) | `lib.rs`, `model.rs`, `tree.rs`, +589 −20 | `209a70af7a13da14…` |
 | `8006213f` (#1245) | `lib.rs`, `model.rs`, `tree.rs`, +51 −10 | `aae55818ea6808e8…` |
-| `6d7a59dc` (#1245) | `rust/pokezero-search/src/tree.rs`, +87 −0 | `82ba92a48a7f1d8f…` |
+| `e9ebcdda` (#1245) | `rust/pokezero-search/src/tree.rs`, +87 −0 | `82ba92a48a7f1d8f…` |
 
-⚠ **The last three rows are T1's argument happening again, and this time inside a single PR.**
-#1245 moved the stamp **three times** — FPU plus the within-batch collision counter, then
-root-decision telemetry, then the per-world visit-lock stop — so a register that recorded only
-"the head moved" would have understated it by two. It also demonstrates the failure mode T1
-names: this table had to be re-derived because
+⚠ **The last three rows are T1's argument happening again, inside a single PR.** #1245 moved the
+stamp **three times** — FPU plus the within-batch collision counter, then root-decision
+telemetry, then the `arm_priors` reporting tests — so a register recording only "the head moved"
+would have understated it by two.
+⚠ **And the third row's commit was wrong on first write**, in the same way the `#1211` row's
+`input` column was: it was typed as `6d7a59dc`, the commit whose message plumbs the per-decision
+budget. `6d7a59dc` touches no fingerprint input at all. The derivation is
+`git log 7fcd9e19..HEAD --` restricted to the **90** paths `build_inputs()` returns, which yields
+exactly seven commits and names `e9ebcdda`; the `fingerprint after` column is
+`compute_fingerprint` with each of those seven checked out. Reading a RANGE
+(`git diff 8006213f 6d7a59dc`) is what produced the wrong sha — a range spans the commit that
+actually moved it, and attributes its bytes to the endpoint.
+⚠ **`e9ebcdda` is a third instance of the `#1211` case.** Its 87 lines are `#[cfg(test)]`-only —
+`strip_prior_columns`, `arm_priors_only_adds_a_reported_column`,
+`fpu_reduction_by_contrast_reaches_the_report_and_the_search`. The stamp moved; the shipped `.so`
+did not. So of #1245's three moves, two are behind-flag semantics and one is source-only, which
+is again why this column cannot be read as "the binary changed".
+⚠ And note what the rows do NOT license. #1245's own dynamic-budget commits (`32c2d4a1` onward)
+touch no fingerprint input, so **`82ba92a4` is stable across every measurement that campaign
+banked** — the last move was `e9ebcdda`, before the first of them. But `82ba92a4` is not
+`2ec5bfd1`, so none of those measurements pools with anything taken on `main`. A PR that reads
+"no `.rs` change, so banked cells stay comparable" makes the first claim about its last few
+commits and the second about the whole branch; only the first is true.
+⚠ Finally, this table was re-derived because
 `tests/test_terminal_disposition_register.py::test_every_value_re_derives` failed on the branch,
 not because anyone noticed. **That test is currently the only thing in the tree that catches a
 moved stamp**, which is precisely why T1 stays OPEN.
-⚠ And note what the three rows do NOT license: #1245's own dynamic-budget commits
-(`32c2d4a1` onward) touch no fingerprint input at all, so **`82ba92a4` is stable across every
-measurement that campaign banked** — but the stamp is `82ba92a4` and NOT `2ec5bfd1`, so those
-measurements are **not** poolable with anything taken on `main`. A PR that reads "no `.rs`
-change, so banked cells stay comparable" is making the first claim about its own last few
-commits and the second about the whole branch; only the first is true.
 
 ⚠ **And the second landed while this register was in review**, three days after C153's build. That
 is not an aside: it is T1's argument, live. C151 §3 deferred the terminal sweep precisely because
