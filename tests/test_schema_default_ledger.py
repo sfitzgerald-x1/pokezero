@@ -343,9 +343,15 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         self.assertEqual(
             stray, [],
             f"kind name(s) {stray} appear in the ledger docstring OUTSIDE the generated kinds "
-            "table. Only the generated region may carry a kind's row and count; a copy anywhere "
-            "else is a figure nothing holds, and moving a retired kind's row out of the region is "
-            "exactly how a stale count survives this comparison.\n"
+            "table. Only the generated region may name a kind.\n"
+            "TWO WAYS TO HIT THIS, and the message cannot tell them apart, so both are listed:\n"
+            "  1. a retired kind's ROW was moved out of the region -- that is how a stale count "
+            "survives the byte comparison, and it is what this check exists for;\n"
+            "  2. ordinary PROSE mentions a kind by name. Also disallowed, and deliberately: prose "
+            "naming a kind beside a number is how every stale figure in this docstring got there. "
+            "Rewrite it without the name.\n"
+            "Naming both cases is the point -- an earlier version of this message asserted (1) only, "
+            "and sent a maintainer who had written prose looking for a row they had never moved.\n"
             "KNOWN LIMIT, stated rather than implied: this uses the tool's KIND_DESCRIPTIONS as the "
             "vocabulary, so a row whose kind has been deleted from KIND_DESCRIPTIONS *and* retired "
             "from the emitted rows *and* moved out of the region would still escape. That is three "
@@ -373,7 +379,10 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         # plant "All NINE counts" in prose, and it passes. That is the identical weakness the surface
         # guard in this file already had and had fixed, reintroduced one guard over -- so a wrong
         # total is now caught wherever it sits, in exactly the form the right one takes.
-        stated_totals = set(re.findall(r"All ([A-Z]+) counts", doc))
+        # Case-INSENSITIVE, compared uppercased. `[A-Z]+` missed a wrong total written "All Nine
+        # counts" or "all nine counts" while the right one was also present -- a narrower version of
+        # the same present-somewhere hole this replaced.
+        stated_totals = {m.upper() for m in re.findall(r"[Aa]ll ([A-Za-z]+) counts", doc)}
         self.assertEqual(
             stated_totals, {words[total]},
             f"the docstring must state 'All {words[total]} counts' and no other total -- {surfaces} "
@@ -389,11 +398,16 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         if n_kinds == 0:
             self.assertIn(
                 "GOAL STATE REACHED", doc,
-                "the ledger emits no non-surface kinds, so `bare-const` and `default-spec` have "
-                "burned down to zero -- this migration's goal state. Both sides of the byte "
-                "comparison are then empty and it proves nothing, so the docstring must say "
-                "'GOAL STATE REACHED' to record that a human saw it. Without that, an empty table "
-                "and a broken tool are indistinguishable.",
+                "the ledger emits no non-surface kinds -- every kind has burned down to zero, which "
+                "is this migration's goal state. Both sides of the byte comparison are then empty "
+                "and it proves nothing, so the docstring must say 'GOAL STATE REACHED' to record "
+                "that a human saw it. Without that, an empty table and a broken tool are "
+                "indistinguishable.\n"
+                "WRITE THE ACKNOWLEDGEMENT WITHOUT NAMING THE KINDS. Kind names may appear only "
+                "inside the generated table, and the stray-name check above will reject prose that "
+                "spells one -- an earlier version of this very message told you to write "
+                "'<kind> and <kind> have burned down to zero', which then failed for a reason that "
+                "had nothing to do with what you wrote.",
             )
 
     def _kind_vocabulary(self) -> list[str]:
