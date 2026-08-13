@@ -9,14 +9,14 @@ re-derivable rather than recalled.
 A "site reaching the global default" is any of:
 
   bare-const           a read of `OBSERVATION_SCHEMA_VERSION` itself                    (16)
-  default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                        (53)
+  default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                        (50)
   implicit:<Surface>   a call to <Surface> leaving at least one default-bearing kwarg unnamed,
                        one kind per surface so a new one cannot join an existing bucket. All EIGHT
                        surfaces, with provenance -- seven DERIVED from src/, one an alternate
                        constructor that cannot be (marked *):
 
-                         LocalShowdownConfig            133    ObservationSpec            34
-                         compact_category *              96    TransformerPolicyConfig     4
+                         LocalShowdownConfig            135    ObservationSpec            24
+                         compact_category *              39    TransformerPolicyConfig     4
                          PokeZeroObservationV0           49    LinearPolicyModel           3
                                                                OnlineBattleAgent           2
                          observation_from_player_state    0
