@@ -38,11 +38,8 @@ from .observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     DEFAULT_OBSERVATION_FEATURE_MASKS,
     FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
-    GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
-    TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
-    V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS,
-    V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS,
     FIELD_TOKEN_COUNT,
+    GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
     OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,
@@ -52,6 +49,9 @@ from .observation import (
     OPPONENT_POKEMON_TOKEN_COUNT,
     OPPONENT_TENDENCY_STATS_TOKEN_COUNT,
     TRANSITION_TOKEN_COUNT,
+    TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
+    V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS,
+    V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS,
     V3_TRANSITION_TOKEN_COUNT,
     V4_TRANSITION_TOKEN_COUNT,
     ObservationFeatureMasks,
@@ -1230,10 +1230,22 @@ def numeric_index_for_schema(schema_version: str, legacy_index: int) -> int:
 
     spec = observation_spec_for_schema(schema_version)
     # Membership, not identity. `== V4` asks "is this THE feature-pack schema" and answers by
-    # naming one version, so any later schema sharing v4's projection silently falls through to
-    # the UNPROJECTED legacy path below and returns wrong-but-plausible indices instead of
-    # raising. Measured on a synthetic schema sharing v4's layout: 134 of 155 legacy indices
-    # disagreed, and all 50 dropped columns returned an index where they must return None.
+    # naming one version, so a later schema sharing v4's projection silently falls through to the
+    # UNPROJECTED legacy path below. Measured on a synthetic schema sharing v4's layout: 128 of the
+    # first 172 legacy indices disagree with v4 and 40 raise.
+    #
+    # WHAT THIS FIXES, precisely: it moves the required edit from here to the property tuple in
+    # observation.py, so registering a schema in one place routes it everywhere. It does NOT make
+    # the failure loud. A schema registered in REPLAY_OBSERVATION_SPECS_BY_SCHEMA but absent from
+    # both projection tuples still falls through silently -- the same 128 disagreements. An earlier
+    # revision of this comment said the identity form fell through "instead of raising", implying
+    # the membership form raises. It does not.
+    #
+    # The fail-closed pattern already exists in this file: `_MINIMUM_NUMERIC_CENSUS_BY_SCHEMA` at
+    # encode raises KeyError on an unregistered schema, ~3,100 lines below. Replacing the two
+    # branches here with a NUMERIC_PROJECTION_BY_SCHEMA dict whose KeyError is the refusal would
+    # make this function match it -- deliberately left as a follow-up, because it is a new refusal
+    # path and this change is behaviour-preserving on the current schema set by design.
     if schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS:
         return v4_numeric_index(legacy_index)
     if schema_version in V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS:

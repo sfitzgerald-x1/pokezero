@@ -114,11 +114,19 @@ FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V4,)
 # wrong-but-plausible indices rather than raising.
 V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V3,)
 
-# Schemas carrying the v2.1 block set forward: PP-validity bits, sub HP, the per-mon pinned
-# Tier-2 conclusions -- every current-state surface that survives a region trim. Everything
+# Schemas carrying the v2.1 block set forward: the PP-validity bits and substitute HP. Everything
 # except v2. Named as a lineage because that is what the encode gate means; it was previously
-# spelled as a three-term disjunction over other gates, which is the same set stated in a form
-# no future schema can join.
+# spelled as a three-term disjunction over other gates, which is the same set stated in a form no
+# future schema can join.
+#
+# NOT the per-mon pinned Tier-2 conclusions, which an earlier version of this comment listed. v4
+# RETIRES those -- `showdown.py` spells the exclusion `schema_v2_1 and not schema_v4` and says so
+# explicitly ("RETIRED AT V4 (and only at v4) ... that flag means 'carries the v2.1 blocks' and v4
+# inherits it for the PP-validity bits and sub HP"). The membership was right and the stated RULE
+# was wrong, which is the worse of the two errors here: the set can be checked against the tuple,
+# but a v6 author deciding whether their schema joins this lineage has only the rule to go on, and
+# this comment is the place that decision gets made. Inherited from the old inline gate comment,
+# where it was an aside; promoting it to a definition is what made it load-bearing.
 V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS = (
     OBSERVATION_SCHEMA_VERSION_V2_1,
     OBSERVATION_SCHEMA_VERSION_V2_2,
@@ -183,8 +191,10 @@ class ObservationSpec:
     # carrying 51/155/151.
     #
     # Real v3/v4 specs come from `REPLAY_OBSERVATION_SPECS_BY_SCHEMA`, which passes
-    # `schema_version` explicitly, so this default is reachable only by hand construction --
-    # exactly the case that must be coherent by default rather than by remembering.
+    # `schema_version` explicitly, so this default is reached only by CONSTRUCTING a spec by hand.
+    # "Only in tests" would be wrong: `teacher_scenarios._observation` does exactly that, and is
+    # reachable from the `pokezero-bootstrap` CLI via bootstrap.py. Which strengthens the case --
+    # a default that has to be remembered is one a production path can get wrong too.
     schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2
 
     @property
