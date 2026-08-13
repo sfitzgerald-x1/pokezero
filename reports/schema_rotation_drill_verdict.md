@@ -123,10 +123,20 @@ asserts is the laundering the emptiness was protecting against.
   compiled code. This drill edits Python in a worktree and never rebuilds the crate, so 10
   `EngineEnvTest` failures are excluded by cause. Anything the rotation would break *inside* the
   native encoder is invisible to this instrument.
-- **The blind set.** 12 stable baseline failures plus 1 artifact are subtracted; a genuine breakage of
-  any of them would be invisible. They are printed in full by every run rather than implied.
+- **The blind sets -- ALL of them.** Four things are subtracted, not one, and an earlier version of
+  this list named only the first, which is the omission a reviewer called out as a hole in this
+  section's own honesty contract:
+    - 12 stable baseline failures + 1 source-mutation artifact (printed in full every run);
+    - 8 control-arm failures, i.e. caused by ADDING a schema. The control arm now runs TWICE and
+      subtracts only the intersection, because a single run let a flake earn a permanent excuse --
+      the same defect the baseline had fixed, reintroduced in the arm added later;
+    - 10 native-Rust failures. Excluded only when the message is attached to an EXCEPTION TYPE on a
+      pytest `E ` line, and resolved to FULL test ids -- a substring match over the section body,
+      and a `Class.test` comparison that discarded the file, were both shown to drop a genuine
+      naming breakage.
+  A genuine breakage of anything in any of these four is invisible to the verdict.
 - **Runtime-assembled containers.** The container census finds literal containers of schema names or
-  version constants (19 of them, across 6 files). A set built at runtime from a comprehension is not
+  version constants (19 of them, across 10 files). A set built at runtime from a comprehension is not
   found by it and is covered only by `PRECONDITION 2`'s membership check.
 
 ## Why the earlier numbers were wrong
@@ -155,4 +165,6 @@ what it had missed. Enumerating them took the count from 8 to 19.
    `test_collect_and_train_...` pin to the rubric. Expected → 9.
 2. Fix the `test_golden_corpus` hardcoded literal, or record it as a ledger row.
 3. Read the two unadjudicated tests and classify them.
-4. Run `DRILL_SHAPE=differ` to full completion, so the shape half stops being uncovered.
+4. Close the two subtraction-chain defects a reviewer demonstrated (done: the control arm now
+   runs twice and intersects; the native exclusion requires an exception-type attachment and
+   matches full ids, aborting on an ambiguous `Class.test`).

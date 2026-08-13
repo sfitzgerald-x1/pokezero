@@ -1076,13 +1076,30 @@ else
   git -C "$REPO" worktree add -q --detach "$CTRL" HEAD || exit 3
   DRILL_WT="$CTRL" DRILL_NO_ROTATE=1 python3 "$INJ" "$CTRL" || exit 3
   find "$CTRL/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
-  PYTHONPATH="$CTRL/src" "$VENV" -m pytest $(drill_targets "$CTRL") -q -p no:randomly \
-    > "$CTRL/CONTROL.txt" 2>&1 || true
-  grep -E '^(FAILED|SUBFAILED)' "$CTRL/CONTROL.txt" | _norm_id | sort -u > "$WT/control_raw.txt"
+  # TWICE, INTERSECTED -- exactly as the baseline does, and for the identical reason. This arm
+  # subtracts from the scored set, so a test that fails ONCE here earns a permanent excuse and a
+  # genuine naming breakage disappears with no trace. The baseline was fixed for that (D6/D12: "a
+  # single run let a flaky test earn a permanent excuse"); this arm was added later and shipped with
+  # the same defect, demonstrated by review with a probe that failed in the rotated arm, passed both
+  # baselines, and failed once in control -- it vanished from the verdict.
+  for _crun in 1 2; do
+    PYTHONPATH="$CTRL/src" "$VENV" -m pytest $(drill_targets "$CTRL") -q -p no:randomly \
+      > "$CTRL/CONTROL.$_crun.txt" 2>&1 || true
+    grep -E '^(FAILED|SUBFAILED)' "$CTRL/CONTROL.$_crun.txt" | _norm_id | sort -u > "$CTRL/c$_crun.txt"
+  done
+  cp "$CTRL/CONTROL.1.txt" "$CTRL/CONTROL.txt"   # the log the reader is pointed at
+  comm -12 "$CTRL/c1.txt" "$CTRL/c2.txt" > "$WT/control_raw.txt"
+  comm -3 "$CTRL/c1.txt" "$CTRL/c2.txt" > "$CTRL/control.unstable.txt"
+  _cunstable=$(grep -c . "$CTRL/control.unstable.txt" || true)
   comm -23 "$WT/control_raw.txt" "$WT/baseline.txt" > "$WT/control.txt"
   echo "  control failures beyond baseline (caused by ADDING a schema, not by rotating): $(wc -l < "$WT/control.txt" | tr -d ' ')"
   sed 's/^/    /' "$WT/control.txt" | head -12
   [ "$(wc -l < "$WT/control.txt")" -gt 12 ] && echo "    ... and $(( $(wc -l < "$WT/control.txt") - 12 )) more"
+  if [ "${_cunstable:-0}" -gt 0 ]; then
+    echo "  UNSTABLE across the two control runs, NOT subtracted ($_cunstable) -- a flake must not"
+    echo "  excuse a rotation breakage:"
+    sed 's/^/    /' "$CTRL/control.unstable.txt"
+  fi
 fi
 
 # ===================== NATIVE-SCHEMA EXCLUSION, derived by CAUSE not by name =====================
@@ -1106,14 +1123,31 @@ import re, sys
 wt = sys.argv[1]
 text = open(f"{wt}/DRILL.txt", errors="replace").read()
 MSG = "unsupported observation layout schema"
-# pytest's FAILURES sections are delimited by `____ Class.test ____`; attribute the message to the
-# section it appears in.
+# The message must appear in a RAISED-EXCEPTION line, not anywhere in the section body. A plain
+# `MSG in body` substring test was defeated by review with a two-line probe: a test failing for a
+# pure NAMING reason whose assertion message merely CONTAINED the string was excluded and vanished
+# from the verdict. Any test whose captured log, docstring, or assertion text mentions the error --
+# including a test ABOUT the error -- would have been silently subtracted.
+#
+# pytest prefixes traceback and exception lines in a FAILURES section with "E ". Requiring the match
+# there means the exclusion is justified by the exception the test actually raised.
+# Attached to an EXCEPTION TYPE, not merely on an `E ` line. Requiring `E ` alone was still not
+# enough: pytest prints a custom assertion MESSAGE on an `E ` line too, so the review probe
+# (`assertEqual(..., "context: unsupported observation layout schema")`) was still excluded. The Rust
+# dispatch surfaces as `E   ValueError: unsupported observation layout schema "..."`, so the rule is
+# that the message must follow an `<SomethingError>:` / `<SomethingException>:` token.
+#
+# RESIDUAL, stated rather than left implicit: a test that genuinely RAISES an exception whose message
+# contains this string is still excluded. That is much narrower than "mentions it anywhere" and is
+# arguably correct -- it IS the error. What is now impossible is excluding a test on the strength of
+# an assertion message, a docstring, or a captured log.
+E_LINE = re.compile(r'^E\s+[A-Za-z_][A-Za-z_.]*(?:Error|Exception):\s.*' + re.escape(MSG), re.M)
 parts = re.split(r'\n_+ (\S+) _+\n', text)
 ids = []
 for i in range(1, len(parts), 2):
     name = parts[i]
     body = parts[i + 1] if i + 1 < len(parts) else ""
-    if MSG in body:
+    if E_LINE.search(body):
         ids.append(name)
 print("\n".join(sorted(set(ids))))
 NATIVE
@@ -1128,18 +1162,45 @@ fi
 
 comm -23 "$WT/rotated.txt" "$WT/baseline.txt" > "$WT/attributable_pre_control.txt"
 comm -23 "$WT/attributable_pre_control.txt" "$WT/control.txt" > "$WT/attributable_pre_native.txt"
-# Match on the CLASS.TEST form pytest uses in section headers against our normalised ids.
+# Section headers carry only `Class.test`, so the exclusion is resolved to FULL ids before use, and
+# an AMBIGUOUS tail is a hard abort rather than a guess. The first cut compared on `Class.test` and
+# discarded the file, so a same-named test in an UNRELATED file was excluded too -- demonstrated by
+# review: a probe at `test_zz_unrelated_file.py::EngineEnvTest::test_observation_validates_...` was
+# dropped by an exclusion earned in `test_engine_env.py`.
 "$VENV" - "$WT" <<'FILTER' > "$WT/attributable.txt"
 import sys
 wt = sys.argv[1]
 native = {l.strip() for l in open(f"{wt}/native_schema.txt") if l.strip()}
-def tail(i):  # "file.py::Class::test[p]" -> "Class.test"
+
+
+def tail(i):
     core = i.split("[")[0]
     bits = core.split("::")
     return ".".join(bits[-2:]) if len(bits) >= 2 else core
-for line in open(f"{wt}/attributable_pre_native.txt"):
-    i = line.rstrip("\n")
-    if i and tail(i) not in native:
+
+
+# Ambiguity is checked against the WHOLE rotated set, because a same-named test in another file is a
+# collision wherever it sits. The FILTER, though, must be applied to `attributable_pre_native.txt` --
+# the set already reduced by the baseline and control subtractions. An earlier version of this block
+# read `rotated.txt` for both, which would have bypassed those two subtractions entirely and inflated
+# the verdict. Two different inputs, deliberately.
+rotated = [l.rstrip("\n") for l in open(f"{wt}/rotated.txt") if l.strip()]
+candidates = [l.rstrip("\n") for l in open(f"{wt}/attributable_pre_native.txt") if l.strip()]
+by_tail = {}
+for i in rotated:
+    by_tail.setdefault(tail(i), set()).add(i.split("[")[0])
+ambiguous = {t: sorted(v) for t, v in by_tail.items() if t in native and len(v) > 1}
+if ambiguous:
+    sys.stderr.write(
+        "drill: a native-schema exclusion is AMBIGUOUS -- the same Class.test exists in more than "
+        "one file, so excluding by tail would drop a test that never raised the Rust error:\n"
+    )
+    for t, v in sorted(ambiguous.items()):
+        sys.stderr.write(f"  {t} -> {v}\n")
+    sys.exit(16)
+excluded_full = {f for t, v in by_tail.items() if t in native for f in v}
+for i in candidates:
+    if i.split("[")[0] not in excluded_full:
         print(i)
 FILTER
 # Artifact matching is TEST-granular on purpose, while ids are SUBTEST-granular. A source-mutation
