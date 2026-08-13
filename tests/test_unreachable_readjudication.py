@@ -1138,14 +1138,19 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
     trap this module has now hit three times.
 
     ⚠ **THE LINE NUMBER OF THAT COMMENT IS NOT WRITTEN DOWN ANYWHERE, and the reason is
-    C156's own defect.** Its first revision cited it as `:1202` in three places in this
+    C156's own defect.** Its first revision cited it BY LINE NUMBER in three places in this
     module and once in `reports/c156`, and C156's own eleven-line workflow comment moved it
     to a different line IN THE SAME COMMIT -- four citations stale inside the change that
     staled them, in a pass whose subject is stale typed numbers. Review found it, and then
     found the FIRST TWO FIXES for it defective in turn; the record is in
     `test_the_scan_sees_every_invocation_a_flat_scan_sees`, which is where the working one
     lives. (`#1202` elsewhere in this module is the PULL REQUEST, not a line, and is not
-    affected.)
+    affected: the guard below matches `":%d" % number`, so a `#`-prefixed reference cannot
+    collide with a workflow line. A previous pass de-numbered those PR references too, on the
+    stated grounds that the guard "cannot distinguish a PR reference from a line citation" --
+    which is false, and cost this paragraph the sentence that had said so correctly. Verified by
+    mutation: restoring `#1202` leaves the guard green; inserting `:<a live invocation line>`
+    reddens it.)
     """
 
     WORKFLOW = ".github/workflows/engine-fidelity-gates.yml"
@@ -1354,7 +1359,7 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
         then review's finding on each of the two fixes for it. All three are recorded,
         because the later ones are worse than the first.
 
-          * **The defect.** C156's first revision cited the comment as `:1202` three times
+          * **The defect.** C156's first revision cited the comment BY LINE NUMBER three times
             here and once in `reports/c156`, and C156's own workflow comment moved it in
             the same commit. Four citations stale inside the change that staled them.
           * **Fix 1 reddened on NOISE.** It pinned the typed citation to the computed line,
@@ -1384,7 +1389,7 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
             cannot go stale and is not in scope here.
           * ⚠ **It catches a citation typed at its CORRECT value, and cannot catch one that
             is already wrong.** Authoring time is exactly when this defect is born -- C156
-            typed `:1202` while the comment WAS at 1202 -- so the guard fires as the mistake
+            typed the line number while the comment WAS at it -- so the guard fires as the mistake
             is made, before the edit that stales it. But a citation that has ALREADY drifted
             equals no computed value and is invisible here. Not hypothetical: the
             contact-ability step's citation named line 469 and had been wrong since #1204

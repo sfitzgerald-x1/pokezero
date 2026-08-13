@@ -62,6 +62,7 @@ from pokezero.public_projection import (
     ProjectionMismatch,
     WorldObserver,
     aggregate_projection_records,
+    dropped_move_lines,
     render_projection_mismatch,
     render_self_consistency_mismatches,
     state_projection_mismatches,
@@ -234,6 +235,7 @@ CLOSED_AXES = (
     "render_unmatched_transition",
     "render_no_usable_branch",
     "render_post_state_disagreement",
+    "render_move_line_dropped",
 )
 
 #: The seat-scoped axes, written out for the same reason as `PUBLIC_BOOST_KEYS`.
@@ -1452,6 +1454,7 @@ class AxisClosureTests(unittest.TestCase):
                 "render_unmatched_transition",
                 "render_no_usable_branch",
                 "render_post_state_disagreement",
+                "render_move_line_dropped",
             },
             {axis for axis in CLOSED_AXES if axis.startswith("render_")},
         )
@@ -2771,6 +2774,463 @@ class RenderProjectionTests(unittest.TestCase):
         branches = [{"events": rendered, "lossy": [], "attribution_unsafe": False}]
         found, _ = self._run(branches, observed)
         self.assertEqual(["render_unmatched_transition"], _axes(found))
+
+
+class DroppedMoveLineTests(unittest.TestCase):
+    """A protocol line that is SILENTLY ABSENT from an otherwise matching render.
+
+    The gap this closes, stated as the campaign measured it: `consume_move_prelude`'s
+    FREEZE/thaw arm ate a benched party-cure clear, which left the ACTIVE's own clear
+    next in line for the wake arm, so both were consumed and the render dropped
+    `|move|..|healbell|..|[from] Sleep Talk` with `attribution_unsafe=[]` and
+    `lossy=[]`. No refusal, no counter, no census row -- so every acceptance
+    criterion of the direction-1 census was blind to it before and after #1242.
+
+    WHY THE CHECK CAN LIVE HERE FOR THE PRICE OF TWO `Counter`s.
+    `render_projection_mismatch` already holds the observed log and the rendered
+    branch in one frame; `fold_step_lines` has no `move` arm, so the `|move|`
+    population of BOTH sides falls through its tag chain unhandled. The
+    discriminator was in hand and the consumer was not reading it. Direction 1
+    cannot host the same check at any price: `truth_differential` has no log in
+    scope at all.
+
+    NULL WORLDS, one per test below and none of them shared: a genuine
+    `|cant|..|slp` with no `|move|` on either side, an empty tail, a branch whose
+    telemetry-only marker says the omission was deliberate, a sibling branch that
+    does carry the line, and a display-name/slug pair that is one announcement.
+    Reverting `dropped_move_lines` to `return []` turns the two firing tests red
+    and leaves every silent one green, which is the direction that matters.
+    """
+
+    PRE = types.SimpleNamespace(
+        p1_hp=200,
+        p2_hp=100,
+        p1_status="NONE",
+        p2_status="NONE",
+        fainted=frozenset(),
+        weather="NONE",
+        side_conditions={},
+        presence=lambda: {},
+    )
+
+    def _run(self, branches, observed_lines):
+        return render_projection_mismatch(
+            state_string="<state>",
+            slot_sides=SLOT_SIDES,
+            party_display={"p1": ["Pikachu"], "p2": ["Squirtle"]},
+            turn=3,
+            choices={"p1": "sleeptalk", "p2": "splash"},
+            observed_lines=observed_lines,
+            pre_features=self.PRE,
+            module=_FakeCrate(branches),
+        )
+
+    #: The exact shape of the defect, in protocol terms: Showdown announces Sleep
+    #: Talk AND the move it called; the render announces only Sleep Talk. Nothing
+    #: about the state moved, which is why every other axis agrees.
+    OBSERVED_CALLEE = [
+        "|cant|p1a: Pikachu|slp",
+        "|move|p1a: Pikachu|Sleep Talk|p1a: Pikachu",
+        "|move|p1a: Pikachu|Heal Bell|p1a: Pikachu|[from]Sleep Talk",
+        "|turn|4",
+    ]
+    RENDERED_WITHOUT_CALLEE = [
+        "|cant|p1a: Pikachu|slp",
+        "|move|p1a: Pikachu|sleeptalk|p1a: Pikachu",
+        "|turn|4",
+    ]
+
+    def test_a_silently_dropped_callee_line_is_caught(self):
+        """MUST FIRE. The branch folds equal on every axis the comparator had --
+        no HP moved, no status moved, nothing fainted -- so before this check the
+        boundary was published as `matched` and the missing announcement was
+        never counted anywhere in the tree."""
+
+        branches = [
+            {
+                "events": list(self.RENDERED_WITHOUT_CALLEE),
+                "lossy": [],
+                "attribution_unsafe": False,
+            }
+        ]
+        found, diagnostics = self._run(branches, self.OBSERVED_CALLEE)
+        self.assertEqual(["render_move_line_dropped"], _axes(found))
+        # NAMED, not merely counted. A tally that cannot say WHICH line went
+        # missing cannot be triaged, and the predicate is the queue key.
+        self.assertEqual(
+            "render_move_line_dropped:move:p1a:healbell", found[0].predicate
+        )
+        self.assertEqual(["move:p1a:healbell"], diagnostics["move_lines_dropped"])
+        # THE DENOMINATOR. Two announcements were compared, not zero.
+        self.assertEqual(2, diagnostics["move_lines_compared"])
+
+    def test_the_defect_free_render_of_the_same_boundary_is_silent(self):
+        """THE CONTROL for the test above, and the post-#1242 render of the same
+        position: the callee line is present, so the same comparator says nothing.
+        Without this the firing test could be passing because the axis fires on
+        every Sleep Talk boundary."""
+
+        branches = [
+            {
+                "events": [
+                    "|cant|p1a: Pikachu|slp",
+                    "|move|p1a: Pikachu|sleeptalk|p1a: Pikachu",
+                    "|move|p1a: Pikachu|healbell|p1a: Pikachu|[from] Sleep Talk",
+                    "|turn|4",
+                ],
+                "lossy": [],
+                "attribution_unsafe": False,
+            }
+        ]
+        found, diagnostics = self._run(branches, self.OBSERVED_CALLEE)
+        self.assertEqual([], _axes(found))
+        self.assertEqual([], diagnostics["move_lines_dropped"])
+        self.assertEqual(2, diagnostics["move_lines_compared"])
+
+    def test_a_display_name_and_its_slug_are_one_announcement(self):
+        """NULL WORLD: the log writes `Heal Bell` and the renderer writes
+        `healbell`. Keying on the raw line would report every single announcement
+        in the census as dropped -- an instrument that fires on everything is the
+        same as one that fires on nothing."""
+
+        self.assertEqual(
+            [],
+            dropped_move_lines(
+                ["|move|p1a: Pikachu|Heal Bell|p1a: Pikachu|[from]Sleep Talk"],
+                ["|move|p1a: Pikachu|healbell|p1a: Pikachu|[from] Sleep Talk"],
+            ),
+        )
+
+    def test_a_target_field_disagreement_is_not_a_dropped_line(self):
+        """NULL WORLD: the renderer blanks the target and adds `[still]` on a
+        self-target failure where Showdown names the user. That is a different
+        (and narrower) defect than an announcement that is not there, and
+        conflating them would put a target-rendering question in a bucket whose
+        whole claim is `this line does not exist`."""
+
+        self.assertEqual(
+            [],
+            dropped_move_lines(
+                ["|move|p1a: Pikachu|Splash|p1a: Pikachu"],
+                ["|move|p1a: Pikachu|splash||[still]"],
+            ),
+        )
+
+    def test_a_genuine_cant_slp_branch_with_no_move_line_is_silent(self):
+        """NULL WORLD, the one the instrument is most likely to get wrong: a mon
+        that is asleep and does not act announces NO move on EITHER side. The
+        deficit is empty and the boundary must stay quiet."""
+
+        observed = ["|cant|p1a: Pikachu|slp", "|turn|4"]
+        branches = [
+            {"events": list(observed), "lossy": [], "attribution_unsafe": False}
+        ]
+        found, diagnostics = self._run(branches, observed)
+        self.assertEqual([], _axes(found))
+        # And the denominator says so honestly: nothing was compared here, which
+        # is NOT the same reading as "compared and clean".
+        self.assertEqual(0, diagnostics["move_lines_compared"])
+
+    def test_an_empty_tail_is_silent(self):
+        """NULL WORLD: a branch that renders nothing at all. The deficit over an
+        empty observed slice is empty, so a boundary with no protocol content
+        cannot manufacture a verdict."""
+
+        found, diagnostics = self._run(
+            [{"events": [], "lossy": [], "attribution_unsafe": False}], []
+        )
+        self.assertEqual([], _axes(found))
+        self.assertEqual(0, diagnostics["move_lines_compared"])
+
+    def test_a_telemetry_only_marker_makes_the_omission_MARKED_not_a_verdict(self):
+        """NULL WORLD for the verdict, MUST-FIRE for the counter.
+
+        `sleeptalk_called_unidentified` renders the callee's damage with no
+        `|move|` owner ON PURPOSE -- the class is already counted, by name, in
+        direction 1. Reporting it here would bury this axis in the very class it
+        exists to be independent of. It is still COUNTED, on its own key: if that
+        class is ever closed, the closure has to show up as this counter going to
+        zero rather than as the measurement quietly disappearing.
+        """
+
+        branches = [
+            {
+                "events": list(self.RENDERED_WITHOUT_CALLEE),
+                "lossy": ["sleeptalk_called_unidentified"],
+                "attribution_unsafe": False,
+            }
+        ]
+        found, diagnostics = self._run(branches, self.OBSERVED_CALLEE)
+        self.assertEqual([], _axes(found))
+        self.assertEqual([], diagnostics["move_lines_dropped"])
+        self.assertEqual(
+            ["move:p1a:healbell"], diagnostics["move_lines_dropped_marked"]
+        )
+
+    def test_a_sibling_branch_that_carries_the_line_clears_the_verdict(self):
+        """MUTATED TOWARD THE SAFER BEHAVIOUR, and it found a real false positive.
+
+        The first revision returned on the FIRST branch whose fold matched. On
+        the 16-game control block that reported a dropped `|move|..|Toxic|..|[miss]`
+        against a paralysed Pelipper: the full-paralysis sibling folds to exactly
+        the same net state -- no damage, no status, no faint -- so which of the
+        two the engine enumerated first decided the verdict. The support claim
+        (`the observed transition lies in the rendered support`) is satisfied by
+        ANY branch, so the deficit claim has to be as well.
+
+        NULL WORLD: take the verdict on the first fold-matching branch instead of
+        the whole matching set, and this goes red while every other test here
+        stays green.
+        """
+
+        branches = [
+            # Enumerated FIRST, folds equal, and announces nothing.
+            {
+                "events": ["|cant|p1a: Pikachu|par", "|turn|4"],
+                "lossy": [],
+                "attribution_unsafe": False,
+            },
+            # The branch the log actually took.
+            {
+                "events": [
+                    "|move|p1a: Pikachu|toxic|p2a: Squirtle|[miss]",
+                    "|-miss|p1a: Pikachu|p2a: Squirtle",
+                    "|turn|4",
+                ],
+                "lossy": [],
+                "attribution_unsafe": False,
+            },
+        ]
+        observed = [
+            "|move|p1a: Pikachu|Toxic|p2a: Squirtle|[miss]",
+            "|-miss|p1a: Pikachu|p2a: Squirtle",
+            "|turn|4",
+        ]
+        found, diagnostics = self._run(branches, observed)
+        self.assertEqual([], _axes(found))
+        self.assertEqual(2, diagnostics["matched_branches"])
+
+    def test_every_matching_branch_dropping_it_is_still_a_verdict(self):
+        """THE OTHER SIDE of the test above. Widening to "any matching branch
+        clears it" must not become "nothing ever fires": when EVERY branch that
+        folds equal omits the announcement, there is no render that produced it
+        and the verdict stands."""
+
+        branches = [
+            {"events": ["|turn|4"], "lossy": [], "attribution_unsafe": False},
+            {
+                "events": ["|cant|p1a: Pikachu|par", "|turn|4"],
+                "lossy": [],
+                "attribution_unsafe": False,
+            },
+        ]
+        observed = [
+            "|move|p1a: Pikachu|Toxic|p2a: Squirtle|[miss]",
+            "|-miss|p1a: Pikachu|p2a: Squirtle",
+            "|turn|4",
+        ]
+        found, diagnostics = self._run(branches, observed)
+        self.assertEqual(["render_move_line_dropped"], _axes(found))
+        self.assertEqual(2, diagnostics["matched_branches"])
+
+    #: One branch that declares nothing lost and one that declares
+    #: `sleeptalk_called_unidentified`, both folding equal and both omitting the
+    #: SAME announcement. The pair is built once and used in both orders.
+    def _tied_pair(self, first_lossy):
+        events = list(self.RENDERED_WITHOUT_CALLEE)
+        lossy_branch = {
+            "events": events,
+            "lossy": ["sleeptalk_called_unidentified"],
+            "attribution_unsafe": False,
+        }
+        clean_branch = {"events": events, "lossy": [], "attribution_unsafe": False}
+        return (
+            [lossy_branch, clean_branch] if first_lossy else [clean_branch, lossy_branch]
+        )
+
+    def test_a_lossy_sibling_cannot_silence_a_clean_branchs_identical_deficit(self):
+        """⚠ THE REVIEW FINDING, and the reason the split moved to the SET.
+
+        The first revision selected ONE branch by `(len(deficit), deficit)` -- a
+        key that does not mention `lossy` -- and then read `lossy` off whatever
+        `min` returned. `min` returns the FIRST minimal element, so on a tie
+        CRATE ENUMERATION ORDER decided whether the deficit became a verdict or
+        was filed into the bucket that is never a verdict.
+
+        Not hypothetical: on the 256-game control block whose zero is this
+        instrument's headline, 11 of 53 marked boundaries had more than one
+        matching branch, and at one of them FIVE branches all omitted
+        `move:p2a:surf` while THREE declared `lossy=[]`. A lossy branch sat at
+        index 0, the axis stayed silent, and the published zero was wrong.
+
+        A render that declared nothing was lost and still omitted an announced
+        line is a verdict whatever its siblings declared.
+
+        NULL WORLD: reduce over the whole matching set again instead of per
+        population -- i.e. select with `(len, content)` and read `lossy` off the
+        winner -- and the `first_lossy=True` subtest goes red while
+        `first_lossy=False` stays green. That asymmetry IS the bug.
+        """
+
+        for first_lossy in (True, False):
+            # BOTH ORDERS, because order is the variable. A pin in one order
+            # passes for exactly the reason the defect existed.
+            with self.subTest(lossy_branch_first=first_lossy):
+                found, diagnostics = self._run(
+                    self._tied_pair(first_lossy), self.OBSERVED_CALLEE
+                )
+                self.assertEqual(["render_move_line_dropped"], _axes(found))
+                self.assertEqual(
+                    ["move:p1a:healbell"], diagnostics["move_lines_dropped"]
+                )
+                # And the lossy population still reports its own, because the two
+                # keys are now independent rather than a single value routed to
+                # one of two names.
+                self.assertEqual(
+                    ["move:p1a:healbell"], diagnostics["move_lines_dropped_marked"]
+                )
+                self.assertEqual(2, diagnostics["matched_branches"])
+                self.assertEqual(1, diagnostics["matched_clean_branches"])
+
+    def test_a_smaller_lossy_deficit_does_not_mask_a_larger_clean_one(self):
+        """The second shape the review found on the same block: the only CLEAN
+        branch drops TWO lines while a lossy sibling drops one. Reducing over the
+        merged set picks the lossy branch's single line, and the clean branch's
+        extra announcement is counted in NEITHER bucket -- it vanishes from the
+        run. Reducing per population reports both lines."""
+
+        observed = self.OBSERVED_CALLEE + [
+            "|move|p2a: Squirtle|Splash|p2a: Squirtle"
+        ]
+        branches = [
+            {
+                "events": list(self.RENDERED_WITHOUT_CALLEE)
+                + ["|move|p2a: Squirtle|splash||[still]"],
+                "lossy": ["sleeptalk_called_unidentified"],
+                "attribution_unsafe": False,
+            },
+            {
+                "events": list(self.RENDERED_WITHOUT_CALLEE),
+                "lossy": [],
+                "attribution_unsafe": False,
+            },
+        ]
+        found, diagnostics = self._run(branches, observed)
+        self.assertEqual(["render_move_line_dropped"], _axes(found))
+        self.assertEqual(
+            ["move:p1a:healbell", "move:p2a:splash"],
+            diagnostics["move_lines_dropped"],
+        )
+        self.assertEqual(
+            ["move:p1a:healbell"], diagnostics["move_lines_dropped_marked"]
+        )
+
+    def test_no_clean_branch_at_all_leaves_the_axis_silent(self):
+        """THE OTHER SIDE of the two pins above, and the null world for the
+        split. Widening to "the clean population decides" must not become "any
+        deficit fires": when EVERY matching branch declared a loss, there is no
+        render that claimed nothing was lost and the omission is accounted for by
+        the class that already counts it."""
+
+        found, diagnostics = self._run(
+            [
+                {
+                    "events": list(self.RENDERED_WITHOUT_CALLEE),
+                    "lossy": ["sleeptalk_called_unidentified"],
+                    "attribution_unsafe": False,
+                }
+            ],
+            self.OBSERVED_CALLEE,
+        )
+        self.assertEqual([], _axes(found))
+        self.assertEqual([], diagnostics["move_lines_dropped"])
+        self.assertEqual(0, diagnostics["matched_clean_branches"])
+        self.assertEqual(
+            ["move:p1a:healbell"], diagnostics["move_lines_dropped_marked"]
+        )
+
+    def test_the_counter_tokens_carry_no_pipe(self):
+        """These strings become census counter keys and mismatch predicates, and
+        both are rendered into GFM tables by `--mode report`. A raw `|` splits
+        the cell and a code span does NOT escape it, so the token
+        `|move|p1a|healbell` silently ate the count column of every row it
+        appeared in -- 13 rows unforced, thousands under the forcing. Pinned on
+        the token rather than on the report, because the report is one of several
+        consumers and the next one will not have a test."""
+
+        for token in dropped_move_lines(
+            self.OBSERVED_CALLEE, self.RENDERED_WITHOUT_CALLEE
+        ):
+            self.assertNotIn("|", token)
+
+    def test_a_boundary_that_matched_nothing_publishes_a_zero_denominator(self):
+        """The deficit is only read on a branch the fold ACCEPTED, so on an
+        unmatched boundary the check does not run. It publishes an explicit 0
+        rather than omitting the key, so a census summing `move_lines_compared`
+        cannot read "no matched boundary here" as "no announcements here"."""
+
+        observed = ["|move|p1a: Pikachu|Tackle|p2a: Squirtle", "|-damage|p2a: Squirtle|10/100"]
+        branches = [
+            {
+                "events": ["|move|p1a: Pikachu|tackle|p2a: Squirtle"],
+                "lossy": [],
+                "attribution_unsafe": False,
+            }
+        ]
+        found, diagnostics = self._run(branches, observed)
+        self.assertEqual(["render_unmatched_transition"], _axes(found))
+        self.assertEqual(0, diagnostics["move_lines_compared"])
+
+    def test_an_unrelated_disagreement_hides_the_same_drop(self):
+        """THE COVERAGE LIMIT, PINNED rather than described in a comment.
+
+        The deficit is read only on a branch the fold ACCEPTED. Take the boundary
+        from `test_a_silently_dropped_callee_line_is_caught` -- identical
+        announcements, identical drop -- and add one unrelated `|-damage|` to the
+        log that the render does not have. The boundary now reports
+        `render_unmatched_transition` and `move_lines_compared: 0`: LOUD, so
+        nothing is silently wrong, but the drop fact is recorded NOWHERE.
+
+        Measured on the 256-game control block: the deficit runs on 6,051 of
+        6,325 evaluated boundaries (95.7%) and 6,051 of 24,749 decisions (24.4%).
+        This test is what stops that number being quietly re-described as full
+        coverage.
+        """
+
+        found, diagnostics = self._run(
+            [
+                {
+                    "events": list(self.RENDERED_WITHOUT_CALLEE),
+                    "lossy": [],
+                    "attribution_unsafe": False,
+                }
+            ],
+            self.OBSERVED_CALLEE + ["|-damage|p2a: Squirtle|40/100"],
+        )
+        self.assertEqual(["render_unmatched_transition"], _axes(found))
+        self.assertEqual(0, diagnostics["move_lines_compared"])
+
+    def test_an_extra_rendered_announcement_is_not_this_axis(self):
+        """SCOPE, stated as a limit rather than left to be discovered. The
+        opposite direction -- a `|move|` line the render invents and the log does
+        not have -- is by this campaign's doctrine WORSE than a dropped one, and
+        it is the same two `Counter`s away. It is deliberately not shipped here:
+        it has no measured baseline, and an axis whose false-positive rate is
+        unknown cannot be added to a census in the same change that establishes
+        the first one's. Registered as a follow-up; this test pins that the
+        current axis does NOT fire on it, so the follow-up cannot be mistaken for
+        already done."""
+
+        self.assertEqual(
+            [],
+            dropped_move_lines(
+                ["|move|p1a: Pikachu|Tackle|p2a: Squirtle"],
+                [
+                    "|move|p1a: Pikachu|tackle|p2a: Squirtle",
+                    "|move|p1a: Pikachu|splash||[still]",
+                ],
+            ),
+        )
 
 
 class RenderBandWidthTests(unittest.TestCase):

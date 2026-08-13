@@ -1,0 +1,3421 @@
+[
+  {
+    "file": "docs/token-format/extract_turn16.py",
+    "line": 665,
+    "kind": "bare-const",
+    "owner": "<module>"
+  },
+  {
+    "file": "scripts/attest_materialized_damage_stats.py",
+    "line": 336,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/attract_differential.py",
+    "line": 209,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/behavior_probe.py",
+    "line": 85,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_self_play_behavior",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/belief_coherence_gate.py",
+    "line": 557,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "run_sweep",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/bench_crate_search.py",
+    "line": 51,
+    "kind": "implicit:compact_category",
+    "owner": "_template_inputs",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "scripts/blank_target_slot_census.py",
+    "line": 36,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "<module>",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/build_mcts_timing_corpus.py",
+    "line": 81,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/coverage_enumeration_audit.py",
+    "line": 814,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/deep_line_audit.py",
+    "line": 170,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/depth_tactics_probe.py",
+    "line": 912,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "build_env",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/depth_tactics_probe.py",
+    "line": 923,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "build_env",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/encode_foulplay_capture.py",
+    "line": 141,
+    "kind": "default-spec",
+    "owner": "main"
+  },
+  {
+    "file": "scripts/encoding_collision_audit.py",
+    "line": 70,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/engine_env_benchmark.py",
+    "line": 287,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "run_showdown_arm",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/engine_transition_differential.py",
+    "line": 3967,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/expected_stat_gate.py",
+    "line": 138,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "run_gate",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/foulplay_paired_eval.py",
+    "line": 382,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/gen3_duration_differential.py",
+    "line": 96,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "scenario_encore",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/gen3_duration_differential.py",
+    "line": 184,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "scenario_wish",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/gen3_duration_differential.py",
+    "line": 344,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "scenario_damage",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/gen3_recoil_differential.py",
+    "line": 183,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/gen3_sleeptalk_probe.py",
+    "line": 364,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "showdown_calls",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/gen3_switch_differential.py",
+    "line": 2669,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/hazard_blind_spot_audit.py",
+    "line": 87,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/hc_depth_grid.py",
+    "line": 176,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/investment_gate.py",
+    "line": 175,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/k0_grid_h2h.py",
+    "line": 88,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/mcts_acceptance_h2h.py",
+    "line": 353,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/oracle_differential.py",
+    "line": 494,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "run",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/play_against_checkpoint.py",
+    "line": 113,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "play",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/play_online_baseline.py",
+    "line": 56,
+    "kind": "default-spec",
+    "owner": "main"
+  },
+  {
+    "file": "scripts/policy_probe.py",
+    "line": 124,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "capture_base_state",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/public_projection_census.py",
+    "line": 721,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "run_shard",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/rapidspin_differential.py",
+    "line": 231,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/refusal_recorder_cost.py",
+    "line": 61,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "__init__",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "scripts/shaping_ranker.py",
+    "line": 228,
+    "kind": "default-spec",
+    "owner": "value_of"
+  },
+  {
+    "file": "scripts/shaping_ranker.py",
+    "line": 393,
+    "kind": "implicit:compact_category",
+    "owner": "main",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "scripts/silent_mutation_audit.py",
+    "line": 123,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/tier2_gate.py",
+    "line": 214,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/trait_eval.py",
+    "line": 178,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/trait_eval.py",
+    "line": 190,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/truth_differential_census.py",
+    "line": 629,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "run_shard",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "scripts/vocab_shift_probe.py",
+    "line": 85,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/bootstrap_cli.py",
+    "line": 244,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_teacher",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/bootstrap_cli.py",
+    "line": 308,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_teacher_benchmark",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/bootstrap_cli.py",
+    "line": 367,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_teacher_selfplay_benchmark",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/bootstrap_cli.py",
+    "line": 465,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_teacher_scenario_preflight",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/checkpoint_factors.py",
+    "line": 226,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "build_corpus",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/checkpoint_factors.py",
+    "line": 323,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "sample_states_at_turn",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/engine_env.py",
+    "line": 519,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "resolved_showdown_root",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/engine_env.py",
+    "line": 613,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_team_source",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/engine_env.py",
+    "line": 1140,
+    "kind": "default-spec",
+    "owner": "_default_observation_spec"
+  },
+  {
+    "file": "src/pokezero/engine_env.py",
+    "line": 1237,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_load_encoder_tables",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/engine_fidelity.py",
+    "line": 492,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/engine_fidelity_multiturn.py",
+    "line": 661,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/engine_search.py",
+    "line": 3205,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "main",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/fallback_replay.py",
+    "line": 1031,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "rollout_runner",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/golden_corpus.py",
+    "line": 1054,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "generate_golden_corpus",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/golden_corpus_scenarios.py",
+    "line": 512,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "play_scenario_games",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/golden_corpus_scenarios.py",
+    "line": 602,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "run_scenario_fallback_sweep",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/golden_corpus_scenarios.py",
+    "line": 641,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "generate_scenario_corpus",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/linear_cli.py",
+    "line": 169,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_benchmark",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/linear_policy.py",
+    "line": 80,
+    "kind": "bare-const",
+    "owner": "_linear_feature_fingerprint_payload"
+  },
+  {
+    "file": "src/pokezero/linear_policy.py",
+    "line": 110,
+    "kind": "bare-const",
+    "owner": "LinearPolicyModel"
+  },
+  {
+    "file": "src/pokezero/linear_policy.py",
+    "line": 503,
+    "kind": "implicit:LinearPolicyModel",
+    "owner": "train_linear_policy",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "src/pokezero/local_showdown.py",
+    "line": 226,
+    "kind": "default-spec",
+    "owner": "env_config_from_checkpoint_provenance"
+  },
+  {
+    "file": "src/pokezero/local_showdown.py",
+    "line": 271,
+    "kind": "default-spec",
+    "owner": "LocalShowdownConfig"
+  },
+  {
+    "file": "src/pokezero/local_showdown.py",
+    "line": 391,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "__init__",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 2684,
+    "kind": "implicit:compact_category",
+    "owner": "_describe",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 3025,
+    "kind": "bare-const",
+    "owner": "_train"
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 3092,
+    "kind": "implicit:compact_category",
+    "owner": "_train",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 3670,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_benchmark",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 4255,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_root_puct_play_benchmark",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 5005,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_root_puct_benchmark",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 5109,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_root_puct_counterfactual",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 5593,
+    "kind": "bare-const",
+    "owner": "_iterate"
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 5697,
+    "kind": "implicit:compact_category",
+    "owner": "_iterate",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "src/pokezero/neural_policy.py",
+    "line": 245,
+    "kind": "default-spec",
+    "owner": "TransformerPolicyConfig"
+  },
+  {
+    "file": "src/pokezero/neural_policy.py",
+    "line": 246,
+    "kind": "default-spec",
+    "owner": "TransformerPolicyConfig"
+  },
+  {
+    "file": "src/pokezero/neural_policy.py",
+    "line": 257,
+    "kind": "bare-const",
+    "owner": "TransformerPolicyConfig"
+  },
+  {
+    "file": "src/pokezero/neural_policy.py",
+    "line": 483,
+    "kind": "default-spec",
+    "owner": "from_dict"
+  },
+  {
+    "file": "src/pokezero/online_client.py",
+    "line": 99,
+    "kind": "default-spec",
+    "owner": "OnlineBattleAgent"
+  },
+  {
+    "file": "src/pokezero/poke_engine_outcomes.py",
+    "line": 1405,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "run_charmander_squirtle_outcome_comparison",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/poke_engine_outcomes.py",
+    "line": 1441,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "run_charmander_squirtle_damage_diagnostic",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/refutation_cli.py",
+    "line": 562,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_mine",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/refutation_cli.py",
+    "line": 649,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_reproduce",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/refutation_cli.py",
+    "line": 735,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_curriculum",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/rollout_cli.py",
+    "line": 449,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_collect",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/rollout_cli.py",
+    "line": 479,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_collect_training_cache",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/rollout_cli.py",
+    "line": 638,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_collect_selfplay_training_cache",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/rollout_cli.py",
+    "line": 862,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_benchmark",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/rollout_cli.py",
+    "line": 904,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_replay_benchmark",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/scenario_studio/service.py",
+    "line": 33,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "generate_team",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/scenario_studio/service.py",
+    "line": 41,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "validate_payload",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/scenario_studio/service.py",
+    "line": 70,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "evaluate_root",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/selfplay_cli.py",
+    "line": 190,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_iterate",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/showdown.py",
+    "line": 1143,
+    "kind": "bare-const",
+    "owner": "<module>"
+  },
+  {
+    "file": "src/pokezero/showdown.py",
+    "line": 4280,
+    "kind": "default-spec",
+    "owner": "observation_from_player_state"
+  },
+  {
+    "file": "src/pokezero/showdown_fixture.py",
+    "line": 354,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "__init__",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "src/pokezero/teacher_scenarios.py",
+    "line": 553,
+    "kind": "implicit:ObservationSpec",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "src/pokezero/teacher_scenarios.py",
+    "line": 554,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_batch_replay.py",
+    "line": 39,
+    "kind": "implicit:ObservationSpec",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_batch_replay.py",
+    "line": 40,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_batch_replay.py",
+    "line": 93,
+    "kind": "implicit:compact_category",
+    "owner": "_model_config",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_belief_coherence.py",
+    "line": 293,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_the_tracked_phase_never_changes_a_classification",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_bench_model_eval.py",
+    "line": 25,
+    "kind": "implicit:compact_category",
+    "owner": "_tiny_config",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_bootstrap.py",
+    "line": 38,
+    "kind": "implicit:ObservationSpec",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_bootstrap.py",
+    "line": 39,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_cache_concat.py",
+    "line": 44,
+    "kind": "implicit:ObservationSpec",
+    "owner": "<module>",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_cache_concat.py",
+    "line": 51,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_collection.py",
+    "line": 61,
+    "kind": "implicit:ObservationSpec",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_collection.py",
+    "line": 62,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_collection.py",
+    "line": 253,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "integration_config",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_crate_model_leafeval.py",
+    "line": 52,
+    "kind": "implicit:compact_category",
+    "owner": "_tiny_config",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_crate_model_leafeval.py",
+    "line": 202,
+    "kind": "implicit:compact_category",
+    "owner": "test_full_size_artifact_parity_when_present",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_dataset.py",
+    "line": 40,
+    "kind": "implicit:ObservationSpec",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_dataset.py",
+    "line": 41,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_dataset.py",
+    "line": 814,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_training_cache_compacts_zero_padded_categorical_features",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_dataset.py",
+    "line": 817,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "wide_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_dataset.py",
+    "line": 866,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_training_cache_coalesces_mixed_categorical_widths",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_dataset.py",
+    "line": 869,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "record_with_categories",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_determinization.py",
+    "line": 76,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "integration_config",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_determinization.py",
+    "line": 134,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_context",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_determinization.py",
+    "line": 370,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_belief_world_sampling_checksum_ignores_true_hidden_team_payload",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_distributed_training.py",
+    "line": 37,
+    "kind": "implicit:ObservationSpec",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_distributed_training.py",
+    "line": 38,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_distributed_training.py",
+    "line": 147,
+    "kind": "implicit:compact_category",
+    "owner": "test_ddp_two_rank_contiguous_shards_match_single_device_updates",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_distributed_training.py",
+    "line": 224,
+    "kind": "implicit:compact_category",
+    "owner": "test_ddp_two_rank_ppo_reports_global_metrics_within_parity_bounds",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_engine_env.py",
+    "line": 60,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_missing",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_engine_fidelity_multiturn.py",
+    "line": 48,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "integration_config",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_engine_stat_attestation.py",
+    "line": 904,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_real_replay_materializes_and_attests_transport_with_source_hash",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_engine_world.py",
+    "line": 1122,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_transform_fails_closed_for_both_seats",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_engine_world.py",
+    "line": 1225,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_mirror_seat_p1_facing_transformed_p2_ditto",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_engine_world.py",
+    "line": 1284,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_knock_off_removal_constructs_with_cleared_item",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_engine_world.py",
+    "line": 1358,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_trick_exchange_constructs_with_both_current_items",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_env.py",
+    "line": 10,
+    "kind": "implicit:ObservationSpec",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_env.py",
+    "line": 11,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_export_model.py",
+    "line": 27,
+    "kind": "implicit:compact_category",
+    "owner": "_tiny_config",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_fallback_replay_end_to_end.py",
+    "line": 112,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_play_and_write_shard",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_fallback_replay_end_to_end.py",
+    "line": 269,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "play",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_fallback_replay_end_to_end.py",
+    "line": 332,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "play",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 35,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_no_transformer_checkpoints_leaves_config_unchanged",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 39,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_default_env_adopts_the_checkpoint_masks",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 44,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_matching_masks_are_a_no_op",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 53,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_conflicting_checkpoints_hard_fail",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 57,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_explicit_env_override_conflicting_with_checkpoint_hard_fails",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 64,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_full_default_checkpoint_keeps_default_env",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 108,
+    "kind": "implicit:compact_category",
+    "owner": "_save_k32_checkpoint",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 179,
+    "kind": "implicit:compact_category",
+    "owner": "test_tokens_come_from_the_checkpoint_not_the_build",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 202,
+    "kind": "implicit:compact_category",
+    "owner": "test_a_build_that_inserted_a_token_does_not_shift_the_trained_rows",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 241,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_provenance_without_a_vocabulary_fails_closed",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 249,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_spec_only_provenance_also_fails_closed",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 256,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_no_provenance_at_all_is_still_a_no_op",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 261,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_default_env_adopts_the_checkpoint_vocabulary",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 267,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_agreeing_checkpoints_adopt_once",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 274,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_conflicting_vocabularies_hard_fail",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 279,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_explicit_env_vocabulary_conflicting_with_checkpoint_hard_fails",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 303,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_a_reordered_vocabulary_of_the_same_tokens_is_still_a_conflict",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 307,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_matching_vocabulary_is_a_no_op",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 322,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_default_env_adopts_the_checkpoint_v2_spec",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 350,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_conflicting_schemas_hard_fail",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 371,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_masks_and_specs_resolve_together",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 416,
+    "kind": "implicit:compact_category",
+    "owner": "test_feature_masks_from_model_config_round_trips",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 430,
+    "kind": "implicit:compact_category",
+    "owner": "test_feature_masks_from_model_config_round_trips",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 449,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_policy_sweep_finds_model_configs",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 578,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_policy_spec_resolver_builds_k32_env_config",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 596,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_neural_cli_spec_mask_helper_covers_iterate_and_root_puct_paths",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 605,
+    "kind": "implicit:compact_category",
+    "owner": "test_neural_cli_spec_mask_helper_covers_iterate_and_root_puct_paths",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 610,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_neural_cli_spec_mask_helper_covers_iterate_and_root_puct_paths",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 753,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_policy_spec_resolver_builds_v2_env_config",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 848,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_v2_and_v2_1_checkpoints_in_one_env_hard_fail",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 1106,
+    "kind": "implicit:compact_category",
+    "owner": "test_payload_missing_field_resolves_off",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 1122,
+    "kind": "implicit:compact_category",
+    "owner": "test_explicit_value_round_trips_and_derives",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 1151,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_env_adopts_tier2_off_and_conflicts_fail",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 1156,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_env_adopts_tier2_off_and_conflicts_fail",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 1172,
+    "kind": "implicit:compact_category",
+    "owner": "test_defaults_and_missing_field_resolve_off",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_feature_mask_consistency.py",
+    "line": 1188,
+    "kind": "implicit:compact_category",
+    "owner": "test_explicit_value_round_trips_and_derives",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_foulplay_bridge.py",
+    "line": 160,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_foulplay_bridge.py",
+    "line": 737,
+    "kind": "default-spec",
+    "owner": "test_capture_writes_p1_only_rollouts_and_preserves_partial_output"
+  },
+  {
+    "file": "tests/test_foulplay_bridge.py",
+    "line": 738,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_capture_writes_p1_only_rollouts_and_preserves_partial_output",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_foulplay_bridge.py",
+    "line": 869,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_capture_excludes_capped_games_from_value_labels",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_foulplay_bridge.py",
+    "line": 1447,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_build_policy_uses_separate_calibrated_value_model_and_relative_budget",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_foulplay_bridge.py",
+    "line": 2518,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_observation_with_search_metadata_adds_belief_view_without_mutating_original",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_gen3_damage.py",
+    "line": 241,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_integration_config",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_golden_corpus.py",
+    "line": 464,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "run",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_hazard_audit.py",
+    "line": 44,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_interaction_registry.py",
+    "line": 70,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "setUpClass",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_investment_live_env.py",
+    "line": 38,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_env",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 38,
+    "kind": "implicit:ObservationSpec",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 39,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 221,
+    "kind": "bare-const",
+    "owner": "test_linear_checkpoint_round_trip_preserves_predictions"
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 306,
+    "kind": "bare-const",
+    "owner": "test_linear_feature_fingerprint_payload_tracks_extractor_source_and_schemas"
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 510,
+    "kind": "implicit:LinearPolicyModel",
+    "owner": "test_train_linear_policy_can_warm_start_from_initial_model",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 551,
+    "kind": "implicit:LinearPolicyModel",
+    "owner": "test_linear_softmax_policy_respects_legal_mask",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 558,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_linear_softmax_policy_respects_legal_mask",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 580,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_linear_softmax_policy_samples_and_records_sampling_probability",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 602,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_linear_softmax_policy_records_epsilon_mixture_probability",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 623,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_linear_softmax_policy_records_non_greedy_epsilon_probability",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_local_showdown.py",
+    "line": 346,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_boundary_reader_ignores_choice_ack_and_stale_requests_until_ready",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 45,
+    "kind": "implicit:compact_category",
+    "owner": "test_sizing_and_dedup_sort",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 56,
+    "kind": "implicit:compact_category",
+    "owner": "test_serialization_round_trip",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 63,
+    "kind": "implicit:TransformerPolicyConfig",
+    "owner": "test_list_vocab_normalized_to_tuple_and_round_trips",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 72,
+    "kind": "implicit:TransformerPolicyConfig",
+    "owner": "test_rejects_inconsistent_size",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 78,
+    "kind": "implicit:TransformerPolicyConfig",
+    "owner": "test_rejects_oov_without_vocab",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 81,
+    "kind": "implicit:compact_category",
+    "owner": "test_default_oov_constant",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 92,
+    "kind": "implicit:compact_category",
+    "owner": "_model",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_category_vocab.py",
+    "line": 117,
+    "kind": "implicit:compact_category",
+    "owner": "test_save_load_preserves_string_vocab",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 111,
+    "kind": "implicit:ObservationSpec",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 112,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 191,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_policy_config_defaults_match_replay_observation_shape",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 195,
+    "kind": "default-spec",
+    "owner": "test_transformer_policy_config_defaults_match_replay_observation_shape"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 196,
+    "kind": "default-spec",
+    "owner": "test_transformer_policy_config_defaults_match_replay_observation_shape"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 197,
+    "kind": "default-spec",
+    "owner": "test_transformer_policy_config_defaults_match_replay_observation_shape"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 212,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_policy_config_resolves_token_count_from_stamped_schema",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 232,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_policy_config_rejects_token_count_from_another_schema",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 281,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_policy_config_loads_legacy_fields_with_compatible_defaults",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 293,
+    "kind": "implicit:TransformerPolicyConfig",
+    "owner": "test_transformer_policy_config_requires_category_vocab",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 298,
+    "kind": "implicit:compact_category",
+    "owner": "test_validate_initial_model_config_detects_warm_start_vocab_mismatch",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 299,
+    "kind": "implicit:compact_category",
+    "owner": "test_validate_initial_model_config_detects_warm_start_vocab_mismatch",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 311,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_policy_config_validates_attention_shape",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 313,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_policy_config_validates_attention_shape",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 315,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_policy_config_validates_attention_shape",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 317,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_policy_config_validates_attention_shape",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 322,
+    "kind": "implicit:compact_category",
+    "owner": "test_zero_layer_transformer_policy_forward_smoke",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 329,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_zero_layer_transformer_policy_forward_smoke",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 358,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_forward_accepts_compact_categorical_training_cache_rows",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 365,
+    "kind": "default-spec",
+    "owner": "test_transformer_forward_accepts_compact_categorical_training_cache_rows"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 409,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_forward_accepts_row_indexed_training_cache_windows",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 416,
+    "kind": "default-spec",
+    "owner": "test_transformer_forward_accepts_row_indexed_training_cache_windows"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 467,
+    "kind": "implicit:compact_category",
+    "owner": "test_zero_layer_row_indexed_forward_matches_dense_expansion",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 474,
+    "kind": "default-spec",
+    "owner": "test_zero_layer_row_indexed_forward_matches_dense_expansion"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 582,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_evaluate_transformer_observation_value_uses_configured_history_window",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 583,
+    "kind": "implicit:compact_category",
+    "owner": "test_evaluate_transformer_observation_value_uses_configured_history_window",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 628,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_evaluate_transformer_observation_value_applies_calibration_transform",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 629,
+    "kind": "implicit:compact_category",
+    "owner": "test_evaluate_transformer_observation_value_applies_calibration_transform",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 666,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_evaluate_transformer_observation_values_batches_and_calibrates",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 667,
+    "kind": "implicit:compact_category",
+    "owner": "test_evaluate_transformer_observation_values_batches_and_calibrates",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 738,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_value_output_is_bounded_to_terminal_return_range",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 777,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_linear_value_activation_preserves_unbounded_outputs",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 810,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_gru_temporal_aggregator_forward_shapes",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 842,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_gru_temporal_aggregator_is_padding_invariant_per_row",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 892,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_evaluate_transformer_action_priors_masks_illegal_actions",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 893,
+    "kind": "implicit:compact_category",
+    "owner": "test_evaluate_transformer_action_priors_masks_illegal_actions",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 934,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_transformer_evaluator_timing_splits_encoding_and_forward_work",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 935,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_evaluator_timing_splits_encoding_and_forward_work",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 988,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_transformer_policy_records_value_estimate_on_decision",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 989,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_policy_records_value_estimate_on_decision",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1044,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_policy_forward_fn_seam_preserves_decisions",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1047,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_transformer_policy_forward_fn_seam_preserves_decisions",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1099,
+    "kind": "implicit:compact_category",
+    "owner": "test_remote_inference_policy_matches_local_over_http",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1158,
+    "kind": "implicit:compact_category",
+    "owner": "test_remote_config_serves_model_config_for_agent_construction",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1312,
+    "kind": "implicit:compact_category",
+    "owner": "_make_ckpt",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1379,
+    "kind": "implicit:compact_category",
+    "owner": "test_inference_forward_batch_matches_single",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1426,
+    "kind": "implicit:compact_category",
+    "owner": "test_inference_server_returns_400_on_malformed_forward_body",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1459,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_transformer_policy_drops_non_finite_value_estimate",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 1460,
+    "kind": "implicit:compact_category",
+    "owner": "test_transformer_policy_drops_non_finite_value_estimate",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 2518,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_describe_is_import_safe_without_torch"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 3643,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_summary_out_persists_json"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 3643,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_summary_out_persists_json"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 3721,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_wires_raw_and_search_matchups"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 3721,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_wires_raw_and_search_matchups"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4344,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4345,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4545,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_keeps_raw_priors_and_uses_explicit_value_checkpoint"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4546,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_keeps_raw_priors_and_uses_explicit_value_checkpoint"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4772,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4773,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4909,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_defaults_root_prior_temperature_to_temperature"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4909,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_defaults_root_prior_temperature_to_temperature"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4967,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_average_checkpoint_opponent_action_scenarios"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4967,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_average_checkpoint_opponent_action_scenarios"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5089,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_policy_for_root_opponent_actions"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5089,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_policy_for_root_opponent_actions"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5180,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_opponent_for_leaf_rollouts"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5180,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_opponent_for_leaf_rollouts"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5258,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_sweep_leaf_depths"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5258,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_sweep_leaf_depths"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5340,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_tags_single_sweep_depth"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5340,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_tags_single_sweep_depth"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5405,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_benchmark_wires_checkpoint_callbacks_and_source_policies"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5406,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_benchmark_wires_checkpoint_callbacks_and_source_policies"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5574,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_counterfactual_wires_continuation_policies"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5575,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_counterfactual_wires_continuation_policies"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5807,
+    "kind": "implicit:compact_category",
+    "owner": "test_neural_cli_value_calibration_includes_quality_gates_with_fit_out",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5890,
+    "kind": "implicit:compact_category",
+    "owner": "test_neural_cli_value_calibration_can_save_calibrated_checkpoint",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5963,
+    "kind": "implicit:compact_category",
+    "owner": "test_neural_cli_value_calibration_can_save_isotonic_calibrated_checkpoint",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6017,
+    "kind": "implicit:compact_category",
+    "owner": "test_neural_cli_value_calibration_warns_on_collapsed_isotonic_transform",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6076,
+    "kind": "implicit:compact_category",
+    "owner": "test_neural_cli_value_calibration_compare_reports_heldout_methods",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6148,
+    "kind": "implicit:compact_category",
+    "owner": "test_neural_cli_value_calibration_compare_defaults_to_pearson_selection",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6192,
+    "kind": "implicit:compact_category",
+    "owner": "test_neural_cli_value_calibration_compare_text_can_write_json_report",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6284,
+    "kind": "implicit:compact_category",
+    "owner": "test_neural_cli_value_calibration_compare_skips_unavailable_selection_metric_rows",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6347,
+    "kind": "implicit:compact_category",
+    "owner": "test_neural_cli_value_calibration_compare_rejects_all_unavailable_selection_metric",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6808,
+    "kind": "implicit:compact_category",
+    "owner": "test_value_selection_restores_best_epoch_state",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 6907,
+    "kind": "implicit:compact_category",
+    "owner": "test_value_selection_can_restore_best_epoch_by_pearson_correlation",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7643,
+    "kind": "implicit:compact_category",
+    "owner": "test_train_transformer_policy_records_annealed_epoch_learning_rates",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7701,
+    "kind": "implicit:compact_category",
+    "owner": "test_train_transformer_policy_applies_max_grad_norm_clip",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7758,
+    "kind": "implicit:compact_category",
+    "owner": "test_train_transformer_policy_bf16_autocast_runs_and_engages",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7851,
+    "kind": "implicit:compact_category",
+    "owner": "test_torch_forward_train_save_load_and_policy_adapter_smoke",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7888,
+    "kind": "implicit:compact_category",
+    "owner": "test_torch_forward_train_save_load_and_policy_adapter_smoke",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7940,
+    "kind": "implicit:compact_category",
+    "owner": "test_train_transformer_policy_accepts_cache_backed_row_indexed_batches",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 7987,
+    "kind": "implicit:compact_category",
+    "owner": "test_train_transformer_policy_mixes_capped_auxiliary_batches",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8021,
+    "kind": "implicit:compact_category",
+    "owner": "test_checkpoint_round_trips_belief_provenance",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8106,
+    "kind": "implicit:compact_category",
+    "owner": "test_checkpoint_round_trips_ppo_diagnostic_metrics",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8164,
+    "kind": "implicit:compact_category",
+    "owner": "_build_atomic_checkpoint_fixture",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8255,
+    "kind": "implicit:compact_category",
+    "owner": "test_value_only_freeze_updates_value_head_only",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8327,
+    "kind": "implicit:compact_category",
+    "owner": "test_train_transformer_policy_rejects_window_size_mismatch",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8355,
+    "kind": "implicit:compact_category",
+    "owner": "test_train_transformer_policy_calls_epoch_callback",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8546,
+    "kind": "implicit:compact_category",
+    "owner": "test_policy_forward_matches_manual_truncation",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 8553,
+    "kind": "default-spec",
+    "owner": "test_policy_forward_matches_manual_truncation"
+  },
+  {
+    "file": "tests/test_neural_selfplay.py",
+    "line": 58,
+    "kind": "implicit:compact_category",
+    "owner": "_entity_test_model_config",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_selfplay.py",
+    "line": 834,
+    "kind": "implicit:compact_category",
+    "owner": "test_neural_cli_iterate_can_disable_fixed_opponents_for_mirror_self_play",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_selfplay.py",
+    "line": 5511,
+    "kind": "implicit:compact_category",
+    "owner": "test_torch_smoke_runs_train_save_load_benchmark_chain",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_selfplay.py",
+    "line": 5556,
+    "kind": "implicit:compact_category",
+    "owner": "test_torch_smoke_trains_from_real_cache_chunks_and_deletes_them",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_selfplay.py",
+    "line": 5654,
+    "kind": "implicit:compact_category",
+    "owner": "_write_loadable_fake_checkpoint",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_selfplay.py",
+    "line": 6217,
+    "kind": "implicit:ObservationSpec",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_selfplay.py",
+    "line": 6218,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 28,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_token_count_matches_spec_v2_shape",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 46,
+    "kind": "bare-const",
+    "owner": "test_schema_version_is_v2_2_with_v2_v2_1_v3_v4_supported_and_v1_legacy"
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 60,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_legacy_schema_version_is_refused_with_pinned_tag_message",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 86,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_observation_validates_fixed_shape",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 87,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_observation_validates_fixed_shape",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 98,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_observation_rejects_wrong_legal_mask_size",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 99,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_observation_rejects_wrong_legal_mask_size",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 111,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_observation_accepts_array_like_shapes",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 112,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_observation_accepts_array_like_shapes",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 143,
+    "kind": "implicit:ObservationSpec",
+    "owner": "test_observation_accepts_perspective_debug_metadata",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 144,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_observation_accepts_perspective_debug_metadata",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 366,
+    "kind": "default-spec",
+    "owner": "test_token_section_offsets"
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 959,
+    "kind": "bare-const",
+    "owner": "test_examples_from_record_accepts_current_schema"
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 983,
+    "kind": "default-spec",
+    "owner": "test_missing_observation_schema_version_is_refused_not_assumed_current"
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 988,
+    "kind": "implicit:compact_category",
+    "owner": "test_missing_checkpoint_schema_version_is_refused",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 1022,
+    "kind": "implicit:compact_category",
+    "owner": "test_v1_model_config_refuses_with_pinned_tag_message",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 1046,
+    "kind": "implicit:compact_category",
+    "owner": "test_v1_checkpoint_file_load_refuses_cleanly",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation_spec_v2_1.py",
+    "line": 95,
+    "kind": "default-spec",
+    "owner": "test_schema_keyed_censuses"
+  },
+  {
+    "file": "tests/test_observation_spec_v2_1.py",
+    "line": 96,
+    "kind": "bare-const",
+    "owner": "test_schema_keyed_censuses"
+  },
+  {
+    "file": "tests/test_observation_spec_v2_1.py",
+    "line": 522,
+    "kind": "implicit:compact_category",
+    "owner": "_config",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_observation_spec_v3.py",
+    "line": 350,
+    "kind": "bare-const",
+    "owner": "test_v3_is_supported_but_not_the_default"
+  },
+  {
+    "file": "tests/test_observation_spec_v4.py",
+    "line": 238,
+    "kind": "bare-const",
+    "owner": "test_v4_is_supported_turn_merged_grouped_and_feature_packed_but_not_the_default"
+  },
+  {
+    "file": "tests/test_online_client.py",
+    "line": 34,
+    "kind": "implicit:OnlineBattleAgent",
+    "owner": "_agent",
+    "unclosed": [
+      "spec"
+    ]
+  },
+  {
+    "file": "tests/test_online_client.py",
+    "line": 204,
+    "kind": "implicit:OnlineBattleAgent",
+    "owner": "test_agent_threads_set_source_and_env_gate_controls_build",
+    "unclosed": [
+      "spec"
+    ]
+  },
+  {
+    "file": "tests/test_opponent_journal.py",
+    "line": 95,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_poke_engine_outcomes.py",
+    "line": 1015,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "integration_config",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_policy.py",
+    "line": 21,
+    "kind": "implicit:ObservationSpec",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_policy.py",
+    "line": 22,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_public_prefix_evaluator.py",
+    "line": 25,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_refusal_records.py",
+    "line": 129,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "__init__",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_refutation_mining.py",
+    "line": 60,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_region_trim.py",
+    "line": 37,
+    "kind": "implicit:compact_category",
+    "owner": "_config",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_remote_self_describe.py",
+    "line": 54,
+    "kind": "implicit:compact_category",
+    "owner": "_train_checkpoint",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_remote_self_describe.py",
+    "line": 87,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_remote_spec_adopts_like_neural_spec",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_remote_self_describe.py",
+    "line": 111,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_explicit_schema_spec_refines_to_trimmed_region",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_replay_branching.py",
+    "line": 37,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "integration_config",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_replay_branching.py",
+    "line": 46,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_replay_branching.py",
+    "line": 56,
+    "kind": "default-spec",
+    "owner": "_observation_with_recent_event_token"
+  },
+  {
+    "file": "tests/test_replay_branching.py",
+    "line": 74,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation_with_recent_event_token",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_replay_branching.py",
+    "line": 84,
+    "kind": "default-spec",
+    "owner": "_observation_with_self_hp_fraction"
+  },
+  {
+    "file": "tests/test_replay_branching.py",
+    "line": 144,
+    "kind": "default-spec",
+    "owner": "_observation_with_numeric_feature"
+  },
+  {
+    "file": "tests/test_replay_branching.py",
+    "line": 153,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation_with_numeric_feature",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_replay_import.py",
+    "line": 27,
+    "kind": "implicit:ObservationSpec",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_replay_import.py",
+    "line": 28,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_rollout.py",
+    "line": 10,
+    "kind": "implicit:ObservationSpec",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_rollout.py",
+    "line": 11,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_search.py",
+    "line": 29,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_search_benchmark.py",
+    "line": 19,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_search_depth_tactics.py",
+    "line": 87,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "setUpClass",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_search_policy.py",
+    "line": 41,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_selfplay.py",
+    "line": 44,
+    "kind": "implicit:ObservationSpec",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_selfplay.py",
+    "line": 45,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_selfplay.py",
+    "line": 587,
+    "kind": "bare-const",
+    "owner": "test_run_selfplay_iterations_writes_checkpoint_and_manifests"
+  },
+  {
+    "file": "tests/test_shaping.py",
+    "line": 39,
+    "kind": "implicit:ObservationSpec",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_shaping.py",
+    "line": 40,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_shaping_provenance.py",
+    "line": 87,
+    "kind": "implicit:compact_category",
+    "owner": "_model_config",
+    "unclosed": [
+      "categorical_feature_count",
+      "numeric_feature_count",
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_showdown.py",
+    "line": 1609,
+    "kind": "default-spec",
+    "owner": "test_curse_move_effect_resolves_by_user_type"
+  },
+  {
+    "file": "tests/test_showdown_fixture.py",
+    "line": 28,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "integration_config",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_spread_gate_provenance.py",
+    "line": 413,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_latched_from_checkpoint",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_struggle_only_move_state.py",
+    "line": 370,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_integration_config",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_tier2_live_env.py",
+    "line": 220,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_ten_game_sweep_only_monotone_divergences",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_trajectory.py",
+    "line": 9,
+    "kind": "implicit:ObservationSpec",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_trajectory.py",
+    "line": 10,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_transitions_fold.py",
+    "line": 160,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_prefix_closure_over_random_games",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_transitions_fold.py",
+    "line": 193,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_prefix_closure_over_scenario_games",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_transitions_fold.py",
+    "line": 261,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_annotated_products_match",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_transitions_fold.py",
+    "line": 544,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_measure",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_truth_differential.py",
+    "line": 492,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "test_the_builder_reproduces_both_sides_generator_sets",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_turn_merged_encode.py",
+    "line": 84,
+    "kind": "bare-const",
+    "owner": "test_v2_2_is_a_supported_schema_entry_and_the_default"
+  },
+  {
+    "file": "tests/test_turn_merged_engine.py",
+    "line": 57,
+    "kind": "implicit:LocalShowdownConfig",
+    "owner": "_integration_config",
+    "unclosed": [
+      "observation_spec"
+    ]
+  },
+  {
+    "file": "tests/test_value_calibration.py",
+    "line": 34,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "_observation",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_value_calibration.py",
+    "line": 375,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_value_calibration_uses_training_shaped_return_targets",
+    "unclosed": [
+      "schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_value_calibration.py",
+    "line": 386,
+    "kind": "implicit:PokeZeroObservationV0",
+    "owner": "test_value_calibration_uses_training_shaped_return_targets",
+    "unclosed": [
+      "schema_version"
+    ]
+  }
+]

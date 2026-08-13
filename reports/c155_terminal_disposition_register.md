@@ -614,9 +614,15 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 42 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure. The workflow holds **32** lines containing the unittest
-invocation, of which **one is a comment**, so there are **31 executable** invocation sites at this
-head; the scan resolves **31** of them and leaves **none** unresolved. **This step is among the
+rather than inherited from #1205's figure. The workflow holds **34** lines containing the unittest
+invocation, of which **one is a comment**, so there are **33 executable** invocation sites at this
+head; the scan resolves **33** of them and leaves **none** unresolved.
+
+(Was 33/1/32. CI caught the drift rather than a human: GitHub gates on `refs/pull/<n>/merge`, so it
+measures the MERGED workflow while a branch measures only its own — the guard's own failure message
+predicts exactly this and says to merge `origin/main` and re-derive. `origin/main` gained a
+`tests.test_render_dropped_move_line_crate` invocation while this branch was open. Re-derived on the
+merged tree with `grep -c 'python -m unittest'`, not adjusted by one.) **This step is among the
 resolved ones** — the number is not restated here, because a fourth copy of it is a fourth thing to
 go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 42 from the module's AST
 and matches the guard. All three numbers are **re-derived by the pin** rather than typed.
