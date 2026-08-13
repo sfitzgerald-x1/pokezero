@@ -1613,6 +1613,46 @@ def native_search_args(
     return search_args
 
 
+#: EVERY counter that is a CLAIM ABOUT ONE DECISION rather than a measure of work
+#: done. `_search_ladder` rewinds all of them to the winning rung, because
+#: `_search_model` charges them once per RUNG and an escalating decision would
+#: otherwise vote once per rung it happened to climb.
+#:
+#: This list exists because review found the same defect FOUR times on four
+#: surfaces -- the override counters, the per-decision rows, the override addresses,
+#: and then these -- each round fixing one more. Enumerating the class is the only
+#: fix that generalises: a new per-decision counter is added HERE or the sibling
+#: test refuses it.
+#:
+#: What is deliberately NOT here, and why:
+#:   * `depth_reached_*`, `model_evals`, `total_iterations`, every `*_wall_seconds`,
+#:     `worlds_searched`, `world_search_attempts`, the `collision_*` family --
+#:     measures of WORK. A rung really did that work; summing it across rungs is
+#:     what a cost analysis wants and `ladder_rungs_per_decision` is how a reader
+#:     divides it.
+#:   * `search_override_unmeasured_causes`, `world_failure_reasons`,
+#:     `fallback_reasons` -- CAUSE TAXONOMIES. A cause a discarded rung hit is still
+#:     a cause the run encountered, and none is anyone's denominator.
+#:   * `fallback_decisions` -- kept gross on purpose, with `fallback_rate` netting
+#:     `ladder_recovered_fallbacks` out, so the taxonomy and the rate stay
+#:     independently readable.
+LADDER_PER_DECISION_CLAIMS = (
+    "override_measured_decisions",
+    "model_override_decisions",
+    "search_override_unmeasured",
+    # H2's headline. `root_q_gap_mean` is quoted as "the gap between the two arms
+    # search is choosing between", i.e. per decision -- so a decision that climbed
+    # three rungs contributed three gaps to it, from three different budgets.
+    "root_arm_gap_samples",
+    "root_q_gap_sum",
+    "root_visit_gap_sum",
+    # H4's predictor side, and both are named `_decisions`.
+    "opponent_top_arm_decisions",
+    "opponent_prior_arm_decisions",
+    # "decisions where a stop was accepted" -- one per decision, not one per rung.
+    "early_stop_accepted_decisions",
+)
+
 #: Hard floor for a dynamic ladder's depth. Depth 1 is a one-ply search, which is
 #: no better than the raw policy -- so the cheapest rung, the one most decisions
 #: never leave, must still be a real search. Owner-set.
@@ -3105,18 +3145,16 @@ class EngineMctsPolicy:
         # incomparable to a fixed cell's, and `search_config_id` deliberately pools
         # telemetry-on with telemetry-off, so nothing else would have caught it.
         # Rewound below to the WINNING rung's contribution alone. Found in review.
-        def _override_ledger() -> tuple[int, int, int]:
-            return (
-                self.stats.override_measured_decisions,
-                self.stats.model_override_decisions,
-                self.stats.search_override_unmeasured,
+        def _override_ledger() -> tuple[float, ...]:
+            return tuple(
+                getattr(self.stats, name) for name in LADDER_PER_DECISION_CLAIMS
             )
 
         override_at_decision_start = _override_ledger()
         # The WINNING rung's contribution, as a delta. Not its cumulative total:
         # taking the total after the last successful rung keeps every earlier rung's
         # vote too, which is the bug in a subtler form.
-        winning_rung_delta = (0, 0, 0)
+        winning_rung_delta: tuple[float, ...] = (0,) * len(LADDER_PER_DECISION_CLAIMS)
         # AND THE SAME PROBLEM ON THE ROWS. `_record_root_telemetry` appends one
         # per-decision row per `_search_model` call, so a ladder decision leaves
         # several -- and any per-decision statistic computed over rows (the top-1/
@@ -3236,14 +3274,10 @@ class EngineMctsPolicy:
         # snapshots is a decision the engine made, so nothing between them belongs
         # in a per-decision rate. A rung that fell back contributes nothing, which
         # is right: it measured no override.
-        (
-            self.stats.override_measured_decisions,
-            self.stats.model_override_decisions,
-            self.stats.search_override_unmeasured,
-        ) = tuple(
-            start + delta
-            for start, delta in zip(override_at_decision_start, winning_rung_delta)
-        )
+        for name, start, delta in zip(
+            LADDER_PER_DECISION_CLAIMS, override_at_decision_start, winning_rung_delta
+        ):
+            setattr(self.stats, name, start + delta)
         # DROP the superseded addresses, keeping the winning rung's.
         if len(self.stats.override_disagreements) > disagreements_at_decision_start:
             keep = self.stats.override_disagreements[:disagreements_at_decision_start]

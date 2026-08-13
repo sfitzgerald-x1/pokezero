@@ -14,6 +14,7 @@ import warnings
 from types import SimpleNamespace
 import unittest
 from collections import Counter
+import dataclasses
 from dataclasses import replace
 from unittest.mock import patch
 
@@ -3345,6 +3346,138 @@ class WorldAbortRateTests(unittest.TestCase):
 
         policy._search_model = _fake_search_model
         return policy
+
+    def test_every_per_decision_claim_is_rewound_not_just_the_override_ones(self) -> None:
+        """THE FIFTH SURFACE, and the reason the class is now enumerated.
+
+        Review found the same defect four times running -- the override counters, the
+        per-decision rows, the override addresses -- each round fixing one surface.
+        The generalisation is `LADDER_PER_DECISION_CLAIMS`: H2's Q-gap sums, H4's
+        opponent-arm counters and `early_stop_accepted_decisions` are all claims about
+        ONE decision, all charged per RUNG, and none of them was rewound. A decision
+        that climbed three rungs contributed three Q gaps to `root_q_gap_mean` -- the
+        figure this programme published as its H2 headline -- from three different
+        budgets.
+        """
+        from pokezero.engine_search import LADDER_PER_DECISION_CLAIMS
+        from pokezero.policy import PolicyDecision
+
+        harness = EarlyStopPolicyIntegrationTests()
+        policy = harness._policy(early_stop=False)
+        policy._config = replace(policy._config, depth_min=2, worlds_min=1,
+                                 search_depth=3, search_sims=100)
+        policy.stats = EngineMctsStats()
+        policy.policy_id = "engine-mcts"
+        rungs = []
+
+        def _fake_search_model(context, worlds, live_fold, rng):
+            rungs.append(len(worlds))
+            # Every rung charges EVERY per-decision claim, so a rewind that misses
+            # one shows up as a 2 where the others read 1.
+            for name in LADDER_PER_DECISION_CLAIMS:
+                setattr(policy.stats, name, getattr(policy.stats, name) + 1)
+            policy._ladder_saturated = False
+            policy._ladder_worlds_agree = True
+            return PolicyDecision(action_index=0, policy_id=policy.policy_id)
+
+        policy._search_model = _fake_search_model
+        policy._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                              object(), random.Random(0))
+        self.assertEqual(rungs, [2, 1], "the ladder must actually escalate")
+        for name in LADDER_PER_DECISION_CLAIMS:
+            with self.subTest(claim=name):
+                self.assertEqual(getattr(policy.stats, name), 1,
+                                 "one decision, one vote -- not one per rung")
+
+    def test_the_claim_list_covers_every_per_decision_counter_named_as_one(self) -> None:
+        # The list is only a generalisation if adding a counter without classifying
+        # it FAILS. Every `EngineMctsStats` field whose name declares it counts
+        # DECISIONS must be either rewound or deliberately exempt, and the exemptions
+        # are named here so a new one cannot be added silently.
+        from pokezero.engine_search import LADDER_PER_DECISION_CLAIMS
+
+        exempt = {
+            # Gross on purpose: `fallback_rate` nets `ladder_recovered_fallbacks`
+            # out, so the taxonomy and the rate stay independently readable.
+            "fallback_decisions",
+            # The ladder's own accounting, charged once per decision BY the ladder.
+            "ladder_decisions", "ladder_unsearched_decisions",
+            "ladder_recovered_fallbacks",
+            # Charged once per decide(), outside `_search_model` entirely.
+            "decisions",
+            # Per RUNG by construction and documented as such -- it is the
+            # denominator that tells a reader a figure is rung-scoped.
+            "searched_decisions",
+            # Replay counts, i.e. work: a rung that replayed really did replay.
+            "early_stop_full_budget_replays",
+            # Charged in `_search` BEFORE the ladder dispatch (engine_search.py:2223,
+            # :2225), so they are already once per decision. VERIFIED, not assumed --
+            # that is the whole point of this guard.
+            "removed_item_decisions", "item_override_decisions",
+            # Charged by the BRIDGE, once per decision it submits
+            # (foulplay_bridge.py:4804), and never inside a search.
+            "oracle_belief_decisions",
+        }
+        named = {
+            f.name for f in dataclasses.fields(EngineMctsStats)
+            if f.name.endswith("_decisions") or f.name.endswith("decisions")
+        }
+        unclassified = named - set(LADDER_PER_DECISION_CLAIMS) - exempt
+        self.assertEqual(
+            unclassified, set(),
+            "a counter of DECISIONS must be rewound to the winning rung or listed "
+            "as exempt with a reason; see LADDER_PER_DECISION_CLAIMS",
+        )
+
+    def test_the_claim_list_membership_is_pinned_exactly(self) -> None:
+        """The classification IS the rule, so the rule is pinned by literal.
+
+        The rewind test above iterates `LADDER_PER_DECISION_CLAIMS`, which makes it
+        self-referential: deleting an entry deletes it from the assertion too, and a
+        mutant that dropped H2's Q-gap sums survived the whole suite for exactly that
+        reason. The guard on `*_decisions` names does not catch it either, because
+        `root_q_gap_sum` is not named for what it counts. So the membership is
+        asserted as a literal -- shrinking it, or adding a counter without deciding
+        which side of the rule it falls on, fails HERE.
+        """
+        from pokezero.engine_search import LADDER_PER_DECISION_CLAIMS
+
+        self.assertEqual(
+            LADDER_PER_DECISION_CLAIMS,
+            (
+                "override_measured_decisions",
+                "model_override_decisions",
+                "search_override_unmeasured",
+                "root_arm_gap_samples",
+                "root_q_gap_sum",
+                "root_visit_gap_sum",
+                "opponent_top_arm_decisions",
+                "opponent_prior_arm_decisions",
+                "early_stop_accepted_decisions",
+            ),
+            "every name here is a claim about ONE decision, charged once per RUNG by "
+            "`_search_model`. Adding or removing one is a decision about the rule, "
+            "not a refactor -- see the `LADDER_PER_DECISION_CLAIMS` docstring for "
+            "what is deliberately excluded and why.",
+        )
+        # And each one must really exist on the stats object, or the rewind is a
+        # silent no-op on a typo.
+        fields = {f.name for f in dataclasses.fields(EngineMctsStats)}
+        for name in LADDER_PER_DECISION_CLAIMS:
+            with self.subTest(claim=name):
+                self.assertIn(name, fields)
+
+    def test_work_counters_are_deliberately_not_rewound(self) -> None:
+        # The other half of the rule, or "rewind everything" would pass the test
+        # above. A rung really did its iterations and its wall, and a cost analysis
+        # needs the sum -- `ladder_rungs_per_decision` is how a reader divides it.
+        from pokezero.engine_search import LADDER_PER_DECISION_CLAIMS
+
+        for name in ("total_iterations", "model_evals", "search_wall_seconds",
+                     "depth_reached_samples", "worlds_searched",
+                     "world_search_attempts", "fallback_decisions"):
+            with self.subTest(counter=name):
+                self.assertNotIn(name, LADDER_PER_DECISION_CLAIMS)
 
     def test_a_superseded_rungs_override_address_is_dropped(self) -> None:
         # THE THIRD SURFACE of the same defect. The counters were rewound and then
