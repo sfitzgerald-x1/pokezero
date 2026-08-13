@@ -1012,7 +1012,11 @@ fi
 # Collection ERRORs and a non-zero-but-no-FAILED run are both "the suite did not measure what
 # it claims". Scoring only ^FAILED made a module-level import failure read as "6 pins no longer
 # pinning" rather than "nothing ran" -- the exact symptom this drill hit twice.
-for f in "$WT/DRILL.txt" "$BASE/BASE.txt"; do
+# The CONTROL logs are in this list too. They were not, so a control run that died before pytest
+# printed a summary yielded an EMPTY failure set -- which subtracts nothing and silently turns
+# off the arm whose whole job is to prevent over-attribution.
+for f in "$WT/DRILL.txt" "$BASE/BASE.txt" "${CTRL:-/nonexistent}/CONTROL.1.txt" "${CTRL:-/nonexistent}/CONTROL.2.txt"; do
+  [ -f "$f" ] || continue
   if ! grep -qE '^[0-9]+ (passed|failed)' "$f"; then
     echo "ABORT: $f has no pytest summary line -- the run did not complete."; exit 4
   fi
@@ -1098,6 +1102,10 @@ else
   # the same defect, demonstrated by review with a probe that failed in the rotated arm, passed both
   # baselines, and failed once in control -- it vanished from the verdict.
   for _crun in 1 2; do
+    # PER RUN, as the baseline does. Clearing once before both let the second reuse the first's
+    # bytecode, CORRELATING the two runs -- and their intersection is SUBTRACTED, so correlated runs
+    # can excuse a real rotation breakage. That is the direction that matters.
+    find "$CTRL/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
     PYTHONPATH="$CTRL/src" "$VENV" -m pytest $(drill_targets "$CTRL") -q -p no:randomly \
       > "$CTRL/CONTROL.$_crun.txt" 2>&1 || true
     grep -E '^(FAILED|SUBFAILED)' "$CTRL/CONTROL.$_crun.txt" | _norm_id | sort -u > "$CTRL/c$_crun.txt"
@@ -1174,8 +1182,14 @@ E_LINE = re.compile(r'^E\s+ValueError:\s*' + re.escape(MSG), re.M)
 parts = re.split(r'\n_+ (.+?) _+\n', text)
 ids = []
 for i in range(1, len(parts), 2):
-    name = re.sub(r'\s*\(.*\)$', '', parts[i].strip())
-    name = re.sub(r'\[.*\]$', '', name)
+    # The tail is CONVERTED, never stripped. pytest's header is `Cls.test (i=1)`; `_norm_id`
+    # produces `file.py::Cls::test[i=1]`. Stripping it made the exclusion TEST-granular while the
+    # scored set is SUBTEST-granular, so a Rust ValueError in ONE subtest excused an innocent naming
+    # breakage in a DIFFERENT subtest of the same test -- and that contradicts `_norm_id`'s own
+    # stated invariant, which keeps the param precisely so one failing subtest cannot excuse its
+    # siblings. Demonstrated by review against real pytest output; latent in v8 only because no
+    # exclusion there had a sibling.
+    name = re.sub(r'\s*\((.*)\)$', r'[\1]', parts[i].strip())
     body = parts[i + 1] if i + 1 < len(parts) else ""
     if E_LINE.search(body):
         ids.append(name)
@@ -1204,9 +1218,12 @@ native = {l.strip() for l in open(f"{wt}/native_schema.txt") if l.strip()}
 
 
 def tail(i):
-    core = i.split("[")[0]
+    # Keeps the [param] tail, for the same reason native.py now keeps it: dropping it collapses every
+    # subtest of a test onto one key, so excluding one excluded all of them.
+    core, _, param = i.partition("[")
     bits = core.split("::")
-    return ".".join(bits[-2:]) if len(bits) >= 2 else core
+    base = ".".join(bits[-2:]) if len(bits) >= 2 else core
+    return f"{base}[{param}" if param else base
 
 
 # Ambiguity is checked against the WHOLE rotated set, because a same-named test in another file is a
@@ -1218,7 +1235,7 @@ rotated = [l.rstrip("\n") for l in open(f"{wt}/rotated.txt") if l.strip()]
 candidates = [l.rstrip("\n") for l in open(f"{wt}/attributable_pre_native.txt") if l.strip()]
 by_tail = {}
 for i in rotated:
-    by_tail.setdefault(tail(i), set()).add(i.split("[")[0])
+    by_tail.setdefault(tail(i), set()).add(i)
 ambiguous = {t: sorted(v) for t, v in by_tail.items() if t in native and len(v) > 1}
 if ambiguous:
     sys.stderr.write(
@@ -1230,7 +1247,7 @@ if ambiguous:
     sys.exit(16)
 excluded_full = {f for t, v in by_tail.items() if t in native for f in v}
 for i in candidates:
-    if i.split("[")[0] not in excluded_full:
+    if i not in excluded_full:
         print(i)
 FILTER
 # Artifact matching is TEST-granular on purpose, while ids are SUBTEST-granular. A source-mutation
