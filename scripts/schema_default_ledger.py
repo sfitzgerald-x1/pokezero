@@ -34,9 +34,14 @@ A "site reaching the global default" is any of:
                        while listing compact_category (not derived) and omitting this one: the count
                        was right and the membership was not.
 
-                       The row's `unclosed` field names which kwarg is still open. These nine counts
-                       are pinned by tests/test_schema_default_ledger.py -- a previous docstring
-                       table staled for several commits because nothing held it to the tool.
+                       The row's `unclosed` field names which kwarg is still open. All EIGHT counts
+                       above -- the six surface rows, plus bare-const and default-spec -- are
+                       pinned by tests/test_schema_default_ledger.py, which fails if any disagrees
+                       with the tool. A previous docstring table staled for several commits because
+                       nothing held it. This line itself said "nine" while six were pinned and
+                       eight existed: the two `kind (N)` counts were spelled with a backticked
+                       constant between name and number, which the surface-row parser cannot match,
+                       so they were prose claiming to be pinned. Both are held now.
 
   Two retired names, `implicit-spec` and `implicit-cfg`, were listed here long after the code
   stopped emitting them -- the reader-facing vocabulary staled in the same change that derived the

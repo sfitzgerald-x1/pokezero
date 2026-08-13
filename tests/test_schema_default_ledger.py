@@ -194,6 +194,25 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
             found[name] = int(count)
         return found
 
+    def _docstring_kind_counts(self) -> dict[str, int]:
+        """Parse the two NON-surface kind counts, spelled `kind-name ... (<count>)`.
+
+        These escaped `_docstring_counts` entirely: its pattern needs identifier-space-digits,
+        and both of these lines put a backticked constant between the kind name and its count, so
+        the docstring said `bare-const (16)` / `default-spec (50)` with nothing checking either.
+        The docstring claimed all of its counts were pinned while two of them were prose. Anchored
+        on the kind names the tool actually emits, so a renamed kind fails rather than vanishing.
+        """
+        import ast as _ast
+
+        doc = _ast.get_docstring(_ast.parse(LEDGER.read_text(encoding="utf-8"))) or ""
+        found: dict[str, int] = {}
+        for kind in ("bare-const", "default-spec"):
+            m = re.search(rf"^\s*{re.escape(kind)}\b[^\n]*?\((\d+)\)", doc, re.M)
+            if m is not None:
+                found[kind] = int(m.group(1))
+        return found
+
     def _derived_counts(self) -> dict[str, int]:
         counts = Counter(
             row["kind"].split(":", 1)[1] for row in _derive() if row["kind"].startswith("implicit:")
@@ -232,14 +251,51 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
                     f"derives {derived[surface]}.",
                 )
 
+    def test_the_docstring_pins_the_two_non_surface_kind_counts_too(self) -> None:
+        """`bare-const` and `default-spec` are counts in the same table and were held by nothing.
+
+        The docstring asserted that its counts were pinned by this file. Six were -- the surface
+        rows. These two were not, because they are spelled `kind (N)` with a backticked constant
+        in between, which the surface-row pattern cannot match. A figure nothing holds is prose,
+        and this docstring has already staled twice.
+        """
+        documented = self._docstring_kind_counts()
+        self.assertEqual(
+            sorted(documented), ["bare-const", "default-spec"],
+            "the docstring no longer states a count for both non-surface kinds in the parsed "
+            f"`kind ... (N)` form; found {sorted(documented)}. Renaming a kind or dropping its "
+            "count must fail here rather than silently unpin it.",
+        )
+        derived = Counter(row["kind"] for row in _derive())
+        for kind in sorted(documented):
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    documented[kind], derived[kind],
+                    f"the docstring says {kind} has {documented[kind]} sites; the tool derives "
+                    f"{derived[kind]}.",
+                )
+
     def test_the_docstring_states_the_surface_count_it_actually_has(self) -> None:
         doc = LEDGER.read_text(encoding="utf-8")
         n = len(self._surfaces())
-        words = {7: "SEVEN", 8: "EIGHT", 9: "NINE"}
+        # Spelled words only, and an unmapped count is a HARD FAILURE rather than a fallback to
+        # the digit. This guard was inert exactly once: the map covered 7/8/9, the count became
+        # SIX, `words.get(n, str(n))` degraded the assertion to `assertIn("6", docstring)`, and the
+        # only "6" in the docstring is the one inside `bare-const (16)` on an unrelated line. The
+        # docstring could have said EIGHT, or named no count at all, and this test stayed green
+        # while claiming to hold it. A digit is a substring of other digits; a word is not, which
+        # is the whole reason this guard spells the number.
+        words = {0: "ZERO", 1: "ONE", 2: "TWO", 3: "THREE", 4: "FOUR", 5: "FIVE",
+                 6: "SIX", 7: "SEVEN", 8: "EIGHT", 9: "NINE", 10: "TEN"}
+        if n not in words:
+            self.fail(
+                f"{n} surfaces, which this guard has no spelled word for. Add it to `words` -- do "
+                "NOT fall back to the digit, which is how this assertion went inert before."
+            )
         self.assertIn(
-            words.get(n, str(n)), doc.split('"""')[1],
-            f"there are {n} surfaces; the docstring does not say so. The previous text said "
-            "'seven derived surfaces' while listing an alternate constructor as derived and "
+            words[n], doc.split('"""')[1],
+            f"there are {n} surfaces; the docstring does not say so in words. The previous text "
+            "said 'seven derived surfaces' while listing an alternate constructor as derived and "
             "omitting a derived surface with no open sites.",
         )
 
