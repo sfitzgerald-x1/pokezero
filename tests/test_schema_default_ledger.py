@@ -368,11 +368,18 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
             f"{total} held counts, which this guard has no spelled word for. Add it -- do NOT fall "
             "back to the digit, which is how a sibling guard in this file went inert.",
         )
-        self.assertIn(
-            f"All {words[total]} counts", doc,
-            f"the docstring must say 'All {words[total]} counts' -- {surfaces} surface row(s) plus "
-            f"{n_kinds} kind row(s). It is the one figure in this table that describes the table "
-            "itself, and nothing held it until now.",
+        # The SET of counts stated, not "the right one appears somewhere". `assertIn` over the whole
+        # docstring detects a MISSING total and not a WRONG one: state EIGHT in the real sentence and
+        # plant "All NINE counts" in prose, and it passes. That is the identical weakness the surface
+        # guard in this file already had and had fixed, reintroduced one guard over -- so a wrong
+        # total is now caught wherever it sits, in exactly the form the right one takes.
+        stated_totals = set(re.findall(r"All ([A-Z]+) counts", doc))
+        self.assertEqual(
+            stated_totals, {words[total]},
+            f"the docstring must state 'All {words[total]} counts' and no other total -- {surfaces} "
+            f"surface row(s) plus {n_kinds} kind row(s) -- and it states "
+            f"{sorted(stated_totals) or 'none'}. It is the one figure in this table that describes "
+            "the table itself, and nothing held it until now.",
         )
         # NON-VACUITY, the case my own round-11 message overstated. `len(lines) == len(kinds)` binds a
         # SHORT rendering; it does NOT bind empty-vs-empty, because 0 == 0. And an empty kinds table
