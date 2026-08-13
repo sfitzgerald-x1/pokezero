@@ -295,13 +295,21 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         It is one-sided on purpose: narrower is legal (the v2 119-numeric relic), wider is not.
 
         EVERY SUPPORTED SCHEMA, not just v2. An earlier revision hard-coded v2, so the bound was
-        pinned on 1 of 5 schemas and four mutants survived: applying the categorical bound for v2
-        only, the numeric bound for v2 only, both for v2 only, and bypassing the categorical bound
-        for v4. All four left this file green at 364 passed.
+        pinned on 1 of 5 schemas and SIX mutants survived, all leaving this file green at
+        364 passed / 36 subtests: the categorical bound applied for v2 only, the numeric bound for
+        v2 only, both for v2 only, the categorical bound bypassed for v4, the NUMERIC bound bypassed
+        for v4, and both bounds bypassed for v2.1.
 
-        The v4 one is the worst of them, because a v4 config carrying v2.2's 51/155 against v4's
-        41/132 is this PR's own headline scenario -- 4 of the 10 payloads the bound newly refuses
-        are v4-stamped. The guard against the exact case the PR exists to fix had no test.
+        An earlier revision of this docstring said "four", omitting the last two. That omission cut
+        against the very argument it was making: BOTH halves of the v4 case were uncovered, not just
+        the categorical one.
+
+        The v4 pair is the worst of the six, because a v4 config carrying v2.2's 51/155 against v4's
+        41/132 is this PR's headline scenario. Of the 10 over-census payloads the bound newly
+        refuses -- 5 schemas x 2 width fields -- exactly 2 are v4-stamped (categorical 42, numeric
+        133). An earlier revision said 4, which counted v4 SUBTESTS of this test rather than
+        payloads, and so included the two `zero` cases that main already refuses: a mixed
+        denominator. The guard against the case the PR exists to fix had no test at all.
 
         This is also the identical defect round 1 found in
         `test_transformer_policy_config_resolves_widths_from_its_own_schema`, whose hand-listed
