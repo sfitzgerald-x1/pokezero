@@ -1020,7 +1020,7 @@ fi
 # The CONTROL logs are in this list too. They were not, so a control run that died before pytest
 # printed a summary yielded an EMPTY failure set -- which subtracts nothing and silently turns
 # off the arm whose whole job is to prevent over-attribution.
-for f in "$WT/DRILL.txt" "$BASE/BASE.txt" "${CTRL:-/nonexistent}/CONTROL.1.txt" "${CTRL:-/nonexistent}/CONTROL.2.txt"; do
+for f in "$WT/DRILL.txt" "$BASE/BASE.txt"; do
   [ -f "$f" ] || continue
   if ! grep -qE '^[0-9]+ (passed|failed)' "$f"; then
     echo "ABORT: $f has no pytest summary line -- the run did not complete."; exit 4
@@ -1113,6 +1113,16 @@ else
     find "$CTRL/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
     PYTHONPATH="$CTRL/src" "$VENV" -m pytest $(drill_targets "$CTRL") -q -p no:randomly \
       > "$CTRL/CONTROL.$_crun.txt" 2>&1 || true
+    # CHECKED HERE, where the log exists and $CTRL is assigned. A control run that died before pytest
+    # printed a summary yields an EMPTY failure set, which subtracts nothing and silently turns off the
+    # arm whose whole job is to prevent over-attribution -- and with both runs dead, `_cunstable` is 0
+    # too, so the run reports "control failures beyond baseline: 0" with no warning at all.
+    if ! grep -qE '^[0-9]+ (passed|failed)' "$CTRL/CONTROL.$_crun.txt"; then
+      echo "ABORT: $CTRL/CONTROL.$_crun.txt has no pytest summary line -- control run $_crun did not"
+      echo "       complete, and an empty control set silently disables the arm."
+      tail -5 "$CTRL/CONTROL.$_crun.txt" | sed 's/^/  /'
+      exit 4
+    fi
     grep -E '^(FAILED|SUBFAILED)' "$CTRL/CONTROL.$_crun.txt" | _norm_id | sort -u > "$CTRL/c$_crun.txt"
   done
   cp "$CTRL/CONTROL.1.txt" "$CTRL/CONTROL.txt"   # the log the reader is pointed at
@@ -1320,7 +1330,7 @@ if [ "$NU" -eq 0 ] && [ "$NM" -eq 0 ]; then
     echo "INCONCLUSIVE ($_mode): breakage set matches, but this configuration is NOT the stop"
     echo "  condition. fast cannot see a new breakage in a file that has never broken; differ is"
     echo "  a SCOPED arm. Re-run with no DRILL_SCOPE before quoting a result; DRILL_SHAPE=differ is"
-    echo "  verified and has its own rubric, but `fast` cannot see a new breakage in an unlisted file."
+    echo "  verified and has its own rubric, but 'fast' cannot see a new breakage in an unlisted file."
     exit 12
   fi
   echo "PASS ($_mode): the breakage set is EXACTLY the class-(iii) readers."
