@@ -8,18 +8,23 @@ re-derivable rather than recalled.
 
 A "site reaching the global default" is any of:
 
-  bare-const           a read of `OBSERVATION_SCHEMA_VERSION` itself                    (16)
-  default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                        (50)
+  bare-const           a read of `OBSERVATION_SCHEMA_VERSION` itself              (16)
+  default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                (50)
   implicit:<Surface>   a call to <Surface> leaving at least one default-bearing kwarg unnamed,
-                       one kind per surface so a new one cannot join an existing bucket. All EIGHT
-                       surfaces, with provenance -- seven DERIVED from src/, one an alternate
+                       one kind per surface so a new one cannot join an existing bucket. All SIX
+                       surfaces, with provenance -- five DERIVED from src/, one an alternate
                        constructor that cannot be (marked *):
 
-                         LocalShowdownConfig            135    ObservationSpec            24
-                         compact_category *              39    TransformerPolicyConfig     4
-                         PokeZeroObservationV0           49    LinearPolicyModel           3
-                                                               OnlineBattleAgent           2
-                         observation_from_player_state    0
+                         LocalShowdownConfig            135    TransformerPolicyConfig     4
+                         compact_category *              39    LinearPolicyModel           3
+                         observation_from_player_state    0    OnlineBattleAgent           2
+
+                       WAS EIGHT. `ObservationSpec` (24 rows here) and `PokeZeroObservationV0` (49)
+                       left the model when their `schema_version` field defaults stopped naming the
+                       global and named v2.2 instead: `derive_surfaces` identifies a surface BY that
+                       default, so the class stops being one and all 73 of their call sites stop
+                       being counted. Intended direction -- those sites now inherit a named version.
+                       N went 322 -> 249 in the same change.
 
                        `observation_from_player_state` is DERIVED and carries ZERO rows: all 130 of
                        its call sites pass `spec=` explicitly. A modelled surface with no open sites
@@ -29,9 +34,25 @@ A "site reaching the global default" is any of:
                        while listing compact_category (not derived) and omitting this one: the count
                        was right and the membership was not.
 
-                       The row's `unclosed` field names which kwarg is still open. These nine counts
-                       are pinned by tests/test_schema_default_ledger.py -- a previous docstring
-                       table staled for several commits because nothing held it to the tool.
+                       The row's `unclosed` field names which kwarg is still open. All EIGHT counts
+                       above are held by tests/test_schema_default_ledger.py, by two different
+                       mechanisms: the surface rows are PARSED and compared to the derivation, and
+                       the kind rows at the top of this table are GENERATED -- the test
+                       asserts that region is byte-equal to `--render-kinds-table`. Regenerate it
+                       with that flag rather than editing it by hand.
+
+                       The kind rows are generated because parsing them could not be made sound.
+                       Five review rounds narrowed a regex that tried to recognise a hand-written
+                       row, and each round closed the escapes just named and left the next ones
+                       open: an uppercase or capitalised name, an underscore, a `*` or `-` bullet
+                       this table already uses, a trailing colon in the style of the `implicit:`
+                       row below, `[16]`, `n=16`, `(16 rows)` in the style of the WAS EIGHT line
+                       above, the count moved to the next line -- plus a duplicated row where the
+                       WRONG count silently won. Any of those made a retired kind's stale count
+                       invisible while the test stayed green. A byte comparison has no grammar to
+                       evade, so a reformat is a diff instead of a disappearance.
+
+                       This line itself once said "nine" while six were pinned and eight existed.
 
   Two retired names, `implicit-spec` and `implicit-cfg`, were listed here long after the code
   stopped emitting them -- the reader-facing vocabulary staled in the same change that derived the
@@ -55,6 +76,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from collections import Counter
 import json
 import subprocess
 import sys
@@ -545,10 +567,58 @@ def sites_in(path: Path) -> list[dict]:
     return found
 
 
+#: One line of prose per non-surface kind, owned HERE rather than in the docstring, so the docstring
+#: can be a verbatim copy of this tool's output instead of a hand-maintained parallel table. Adding
+#: a kind without adding its description fails loudly in `render_kinds_table` rather than rendering
+#: a blank cell.
+KIND_DESCRIPTIONS = {
+    "bare-const": "a read of `OBSERVATION_SCHEMA_VERSION` itself",
+    "default-spec": "a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`",
+}
+
+
+def render_kinds_table(rows: list[dict]) -> str:
+    """Render the non-surface kind rows exactly as the module docstring must contain them.
+
+    THE DOCSTRING IS GENERATED, NOT PARSED. Five rounds of review were spent narrowing a regex that
+    tried to recognise a hand-written table: each round closed the escapes the previous reviewer
+    named and left the next ones open -- 2 reformats, then 17 more (uppercase or capitalised kind
+    name, an underscore, a `*` or `-` bullet the table already uses elsewhere, a trailing colon in
+    the house style of the very next row, `[16]`, `n=16`, `(16 rows)` which the docstring itself uses
+    nine lines below, the count moved to the next line), plus a containment test that masked an
+    unreadable row whenever its text was a substring of a readable one, plus last-write-wins on a
+    duplicated row so a WRONG count inserted above the right one was silently discarded.
+
+    A grammar cannot win that: every version is one character away from the next escape. So the tool
+    emits the block and the test asserts the docstring region is BYTE-EQUAL to it. There is no
+    grammar to evade, a reformat is a diff rather than a disappearance, a duplicate row is a diff,
+    and a retired kind is a diff. Regenerate with:
+
+        python scripts/schema_default_ledger.py --render-kinds-table
+    """
+    counts = Counter(r["kind"] for r in rows)
+    kinds = sorted(k for k in counts if not k.startswith("implicit:") and k != "UNPARSED")
+    missing = [k for k in kinds if k not in KIND_DESCRIPTIONS]
+    if missing:
+        raise SystemExit(
+            f"schema_default_ledger: no KIND_DESCRIPTIONS entry for {missing}. A kind with no "
+            "description would render a blank cell and the docstring would document a count "
+            "without saying what it counts."
+        )
+    return "\n".join(
+        f"  {k:<20} {KIND_DESCRIPTIONS[k]:<58} ({counts[k]})" for k in kinds
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--by-file", action="store_true")
+    ap.add_argument(
+        "--render-kinds-table",
+        action="store_true",
+        help="emit the docstring's kinds table; the docstring must contain this verbatim",
+    )
     args = ap.parse_args()
 
     scanned = tracked_py()
@@ -556,6 +626,9 @@ def main() -> int:
     rows.sort(key=lambda r: (r["file"], r["line"]))
 
     kinds_all = {r["kind"] for r in rows}
+    if args.render_kinds_table:
+        print(render_kinds_table(rows))
+        return 2 if "UNPARSED" in kinds_all else 0
     if args.json:
         print(json.dumps(rows, indent=2))
         # Exit 2 here too. The FIRST version returned 0 from this branch before the UNPARSED

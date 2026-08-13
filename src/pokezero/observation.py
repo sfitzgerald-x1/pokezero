@@ -108,6 +108,32 @@ GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS = (
 # does the turn-merged families — and this tuple is what every such latch tests.
 FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V4,)
 
+# Schemas using v3's numeric projection. Exists so `numeric_index_for_schema` can ask a PROPERTY
+# ("which projection does this schema use") instead of naming a version -- the identity form
+# silently routed any unlisted schema to the UNPROJECTED legacy path, returning
+# wrong-but-plausible indices rather than raising.
+V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V3,)
+
+# Schemas carrying the v2.1 block set forward: the PP-validity bits and substitute HP. Everything
+# except v2. Named as a lineage because that is what the encode gate means; it was previously
+# spelled as a three-term disjunction over other gates, which is the same set stated in a form no
+# future schema can join.
+#
+# NOT the per-mon pinned Tier-2 conclusions, which an earlier version of this comment listed. v4
+# RETIRES those -- `showdown.py` spells the exclusion `schema_v2_1 and not schema_v4` and says so
+# explicitly ("RETIRED AT V4 (and only at v4) ... that flag means 'carries the v2.1 blocks' and v4
+# inherits it for the PP-validity bits and sub HP"). The membership was right and the stated RULE
+# was wrong, which is the worse of the two errors here: the set can be checked against the tuple,
+# but a v6 author deciding whether their schema joins this lineage has only the rule to go on, and
+# this comment is the place that decision gets made. Inherited from the old inline gate comment,
+# where it was an aside; promoting it to a definition is what made it load-bearing.
+V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS = (
+    OBSERVATION_SCHEMA_VERSION_V2_1,
+    OBSERVATION_SCHEMA_VERSION_V2_2,
+    OBSERVATION_SCHEMA_VERSION_V3,
+    OBSERVATION_SCHEMA_VERSION_V4,
+)
+
 def schema_with(
     *,
     transition_region: bool | None = None,
@@ -219,7 +245,20 @@ class ObservationSpec:
     numeric_feature_count: int
     opponent_tendency_stats_token_count: int = OPPONENT_TENDENCY_STATS_TOKEN_COUNT
     transition_token_count: int = TRANSITION_TOKEN_COUNT
-    schema_version: str = OBSERVATION_SCHEMA_VERSION
+    # v2.2 by NAME, not the global default. Every other default on this dataclass is a v2-family
+    # constant -- `transition_token_count` is `TRANSITION_TOKEN_COUNT` (128) and `token_count` is
+    # computed from the v2-family module constants above -- so a hand-built spec has a v2.2 SHAPE
+    # whatever this field says. Taking the global default here therefore stamps whatever schema
+    # currently holds the default slot onto a v2.2-shaped object, and `validate()` accepts it:
+    # the incoherence is silent. Under a v4 default that is a spec claiming 41/132/23 while
+    # carrying 51/155/151.
+    #
+    # Real v3/v4 specs come from `REPLAY_OBSERVATION_SPECS_BY_SCHEMA`, which passes
+    # `schema_version` explicitly, so this default is reached only by CONSTRUCTING a spec by hand.
+    # "Only in tests" would be wrong: `teacher_scenarios._observation` does exactly that, and is
+    # reachable from the `pokezero-bootstrap` CLI via bootstrap.py. Which strengthens the case --
+    # a default that has to be remembered is one a production path can get wrong too.
+    schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2
 
     @property
     def token_count(self) -> int:
@@ -370,7 +409,13 @@ class PokeZeroObservationV0:
     legal_action_mask: Any
     perspective: ObservationPerspective | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
-    schema_version: str = OBSERVATION_SCHEMA_VERSION
+    # v2.2 by name, for the same reason as `ObservationSpec.schema_version` and NECESSARILY in
+    # step with it: `validate()` below refuses an observation whose stamp differs from the spec's,
+    # so a hand-built pair has to agree. Moving one default without the other would turn a silent
+    # incoherence into a loud one, which is better but still wrong -- they are one decision.
+    # Production observations come from the encoder, which stamps this from the spec it actually
+    # encoded under; this default is reachable only by hand construction.
+    schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2
 
     def validate(self, spec: ObservationSpec) -> None:
         require_current_observation_schema(self.schema_version, context="observation")
