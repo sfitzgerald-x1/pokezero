@@ -21,33 +21,22 @@
 # Keyed on file + members, NOT on line number, which drifts.
 #
 # ---------------------------------------------------------------------------------------------
-# REGISTER -- means "every supported schema". The injection adds the synthetic schema to each.
-REGISTER  scripts/export_encoder_tables.py  v2.2,v3,v4
-REGISTER  scripts/export_encoder_tables.py  OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4
-REGISTER  scripts/schema_identity_gate_scan.py  pokezero.observation.v2,pokezero.observation.v2.1,pokezero.observation.v2.2,pokezero.observation.v3,pokezero.observation.v4
-REGISTER  src/pokezero/engine_env.py  v2.2,v3,v4
-REGISTER  src/pokezero/mcts_eval/lattice.py  OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4
-REGISTER  src/pokezero/mcts_eval/resolver.py  pokezero.observation.v2.2,pokezero.observation.v3,pokezero.observation.v4
-REGISTER  src/pokezero/neural_cli.py  v2.1,v2.2,v3,v4
-REGISTER  src/pokezero/rollout_cli.py  v2.1,v2.2,v3,v4
-REGISTER  src/pokezero/showdown.py  v2.1,v2.2,v3,v4
-#
-# ---------------------------------------------------------------------------------------------
-# MIRRORED -- registered by the injection's own dedicated rules, NOT by the generic append. These are
-# the routing properties and schema-keyed maps whose membership must MIRROR the outgoing default
-# rather than include everything: v5-drill joins GROUPED_LAYOUT only if the outgoing default is in it.
-# Appending unconditionally here would give the synthetic schema properties its reference does not
-# have, which is the shape/naming ambiguity the drill exists to exclude. Listed so they are ACCOUNTED
-# FOR rather than absent -- an unlisted container aborts, and "handled elsewhere" has to be written
-# down to be checkable.
-MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4
-MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3
-MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4
-MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4
-MIRRORED  src/pokezero/showdown.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4
-#
-# ---------------------------------------------------------------------------------------------
-# PARTIAL -- a deliberately chosen subset, NOT "all schemas". Registering the synthetic schema would
-# change what the code means rather than keep it equivalent. `vocab_shift_probe` compares one named
-# PAIR of schemas; a third member is not a wider version of that comparison, it is a different one.
-PARTIAL   scripts/vocab_shift_probe.py  pokezero.observation.v2.2,pokezero.observation.v3
+REGISTER  scripts/export_encoder_tables.py  v2.2,v3,v4  <inline>
+REGISTER  scripts/export_encoder_tables.py  OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  <inline>
+REGISTER  scripts/schema_identity_gate_scan.py  pokezero.observation.v2,pokezero.observation.v2.1,pokezero.observation.v2.2,pokezero.observation.v3,pokezero.observation.v4  VERSION_LITERALS
+PARTIAL   scripts/vocab_shift_probe.py  pokezero.observation.v2.2,pokezero.observation.v3  <inline>
+REGISTER  src/pokezero/engine_env.py  v2.2,v3,v4  <inline>
+REGISTER  src/pokezero/mcts_eval/lattice.py  OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  _EXPORTER_SCHEMA_CHOICES
+REGISTER  src/pokezero/mcts_eval/resolver.py  pokezero.observation.v2.2,pokezero.observation.v3,pokezero.observation.v4  SUPPORTED_OBSERVATION_SCHEMAS
+REGISTER  src/pokezero/neural_cli.py  v2.1,v2.2,v3,v4  <inline>
+REGISTER  src/pokezero/neural_cli.py  v2.1,v2.2,v3,v4  <inline>
+MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  SUPPORTED_OBSERVATION_SCHEMA_VERSIONS
+MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3  TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS
+MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS
+MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA
+REGISTER  src/pokezero/rollout_cli.py  v2.1,v2.2,v3,v4  <inline>
+MIRRORED  src/pokezero/showdown.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  REPLAY_OBSERVATION_SPECS_BY_SCHEMA
+MIRRORED  src/pokezero/showdown.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  _MINIMUM_CATEGORICAL_CENSUS_BY_SCHEMA
+MIRRORED  src/pokezero/showdown.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  _MINIMUM_NUMERIC_CENSUS_BY_SCHEMA
+REGISTER  src/pokezero/showdown.py  v2.1,v2.2,v3,v4  OBSERVATION_SCHEMA_CLI_CHOICES

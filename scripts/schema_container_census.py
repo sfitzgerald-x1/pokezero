@@ -40,9 +40,34 @@ SHORT = {"v2", "v2.1", "v2.2", "v3", "v4"}
 FULL = {f"pokezero.observation.{s}" for s in SHORT}
 
 
-def containers() -> list[tuple[str, int, tuple[str, ...]]]:
-    """(file, line, sorted members) for every literal set/list/tuple of schema names."""
-    found: set[tuple[str, int, tuple[str, ...]]] = set()
+def _assigned_names(tree: ast.AST) -> dict[int, str]:
+    """Map a container node's id() to the variable it is assigned to, where there is one.
+
+    The classification is keyed on the container's NAME as well as its members. Keying on members
+    alone let a NEW routing tuple whose member set duplicated an existing row be classified for free
+    and then checked by nothing -- which is drill defect #1 (an unregistered routing tuple) reopening
+    through the very file added to prevent it. A container with no assignment target (an inline set in
+    an `if x not in {...}`) gets "<inline>", which is still distinguishing: two inline containers in
+    the same file with the same members are genuinely the same classification question.
+    """
+    out: dict[int, str] = {}
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        if not targets:
+            continue
+        name = next((t.id for t in targets if isinstance(t, ast.Name)), None)
+        if name and isinstance(node.value, (ast.Set, ast.List, ast.Tuple, ast.Dict)):
+            out[id(node.value)] = name
+    return out
+
+
+def containers() -> list[tuple[str, int, tuple[str, ...], str]]:
+    """(file, line, sorted members, variable name) for every literal container of schema names."""
+    found: set[tuple[str, int, tuple[str, ...], str]] = set()
     roots = [REPO / "src", REPO / "scripts"]
     # This file is the INSTRUMENT, not the subject: its SHORT/FULL sets are the vocabulary it scans
     # WITH, and scanning them would report the measuring device as a table needing registration.
@@ -57,6 +82,7 @@ def containers() -> list[tuple[str, int, tuple[str, ...]]]:
                 tree = ast.parse(path.read_text(encoding="utf-8"))
             except (SyntaxError, UnicodeDecodeError):
                 continue
+            names = _assigned_names(tree)
             for node in ast.walk(tree):
                 # Sets/lists/tuples by MEMBER, dicts by KEY. Scanning only the first three left the
                 # enumerator's own denominator incomplete, and it cost a full scored run to find out:
@@ -83,17 +109,18 @@ def containers() -> list[tuple[str, int, tuple[str, ...]]]:
                 # it, and every EngineEnvTest failed on `parser.error("unsupported encoder-table
                 # schema")`. Eighth instance of the class, and the second missed because this tool's
                 # notion of "container" was narrower than the code's.
-                names = {
+                consts = {
                     e.id for e in elts
                     if isinstance(e, ast.Name) and e.id.startswith("OBSERVATION_SCHEMA_VERSION_V")
                 }
                 # >= 2 members, and EVERY member a schema name in ONE convention. A single name is an
                 # ordinary comparison, and a mixed container is not a schema table.
                 rel = str(path.relative_to(REPO))
+                var = names.get(id(node), "<inline>")
                 if len(vals) >= 2 and (vals <= SHORT or vals <= FULL):
-                    found.add((rel, node.lineno, tuple(sorted(vals))))
-                elif len(names) >= 2 and not vals:
-                    found.add((rel, node.lineno, tuple(sorted(names))))
+                    found.add((rel, node.lineno, tuple(sorted(vals)), var))
+                elif len(consts) >= 2 and not vals:
+                    found.add((rel, node.lineno, tuple(sorted(consts)), var))
     return sorted(found)
 
 
@@ -107,12 +134,13 @@ def classification() -> dict[tuple[str, tuple[str, ...]], str]:
         if not line or line.startswith("#"):
             continue
         parts = line.split()
-        if len(parts) != 3:
-            raise SystemExit(f"census: malformed row (want 3 fields): {raw!r}")
-        kind, path, members = parts
+        if len(parts) not in (3, 4):
+            raise SystemExit(f"census: malformed row (want 3 or 4 fields): {raw!r}")
+        kind, path, members = parts[0], parts[1], parts[2]
+        var = parts[3] if len(parts) > 3 else "<inline>"
         if kind not in ("REGISTER", "PARTIAL", "MIRRORED"):
             raise SystemExit(f"census: unknown classification {kind!r} in {raw!r}")
-        out[(path, tuple(sorted(members.split(","))))] = kind
+        out[(path, tuple(sorted(members.split(","))), var)] = kind
     return out
 
 
@@ -132,22 +160,22 @@ def main() -> int:
     print()
 
     unclassified = []
-    for path, line, members in found:
-        kind = spec.get((path, members))
+    for path, line, members, var in found:
+        kind = spec.get((path, members, var))
         if kind is None:
-            unclassified.append((path, line, members))
+            unclassified.append((path, line, members, var))
         if args.list or kind is None:
-            print(f"  {kind or 'UNCLASSIFIED':12} {path}:{line}  {list(members)}")
+            print(f"  {kind or 'UNCLASSIFIED':12} {path}:{line}  {var}  {list(members)}")
 
     # A classification with no container is as bad as a container with no classification: it means
     # the file records a structure that no longer exists, and the next reader trusts it.
-    seen = {(p, m) for p, _, m in found}
+    seen = {(p, m, v) for p, _, m, v in found}
     unused = sorted(k for k in spec if k not in seen)
     if unused:
         print()
         print("  classifications with NO matching container (stale rows):")
-        for path, members in unused:
-            print(f"    {path}  {list(members)}")
+        for path, members, var in unused:
+            print(f"    {path}  {var}  {list(members)}")
 
     if not args.check:
         return 0
