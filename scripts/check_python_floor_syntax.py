@@ -129,6 +129,25 @@ def _ruff(target: str, paths: list[str], *, extra: list[str] | None = None):
     return subprocess.run(
         [ruff(), "check", "--isolated", "--color=never", f"--target-version={target}",
          "--no-cache", *(extra or []), "--output-format=concise", "--", *paths],
+        # `cwd=REPO`. `git ls-files` is anchored with `git -C REPO` and returns REPO-RELATIVE paths,
+        # but ruff resolves them against the PROCESS cwd, which was never pinned. Every other part
+        # of this script is deliberately path-independent (REPO from __file__, git -C REPO), which
+        # actively invites running it from elsewhere -- and then it graded a different filesystem.
+        #
+        # Demonstrated with the historical defect restored here and a clean sibling worktree of the
+        # SAME commit as cwd: `tracked_files=522 invalid-syntax=0`, the success line, exit 0, with
+        # 41 real diagnostics in the repo the paths came from.
+        #
+        # This is the one place the `--show-files` reconciliation cannot help, and the reason is
+        # worth stating: `run_ruff_show_files` goes through this same function, so it inherited the
+        # same unpinned cwd and cheerfully reconciled 522 of 522. The check compared ruff against
+        # ruff, both looking at a tree `git ls-files` never enumerated. A reconciliation between two
+        # halves that share a blind spot is not a reconciliation.
+        #
+        # (Reproducing it needs a sibling with the SAME file set. Against a sibling at origin/main
+        # -- 521 files, one fewer -- show-files caught it at "521 of the 522" purely by accident of
+        # the count differing. Fail-open by luck is not fail-closed.)
+        cwd=str(REPO),
         capture_output=True, text=True, env=scrubbed,
     )
 
@@ -257,10 +276,6 @@ def main() -> int:
     floor = args.floor or declared_floor()
     # N6: validated, not a free-text escape hatch. `--floor py99` made ruff exit 2, which (before
     # B1 above) printed the success line and returned 0 -- a one-flag silent-green switch.
-    if args.print_floor:
-        # So nothing downstream hardcodes what this script derives.
-        print(floor)
-        return 0
     if not re.fullmatch(r"py3\d{1,2}", floor):
         print(
             f"floor {floor!r} is not a ruff target-version of the form py3NN. A target ruff does "
@@ -268,6 +283,12 @@ def main() -> int:
             file=sys.stderr,
         )
         raise SystemExit(2)
+
+    if args.print_floor:
+        # AFTER validation, not before. Printing an unvalidated floor would hand a caller a value
+        # this script has already decided it cannot enforce.
+        print(floor)
+        return 0
 
     if args.self_test:
         return self_test(floor)
