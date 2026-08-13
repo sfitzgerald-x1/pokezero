@@ -178,6 +178,45 @@ class LatencyGateTest(unittest.TestCase):
         self.assertIn("PASS", rep["cells"]["slow@k0"]["cap"])
         self.assertIn("slow@k0", rep["ranking_eligible"])
 
+    def test_the_gate_prefers_the_per_decision_wall_on_a_dynamic_cell(self) -> None:
+        # `search_wall_per_searched_decision` is per-RUNG on a ladder cell:
+        # `searched_decisions` is charged once per `_search_model` call and a ladder
+        # calls it once per rung (measured 2,224 rungs against 1,062 decisions). So
+        # gating on it lets a cell at ~2.1 rungs/decision report 5.7s when its true
+        # per-decision wall is 12s, and the 20s/turn cap silently stops gating on
+        # exactly the cells this feature exists to produce. Found in review.
+        entry = {"per_seat": [{"p1": {
+            "search_wall_per_searched_decision": 5.71,
+            "search_wall_per_ladder_decision": 12.0,
+            "ladder_rungs_per_decision": 2.1,
+            "wall_per_decision_mean": 12.4,
+            "wall_per_decision_p95": 18.0,
+        }}]}
+        lat = _R.latency_of(entry)
+        self.assertEqual(lat["search_wall_per_searched_decision_mean"], 12.0)
+        self.assertEqual(lat["gate_denominator"], "per_ladder_decision")
+        self.assertAlmostEqual(lat["ladder_rungs_per_decision_mean"], 2.1)
+
+    def test_a_fixed_cell_still_gates_on_the_field_it_always_did(self) -> None:
+        # No ladder field means a fixed cell, where the gate field IS per-decision.
+        # Every banked cell must keep reading exactly as it did.
+        entry = {"per_seat": [{"p1": {"search_wall_per_searched_decision": 12.51}}]}
+        lat = _R.latency_of(entry)
+        self.assertEqual(lat["search_wall_per_searched_decision_mean"], 12.51)
+        self.assertEqual(lat["gate_denominator"], "per_searched_decision_PER_RUNG")
+        self.assertIsNone(lat["ladder_rungs_per_decision_mean"])
+
+    def test_mixing_the_two_denominators_is_labelled_not_averaged(self) -> None:
+        # Should be impossible -- assert_single_build refuses cross-fingerprint
+        # merges -- but averaging a per-rung figure with a per-decision one produces
+        # a number that is neither, so if it ever happens the reader must see it.
+        entry = {"per_seat": [
+            {"p1": {"search_wall_per_ladder_decision": 12.0}},
+            {"p1": {"search_wall_per_searched_decision": 6.0}},
+        ]}
+        self.assertEqual(_R.latency_of(entry)["gate_denominator"],
+                         "MIXED - do not compare")
+
     def test_missing_gate_field_is_unevaluable_not_a_pass(self) -> None:
         # A fully-fallen-back cell emits no search_wall_per_searched_decision.
         # Reading that as a pass would adopt a config whose latency is unknown.

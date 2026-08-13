@@ -167,18 +167,51 @@ def collect_rows(shards: list[dict]) -> tuple[dict, dict]:
 
 
 def latency_of(meta_entry: dict) -> dict:
-    """Mean/p95 of the GATE field across a cell's seats, plus the other wall."""
-    gate, p95, other = [], [], []
+    """Mean/p95 of the GATE field across a cell's seats, plus the other wall.
+
+    THE GATE FIELD IS PER-DECISION WHEN THE SHARD OFFERS ONE. On a dynamic-budget
+    cell `search_wall_per_searched_decision` is per-RUNG -- `searched_decisions` is
+    charged once per `_search_model` call and a ladder calls it once per rung
+    (measured 2,224 rungs against 1,062 decisions) -- so gating on it lets a cell
+    at 2.1 rungs/decision report 5.7 s while its true per-decision wall is 12 s,
+    and the 20 s/turn cap silently stops gating on exactly the cells this feature
+    exists to produce. `search_wall_per_ladder_decision` is hoisted into every
+    shard's seat block for this reason; prefer it, and say which one was used so a
+    reader is never guessing. Found in review.
+    """
+    gate, p95, other, rungs = [], [], [], []
+    per_decision_seats = 0
+    per_rung_seats = 0
     for per_seat in meta_entry["per_seat"]:
         for seat in (per_seat or {}).values():
-            if seat.get("search_wall_per_searched_decision") is not None:
+            ladder_wall = seat.get("search_wall_per_ladder_decision")
+            if ladder_wall is not None:
+                gate.append(float(ladder_wall))
+                per_decision_seats += 1
+            elif seat.get("search_wall_per_searched_decision") is not None:
                 gate.append(float(seat["search_wall_per_searched_decision"]))
+                per_rung_seats += 1
+            if seat.get("ladder_rungs_per_decision") is not None:
+                rungs.append(float(seat["ladder_rungs_per_decision"]))
             if seat.get("wall_per_decision_p95") is not None:
                 p95.append(float(seat["wall_per_decision_p95"]))
             if seat.get("wall_per_decision_mean") is not None:
                 other.append(float(seat["wall_per_decision_mean"]))
     return {
         "search_wall_per_searched_decision_mean": (sum(gate) / len(gate)) if gate else None,
+        # WHICH denominator the line above is on. A cell that mixes them is a cell
+        # whose shards were not all built from one image, which `assert_single_build`
+        # already refuses -- but if it ever happens, the reader must see it.
+        "gate_denominator": (
+            None
+            if not gate
+            else "per_ladder_decision"
+            if per_decision_seats and not per_rung_seats
+            else "per_searched_decision_PER_RUNG"
+            if per_rung_seats and not per_decision_seats
+            else "MIXED - do not compare"
+        ),
+        "ladder_rungs_per_decision_mean": (sum(rungs) / len(rungs)) if rungs else None,
         "wall_per_decision_p95_max": max(p95) if p95 else None,
         "wall_per_decision_mean": (sum(other) / len(other)) if other else None,
     }

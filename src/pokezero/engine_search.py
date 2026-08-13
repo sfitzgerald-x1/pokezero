@@ -507,8 +507,36 @@ class EngineMctsConfig:
                     "docs/crate_search_design.md review caveats)."
                 )
             if self.early_stop and not 0 < self.early_stop_min_sims <= self.search_sims:
+                # Against `search_sims`, which on a DYNAMIC cell is the TOTAL for
+                # the decision rather than a per-world budget -- so passing here
+                # does not mean the floor fits every rung. `_search_model` clamps it
+                # to the rung; see the note there for why clamping is the
+                # conservative direction and not a relaxed bar.
                 raise ValueError(
-                    "early_stop_min_sims must be in 1..=search_sims when early_stop is enabled."
+                    "early_stop_min_sims must be in 1..=search_sims when early_stop "
+                    "is enabled. On a dynamic cell search_sims is the TOTAL budget "
+                    "for a decision, so a floor that passes here can still exceed an "
+                    "individual rung's per-world share; it is clamped to the rung."
+                )
+            if (self.depth_min is not None or self.worlds_min is not None) and (
+                self.search_sims < self.worlds
+            ):
+                # A LADDER cell divides `search_sims` across its worlds, so a
+                # budget below the world cap cannot give every world a simulation.
+                # An earlier revision clamped instead, and the clamp was worse than
+                # the config it was rescuing: at search_sims=2, worlds=4,
+                # worlds_min=3 it ran TWO worlds while the floor said three -- it
+                # broke the very floor that turned the axis dynamic -- and it left
+                # rung 0 asking for fewer worlds than `decide()` had already
+                # charged, which put a FALSE 0.25 into `world_search_abort_rate`
+                # (the mirror of the -1.75 that review found). Refused instead:
+                # this is not a config anyone wants, and degrading it silently
+                # produces a cell whose name does not describe what ran.
+                raise ValueError(
+                    "search_sims must be >= worlds on a dynamic cell "
+                    f"(got search_sims={self.search_sims}, worlds={self.worlds}); "
+                    "search_sims is the TOTAL budget divided across belief worlds, "
+                    "so a smaller budget cannot give every world one simulation."
                 )
             if self.depth_min is not None and not (
                 LADDER_MIN_DEPTH_FLOOR <= self.depth_min <= self.search_depth
@@ -1073,6 +1101,13 @@ class EngineMctsStats:
     #: SUCCESSFUL rung's decision, so this is also the count of decisions whose
     #: escalation was abandoned.
     ladder_fallback_rungs: int = 0
+    #: Of those, the ones where an EARLIER rung had already produced a searched
+    #: answer, so the decision the engine returned was a real search and not a
+    #: fallback. `_fallback` has already charged `fallback_decisions` by then and
+    #: there is nothing to un-charge it, so without this counter `fallback_rate`
+    #: reported 1.0 for a decision that was searched fine at rung 0 -- and the
+    #: power report's health gate would drop a healthy ladder cell on it.
+    ladder_recovered_fallbacks: int = 0
     ladder_depth_rungs: int = 0
     fold_advanced_lines: int = 0
     fold_cross_checks: int = 0
@@ -1106,6 +1141,18 @@ class EngineMctsStats:
     # holds whenever the flag is on, and a consumer that subtracts instead of
     # reading `override_measured_decisions` gets the same number -- the identity
     # is pinned by test rather than assumed.
+    #
+    # ON A LADDER CELL the right-hand side is `ladder_decisions`, not
+    # `searched_decisions`. Both counters are charged inside `_search_model`, which
+    # a ladder calls once per rung, so an escalating decision would otherwise vote
+    # several times and the rate would come out weighted by how far each decision
+    # climbed -- and incomparable to a fixed cell's, which is the comparison the
+    # override study is entirely about. `_search_ladder` therefore REWINDS all
+    # three to the winning rung's contribution, so each decision contributes
+    # exactly one vote and both forms of the identity are pinned by test.
+    # `search_override_unmeasured_causes` is deliberately NOT rewound: it is a
+    # diagnostic taxonomy rather than a rate denominator, and a cause a discarded
+    # rung hit is still a cause the run really encountered.
     override_measured_decisions: int = 0
     model_override_decisions: int = 0
     # The honesty half, and the one that matters most: searched decisions where
@@ -1181,7 +1228,19 @@ class EngineMctsStats:
             "searched_decisions": self.searched_decisions,
             "fallback_decisions": self.fallback_decisions,
             "oracle_belief_decisions": self.oracle_belief_decisions,
-            "fallback_rate": self.fallback_decisions / self.decisions if self.decisions else 0.0,
+            # NET of recovered ones. `fallback_decisions` counts RUNGS that fell
+            # back, and a ladder rung falling back after an earlier rung succeeded
+            # is not a fallen-back decision -- the engine returns the earlier
+            # rung's searched answer. Counting it charged `fallback_rate` 1.0 for a
+            # decision that searched fine. Both numbers are emitted so the taxonomy
+            # stays whole. Found in review.
+            "fallback_rate": (
+                max(0, self.fallback_decisions - self.ladder_recovered_fallbacks)
+                / self.decisions
+                if self.decisions
+                else 0.0
+            ),
+            "ladder_recovered_fallbacks": self.ladder_recovered_fallbacks,
             "removed_item_decisions": self.removed_item_decisions,
             "item_override_decisions": self.item_override_decisions,
             "worlds_attempted": self.worlds_attempted,
@@ -2927,20 +2986,14 @@ class EngineMctsPolicy:
             return [(worlds_start, None, depth_cap)]
         rungs: list[tuple[int, int | None, int]] = []
         for w in range(worlds_start, worlds_floor - 1, -1):
-            # Integer division so a rung never costs more than the budget, and a
-            # floor of 1 sim. F12: `budget < worlds` would otherwise round to 0.
-            per_world = max(1, budget // w)
-            if per_world * w > budget:
-                # Degenerate only (budget < worlds). Drop the world count to what
-                # the budget can actually pay for rather than overspend it.
-                per_world = 1
-                w = min(w, budget) or 1
-            if rungs and rungs[-1] == (w, per_world, depth_floor):
-                # Only reachable in the degenerate `budget < worlds` case, where the
-                # clamp above collapses several world counts onto the same
-                # affordable one. Three identical rungs would be three identical
-                # searches billed as escalation.
-                continue
+            # Integer division, so a rung never costs MORE than the budget: at
+            # worlds=3 and 16,384 the rung is 5,461 x 3 = 16,383, one short rather
+            # than one over. `__post_init__` refuses `search_sims < worlds` on a
+            # dynamic cell, which is what makes this division safe -- it cannot
+            # round to zero, so no clamp is needed and no two rungs can collapse
+            # onto the same world count.
+            per_world = budget // w
+            assert per_world >= 1, (budget, w)  # guaranteed by the config refusal
             rungs.append((w, per_world, depth_floor))
         # Then depth, one ply per rung, at the most concentrated allocation -- the
         # one that has the sims to fill the new plies.
@@ -2991,12 +3044,32 @@ class EngineMctsPolicy:
         self.stats.ladder_decisions += 1
         decision: Optional[PolicyDecision] = None
         last_good: Optional[PolicyDecision] = None
+        # THE OVERRIDE RATE IS ABOUT THE DECISION, NOT THE RUNGS. `_search_model`
+        # charges `override_measured_decisions` once per call, so on a ladder cell
+        # every escalating decision voted several times and the headline rate came
+        # out weighted by how far each decision climbed -- which also makes it
+        # incomparable to a fixed cell's, and `search_config_id` deliberately pools
+        # telemetry-on with telemetry-off, so nothing else would have caught it.
+        # Rewound below to the WINNING rung's contribution alone. Found in review.
+        def _override_ledger() -> tuple[int, int, int]:
+            return (
+                self.stats.override_measured_decisions,
+                self.stats.model_override_decisions,
+                self.stats.search_override_unmeasured,
+            )
+
+        override_at_decision_start = _override_ledger()
+        # The WINNING rung's contribution, as a delta. Not its cumulative total:
+        # taking the total after the last successful rung keeps every earlier rung's
+        # vote too, which is the bug in a subtler form.
+        winning_rung_delta = (0, 0, 0)
         for index, (stage_worlds, stage_sims, stage_depth) in enumerate(ladder):
             # Snapshot BEFORE the rung so a fallback raised inside it is visible,
             # and reset the per-rung signals so a stale one cannot license an
             # escalation: `_fallback` returns early, before the block that
             # recomputes them.
             fallbacks_before = self.stats.fallback_decisions
+            override_before_rung = _override_ledger()
             self._ladder_saturated = False
             self._ladder_worlds_agree = True
             self._ladder_depth_override = stage_depth
@@ -3027,9 +3100,16 @@ class EngineMctsPolicy:
             if self.stats.fallback_decisions > fallbacks_before:
                 if last_good is not None:
                     decision = last_good
+                    # RECOVERED: the returned decision is an earlier rung's real
+                    # search, so this decision did not fall back even though a rung
+                    # did. `fallback_rate` nets these out.
+                    self.stats.ladder_recovered_fallbacks += 1
                 self.stats.ladder_fallback_rungs += 1
                 break
             last_good = decision
+            winning_rung_delta = tuple(
+                now - before for now, before in zip(_override_ledger(), override_before_rung)
+            )
             if index + 1 >= len(ladder):
                 break
             next_worlds, next_sims, next_depth = ladder[index + 1]
@@ -3057,6 +3137,18 @@ class EngineMctsPolicy:
                     self.stats.ladder_worlds_disagree_stops += 1
                     break
             self.stats.ladder_escalations += 1
+        # Rewind the override ledger to the winning rung. Nothing between the
+        # snapshots is a decision the engine made, so nothing between them belongs
+        # in a per-decision rate. A rung that fell back contributes nothing, which
+        # is right: it measured no override.
+        (
+            self.stats.override_measured_decisions,
+            self.stats.model_override_decisions,
+            self.stats.search_override_unmeasured,
+        ) = tuple(
+            start + delta
+            for start, delta in zip(override_at_decision_start, winning_rung_delta)
+        )
         assert decision is not None  # a ladder always has at least one rung
         return decision
 
@@ -3098,8 +3190,17 @@ class EngineMctsPolicy:
         # validated against `search_sims`, which on a ladder cell is the TOTAL for
         # the decision -- so a floor of 64 against a total of 128 across 4 worlds is
         # a floor ABOVE the 32-sim rung, and the stop rule could never fire on the
-        # rungs that need it most. Clamped to the rung so the floor keeps meaning
-        # "don't stop before this much evidence". Found in review.
+        # rungs that need it most. Found in review.
+        #
+        # AND THE CLAMP IS THE CONSERVATIVE DIRECTION, which is worth stating because
+        # it reads like a relaxed bar. Clamping the floor to the rung sets it to the
+        # rung's ENTIRE budget, so the earliest a stop can fire is the last batch of
+        # that rung -- it cannot fire early. The absolute evidence is smaller (32 sims
+        # rather than 64) only because 32 is all that rung has; the alternative is not
+        # "more evidence", it is early-stop being silently dead on every rung below
+        # the floor while the cell's name still claims the feature. A fixed cell is
+        # untouched: `_ladder_sims_override` is None there, so the configured floor
+        # reaches the crate byte-identically and no banked measurement moves.
         stop_floor = config.early_stop_min_sims if config.early_stop else 0
         _rung_sims = getattr(self, "_ladder_sims_override", None)
         if stop_floor and _rung_sims:
@@ -3405,12 +3506,19 @@ class EngineMctsPolicy:
                     # the depth cap -- a depth the ladder had not licensed -- and
                     # those reports then fed the saturation test, handing the
                     # ladder a forged licence to deepen. Found in review.
+                    # `rung_sims` ALONE, with no multiplicity factor. This loop
+                    # walks RECORDS, so an N-group is replayed N times -- the
+                    # multiplicity is already spent by the iteration. Scaling each
+                    # replay by it as well cost N^2 x rung_sims for one group: at
+                    # a 4,096 rung and a 3-group, 36,864 sims against an intended
+                    # 12,288, i.e. 2.25x the whole decision's budget, and the
+                    # oversized trees then fed the saturation test and re-forged
+                    # the licence F3 removed. Found by review of the F3 fix.
                     rung_sims = getattr(self, "_ladder_sims_override", None)
-                    multiplicity = max(1, int(record.get("_collapse_multiplicity", 1)))
                     report = run_world(
                         record,
                         0,
-                        sims=None if rung_sims is None else rung_sims * multiplicity,
+                        sims=rung_sims,
                         depth=getattr(self, "_ladder_depth_override", None),
                     )
                     if report is None:
