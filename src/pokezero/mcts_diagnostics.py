@@ -80,6 +80,19 @@ _DIRECT_MATERIALIZATION_REJECTION_CATEGORIES = frozenset(
         "no_actionable_boundary",
         "observation_mismatch",
         "self_benched_move_history",
+        # The three Substitute classes share their NAMES with `engine_world`'s
+        # `EngineWorldUnsupported` reason codes on purpose: the direct bridge lane and the
+        # crate lane consume the same `substituteHealthState`/`substituteDepletion` payload
+        # keys, so an era aggregator can add the two lanes' refusals of one public fact
+        # instead of reading a bridge-shaped alias next to a crate-shaped one.
+        #
+        # Registration here is not decorative -- this frozenset is the allowlist
+        # `sanitize_root_puct_direct_materialization_rejection_categories` filters against,
+        # and an unregistered category is dropped SILENTLY from persisted telemetry. A named
+        # refusal that gets sanitized away is indistinguishable from no refusal at all.
+        "substitute_depletion_world_incompatible",
+        "substitute_health_provenance_contradiction",
+        "substitute_health_unknown",
         "terminal_state",
         "unsupported_side_condition",
         "volatile_effects",
@@ -97,7 +110,21 @@ def root_puct_direct_materialization_rejection_category(error: object) -> str:
         return "self_benched_move_history"
     if "future sight" in message:
         return "future_sight"
-    if "volatile effects" in message:
+    # Substitute BEFORE the generic volatile arm: these are refusals of one specific public
+    # fact whose provenance the payload already carries, and the campaign's stop condition
+    # needs them rankable on their own rather than pooled with every other volatile.
+    if "contradictory substitute health provenance" in message:
+        return "substitute_health_provenance_contradiction"
+    if "unknown substitute health" in message:
+        return "substitute_health_unknown"
+    if "substitute depletion" in message:
+        return "substitute_depletion_world_incompatible"
+    # SINGULAR, so this matches the plural too. Three of the bridge's four volatile-payload
+    # errors say "volatile effect" (`does not yet support`, `received invalid ... for`,
+    # `received duplicate`) and only one says "volatile effects"; the plural-only test meant
+    # the other three were filed as `materializer_error`, the catch-all. That is how the
+    # Substitute class stayed invisible: it was counted, but only as "something went wrong".
+    if "volatile effect" in message:
         return "volatile_effects"
     if "side condition" in message:
         return "unsupported_side_condition"

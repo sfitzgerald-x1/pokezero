@@ -471,6 +471,95 @@ def require_model_feature(witness: Mapping[str, Any]) -> None:
         )
 
 
+def artifact_identity(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
+    """Stamp the model artifacts into the shard BY CONTENT, not just by path.
+
+    ``identity_witness`` already digests the compiled crate (``_extension_hash``) and
+    the Python sources, but the three model artifacts were recorded as bare paths.
+    A path is not an identity: a checkpoint replaced in place, or two different
+    ``model_ts.pt`` files at one path, are indistinguishable across shards -- and when
+    the path is deleted the shard no longer says which bytes produced its numbers.
+    That happened: the ``v3hist-k64-...-2657`` baseline's artifacts were destroyed and
+    only the paths survive in the published shards.
+
+    Unreadable artifacts are reported as an ``error`` string rather than raising, so a
+    missing file cannot turn a finished shard's numbers into a lost run.
+    """
+
+    identity: dict[str, dict[str, Any]] = {}
+    for key in ("checkpoint", "model_path", "tables"):
+        raw = getattr(args, key, None)
+        if not raw:
+            continue
+        entry: dict[str, Any] = {"path": str(raw)}
+        try:
+            data = Path(raw).read_bytes()
+        except OSError as exc:
+            entry["error"] = f"{type(exc).__name__}: {exc}"
+        else:
+            entry["sha256"] = hashlib.sha256(data).hexdigest()
+            entry["bytes"] = len(data)
+        identity[key] = entry
+    return identity
+
+
+def build_shard_payload(
+    *,
+    args: argparse.Namespace,
+    artifacts: Mapping[str, Mapping[str, Any]],
+    driver_config: Any,
+    truth_config: Any,
+    witness: Mapping[str, Any],
+    child_witness: Mapping[str, Any],
+    mismatches: Mapping[str, Any],
+    plan: Mapping[str, Any] | None,
+    wall_seconds: float,
+    per_game: Sequence[Mapping[str, Any]],
+    probes: Mapping[str, Any],
+    driver_policies: Mapping[str, Any],
+    truth_policies: Mapping[str, Any],
+    records: Sequence[Any],
+    aggregate: Any,
+) -> dict[str, Any]:
+    """Assemble the shard payload.
+
+    A module-level function rather than a closure inside ``run_shard`` so that WHAT
+    GETS EMITTED is testable without a Showdown checkout, an engine wheel or a game.
+    ``artifact_identity`` was previously pinned only as a pure helper, so deleting the
+    one line that put it in the payload passed the whole suite -- provenance that
+    exists only in a unit test. The emission itself is now the thing under test.
+    """
+
+    return {
+        "schema": "truth-differential-census-shard/v1",
+        "config": {
+            key: (str(value) if isinstance(value, Path) else value)
+            for key, value in vars(args).items()
+        },
+        "driver_config": dataclasses.asdict(driver_config),
+        "truth_config": dataclasses.asdict(truth_config),
+        "identity_witness": witness,
+        "identity_witness_child_neutral_cwd": child_witness,
+        "identity_witness_mismatches": mismatches,
+        "artifact_identity": artifacts,
+        "plan_source_hash": plan["source_hash"] if plan else None,
+        "wall_seconds": wall_seconds,
+        "per_game": per_game,
+        "instrument_errors": sorted(
+            {error for probe in probes.values() for error in probe.errors}
+        ),
+        "instrument_error_count": sum(len(probe.errors) for probe in probes.values()),
+        "driver_stats": {
+            seat: policy.stats.to_dict() for seat, policy in driver_policies.items()
+        },
+        "truth_stats": {
+            seat: policy.stats.to_dict() for seat, policy in truth_policies.items()
+        },
+        "summary": aggregate(records),
+        "records": [record.to_dict() for record in records],
+    }
+
+
 def run_shard(args: argparse.Namespace) -> int:
     from pokezero.collection import policy_from_spec  # noqa: F401 - parity with prod harnesses
     from pokezero.dex import load_showdown_dex_cached
@@ -614,35 +703,27 @@ def run_shard(args: argparse.Namespace) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     per_game: list[dict[str, Any]] = []
+    # Hashed once: dump() runs every --dump-every games and the checkpoint is ~40 MB.
+    artifacts = artifact_identity(args)
 
     def dump() -> None:
-        payload = {
-            "schema": "truth-differential-census-shard/v1",
-            "config": {
-                key: (str(value) if isinstance(value, Path) else value)
-                for key, value in vars(args).items()
-            },
-            "driver_config": dataclasses.asdict(driver_config),
-            "truth_config": dataclasses.asdict(truth_config),
-            "identity_witness": witness,
-            "identity_witness_child_neutral_cwd": child_witness,
-            "identity_witness_mismatches": mismatches,
-            "plan_source_hash": plan["source_hash"] if plan else None,
-            "wall_seconds": time.perf_counter() - started,
-            "per_game": per_game,
-            "instrument_errors": sorted(
-                {error for probe in probes.values() for error in probe.errors}
-            ),
-            "instrument_error_count": sum(len(probe.errors) for probe in probes.values()),
-            "driver_stats": {
-                seat: policy.stats.to_dict() for seat, policy in driver_policies.items()
-            },
-            "truth_stats": {
-                seat: policy.stats.to_dict() for seat, policy in truth_policies.items()
-            },
-            "summary": aggregate_records(records),
-            "records": [record.to_dict() for record in records],
-        }
+        payload = build_shard_payload(
+            args=args,
+            artifacts=artifacts,
+            driver_config=driver_config,
+            truth_config=truth_config,
+            witness=witness,
+            child_witness=child_witness,
+            mismatches=mismatches,
+            plan=plan,
+            wall_seconds=time.perf_counter() - started,
+            per_game=per_game,
+            probes=probes,
+            driver_policies=driver_policies,
+            truth_policies=truth_policies,
+            records=records,
+            aggregate=aggregate_records,
+        )
         out_path.write_text(
             json.dumps(payload, indent=1, sort_keys=True, default=str), encoding="utf-8"
         )
@@ -737,6 +818,96 @@ def _shard_games(plan: Mapping[str, Any] | None, args: argparse.Namespace) -> li
 # --- report ------------------------------------------------------------------
 
 
+_ARTIFACT_KEYS = ("checkpoint", "model_path", "tables")
+_SHARD_SCHEMA = "truth-differential-census-shard/v1"
+_SHARD_SCHEMA_FAMILY = "truth-differential-census-shard/"
+
+
+def is_census_shard(payload: Mapping[str, Any]) -> bool:
+    """Whether a merged JSON file is a census SHARD rather than something else.
+
+    ``--shards <dir>/*.json`` routinely globs a previous ``--mode report`` output
+    (``summary.json``) in beside the real shards -- the salvaged censusB directory is
+    exactly this shape. Such a file has no artifact set at all, and counting its absence
+    as a disagreement fires the cross-baseline alarm on a perfectly uniform census. An
+    alarm that cries wolf on a clean merge gets ignored, which costs the same as silence.
+
+    A PREFIX match on the schema family, not equality with ``/v1``. Under equality a
+    future ``/v2`` shard would be classified "not a shard" for alarm purposes while its
+    ``records`` still entered the published total -- excluded from the very check meant to
+    catch it. Nothing may be a shard for arithmetic and a non-shard for the alarm, so one
+    predicate decides both (see ``merge_shards``).
+    """
+
+    return str(payload.get("schema") or "").startswith(_SHARD_SCHEMA_FAMILY)
+
+
+def shard_artifact_identity(payload: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """The best available artifact identity for one shard, stamped or not.
+
+    Shards written before the stamp existed -- every published figure in this campaign,
+    including the salvaged ones -- carry only paths, under ``truth_config``. Those are
+    reported with ``sha256: None`` and ``unstamped: True`` rather than being dropped, so
+    a merge that mixes pre-stamp and post-stamp shards cannot LOOK uniform.
+    """
+
+    stamped = payload.get("artifact_identity") or {}
+    if stamped:
+        return {key: dict(value) for key, value in stamped.items()}
+    truth = payload.get("truth_config") or {}
+    fallback: dict[str, dict[str, Any]] = {}
+    for key, config_key in (
+        ("checkpoint", "checkpoint_path"),
+        ("model_path", "model_path"),
+        ("tables", "tables_path"),
+    ):
+        recorded = truth.get(config_key)
+        if recorded:
+            fallback[key] = {"path": recorded, "sha256": None, "unstamped": True}
+    return fallback
+
+
+def _artifact_token(entry: Mapping[str, Any] | None) -> str:
+    """One comparable identity string per artifact.
+
+    The digest when the shard has one; otherwise the recorded path, marked
+    ``unstamped:`` so that a stamped shard and a pre-stamp shard pointing at the same
+    path are NOT treated as agreeing -- the whole point is that a path is not an
+    identity. An artifact absent altogether is its own third value.
+    """
+
+    if not entry:
+        return "absent"
+    digest = entry.get("sha256")
+    if digest:
+        return str(digest)
+    path = entry.get("path")
+    return f"unstamped:{path}" if path else "absent"
+
+
+def artifact_identity_mismatches(
+    shards: Sequence[Mapping[str, Any]],
+) -> dict[str, list[str]]:
+    """Artifacts that DISAGREE across the merged shards, keyed by artifact.
+
+    Same shape as ``identity_witness_mismatches``: present only for the keys that
+    actually differ, value = the distinct values seen. Merging shards produced by
+    different checkpoints silently co-ranks two baselines into one number, which is
+    exactly the confusion the per-shard stamp exists to prevent; the merge is the layer
+    where it becomes publishable, so it is flagged here rather than only per shard.
+    """
+
+    mismatches: dict[str, list[str]] = {}
+    for key in _ARTIFACT_KEYS:
+        seen = {
+            _artifact_token((shard.get("artifact_identity") or {}).get(key))
+            for shard in shards
+        }
+        if len(seen) > 1:
+            mismatches[key] = sorted(seen)
+    return mismatches
+
+
 def merge_shards(paths: Iterable[Path]) -> dict[str, Any]:
     from pokezero.truth_differential import aggregate_records
 
@@ -744,7 +915,12 @@ def merge_shards(paths: Iterable[Path]) -> dict[str, Any]:
     shards: list[dict[str, Any]] = []
     for path in paths:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        records.extend(payload.get("records") or [])
+        # ONE predicate decides both the arithmetic and the alarm. Aggregating a payload's
+        # records while excluding it from the artifact comparison is how a second
+        # observation schema could enter the published total unremarked.
+        shard_is_census = is_census_shard(payload)
+        contributed = (payload.get("records") or []) if shard_is_census else []
+        records.extend(contributed)
         shards.append(
             {
                 "path": str(path),
@@ -753,6 +929,11 @@ def merge_shards(paths: Iterable[Path]) -> dict[str, Any]:
                 "instrument_errors": (payload.get("instrument_errors") or [])[:10],
                 "identity_witness_mismatches": payload.get("identity_witness_mismatches"),
                 "identity_witness": payload.get("identity_witness"),
+                "artifact_identity": shard_artifact_identity(payload),
+                "is_census_shard": shard_is_census,
+                "schema": payload.get("schema"),
+                "records_counted": len(contributed),
+                "records_present": len(payload.get("records") or []),
                 "games_ok": sum(1 for g in payload.get("per_game") or [] if g.get("ok")),
                 "games_failed": sum(1 for g in payload.get("per_game") or [] if not g.get("ok")),
                 "driver_config": payload.get("driver_config"),
@@ -762,6 +943,20 @@ def merge_shards(paths: Iterable[Path]) -> dict[str, Any]:
     summary = aggregate_records(records)
     summary["shards"] = shards
     summary["shard_count"] = len(shards)
+    merged = [shard for shard in shards if shard["is_census_shard"]]
+    summary["merged_shard_count"] = len(merged)
+    # Only real shards are compared: a globbed-in report summary carries no artifact set
+    # and must not read as a disagreeing baseline. Same predicate as the aggregation above.
+    summary["artifact_identity_mismatches"] = artifact_identity_mismatches(merged)
+    summary["non_shard_inputs"] = [
+        shard["path"] for shard in shards if not shard["is_census_shard"]
+    ]
+    # Records a non-shard input was carrying and did NOT contribute. Non-zero means a
+    # real shard was misclassified and has silently left the census -- the one way this
+    # reconciliation can lose data rather than protect it, so it is counted, not assumed.
+    summary["non_shard_records_excluded"] = sum(
+        shard["records_present"] for shard in shards if not shard["is_census_shard"]
+    )
     summary["instrument_error_total"] = sum(
         int(shard.get("instrument_error_count") or 0) for shard in shards
     )
@@ -815,6 +1010,15 @@ def render_queue(summary: Mapping[str, Any], *, commands: Sequence[str], title: 
         f"| decisions seen | DECISIONS | {summary.get('decisions_seen')} |"
     )
     lines.append(f"| battles | BATTLES | {summary.get('battles')} |")
+    # The denominator's provenance belongs beside the number, not only in the JSON: a
+    # reader must be able to see how many shards were actually merged into the figure
+    # above, and whether any input was dropped on the way.
+    merged_count = summary.get("merged_shard_count")
+    total_inputs = summary.get("shard_count")
+    if merged_count is None:
+        lines.append(f"| shards merged | SHARDS | UNRECORDED (of {total_inputs} inputs) |")
+    else:
+        lines.append(f"| shards merged | SHARDS | {merged_count} of {total_inputs} inputs |")
     lines.append(
         "| truth unavailable (instrument gap) | DECISIONS | "
         f"{summary.get('truth_unavailable_decisions')} |"
@@ -894,6 +1098,99 @@ def render_queue(summary: Mapping[str, Any], *, commands: Sequence[str], title: 
         lines.append(f"| `{name}` | {count} |")
     if not summary.get("sampler_search_failure_reasons"):
         lines.append("| *(none)* | 0 |")
+    lines.append("")
+    lines.append("## Which baseline produced this number")
+    lines.append("")
+    # ABSENT is not EMPTY. `summary.get(...) or {}` cannot tell "every shard agreed" from
+    # "no comparison was ever performed", and a summary written before the stamp existed
+    # has the key missing -- so a reassuring sentence would be asserting the result of a
+    # check that never ran. That is this PR's own failure mode one layer up: an instrument
+    # that cannot say "I did not check" says "it is fine".
+    checked = "artifact_identity_mismatches" in summary
+    artifact_mismatches = summary.get("artifact_identity_mismatches") or {}
+    if not checked:
+        lines.append(
+            "**ARTIFACT IDENTITY: NOT CHECKED.** This summary carries no "
+            "`artifact_identity_mismatches` key, so no cross-shard artifact comparison was "
+            "performed -- it predates the check, or was produced by a merge that did not "
+            "run it. **Do NOT read the absence of a warning as agreement.** Which "
+            "checkpoint, TorchScript model and encoder tables produced this figure is "
+            "UNVERIFIED here; re-run `--mode report` over the shards to establish it."
+        )
+    elif artifact_mismatches:
+        lines.append(
+            "**THE MERGED SHARDS DO NOT SHARE ONE ARTIFACT SET.** The figure above spans "
+            "more than one baseline and must NOT be read as a single measurement -- a "
+            "count merged across different policy checkpoints co-ranks two populations. "
+            "Disagreeing artifacts, with the distinct values seen:"
+        )
+        lines.append("")
+        lines.append("| artifact | distinct values across shards |")
+        lines.append("|---|---|")
+        for name, values in sorted(artifact_mismatches.items()):
+            rendered = "<br>".join(f"`{value}`" for value in values)
+            lines.append(f"| `{name}` | {rendered} |")
+    else:
+        lines.append(
+            "All merged shards report the same artifact set (or there is only one shard)."
+        )
+        # Gated on an actual `unstamped:` token. Printed unconditionally it appears
+        # under fully digest-stamped merges too, where it does not apply, and a caveat
+        # that always prints is boilerplate the reader learns to skip.
+        if any(
+            _artifact_token((shard.get("artifact_identity") or {}).get(key)).startswith(
+                "unstamped:"
+            )
+            for shard in (summary.get("shards") or [])
+            if shard.get("is_census_shard")
+            for key in _ARTIFACT_KEYS
+        ):
+            lines.append("")
+            lines.append(
+                "**Agreement here is by PATH, not digest.** At least one merged shard is "
+                "pre-stamp (`unstamped:`), and a path is not an identity -- two shards from "
+                "different machines can carry the same path string over different bytes. "
+                "This is weaker than a digest match and cannot be strengthened after the "
+                "fact."
+            )
+    # Inputs that did NOT enter the figure. Listed here rather than only in the JSON:
+    # an excluded file is otherwise invisible to a reader of the doc, and a real shard
+    # misclassified as a non-shard would leave the census without a word.
+    non_shard = summary.get("non_shard_inputs")
+    excluded_records = summary.get("non_shard_records_excluded") or 0
+    if non_shard:
+        lines.append("")
+        lines.append(
+            f"**{len(non_shard)} input(s) were NOT merged** -- not census shards "
+            "(no `truth-differential-census-shard/*` schema), so they contributed neither "
+            "records nor an artifact set:"
+        )
+        lines.append("")
+        for path in non_shard:
+            lines.append(f"- `{path}`")
+        if excluded_records:
+            lines.append("")
+            lines.append(
+                f"**WARNING: {excluded_records} record(s) in those inputs were DROPPED.** A "
+                "non-shard input carrying records means a real shard was misclassified and "
+                "has silently left the census. Investigate before publishing this figure."
+            )
+    lines.append("")
+    lines.append("```json")
+    lines.append(
+        json.dumps(
+            [
+                {
+                    "path": shard["path"],
+                    "artifact_identity": shard.get("artifact_identity"),
+                }
+                for shard in (summary.get("shards") or [])[:2]
+            ],
+            indent=1,
+            sort_keys=True,
+        )
+    )
+    lines.append("```")
     lines.append("")
     lines.append("## Identity witness (per shard, from the LOADED module)")
     lines.append("")
