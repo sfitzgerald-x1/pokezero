@@ -195,36 +195,61 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         return found
 
     def _docstring_kind_counts(self) -> dict[str, int]:
-        """Parse the two NON-surface kind counts, spelled `kind-name ... (<count>)`.
+        """Parse EVERY non-surface kind row in the kinds table, spelled `kind-name ... (<count>)`.
 
         These escaped `_docstring_counts` entirely: its pattern needs identifier-space-digits,
         and both of these lines put a backticked constant between the kind name and its count, so
         the docstring said `bare-const (16)` / `default-spec (50)` with nothing checking either.
-        The docstring claimed all of its counts were pinned while two of them were prose. Anchored
-        on the kind names the tool actually emits, so a renamed kind fails rather than vanishing.
+        The docstring claimed all of its counts were pinned while two of them were prose.
+
+        Parsed GENERICALLY -- by row shape, not by the vocabulary the tool currently emits. Keying
+        the search on `_non_surface_kinds()` made the comparison one-directional: `documented`
+        could then never contain a kind the tool does not emit, so a kind that STOPS being emitted
+        left its docstring row standing and unpinned, and the equality could not see it. That is
+        this file's own defect class, and it is on the roadmap rather than hypothetical -- driving
+        `bare-const` and `default-spec` to zero is the goal, and the burndown reaching it is
+        exactly when `(16)`/`(50)` would silently become prose again. Reading rows from the
+        docstring and kinds from the tool lets the comparison fail in BOTH directions.
         """
+        table = self._kinds_table()
+        found: dict[str, int] = {}
+        # A kind row: indented, a kind token, two-or-more spaces of column gutter, then anything
+        # ending in a parenthesised count. `implicit:<Surface>` carries no count and is excluded by
+        # requiring one. Anchored to the kinds table so a `(49)` in the surrounding prose is out of
+        # scope rather than matched by luck.
+        for name, count in re.findall(r"^\s+([a-z][a-z0-9-]*)\s{2,}.*?\((\d+)\)\s*$", table, re.M):
+            found[name] = int(count)
+        return found
+
+    def _kinds_table(self) -> str:
+        """The docstring region listing the kinds, from `is any of:` up to the `implicit:` row."""
         import ast as _ast
 
         doc = _ast.get_docstring(_ast.parse(LEDGER.read_text(encoding="utf-8"))) or ""
-        found: dict[str, int] = {}
-        for kind in self._non_surface_kinds():
-            m = re.search(rf"^\s*{re.escape(kind)}\b[^\n]*?\((\d+)\)", doc, re.M)
-            if m is not None:
-                found[kind] = int(m.group(1))
-        return found
+        try:
+            start = doc.index("is any of:")
+            end = doc.index("implicit:", start)
+        except ValueError:  # pragma: no cover - guarded so the scope cannot silently empty
+            self.fail(
+                "the ledger docstring no longer has an `is any of:` ... `implicit:` kinds table, "
+                "so this guard has nothing to parse. An empty scope would make every kind-count "
+                "assertion vacuous, which is the failure mode this whole test exists to prevent."
+            )
+        return doc[start:end]
 
-    def _non_surface_kinds(self) -> list[str]:
+    def _non_surface_kinds(self, rows=None) -> list[str]:
         """Every kind the tool emits that is not an `implicit:<Surface>` row, DERIVED not listed.
 
         Hardcoding ("bare-const", "default-spec") reproduced the defect this test exists to fix,
         one step out: a ninth kind would get a docstring row that nothing pinned, and the
-        docstring's "All EIGHT counts" would stale with no test failing. Derived from the tool, so
-        a new kind is pinned the moment it is emitted -- and if its row is missing from the
-        docstring, the sorted() comparison below fails rather than quietly skipping it.
+        docstring's "All EIGHT counts" would stale with no test failing.
+
+        `rows` is threaded so a caller can derive ONCE. This test used to call `_derive()` three
+        times -- a full AST walk of every tracked file each time -- which tripled its runtime for
+        no additional coverage.
         """
-        return sorted(
-            {row["kind"] for row in _derive() if not row["kind"].startswith("implicit:")}
-        )
+        rows = _derive() if rows is None else rows
+        return sorted({r["kind"] for r in rows if not r["kind"].startswith("implicit:")})
 
     def _derived_counts(self) -> dict[str, int]:
         counts = Counter(
@@ -272,16 +297,22 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         in between, which the surface-row pattern cannot match. A figure nothing holds is prose,
         and this docstring has already staled twice.
         """
-        expected = self._non_surface_kinds()
+        rows = _derive()  # once; the helpers below take it rather than re-walking every file
+        expected = self._non_surface_kinds(rows)
         documented = self._docstring_kind_counts()
+        # BOTH DIRECTIONS. Set equality, not "every emitted kind is documented": the one-directional
+        # form let a kind the tool no longer emits keep a stale, unpinned docstring row, because
+        # `documented` was itself built from the tool's vocabulary and so could never contain the
+        # extra name. Rows now come from the docstring and kinds from the tool, so a row without a
+        # kind and a kind without a row both fail here.
         self.assertEqual(
             sorted(documented), expected,
-            "the docstring does not state a count for every non-surface kind the tool emits, in "
-            f"the parsed `kind ... (N)` form.\n  tool emits: {expected}\n  docstring:  "
-            f"{sorted(documented)}\nRenaming a kind, dropping its count, or adding a new kind must "
-            "fail here rather than silently leaving a row unpinned.",
+            "the docstring's `kind ... (N)` rows and the kinds the tool emits are not the same "
+            f"set.\n  tool emits: {expected}\n  docstring:  {sorted(documented)}\n"
+            "Adding a kind, renaming one, dropping a count, or RETIRING a kind while leaving its "
+            "row behind must all fail here rather than leaving a figure nothing holds.",
         )
-        derived = Counter(row["kind"] for row in _derive())
+        derived = Counter(r["kind"] for r in rows)
         for kind in sorted(documented):
             with self.subTest(kind=kind):
                 self.assertEqual(
@@ -314,15 +345,30 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         # this docstring narrates -- passed with the table still reading "All SIX". Spelling the
         # number fixed digit-substring matching and left prose-substring matching wide open: a word
         # is not a substring of other numbers, but it is a substring of sentences containing it.
+        # SCOPED to the `implicit:` entry's own paragraph, not searched across the whole docstring.
+        # A phrase match over the full text was still defeatable: set the table to "All NINE" and
+        # plant "All SIX\n surfaces" in the WAS-EIGHT paragraph, and it passed. Scoping means prose
+        # elsewhere is not merely unlikely to collide, it is out of range.
+        #
+        # `\s+` rather than `\s*\n\s*`: requiring a line break between the word and "surfaces" made
+        # the guard fail on legitimate rewrapping, reporting that the table "does not say so" when
+        # it plainly did. A guard that fires on reflow gets edited out rather than obeyed.
         body = doc.split('"""')[1]
-        m = re.search(rf"All {words[n]}\s*\n\s*surfaces\b", body)
-        self.assertIsNotNone(
-            m,
-            f"there are {n} surfaces; the docstring's surface table does not say so. It must read "
-            f"'All {words[n]}\\n surfaces' -- matched on that phrase specifically, so the count "
-            "cannot be satisfied by the word appearing in unrelated prose. The original text said "
-            "'seven derived surfaces' while listing an alternate constructor as derived and "
-            "omitting a derived surface with no open sites.",
+        try:
+            para = body[body.index("implicit:"):].split("\n\n")[0]
+        except ValueError:  # pragma: no cover - guarded so the scope cannot silently empty
+            self.fail(
+                "the ledger docstring no longer has an `implicit:` entry, so there is no surface "
+                "table paragraph to hold the count. An empty scope makes this assertion vacuous."
+            )
+        hits = re.findall(rf"All {words[n]}\s+surfaces\b", para)
+        self.assertEqual(
+            len(hits), 1,
+            f"there are {n} surfaces; the docstring's surface-table paragraph must say "
+            f"'All {words[n]} surfaces' exactly once, and says it {len(hits)} time(s).\n"
+            f"  paragraph searched:\n{para}\n"
+            "The original text said 'seven derived surfaces' while listing an alternate "
+            "constructor as derived and omitting a derived surface with no open sites.",
         )
 
     RETIRED_KINDS = ("implicit-spec", "implicit-cfg")
