@@ -339,8 +339,15 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         """Closes the gap a surviving mutant found in #1227's review.
 
         Nothing pinned resolution for a REGION-TRIMMED config: a resolver returning
-        `schema_spec.token_count` instead of `fixed_prefix + transition_token_count` passed all
-        264 tests. v3's full region is 64, so a 32-token budget must resolve to 87 - 64 + 32 = 55.
+        `schema_spec.token_count` instead of `fixed_prefix + transition_token_count` survived the
+        whole suite as it then stood, which is why this test exists. The count that used to sit here
+        -- "passed all 264 tests" -- re-derives to no scope: this module collects 228 on this branch
+        and 224 on origin/main. It was a snapshot from #1227's review era carried forward, and an
+        unverifiable figure in a test docstring is worse than no figure, so it is replaced by the
+        claim that is checkable.
+
+        v3's full region is 64, so a 32-token budget must resolve to 87 - 64 + 32 = 55 -- and THAT
+        arithmetic is the pin, derived from the spec table rather than recalled.
         """
         config = TransformerPolicyConfig.compact_category(
             category_vocab=("species:a",),
