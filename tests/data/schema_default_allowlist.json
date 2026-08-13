@@ -289,7 +289,7 @@
   },
   {
     "file": "scripts/public_projection_census.py",
-    "line": 624,
+    "line": 721,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "run_shard",
     "unclosed": [
