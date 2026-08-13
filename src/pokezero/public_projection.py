@@ -184,6 +184,12 @@ AXES = (
     "render_unmatched_transition",
     "render_no_usable_branch",
     "render_post_state_disagreement",
+    # A `|move|` announcement the observed log carries and the ACCEPTED render
+    # does not. Registered in the taxonomy rather than left to appear only in the
+    # census's `axis:*` counter, because that counter is keyed by whatever string
+    # arrives while THIS tuple is what a queue's columns come from -- an axis
+    # missing here is a row a report can never grow.
+    "render_move_line_dropped",
 )
 
 #: Axes whose observed side comes from the acting seat's own request. Only
@@ -1378,6 +1384,70 @@ def render_branch_is_usable(lossy: Sequence[str]) -> bool:
     return not lossy or set(lossy) <= RENDER_TELEMETRY_ONLY_LOSSY
 
 
+def move_announcements(lines: Sequence[str]) -> Counter[tuple[str, str]]:
+    """Every ``|move|`` announcement in a protocol slice, as a MULTISET.
+
+    Keyed ``(slot, move id)`` and deliberately not on the full line:
+
+    * the move name is a display name in the log (``Heal Bell``) and a slug in
+      the render (``healbell``), so both go through ``_normalize_identifier``;
+    * the TARGET field is dropped. The renderer blanks it and adds ``[still]``
+      on a self-target failure while Showdown sometimes names the user, and a
+      target disagreement is a different (narrower) defect than a line that is
+      not there at all;
+    * ``[from]`` tags are dropped for the same reason -- ``|[from]Sleep Talk``
+      and ``|[from] Sleep Talk`` are the same announcement;
+    * the IDENT is reduced to its slot (``p1a``). The nickname half can drift on
+      a forme change or a Transform, and keying on it would report one dropped
+      line and one fabricated line for a render that announced the right move.
+      That is a false positive on the axis this exists to make trustworthy.
+
+    A multiset, not a set: a step can carry two announcements from one slot
+    (Sleep Talk's own line and its callee's), which is exactly the pair the
+    party-cure defect separates.
+    """
+
+    from .showdown import _normalize_identifier  # noqa: PLC0415
+
+    counts: Counter[tuple[str, str]] = Counter()
+    for line in lines:
+        parts = line.split("|")
+        if len(parts) < 4 or parts[1] != "move":
+            continue
+        slot = parts[2].split(":", 1)[0].strip()[:3]
+        counts[(slot, _normalize_identifier(parts[3]))] += 1
+    return counts
+
+
+def dropped_move_lines(
+    observed_lines: Sequence[str], rendered_lines: Sequence[str]
+) -> list[str]:
+    """``|move|`` announcements the LOG carries and the render does not.
+
+    This is the whole instrument, and the reason it can exist for the price of
+    two ``Counter``s is that ``render_projection_mismatch`` already holds both
+    line populations in one frame (``observed_lines`` and ``branch["events"]``)
+    and then discards the ``|move|`` half of each: ``fold_step_lines`` has no
+    ``move`` arm, so both sides fall through its tag chain unhandled. The
+    comparison is by CONTENT of a state fold, and a dropped announcement is a
+    COUNT difference over a tag the fold does not model -- so a branch can drop
+    ``|move|..|healbell|..|[from] Sleep Talk``, fold to a byte-identical
+    projection, and be reported ``matched``.
+
+    Direction 1 cannot host this check at any price: ``truth_differential`` has
+    no observed log in scope at all (no ``raw_line``, no ``public_events``), it
+    counts REFUSALS. A line that is silently absent produces no refusal, so the
+    only place in the tree where the fact is knowable is here.
+    """
+
+    deficit = move_announcements(observed_lines) - move_announcements(rendered_lines)
+    return [
+        f"|move|{slot}|{move}"
+        for (slot, move), count in sorted(deficit.items())
+        for _ in range(count)
+    ]
+
+
 def render_projection_mismatch(
     *,
     state_string: str,
@@ -1459,6 +1529,10 @@ def render_projection_mismatch(
     #: The reason set of the CLOSEST branch -- fewest disagreements -- which is
     #: the informative one when nothing matched.
     best: list[str] = []
+    #: One entry per branch whose FOLD matched: its `|move|` deficit, its lossy
+    #: set and its lines. Accumulated rather than returned on, so the deficit
+    #: verdict is taken over the whole matching set -- see the comment below.
+    candidate_deficits: list[tuple[list[str], list[str], list[str]]] = []
     for branch in branches:
         lossy = list(branch.get("lossy") or [])
         if branch.get("attribution_unsafe") or not render_branch_is_usable(lossy):
@@ -1466,30 +1540,94 @@ def render_projection_mismatch(
                 unusable_markers[str(marker).split(":")[0]] += 1
             continue
         usable += 1
-        rendered = fold_step_lines(
-            [line for line in (branch.get("events") or []) if line and line != "|"],
-            pre_features,
-        )
+        branch_lines = [
+            line for line in (branch.get("events") or []) if line and line != "|"
+        ]
+        rendered = fold_step_lines(branch_lines, pre_features)
         branch_reasons = _render_mismatch_reasons(observed, rendered, pre_features)
         if not branch_reasons:
-            return self_consistency, {
-                "branches": len(branches),
-                "usable_branches": usable,
-                "self_consistency_branches": len(
-                    [b for b in branches
-                     if isinstance(b.get("post"), Mapping)
-                     and not b.get("attribution_unsafe")
-                     and render_branch_is_usable(list(b.get("lossy") or []))]
-                ),
-                "matched": True,
-                "self_consistency": len(self_consistency),
-            }
+            # THE FOLD SAID YES. That is exactly when a dropped `|move|` line is
+            # invisible: the state transition is right and only the narration is
+            # missing, so every axis above agrees and this boundary is about to
+            # be published as `matched`. Read the count difference the fold threw
+            # away -- but NOT here, and not on the first such branch.
+            #
+            # EVERY fold-matching branch is collected instead, because "the first
+            # branch that folds equal" is not the same claim as "the branch
+            # Showdown took". Measured on the 16-game control block: a paralysed
+            # Pelipper's `|move|..|Toxic|..|[miss]` folds to exactly the same net
+            # state as the FULL-PARALYSIS sibling -- no damage, no status, no
+            # faint -- so whichever of the two the engine enumerates first is the
+            # one this loop used to return on. Returning on the paralysis sibling
+            # reported a dropped `|move|` line against a render that was never
+            # asked. The support claim is satisfied by ANY branch, so the deficit
+            # claim must be too.
+            candidate_deficits.append(
+                (dropped_move_lines(observed_lines, branch_lines), lossy, branch_lines)
+            )
+            continue
         # ALL of them, not the first. The first revision returned on the first
         # difference and checked status BEFORE hp and side conditions, so on the
         # ~28% of boundaries where a status difference fired, the hp and
         # side-condition checks never ran at all -- masking, measured by review.
         best = min(best, branch_reasons, key=len) if best else branch_reasons
         reasons.extend(branch_reasons)
+
+    if candidate_deficits:
+        # The reading a consumer wants is "was the observed narration produced by
+        # ANY accepted branch", so the boundary is judged on the SMALLEST deficit
+        # among the fold-matching branches. `min` on length and then on content so
+        # the choice is deterministic when two branches tie -- a tally that
+        # depends on engine enumeration order is not a tally.
+        dropped, lossy, branch_lines = min(
+            candidate_deficits, key=lambda item: (len(item[0]), item[0])
+        )
+        diagnostics = {
+            "branches": len(branches),
+            "usable_branches": usable,
+            "self_consistency_branches": len(
+                [b for b in branches
+                 if isinstance(b.get("post"), Mapping)
+                 and not b.get("attribution_unsafe")
+                 and render_branch_is_usable(list(b.get("lossy") or []))]
+            ),
+            "matched": True,
+            "self_consistency": len(self_consistency),
+            # THE DENOMINATOR, published whether or not anything fired. A zero on
+            # this axis is admissible only next to the number of announcements it
+            # was zero out of; `move_lines_compared == 0` means the check did not
+            # run, which is not the same reading as "the check ran and found
+            # nothing" and must never be mistaken for it.
+            "move_lines_compared": sum(move_announcements(observed_lines).values()),
+            "matched_branches": len(candidate_deficits),
+            # DISJOINT, and that is the whole discrimination. A branch that is
+            # telemetry-only lossy is ALLOWED to omit a line --
+            # `sleeptalk_called_unidentified` renders the damage with no `|move|`
+            # owner on purpose -- so its deficit is MARKED, counted, and never a
+            # verdict. `move_lines_dropped` is what is left: a line absent from a
+            # render that claimed nothing was lost. The first revision published
+            # the same deficit under both keys, which reads as a doubled tally
+            # and hides exactly the distinction the axis rests on.
+            "move_lines_dropped": [] if lossy else dropped,
+            "move_lines_dropped_marked": dropped if lossy else [],
+        }
+        if dropped and not lossy:
+            return self_consistency + [
+                ProjectionMismatch(
+                    axis="render_move_line_dropped",
+                    slot="both",
+                    predicate="render_move_line_dropped:"
+                    + ",".join(sorted(set(dropped))),
+                    detail=_bounded(
+                        f"every one of {len(candidate_deficits)} branches that "
+                        f"folded equal omits {dropped}; observed "
+                        f"{sorted(move_announcements(observed_lines).elements())}, "
+                        f"closest render "
+                        f"{sorted(move_announcements(branch_lines).elements())}"
+                    ),
+                )
+            ], diagnostics
+        return self_consistency, diagnostics
 
     diagnostics = {
         "branches": len(branches),
@@ -1498,6 +1636,15 @@ def render_projection_mismatch(
         "unusable_markers": dict(unusable_markers),
         "reasons": [_bounded(reason) for reason in best[:6]],
         "all_reasons": len(reasons),
+        # ZERO, and it means DID NOT RUN. The `|move|` deficit is only read on
+        # the branch the fold accepted, because that is the branch whose drop is
+        # silent; when nothing matched, the boundary is already loud on
+        # `render_unmatched_transition` and there is no accepted narration to
+        # audit. Published as an explicit 0 rather than omitted so that a census
+        # summing this key cannot mistake "no matched boundary here" for "no
+        # announcements here". A drop that rides along with an unrelated
+        # unmatched boundary is NOT covered; that is a stated limit, not a claim.
+        "move_lines_compared": 0,
         "self_consistency": len(self_consistency),
         "self_consistency_branches": len(
             [b for b in branches

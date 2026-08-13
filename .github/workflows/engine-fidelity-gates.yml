@@ -211,6 +211,12 @@ jobs:
             # HP band's pins or drops the plain-poison fixture must still trip the
             # gate. #1215 shipped this file with no entry and no step at all.
             tests/test_public_projection.py
+            # The dropped-`|move|`-line instrument, with a STEP below. Listed for the
+            # same reason as the module above: a PR whose only change weakens the
+            # gap pins -- the two layouts where the party cure's walk reaches the
+            # ACTIVE's own clear first, which the renderer still drops silently --
+            # must trip this gate rather than ride in under `src/pokezero/**`.
+            tests/test_render_dropped_move_line_crate.py
             tests/test_sleep_talk_phaze_drag.py
             tests/test_instruction_event_mapping.py
             # This PR pins `Ran 8 tests` on crit-kill-split, so its own edits must trigger.
@@ -411,8 +417,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_public_projection -v 2>&1 \
             | tee /tmp/pubproj.log
-          if ! grep -qE 'Ran 114 tests' /tmp/pubproj.log; then
-            echo "::error::expected 114 public-projection pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 125 tests' /tmp/pubproj.log; then
+            echo "::error::expected 125 public-projection pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. RenderBandWidthTests is the only thing pinning
@@ -421,6 +427,37 @@ jobs:
           # into an unverified one.
           if ! grep -qE '^OK$' /tmp/pubproj.log; then
             echo "::error::public-projection pins did not report a clean OK"
+            exit 1
+          fi
+
+      # The dropped-`|move|`-line instrument, through the SHIPPED renderer. Its own
+      # step for the reason the step above has one: the workflow names modules one at
+      # a time, so a new test module is invisible here by DEFAULT, and #1215 shipped
+      # direction 2 itself with no entry and no step at all.
+      #
+      # THE NO-SKIP GUARD IS THE POINT OF THIS STEP, not boilerplate. Three of these
+      # six pins call `pokezero_search.branch_events` on a constructed state and are
+      # `skipIf`-guarded on the native module; they are the only thing that ties the
+      # instrument to the actual renderer, and the comparator pins in
+      # `test_public_projection` cannot notice a renderer change. A venv without the
+      # crate would skip exactly those three and still print OK -- an instrument that
+      # cannot report failure reporting success, which is the failure this whole
+      # instrument exists to remove.
+      - name: Dropped protocol line instrument (direction 2)
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_render_dropped_move_line_crate -v 2>&1 \
+            | tee /tmp/droppedline.log
+          if ! grep -qE 'Ran 6 tests' /tmp/droppedline.log; then
+            echo "::error::expected 6 dropped-line pins; the suite shrank or grew"
+            exit 1
+          fi
+          if grep -q 'skipped' /tmp/droppedline.log; then
+            echo "::error::a dropped-line pin SKIPPED -- the crate-backed half did not run"
+            exit 1
+          fi
+          if ! grep -qE '^OK$' /tmp/droppedline.log; then
+            echo "::error::dropped-line pins did not report a clean OK"
             exit 1
           fi
 
