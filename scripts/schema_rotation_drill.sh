@@ -452,7 +452,11 @@ for _raw in open(_census):
     _l = _raw.strip()
     if not _l or _l.startswith("#"):
         continue
-    _kind, _path, _members = _l.split()
+    # 3 OR 4 fields: the classification file gained a variable-name column when the key was made
+    # finer (F3). Unpacking exactly three aborted the injection with "too many values to unpack" --
+    # loudly, which is why it was caught in seconds rather than scored.
+    _parts = _l.split()
+    _kind, _path, _members = _parts[0], _parts[1], _parts[2]
     if _kind == "REGISTER":
         _reg_targets.append((_path, sorted(_members.split(","))))
 if not _reg_targets:
