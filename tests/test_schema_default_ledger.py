@@ -211,21 +211,42 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         exactly when `(16)`/`(50)` would silently become prose again. Reading rows from the
         docstring and kinds from the tool lets the comparison fail in BOTH directions.
         """
-        table = self._kinds_table()
+        self._kinds_table()  # anchors must exist; fails loudly if the table is gone
+        # Searched over the WHOLE docstring, not just the kinds table. Scoping to the table left the
+        # both-directions property depending on WHERE the row sits: retire a kind and move its row
+        # below the `implicit:` anchor, and the row survives with its count unpinned again. A stale
+        # row is stale wherever it is written.
+        #
+        # A kind row: indented, a kind token (optionally backticked -- a retired kind's row read
+        # `` `bare-const` `` and became invisible to both sets, which was the same escape), two-or-
+        # more spaces of column gutter, then anything ending in a parenthesised count.
+        # `implicit:<Surface>` carries no count and is excluded by requiring one. Verified to match
+        # nothing else in this docstring: the `(24)`/`(49)` prose line begins with an uppercase token
+        # and its counts are not line-final.
+        doc = self._docstring()
         found: dict[str, int] = {}
-        # A kind row: indented, a kind token, two-or-more spaces of column gutter, then anything
-        # ending in a parenthesised count. `implicit:<Surface>` carries no count and is excluded by
-        # requiring one. Anchored to the kinds table so a `(49)` in the surrounding prose is out of
-        # scope rather than matched by luck.
-        for name, count in re.findall(r"^\s+([a-z][a-z0-9-]*)\s{2,}.*?\((\d+)\)\s*$", table, re.M):
+        pattern = r"^\s+`?([a-z][a-z0-9-]*)`?\s{2,}.*?\((\d+)\)\s*$"
+        for name, count in re.findall(pattern, doc, re.M):
             found[name] = int(count)
         return found
 
-    def _kinds_table(self) -> str:
-        """The docstring region listing the kinds, from `is any of:` up to the `implicit:` row."""
+    #: The row grammar, quoted in failure messages so a reformat that this parser cannot read is
+    #: reported as "not in the parsed form" rather than as "the count is missing".
+    KIND_ROW_SHAPE = "indented, kind token (backticks optional), 2+ spaces, then a line-final (N)"
+
+    def _docstring(self) -> str:
         import ast as _ast
 
-        doc = _ast.get_docstring(_ast.parse(LEDGER.read_text(encoding="utf-8"))) or ""
+        return _ast.get_docstring(_ast.parse(LEDGER.read_text(encoding="utf-8"))) or ""
+
+    def _kinds_table(self) -> str:
+        """The docstring region listing the kinds, from `is any of:` up to the `implicit:` row.
+
+        No longer used to scope the row search -- see `_docstring_kind_counts` -- but still called
+        for its anchors, so a docstring that has lost its kinds table fails loudly here rather than
+        parsing zero rows somewhere else and reporting a confusing set difference.
+        """
+        doc = self._docstring()
         try:
             start = doc.index("is any of:")
             end = doc.index("implicit:", start)
@@ -237,7 +258,7 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
             )
         return doc[start:end]
 
-    def _non_surface_kinds(self, rows=None) -> list[str]:
+    def _non_surface_kinds(self, rows: list[dict] | None = None) -> list[str]:
         """Every kind the tool emits that is not an `implicit:<Surface>` row, DERIVED not listed.
 
         Hardcoding ("bare-const", "default-spec") reproduced the defect this test exists to fix,
@@ -310,7 +331,10 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
             "the docstring's `kind ... (N)` rows and the kinds the tool emits are not the same "
             f"set.\n  tool emits: {expected}\n  docstring:  {sorted(documented)}\n"
             "Adding a kind, renaming one, dropping a count, or RETIRING a kind while leaving its "
-            "row behind must all fail here rather than leaving a figure nothing holds.",
+            "row behind must all fail here rather than leaving a figure nothing holds.\n"
+            f"If the row IS present, check its FORM -- a row is only parsed when it is: "
+            f"{self.KIND_ROW_SHAPE}. A reformatted row is unreadable to this guard and shows up "
+            "here as a missing count rather than as a formatting complaint.",
         )
         derived = Counter(r["kind"] for r in rows)
         for kind in sorted(documented):
@@ -361,11 +385,17 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
                 "the ledger docstring no longer has an `implicit:` entry, so there is no surface "
                 "table paragraph to hold the count. An empty scope makes this assertion vacuous."
             )
-        hits = re.findall(rf"All {words[n]}\s+surfaces\b", para)
+        # Collect EVERY count the paragraph states and require the set to be exactly the right one.
+        # Asserting only that the correct phrase appears detects a MISSING count but not a WRONG one:
+        # with the table set to "All NINE surfaces" and "All SIX surfaces" appended lower in the same
+        # paragraph, the right phrase was present, so it passed while the table misstated the count.
+        # Deleting the blank line that terminates the paragraph widened the scope and did the same.
+        # A set comparison fails on the extra "NINE" regardless of where either phrase sits.
+        stated = set(re.findall(r"All ([A-Z]+)\s+surfaces\b", para))
         self.assertEqual(
-            len(hits), 1,
-            f"there are {n} surfaces; the docstring's surface-table paragraph must say "
-            f"'All {words[n]} surfaces' exactly once, and says it {len(hits)} time(s).\n"
+            stated, {words[n]},
+            f"there are {n} surfaces, so the docstring's surface-table paragraph must state "
+            f"'All {words[n]} surfaces' and no other count; it states {sorted(stated) or 'none'}.\n"
             f"  paragraph searched:\n{para}\n"
             "The original text said 'seven derived surfaces' while listing an alternate "
             "constructor as derived and omitting a derived surface with no open sites.",
