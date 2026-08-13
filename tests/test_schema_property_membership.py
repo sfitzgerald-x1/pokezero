@@ -425,6 +425,12 @@ class EachGateSiteReadsItsOwnTupleTest(unittest.TestCase):
             "V4_DROPPED_LEGACY_NUMERIC_INDICES"},
         ("numeric_index_if_present_for_schema", "V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS"): {
             "V3_DROPPED_LEGACY_NUMERIC_INDICES", "V4_ONLY_NUMERIC_INDICES"},
+        # `_attention_mask`'s gate is a TERNARY, so its "body" is the TRUE arm. Extending the walk
+        # to `ast.IfExp` was necessary but not sufficient: with no entry here, nothing asserted what
+        # that arm should be, and swapping the two arms stayed green. A turn-merged schema must read
+        # `turn_merged_tokens`; reading `transition_tokens` there is the same crossed-projection
+        # defect as the numeric_index swap, at the one converted site with no `ast.If` to hang on.
+        ("_attention_mask", "TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS"): {"turn_merged_tokens"},
     }
 
     def test_each_tuple_guards_the_body_belonging_to_its_own_projection(self) -> None:
@@ -440,7 +446,17 @@ class EachGateSiteReadsItsOwnTupleTest(unittest.TestCase):
             if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for node in ast.walk(function):
-                if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+                # `ast.IfExp` as well as `ast.If`. `_attention_mask`'s gate is a TERNARY, and it is
+                # one of the six converted sites -- the very one this file's own comment calls
+                # "invisible to a scanner that greps only `== V<n>`". Swapping its two arms left the
+                # file at 19 passed / 107 subtests green, because the counts pass, the value is an
+                # IfExp rather than a Compare so the assignment pin never saw it, and this walk
+                # stopped at `ast.If`. The wider battery does catch it (6 frozen-byte subtests), but
+                # a file that needs the rest of the suite to guard its own subject is not
+                # self-sufficient.
+                if not isinstance(node, (ast.If, ast.IfExp)) or not isinstance(
+                    node.test, ast.Compare
+                ):
                     continue
                 tuples = {
                     c.id
@@ -452,9 +468,20 @@ class EachGateSiteReadsItsOwnTupleTest(unittest.TestCase):
                     continue
                 # Every NAME the guarded body mentions, so the assertion is about what the branch
                 # reaches rather than about its exact statement shape.
-                body_names = {
-                    n.id for stmt in node.body for n in ast.walk(stmt) if isinstance(n, ast.Name)
-                }
+                # An IfExp's `body` is a single expression, not a list of statements.
+                body = node.body if isinstance(node.body, list) else [node.body]
+                # ATTRIBUTE names as well as bare Names. The numeric_index bodies call
+                # `v4_numeric_index(...)`, a Name -- but `_attention_mask`'s ternary arm is
+                # `state.turn_merged_tokens`, an Attribute, so a Name-only collector saw `{state}`
+                # and the pin failed at baseline against a correct tree. The thing being asserted is
+                # "which stream/table does this branch reach", and that is the attribute.
+                body_names: set[str] = set()
+                for statement in body:
+                    for inner in ast.walk(statement):
+                        if isinstance(inner, ast.Name):
+                            body_names.add(inner.id)
+                        elif isinstance(inner, ast.Attribute):
+                            body_names.add(inner.attr)
                 for tuple_name in tuples:
                     key = (function.name, tuple_name)
                     found.setdefault(key, set()).update(body_names)
@@ -632,6 +659,17 @@ class NoNewIdentityGateTest(unittest.TestCase):
         "OBSERVATION_SCHEMA_VERSION",
     }
 
+    # Methods that are a gate WHEREVER they appear, condition or not. A prefix or suffix test on a
+    # schema version string has no purpose other than deciding which schema this is -- so
+    # `matches_v4 = spec.schema_version.startswith("pokezero.observation.v4")` on its own line, read
+    # by an `if` twenty lines later, is still a gate. This is a short list and it IS an enumeration,
+    # which is the thing that let `startswith` be missed once already; it is justified only because
+    # each entry is unambiguous. Open-ended shapes (`re.match`, dict dispatch) are scoped by
+    # CONDITION instead, because those same calls have legitimate non-gating uses -- matching every
+    # call whose arguments named a version flagged the five ObservationSpec spec-table constructions
+    # and two ValueError messages in showdown.py.
+    ALWAYS_GATE_METHODS = frozenset({"startswith", "endswith", "removeprefix", "removesuffix"})
+
     # The schema namespace. Any string literal containing it is naming a schema, however it is
     # assembled -- which is what catches a concatenation that matches no complete version string.
     VERSION_NAMESPACE = "pokezero.observation."
@@ -707,6 +745,21 @@ class NoNewIdentityGateTest(unittest.TestCase):
             if any(re.search(rf"\b{re.escape(t)}\b", text)
                    for t in self.VERSION_CONSTANTS | aliases):
                 return True
+            # A bare version SUFFIX compared against something derived from the schema version.
+            # `spec.schema_version.split(".")[-1] == "v4"` names v4 without naming the namespace or
+            # the constant, and `re.match(r"pokezero\.observation\.v4", ...)` escapes the dots so
+            # the namespace substring below does not match either. Both are identity gates.
+            # Backslashes stripped first: `re.match(r"pokezero\.observation\.v4", ...)` unparses
+            # with DOUBLED backslashes, so a pattern allowing at most one did not match. Escaping is
+            # a rendering detail, never a semantic one, so normalise it away rather than counting it.
+            flat = text.replace("\\", "")
+            if re.search(r"pokezero\.observation\.v\d", flat):
+                return True
+            # A bare version SUFFIX next to something derived from the schema version, e.g.
+            # `spec.schema_version.split(".")[-1] == "v4"`. The signal SPANS the two operands, so
+            # this is also applied to the whole comparison below, not only to each side.
+            if re.search(r"schema_version", flat) and re.search(r"['\"]v\d[._\d]*['\"]", flat):
+                return True
             if any(lit in text for lit in self.VERSION_LITERALS):
                 return True
             # The literal PREFIX, not only whole version strings. `"pokezero.observation." + "v4"`
@@ -725,6 +778,27 @@ class NoNewIdentityGateTest(unittest.TestCase):
                 for inner in ast.walk(node)
             )
 
+        # Every Call that sits inside a boolean/branching context. Built first so the sweep below
+        # can scope call-shaped gates without enumerating method names.
+        condition_calls: set[int] = set()
+
+        def mark_conditions(expr) -> None:
+            for inner in ast.walk(expr):
+                if isinstance(inner, ast.Call):
+                    condition_calls.add(id(inner))
+
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.If, ast.IfExp, ast.While, ast.Assert)):
+                mark_conditions(node.test)
+            elif isinstance(node, ast.BoolOp):
+                for value in node.values:
+                    mark_conditions(value)
+            elif isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+                mark_conditions(node.operand)
+            elif isinstance(node, ast.comprehension):
+                for condition in node.ifs:
+                    mark_conditions(condition)
+
         hits: list[tuple[int, str]] = []
         for node in ast.walk(tree):
             # `is` / `is not` -- ONE CHARACTER from `==`, and because both operands reference the
@@ -732,16 +806,31 @@ class NoNewIdentityGateTest(unittest.TestCase):
             # absent from the operator filter entirely.
             if isinstance(node, ast.Compare):
                 for op, comparator in zip(node.ops, node.comparators):
+                    # ORDERING comparators included. The version strings sort in version order
+                    # (`...v2` < `...v2.1` < `...v2.2` < `...v3` < `...v4`), so
+                    # `spec.schema_version >= OBSERVATION_SCHEMA_VERSION_V3` is a WORKING identity
+                    # gate -- and `Lt/LtE/Gt/GtE` were simply absent from this whitelist. Same class
+                    # as the `is`/`is not` miss: an operator enumeration, one entry short.
                     if not isinstance(
-                        op, (ast.Eq, ast.NotEq, ast.Is, ast.IsNot, ast.In, ast.NotIn)
+                        op,
+                        (
+                            ast.Eq, ast.NotEq, ast.Is, ast.IsNot,
+                            ast.In, ast.NotIn,
+                            ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+                        ),
                     ):
                         continue
-                    if isinstance(op, (ast.Eq, ast.NotEq, ast.Is, ast.IsNot)):
-                        # BOTH operands: `node.left` was never inspected, so writing the comparison
-                        # the other way round defeated the scan.
-                        if offends(comparator) or offends(node.left):
-                            hits.append((node.lineno, ast.unparse(node)))
-                    elif offends(comparator):
+                    # BOTH operands, for EVERY operator. The previous version checked `node.left`
+                    # only in the Eq-family arm and left the containment arm one-sided -- so
+                    # `"pokezero.observation.v4" in spec.schema_version`, the natural word order for
+                    # a containment gate, was missed. That is the same fix applied to one arm and
+                    # not the one beside it, which is now the fourth occurrence of that pattern in
+                    # this stack.
+                    # The WHOLE comparison as well as each side. Some gates split the signal
+                    # across operands -- `schema_version.split(".")[-1] == "v4"` mentions the field
+                    # on the left and the version on the right, and neither operand alone carries
+                    # enough to identify it.
+                    if offends(comparator) or offends(node.left) or offends(node):
                         hits.append((node.lineno, ast.unparse(node)))
 
             # `match schema_version: case "pokezero.observation.v4":` -- no Compare node at all.
@@ -752,12 +841,46 @@ class NoNewIdentityGateTest(unittest.TestCase):
 
             # `.startswith("pokezero.observation.v4")` / `.endswith(...)` -- not a comparison, and
             # a prefix test on a version string is an identity gate with extra steps.
-            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                if node.func.attr in ("startswith", "endswith") and any(
-                    offends(arg) for arg in node.args
+            elif isinstance(node, ast.Call) and (
+                id(node) in condition_calls
+                or (isinstance(node.func, ast.Attribute)
+                    and node.func.attr in self.ALWAYS_GATE_METHODS)
+            ):
+                # A CALL used as a CONDITION. `re.match(r"pokezero\.observation\.v4", s)`,
+                # `s.startswith("pokezero.observation.v4")`, `{V4: True}.get(s)` are gates; the same
+                # call shapes elsewhere are not.
+                #
+                # Scoping by condition rather than by method name matters in BOTH directions. A
+                # method-name list is an enumeration to keep one entry short -- that is how
+                # `startswith` was missed. But matching every call whose arguments name a version
+                # over-matched badly on real code: it flagged the five `ObservationSpec(...,
+                # schema_version=OBSERVATION_SCHEMA_VERSION_V*)` spec-table constructions (the
+                # legitimate DEFINITION sites) and two `ValueError(f"... {V2!r} ...")` error
+                # messages. A routing decision lives in a condition; a construction and a message
+                # do not.
+                if (
+                    any(offends(arg) for arg in node.args)
+                    or any(offends(kw.value) for kw in node.keywords)
+                    or (isinstance(node.func, (ast.Attribute, ast.Subscript))
+                        and offends(node.func))
                 ):
                     hits.append((node.lineno, ast.unparse(node)))
-        return hits
+        # DEDUPED. The whole-comparison check and the per-operand checks can both fire on one gate,
+        # and a nested Call inside a flagged Compare is reported twice -- which made the
+        # `in frozenset({V4})` self-test see 2 hits where it asserts 1. Same site, one finding.
+        seen: set[tuple[int, str]] = set()
+        unique: list[tuple[int, str]] = []
+        for hit in hits:
+            if hit not in seen:
+                seen.add(hit)
+                unique.append(hit)
+        # A Call nested inside an already-flagged Compare on the same line is the same gate.
+        compare_lines = {line for line, code in unique if " in " in code or "==" in code}
+        return [
+            hit for hit in unique
+            if not (hit[0] in compare_lines and hit[1].endswith(")")
+                    and any(hit[1] in other for line, other in unique if other != hit[1]))
+        ]
 
     def test_the_encode_module_routes_by_property_not_by_version(self) -> None:
         from pathlib import Path
