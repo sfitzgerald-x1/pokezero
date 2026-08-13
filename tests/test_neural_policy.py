@@ -258,7 +258,14 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         """Resolution fills the UNSET case only; it must not overwrite a deliberate value.
 
         Non-vacuity for the test above: a resolver that unconditionally stamped the census would
-        satisfy it and silently destroy every projected or trimmed config.
+        satisfy it while overwriting every explicitly narrow config.
+
+        The narrow population is the v2 119-numeric relic family described below -- NOT "projected
+        or trimmed" configs, which an earlier revision of this docstring claimed. Both halves of
+        that claim are false: `scripts/convert_region_trim.py` writes only `transition_token_count`
+        and `token_count` and never touches a width, and the grouped v3/v4 layouts demand EXACT
+        widths at encode. The claim mattered because it argued the next reader out of the upper
+        bound this PR adds -- the very check that catches the bug the resolution exists to fix.
         """
         # The v2 119-numeric relic family: numeric-only, v2-only, below the 121 census. This is
         # the REAL narrow population. An earlier revision used v4 at 7/9 -- a shape the encoder
