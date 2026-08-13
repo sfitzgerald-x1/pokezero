@@ -119,7 +119,10 @@ fn canonical_gen3_randbat_species_id(value: &str) -> String {
     let normalized = normalize_identifier(value);
     if let Some(suffix) = normalized.strip_prefix("unown") {
         let cosmetic = suffix.len() == 1
-            && suffix.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+            && suffix
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase())
             || suffix == "exclamation"
             || suffix == "question";
         if cosmetic {
@@ -136,13 +139,33 @@ fn canonical_gen3_randbat_species_id(value: &str) -> String {
 /// Column and token-offset indices resolved ONCE against the run-fixed schema at
 /// table load, then read positionally per leaf. Closeout plan C1.
 ///
-/// `Option<usize>`, not `usize`, and that is load-bearing: some columns exist only in
-/// one schema version -- `NUMERIC_MEANLOOK_TRAP` is read under `is_v3()`,
-/// `NUMERIC_TRUANT_LOAF` under `is_v4()` -- so resolving eagerly to `usize` would make
-/// a v4 tables file fail at load on a column v4 correctly does not have. Keeping the
-/// Option preserves the previous semantics exactly: the error surfaces if and only if
-/// the code path that needs the column actually runs.
-#[derive(Debug, Default)]
+/// `Option<usize>`, not `usize`, and that is load-bearing rather than defensive: many of
+/// these columns are absent from some schema versions, so eager resolution to `usize`
+/// would make a perfectly valid tables file fail at LOAD on a column that schema
+/// correctly does not carry. Counted against `scripts/export_encoder_tables.py`:
+///
+///   v2.2 -- 8 numeric absent (GENDER_*, MEANLOOK_TRAP, *_WISH_TURNS,
+///           SLEEP_CLAUSE_BLOCKS_*, TT_CONFUSION_SELFHIT) and 2 categorical
+///           (LAST_USED_MOVE, TRACED_ABILITY)
+///   v3   -- 4 numeric absent (SELF/OPP_SCREENS, SELF/OPP_FUTURE_SIGHT), same 2 categorical
+///   v4   -- 12 numeric absent (+ TIER2_*, TM2_PRESENT, TT_ABS_TURN, TT_TURNS_AGO,
+///           TT_OWN_SPIKES, TT_OPP_SPIKES) and 12 categorical -- the entire
+///           `CATEGORY_TM_*` family
+///
+/// So v4, the production schema, is itself a case: `CATEGORY_TM_*` is what would break.
+/// Keeping the Option preserves the previous semantics exactly -- the error surfaces if
+/// and only if the code path needing that column runs, with the same message naming the
+/// same constant.
+///
+/// An earlier version of this comment cited `NUMERIC_MEANLOOK_TRAP` and
+/// `NUMERIC_TRUANT_LOAF` as the examples. Independent review showed both were wrong:
+/// MEANLOOK_TRAP *is* present at v4 (its `is_v3()` guard is true for v4, see `is_v3`),
+/// and TRUANT_LOAF is not a `Cols` field at all. Corrected here because this comment's
+/// whole job is to stop a future reader collapsing the Option to `usize`, and a reader
+/// who checks a false example is MORE likely to collapse it, not less.
+// No `Default`: a defaulted `Cols` is one in which all 91 columns read as missing, so a
+// future `..Default::default()` in the `Layout` literal would compile and silently turn
+// every call site into a runtime error. No `Debug` either -- `Layout` derives none.
 struct Cols {
     num_accuracy: Option<usize>,
     num_active: Option<usize>,
@@ -337,6 +360,126 @@ impl Cols {
             off_transition: offsets.get("transition").copied(),
         }
     }
+
+    /// Field name and resolved value for every field, in declaration order.
+    /// Exists so the mapping can be asserted; Rust has no field reflection.
+    #[cfg(test)]
+    fn as_pairs(&self) -> Vec<(&'static str, Option<usize>)> {
+        vec![
+            ("num_accuracy", self.num_accuracy),
+            ("num_active", self.num_active),
+            ("num_base_hp", self.num_base_hp),
+            ("num_base_power", self.num_base_power),
+            ("num_candidate_set_count", self.num_candidate_set_count),
+            ("num_effect_chance", self.num_effect_chance),
+            ("num_gender_female", self.num_gender_female),
+            ("num_gender_male", self.num_gender_male),
+            ("num_hp_fraction", self.num_hp_fraction),
+            ("num_legal", self.num_legal),
+            ("num_level", self.num_level),
+            ("num_meanlook_trap", self.num_meanlook_trap),
+            ("num_move_pp_fraction", self.num_move_pp_fraction),
+            ("num_opp_future_sight", self.num_opp_future_sight),
+            ("num_opp_hazards", self.num_opp_hazards),
+            ("num_opp_move_pp_offset", self.num_opp_move_pp_offset),
+            (
+                "num_opp_move_pp_valid_offset",
+                self.num_opp_move_pp_valid_offset,
+            ),
+            ("num_opp_screens", self.num_opp_screens),
+            ("num_opp_sleep_clause", self.num_opp_sleep_clause),
+            ("num_opp_wish_pending", self.num_opp_wish_pending),
+            ("num_opp_wish_turns", self.num_opp_wish_turns),
+            (
+                "num_possible_ability_count",
+                self.num_possible_ability_count,
+            ),
+            ("num_possible_item_count", self.num_possible_item_count),
+            ("num_possible_move_count", self.num_possible_move_count),
+            ("num_present", self.num_present),
+            ("num_priority", self.num_priority),
+            ("num_rest_sleep", self.num_rest_sleep),
+            ("num_revealed_ability", self.num_revealed_ability),
+            ("num_revealed_item", self.num_revealed_item),
+            ("num_revealed_move_count", self.num_revealed_move_count),
+            ("num_self_future_sight", self.num_self_future_sight),
+            ("num_self_hazards", self.num_self_hazards),
+            ("num_self_hp_cost", self.num_self_hp_cost),
+            ("num_self_screens", self.num_self_screens),
+            ("num_self_sleep_clause", self.num_self_sleep_clause),
+            ("num_self_wish_pending", self.num_self_wish_pending),
+            ("num_self_wish_turns", self.num_self_wish_turns),
+            (
+                "num_sleep_clause_blocks_opp",
+                self.num_sleep_clause_blocks_opp,
+            ),
+            (
+                "num_sleep_clause_blocks_self",
+                self.num_sleep_clause_blocks_self,
+            ),
+            ("num_sleep_turns", self.num_sleep_turns),
+            (
+                "num_stat_weather_reveal_offset",
+                self.num_stat_weather_reveal_offset,
+            ),
+            ("num_sub_hp_fraction", self.num_sub_hp_fraction),
+            ("num_tier2_cb_pinned", self.num_tier2_cb_pinned),
+            (
+                "num_tier2_investment_pinned",
+                self.num_tier2_investment_pinned,
+            ),
+            ("num_tm2_present", self.num_tm2_present),
+            ("num_toxic_stage", self.num_toxic_stage),
+            ("num_trapper_alive", self.num_trapper_alive),
+            ("num_tt_abs_turn", self.num_tt_abs_turn),
+            ("num_tt_confusion_selfhit", self.num_tt_confusion_selfhit),
+            ("num_tt_opp_spikes", self.num_tt_opp_spikes),
+            ("num_tt_own_spikes", self.num_tt_own_spikes),
+            ("num_tt_turns_ago", self.num_tt_turns_ago),
+            ("num_turns_active", self.num_turns_active),
+            ("num_turn_count", self.num_turn_count),
+            ("num_uncertainty", self.num_uncertainty),
+            ("num_wake_known", self.num_wake_known),
+            ("num_weather_permanent", self.num_weather_permanent),
+            ("num_weather_turns", self.num_weather_turns),
+            ("cat_belief_ability_offset", self.cat_belief_ability_offset),
+            ("cat_belief_item_offset", self.cat_belief_item_offset),
+            ("cat_belief_move_offset", self.cat_belief_move_offset),
+            ("cat_last_used_move", self.cat_last_used_move),
+            ("cat_move_category", self.cat_move_category),
+            ("cat_move_effect", self.cat_move_effect),
+            ("cat_move_priority", self.cat_move_priority),
+            ("cat_primary", self.cat_primary),
+            ("cat_role", self.cat_role),
+            ("cat_secondary", self.cat_secondary),
+            ("cat_slot", self.cat_slot),
+            ("cat_tm_first_bp", self.cat_tm_first_bp),
+            ("cat_tm_first_cant", self.cat_tm_first_cant),
+            ("cat_tm_first_kind", self.cat_tm_first_kind),
+            ("cat_tm_second_action", self.cat_tm_second_action),
+            ("cat_tm_second_bp", self.cat_tm_second_bp),
+            ("cat_tm_second_cant", self.cat_tm_second_cant),
+            ("cat_tm_second_defender", self.cat_tm_second_defender),
+            (
+                "cat_tm_second_effectiveness",
+                self.cat_tm_second_effectiveness,
+            ),
+            ("cat_tm_second_kind", self.cat_tm_second_kind),
+            ("cat_tm_second_outcome", self.cat_tm_second_outcome),
+            ("cat_tm_second_side_effect", self.cat_tm_second_side_effect),
+            ("cat_tm_second_species", self.cat_tm_second_species),
+            ("cat_traced_ability", self.cat_traced_ability),
+            ("cat_type_1", self.cat_type_1),
+            ("cat_type_2", self.cat_type_2),
+            ("cat_volatile_offset", self.cat_volatile_offset),
+            ("off_action_candidates", self.off_action_candidates),
+            ("off_field", self.off_field),
+            ("off_opponent_pokemon", self.off_opponent_pokemon),
+            ("off_self_pokemon", self.off_self_pokemon),
+            ("off_stats", self.off_stats),
+            ("off_transition", self.off_transition),
+        ]
+    }
 }
 
 struct Layout {
@@ -347,8 +490,20 @@ struct Layout {
     action_count: usize,
     move_action_count: usize,
     // `cat` and `offsets` are gone: every read of them was a constant name, now resolved
-    // once into `cols`. `num` stays because 22 sites still look up a column name computed
-    // from the load-time slot lists (boost/base/actual stat slots, timed conditions).
+    // once into `cols`.
+    //
+    // `num` stays for 22 `num_col` sites that iterate hard-coded `&'static str` arrays --
+    // NOT, as an earlier version of this comment claimed, because they read names from the
+    // load-time slot lists. Independent review checked: `timed_condition_slots`,
+    // `base_stat_slots`, `actual_stat_slots` and `boost_stat_slots` carry (name, index)
+    // pairs and are ALREADY read positionally; none of them calls `num_col`.
+    //
+    // Those 22 sites still string-hash 63 distinct constant names per leaf -- more names
+    // than the 58 numeric ones migrated here -- and they include the per-transition-row
+    // TT/TM2 block (the `const FIRST`/`const SECOND: SubBlockColumns` sites), which is the
+    // hottest region in this file. The stopping point of this change is therefore
+    // ARBITRARY, chosen to keep one diff mechanical, and is not a claim that the residue is
+    // irreducible. Finishing it is the obvious next change.
     num: HashMap<String, usize>,
     /// Load-resolved indices for every constant column name the encode path reads.
     cols: Cols,
@@ -391,15 +546,12 @@ impl Layout {
         self.schema_version == "pokezero.observation.v4"
     }
 
-
     fn num_col(&self, name: &str) -> PyResult<usize> {
         self.num
             .get(name)
             .copied()
             .ok_or_else(|| err(format!("layout missing numeric column {name}")))
     }
-
-
 }
 
 struct SpeciesEntry {
@@ -523,11 +675,9 @@ impl Tables {
                 if value > 0.0 {
                     value
                 } else if tables_schema_is_v4 {
-                    return Err(err(
-                        "v4 encoder tables are missing or have a non-positive \
+                    return Err(err("v4 encoder tables are missing or have a non-positive \
                          constants.matchup_count_divisor (it divides a count, so zero \
-                         and negatives are malformed, not merely absent)",
-                    ));
+                         and negatives are malformed, not merely absent)"));
                 } else {
                     // Pre-v4 tables never carry it and never read it.
                     f64::NAN
@@ -845,7 +995,13 @@ fn hidden_power_ivs(hp_type: &str) -> Option<&'static [(&'static str, i64)]> {
         "electric" => &[("spa", 30)],
         "fighting" => &[("def", 30), ("spa", 30), ("spd", 30), ("spe", 30)],
         "fire" => &[("atk", 30), ("spa", 30), ("spe", 30)],
-        "flying" => &[("hp", 30), ("atk", 30), ("def", 30), ("spa", 30), ("spd", 30)],
+        "flying" => &[
+            ("hp", 30),
+            ("atk", 30),
+            ("def", 30),
+            ("spa", 30),
+            ("spd", 30),
+        ],
         "ghost" => &[("def", 30), ("spd", 30)],
         "grass" => &[("atk", 30), ("spa", 30)],
         "ground" => &[("spa", 30), ("spd", 30)],
@@ -865,10 +1021,10 @@ fn hidden_power_type_of(moves: &[String]) -> Option<&str> {
     // with no `break`) and the Python twin `gen3_damage.hidden_power_type`. `find_map` took the
     // first, which diverges from both when a set carries two Hidden Powers -- unreachable in the
     // current pool, but the two implementations must not disagree on the rule.
-    moves
-        .iter()
-        .rev()
-        .find_map(|m| m.strip_prefix("hiddenpower").filter(|rest| !rest.is_empty()))
+    moves.iter().rev().find_map(|m| {
+        m.strip_prefix("hiddenpower")
+            .filter(|rest| !rest.is_empty())
+    })
 }
 
 /// The generator's legal spread set. Any value outside it means the generator drifted or this
@@ -941,8 +1097,7 @@ fn randbats_spread_stats(
     // Keeping them here rather than at the call site is what stops this function being a
     // partial view of the generator's spread -- the shape that let the Python side get fixed
     // while the native side kept the old flat iv=31 (the "Rust spread fork" defect).
-    let mut non_hp_ivs: [(&str, i64); 4] =
-        [("def", 31), ("spa", 31), ("spd", 31), ("spe", 31)];
+    let mut non_hp_ivs: [(&str, i64); 4] = [("def", 31), ("spa", 31), ("spd", 31), ("spe", 31)];
     let hp_type = hidden_power_type_of(moves).map(|t| t.to_string());
     if let Some(hp_type) = hp_type.as_deref() {
         // `HIDDEN_POWER_IVS.get(hp_type, {})` -- an UNRECOGNIZED type takes the same branch as
@@ -1245,7 +1400,11 @@ pub fn encode_row(tables: &Tables, row_json: &str) -> PyResult<EncodedArrays> {
 }
 
 fn transition_row_count(layout: &Layout) -> PyResult<usize> {
-    Ok(layout.token_count - layout.cols.off_transition.ok_or_else(|| err("layout missing token offset transition"))?)
+    Ok(layout.token_count
+        - layout
+            .cols
+            .off_transition
+            .ok_or_else(|| err("layout missing token offset transition"))?)
 }
 
 /// Encode one row-inputs value, optionally consuming fold PRODUCTS natively
@@ -1295,12 +1454,30 @@ pub(crate) fn encode_row_value(
     }
 
     // --- token type ids (constant per spec). ---
-    let field_offset = layout.cols.off_field.ok_or_else(|| err("layout missing token offset field"))?;
-    let self_offset = layout.cols.off_self_pokemon.ok_or_else(|| err("layout missing token offset self_pokemon"))?;
-    let opponent_offset = layout.cols.off_opponent_pokemon.ok_or_else(|| err("layout missing token offset opponent_pokemon"))?;
-    let action_offset = layout.cols.off_action_candidates.ok_or_else(|| err("layout missing token offset action_candidates"))?;
-    let stats_offset = layout.cols.off_stats.ok_or_else(|| err("layout missing token offset stats"))?;
-    let transition_offset = layout.cols.off_transition.ok_or_else(|| err("layout missing token offset transition"))?;
+    let field_offset = layout
+        .cols
+        .off_field
+        .ok_or_else(|| err("layout missing token offset field"))?;
+    let self_offset = layout
+        .cols
+        .off_self_pokemon
+        .ok_or_else(|| err("layout missing token offset self_pokemon"))?;
+    let opponent_offset = layout
+        .cols
+        .off_opponent_pokemon
+        .ok_or_else(|| err("layout missing token offset opponent_pokemon"))?;
+    let action_offset = layout
+        .cols
+        .off_action_candidates
+        .ok_or_else(|| err("layout missing token offset action_candidates"))?;
+    let stats_offset = layout
+        .cols
+        .off_stats
+        .ok_or_else(|| err("layout missing token offset stats"))?;
+    let transition_offset = layout
+        .cols
+        .off_transition
+        .ok_or_else(|| err("layout missing token offset transition"))?;
     let mut token_types = vec![0i16; layout.token_count];
     for index in 0..layout.token_count {
         token_types[index] = if index == field_offset {
@@ -1376,8 +1553,22 @@ pub(crate) fn encode_row_value(
     // zero without fold products (the stored-surface ceiling), real when the
     // fold state is supplied.
     if layout.stats_block {
-        grid.set_cat(stats_offset, layout.cols.cat_role.ok_or_else(|| err("layout missing categorical column CATEGORY_ROLE"))?, "stats");
-        grid.set_num(stats_offset, layout.cols.num_present.ok_or_else(|| err("layout missing numeric column NUMERIC_PRESENT"))?, 1.0);
+        grid.set_cat(
+            stats_offset,
+            layout
+                .cols
+                .cat_role
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_ROLE"))?,
+            "stats",
+        );
+        grid.set_num(
+            stats_offset,
+            layout
+                .cols
+                .num_present
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_PRESENT"))?,
+            1.0,
+        );
     }
     if let Some(products) = products {
         // v4 has NO transition region, but the products still carry the tendency counters and
@@ -1445,16 +1636,36 @@ fn encode_field_token(
     let request_kind = str_or_empty(get(md, "request_kind"));
     grid.set_cat(
         token,
-        layout.cols.cat_primary.ok_or_else(|| err("layout missing categorical column CATEGORY_PRIMARY"))?,
+        layout
+            .cols
+            .cat_primary
+            .ok_or_else(|| err("layout missing categorical column CATEGORY_PRIMARY"))?,
         format!("request_kind:{request_kind}"),
     );
-    grid.set_cat(token, layout.cols.cat_role.ok_or_else(|| err("layout missing categorical column CATEGORY_ROLE"))?, "field");
-    grid.set_num(token, layout.cols.num_present.ok_or_else(|| err("layout missing numeric column NUMERIC_PRESENT"))?, 1.0);
+    grid.set_cat(
+        token,
+        layout
+            .cols
+            .cat_role
+            .ok_or_else(|| err("layout missing categorical column CATEGORY_ROLE"))?,
+        "field",
+    );
+    grid.set_num(
+        token,
+        layout
+            .cols
+            .num_present
+            .ok_or_else(|| err("layout missing numeric column NUMERIC_PRESENT"))?,
+        1.0,
+    );
     let weather = str_or_empty(get(md, "weather"));
     if !weather.is_empty() {
         grid.set_cat(
             token,
-            layout.cols.cat_secondary.ok_or_else(|| err("layout missing categorical column CATEGORY_SECONDARY"))?,
+            layout
+                .cols
+                .cat_secondary
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_SECONDARY"))?,
             format!("weather:{weather}"),
         );
     }
@@ -1462,8 +1673,22 @@ fn encode_field_token(
         side_condition_features(get(md, "self_side_condition_counts"), layout);
     let (opp_haz, opp_scr) =
         side_condition_features(get(md, "opponent_side_condition_counts"), layout);
-    grid.set_num(token, layout.cols.num_self_hazards.ok_or_else(|| err("layout missing numeric column NUMERIC_SELF_HAZARDS"))?, self_haz);
-    grid.set_num(token, layout.cols.num_opp_hazards.ok_or_else(|| err("layout missing numeric column NUMERIC_OPP_HAZARDS"))?, opp_haz);
+    grid.set_num(
+        token,
+        layout
+            .cols
+            .num_self_hazards
+            .ok_or_else(|| err("layout missing numeric column NUMERIC_SELF_HAZARDS"))?,
+        self_haz,
+    );
+    grid.set_num(
+        token,
+        layout
+            .cols
+            .num_opp_hazards
+            .ok_or_else(|| err("layout missing numeric column NUMERIC_OPP_HAZARDS"))?,
+        opp_haz,
+    );
     if let Some(column) = layout.cols.num_self_screens {
         grid.set_num(token, column, self_scr);
     }
@@ -1474,7 +1699,10 @@ fn encode_field_token(
     if turn_number != 0 {
         grid.set_num(
             token,
-            layout.cols.num_turn_count.ok_or_else(|| err("layout missing numeric column NUMERIC_TURN_COUNT"))?,
+            layout
+                .cols
+                .num_turn_count
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_TURN_COUNT"))?,
             (turn_number as f64 / 1000.0).min(1.0),
         );
     }
@@ -1494,14 +1722,18 @@ fn encode_field_token(
         if as_bool(get(md, "self_sleep_clause_blocks")) {
             grid.set_num(
                 token,
-                layout.cols.num_sleep_clause_blocks_self.ok_or_else(|| err("layout missing numeric column NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF"))?,
+                layout.cols.num_sleep_clause_blocks_self.ok_or_else(|| {
+                    err("layout missing numeric column NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF")
+                })?,
                 1.0,
             );
         }
         if as_bool(get(md, "opponent_sleep_clause_blocks")) {
             grid.set_num(
                 token,
-                layout.cols.num_sleep_clause_blocks_opp.ok_or_else(|| err("layout missing numeric column NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP"))?,
+                layout.cols.num_sleep_clause_blocks_opp.ok_or_else(|| {
+                    err("layout missing numeric column NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP")
+                })?,
                 1.0,
             );
         }
@@ -1509,7 +1741,10 @@ fn encode_field_token(
         if self_wish_turns != 0 {
             grid.set_num(
                 token,
-                layout.cols.num_self_wish_turns.ok_or_else(|| err("layout missing numeric column NUMERIC_SELF_WISH_TURNS"))?,
+                layout
+                    .cols
+                    .num_self_wish_turns
+                    .ok_or_else(|| err("layout missing numeric column NUMERIC_SELF_WISH_TURNS"))?,
                 (self_wish_turns as f64 / 2.0).min(1.0),
             );
         }
@@ -1517,7 +1752,10 @@ fn encode_field_token(
         if opponent_wish_turns != 0 {
             grid.set_num(
                 token,
-                layout.cols.num_opp_wish_turns.ok_or_else(|| err("layout missing numeric column NUMERIC_OPP_WISH_TURNS"))?,
+                layout
+                    .cols
+                    .num_opp_wish_turns
+                    .ok_or_else(|| err("layout missing numeric column NUMERIC_OPP_WISH_TURNS"))?,
                 (opponent_wish_turns as f64 / 2.0).min(1.0),
             );
         }
@@ -1532,8 +1770,14 @@ fn encode_field_token(
             ("opponent_hazard_credit", "NUMERIC_OPP_HAZARD_CREDIT"),
             ("self_hazard_expected", "NUMERIC_SELF_HAZARD_EXPECTED"),
             ("opponent_hazard_expected", "NUMERIC_OPP_HAZARD_EXPECTED"),
-            ("self_items_removed_credit", "NUMERIC_SELF_ITEMS_REMOVED_CREDIT"),
-            ("opponent_items_removed_credit", "NUMERIC_OPP_ITEMS_REMOVED_CREDIT"),
+            (
+                "self_items_removed_credit",
+                "NUMERIC_SELF_ITEMS_REMOVED_CREDIT",
+            ),
+            (
+                "opponent_items_removed_credit",
+                "NUMERIC_OPP_ITEMS_REMOVED_CREDIT",
+            ),
         ] {
             let value = as_f64(get(md, key));
             if value != 0.0 {
@@ -1546,20 +1790,43 @@ fn encode_field_token(
     }
     // Exact-state layer (`_encode_field_exact_state`).
     if as_bool(get(md, "self_sleep_clause_used")) {
-        grid.set_num(token, layout.cols.num_self_sleep_clause.ok_or_else(|| err("layout missing numeric column NUMERIC_SELF_SLEEP_CLAUSE"))?, 1.0);
+        grid.set_num(
+            token,
+            layout
+                .cols
+                .num_self_sleep_clause
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_SELF_SLEEP_CLAUSE"))?,
+            1.0,
+        );
     }
     if as_bool(get(md, "opponent_sleep_clause_used")) {
-        grid.set_num(token, layout.cols.num_opp_sleep_clause.ok_or_else(|| err("layout missing numeric column NUMERIC_OPP_SLEEP_CLAUSE"))?, 1.0);
+        grid.set_num(
+            token,
+            layout
+                .cols
+                .num_opp_sleep_clause
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_OPP_SLEEP_CLAUSE"))?,
+            1.0,
+        );
     }
     if !weather.is_empty() {
         let weather_turns = as_i64(get(md, "weather_turns_remaining"));
         grid.set_num(
             token,
-            layout.cols.num_weather_turns.ok_or_else(|| err("layout missing numeric column NUMERIC_WEATHER_TURNS"))?,
+            layout
+                .cols
+                .num_weather_turns
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_WEATHER_TURNS"))?,
             (weather_turns as f64 / layout.timed_condition_duration as f64).min(1.0),
         );
         if as_bool(get(md, "weather_permanent")) {
-            grid.set_num(token, layout.cols.num_weather_permanent.ok_or_else(|| err("layout missing numeric column NUMERIC_WEATHER_PERMANENT"))?, 1.0);
+            grid.set_num(
+                token,
+                layout.cols.num_weather_permanent.ok_or_else(|| {
+                    err("layout missing numeric column NUMERIC_WEATHER_PERMANENT")
+                })?,
+                1.0,
+            );
         }
     }
     let self_slot = str_or_empty(get(md, "showdown_slot"));
@@ -1585,10 +1852,24 @@ fn encode_field_token(
         }
     }
     if as_bool(get(md, "self_wish_pending")) {
-        grid.set_num(token, layout.cols.num_self_wish_pending.ok_or_else(|| err("layout missing numeric column NUMERIC_SELF_WISH_PENDING"))?, 1.0);
+        grid.set_num(
+            token,
+            layout
+                .cols
+                .num_self_wish_pending
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_SELF_WISH_PENDING"))?,
+            1.0,
+        );
     }
     if as_bool(get(md, "opponent_wish_pending")) {
-        grid.set_num(token, layout.cols.num_opp_wish_pending.ok_or_else(|| err("layout missing numeric column NUMERIC_OPP_WISH_PENDING"))?, 1.0);
+        grid.set_num(
+            token,
+            layout
+                .cols
+                .num_opp_wish_pending
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_OPP_WISH_PENDING"))?,
+            1.0,
+        );
     }
     Ok(())
 }
@@ -1773,14 +2054,20 @@ fn encode_species_type_categories(
         if let Some(first) = info.types.first() {
             grid.set_cat(
                 token,
-                layout.cols.cat_type_1.ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_1"))?,
+                layout
+                    .cols
+                    .cat_type_1
+                    .ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_1"))?,
                 format!("type:{first}"),
             );
         }
         if let Some(second) = info.types.get(1) {
             grid.set_cat(
                 token,
-                layout.cols.cat_type_2.ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_2"))?,
+                layout
+                    .cols
+                    .cat_type_2
+                    .ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_2"))?,
                 format!("type:{second}"),
             );
         }
@@ -1799,7 +2086,10 @@ fn encode_pokemon_stats(
     if let Some(level) = level_from_details(details) {
         grid.set_num(
             token,
-            layout.cols.num_level.ok_or_else(|| err("layout missing numeric column NUMERIC_LEVEL"))?,
+            layout
+                .cols
+                .num_level
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_LEVEL"))?,
             (level as f64 / 100.0).min(1.0),
         );
     }
@@ -1858,7 +2148,10 @@ fn encode_active_volatiles(
     let mut sorted: Vec<String> = volatiles.to_vec();
     sorted.sort();
     sorted.dedup();
-    let offset = layout.cols.cat_volatile_offset.ok_or_else(|| err("layout missing categorical column CATEGORY_VOLATILE_OFFSET"))?;
+    let offset = layout
+        .cols
+        .cat_volatile_offset
+        .ok_or_else(|| err("layout missing categorical column CATEGORY_VOLATILE_OFFSET"))?;
     for (index, name) in sorted.iter().take(layout.volatile_buckets).enumerate() {
         grid.set_cat(
             token,
@@ -1879,15 +2172,21 @@ fn encode_belief_fact(
     let layout = &tables.layout;
     let (offset, buckets) = match kind {
         "possible_ability" => (
-            layout.cols.cat_belief_ability_offset.ok_or_else(|| err("layout missing categorical column CATEGORY_BELIEF_ABILITY_OFFSET"))?,
+            layout.cols.cat_belief_ability_offset.ok_or_else(|| {
+                err("layout missing categorical column CATEGORY_BELIEF_ABILITY_OFFSET")
+            })?,
             layout.belief_ability_buckets,
         ),
         "possible_item" => (
-            layout.cols.cat_belief_item_offset.ok_or_else(|| err("layout missing categorical column CATEGORY_BELIEF_ITEM_OFFSET"))?,
+            layout.cols.cat_belief_item_offset.ok_or_else(|| {
+                err("layout missing categorical column CATEGORY_BELIEF_ITEM_OFFSET")
+            })?,
             layout.belief_item_buckets,
         ),
         "possible_move" => (
-            layout.cols.cat_belief_move_offset.ok_or_else(|| err("layout missing categorical column CATEGORY_BELIEF_MOVE_OFFSET"))?,
+            layout.cols.cat_belief_move_offset.ok_or_else(|| {
+                err("layout missing categorical column CATEGORY_BELIEF_MOVE_OFFSET")
+            })?,
             layout.belief_move_buckets,
         ),
         _ => return Err(err(format!("unsupported belief fact kind {kind}"))),
@@ -2307,7 +2606,10 @@ fn encode_pokemon_tokens(
 
         grid.set_cat(
             token,
-            layout.cols.cat_primary.ok_or_else(|| err("layout missing categorical column CATEGORY_PRIMARY"))?,
+            layout
+                .cols
+                .cat_primary
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_PRIMARY"))?,
             format!("species:{enc_species}"),
         );
         encode_species_type_categories(tables, grid, token, &enc_species)?;
@@ -2315,12 +2617,18 @@ fn encode_pokemon_tokens(
             if let Some((type1, type2)) = live_type_slots(tables, source) {
                 grid.set_cat(
                     token,
-                    layout.cols.cat_type_1.ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_1"))?,
+                    layout
+                        .cols
+                        .cat_type_1
+                        .ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_1"))?,
                     format!("type:{type1}"),
                 );
                 grid.set_cat(
                     token,
-                    layout.cols.cat_type_2.ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_2"))?,
+                    layout
+                        .cols
+                        .cat_type_2
+                        .ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_2"))?,
                     type2
                         .map(|value| format!("type:{value}"))
                         .unwrap_or_default(),
@@ -2336,7 +2644,10 @@ fn encode_pokemon_tokens(
             if original_hp != 0 {
                 grid.set_num(
                     token,
-                    layout.cols.num_base_hp.ok_or_else(|| err("layout missing numeric column NUMERIC_BASE_HP"))?,
+                    layout
+                        .cols
+                        .num_base_hp
+                        .ok_or_else(|| err("layout missing numeric column NUMERIC_BASE_HP"))?,
                     (original_hp as f64 / 200.0).min(1.0),
                 );
             }
@@ -2344,8 +2655,21 @@ fn encode_pokemon_tokens(
         encode_actual_stats(tables, grid, token, candidate)?;
         if layout.is_v3() {
             match gender_from_details(candidate.details()) {
-                Some("M") => grid.set_num(token, layout.cols.num_gender_male.ok_or_else(|| err("layout missing numeric column NUMERIC_GENDER_MALE"))?, 1.0),
-                Some("F") => grid.set_num(token, layout.cols.num_gender_female.ok_or_else(|| err("layout missing numeric column NUMERIC_GENDER_FEMALE"))?, 1.0),
+                Some("M") => grid.set_num(
+                    token,
+                    layout
+                        .cols
+                        .num_gender_male
+                        .ok_or_else(|| err("layout missing numeric column NUMERIC_GENDER_MALE"))?,
+                    1.0,
+                ),
+                Some("F") => grid.set_num(
+                    token,
+                    layout.cols.num_gender_female.ok_or_else(|| {
+                        err("layout missing numeric column NUMERIC_GENDER_FEMALE")
+                    })?,
+                    1.0,
+                ),
                 _ => {}
             }
         }
@@ -2356,7 +2680,11 @@ fn encode_pokemon_tokens(
             // no v3 vocabulary row and would hash into the OOV band there.
             let mut bag = volatiles.clone();
             if layout.is_v4() {
-                let prefix = if role == Role::SelfTeam { "self" } else { "opponent" };
+                let prefix = if role == Role::SelfTeam {
+                    "self"
+                } else {
+                    "opponent"
+                };
                 if as_bool(get(md, &format!("{prefix}_must_recharge"))) {
                     bag.push("mustrecharge".to_string());
                 }
@@ -2365,7 +2693,10 @@ fn encode_pokemon_tokens(
             if toxic_stage != 0 {
                 grid.set_num(
                     token,
-                    layout.cols.num_toxic_stage.ok_or_else(|| err("layout missing numeric column NUMERIC_TOXIC_STAGE"))?,
+                    layout
+                        .cols
+                        .num_toxic_stage
+                        .ok_or_else(|| err("layout missing numeric column NUMERIC_TOXIC_STAGE"))?,
                     (toxic_stage as f64 / 15.0).min(1.0),
                 );
             }
@@ -2391,11 +2722,21 @@ fn encode_pokemon_tokens(
                     }
                 }
                 if as_bool(get(md, &format!("{prefix}_meanlook_trap"))) {
-                    grid.set_num(token, layout.cols.num_meanlook_trap.ok_or_else(|| err("layout missing numeric column NUMERIC_MEANLOOK_TRAP"))?, 1.0);
+                    grid.set_num(
+                        token,
+                        layout.cols.num_meanlook_trap.ok_or_else(|| {
+                            err("layout missing numeric column NUMERIC_MEANLOOK_TRAP")
+                        })?,
+                        1.0,
+                    );
                 }
             }
             if layout.is_v4() {
-                let prefix = if role == Role::SelfTeam { "self" } else { "opponent" };
+                let prefix = if role == Role::SelfTeam {
+                    "self"
+                } else {
+                    "opponent"
+                };
                 for (key, column) in [
                     ("truant_loaf", "NUMERIC_TRUANT_LOAF"),
                     ("choice_locked", "NUMERIC_CHOICE_LOCKED"),
@@ -2427,7 +2768,13 @@ fn encode_pokemon_tokens(
                     } else {
                         format!("move:{}", normalize_identifier(&last_move))
                     };
-                    grid.set_cat(token, layout.cols.cat_last_used_move.ok_or_else(|| err("layout missing categorical column CATEGORY_LAST_USED_MOVE"))?, label);
+                    grid.set_cat(
+                        token,
+                        layout.cols.cat_last_used_move.ok_or_else(|| {
+                            err("layout missing categorical column CATEGORY_LAST_USED_MOVE")
+                        })?,
+                        label,
+                    );
                 }
                 // A4: the CURRENT Trace copy, cleared on switch-out. Never the belief's
                 // persistent revealed-ability channel, which holds the last-ever-traced one.
@@ -2435,7 +2782,9 @@ fn encode_pokemon_tokens(
                 if !traced.is_empty() {
                     grid.set_cat(
                         token,
-                        layout.cols.cat_traced_ability.ok_or_else(|| err("layout missing categorical column CATEGORY_TRACED_ABILITY"))?,
+                        layout.cols.cat_traced_ability.ok_or_else(|| {
+                            err("layout missing categorical column CATEGORY_TRACED_ABILITY")
+                        })?,
                         format!("ability:{}", normalize_identifier(&traced)),
                     );
                 }
@@ -2476,10 +2825,20 @@ fn encode_pokemon_tokens(
             .unwrap_or_else(|| condition.status.clone());
         grid.set_cat(
             token,
-            layout.cols.cat_secondary.ok_or_else(|| err("layout missing categorical column CATEGORY_SECONDARY"))?,
+            layout
+                .cols
+                .cat_secondary
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_SECONDARY"))?,
             format!("status:{status}"),
         );
-        grid.set_cat(token, layout.cols.cat_role.ok_or_else(|| err("layout missing categorical column CATEGORY_ROLE"))?, role_label);
+        grid.set_cat(
+            token,
+            layout
+                .cols
+                .cat_role
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_ROLE"))?,
+            role_label,
+        );
         encode_belief_fact(tables, grid, token, "possible_ability", &ability_values)?;
         encode_belief_fact(tables, grid, token, "possible_item", &item_values)?;
         let bucket_moves = compact_belief_values(
@@ -2489,54 +2848,97 @@ fn encode_pokemon_tokens(
         encode_belief_fact(tables, grid, token, "possible_move", &bucket_moves)?;
         grid.set_num(
             token,
-            layout.cols.num_hp_fraction.ok_or_else(|| err("layout missing numeric column NUMERIC_HP_FRACTION"))?,
+            layout
+                .cols
+                .num_hp_fraction
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_HP_FRACTION"))?,
             condition.hp_fraction.unwrap_or(0.0),
         );
         grid.set_num(
             token,
-            layout.cols.num_active.ok_or_else(|| err("layout missing numeric column NUMERIC_ACTIVE"))?,
+            layout
+                .cols
+                .num_active
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_ACTIVE"))?,
             if candidate.active() { 1.0 } else { 0.0 },
         );
         grid.set_num(
             token,
-            layout.cols.num_legal.ok_or_else(|| err("layout missing numeric column NUMERIC_LEGAL"))?,
+            layout
+                .cols
+                .num_legal
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_LEGAL"))?,
             if condition.fainted { 0.0 } else { 1.0 },
         );
-        grid.set_num(token, layout.cols.num_present.ok_or_else(|| err("layout missing numeric column NUMERIC_PRESENT"))?, 1.0);
         grid.set_num(
             token,
-            layout.cols.num_revealed_move_count.ok_or_else(|| err("layout missing numeric column NUMERIC_REVEALED_MOVE_COUNT"))?,
+            layout
+                .cols
+                .num_present
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_PRESENT"))?,
+            1.0,
+        );
+        grid.set_num(
+            token,
+            layout
+                .cols
+                .num_revealed_move_count
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_REVEALED_MOVE_COUNT"))?,
             revealed_moves.len() as f64,
         );
         grid.set_num(
             token,
-            layout.cols.num_candidate_set_count.ok_or_else(|| err("layout missing numeric column NUMERIC_CANDIDATE_SET_COUNT"))?,
+            layout
+                .cols
+                .num_candidate_set_count
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_CANDIDATE_SET_COUNT"))?,
             candidate_set_count as f64,
         );
-        grid.set_num(token, layout.cols.num_uncertainty.ok_or_else(|| err("layout missing numeric column NUMERIC_UNCERTAINTY"))?, uncertainty);
         grid.set_num(
             token,
-            layout.cols.num_possible_ability_count.ok_or_else(|| err("layout missing numeric column NUMERIC_POSSIBLE_ABILITY_COUNT"))?,
+            layout
+                .cols
+                .num_uncertainty
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_UNCERTAINTY"))?,
+            uncertainty,
+        );
+        grid.set_num(
+            token,
+            layout.cols.num_possible_ability_count.ok_or_else(|| {
+                err("layout missing numeric column NUMERIC_POSSIBLE_ABILITY_COUNT")
+            })?,
             ability_values.len() as f64,
         );
         grid.set_num(
             token,
-            layout.cols.num_possible_item_count.ok_or_else(|| err("layout missing numeric column NUMERIC_POSSIBLE_ITEM_COUNT"))?,
+            layout
+                .cols
+                .num_possible_item_count
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_POSSIBLE_ITEM_COUNT"))?,
             item_values.len() as f64,
         );
         grid.set_num(
             token,
-            layout.cols.num_possible_move_count.ok_or_else(|| err("layout missing numeric column NUMERIC_POSSIBLE_MOVE_COUNT"))?,
+            layout
+                .cols
+                .num_possible_move_count
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_POSSIBLE_MOVE_COUNT"))?,
             possible_moves.len() as f64,
         );
         grid.set_num(
             token,
-            layout.cols.num_revealed_ability.ok_or_else(|| err("layout missing numeric column NUMERIC_REVEALED_ABILITY"))?,
+            layout
+                .cols
+                .num_revealed_ability
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_REVEALED_ABILITY"))?,
             if revealed_ability.is_some() { 1.0 } else { 0.0 },
         );
         grid.set_num(
             token,
-            layout.cols.num_revealed_item.ok_or_else(|| err("layout missing numeric column NUMERIC_REVEALED_ITEM"))?,
+            layout
+                .cols
+                .num_revealed_item
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_REVEALED_ITEM"))?,
             if revealed_item.is_some() { 1.0 } else { 0.0 },
         );
         if layout.exact_state {
@@ -2545,24 +2947,40 @@ fn encode_pokemon_tokens(
                 if status == "slp" {
                     grid.set_num(
                         token,
-                        layout.cols.num_sleep_turns.ok_or_else(|| err("layout missing numeric column NUMERIC_SLEEP_TURNS"))?,
+                        layout.cols.num_sleep_turns.ok_or_else(|| {
+                            err("layout missing numeric column NUMERIC_SLEEP_TURNS")
+                        })?,
                         (exact.sleep_turns() as f64 / 5.0).min(1.0),
                     );
                     if exact.rest_sleep() {
-                        grid.set_num(token, layout.cols.num_rest_sleep.ok_or_else(|| err("layout missing numeric column NUMERIC_REST_SLEEP"))?, 1.0);
+                        grid.set_num(
+                            token,
+                            layout.cols.num_rest_sleep.ok_or_else(|| {
+                                err("layout missing numeric column NUMERIC_REST_SLEEP")
+                            })?,
+                            1.0,
+                        );
                         let wake_known = match role {
                             Role::SelfTeam => true,
                             Role::Opponent => opponent_rest_wake_known(exact),
                         };
                         if wake_known {
-                            grid.set_num(token, layout.cols.num_wake_known.ok_or_else(|| err("layout missing numeric column NUMERIC_WAKE_KNOWN"))?, 1.0);
+                            grid.set_num(
+                                token,
+                                layout.cols.num_wake_known.ok_or_else(|| {
+                                    err("layout missing numeric column NUMERIC_WAKE_KNOWN")
+                                })?,
+                                1.0,
+                            );
                         }
                     }
                 }
                 if candidate.active() && exact.turns_active() != 0 {
                     grid.set_num(
                         token,
-                        layout.cols.num_turns_active.ok_or_else(|| err("layout missing numeric column NUMERIC_TURNS_ACTIVE"))?,
+                        layout.cols.num_turns_active.ok_or_else(|| {
+                            err("layout missing numeric column NUMERIC_TURNS_ACTIVE")
+                        })?,
                         (exact.turns_active() as f64 / layout.stat_count_divisor).min(1.0),
                     );
                 }
@@ -2578,7 +2996,13 @@ fn encode_pokemon_tokens(
                     && !condition.fainted
                     && !candidate.active()
                 {
-                    grid.set_num(token, layout.cols.num_trapper_alive.ok_or_else(|| err("layout missing numeric column NUMERIC_TRAPPER_ALIVE"))?, 1.0);
+                    grid.set_num(
+                        token,
+                        layout.cols.num_trapper_alive.ok_or_else(|| {
+                            err("layout missing numeric column NUMERIC_TRAPPER_ALIVE")
+                        })?,
+                        1.0,
+                    );
                 }
             }
             // Substitute HP fraction (v2.1+): active mon with a live sub.
@@ -2592,7 +3016,13 @@ fn encode_pokemon_tokens(
                 } else {
                     0.25
                 };
-                grid.set_num(token, layout.cols.num_sub_hp_fraction.ok_or_else(|| err("layout missing numeric column NUMERIC_SUB_HP_FRACTION"))?, fraction);
+                grid.set_num(
+                    token,
+                    layout.cols.num_sub_hp_fraction.ok_or_else(|| {
+                        err("layout missing numeric column NUMERIC_SUB_HP_FRACTION")
+                    })?,
+                    fraction,
+                );
             }
             if role == Role::Opponent {
                 // `_encode_opponent_move_pp_fractions` (with validity bits).
@@ -2605,7 +3035,9 @@ fn encode_pokemon_tokens(
                         .collect();
                     if !revealed_keys.is_empty() {
                         let uses = exact.move_uses();
-                        let pp_offset = layout.cols.num_opp_move_pp_offset.ok_or_else(|| err("layout missing numeric column NUMERIC_OPP_MOVE_PP_OFFSET"))?;
+                        let pp_offset = layout.cols.num_opp_move_pp_offset.ok_or_else(|| {
+                            err("layout missing numeric column NUMERIC_OPP_MOVE_PP_OFFSET")
+                        })?;
                         let valid_offset = layout.cols.num_opp_move_pp_valid_offset.ok_or_else(|| err("layout missing numeric column NUMERIC_OPP_MOVE_PP_VALID_OFFSET"))?;
                         for (index, bucket_move) in bucket_moves
                             .iter()
@@ -2847,32 +3279,50 @@ fn encode_move_mechanics(
     };
     grid.set_cat(
         token,
-        layout.cols.cat_type_1.ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_1"))?,
+        layout
+            .cols
+            .cat_type_1
+            .ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_1"))?,
         format!("type:{move_type_token}"),
     );
     grid.set_cat(
         token,
-        layout.cols.cat_move_category.ok_or_else(|| err("layout missing categorical column CATEGORY_MOVE_CATEGORY"))?,
+        layout
+            .cols
+            .cat_move_category
+            .ok_or_else(|| err("layout missing categorical column CATEGORY_MOVE_CATEGORY"))?,
         format!("move_category:{}", info.gen3_category),
     );
     grid.set_cat(
         token,
-        layout.cols.cat_move_priority.ok_or_else(|| err("layout missing categorical column CATEGORY_MOVE_PRIORITY"))?,
+        layout
+            .cols
+            .cat_move_priority
+            .ok_or_else(|| err("layout missing categorical column CATEGORY_MOVE_PRIORITY"))?,
         format!("move_priority:{}", info.priority),
     );
     grid.set_num(
         token,
-        layout.cols.num_base_power.ok_or_else(|| err("layout missing numeric column NUMERIC_BASE_POWER"))?,
+        layout
+            .cols
+            .num_base_power
+            .ok_or_else(|| err("layout missing numeric column NUMERIC_BASE_POWER"))?,
         (base_power as f64 / 200.0).min(1.0),
     );
     grid.set_num(
         token,
-        layout.cols.num_priority.ok_or_else(|| err("layout missing numeric column NUMERIC_PRIORITY"))?,
+        layout
+            .cols
+            .num_priority
+            .ok_or_else(|| err("layout missing numeric column NUMERIC_PRIORITY"))?,
         (info.priority as f64 / 5.0).clamp(-1.0, 1.0),
     );
     grid.set_num(
         token,
-        layout.cols.num_accuracy.ok_or_else(|| err("layout missing numeric column NUMERIC_ACCURACY"))?,
+        layout
+            .cols
+            .num_accuracy
+            .ok_or_else(|| err("layout missing numeric column NUMERIC_ACCURACY"))?,
         if info.accuracy != 0.0 {
             info.accuracy / 100.0
         } else {
@@ -2883,18 +3333,27 @@ fn encode_move_mechanics(
     if !effect_label.is_empty() {
         grid.set_cat(
             token,
-            layout.cols.cat_move_effect.ok_or_else(|| err("layout missing categorical column CATEGORY_MOVE_EFFECT"))?,
+            layout
+                .cols
+                .cat_move_effect
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_MOVE_EFFECT"))?,
             format!("move_effect:{effect_label}"),
         );
     }
     grid.set_num(
         token,
-        layout.cols.num_effect_chance.ok_or_else(|| err("layout missing numeric column NUMERIC_EFFECT_CHANCE"))?,
+        layout
+            .cols
+            .num_effect_chance
+            .ok_or_else(|| err("layout missing numeric column NUMERIC_EFFECT_CHANCE"))?,
         (effect_chance as f64 / 100.0).min(1.0),
     );
     grid.set_num(
         token,
-        layout.cols.num_self_hp_cost.ok_or_else(|| err("layout missing numeric column NUMERIC_SELF_HP_COST"))?,
+        layout
+            .cols
+            .num_self_hp_cost
+            .ok_or_else(|| err("layout missing numeric column NUMERIC_SELF_HP_COST"))?,
         self_hp_cost.clamp(0.0, 1.0),
     );
     Ok(())
@@ -2930,14 +3389,34 @@ fn encode_action_tokens(
         let disabled = entry.map(|m| m.disabled).unwrap_or(true);
         grid.set_cat(
             token,
-            layout.cols.cat_primary.ok_or_else(|| err("layout missing categorical column CATEGORY_PRIMARY"))?,
+            layout
+                .cols
+                .cat_primary
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_PRIMARY"))?,
             format!("move:{move_name}"),
         );
-        grid.set_cat(token, layout.cols.cat_secondary.ok_or_else(|| err("layout missing categorical column CATEGORY_SECONDARY"))?, "action:move");
-        grid.set_cat(token, layout.cols.cat_role.ok_or_else(|| err("layout missing categorical column CATEGORY_ROLE"))?, "action");
         grid.set_cat(
             token,
-            layout.cols.cat_slot.ok_or_else(|| err("layout missing categorical column CATEGORY_SLOT"))?,
+            layout
+                .cols
+                .cat_secondary
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_SECONDARY"))?,
+            "action:move",
+        );
+        grid.set_cat(
+            token,
+            layout
+                .cols
+                .cat_role
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_ROLE"))?,
+            "action",
+        );
+        grid.set_cat(
+            token,
+            layout
+                .cols
+                .cat_slot
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_SLOT"))?,
             format!("move_slot:{}", move_index + 1),
         );
         if let Some(entry) = entry {
@@ -2955,13 +3434,19 @@ fn encode_action_tokens(
             )?;
             grid.set_num(
                 token,
-                layout.cols.num_move_pp_fraction.ok_or_else(|| err("layout missing numeric column NUMERIC_MOVE_PP_FRACTION"))?,
+                layout
+                    .cols
+                    .num_move_pp_fraction
+                    .ok_or_else(|| err("layout missing numeric column NUMERIC_MOVE_PP_FRACTION"))?,
                 entry.pp_fraction.unwrap_or(1.0),
             );
         }
         grid.set_num(
             token,
-            layout.cols.num_legal.ok_or_else(|| err("layout missing numeric column NUMERIC_LEGAL"))?,
+            layout
+                .cols
+                .num_legal
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_LEGAL"))?,
             if legal.get(move_index).copied().unwrap_or(0) != 0 {
                 1.0
             } else {
@@ -2970,12 +3455,18 @@ fn encode_action_tokens(
         );
         grid.set_num(
             token,
-            layout.cols.num_present.ok_or_else(|| err("layout missing numeric column NUMERIC_PRESENT"))?,
+            layout
+                .cols
+                .num_present
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_PRESENT"))?,
             if entry.is_some() { 1.0 } else { 0.0 },
         );
         grid.set_num(
             token,
-            layout.cols.num_active.ok_or_else(|| err("layout missing numeric column NUMERIC_ACTIVE"))?,
+            layout
+                .cols
+                .num_active
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_ACTIVE"))?,
             if disabled { 0.0 } else { 1.0 },
         );
     }
@@ -3001,7 +3492,10 @@ fn encode_action_tokens(
             .unwrap_or_else(|| format!("slot:{}", switch_slot + 1));
         grid.set_cat(
             token,
-            layout.cols.cat_primary.ok_or_else(|| err("layout missing categorical column CATEGORY_PRIMARY"))?,
+            layout
+                .cols
+                .cat_primary
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_PRIMARY"))?,
             format!("species:{species}"),
         );
         if let Some(mon) = mon {
@@ -3011,23 +3505,42 @@ fn encode_action_tokens(
         }
         grid.set_cat(
             token,
-            layout.cols.cat_secondary.ok_or_else(|| err("layout missing categorical column CATEGORY_SECONDARY"))?,
+            layout
+                .cols
+                .cat_secondary
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_SECONDARY"))?,
             "action:switch",
         );
-        grid.set_cat(token, layout.cols.cat_role.ok_or_else(|| err("layout missing categorical column CATEGORY_ROLE"))?, "action");
         grid.set_cat(
             token,
-            layout.cols.cat_slot.ok_or_else(|| err("layout missing categorical column CATEGORY_SLOT"))?,
+            layout
+                .cols
+                .cat_role
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_ROLE"))?,
+            "action",
+        );
+        grid.set_cat(
+            token,
+            layout
+                .cols
+                .cat_slot
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_SLOT"))?,
             format!("switch_slot:{}", switch_slot + 1),
         );
         grid.set_num(
             token,
-            layout.cols.num_hp_fraction.ok_or_else(|| err("layout missing numeric column NUMERIC_HP_FRACTION"))?,
+            layout
+                .cols
+                .num_hp_fraction
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_HP_FRACTION"))?,
             condition.hp_fraction.unwrap_or(0.0),
         );
         grid.set_num(
             token,
-            layout.cols.num_active.ok_or_else(|| err("layout missing numeric column NUMERIC_ACTIVE"))?,
+            layout
+                .cols
+                .num_active
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_ACTIVE"))?,
             if mon.map(|m| m.active()).unwrap_or(false) {
                 1.0
             } else {
@@ -3036,7 +3549,10 @@ fn encode_action_tokens(
         );
         grid.set_num(
             token,
-            layout.cols.num_legal.ok_or_else(|| err("layout missing numeric column NUMERIC_LEGAL"))?,
+            layout
+                .cols
+                .num_legal
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_LEGAL"))?,
             if legal.get(action_index).copied().unwrap_or(0) != 0 {
                 1.0
             } else {
@@ -3045,7 +3561,10 @@ fn encode_action_tokens(
         );
         grid.set_num(
             token,
-            layout.cols.num_present.ok_or_else(|| err("layout missing numeric column NUMERIC_PRESENT"))?,
+            layout
+                .cols
+                .num_present
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_PRESENT"))?,
             if mon.is_some() { 1.0 } else { 0.0 },
         );
     }
@@ -3122,7 +3641,10 @@ fn write_turn_merged_rows(
     turn_number: i64,
 ) -> PyResult<()> {
     let layout = &tables.layout;
-    let transition_offset = layout.cols.off_transition.ok_or_else(|| err("layout missing token offset transition"))?;
+    let transition_offset = layout
+        .cols
+        .off_transition
+        .ok_or_else(|| err("layout missing token offset transition"))?;
     let transition_count = transition_row_count(layout)?;
     let budget = layout.transition_token_budget.min(transition_count);
     let tokens = &products.turn_merged_tokens;
@@ -3139,49 +3661,74 @@ fn write_turn_merged_rows(
         };
         grid.set_cat(
             row,
-            layout.cols.cat_primary.ok_or_else(|| err("layout missing categorical column CATEGORY_PRIMARY"))?,
+            layout
+                .cols
+                .cat_primary
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_PRIMARY"))?,
             format!("species:{}", first.actor_species),
         );
         grid.set_cat(
             row,
-            layout.cols.cat_secondary.ok_or_else(|| err("layout missing categorical column CATEGORY_SECONDARY"))?,
+            layout
+                .cols
+                .cat_secondary
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_SECONDARY"))?,
             tm_first_action_label(first.kind, &first.action),
         );
         grid.set_cat(
             row,
-            layout.cols.cat_role.ok_or_else(|| err("layout missing categorical column CATEGORY_ROLE"))?,
+            layout
+                .cols
+                .cat_role
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_ROLE"))?,
             format!("transition:{actor_role}"),
         );
         grid.set_cat(
             row,
-            layout.cols.cat_slot.ok_or_else(|| err("layout missing categorical column CATEGORY_SLOT"))?,
+            layout
+                .cols
+                .cat_slot
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_SLOT"))?,
             format!("tt_phase:{}", token.phase.as_str()),
         );
         grid.set_cat(
             row,
-            layout.cols.cat_tm_first_kind.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_FIRST_KIND"))?,
+            layout
+                .cols
+                .cat_tm_first_kind
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_TM_FIRST_KIND"))?,
             format!("tt_kind:{}", fold_kind_str(first.kind)),
         );
         if first.kind == Some(FoldKind::Move) {
             grid.set_cat(
                 row,
-                layout.cols.cat_type_1.ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_1"))?,
+                layout
+                    .cols
+                    .cat_type_1
+                    .ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_1"))?,
                 format!("tt_outcome:{}", first.damage_outcome.as_str()),
             );
             grid.set_cat(
                 row,
-                layout.cols.cat_type_2.ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_2"))?,
+                layout
+                    .cols
+                    .cat_type_2
+                    .ok_or_else(|| err("layout missing categorical column CATEGORY_TYPE_2"))?,
                 format!("tt_effectiveness:{}", first.effectiveness.as_str()),
             );
             grid.set_cat(
                 row,
-                layout.cols.cat_move_category.ok_or_else(|| err("layout missing categorical column CATEGORY_MOVE_CATEGORY"))?,
+                layout.cols.cat_move_category.ok_or_else(|| {
+                    err("layout missing categorical column CATEGORY_MOVE_CATEGORY")
+                })?,
                 format!("tt_side_effect:{}", first.side_effect.as_str()),
             );
             if let Some(defender) = opt_str_nonempty(&first.defender_species) {
                 grid.set_cat(
                     row,
-                    layout.cols.cat_move_priority.ok_or_else(|| err("layout missing categorical column CATEGORY_MOVE_PRIORITY"))?,
+                    layout.cols.cat_move_priority.ok_or_else(|| {
+                        err("layout missing categorical column CATEGORY_MOVE_PRIORITY")
+                    })?,
                     format!("species:{defender}"),
                 );
             }
@@ -3189,49 +3736,76 @@ fn write_turn_merged_rows(
         if let Some(weather) = opt_str_nonempty(&token.weather) {
             grid.set_cat(
                 row,
-                layout.cols.cat_move_effect.ok_or_else(|| err("layout missing categorical column CATEGORY_MOVE_EFFECT"))?,
+                layout
+                    .cols
+                    .cat_move_effect
+                    .ok_or_else(|| err("layout missing categorical column CATEGORY_MOVE_EFFECT"))?,
                 format!("weather:{weather}"),
             );
         }
         if let Some(cant) = opt_str_nonempty(&first.cant_reason) {
             grid.set_cat(
                 row,
-                layout.cols.cat_tm_first_cant.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_FIRST_CANT"))?,
+                layout.cols.cat_tm_first_cant.ok_or_else(|| {
+                    err("layout missing categorical column CATEGORY_TM_FIRST_CANT")
+                })?,
                 format!("cant:{cant}"),
             );
         }
         if let Some(bp) = opt_str_nonempty(&first.baton_pass_species) {
             grid.set_cat(
                 row,
-                layout.cols.cat_tm_first_bp.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_FIRST_BP"))?,
+                layout
+                    .cols
+                    .cat_tm_first_bp
+                    .ok_or_else(|| err("layout missing categorical column CATEGORY_TM_FIRST_BP"))?,
                 format!("species:{bp}"),
             );
         }
-        grid.set_num(row, layout.cols.num_present.ok_or_else(|| err("layout missing numeric column NUMERIC_PRESENT"))?, 1.0);
+        grid.set_num(
+            row,
+            layout
+                .cols
+                .num_present
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_PRESENT"))?,
+            1.0,
+        );
         write_sub_block_numerics(tables, grid, row, first, SubBlockColumns::FIRST)?;
         if token.own_spikes_layers != 0 {
             grid.set_num(
                 row,
-                layout.cols.num_tt_own_spikes.ok_or_else(|| err("layout missing numeric column NUMERIC_TT_OWN_SPIKES"))?,
+                layout
+                    .cols
+                    .num_tt_own_spikes
+                    .ok_or_else(|| err("layout missing numeric column NUMERIC_TT_OWN_SPIKES"))?,
                 (token.own_spikes_layers as f64 / 3.0).min(1.0),
             );
         }
         if token.opp_spikes_layers != 0 {
             grid.set_num(
                 row,
-                layout.cols.num_tt_opp_spikes.ok_or_else(|| err("layout missing numeric column NUMERIC_TT_OPP_SPIKES"))?,
+                layout
+                    .cols
+                    .num_tt_opp_spikes
+                    .ok_or_else(|| err("layout missing numeric column NUMERIC_TT_OPP_SPIKES"))?,
                 (token.opp_spikes_layers as f64 / 3.0).min(1.0),
             );
         }
         grid.set_num(
             row,
-            layout.cols.num_tt_abs_turn.ok_or_else(|| err("layout missing numeric column NUMERIC_TT_ABS_TURN"))?,
+            layout
+                .cols
+                .num_tt_abs_turn
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_TT_ABS_TURN"))?,
             (token.turn as f64 / 1000.0).min(1.0),
         );
         let turns_ago = (turn_number - token.turn).max(0);
         grid.set_num(
             row,
-            layout.cols.num_tt_turns_ago.ok_or_else(|| err("layout missing numeric column NUMERIC_TT_TURNS_AGO"))?,
+            layout
+                .cols
+                .num_tt_turns_ago
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_TT_TURNS_AGO"))?,
             (turns_ago as f64 / stat_divisor).min(1.0),
         );
 
@@ -3241,13 +3815,17 @@ fn write_turn_merged_rows(
             // identity when the fold knows it; all TM2 numerics stay 0.0.
             grid.set_cat(
                 row,
-                layout.cols.cat_tm_second_kind.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_SECOND_KIND"))?,
+                layout.cols.cat_tm_second_kind.ok_or_else(|| {
+                    err("layout missing categorical column CATEGORY_TM_SECOND_KIND")
+                })?,
                 format!("tt2_status:{}", second.status.as_str()),
             );
             if !second.actor_species.is_empty() {
                 grid.set_cat(
                     row,
-                    layout.cols.cat_tm_second_species.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_SECOND_SPECIES"))?,
+                    layout.cols.cat_tm_second_species.ok_or_else(|| {
+                        err("layout missing categorical column CATEGORY_TM_SECOND_SPECIES")
+                    })?,
                     format!("tt2_species:{}", second.actor_species),
                 );
             }
@@ -3255,39 +3833,54 @@ fn write_turn_merged_rows(
         }
         grid.set_cat(
             row,
-            layout.cols.cat_tm_second_kind.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_SECOND_KIND"))?,
+            layout
+                .cols
+                .cat_tm_second_kind
+                .ok_or_else(|| err("layout missing categorical column CATEGORY_TM_SECOND_KIND"))?,
             format!("tt2_kind:{}", fold_kind_str(second.kind)),
         );
         grid.set_cat(
             row,
-            layout.cols.cat_tm_second_species.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_SECOND_SPECIES"))?,
+            layout.cols.cat_tm_second_species.ok_or_else(|| {
+                err("layout missing categorical column CATEGORY_TM_SECOND_SPECIES")
+            })?,
             format!("tt2_species:{}", second.actor_species),
         );
         grid.set_cat(
             row,
-            layout.cols.cat_tm_second_action.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_SECOND_ACTION"))?,
+            layout.cols.cat_tm_second_action.ok_or_else(|| {
+                err("layout missing categorical column CATEGORY_TM_SECOND_ACTION")
+            })?,
             tm_second_action_label(second.kind, &second.action),
         );
         if second.kind == Some(FoldKind::Move) {
             grid.set_cat(
                 row,
-                layout.cols.cat_tm_second_outcome.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_SECOND_OUTCOME"))?,
+                layout.cols.cat_tm_second_outcome.ok_or_else(|| {
+                    err("layout missing categorical column CATEGORY_TM_SECOND_OUTCOME")
+                })?,
                 format!("tt2_outcome:{}", second.damage_outcome.as_str()),
             );
             grid.set_cat(
                 row,
-                layout.cols.cat_tm_second_effectiveness.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_SECOND_EFFECTIVENESS"))?,
+                layout.cols.cat_tm_second_effectiveness.ok_or_else(|| {
+                    err("layout missing categorical column CATEGORY_TM_SECOND_EFFECTIVENESS")
+                })?,
                 format!("tt2_effectiveness:{}", second.effectiveness.as_str()),
             );
             grid.set_cat(
                 row,
-                layout.cols.cat_tm_second_side_effect.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_SECOND_SIDE_EFFECT"))?,
+                layout.cols.cat_tm_second_side_effect.ok_or_else(|| {
+                    err("layout missing categorical column CATEGORY_TM_SECOND_SIDE_EFFECT")
+                })?,
                 format!("tt2_side_effect:{}", second.side_effect.as_str()),
             );
             if let Some(defender) = opt_str_nonempty(&second.defender_species) {
                 grid.set_cat(
                     row,
-                    layout.cols.cat_tm_second_defender.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_SECOND_DEFENDER"))?,
+                    layout.cols.cat_tm_second_defender.ok_or_else(|| {
+                        err("layout missing categorical column CATEGORY_TM_SECOND_DEFENDER")
+                    })?,
                     format!("tt2_species:{defender}"),
                 );
             }
@@ -3295,18 +3888,29 @@ fn write_turn_merged_rows(
         if let Some(cant) = opt_str_nonempty(&second.cant_reason) {
             grid.set_cat(
                 row,
-                layout.cols.cat_tm_second_cant.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_SECOND_CANT"))?,
+                layout.cols.cat_tm_second_cant.ok_or_else(|| {
+                    err("layout missing categorical column CATEGORY_TM_SECOND_CANT")
+                })?,
                 format!("tt2_cant:{cant}"),
             );
         }
         if let Some(bp) = opt_str_nonempty(&second.baton_pass_species) {
             grid.set_cat(
                 row,
-                layout.cols.cat_tm_second_bp.ok_or_else(|| err("layout missing categorical column CATEGORY_TM_SECOND_BP"))?,
+                layout.cols.cat_tm_second_bp.ok_or_else(|| {
+                    err("layout missing categorical column CATEGORY_TM_SECOND_BP")
+                })?,
                 format!("tt2_species:{bp}"),
             );
         }
-        grid.set_num(row, layout.cols.num_tm2_present.ok_or_else(|| err("layout missing numeric column NUMERIC_TM2_PRESENT"))?, 1.0);
+        grid.set_num(
+            row,
+            layout
+                .cols
+                .num_tm2_present
+                .ok_or_else(|| err("layout missing numeric column NUMERIC_TM2_PRESENT"))?,
+            1.0,
+        );
         write_sub_block_numerics(tables, grid, row, second, SubBlockColumns::SECOND)?;
     }
     Ok(())
@@ -3441,7 +4045,13 @@ fn write_sub_block_numerics(
             grid.set_num(row, layout.num_col(columns.fail)?, 1.0);
         }
         if sub.confusion_selfhit {
-            grid.set_num(row, layout.cols.num_tt_confusion_selfhit.ok_or_else(|| err("layout missing numeric column NUMERIC_TT_CONFUSION_SELFHIT"))?, 1.0);
+            grid.set_num(
+                row,
+                layout.cols.num_tt_confusion_selfhit.ok_or_else(|| {
+                    err("layout missing numeric column NUMERIC_TT_CONFUSION_SELFHIT")
+                })?,
+                1.0,
+            );
         }
     }
     Ok(())
@@ -3451,7 +4061,10 @@ fn write_sub_block_numerics(
 /// opponent weather-reveal pairs).
 fn write_stats_token(tables: &Tables, grid: &mut Grid, products: &ProductsData) -> PyResult<()> {
     let layout = &tables.layout;
-    let stats_offset = layout.cols.off_stats.ok_or_else(|| err("layout missing token offset stats"))?;
+    let stats_offset = layout
+        .cols
+        .off_stats
+        .ok_or_else(|| err("layout missing token offset stats"))?;
     let stats = &products.tendency_stats;
     for (column, count) in [
         ("NUMERIC_STAT_OPP_SWITCH_COUNT", stats.opponent_switch_count),
@@ -3477,7 +4090,10 @@ fn write_stats_token(tables: &Tables, grid: &mut Grid, products: &ProductsData) 
             );
         }
     }
-    let reveal_offset = layout.cols.num_stat_weather_reveal_offset.ok_or_else(|| err("layout missing numeric column NUMERIC_STAT_WEATHER_REVEAL_OFFSET"))?;
+    let reveal_offset = layout
+        .cols
+        .num_stat_weather_reveal_offset
+        .ok_or_else(|| err("layout missing numeric column NUMERIC_STAT_WEATHER_REVEAL_OFFSET"))?;
     for (index, weather) in layout.weather_reveal_order.iter().enumerate() {
         let Some((_, from_ability)) = stats
             .opponent_weather_reveals
@@ -3505,8 +4121,14 @@ fn write_opponent_mon_history(
     opponent_mons: &[MonToken],
 ) -> PyResult<()> {
     let layout = &tables.layout;
-    let opponent_offset = layout.cols.off_opponent_pokemon.ok_or_else(|| err("layout missing token offset opponent_pokemon"))?;
-    let action_offset = layout.cols.off_action_candidates.ok_or_else(|| err("layout missing token offset action_candidates"))?;
+    let opponent_offset = layout
+        .cols
+        .off_opponent_pokemon
+        .ok_or_else(|| err("layout missing token offset opponent_pokemon"))?;
+    let action_offset = layout
+        .cols
+        .off_action_candidates
+        .ok_or_else(|| err("layout missing token offset action_candidates"))?;
     let limit = action_offset - opponent_offset;
     let cb_pinned: Vec<String> = products
         .cb_pinned_species
@@ -3552,8 +4174,7 @@ fn write_opponent_mon_history(
     // construction (`.map()` over the same Vec), but a later `filter_map` here would silently
     // misalign the pairing under `.rev()` and write wrong values without panicking.
     debug_assert!(
-        !matchup_write
-            || matchup_keys.len() == products.tendency_stats.opponent_mon_matchups.len(),
+        !matchup_write || matchup_keys.len() == products.tendency_stats.opponent_mon_matchups.len(),
         "matchup_keys must stay 1:1 with opponent_mon_matchups for the zip+rev lookup"
     );
     for (slot, mon) in opponent_mons.iter().take(limit).enumerate() {
@@ -3822,7 +4443,14 @@ mod spread_tests {
         // replaced jumped straight to ev=0, which reports 320 -- 9 HP low, and low by a
         // DIFFERENT amount for every species, so it does not even fail consistently.
         assert_eq!(
-            spread(160, 110, 68, &["bellydrum", "bodyslam", "rest", "sleeptalk"], "leftovers", true),
+            spread(
+                160,
+                110,
+                68,
+                &["bellydrum", "bodyslam", "rest", "sleeptalk"],
+                "leftovers",
+                true
+            ),
             Some((329, 189))
         );
     }
@@ -3830,7 +4458,14 @@ mod spread_tests {
     #[test]
     fn substitute_pinch_berry_trims_through_the_second_pass() {
         assert_eq!(
-            spread(40, 100, 84, &["substitute", "flail", "endure"], "salacberry", true),
+            spread(
+                40,
+                100,
+                84,
+                &["substitute", "flail", "endure"],
+                "salacberry",
+                true
+            ),
             Some((203, 216))
         );
     }
@@ -3838,7 +4473,14 @@ mod spread_tests {
     #[test]
     fn substitute_endeavor_trims_one_step_in_the_second_pass() {
         assert_eq!(
-            spread(40, 100, 84, &["substitute", "endeavor", "protect"], "leftovers", true),
+            spread(
+                40,
+                100,
+                84,
+                &["substitute", "endeavor", "protect"],
+                "leftovers",
+                true
+            ),
             Some((204, 216))
         );
     }
@@ -3846,7 +4488,14 @@ mod spread_tests {
     #[test]
     fn atk_zeroing_without_hidden_power_uses_iv_zero() {
         assert_eq!(
-            spread(95, 75, 84, &["surf", "psychic", "thunderwave", "rest"], "leftovers", false),
+            spread(
+                95,
+                75,
+                84,
+                &["surf", "psychic", "thunderwave", "rest"],
+                "leftovers",
+                false
+            ),
             Some((297, 131))
         );
     }
@@ -3856,7 +4505,14 @@ mod spread_tests {
         // ivs.atk = 30 (Hidden Power Ice override) - 28 = 2, NOT 0. The old approximation
         // hardcoded iv=0 here and was wrong on 43% of Atk-zeroed variants, every one an HP set.
         assert_eq!(
-            spread(60, 65, 80, &["hiddenpowerice", "thunderbolt", "icebeam", "substitute"], "leftovers", false),
+            spread(
+                60,
+                65,
+                80,
+                &["hiddenpowerice", "thunderbolt", "icebeam", "substitute"],
+                "leftovers",
+                false
+            ),
             Some((227, 110))
         );
     }
@@ -3866,7 +4522,14 @@ mod spread_tests {
         // The only HP type whose override touches `hp`, so it is the only one that moves the
         // HP stat off the all-31 value: 227 -> 226.
         assert_eq!(
-            spread(60, 65, 80, &["hiddenpowerflying", "thunderbolt", "icebeam", "rest"], "leftovers", false),
+            spread(
+                60,
+                65,
+                80,
+                &["hiddenpowerflying", "thunderbolt", "icebeam", "rest"],
+                "leftovers",
+                false
+            ),
             Some((226, 110))
         );
     }
@@ -3874,7 +4537,14 @@ mod spread_tests {
     #[test]
     fn shedinja_hp_is_pinned_to_one() {
         assert_eq!(
-            spread(1, 90, 84, &["shadowball", "silverwind", "protect"], "lumberry", true),
+            spread(
+                1,
+                90,
+                84,
+                &["shadowball", "silverwind", "protect"],
+                "lumberry",
+                true
+            ),
             Some((1, 199))
         );
     }
@@ -3907,7 +4577,10 @@ mod spread_tests {
         );
         // ...and the generic, untyped move carries no type at all, so Atk falls to IV 0 (109),
         // not 3 (111). The two branches must stay distinguishable.
-        assert_eq!(spread(60, 65, 80, &["hiddenpower"], "leftovers", false), Some((227, 109)));
+        assert_eq!(
+            spread(60, 65, 80, &["hiddenpower"], "leftovers", false),
+            Some((227, 109))
+        );
     }
 
     #[test]
@@ -3918,13 +4591,35 @@ mod spread_tests {
         // far past the generator's floor of 69 -- so the guard is reachable and now pinned.
         // Verified against the Python core, which reaches the same illegal hp_ev=1 and whose
         // `_variant_spread_stats` raises on it.
-        let moves: Vec<String> = ["bellydrum", "bodyslam"].iter().map(|m| m.to_string()).collect();
-        let refused = randbats_spread_stats(&bases(100, 100, 100, 100), 160, 110, 1, &moves, "leftovers", true);
-        assert!(refused.is_err(), "an illegal spread was emitted: {refused:?}");
+        let moves: Vec<String> = ["bellydrum", "bodyslam"]
+            .iter()
+            .map(|m| m.to_string())
+            .collect();
+        let refused = randbats_spread_stats(
+            &bases(100, 100, 100, 100),
+            160,
+            110,
+            1,
+            &moves,
+            "leftovers",
+            true,
+        );
+        assert!(
+            refused.is_err(),
+            "an illegal spread was emitted: {refused:?}"
+        );
         // ...and the same set at its real level is fine, so the guard is not simply always-on.
-        assert!(randbats_spread_stats(&bases(100, 100, 100, 100), 160, 110, 68, &moves, "leftovers", true)
-            .unwrap()
-            .is_some());
+        assert!(randbats_spread_stats(
+            &bases(100, 100, 100, 100),
+            160,
+            110,
+            68,
+            &moves,
+            "leftovers",
+            true
+        )
+        .unwrap()
+        .is_some());
     }
 }
 
@@ -3962,5 +4657,253 @@ mod level_tests {
         assert_eq!(level_from_details(Some("Ditto, Lv84")), Some(100));
         // ...but a gender token starting with L must not be mistaken for one either.
         assert_eq!(level_from_details(Some("Ludicolo, M")), Some(100));
+    }
+}
+
+#[cfg(test)]
+mod cols_mapping {
+    use super::*;
+
+    /// Every (field, source map, constant name) triple `Cols::resolve` is required to
+    /// produce. Generated once from `resolve` and then FROZEN: this table is the
+    /// expectation, not a restatement.
+    ///
+    /// WHY THIS EXISTS. Independent review killed the original PR's evidence by
+    /// mutation: changing one field to read a different constant
+    /// (`num_present: num.get("NUMERIC_LEGAL")`) left `cargo test --features model`
+    /// fully green at 555 passed. Nothing in the crate builds a `Layout`, and the
+    /// Python parity tests skip in CI for want of a Showdown checkout, so all 131
+    /// rewritten call sites were unmeasured. A single mismapped field would write
+    /// every value of one column into another column's slot at every leaf.
+    ///
+    /// The four byte-identity gates cannot close this either, and that is the
+    /// specific reason a Rust-side check is required: 18 of these fields do not
+    /// exist at v4 (the whole `CATEGORY_TM_*` family plus the TT/TM2 numerics) and 2
+    /// do not exist at v2.2/v3, so a mismapping confined to them passes a
+    /// single-schema corpus, differential window and live A/B alike.
+    const EXPECTED: &[(&str, &str, &str)] = &[
+        ("num_accuracy", "num", "NUMERIC_ACCURACY"),
+        ("num_active", "num", "NUMERIC_ACTIVE"),
+        ("num_base_hp", "num", "NUMERIC_BASE_HP"),
+        ("num_base_power", "num", "NUMERIC_BASE_POWER"),
+        (
+            "num_candidate_set_count",
+            "num",
+            "NUMERIC_CANDIDATE_SET_COUNT",
+        ),
+        ("num_effect_chance", "num", "NUMERIC_EFFECT_CHANCE"),
+        ("num_gender_female", "num", "NUMERIC_GENDER_FEMALE"),
+        ("num_gender_male", "num", "NUMERIC_GENDER_MALE"),
+        ("num_hp_fraction", "num", "NUMERIC_HP_FRACTION"),
+        ("num_legal", "num", "NUMERIC_LEGAL"),
+        ("num_level", "num", "NUMERIC_LEVEL"),
+        ("num_meanlook_trap", "num", "NUMERIC_MEANLOOK_TRAP"),
+        ("num_move_pp_fraction", "num", "NUMERIC_MOVE_PP_FRACTION"),
+        ("num_opp_future_sight", "num", "NUMERIC_OPP_FUTURE_SIGHT"),
+        ("num_opp_hazards", "num", "NUMERIC_OPP_HAZARDS"),
+        (
+            "num_opp_move_pp_offset",
+            "num",
+            "NUMERIC_OPP_MOVE_PP_OFFSET",
+        ),
+        (
+            "num_opp_move_pp_valid_offset",
+            "num",
+            "NUMERIC_OPP_MOVE_PP_VALID_OFFSET",
+        ),
+        ("num_opp_screens", "num", "NUMERIC_OPP_SCREENS"),
+        ("num_opp_sleep_clause", "num", "NUMERIC_OPP_SLEEP_CLAUSE"),
+        ("num_opp_wish_pending", "num", "NUMERIC_OPP_WISH_PENDING"),
+        ("num_opp_wish_turns", "num", "NUMERIC_OPP_WISH_TURNS"),
+        (
+            "num_possible_ability_count",
+            "num",
+            "NUMERIC_POSSIBLE_ABILITY_COUNT",
+        ),
+        (
+            "num_possible_item_count",
+            "num",
+            "NUMERIC_POSSIBLE_ITEM_COUNT",
+        ),
+        (
+            "num_possible_move_count",
+            "num",
+            "NUMERIC_POSSIBLE_MOVE_COUNT",
+        ),
+        ("num_present", "num", "NUMERIC_PRESENT"),
+        ("num_priority", "num", "NUMERIC_PRIORITY"),
+        ("num_rest_sleep", "num", "NUMERIC_REST_SLEEP"),
+        ("num_revealed_ability", "num", "NUMERIC_REVEALED_ABILITY"),
+        ("num_revealed_item", "num", "NUMERIC_REVEALED_ITEM"),
+        (
+            "num_revealed_move_count",
+            "num",
+            "NUMERIC_REVEALED_MOVE_COUNT",
+        ),
+        ("num_self_future_sight", "num", "NUMERIC_SELF_FUTURE_SIGHT"),
+        ("num_self_hazards", "num", "NUMERIC_SELF_HAZARDS"),
+        ("num_self_hp_cost", "num", "NUMERIC_SELF_HP_COST"),
+        ("num_self_screens", "num", "NUMERIC_SELF_SCREENS"),
+        ("num_self_sleep_clause", "num", "NUMERIC_SELF_SLEEP_CLAUSE"),
+        ("num_self_wish_pending", "num", "NUMERIC_SELF_WISH_PENDING"),
+        ("num_self_wish_turns", "num", "NUMERIC_SELF_WISH_TURNS"),
+        (
+            "num_sleep_clause_blocks_opp",
+            "num",
+            "NUMERIC_SLEEP_CLAUSE_BLOCKS_OPP",
+        ),
+        (
+            "num_sleep_clause_blocks_self",
+            "num",
+            "NUMERIC_SLEEP_CLAUSE_BLOCKS_SELF",
+        ),
+        ("num_sleep_turns", "num", "NUMERIC_SLEEP_TURNS"),
+        (
+            "num_stat_weather_reveal_offset",
+            "num",
+            "NUMERIC_STAT_WEATHER_REVEAL_OFFSET",
+        ),
+        ("num_sub_hp_fraction", "num", "NUMERIC_SUB_HP_FRACTION"),
+        ("num_tier2_cb_pinned", "num", "NUMERIC_TIER2_CB_PINNED"),
+        (
+            "num_tier2_investment_pinned",
+            "num",
+            "NUMERIC_TIER2_INVESTMENT_PINNED",
+        ),
+        ("num_tm2_present", "num", "NUMERIC_TM2_PRESENT"),
+        ("num_toxic_stage", "num", "NUMERIC_TOXIC_STAGE"),
+        ("num_trapper_alive", "num", "NUMERIC_TRAPPER_ALIVE"),
+        ("num_tt_abs_turn", "num", "NUMERIC_TT_ABS_TURN"),
+        (
+            "num_tt_confusion_selfhit",
+            "num",
+            "NUMERIC_TT_CONFUSION_SELFHIT",
+        ),
+        ("num_tt_opp_spikes", "num", "NUMERIC_TT_OPP_SPIKES"),
+        ("num_tt_own_spikes", "num", "NUMERIC_TT_OWN_SPIKES"),
+        ("num_tt_turns_ago", "num", "NUMERIC_TT_TURNS_AGO"),
+        ("num_turns_active", "num", "NUMERIC_TURNS_ACTIVE"),
+        ("num_turn_count", "num", "NUMERIC_TURN_COUNT"),
+        ("num_uncertainty", "num", "NUMERIC_UNCERTAINTY"),
+        ("num_wake_known", "num", "NUMERIC_WAKE_KNOWN"),
+        ("num_weather_permanent", "num", "NUMERIC_WEATHER_PERMANENT"),
+        ("num_weather_turns", "num", "NUMERIC_WEATHER_TURNS"),
+        (
+            "cat_belief_ability_offset",
+            "cat",
+            "CATEGORY_BELIEF_ABILITY_OFFSET",
+        ),
+        (
+            "cat_belief_item_offset",
+            "cat",
+            "CATEGORY_BELIEF_ITEM_OFFSET",
+        ),
+        (
+            "cat_belief_move_offset",
+            "cat",
+            "CATEGORY_BELIEF_MOVE_OFFSET",
+        ),
+        ("cat_last_used_move", "cat", "CATEGORY_LAST_USED_MOVE"),
+        ("cat_move_category", "cat", "CATEGORY_MOVE_CATEGORY"),
+        ("cat_move_effect", "cat", "CATEGORY_MOVE_EFFECT"),
+        ("cat_move_priority", "cat", "CATEGORY_MOVE_PRIORITY"),
+        ("cat_primary", "cat", "CATEGORY_PRIMARY"),
+        ("cat_role", "cat", "CATEGORY_ROLE"),
+        ("cat_secondary", "cat", "CATEGORY_SECONDARY"),
+        ("cat_slot", "cat", "CATEGORY_SLOT"),
+        ("cat_tm_first_bp", "cat", "CATEGORY_TM_FIRST_BP"),
+        ("cat_tm_first_cant", "cat", "CATEGORY_TM_FIRST_CANT"),
+        ("cat_tm_first_kind", "cat", "CATEGORY_TM_FIRST_KIND"),
+        ("cat_tm_second_action", "cat", "CATEGORY_TM_SECOND_ACTION"),
+        ("cat_tm_second_bp", "cat", "CATEGORY_TM_SECOND_BP"),
+        ("cat_tm_second_cant", "cat", "CATEGORY_TM_SECOND_CANT"),
+        (
+            "cat_tm_second_defender",
+            "cat",
+            "CATEGORY_TM_SECOND_DEFENDER",
+        ),
+        (
+            "cat_tm_second_effectiveness",
+            "cat",
+            "CATEGORY_TM_SECOND_EFFECTIVENESS",
+        ),
+        ("cat_tm_second_kind", "cat", "CATEGORY_TM_SECOND_KIND"),
+        ("cat_tm_second_outcome", "cat", "CATEGORY_TM_SECOND_OUTCOME"),
+        (
+            "cat_tm_second_side_effect",
+            "cat",
+            "CATEGORY_TM_SECOND_SIDE_EFFECT",
+        ),
+        ("cat_tm_second_species", "cat", "CATEGORY_TM_SECOND_SPECIES"),
+        ("cat_traced_ability", "cat", "CATEGORY_TRACED_ABILITY"),
+        ("cat_type_1", "cat", "CATEGORY_TYPE_1"),
+        ("cat_type_2", "cat", "CATEGORY_TYPE_2"),
+        ("cat_volatile_offset", "cat", "CATEGORY_VOLATILE_OFFSET"),
+        ("off_action_candidates", "off", "action_candidates"),
+        ("off_field", "off", "field"),
+        ("off_opponent_pokemon", "off", "opponent_pokemon"),
+        ("off_self_pokemon", "off", "self_pokemon"),
+        ("off_stats", "off", "stats"),
+        ("off_transition", "off", "transition"),
+    ];
+
+    /// Assert `resolve` wires each field to its own constant, using a distinct index
+    /// per name so a swap cannot hide behind equal values.
+    #[test]
+    fn every_field_resolves_its_own_constant() {
+        let mut cat = HashMap::new();
+        let mut num = HashMap::new();
+        let mut offsets = HashMap::new();
+        for (index, (_, source, name)) in EXPECTED.iter().enumerate() {
+            let target = match *source {
+                "num" => &mut num,
+                "cat" => &mut cat,
+                _ => &mut offsets,
+            };
+            target.insert((*name).to_string(), index);
+        }
+        let cols = Cols::resolve(&cat, &num, &offsets);
+        let actual = cols.as_pairs();
+        assert_eq!(
+            actual.len(),
+            EXPECTED.len(),
+            "Cols gained or lost a field without updating EXPECTED"
+        );
+        for (index, (field, _, name)) in EXPECTED.iter().enumerate() {
+            let (actual_field, got) = actual[index];
+            assert_eq!(
+                actual_field, *field,
+                "field order drifted at {index}: EXPECTED has {field}, as_pairs has {actual_field}"
+            );
+            assert_eq!(
+                got,
+                Some(index),
+                "{field} must resolve {name} (index {index}), got {got:?} -- it is reading a different constant"
+            );
+        }
+    }
+
+    /// Anti-vacuity: the assertion above must FAIL when a field is mismapped.
+    /// Without this, an `as_pairs()` that returned an empty slice would pass.
+    #[test]
+    fn the_mapping_check_is_not_vacuous() {
+        assert!(
+            EXPECTED.len() >= 90,
+            "EXPECTED shrank; the mapping check would silently cover almost nothing"
+        );
+        let mut names = EXPECTED.iter().map(|(_, _, n)| *n).collect::<Vec<_>>();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            before,
+            "two fields expect the same constant, so a swap between them is undetectable"
+        );
+        let mut fields = EXPECTED.iter().map(|(f, _, _)| *f).collect::<Vec<_>>();
+        fields.sort_unstable();
+        let before = fields.len();
+        fields.dedup();
+        assert_eq!(fields.len(), before, "duplicate field name in EXPECTED");
     }
 }
