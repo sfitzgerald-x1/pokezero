@@ -131,7 +131,31 @@ _norm_id() {
   #   now  test_unreachable_readjudication.py::T::t[row='R8']
   #
   # Self-tested by --self-test below, on those exact strings, so this cannot go inert again quietly.
-  sed -E 's#[[:space:]]+-[[:space:]].*$##; s#^(FAILED|ERROR)[[:space:]]+##; s#^SUBFAILED\(([^)]*)\)[[:space:]]+(.*)$#\2[\1]#; s#^SUBFAILED[[:space:]]+##; s#(^|::)[^ ]*/tests/#\1#; s#^tests/##'
+  # Structure, not a sequence of nibbles. Every pytest line is
+  #     <MARKER>[(<param>)] <SPACE> <test-id> [ - <reason>]
+  # and the test id is the FIRST whitespace-delimited token after the marker. So each rule takes the
+  # marker, captures the param GREEDILY to the last `)` that is followed by whitespace, keeps the
+  # next token, and discards the rest -- which strips the reason as a side effect of keeping only
+  # the id, rather than by matching the reason's shape.
+  #
+  # The previous version stripped ` - <reason>` FIRST and captured the param with `[^)]*`. Both
+  # failed on real subtest parameters, which are prose:
+  #
+  #   SUBFAILED(spelling='UN-annotated class attribute (ast.Assign, not AnnAssign)') <path>::<id>
+  #       `[^)]*` stopped at the paren inside "(ast.Assign", so the rewrite produced
+  #       "...not AnnAssign)') <path>" -- an id matching nothing, reported as an unexpected breakage.
+  #   SUBFAILED(spelling='dataclasses field(default=...) -- 201 `field(default` uses in src/')
+  #       the reason strip fired on the " -- 201" INSIDE the parameter and truncated the line.
+  #
+  # My self-test had five cases and none carried a paren or a dash in the parameter, so it passed
+  # while the normaliser mangled four real ids. The cases below are taken verbatim from a full run.
+  sed -E '
+    s#^SUBFAILED\((.*)\)[[:space:]]+([^[:space:]]+).*$#\2[\1]#
+    s#^(FAILED|ERROR)[[:space:]]+([^[:space:]]+).*$#\2#
+    s#^SUBFAILED[[:space:]]+([^[:space:]]+).*$#\1#
+    s#(^|::)[^ ]*/tests/#\1#
+    s#^tests/##
+  '
 }
 
 # A normaliser whose output feeds BOTH the scorer and the rubric comparison is the single point
@@ -140,9 +164,13 @@ _norm_id() {
 # incomplete AND every pin is dead" rather than as a broken sed. It went inert exactly that way.
 # Runs before any suite, costs milliseconds.
 _norm_self_test() {
-  local bad=0 got want
+  # `n` is COUNTED, not written. The first version printed a hardcoded "5/5" while the case list had
+  # grown to nine -- a figure quoted rather than derived, inside the guard whose whole job is to stop
+  # exactly that. It would have read "5/5" with four cases silently unexercised.
+  local bad=0 n=0 got want
   while IFS='|' read -r raw want; do
     [ -z "$raw" ] && continue
+    n=$((n + 1))
     got=$(printf '%s\n' "$raw" | _norm_id)
     if [ "$got" != "$want" ]; then
       echo "  NORMALISER SELF-TEST FAILED"
@@ -157,13 +185,17 @@ SUBFAILED(row='R8') ../../../tmp/schema-v5-drill/tests/test_unreachable.py::T::t
 FAILED tests/test_observation.py::T::t|test_observation.py::T::t
 ERROR /abs/path/tests/test_a.py::T::t|test_a.py::T::t
 FAILED tests/test_b.py::T::t_with_dash - E   assert 1 == 2|test_b.py::T::t_with_dash
+SUBFAILED(spelling='UN-annotated class attribute (ast.Assign, not AnnAssign)') ../../../tmp/schema-v5-drill/tests/test_led.py::C::t|test_led.py::C::t[spelling='UN-annotated class attribute (ast.Assign, not AnnAssign)']
+SUBFAILED(spelling='dataclasses field(default=...) -- 201 `field(default` uses in src/') ../../../tmp/x/tests/test_led.py::C::t|test_led.py::C::t[spelling='dataclasses field(default=...) -- 201 `field(default` uses in src/']
+SUBFAILED(spelling='field(default_factory=lambda: ...)') /abs/tests/test_led.py::C::t|test_led.py::C::t[spelling='field(default_factory=lambda: ...)']
+SUBFAILED(kind='bare-const') tests/test_led.py::C::t - AssertionError: 17 != 16|test_led.py::C::t[kind='bare-const']
 CASES
   [ "$bad" = 0 ] || {
     echo "ABORT: the id normaliser does not do what the scorer assumes. Every comparison against"
     echo "       the rubric would be meaningless, in the direction that reports a false failure."
     exit 14
   }
-  echo "  id normaliser self-test: 5/5"
+  echo "  id normaliser self-test: $((n - bad))/$n"
 }
 
 drill_targets() {
