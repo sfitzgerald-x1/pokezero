@@ -94,10 +94,62 @@ def ruff() -> str:
 # raising `requires-python` to >=3.12 would have left it validating a capability the gate no longer
 # exercises. Verified: at floor py312 the py311 fixture returns "All checks passed!".
 KNOWN_BAD_BY_FLOOR = {
+    # Each value must be a SyntaxError at its key and valid at the next version. Enforced below by
+    # `check_fixture_table`, not by these comments -- the first version of this table had py313
+    # mapped to `class C[T = int]` and PEP 696 landed in 3.13, so the fixture was VALID at py313.
+    # I wrote it from memory ("PEP 696 -> 3.13") instead of deriving it, and duplicated the py312
+    # feature under a second key. Exactly the defect this whole gate exists to close, in the gate's
+    # own self-test data.
     "py311": "type Alias = int\n",                              # PEP 695 type alias: 3.12
     "py312": "def f[T = int](x: T) -> T:\n    return x\n",       # PEP 696 defaults: 3.13
-    "py313": "class C[T = int]:\n    pass\n",                    # PEP 696 on a class: 3.13
+    "py313": "try:\n    pass\nexcept ValueError, TypeError:\n    pass\n",  # PEP 758: 3.14
 }
+
+
+def _next_version(floor: str) -> str:
+    """py312 -> py313. Used to prove a fixture is a FLOOR breach, not just broken syntax."""
+    return f"py3{int(floor[3:]) + 1}"
+
+
+def check_fixture_table() -> list[str]:
+    """Every fixture must redden at its own floor AND be accepted at the next version.
+
+    The second half is what makes an entry meaningful. Without it, a fixture that is simply invalid
+    Python everywhere would satisfy the self-test while proving nothing about version detection --
+    and a fixture valid at its own floor would go unnoticed until someone raised the floor and got
+    "the gate cannot be trusted", blaming the gate rather than this table.
+
+    Returns a list of problems; empty means the table is sound.
+    """
+    import tempfile
+
+    problems: list[str] = []
+    for floor, source in sorted(KNOWN_BAD_BY_FLOOR.items()):
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = Path(tmp) / "fixture.py"
+            probe.write_text(source, encoding="utf-8")
+            def run(target: str):
+                return subprocess.run(
+                    [ruff(), "check", "--isolated", f"--target-version={target}", "--no-cache",
+                     "--output-format=concise", "--", str(probe)],
+                    capture_output=True, text=True,
+                )
+            at_floor = run(floor)
+            at_next = run(_next_version(floor))
+        if at_floor.returncode != 1 or not re.search(
+            r":\d+:\d+: invalid-syntax:", at_floor.stdout
+        ):
+            problems.append(
+                f"{floor}: the fixture is ACCEPTED at {floor} (ruff exit {at_floor.returncode}), so "
+                f"it cannot detect a {floor} breach. It must be a SyntaxError at {floor}."
+            )
+        if at_next.returncode != 0:
+            problems.append(
+                f"{floor}: the fixture is ALSO rejected at {_next_version(floor)}, so it is not a "
+                f"version boundary -- it is just invalid Python, and would pass the self-test while "
+                f"proving nothing about version detection."
+            )
+    return problems
 
 
 def self_test(floor: str) -> int:
@@ -108,6 +160,16 @@ def self_test(floor: str) -> int:
     cannot see it. A pinned version stops accidental drift; this stops silent drift.
     """
     import tempfile
+
+    # Validate the WHOLE table, not just this floor's entry: a wrong entry for a floor nobody has
+    # raised to yet is still wrong, and CI is where it should surface rather than at the moment
+    # somebody edits pyproject.
+    problems = check_fixture_table()
+    if problems:
+        print("the self-test fixture table is unsound:", file=sys.stderr)
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        return 2
 
     source = KNOWN_BAD_BY_FLOOR.get(floor)
     if source is None:
