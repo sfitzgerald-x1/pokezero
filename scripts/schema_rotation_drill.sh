@@ -669,9 +669,16 @@ _scored=$(grep -cE '^(FAILED|SUBFAILED)' "$WT/DRILL.txt" || true)
 # scored line -- a genuinely invisible bucket (n=1 today, test_interaction_registry). Under a
 # rotation an xfail flipping to xpass means the thing it documented as broken now works, which is
 # a behaviour change the drill must not swallow.
-_xpass=$(grep -coE '^XPASS|[0-9]+ xpassed' "$WT/DRILL.txt" || true)
+# Counted as a QUANTITY, not as a line count. `grep -c` counts matching LINES, so a summary line
+# reading "3 xpassed" scored 1 and this note would have printed "1 xpass marker(s)" directly above
+# evidence of three -- the same readable-summary-contradicts-the-number defect as D15, reintroduced
+# in the fix for a different one. Takes the max of the summary quantity and the per-line marker
+# count because which of the two a run emits depends on the reporter's verbosity.
+_xpass_sum=$(grep -oE '[0-9]+ xpassed' "$WT/DRILL.txt" | head -1 | grep -oE '[0-9]+' || echo 0)
+_xpass_lines=$(grep -cE '^XPASS' "$WT/DRILL.txt" || true)
+_xpass=$(( ${_xpass_sum:-0} > ${_xpass_lines:-0} ? ${_xpass_sum:-0} : ${_xpass_lines:-0} ))
 if [ "${_xpass:-0}" -gt 0 ]; then
-  echo "  NOTE: $_xpass xpass marker(s) in the rotated run -- an expectedFailure now passes."
+  echo "  NOTE: $_xpass xpass(es) in the rotated run -- an expectedFailure now passes."
   grep -E '^XPASS|[0-9]+ xpassed' "$WT/DRILL.txt" | sed 's/^/    /' | head -5
 fi
 if [ "${_summary_failed:-0}" -ne "${_scored:-0}" ]; then
