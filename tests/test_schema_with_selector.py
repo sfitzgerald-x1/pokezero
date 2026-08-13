@@ -39,8 +39,19 @@ def _has(version: str) -> dict[str, bool]:
 
 
 class SchemaWithTest(unittest.TestCase):
-    def test_every_combination_matches_an_independent_newest_first_oracle(self) -> None:
-        """All 3^4 = 81 combinations, against an oracle built here rather than from the impl."""
+    def test_every_combination_matches_a_reimplemented_newest_first_oracle(self) -> None:
+        """All 3^4 = 81 combinations against an oracle REIMPLEMENTED here — not an independent one.
+
+        Called "independent" for several rounds, and it is not: `_has()` reads the same four
+        production tables the implementation reads, and this loop iterates the same
+        `reversed(SUPPORTED_...)`. So it cannot catch a change to those tables or to that ordering
+        — a reordering mutant left it green, which is why
+        `test_the_supported_tuple_is_ascending_so_reversed_really_means_newest` exists as a
+        separate, non-self-referential pin.
+
+        What this oracle DOES catch is the selection logic: predicate composition, the raise paths,
+        and which candidate wins. That is worth having, under its real name.
+        """
         checked = raised = 0
         for t in (None, True, False):
             for m in (None, True, False):

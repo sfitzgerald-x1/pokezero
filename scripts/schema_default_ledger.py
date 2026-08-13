@@ -67,8 +67,15 @@ def derive_surfaces() -> dict[str, set[str]]:
     def dflt_name(node):
         if isinstance(node, ast.Name):
             return node.id
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            return node.value.id
+        if isinstance(node, ast.Attribute):
+            # BOTH sides. `DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count` puts the
+            # global on the VALUE side; `observation.OBSERVATION_SCHEMA_VERSION` puts it on the
+            # ATTR side. Only the first was matched, so a module-qualified default -- an idiom
+            # used 31 times in this repo -- declared a surface that was never derived.
+            if node.attr in GLOBALS:
+                return node.attr
+            if isinstance(node.value, ast.Name):
+                return node.value.id
         return None
 
     for path in (REPO / "src").rglob("*.py"):
@@ -153,6 +160,26 @@ def sites_in(path: Path) -> list[dict]:
     owner = enclosing(tree)
     found: list[dict] = []
 
+    # Per-file ALIAS map. `from pokezero.observation import OBSERVATION_SCHEMA_VERSION as SV`
+    # made every `SV` read invisible, and `import pokezero.observation as O` made every
+    # `O.OBSERVATION_SCHEMA_VERSION` invisible. Both were demonstrated to add default reads with
+    # N unchanged and the gate green -- the same defect class as the any-of bug: a denominator
+    # blind to a spelling. Resolved here so the kind reported is the GLOBAL, not the local name.
+    alias_to_global: dict[str, str] = {}
+    module_aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for a in node.names:
+                if a.name in (CONST, DEFAULT_SPEC) and a.asname:
+                    alias_to_global[a.asname] = a.name
+                elif a.name in ("observation", "showdown") and node.module \
+                        and node.module.startswith("pokezero"):
+                    module_aliases.add(a.asname or a.name)
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name.startswith("pokezero."):
+                    module_aliases.add(a.asname or a.name.split(".")[0])
+
     def add(node, kind, unclosed=None):
         row = {"file": rel, "line": node.lineno, "kind": kind,
                "owner": owner.get(node.lineno, "<module>")}
@@ -163,10 +190,22 @@ def sites_in(path: Path) -> list[dict]:
         found.append(row)
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and node.id == CONST and rel not in DEFINITION_SITES:
+        if isinstance(node, ast.Name) and rel not in DEFINITION_SITES and (
+            node.id == CONST or alias_to_global.get(node.id) == CONST
+        ):
             add(node, "bare-const")
-        elif isinstance(node, ast.Name) and node.id == DEFAULT_SPEC and rel not in DEFINITION_SITES:
+        elif isinstance(node, ast.Name) and rel not in DEFINITION_SITES and (
+            node.id == DEFAULT_SPEC or alias_to_global.get(node.id) == DEFAULT_SPEC
+        ):
             add(node, "default-spec")
+        elif (
+            isinstance(node, ast.Attribute)
+            and node.attr in (CONST, DEFAULT_SPEC)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in module_aliases
+            and rel not in DEFINITION_SITES
+        ):
+            add(node, "bare-const" if node.attr == CONST else "default-spec")
         elif isinstance(node, ast.Call):
             fn = node.func
             name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)

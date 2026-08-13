@@ -36,6 +36,19 @@ The number is not the artifact — **the command is**. Any figure quoted from me
 this effort produced four wrong ones (6, ~4, 97, 94) before the ledger existed, each stated
 without an established denominator and two of them from hand-picked file lists.
 
+### Reads are matched in every spelling
+
+A default can be reached as a bare name, an alias, or a module attribute:
+
+    OBSERVATION_SCHEMA_VERSION                    # bare
+    SV                                            # from ... import ... as SV
+    observation.OBSERVATION_SCHEMA_VERSION        # import pokezero.observation as observation
+
+Only the first was matched. The other two were demonstrated to add default reads with N unchanged
+and the gate green — the same defect class as the any-of bug: **a denominator blind to a spelling.**
+The idiom is not exotic; `import pokezero.<mod> as <alias>` appears 31 times in the tree. Aliases
+are now resolved per file, so the reported kind is the *global*, not the local name.
+
 ### Surfaces are DERIVED, not listed
 
 `derive_surfaces()` scans `src/` for every class attribute or parameter whose *default* is one of
