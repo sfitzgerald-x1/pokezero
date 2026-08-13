@@ -374,12 +374,43 @@ class TheDefaultEqualsExplicitConflationTest(unittest.TestCase):
         and the record would say "the guard is broken" when it might simply be absent.
         """
         from pokezero.observation import ObservationFeatureMasks
-        from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC, V2_REPLAY_OBSERVATION_SPEC
+        from pokezero.showdown import (
+            DEFAULT_REPLAY_OBSERVATION_SPEC,
+            REPLAY_OBSERVATION_SPECS_BY_SCHEMA,
+        )
+
+        # SELECTED against the live default, not hardcoded. An earlier version of this test named
+        # `V2_REPLAY_OBSERVATION_SPEC` as its "non-default" arm -- and under a v2 rotation that value
+        # IS the default, so the guard stops firing and this test fails with "ValueError not
+        # raised". That is this PR's own defect class, re-introduced inside the test whose stated job
+        # is to stop the two expectedFailures being misread. Worse, its failure mode is precisely
+        # the misreading it warns about: it would report "the guard is broken" when the guard was
+        # simply not applicable.
+        #
+        # Exactly one supported schema's spec equals the default at any time, and WHICH one depends
+        # on the rotation, so the only default-independent choice is to pick relative to the live
+        # value. Two distinct non-default specs are needed: one for the env, one for the checkpoint.
+        others = [
+            spec
+            for spec in REPLAY_OBSERVATION_SPECS_BY_SCHEMA.values()
+            if spec != DEFAULT_REPLAY_OBSERVATION_SPEC
+        ]
+        self.assertGreaterEqual(
+            len(others), 2,
+            "fewer than two non-default specs exist, so this arm cannot be constructed without "
+            "using the default itself -- which is the thing under test.",
+        )
+        env_spec, checkpoint_spec = others[0], others[1]
+        self.assertNotEqual(
+            env_spec, DEFAULT_REPLAY_OBSERVATION_SPEC,
+            "the env spec chosen for this arm equals the default; the guard would not fire and "
+            "this test would report a broken guard where there is merely no explicit value.",
+        )
 
         with self.assertRaisesRegex(ValueError, "conflicts with the loaded checkpoint"):
             env_config_from_checkpoint_provenance(
-                LocalShowdownConfig(observation_spec=V2_REPLAY_OBSERVATION_SPEC),
-                (), context="t", required_specs=V2_1_REPLAY_OBSERVATION_SPEC,
+                LocalShowdownConfig(observation_spec=env_spec),
+                (), context="t", required_specs=checkpoint_spec,
                 required_vocabs=VOCAB,
             )
         with self.assertRaisesRegex(ValueError, "conflict with the loaded checkpoint"):
