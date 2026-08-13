@@ -304,6 +304,79 @@ FORCINGS = {
 }
 
 
+# --- render forcings -----------------------------------------------------------
+#
+# A SECOND registry, deliberately not merged into `FORCINGS`. Every entry there
+# is a world REBUILDER: it returns a `BattleSpec` and its whole contract is that
+# the engine state is rebuilt from it. A dropped protocol line is not a fact
+# about the world -- the world is exactly right and only the narration is short,
+# which is the entire reason the drop is silent -- so no spec rewrite can
+# produce one. Forcing it needs the other seam: the RENDER, between
+# `branch_events` and the comparator.
+#
+# Same discipline as `FORCINGS`: it must produce a counted, ATTRIBUTED mismatch
+# on exactly the axis it targets. `render_move_line_dropped` is the only axis a
+# missing `|move|` line can move, because the fold `render_unmatched_transition`
+# reads has no `move` arm -- so a forcing that also lit up `unmatched` would be
+# evidence that the comparator is reacting to something else.
+
+
+class _DropOneMoveLine:
+    """A ``branch_events`` module double that deletes ONE ``|move|`` line.
+
+    Wraps the REAL crate and edits its output, rather than standing in for it:
+    the branch payloads stay exactly what the shipped renderer produced --
+    percentages, lossy markers, `post` summaries and every other line -- so the
+    only difference between the forced and unforced runs is the one fact under
+    test. A double that synthesised its own branches would prove the comparator
+    reacts to a hand-written list, which is not the claim.
+
+    The LAST ``|move|`` line is the one removed, because the callee line the
+    party-cure defect drops is the second of a pair (Sleep Talk's own line, then
+    the called move) and dropping the first would also change which mon the
+    following damage lines attach to.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.dropped = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def branch_events(self, *args: Any, **kwargs: Any) -> str:
+        report = json.loads(self._inner.branch_events(*args, **kwargs))
+        for branch in report.get("branches") or []:
+            events = list(branch.get("events") or [])
+            for index in range(len(events) - 1, -1, -1):
+                if str(events[index]).startswith("|move|"):
+                    del events[index]
+                    branch["events"] = events
+                    self.dropped += 1
+                    break
+        return json.dumps(report)
+
+
+RENDER_FORCINGS = {"none": None, "render-drop-move-line": _DropOneMoveLine}
+
+
+def resolve_render_forcing(spec: str) -> Any:
+    """Return a callable wrapping the crate module, or ``None``.
+
+    Unknown tokens raise for the same reason `resolve_forcing` raises: a typo
+    that silently disarms the instrument test is the shape of a harness that
+    reports success while measuring nothing.
+    """
+
+    mode = str(spec or "none").strip()
+    if mode not in RENDER_FORCINGS:
+        raise SystemExit(
+            f"unknown --force-render mode {mode!r}; known: "
+            + "|".join(sorted(RENDER_FORCINGS))
+        )
+    return RENDER_FORCINGS[mode]
+
+
 def resolve_forcing(spec: str) -> Any:
     """Compose a comma-separated forcing spec into a world REBUILDER.
 
@@ -372,11 +445,14 @@ class RenderArm:
         dex: Any,
         every: int,
         records_by_key: dict[tuple[str, int], Any],
+        render_forcing: Any = None,
     ) -> None:
         self._set_source = set_source
         self._dex = dex
         self.every = max(0, int(every))
         self.records_by_key = records_by_key
+        self._render_forcing = render_forcing
+        self._forced_module: Any = None
         self.counts: Counter[str] = Counter()
         self.errors: list[str] = []
         self._pending: dict[str, dict[str, Any]] = {}
@@ -511,8 +587,14 @@ class RenderArm:
             return
         from pokezero.public_projection import render_projection_mismatch
 
+        if self._render_forcing is not None and self._forced_module is None:
+            import pokezero_search  # noqa: PLC0415
+
+            self._forced_module = self._render_forcing(pokezero_search)
+
         try:
             mismatches, diagnostics = render_projection_mismatch(
+                module=self._forced_module,
                 state_string=pending["state_string"],
                 slot_sides=pending["slot_sides"],
                 party_display=pending["party_display"],
@@ -529,6 +611,21 @@ class RenderArm:
         if diagnostics.get("render_error"):
             self.counts["error:branch_events"] += 1
         self.counts["evaluated"] += 1
+        # THE DENOMINATOR FOR THE DROPPED-LINE AXIS, carried as its own counters
+        # rather than inferred from `matched`. `render_move_line_dropped` reads 0
+        # on a healthy tree, and a 0 is only evidence next to the number of
+        # `|move|` announcements it was 0 out of: without these two keys a run in
+        # which the comparison never executed -- no matched boundary, a crate
+        # that returned no branches, `--render-every 0` -- is indistinguishable
+        # from a clean one, which is this campaign's standing failure mode.
+        compared = int(diagnostics.get("move_lines_compared") or 0)
+        if compared:
+            self.counts["move_line_boundaries"] += 1
+            self.counts["move_lines_compared"] += compared
+        for line in diagnostics.get("move_lines_dropped") or []:
+            self.counts[f"move_line_dropped:{line}"] += 1
+        for line in diagnostics.get("move_lines_dropped_marked") or []:
+            self.counts[f"move_line_dropped_marked:{line}"] += 1
         record = self.records_by_key.get(pending["key"])
         payload = {
             "axes": [m.axis for m in mismatches],
@@ -679,6 +776,7 @@ def run_shard(args: argparse.Namespace) -> int:
         dex=dex,
         every=args.render_every,
         records_by_key=records_by_key,
+        render_forcing=resolve_render_forcing(args.force_render),
     )
 
     class _Seat:
@@ -920,12 +1018,36 @@ def render_queue(summary: Mapping[str, Any], *, commands: Sequence[str], title: 
     )
     for axis, count in (summary.get("render_axis_boundaries") or {}).items():
         lines.append(f"| `{axis}` | BOUNDARIES | {count} |")
+    # ROWS, in their own block and under their own unit. Emitting one figure per
+    # axis and labelling it BOUNDARIES is what overstated
+    # `render_post_state_disagreement` by 3.5x: it emits one row per (branch,
+    # slot, field), so 80 rows sat in a BOUNDARIES column over 23 boundaries.
+    rows_by_axis = summary.get("render_axis_rows") or {}
+    for axis, count in rows_by_axis.items():
+        lines.append(f"| `{axis}` | ROWS | {count} |")
+    if rows_by_axis:
+        lines.append("")
+        lines.append(
+            "ROWS and BOUNDARIES above are DIFFERENT UNITS and neither is a "
+            "renderer defect rate. One boundary carries one "
+            "`render_unmatched_transition` row but as many "
+            "`render_post_state_disagreement` rows as it has disagreeing "
+            "(branch, slot, field) triples, so only the BOUNDARIES column is "
+            "comparable with `boundaries compared`."
+        )
     lines.append("")
     lines.append("### Render-arm disposition (why a boundary was not compared)")
     lines.append("")
     lines.append("| bucket | BOUNDARIES |")
     lines.append("|---|---|")
     for key, count in (summary.get("render_counts") or {}).items():
+        # `axis:*` are per-ROW shard counters, not dispositions, and this table's
+        # header says BOUNDARIES. Carrying them here is the second place the same
+        # 80 was labelled BOUNDARIES. The axis figures are published above, in
+        # both units, from the per-boundary records rather than from a
+        # pre-aggregated counter that cannot distinguish them.
+        if str(key).startswith("axis:"):
+            continue
         lines.append(f"| `{key}` | {count} |")
     if not summary.get("render_counts"):
         lines.append("| *(render arm not run)* | 0 |")
@@ -1022,6 +1144,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--force", default="none",
         help="comma-separated: " + "|".join(sorted(FORCINGS)),
+    )
+    parser.add_argument(
+        "--force-render", default="none",
+        help="corrupt the RENDER (not the world) before the comparator sees it: "
+             + "|".join(sorted(RENDER_FORCINGS))
+             + ". Separate from --force because a dropped protocol line is not a "
+               "fact about the world and no spec rewrite can produce one.",
     )
     parser.add_argument("--shards", nargs="*", default=[])
     parser.add_argument("--summary")

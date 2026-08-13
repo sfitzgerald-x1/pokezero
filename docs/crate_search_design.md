@@ -237,7 +237,7 @@ state, s1, s2, ctx_json, branch_on_damage, include_post_state)`; context is
 | `\|-weather\|` | ✅ | set / `[from] ability:`+`[of]` on switch-in / `[upkeep]` on decrement / `none` on dissipation |
 | `\|-prepare\|` | ✅ | charge volatiles (SolarBeam class) → move-name payload (fold `pending_charge`) |
 | `\|-crit\|` | ◐ | labeled by exact match against `calculate_both_damage_rolls`' collapsed crit value; NOT labelable on the KO-straddle branch (engine conflates kill-roll and crit) |
-| `\|-miss\|` | ◐ | inferred (empty delta + acc<100 + deterministic causes ruled out); merged with full-para / move-fail branches where deltas coincide (below) |
+| `\|-miss\|` | ◐ | inferred (empty delta + acc<100 + deterministic causes ruled out); merged with move-fail branches where deltas coincide (below). NOT with full-para any more: both move-time immobilizers carry `Instruction::MoveImmobilized`, so that branch is separable and is never inferred |
 | `\|-supereffective\|/-resisted\|/-immune\|` | ✅ | from the engine type chart on the mutated choice; suppressed for fixed-damage moves (real protocol rule); `-immune` covers type immunity, type-status immunity (Steel/psn etc.), and the modeled ability immunities (Levitate, Wonder Guard, absorb trio, Immunity, Insomnia/Vital Spirit, Limber, Water Veil, Magma Armor) |
 | `\|-hitcount\|` | ✅ | count of rendered hits (the engine collapses 2-5-hit moves to 3 — its model, rendered faithfully) |
 | `\|-activate\|` Protect/Sub, `\|-end\|` Sub, absorb `\|-heal/-immune [from] ability:`, Flash Fire `\|-start\|..\|ability: Flash Fire` | ✅ | Blocked / hit-sub / broke-sub / Absorbed outcomes; the Flash Fire FIRST activation renders the boost-state `-start` form (live capture) — an absorb signature the fold consumes (`_is_absorb_start`); repeats render `-immune [from] ability` |
@@ -254,12 +254,12 @@ above (line-stream fidelity).
 ### Insufficiency findings (instruction stream ↔ event stream)
 
 1. **The engine merges semantically distinct outcomes with identical
-   deltas** (`combine_duplicate_instructions`): a fully-paralyzed turn, a
-   missed move, and a failed move can be ONE branch. No mapper can split
-   them — the branch is rendered as the highest-probability cause
-   (deterministic causes first, then full-para over miss, fail over miss on
-   already-statused targets), and the residual mass is a documented,
-   measured ambiguity (the dominant class-(c) family below).
+   deltas** (`combine_duplicate_instructions`): a missed move and a FAILED
+   move can be ONE branch. A fully-paralyzed turn no longer belongs to this
+   set — both immobilizers are marked. Deterministic causes render first;
+   otherwise the larger mass wins, and for an already-carried volatile that is
+   a comparison IN THE CODE (`no_effect_hit_outweighs_miss`, crossing at 50%);
+   `status_fail`'s is still a claim. Residual: the class-(c) family below.
 2. **The KO-straddle branch conflates kill-roll and crit** (single branch
    with combined probability): `|-crit|` is never emitted for it.
 3. **Sleep Talk's called move id is not in the delta**; it is recovered by
@@ -293,7 +293,12 @@ Class (c) decomposition (every case examined and attributed):
 
 - **merged no-op branches** (full-para vs miss vs fail; 2 scenario + ~34
   random): insufficiency #1 — the realized minority outcome renders as the
-  majority one.
+  majority one. ⚠ HISTORICAL, and the label is now half wrong: this golden-v2
+  measurement predates the immobilizer markers, so its **full-para** component no
+  longer exists (see insufficiency #1 above, which contradicts this row's
+  wording). Left as measured rather than restated, because re-labelling a count
+  nobody has re-taken would be worse than a dated one; the miss-vs-fail component
+  is the part `volatile_fail` addresses.
 - **move-line target minutiae** (~24 random): per-move `[still]`/target
   blanking details of the real sim not fully replicated (affects
   `defender_species` on failed/self-target moves only).

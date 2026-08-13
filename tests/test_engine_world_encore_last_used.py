@@ -211,6 +211,66 @@ class TheLatchCannotLieTests(unittest.TestCase):
         self.assertNotIn("encore", dict(side.volatile_status_durations))
 
 
+class TheSwitchSentinelSeedsTheEnginesOwnVariantTests(unittest.TestCase):
+    """The UN-encored branch's ``switch:0`` seeding, which nothing pinned.
+
+    ``_build_side_spec`` used to carry, immediately after reading the latch, the
+    statement ``if last_used_move_id == "switch": last_used_move_id = "switch"``.
+    That is a no-op, and it read like an intentional guard -- so a maintainer
+    editing around it would reasonably assume it was load-bearing and tested. It
+    was neither, and the seeding it appeared to protect was not tested either:
+    renaming the ``"switch"`` literal on the un-encored branch sent the sentinel
+    into ``_resolve_encored_move_index``, which cannot match it against any sampled
+    moveset, so ``last_used_move`` fell back to ``""`` and the whole ``switch:0``
+    seeding disappeared **with nothing red**.
+
+    ``switch:0`` is a POSITIVE fact rather than ignorance: a fresh switch-in
+    genuinely has no last move (``Pokemon.clearVolatile()``), Encore correctly
+    fails against it, and the engine has a distinct ``LastUsedMove`` variant for
+    exactly that. ``""`` is the engine's *unknown*, which is a different claim and
+    the one Encore's ``onStart`` reads as "no move" only by accident.
+
+    Distinct from ``ResolverPrecedenceUnitTests
+    ::test_the_switch_sentinel_is_rejected_before_the_moveset_lookup``, which pins
+    the sentinel's REJECTION inside the resolver against a synthetic moveset
+    holding a move literally named ``switch``. That one is pinned-by-contract: no
+    gen3 move normalises to ``switch``, so the resolver arm is not reachable from
+    the pool. This class pins the reachable half -- what the un-encored branch
+    WRITES when the latch is the sentinel.
+    """
+
+    def setUp(self) -> None:
+        self.dex = _dex()
+
+    def test_a_fresh_switch_in_seeds_the_engines_switch_variant(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["lastUsedMove"] = "switch"
+        side = battle_spec_from_payload(payload, _override(), dex=self.dex).spec.side_two
+        self.assertEqual(side.last_used_move, "switch:0")
+        # Not the encore branch: the sentinel must not create a lock either.
+        self.assertNotIn("encore", side.volatile_statuses)
+        self.assertNotIn("encore", dict(side.volatile_status_durations))
+        # Control, so the assertion above cannot pass on a fixture that seeds
+        # nothing at all: the same payload with a real id still resolves a slot.
+        payload["sides"]["p2"]["lastUsedMove"] = "shadowball"
+        control = battle_spec_from_payload(payload, _override(), dex=self.dex).spec.side_two
+        self.assertEqual(control.last_used_move, "move:1")
+
+    def test_the_sentinel_is_seeded_on_the_SELF_seat_too(self) -> None:
+        """Both seats, because the seeding block is not seat-scoped and must not become so.
+
+        The un-encored seeding was added for EVERY side (an opponent that had
+        visibly just moved was reaching the engine as ``LastUsedMove::None``), so a
+        mutant narrowing this arm to ``is_self`` -- or to the opponent -- is a
+        silent half-fix. One seat asserted alone cannot see it.
+        """
+
+        payload = _payload(self.dex)
+        payload["sides"]["p1"]["lastUsedMove"] = "switch"
+        side = battle_spec_from_payload(payload, _override(), dex=self.dex).spec.side_one
+        self.assertEqual(side.last_used_move, "switch:0")
+
+
 class ResolverPrecedenceUnitTests(unittest.TestCase):
     """``_resolve_encored_move_index`` in isolation: the three-source ladder."""
 

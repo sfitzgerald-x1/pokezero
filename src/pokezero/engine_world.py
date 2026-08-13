@@ -755,11 +755,32 @@ def _apply_transform(
             None,
         )
         if donor is None:
-            # The copied mon is not in this world's opposing party, so its
-            # stats/moves would have to be invented. Fail closed instead.
+            # No engine id in the opposing party equals the copied one, so the
+            # donor's stats/moves would have to be invented. Fail closed.
+            #
+            # The message names BOTH SIDES OF THE COMPARISON on purpose. It used to
+            # assert the copied species was "absent from the sampled opposing
+            # party", and for 24 census decisions that assertion was false and
+            # self-disproving: the party held `deoxysdefense` while the belief had
+            # recorded the base-name nickname `deoxys` off the `-transform` ident.
+            # Anyone debugging from that sentence looked at the sampler, which was
+            # right, instead of at the two ids, which did not match. A refusal
+            # message that states its own inputs cannot mislead that way again.
+            #
+            # Matching on BASE species here would also clear that case and is NOT
+            # the fix: formes of one base have different stats and types (Deoxys-
+            # Attack 180 Atk / Deoxys-Defense 160 Def), so a base match on a party
+            # holding more than one forme silently picks an arbitrary one and
+            # searches a world that never existed. The species is resolved where it
+            # is known — `belief._resolve_transform_target_species` — and this guard
+            # stays exact.
+            party_ids = sorted(
+                _engine_species_id(normalize_id(mon.id)) for mon in donor_side.pokemon
+            )
             raise EngineWorldUnsupported(
                 "transform_unexpressible",
-                f"side {slot!r} copied {target_species!r}, absent from the sampled opposing party",
+                f"side {slot!r} copied {target_species!r} (engine id {target_id!r}); "
+                f"no match in the sampled opposing party {party_ids!r}",
             )
         active = side.pokemon[side.active_index]
         copied = replace(
@@ -1671,8 +1692,8 @@ def _build_side_spec(
     # fact by scanning recent public events, keeps working unchanged.
     raw_last_used = side_payload.get("lastUsedMove")
     last_used_move_id = normalize_id(raw_last_used) if raw_last_used else None
-    if last_used_move_id == "switch":
-        last_used_move_id = "switch"
+    # The ``"switch"`` sentinel is deliberately NOT special-cased here: it is part of
+    # this field's vocabulary and every branch below reads it for itself.
     volatile_durations: dict[str, int] = {}
     pending_encore_move: str | None = None
     if "encore" in volatiles and transformed_active:

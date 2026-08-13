@@ -200,7 +200,14 @@ _CORPUS_TREES = ("reports", "docs")
 # at the top of this file warns about in terms. It is in the corpus now, and
 # `tests/test_unreachable_readjudication.py` asserts the MEMBERSHIP plus a live control
 # that feeds `_evidence_in` a counter-keyed copy and requires it to fire.
-_EXPECTED_COUNTER_ARTIFACTS = 402
+# BUMPED 402 -> 403 for `reports/artifacts/zero_heal_guard_mutation_battery.json`, the
+# recorded run of `scripts/mutate_zero_heal_guard.py`. Confirmed as the instructions in
+# the failure message require: the JSON set under reports/ and docs/ differs from `main`
+# by exactly that one ADDED path, with NOTHING removed (402 -> 403). The 22 counter
+# assertions in this module stayed green across the addition, so the new record's numeric
+# fields do not sit under a dotted path containing a counter name -- the cross-instrument
+# hazard this constant's own header describes.
+_EXPECTED_COUNTER_ARTIFACTS = 403
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

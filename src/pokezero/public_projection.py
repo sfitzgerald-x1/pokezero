@@ -52,21 +52,69 @@ payload:
 * the parser's public opponent record (``replay.public_revealed``), which is the
   definition of "what the protocol revealed" and has no upstream.
 
-That matters for the four guards relaxed on 2026-08-09, three of which are
-visible to the state comparator precisely because the request states the fact
-the guard now infers:
+That matters for the four guards relaxed on 2026-08-09, **two** of which are
+visible to the state comparator. The count is MEASURED, not counted off the
+list below: the first revision of this header said *three* and reached three by
+naming an axis for #1212 that does not exist.
 
 * #1210 (Transform PP overlay) -> ``self_move_pp``: the request publishes the
   copy's live PP every round, so a wrong overlay is a numeric disagreement.
-* #1212 (a third Encore resolution source) -> ``self_move_disabled``: under
-  Encore the request disables every move but the encored one, so resolving the
-  WRONG move produces a different disabled set. This is the axis that makes the
-  relaxation falsifiable at all -- ``encore_move_unknown`` used to refuse.
-* #1209 (toxic stage: demand a weaker proof) -> ``toxic_count``: the engine's
-  ``side_conditions.toxic_count`` must equal the parser's public
-  ``replay.toxic_stage`` whenever that stage is known.
+  **COVERED-MEASURED** -- reverting ``_copied_move_spec``'s overlay takes this
+  axis from zero to a large positive WORLDS count on the census block. The
+  figure and its command live in the direction-2 report, not here; see the note
+  at the end of this section.
+* #1209 (toxic stage: demand a weaker proof) -> ``toxic_count``, whose observed
+  side is ``observed_toxic_multiplier``: the multiplier the log shows was
+  actually PAID, recovered from raw ``|-damage|...|[from] psn`` damage.
+  **COVERED-MEASURED, by a PRODUCER mutant and not by the census reading zero**
+  -- see ``_axis_toxic_count`` and the two paragraphs below, which are the whole
+  reason a zero on this axis must not be read as coverage.
+* #1212 (a third Encore resolution source) -> **NO AXIS. NOT COVERED, BY
+  CONSTRUCTION**, and this is where the first revision of this header was
+  simply wrong. ``_apply_encore_locks`` writes only
+  ``last_used_move=f"move:{index}"`` and never touches ``disabled``; the
+  per-move ``disabled`` flag comes from ``_move_specs`` via ``known_pp``, built
+  from the request's own rows -- so ``self_move_disabled`` compares the
+  request's flag against the request's flag. Separately, #1212's class is the
+  OPPONENT seat, and every ``_SELF_AXES`` member is evaluated only for
+  ``context.player_id``. RETRACTED: the claim that ``self_move_disabled`` is
+  "the axis that makes the relaxation falsifiable at all". It is not an axis on
+  this relaxation at all, and no axis here is.
 * #1211 (absorb guard narrowed to HP headroom) is NOT visible here. It is a
   renderer branch, and it is why ``render_projection_mismatch`` exists.
+  COVERED-MEASURED there, on a separately built crate.
+
+Two things about #1209's axis that a zero must NOT be read as
+-------------------------------------------------------------
+**The two sides are not independent DERIVATIONS.** They are two
+implementations of the same arithmetic over the same ``[from] psn`` line:
+``showdown._reseed_toxic_stage_from_residual`` and
+``observed_toxic_multiplier`` both compute ``damage // (maxhp // 16)`` and both
+refuse on a non-integral quotient. So zero variance across a whole census block
+is that IDENTITY restating itself, not agreement between two witnesses. Nothing
+about a zero here is evidence of power.
+
+**What establishes the power is a producer mutant, and it fires.** Widening
+``local_showdown._materialization_toxic_stage`` from
+``min(14, max(0, tracked_stage - 1))`` to ``min(14, max(0, tracked_stage))`` --
+an over-broad #1209 crediting every world one extra tick -- takes this axis
+**from zero to a four-figure WORLDS count over four-figure DECISIONS** on the
+731-battle block. So #1209's over-credit shape is COVERED-MEASURED.
+
+NO CENSUS MAGNITUDE IS WRITTEN IN THIS FILE, deliberately. The exact figures,
+their commands and the per-arm source sha256 live in the direction-2 report
+(section 3.1), because a number copied into tracked source goes stale on the
+next census with nothing able to notice -- report 4 section 4.8's shape, and a
+mutant that rewrote the figures here to nonsense passed the whole suite. What
+IS pinned here is the direction and the verdict, which is what a reader needs
+and what a test can check.
+
+**And one arm of #1209 is unreachable here, which is the honest reason its
+literal site is not covered.** A producer mutant at #1209's own site --
+``if tracked_stage == 0:`` returning 0 immediately, dropping every proof
+requirement -- is a NULL MUTANT: the census records are **bit-identical** on
+both arms. That is not "the mutant was not run". It was run; this block does
+not reach that arm, and reachability is the limit, not the instrument.
 
 Units, kept apart (plan 4 reporting rules, report 4 section 9.2)
 ----------------------------------------------------------------
@@ -136,10 +184,27 @@ AXES = (
     "render_unmatched_transition",
     "render_no_usable_branch",
     "render_post_state_disagreement",
+    # A `|move|` announcement the observed log carries and the ACCEPTED render
+    # does not. Registered in the taxonomy rather than left to appear only in the
+    # census's `axis:*` counter, because that counter is keyed by whatever string
+    # arrives while THIS tuple is what a queue's columns come from -- an axis
+    # missing here is a row a report can never grow.
+    "render_move_line_dropped",
 )
 
 #: Axes whose observed side comes from the acting seat's own request. Only
 #: meaningful for `context.player_id`; the opponent's request is not ours to see.
+#:
+#: THIS CONSTANT HAS NO RUNTIME CONSUMER, deliberately and disclosed: the seat
+#: scoping is structural (`state_projection_mismatches` passes
+#: `sides[observed.slot]` and `observed.self_request` to the two producers below),
+#: not a lookup against this set. It is documentation the module header cites --
+#: which is exactly the shape that drifts silently, because prose pointing at a
+#: constant nothing reads cannot go stale loudly. Its READER is therefore a test:
+#: `test_public_projection.SetClosureTests.test_the_self_axis_set_is_derived_from
+#: _its_two_producers` DERIVES it from the `axis=` literals of `_axis_self_moves`
+#: and `_axis_self_party` and asserts set equality both ways. Dropping a member
+#: here is a killed mutation, not a silent edit.
 _SELF_AXES = frozenset(
     {
         "self_move_set",
@@ -156,6 +221,18 @@ _DETAIL_LIMIT = 160
 
 #: Tokens a Showdown request can offer that are not moves any engine moveset
 #: carries. Kept as a named constant so deleting it is a killable mutation.
+#:
+#: ADDING to it is the dangerous direction and it was the unpinned one. Every id
+#: named here is filtered OUT of the `self_move_set` comparison, so a single real
+#: move added here blinds the axis for that move permanently while every census
+#: figure keeps reading exactly as it does today -- `rest` alone is #1212's
+#: exemplar move and occurs on a third of the gen3 randbat pool. So the set is
+#: DERIVED, not curated: `engine_transition_differential.engine_choice_for_action`
+#: is the one place that decides which request ids cannot be resolved on the
+#: engine's own move list (it tests `move_id in engine_moves` FIRST and only then
+#: special-cases), and the ids it special-cases after that lookup ARE this set.
+#: Set equality both ways, with an anti-vacuity floor, in
+#: `test_public_projection.SetClosureTests`.
 _REQUEST_PSEUDO_MOVES = frozenset({"struggle", "recharge"})
 
 
@@ -326,8 +403,46 @@ def _fold_public_lines(lines: Sequence[str]) -> Any:
 #: held none. Exemplar `ppc-s1-10100064` p1 round 75:
 #: `|-cureteam|p2a: Blissey|[from] move: Aromatherapy`, observed TOXIC, world
 #: NONE, and the WORLD was right.
+#:
+#: PINNED IN BOTH DIRECTIONS, because widening it was free. There is no single
+#: upstream that spells out "tags that clear a status", so the closure is
+#: assembled: (a) set equality against the `-cure*` tags the parser's own
+#: public-condition dispatch handles, and (b) every member must be IN the `-cure*`
+#: namespace. **(b) is what actually closes this set** -- it is the assertion that
+#: rejects `-heal`, `-damage`, `-sethp`, `faint` and `-status`, and it is stated
+#: here rather than left to (a) because (a) alone cannot see them.
+#:
+#: THE SHADOWING IS THE INTERESTING FACT, and it is why (b) has to carry the
+#: weight. All three fold sites (`_fold_public_lines`, `fold_step_lines`,
+#: `fold_lines_onto_summary`) test the HP tag families BEFORE this one, so a tag
+#: that is already in `_HP_TAGS_FIELD3`/`_HP_TAGS_FIELD4` never reaches the cure
+#: branch at all. Measured: adding `-heal` here changes NOTHING at any of the
+#: three sites for `|-heal|<ident>|<condition>|...`, the only form Showdown
+#: emits -- an equivalent mutant, not a defect. It becomes live only on a
+#: three-field `|-heal|<ident>`, which the protocol never produces. So do NOT read
+#: an addition here as harmless because a fold test stayed green: the fold tests
+#: are structurally blind to any tag the HP branches claim first.
+#:
+#: (Do not confuse the above with the 969-of-3,078 render figure. That belonged to
+#: the missing `if token` guard on the `_HP_TAGS_FIELD3` branch -- see the comment
+#: inside `fold_step_lines` -- not to this set.)
 _CURE_TAGS = ("-curestatus", "-cureteam")
 
+#: The two HP tag families, named for the protocol FIELD that carries the
+#: condition, and DERIVED from the two parser functions that decide which field
+#: that is -- `test_public_projection.SetClosureTests
+#: .test_the_hp_tag_families_are_derived_from_the_parsers_own_fields`.
+#:
+#: Both were duplicated as inline tuples at fold site 3 until this comment was
+#: written, and the duplicates were the defect: an exhaustive per-element sweep
+#: over this module scored 25 survivors, and 8 of them were the two inline copies
+#: below. Dropping `-heal` from `observed_toxic_multiplier`'s copy of
+#: `_HP_TAGS_FIELD3` left the whole suite green while a Leftovers heal stopped
+#: updating `last_hp` and took `observed_toxic_multiplier` from 2 to None --
+#: Leftovers is the most common item in the format, so that one token silences
+#: the `toxic_count` axis, which is #1209's ONLY coverage. Same shape #1222 fixed
+#: for `-heal` in `_TOXIC_RAMP_RESET_TAGS`. **Every site now reads these names,
+#: so the derivation governs all of them; do not re-inline a copy.**
 _HP_TAGS_FIELD3 = ("-damage", "-heal", "-sethp")
 _HP_TAGS_FIELD4 = ("switch", "drag", "replace")
 
@@ -984,6 +1099,13 @@ def _axis_opponent_revealed(
     return out
 
 
+#: Showdown boost key -> the `poke_engine` Side attribute that holds its stage.
+#: DERIVED, not curated: the engine's Side exposes exactly seven `*_boost`
+#: attributes and those seven ARE the public stat stages, so
+#: `test_public_projection.SetClosureTests` asserts this map's values equal that
+#: attribute set and its keys equal `_BOOST_KEYS`. Dropping a key silences that
+#: boost on the state comparator in BOTH the observed and world directions at
+#: once, which is why a `len(...) == 7` floor is asserted alongside.
 _ENGINE_BOOST_FIELD = {
     "atk": "attack_boost",
     "def": "defense_boost",
@@ -1024,6 +1146,12 @@ def _axis_boosts(
 #: constructor's input, and independence is the whole point -- see below.
 _TOXIC_DENOMINATOR = 16
 
+#: Every protocol tag that ends the Toxic ramp the last observed tick was priced
+#: from, BEYOND the switch family handled separately. Mirrors the arms of
+#: `showdown._reseed_toxic_stage_from_residual`; a named constant so deleting an
+#: entry is a killable mutation rather than a silent narrowing.
+_TOXIC_RAMP_RESET_TAGS = frozenset({"faint", "-status", "-curestatus", "-cureteam"})
+
 
 def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
     """The last Toxic multiplier each side actually PAID, read from raw damage.
@@ -1049,13 +1177,44 @@ def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
     ``floor(maxhp / 16) * stage``, so ``stage = damage / floor(maxhp / 16)``, and
     that arithmetic passes through none of the parser's toxic trackers.
 
-    Returns ``{slot: multiplier or None}``. ``None`` means *not determined* --
-    no tick observed since the current active came in, a non-integral quotient,
-    or a percentage-mod HP grid too coarse to divide. An axis never fires on an
-    undetermined value.
+    EVERY EVENT THAT RESETS THE PARSER'S RAMP INVALIDATES WHAT WAS PAID, and
+    getting that list wrong is a FALSE POSITIVE ON A CORRECT WORLD, which is the
+    loud direction but still an anti-instrument. This function used to reset only
+    on ``switch``/``drag``/``replace`` while
+    ``showdown._reseed_toxic_stage_from_residual`` resets on four more, and its
+    own comment names the reachable case: Rest. Measured before the fix --
+    ``|-damage|...|tox|[from] psn`` paying 5, then
+    ``|-status|...|slp|[from] move: Rest``, then ``|-curestatus|``, then
+    ``|-status|...|tox`` -- this still returned **5** while Showdown's ramp had
+    restarted, and `_axis_toxic_count` fired ``last tick paid multiplier 5, world
+    pre-tick counter 0`` against a world the parser had correctly licensed. The
+    reset tags below mirror the parser's arms exactly, including its
+    active-ident rule (a bench ``|-curestatus|p1: Name|`` cannot touch the
+    active's ramp) and its ``-cureteam`` exemption from that rule.
+
+    Returns ``{slot: multiplier or None}``. ``None`` means *not determined*, and
+    this list is CLOSED **in the only sense worth claiming: the reset half of it
+    is DERIVED from the parser, not maintained beside it.**
+    ``test_the_reset_tag_set_is_derived_from_the_parser_not_maintained_by_hand``
+    reads the tags ``showdown._update_toxic_stage`` dispatches on out of its AST
+    and asserts set equality with ``_TOXIC_RAMP_RESET_TAGS``, both directions. A
+    hand-maintained completeness claim is what let the four resets below go
+    missing in the first place, and writing "this list is closed" underneath one
+    is the same defect one level up. Every way the value can be unknown:
+
+    * no tick observed since the current active came in;
+    * a non-integral quotient, or a percentage-mod HP grid too coarse to divide;
+    * a tick whose own condition token is plain ``psn`` rather than ``tox``;
+    * **anything that reset the ramp since the last tick**: ``switch``/``drag``/
+      ``replace``, ``faint``, any ``-status`` (Rest, or a re-``tox`` that
+      restarts the ramp at 1 with nothing yet paid at it), ``-curestatus``,
+      ``-cureteam``.
+
+    An axis never fires on an undetermined value.
     """
 
     from .engine_fidelity import _parse_condition  # noqa: PLC0415
+    from .showdown import _is_active_protocol_ident  # noqa: PLC0415
 
     last_hp: dict[str, int] = {}
     maxhp: dict[str, int] = {}
@@ -1068,7 +1227,7 @@ def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
         slot = parts[2].split(":", 1)[0].strip()[:2]
         if slot not in ("p1", "p2"):
             continue
-        if tag in ("switch", "drag", "replace") and len(parts) >= 5:
+        if tag in _HP_TAGS_FIELD4 and len(parts) >= 5:
             value, _token = _parse_condition(parts[4])
             last_hp[slot] = value
             maxhp[slot] = _condition_maxhp(parts[4]) or maxhp.get(slot, 0)
@@ -1076,7 +1235,23 @@ def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
             # this line says anything about the mon now standing there.
             multiplier[slot] = None
             continue
-        if tag not in ("-damage", "-heal", "-sethp") or len(parts) < 4:
+        if tag in _TOXIC_RAMP_RESET_TAGS:
+            # The parser's OTHER reset arms, mirrored. `Pokemon.setStatus`
+            # replaces `statusState` wholesale, so any `-status` -- Rest most
+            # reachably, and a re-`tox` which restarts at stage 1 -- ends the ramp
+            # the last tick was priced from. `faint`, `-curestatus` and
+            # `-cureteam` end it too. In every case what was PAID no longer
+            # describes what the engine's counter should now hold, and reporting
+            # it is a false positive against a correct world.
+            #
+            # The active-ident rule is the parser's, for the parser's reason: a
+            # bench cure (`|-curestatus|p1: Name|...`, no `a`) cannot touch the
+            # active's ramp. `-cureteam` is exempt because its ident IS the
+            # active source and it cures the whole team.
+            if tag == "-cureteam" or _is_active_protocol_ident(parts[2]):
+                multiplier[slot] = None
+            continue
+        if tag not in _HP_TAGS_FIELD3 or len(parts) < 4:
             continue
         value, _token = _parse_condition(parts[3])
         maxhp[slot] = _condition_maxhp(parts[3]) or maxhp.get(slot, 0)
@@ -1085,6 +1260,21 @@ def observed_toxic_multiplier(lines: Sequence[str]) -> dict[str, int | None]:
         if tag != "-damage" or previous is None:
             continue
         if "[from] psn" not in line:
+            continue
+        # PLAIN POISON IS NOT TOXIC, and this side used to price it as though it
+        # were. The PARSER applies this gate explicitly and this one did not --
+        # `showdown._reseed_toxic_stage_from_residual` opens with
+        # `if "tox" not in new_condition.split(): return`. Gen 3 plain poison
+        # charges `maxhp / 8`, which is exactly `2 * (maxhp // 16)`, so a plain
+        # `psn` tick divided cleanly and came back as TOXIC STAGE 2: a
+        # fabricated value on the side of the comparison whose entire job is to
+        # be observed. Only `_axis_toxic_count`'s engine-status gate stood
+        # between that and a firing, and where the engine DOES say TOXIC the
+        # fabricated 2 can MATCH a pre-tick counter of 2 and silently absorb a
+        # real status disagreement -- the anti-instrument shape (a defect making
+        # the oracle read cleaner) that this axis was rebuilt once to escape.
+        if "tox" not in parts[3].split():
+            multiplier[slot] = None
             continue
         unit = maxhp.get(slot, 0) // _TOXIC_DENOMINATOR
         damage = previous - value
@@ -1194,6 +1384,78 @@ def render_branch_is_usable(lossy: Sequence[str]) -> bool:
     return not lossy or set(lossy) <= RENDER_TELEMETRY_ONLY_LOSSY
 
 
+def move_announcements(lines: Sequence[str]) -> Counter[tuple[str, str]]:
+    """Every ``|move|`` announcement in a protocol slice, as a MULTISET.
+
+    Keyed ``(slot, move id)`` and deliberately not on the full line:
+
+    * the move name is a display name in the log (``Heal Bell``) and a slug in
+      the render (``healbell``), so both go through ``_normalize_identifier``;
+    * the TARGET field is dropped. The renderer blanks it and adds ``[still]``
+      on a self-target failure while Showdown sometimes names the user, and a
+      target disagreement is a different (narrower) defect than a line that is
+      not there at all;
+    * ``[from]`` tags are dropped for the same reason -- ``|[from]Sleep Talk``
+      and ``|[from] Sleep Talk`` are the same announcement;
+    * the IDENT is reduced to its slot (``p1a``). The nickname half can drift on
+      a forme change or a Transform, and keying on it would report one dropped
+      line and one fabricated line for a render that announced the right move.
+      That is a false positive on the axis this exists to make trustworthy.
+
+    A multiset, not a set: a step can carry two announcements from one slot
+    (Sleep Talk's own line and its callee's), which is exactly the pair the
+    party-cure defect separates.
+    """
+
+    from .showdown import _normalize_identifier  # noqa: PLC0415
+
+    counts: Counter[tuple[str, str]] = Counter()
+    for line in lines:
+        parts = line.split("|")
+        if len(parts) < 4 or parts[1] != "move":
+            continue
+        slot = parts[2].split(":", 1)[0].strip()[:3]
+        counts[(slot, _normalize_identifier(parts[3]))] += 1
+    return counts
+
+
+def dropped_move_lines(
+    observed_lines: Sequence[str], rendered_lines: Sequence[str]
+) -> list[str]:
+    """``|move|`` announcements the LOG carries and the render does not.
+
+    This is the whole instrument, and the reason it can exist for the price of
+    two ``Counter``s is that ``render_projection_mismatch`` already holds both
+    line populations in one frame (``observed_lines`` and ``branch["events"]``)
+    and then discards the ``|move|`` half of each: ``fold_step_lines`` has no
+    ``move`` arm, so both sides fall through its tag chain unhandled. The
+    comparison is by CONTENT of a state fold, and a dropped announcement is a
+    COUNT difference over a tag the fold does not model -- so a branch can drop
+    ``|move|..|healbell|..|[from] Sleep Talk``, fold to a byte-identical
+    projection, and be reported ``matched``.
+
+    Direction 1 cannot host this check at any price: ``truth_differential`` has
+    no observed log in scope at all (no ``raw_line``, no ``public_events``), it
+    counts REFUSALS. A line that is silently absent produces no refusal, so the
+    only place in the tree where the fact is knowable is here.
+
+    THE TOKEN CARRIES NO ``|``, and that is not cosmetic. These strings become
+    census counter keys and mismatch predicates, and both are rendered into
+    GitHub-flavoured markdown tables by ``--mode report``. A raw pipe splits the
+    cell and GFM has no escape for it inside a code span, so a token spelled
+    ``|move|p1a|healbell`` silently ate the COUNT column of every row it
+    appeared in -- 13 rows unforced and thousands under the forcing. Named
+    ``move:<slot>:<id>`` instead.
+    """
+
+    deficit = move_announcements(observed_lines) - move_announcements(rendered_lines)
+    return [
+        f"move:{slot}:{move}"
+        for (slot, move), count in sorted(deficit.items())
+        for _ in range(count)
+    ]
+
+
 def render_projection_mismatch(
     *,
     state_string: str,
@@ -1275,6 +1537,10 @@ def render_projection_mismatch(
     #: The reason set of the CLOSEST branch -- fewest disagreements -- which is
     #: the informative one when nothing matched.
     best: list[str] = []
+    #: One entry per branch whose FOLD matched: its `|move|` deficit, its lossy
+    #: set and its lines. Accumulated rather than returned on, so the deficit
+    #: verdict is taken over the whole matching set -- see the comment below.
+    candidate_deficits: list[tuple[list[str], list[str], list[str]]] = []
     for branch in branches:
         lossy = list(branch.get("lossy") or [])
         if branch.get("attribution_unsafe") or not render_branch_is_usable(lossy):
@@ -1282,30 +1548,130 @@ def render_projection_mismatch(
                 unusable_markers[str(marker).split(":")[0]] += 1
             continue
         usable += 1
-        rendered = fold_step_lines(
-            [line for line in (branch.get("events") or []) if line and line != "|"],
-            pre_features,
-        )
+        branch_lines = [
+            line for line in (branch.get("events") or []) if line and line != "|"
+        ]
+        rendered = fold_step_lines(branch_lines, pre_features)
         branch_reasons = _render_mismatch_reasons(observed, rendered, pre_features)
         if not branch_reasons:
-            return self_consistency, {
-                "branches": len(branches),
-                "usable_branches": usable,
-                "self_consistency_branches": len(
-                    [b for b in branches
-                     if isinstance(b.get("post"), Mapping)
-                     and not b.get("attribution_unsafe")
-                     and render_branch_is_usable(list(b.get("lossy") or []))]
-                ),
-                "matched": True,
-                "self_consistency": len(self_consistency),
-            }
+            # THE FOLD SAID YES. That is exactly when a dropped `|move|` line is
+            # invisible: the state transition is right and only the narration is
+            # missing, so every axis above agrees and this boundary is about to
+            # be published as `matched`. Read the count difference the fold threw
+            # away -- but NOT here, and not on the first such branch.
+            #
+            # EVERY fold-matching branch is collected instead, because "the first
+            # branch that folds equal" is not the same claim as "the branch
+            # Showdown took". Measured on the 16-game control block: a paralysed
+            # Pelipper's `|move|..|Toxic|..|[miss]` folds to exactly the same net
+            # state as the FULL-PARALYSIS sibling -- no damage, no status, no
+            # faint -- so whichever of the two the engine enumerates first is the
+            # one this loop used to return on. Returning on the paralysis sibling
+            # reported a dropped `|move|` line against a render that was never
+            # asked. The support claim is satisfied by ANY branch, so the deficit
+            # claim must be too.
+            candidate_deficits.append(
+                (dropped_move_lines(observed_lines, branch_lines), lossy, branch_lines)
+            )
+            continue
         # ALL of them, not the first. The first revision returned on the first
         # difference and checked status BEFORE hp and side conditions, so on the
         # ~28% of boundaries where a status difference fired, the hp and
         # side-condition checks never ran at all -- masking, measured by review.
         best = min(best, branch_reasons, key=len) if best else branch_reasons
         reasons.extend(branch_reasons)
+
+    if candidate_deficits:
+        # THE LOSSY/CLEAN SPLIT IS A PROPERTY OF THE SET, NOT OF ONE SELECTED
+        # BRANCH, and the first revision got this wrong in the one direction that
+        # matters: it selected a single branch by `(len(deficit), deficit)` and
+        # then read `lossy` off whichever branch `min` happened to return. That
+        # key does not mention `lossy`, and `min` returns the FIRST minimal
+        # element -- so when a lossy and a clean branch tied on deficit, CRATE
+        # ENUMERATION ORDER decided whether the deficit became a verdict or was
+        # filed into the bucket that is never a verdict. Measured on the very
+        # 256-game block whose zero this instrument's headline rests on: 11 of
+        # the 53 marked boundaries had more than one matching branch, and at one
+        # of them FIVE branches all dropped `move:p2a:surf` while THREE of the
+        # five declared `lossy=[]`. A lossy sibling sat at index 0, so the axis
+        # stayed silent and the zero was contaminated. Same family as the
+        # enumeration-order defect the loop above already fixes; fixing it there
+        # and not here closed half of it.
+        #
+        # So the two populations are separated FIRST and each is reduced on its
+        # own. A branch that declared nothing was lost and still omitted an
+        # announced line is a verdict no matter what its siblings declared.
+        clean = [item[0] for item in candidate_deficits if not item[1]]
+        marked = [item[0] for item in candidate_deficits if item[1]]
+        # `min` on length and then on content, WITHIN each population, so the
+        # choice is deterministic when two branches of the same kind tie -- a
+        # tally that depends on engine enumeration order is not a tally.
+        def _smallest(deficits: list[list[str]]) -> list[str]:
+            return min(deficits, key=lambda d: (len(d), d)) if deficits else []
+
+        dropped = _smallest(clean)
+        dropped_marked = _smallest(marked)
+        # The narration claim is satisfied by any CLEAN branch that produced it,
+        # which is why an empty `clean` deficit silences the axis; but when there
+        # is no clean branch at all, every render of this boundary declared a
+        # loss and the omission is accounted for elsewhere.
+        branch_lines = next(
+            (item[2] for item in candidate_deficits if item[0] == dropped and not item[1]),
+            candidate_deficits[0][2],
+        )
+        diagnostics = {
+            "branches": len(branches),
+            "usable_branches": usable,
+            "self_consistency_branches": len(
+                [b for b in branches
+                 if isinstance(b.get("post"), Mapping)
+                 and not b.get("attribution_unsafe")
+                 and render_branch_is_usable(list(b.get("lossy") or []))]
+            ),
+            "matched": True,
+            "self_consistency": len(self_consistency),
+            # THE DENOMINATOR, published whether or not anything fired. A zero on
+            # this axis is admissible only next to the number of announcements it
+            # was zero out of; `move_lines_compared == 0` means the check did not
+            # run, which is not the same reading as "the check ran and found
+            # nothing" and must never be mistaken for it.
+            "move_lines_compared": sum(move_announcements(observed_lines).values()),
+            "matched_branches": len(candidate_deficits),
+            # SPLIT BY POPULATION. `matched_clean_branches` is what makes the two
+            # keys below readable: `move_lines_dropped == []` means something
+            # different when it is 0 out of 4 clean branches than when there were
+            # no clean branches to ask.
+            "matched_clean_branches": len(clean),
+            # DISJOINT BY CONSTRUCTION, not by selection -- and the difference is
+            # the whole review finding. A branch that is telemetry-only lossy is
+            # ALLOWED to omit a line (`sleeptalk_called_unidentified` renders the
+            # damage with no `|move|` owner on purpose), so the LOSSY population's
+            # deficit is MARKED, counted, and never a verdict. The CLEAN
+            # population's deficit is a line absent from a render that claimed
+            # nothing was lost, and it is a verdict regardless of what any lossy
+            # sibling declared. Each key is reduced over its own population, so
+            # neither can suppress the other and neither depends on enumeration
+            # order. A boundary may legitimately report BOTH.
+            "move_lines_dropped": dropped,
+            "move_lines_dropped_marked": dropped_marked,
+        }
+        if dropped:
+            return self_consistency + [
+                ProjectionMismatch(
+                    axis="render_move_line_dropped",
+                    slot="both",
+                    predicate="render_move_line_dropped:"
+                    + ",".join(sorted(set(dropped))),
+                    detail=_bounded(
+                        f"every one of {len(clean)} branches that folded equal and "
+                        f"declared no loss omits {dropped}; observed "
+                        f"{sorted(move_announcements(observed_lines).elements())}, "
+                        f"closest clean render "
+                        f"{sorted(move_announcements(branch_lines).elements())}"
+                    ),
+                )
+            ], diagnostics
+        return self_consistency, diagnostics
 
     diagnostics = {
         "branches": len(branches),
@@ -1314,6 +1680,15 @@ def render_projection_mismatch(
         "unusable_markers": dict(unusable_markers),
         "reasons": [_bounded(reason) for reason in best[:6]],
         "all_reasons": len(reasons),
+        # ZERO, and it means DID NOT RUN. The `|move|` deficit is only read on
+        # the branch the fold accepted, because that is the branch whose drop is
+        # silent; when nothing matched, the boundary is already loud on
+        # `render_unmatched_transition` and there is no accepted narration to
+        # audit. Published as an explicit 0 rather than omitted so that a census
+        # summing this key cannot mistake "no matched boundary here" for "no
+        # announcements here". A drop that rides along with an unrelated
+        # unmatched boundary is NOT covered; that is a stated limit, not a claim.
+        "move_lines_compared": 0,
         "self_consistency": len(self_consistency),
         "self_consistency_branches": len(
             [b for b in branches
@@ -1361,8 +1736,18 @@ def render_projection_mismatch(
 #: renderer never emits, so there is nothing to fold against it. Side conditions
 #: are not compared either because `post_state_summary` does not publish them --
 #: the TRANSITION arm covers those against the log.
+#:
+#: The seven public stat stages, and `render_self_consistency_mismatches`'s
+#: docstring claims it compares "all seven boosts" -- a claim that was true and
+#: unpinned, so DROPPING a key from this tuple silenced that boost in BOTH render
+#: arms and falsified the published claim with nothing red. Derived against the
+#: engine's own `*_boost` Side attributes with a `== 7` floor, and every key is
+#: separately shown to FIRE on both arms, in
+#: `test_public_projection.SetClosureTests`.
 _BOOST_KEYS = ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")
 
+#: Field-for-field `_ENGINE_BOOST_FIELD`; the closure test asserts the two are
+#: equal so the duplicate cannot drift.
 _ENGINE_BOOST_ATTR = {
     "atk": "attack_boost",
     "def": "defense_boost",
@@ -1375,6 +1760,33 @@ _ENGINE_BOOST_ATTR = {
 
 _BOOST_ALIAS = {"atk": "atk", "def": "def", "spa": "spa", "spd": "spd",
                 "spe": "spe", "accuracy": "accuracy", "evasion": "evasion"}
+
+#: The boost tags `fold_lines_onto_summary` dispatches on, hoisted out of the
+#: function body because an inline tuple is the shape whose element deletion
+#: survives (report 4 section 4.4). No upstream spells either set out, so both
+#: are pinned in BOTH directions -- must-contain and must-not-contain -- in
+#: `test_public_projection.SetClosureTests`.
+#:
+#: `_BOOST_WRITE_TAGS` carry a stat key in field 3 and an amount in field 4;
+#: `-setboost` ASSIGNS the stage while the other two add a signed delta, which is
+#: why the branch re-tests it by name. Deleting `-setboost` from the inline copy
+#: was green while Belly Drum's `-setboost atk 6` folded to 0.
+_BOOST_WRITE_TAGS = ("-boost", "-unboost", "-setboost")
+
+#: `_BOOST_CLEAR_TAGS` zero the ACTING side's stages only. **`-clearallboost` --
+#: Haze -- must NOT be a member, and the pin says so explicitly:** adding it here
+#: would let this branch claim the line ahead of the `-clearallboost` arm, so
+#: Haze would clear one side instead of both. That is fail-OPEN on the render
+#: arm, because the un-cleared side then matches a world whose boosts Haze
+#: actually removed -- the strictly-more-conservative mutant that report 4
+#: section 4.4 says to write.
+#:
+#: DISCLOSED APPROXIMATION, not a claim: `-clearnegativeboost` zeroes only the
+#: negative stages and `-invertboost` negates them; this branch zeroes everything
+#: for all three. Neither tag exists in gen 3, so the approximation is
+#: unreachable on this census block. Both are pinned lexically; only
+#: `-clearboost`, which IS exact, is also pinned behaviourally.
+_BOOST_CLEAR_TAGS = ("-clearboost", "-clearnegativeboost", "-invertboost")
 
 
 def pre_state_summary(state: Any, slot_sides: Mapping[str, str]) -> dict[str, Any]:
@@ -1438,7 +1850,7 @@ def fold_lines_onto_summary(
         slot = parts[2].split(":", 1)[0].strip()[:2]
         if slot not in out:
             continue
-        if tag in ("switch", "drag", "replace") and len(parts) >= 5:
+        if tag in _HP_TAGS_FIELD4 and len(parts) >= 5:
             species = _norm(str(parts[3]).split(",", 1)[0])
             candidates = [
                 index for index, name in enumerate(out[slot]["species"]) if name == species
@@ -1450,7 +1862,7 @@ def fold_lines_onto_summary(
             # engine emits reset_boosts instructions for it.
             out[slot]["boosts"] = {key: 0 for key in _BOOST_KEYS}
             _write_active(slot, value, _ENGINE_STATUS.get(token, "none"))
-        elif tag in ("-damage", "-heal", "-sethp") and len(parts) >= 4:
+        elif tag in _HP_TAGS_FIELD3 and len(parts) >= 4:
             value, token = _parse_condition(parts[3])
             _write_active(slot, value, _ENGINE_STATUS.get(token) if token else None)
         elif tag == "-status" and len(parts) >= 4:
@@ -1462,7 +1874,7 @@ def fold_lines_onto_summary(
                     mon["status"] = "none"
         elif tag == "faint":
             _write_active(slot, 0, None)
-        elif tag in ("-boost", "-unboost", "-setboost") and len(parts) >= 5:
+        elif tag in _BOOST_WRITE_TAGS and len(parts) >= 5:
             key = _BOOST_ALIAS.get(parts[3].strip())
             if key is None:
                 continue
@@ -1476,7 +1888,7 @@ def fold_lines_onto_summary(
             else:
                 delta = amount if tag == "-boost" else -amount
                 out[slot]["boosts"][key] = max(-6, min(6, current + delta))
-        elif tag in ("-clearboost", "-clearnegativeboost", "-invertboost"):
+        elif tag in _BOOST_CLEAR_TAGS:
             out[slot]["boosts"] = {key: 0 for key in _BOOST_KEYS}
         elif tag == "-clearallboost":
             for other in out:
@@ -1694,6 +2106,17 @@ def _render_mismatch_reasons(
     Exact on everything deterministic; banded on HP only. The band is anchored on
     this step's HP movement, as `engine_fidelity` anchors it: an engine branch
     carries the representative damage roll while Showdown sampled one of sixteen.
+
+    THE BAND'S WIDTH IS THE DOMINANT DETERMINANT OF THE LARGEST RENDER FIGURE --
+    HP is the majority of `render_unmatched_transition`'s reasons on the census
+    block (figure in the direction-2 report section 2.2, not copied here) -- and
+    it was pinned by nothing. Measured on THIS TREE, so it is reproducible from
+    the tree alone: `_DAMAGE_TOLERANCE` could be widened 0.16 ->
+    0.75 (4.7x) and `_MIN_TOLERANCE_HP` 5 -> 40 (8x) with the whole module green,
+    and TIGHTENED to 0 with the whole module green too, so the boundary was open
+    in both directions. `RenderBandWidthTests` now pins both constants from both
+    sides at the two anchors where the floor and the proportional term each
+    dominate; widen or tighten either and a named test fails.
 
     WEATHER IS NOT COMPARED. Both sides fold ONE step, an absent `|-weather|` is
     indistinguishable from "unchanged", and the axis would only ever fire on an
@@ -1937,7 +2360,13 @@ def aggregate_projection_records(
     battles: set[str] = set()
     render_boundaries = 0
     render_mismatched = 0
+    #: BOUNDARIES per axis -- a boundary is counted ONCE however many rows it
+    #: carried. See `render_axis_rows` for the other unit and why they differ.
     render_axis: Counter[str] = Counter()
+    #: ROWS per axis: one per `ProjectionMismatch`. `render_post_state_disagreement`
+    #: emits one row per (branch, slot, field), so this is several times the
+    #: boundary count and is NOT a boundary figure.
+    render_axis_rows: Counter[str] = Counter()
     render_errors: Counter[str] = Counter()
 
     for row in rows:
@@ -1976,8 +2405,15 @@ def aggregate_projection_records(
             axes = render.get("axes") or []
             if axes:
                 render_mismatched += 1
+                # Two different units off one list, kept apart at the source.
+                # Incrementing ONE counter per row and publishing it under a
+                # `_boundaries` name is the bug this replaces: it labelled 80
+                # rows as 80 boundaries, over 23 boundaries -- a 3.5x
+                # overstatement in the artifact the plan calls the deliverable.
                 for axis in axes:
-                    render_axis[str(axis)] += 1
+                    render_axis_rows[str(axis)] += 1
+                for axis in set(str(axis) for axis in axes):
+                    render_axis[axis] += 1
 
     return {
         "decisions_seen": decisions,
@@ -2010,7 +2446,13 @@ def aggregate_projection_records(
         "render_mismatch_rate": (
             (render_mismatched / render_boundaries) if render_boundaries else None
         ),
+        # BOUNDARIES per axis: distinct boundaries, so the key's own name is true.
         "render_axis_boundaries": dict(render_axis.most_common()),
+        # ROWS per axis: one per mismatch row. A DIFFERENT UNIT, published beside
+        # the boundary count rather than instead of it, because the row count is
+        # the honest size of the render arm's output and the boundary count is
+        # the honest denominator-comparable figure.
+        "render_axis_rows": dict(render_axis_rows.most_common()),
         "render_errors": dict(render_errors.most_common(10)),
     }
 
