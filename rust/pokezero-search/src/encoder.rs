@@ -2561,10 +2561,12 @@ fn encode_expected_stats(
 /// Both spellings of a per-role metadata key, derived from ONE token.
 ///
 /// A transposition is inexpressible here, which is the point. Independent review mutation-tested
-/// the hand-typed form and found 3 of 7 classes SURVIVED the Python-reference parity tests --
+/// the hand-typed form and found 4 of 7 classes SURVIVED the Python-reference parity tests --
 /// `must_recharge`, `meanlook_trap` and `truant_loaf` pair transpositions, plus a
 /// `self_arrived_by_baton_pass` typo -- because the v3/v4 fixtures set both seats to the same
-/// value, or never reach the self-side path. Concrete production failure for that class: p1 has
+/// value, or never reach the self-side path. (An earlier version of this line said 3 of 7 while
+/// enumerating four survivors in its own next clause: a false typed count inside the comment that
+/// documents this programme's habit of shipping false typed counts. Corrected on review.) Concrete production failure for that class: p1 has
 /// Truant and p2 does not, so `NUMERIC_TRUANT_LOAF` is written 1.0 on the opponent's active token
 /// and 0.0 on ours, at every leaf, silently, forever.
 ///
@@ -2588,8 +2590,10 @@ macro_rules! md_key {
 /// variants and the key set is closed, so both spellings are literals and the substitution is a
 /// string-equality identity -- byte-identical by construction, with no allocation.
 ///
-/// #1219 converted five single-use sites and left three LOOPS untouched, which the closeout's §2
-/// records as the larger half. Taking all eight here, since #1249's rewrite of this file forced
+/// #1219 converted five single-use sites and left three LOOPS untouched, which the closeout
+/// records as the larger half (its §3, phrased as the complement -- this commit rewrote the §2 row
+/// that used to carry it, so the citation is de-referenced rather than re-pointed, per the
+/// register's own rule). Taking all eight here, since #1249's rewrite of this file forced
 /// #1219 to be re-applied anyway and shipping the known-partial half would have been a choice
 /// rather than an inheritance.
 ///
@@ -2597,8 +2601,9 @@ macro_rules! md_key {
 /// remained against ~48 removed"; review showed the ~48 was unsourced and both figures were
 /// roughly 4x the truth. Derivation: all 8 sites sit inside `if candidate.active()`, and
 /// `encode_pokemon_tokens` runs exactly twice per leaf (once per role), so the real total is
-/// ~13-14 keys per active mon x 2 actives = ~26-28 per leaf, split ~18 in the loops against
-/// ~8-10 in the singles. The qualitative claim -- the loops were the larger half -- holds, at
+/// ~13-14 keys per active mon x 2 actives = ~26-28 per leaf AT V4, split ~18 in the loops against
+/// ~8-10 in the singles. At v3 only the elapsed loop's 4 plus `meanlook_trap` run, so ~5 per
+/// active mon and ~10 per leaf; v4 carries both blocks because `is_v3()` is true at v4. The qualitative claim -- the loops were the larger half -- holds, at
 /// about 2:1. The plan's "~60" is its own figure and is not restated here as if derived.
 #[inline]
 fn per_role(role: Role, self_key: &'static str, opponent_key: &'static str) -> &'static str {
