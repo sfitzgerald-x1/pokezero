@@ -4510,7 +4510,7 @@ class BudgetLadderTest(unittest.TestCase):
             EngineMctsConfig(leaf_eval="hp_fraction", worlds=4, depth_min=2)
 
     def test_a_floor_above_its_cap_is_refused(self) -> None:
-        for kwargs in ({"depth_min": 7}, {"worlds_min": 5}, {"depth_min": 0}):
+        for kwargs in ({"depth_min": 7}, {"worlds_min": 5}, {"depth_min": 0}, {"depth_min": 1}):
             with self.subTest(**kwargs):
                 with self.assertRaises(ValueError):
                     EngineMctsConfig(
@@ -4519,6 +4519,25 @@ class BudgetLadderTest(unittest.TestCase):
                         checkpoint_path="/tmp/c.pt", tables_path="/tmp/t.json",
                         **kwargs,
                     )
+
+    def test_depth_one_is_refused_because_it_is_no_better_than_raw(self) -> None:
+        # A one-ply search forfeits the search advantage entirely (raw ~44% against
+        # search ~54% in this programme), and the floor rung is the one most
+        # decisions never leave -- so it must still be a real search.
+        with self.assertRaises(ValueError) as caught:
+            EngineMctsConfig(
+                leaf_eval="model", worlds=4, search_sims=16384, search_batch=16,
+                search_depth=8, model_path="/tmp/m.pt", checkpoint_path="/tmp/c.pt",
+                tables_path="/tmp/t.json", depth_min=1,
+            )
+        self.assertIn("one-ply", str(caught.exception))
+        # 2 is allowed, and is the owner-specified default floor.
+        cfg = EngineMctsConfig(
+            leaf_eval="model", worlds=4, search_sims=16384, search_batch=16,
+            search_depth=8, model_path="/tmp/m.pt", checkpoint_path="/tmp/c.pt",
+            tables_path="/tmp/t.json", depth_min=2,
+        )
+        self.assertEqual(cfg.depth_min, 2)
 
     def test_the_default_threshold_is_near_full_not_a_majority(self) -> None:
         # A deeper search that did not fill the shallower depth can be WORSE than

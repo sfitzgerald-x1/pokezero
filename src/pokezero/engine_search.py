@@ -516,10 +516,19 @@ class EngineMctsConfig:
                 raise ValueError(
                     "early_stop_min_sims must be in 1..=search_sims when early_stop is enabled."
                 )
-            if self.depth_min is not None and not 0 < self.depth_min <= self.search_depth:
+            if self.depth_min is not None and not (
+                LADDER_MIN_DEPTH_FLOOR <= self.depth_min <= self.search_depth
+            ):
+                # The floor is 2, not 1, and that is a STRENGTH constraint rather
+                # than a taste: a one-ply search is no better than the raw policy,
+                # so a ladder allowed to start at depth 1 would spend its cheapest
+                # and most common rung forfeiting the entire search advantage --
+                # measured in this programme at raw ~44% against search ~54%.
                 raise ValueError(
-                    "depth_min must be in 1..=search_depth when set "
-                    f"(got {self.depth_min} with search_depth={self.search_depth})."
+                    f"depth_min must be in {LADDER_MIN_DEPTH_FLOOR}..=search_depth "
+                    f"when set (got {self.depth_min} with "
+                    f"search_depth={self.search_depth}); depth 1 is one-ply and no "
+                    "better than the raw policy."
                 )
             if not 0.0 <= self.ladder_saturation <= 1.0:
                 raise ValueError(
@@ -1457,6 +1466,11 @@ def native_search_args(
         search_args.append(True)
     return search_args
 
+
+#: Hard floor for a dynamic ladder's depth. Depth 1 is a one-ply search, which is
+#: no better than the raw policy -- so the cheapest rung, the one most decisions
+#: never leave, must still be a real search. Owner-set.
+LADDER_MIN_DEPTH_FLOOR = 2
 
 #: The id Showdown gives the recharge pseudo-move it substitutes for a locked mon's moveset.
 _RECHARGE_REQUEST_MOVE_ID = "recharge"
