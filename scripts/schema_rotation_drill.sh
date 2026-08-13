@@ -156,6 +156,7 @@ _norm_id() {
   # while the normaliser mangled four real ids. The cases below are taken verbatim from a full run.
   sed -E '
     s#^SUBFAILED\((.*)\)[[:space:]]+([^[:space:]]+).*$#\2[\1]#
+    s#^SUBFAILED\[(.*)\][[:space:]]+([^[:space:]]+).*$#\2[\1]#
     s#^(FAILED|ERROR)[[:space:]]+([^[:space:]]+).*$#\2#
     s#^SUBFAILED[[:space:]]+([^[:space:]]+).*$#\1#
     s#(^|::)[^ ]*/tests/#\1#
@@ -194,6 +195,8 @@ SUBFAILED(spelling='UN-annotated class attribute (ast.Assign, not AnnAssign)') .
 SUBFAILED(spelling='dataclasses field(default=...) -- 201 `field(default` uses in src/') ../../../tmp/x/tests/test_led.py::C::t|test_led.py::C::t[spelling='dataclasses field(default=...) -- 201 `field(default` uses in src/']
 SUBFAILED(spelling='field(default_factory=lambda: ...)') /abs/tests/test_led.py::C::t|test_led.py::C::t[spelling='field(default_factory=lambda: ...)']
 SUBFAILED(kind='bare-const') tests/test_led.py::C::t - AssertionError: 17 != 16|test_led.py::C::t[kind='bare-const']
+SUBFAILED[alpha] tests/test_m.py::MTest::test_msg_form - AssertionError: 1 != 2|test_m.py::MTest::test_msg_form[alpha]
+SUBFAILED[alpha] /tmp/schema-v5-drill/tests/test_m.py::MTest::test_msg_form|test_m.py::MTest::test_msg_form[alpha]
 CASES
   [ "$bad" = 0 ] || {
     echo "ABORT: the id normaliser does not do what the scorer assumes. Every comparison against"
@@ -1261,6 +1264,19 @@ if ambiguous:
         sys.stderr.write(f"  {t} -> {v}\n")
     sys.exit(16)
 excluded_full = {f for t, v in by_tail.items() if t in native for f in v}
+# A native key that matches NO rotated id is the safety net for this whole mechanism: the keys are now
+# subtest-granular, i.e. more specific, so a silent non-match is MORE likely than before, and a
+# non-matching key means the exclusion quietly did nothing. Warned, not aborted -- an over-scored run
+# fails loudly on its own, and aborting here would turn a diagnostic into a new failure mode.
+_unmatched = sorted(t for t in native if t not in by_tail)
+if _unmatched:
+    sys.stderr.write(
+        "drill: NOTE -- native-schema key(s) matched no rotated id, so the exclusion did nothing for "
+        "them. Not fatal (the run over-scores rather than under-scores), but it means the message was "
+        "found in a section whose name does not correspond to any scored test:\n"
+    )
+    for t in _unmatched:
+        sys.stderr.write(f"  {t}\n")
 for i in candidates:
     if i not in excluded_full:
         print(i)
