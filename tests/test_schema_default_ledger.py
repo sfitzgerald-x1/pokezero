@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+import ast
 import subprocess
 import sys
 import unittest
@@ -194,123 +195,44 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
             found[name] = int(count)
         return found
 
-    def _docstring_kind_counts(self) -> dict[str, int]:
-        """Parse EVERY non-surface kind row in the kinds table, spelled `kind-name ... (<count>)`.
+    def _rendered_kinds_table(self) -> str:
+        """The kinds table AS THE TOOL RENDERS IT. The docstring must contain this verbatim."""
+        proc = subprocess.run(
+            [sys.executable, str(LEDGER), "--render-kinds-table"], capture_output=True, text=True
+        )
+        if proc.returncode == 2:
+            raise unittest.SkipTest(
+                "the ledger reported UNPARSED file(s), so the counts are measured against an "
+                "incomplete denominator and comparing them to the docstring proves nothing."
+            )
+        self.assertEqual(
+            proc.returncode, 0,
+            f"`--render-kinds-table` exited {proc.returncode}.\n{proc.stderr[-2000:]}",
+        )
+        return proc.stdout.rstrip("\n")
 
-        These escaped `_docstring_counts` entirely: its pattern needs identifier-space-digits,
-        and both of these lines put a backticked constant between the kind name and its count, so
-        the docstring said `bare-const (16)` / `default-spec (50)` with nothing checking either.
-        The docstring claimed all of its counts were pinned while two of them were prose.
+    def _docstring_kinds_region(self) -> str:
+        """The docstring lines between `is any of:` and the `implicit:` row, blank lines dropped.
 
-        Parsed GENERICALLY -- by row shape, not by the vocabulary the tool currently emits. Keying
-        the search on `_non_surface_kinds()` made the comparison one-directional: `documented`
-        could then never contain a kind the tool does not emit, so a kind that STOPS being emitted
-        left its docstring row standing and unpinned, and the equality could not see it. That is
-        this file's own defect class, and it is on the roadmap rather than hypothetical -- driving
-        `bare-const` and `default-spec` to zero is the goal, and the burndown reaching it is
-        exactly when `(16)`/`(50)` would silently become prose again. Reading rows from the
-        docstring and kinds from the tool lets the comparison fail in BOTH directions.
-
-        WHAT UNSCOPING COST, recorded rather than discovered later. Searching the whole docstring
-        instead of the kinds table means a SECOND aligned table of counts -- entirely plausible in
-        this docstring's house style -- would be parsed as extra kinds and fail with names like
-        `per-version`/`supported-map` in the "docstring:" list. It fails CLOSED and the names point
-        straight at the cause, which is why the trade is worth taking; scoping failed OPEN.
-
-        The prose line carrying `(24)` and `(49)` is excluded because its first token is UPPERCASE,
-        and that is the ONLY thing excluding it -- its `(49)` IS line-final. An earlier version of
-        this comment claimed the counts were not line-final, which was wrong about `(49)`.
-        """
-        self._kinds_table()  # anchors must exist; fails loudly if the table is gone
-        # Searched over the WHOLE docstring, not just the kinds table. Scoping to the table left the
-        # both-directions property depending on WHERE the row sits: retire a kind and move its row
-        # below the `implicit:` anchor, and the row survives with its count unpinned again. A stale
-        # row is stale wherever it is written.
-        #
-        # `[ \t]`, NOT `\s`. `\s` matches newlines, so neither "indented" nor "gutter" was actually
-        # enforced: the `bare-const` match span began with a borrowed '\n' from the preceding blank
-        # line, a column-0 line after a blank line matched, and a lone lowercase token on one line
-        # plus any later line ending in `(N)` formed a phantom row spanning the break. Not live in
-        # this docstring, but the grammar now means what the failure message says it means.
-        found: dict[str, int] = {}
-        for name, count in re.findall(self.KIND_ROW_STRICT, self._docstring(), re.M):
-            found[name] = int(count)
-        return found
-
-    #: A kind row the parser can READ: indented, kind token (optionally backticked -- a retired
-    #: kind's row read `` `bare-const` `` and became invisible to both sets), 2+ spaces of column
-    #: gutter, then a line-final parenthesised count. `implicit:<Surface>` carries no count and is
-    #: excluded by requiring one.
-    KIND_ROW_STRICT = r"^[ \t]+`?([a-z][a-z0-9-]*)`?[ \t]{2,}.*?\((\d+)\)[ \t]*$"
-    #: A line that LOOKS like a kind row but the strict grammar cannot read: one space of gutter, a
-    #: count that is not line-final, a trailing footnote marker. Deliberately looser on exactly the
-    #: axes a hand-reformat varies, and no looser -- it still requires a leading lowercase token and
-    #: a parenthesised number on the same line.
-    KIND_ROW_NEAR = r"^[ \t]*`?([a-z][a-z0-9-]*)`?[ \t]+.*?\((\d+)\)"
-    #: Quoted in failure messages so a reformat this parser cannot read is reported as "not in the
-    #: parsed form" rather than as "the count is missing".
-    KIND_ROW_SHAPE = "indented, kind token (backticks optional), 2+ spaces, then a line-final (N)"
-
-    def _kind_rows_the_parser_cannot_read(self) -> list[str]:
-        """Lines shaped like a kind row that the STRICT grammar misses.
-
-        The stale-row property held for a row's POSITION and not for its FORM, and it failed OPEN.
-        A row the strict parser cannot read vanishes from `documented` entirely -- so retiring a
-        kind AND reformatting its row (collapse the gutter to one space, or append a footnote
-        marker after the count, which this table already does elsewhere with `*`) left the stale row
-        sitting there with its count unpinned and the test green. That is the A1/A2 escape again,
-        one gutter-width away.
-
-        Comparing the strict match set against this permissive one turns "the parser cannot read
-        this row" from silence into a failure, and it is what makes the headline property true of
-        form as well as position.
-        """
-        doc = self._docstring()
-        strict = {m.group(0).strip() for m in re.finditer(self.KIND_ROW_STRICT, doc, re.M)}
-        unreadable = []
-        for m in re.finditer(self.KIND_ROW_NEAR, doc, re.M):
-            line = m.group(0).strip()
-            if not any(line in s or s in line for s in strict):
-                unreadable.append(line)
-        return unreadable
-
-    def _docstring(self) -> str:
-        import ast as _ast
-
-        return _ast.get_docstring(_ast.parse(LEDGER.read_text(encoding="utf-8"))) or ""
-
-    def _kinds_table(self) -> str:
-        """The docstring region listing the kinds, from `is any of:` up to the `implicit:` row.
-
-        No longer used to scope the row search -- see `_docstring_kind_counts` -- but still called
-        for its anchors, so a docstring that has lost its kinds table fails loudly here rather than
-        parsing zero rows somewhere else and reporting a confusing set difference.
+        This is the region the tool owns. Extracting a REGION rather than matching rows means an
+        extra row, a duplicated row, a stale row, or a reformatted row all land inside it and all
+        show up as a diff.
         """
         doc = self._docstring()
         try:
             start = doc.index("is any of:")
-            end = doc.index("implicit:", start)
-        except ValueError:  # pragma: no cover - guarded so the scope cannot silently empty
+            start = doc.index("\n", start) + 1
+            end = doc.index("  implicit:", start)
+        except ValueError:
             self.fail(
-                "the ledger docstring no longer has an `is any of:` ... `implicit:` kinds table, "
-                "so this guard has nothing to parse. An empty scope would make every kind-count "
-                "assertion vacuous, which is the failure mode this whole test exists to prevent."
+                "the ledger docstring no longer has an `is any of:` ... `  implicit:` kinds table, "
+                "so this guard has nothing to compare. An empty region would make the comparison "
+                "vacuous, which is the failure mode this whole test exists to prevent."
             )
-        return doc[start:end]
+        return "\n".join(l for l in doc[start:end].split("\n") if l.strip())
 
-    def _non_surface_kinds(self, rows: list[dict] | None = None) -> list[str]:
-        """Every kind the tool emits that is not an `implicit:<Surface>` row, DERIVED not listed.
-
-        Hardcoding ("bare-const", "default-spec") reproduced the defect this test exists to fix,
-        one step out: a ninth kind would get a docstring row that nothing pinned, and the
-        docstring's "All EIGHT counts" would stale with no test failing.
-
-        `rows` is threaded so a caller can derive ONCE. This test used to call `_derive()` three
-        times -- a full AST walk of every tracked file each time -- which tripled its runtime for
-        no additional coverage.
-        """
-        rows = _derive() if rows is None else rows
-        return sorted({r["kind"] for r in rows if not r["kind"].startswith("implicit:")})
+    def _docstring(self) -> str:
+        return ast.get_docstring(ast.parse(LEDGER.read_text(encoding="utf-8"))) or ""
 
     def _derived_counts(self) -> dict[str, int]:
         counts = Counter(
@@ -350,53 +272,35 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
                     f"derives {derived[surface]}.",
                 )
 
-    def test_the_docstring_pins_the_two_non_surface_kind_counts_too(self) -> None:
-        """`bare-const` and `default-spec` are counts in the same table and were held by nothing.
+    def test_the_docstring_kinds_table_is_byte_equal_to_the_tool_rendering(self) -> None:
+        """The kinds table is GENERATED. Compare it byte-for-byte; do not parse it.
 
-        The docstring asserted that its counts were pinned by this file. Six were -- the surface
-        rows. These two were not, because they are spelled `kind (N)` with a backticked constant
-        in between, which the surface-row pattern cannot match. A figure nothing holds is prose,
-        and this docstring has already staled twice.
+        This replaces five rounds of narrowing a regex that tried to RECOGNISE a hand-written
+        table. Each round closed the escapes the previous reviewer named and left the next ones
+        open: first two reformats, then seventeen more -- an uppercase or capitalised kind name, an
+        underscore, a `*` or `-` bullet the table already uses elsewhere, a trailing colon in the
+        house style of the very next row, `[16]`, `n=16`, `(16 rows)` which this docstring itself
+        uses nine lines below, the count moved to the following line. Plus a containment check that
+        masked an unreadable row whenever its text was a substring of a readable one, and
+        last-write-wins on a duplicated row, so a WRONG count inserted above the right one was
+        discarded in silence.
+
+        A grammar cannot win that. Every version was one character from the next escape, and each
+        fix arrived with a claim that the property now held. So there is no grammar: the tool emits
+        the block, and the docstring region must equal it exactly. A reformat is a diff rather than
+        a disappearance. A duplicate row is a diff. A retired kind is a diff. A wrong count is a
+        diff. Regenerate with:
+
+            python scripts/schema_default_ledger.py --render-kinds-table
         """
-        rows = _derive()  # once; the helpers below take it rather than re-walking every file
-        expected = self._non_surface_kinds(rows)
-        documented = self._docstring_kind_counts()
-        # BEFORE the set comparison: a row the parser cannot read must not be able to disappear.
-        # Otherwise retiring a kind and reformatting its row leaves the stale count unpinned and
-        # this test green -- the escape fails OPEN, which is worse than the hole it replaced.
-        unreadable = self._kind_rows_the_parser_cannot_read()
         self.assertEqual(
-            unreadable, [],
-            "line(s) in the ledger docstring are shaped like a kind-count row but are not in the "
-            f"form this guard parses ({self.KIND_ROW_SHAPE}):\n  "
-            + "\n  ".join(unreadable)
-            + "\nSuch a line is INVISIBLE to the comparison below, so a retired kind whose row was "
-            "reformatted would keep an unpinned count with this test still green. Either put the "
-            "row in the parsed form, or delete it.",
+            self._docstring_kinds_region(), self._rendered_kinds_table(),
+            "the ledger docstring's kinds table is not byte-equal to what the tool renders.\n"
+            "Regenerate it:  python scripts/schema_default_ledger.py --render-kinds-table\n"
+            "This table is GENERATED, not hand-maintained -- any difference (a changed count, an "
+            "added or retired kind, a duplicated row, a reformatted row, stray prose inside the "
+            "region) is a real difference and none of them can hide from a byte comparison.",
         )
-        # BOTH DIRECTIONS. Set equality, not "every emitted kind is documented": the one-directional
-        # form let a kind the tool no longer emits keep a stale, unpinned docstring row, because
-        # `documented` was itself built from the tool's vocabulary and so could never contain the
-        # extra name. Rows now come from the docstring and kinds from the tool, so a row without a
-        # kind and a kind without a row both fail here.
-        self.assertEqual(
-            sorted(documented), expected,
-            "the docstring's `kind ... (N)` rows and the kinds the tool emits are not the same "
-            f"set.\n  tool emits: {expected}\n  docstring:  {sorted(documented)}\n"
-            "Adding a kind, renaming one, dropping a count, or RETIRING a kind while leaving its "
-            "row behind must all fail here rather than leaving a figure nothing holds.\n"
-            f"If the row IS present, check its FORM -- a row is only parsed when it is: "
-            f"{self.KIND_ROW_SHAPE}. A reformatted row is unreadable to this guard and shows up "
-            "here as a missing count rather than as a formatting complaint.",
-        )
-        derived = Counter(r["kind"] for r in rows)
-        for kind in sorted(documented):
-            with self.subTest(kind=kind):
-                self.assertEqual(
-                    documented[kind], derived[kind],
-                    f"the docstring says {kind} has {documented[kind]} sites; the tool derives "
-                    f"{derived[kind]}.",
-                )
 
     def test_the_docstring_states_the_surface_count_it_actually_has(self) -> None:
         doc = LEDGER.read_text(encoding="utf-8")
