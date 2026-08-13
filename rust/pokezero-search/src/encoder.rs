@@ -148,9 +148,9 @@ fn canonical_gen3_randbat_species_id(value: &str) -> String {
 ///           SLEEP_CLAUSE_BLOCKS_*, TT_CONFUSION_SELFHIT) and 2 categorical
 ///           (LAST_USED_MOVE, TRACED_ABILITY)
 ///   v3   -- 4 numeric absent (SELF/OPP_SCREENS, SELF/OPP_FUTURE_SIGHT), same 2 categorical
-///   v4   -- 12 numeric absent (+ TIER2_*, TM2_PRESENT, TT_ABS_TURN, TT_TURNS_AGO,
-///           TT_OWN_SPIKES, TT_OPP_SPIKES) and 12 categorical -- the entire
-///           `CATEGORY_TM_*` family
+///   v4   -- 12 numeric absent (v3's 4 plus TIER2_CB_PINNED, TIER2_INVESTMENT_PINNED,
+///           TM2_PRESENT, TT_ABS_TURN, TT_TURNS_AGO, TT_OWN_SPIKES, TT_OPP_SPIKES,
+///           TT_CONFUSION_SELFHIT) and 12 categorical -- the entire `CATEGORY_TM_*` family
 ///
 /// So v4, the production schema, is itself a case: `CATEGORY_TM_*` is what would break.
 /// Keeping the Option preserves the previous semantics exactly -- the error surfaces if
@@ -365,119 +365,205 @@ impl Cols {
     /// Exists so the mapping can be asserted; Rust has no field reflection.
     #[cfg(test)]
     fn as_pairs(&self) -> Vec<(&'static str, Option<usize>)> {
+        // Exhaustive destructuring with NO `..` rest pattern, deliberately: adding a field to
+        // `Cols` without adding it here is then a COMPILE error. Independent review showed the
+        // previous `self.field` form left ADDITION undetected -- a new field in `Cols` and
+        // `resolve` but not here kept every mapping test green, the only signal being a `never
+        // read` warning that vanishes the moment the field is used at a call site.
+        let Cols {
+            num_accuracy,
+            num_active,
+            num_base_hp,
+            num_base_power,
+            num_candidate_set_count,
+            num_effect_chance,
+            num_gender_female,
+            num_gender_male,
+            num_hp_fraction,
+            num_legal,
+            num_level,
+            num_meanlook_trap,
+            num_move_pp_fraction,
+            num_opp_future_sight,
+            num_opp_hazards,
+            num_opp_move_pp_offset,
+            num_opp_move_pp_valid_offset,
+            num_opp_screens,
+            num_opp_sleep_clause,
+            num_opp_wish_pending,
+            num_opp_wish_turns,
+            num_possible_ability_count,
+            num_possible_item_count,
+            num_possible_move_count,
+            num_present,
+            num_priority,
+            num_rest_sleep,
+            num_revealed_ability,
+            num_revealed_item,
+            num_revealed_move_count,
+            num_self_future_sight,
+            num_self_hazards,
+            num_self_hp_cost,
+            num_self_screens,
+            num_self_sleep_clause,
+            num_self_wish_pending,
+            num_self_wish_turns,
+            num_sleep_clause_blocks_opp,
+            num_sleep_clause_blocks_self,
+            num_sleep_turns,
+            num_stat_weather_reveal_offset,
+            num_sub_hp_fraction,
+            num_tier2_cb_pinned,
+            num_tier2_investment_pinned,
+            num_tm2_present,
+            num_toxic_stage,
+            num_trapper_alive,
+            num_tt_abs_turn,
+            num_tt_confusion_selfhit,
+            num_tt_opp_spikes,
+            num_tt_own_spikes,
+            num_tt_turns_ago,
+            num_turns_active,
+            num_turn_count,
+            num_uncertainty,
+            num_wake_known,
+            num_weather_permanent,
+            num_weather_turns,
+            cat_belief_ability_offset,
+            cat_belief_item_offset,
+            cat_belief_move_offset,
+            cat_last_used_move,
+            cat_move_category,
+            cat_move_effect,
+            cat_move_priority,
+            cat_primary,
+            cat_role,
+            cat_secondary,
+            cat_slot,
+            cat_tm_first_bp,
+            cat_tm_first_cant,
+            cat_tm_first_kind,
+            cat_tm_second_action,
+            cat_tm_second_bp,
+            cat_tm_second_cant,
+            cat_tm_second_defender,
+            cat_tm_second_effectiveness,
+            cat_tm_second_kind,
+            cat_tm_second_outcome,
+            cat_tm_second_side_effect,
+            cat_tm_second_species,
+            cat_traced_ability,
+            cat_type_1,
+            cat_type_2,
+            cat_volatile_offset,
+            off_action_candidates,
+            off_field,
+            off_opponent_pokemon,
+            off_self_pokemon,
+            off_stats,
+            off_transition,
+        } = self;
         vec![
-            ("num_accuracy", self.num_accuracy),
-            ("num_active", self.num_active),
-            ("num_base_hp", self.num_base_hp),
-            ("num_base_power", self.num_base_power),
-            ("num_candidate_set_count", self.num_candidate_set_count),
-            ("num_effect_chance", self.num_effect_chance),
-            ("num_gender_female", self.num_gender_female),
-            ("num_gender_male", self.num_gender_male),
-            ("num_hp_fraction", self.num_hp_fraction),
-            ("num_legal", self.num_legal),
-            ("num_level", self.num_level),
-            ("num_meanlook_trap", self.num_meanlook_trap),
-            ("num_move_pp_fraction", self.num_move_pp_fraction),
-            ("num_opp_future_sight", self.num_opp_future_sight),
-            ("num_opp_hazards", self.num_opp_hazards),
-            ("num_opp_move_pp_offset", self.num_opp_move_pp_offset),
+            ("num_accuracy", *num_accuracy),
+            ("num_active", *num_active),
+            ("num_base_hp", *num_base_hp),
+            ("num_base_power", *num_base_power),
+            ("num_candidate_set_count", *num_candidate_set_count),
+            ("num_effect_chance", *num_effect_chance),
+            ("num_gender_female", *num_gender_female),
+            ("num_gender_male", *num_gender_male),
+            ("num_hp_fraction", *num_hp_fraction),
+            ("num_legal", *num_legal),
+            ("num_level", *num_level),
+            ("num_meanlook_trap", *num_meanlook_trap),
+            ("num_move_pp_fraction", *num_move_pp_fraction),
+            ("num_opp_future_sight", *num_opp_future_sight),
+            ("num_opp_hazards", *num_opp_hazards),
+            ("num_opp_move_pp_offset", *num_opp_move_pp_offset),
             (
                 "num_opp_move_pp_valid_offset",
-                self.num_opp_move_pp_valid_offset,
+                *num_opp_move_pp_valid_offset,
             ),
-            ("num_opp_screens", self.num_opp_screens),
-            ("num_opp_sleep_clause", self.num_opp_sleep_clause),
-            ("num_opp_wish_pending", self.num_opp_wish_pending),
-            ("num_opp_wish_turns", self.num_opp_wish_turns),
-            (
-                "num_possible_ability_count",
-                self.num_possible_ability_count,
-            ),
-            ("num_possible_item_count", self.num_possible_item_count),
-            ("num_possible_move_count", self.num_possible_move_count),
-            ("num_present", self.num_present),
-            ("num_priority", self.num_priority),
-            ("num_rest_sleep", self.num_rest_sleep),
-            ("num_revealed_ability", self.num_revealed_ability),
-            ("num_revealed_item", self.num_revealed_item),
-            ("num_revealed_move_count", self.num_revealed_move_count),
-            ("num_self_future_sight", self.num_self_future_sight),
-            ("num_self_hazards", self.num_self_hazards),
-            ("num_self_hp_cost", self.num_self_hp_cost),
-            ("num_self_screens", self.num_self_screens),
-            ("num_self_sleep_clause", self.num_self_sleep_clause),
-            ("num_self_wish_pending", self.num_self_wish_pending),
-            ("num_self_wish_turns", self.num_self_wish_turns),
-            (
-                "num_sleep_clause_blocks_opp",
-                self.num_sleep_clause_blocks_opp,
-            ),
+            ("num_opp_screens", *num_opp_screens),
+            ("num_opp_sleep_clause", *num_opp_sleep_clause),
+            ("num_opp_wish_pending", *num_opp_wish_pending),
+            ("num_opp_wish_turns", *num_opp_wish_turns),
+            ("num_possible_ability_count", *num_possible_ability_count),
+            ("num_possible_item_count", *num_possible_item_count),
+            ("num_possible_move_count", *num_possible_move_count),
+            ("num_present", *num_present),
+            ("num_priority", *num_priority),
+            ("num_rest_sleep", *num_rest_sleep),
+            ("num_revealed_ability", *num_revealed_ability),
+            ("num_revealed_item", *num_revealed_item),
+            ("num_revealed_move_count", *num_revealed_move_count),
+            ("num_self_future_sight", *num_self_future_sight),
+            ("num_self_hazards", *num_self_hazards),
+            ("num_self_hp_cost", *num_self_hp_cost),
+            ("num_self_screens", *num_self_screens),
+            ("num_self_sleep_clause", *num_self_sleep_clause),
+            ("num_self_wish_pending", *num_self_wish_pending),
+            ("num_self_wish_turns", *num_self_wish_turns),
+            ("num_sleep_clause_blocks_opp", *num_sleep_clause_blocks_opp),
             (
                 "num_sleep_clause_blocks_self",
-                self.num_sleep_clause_blocks_self,
+                *num_sleep_clause_blocks_self,
             ),
-            ("num_sleep_turns", self.num_sleep_turns),
+            ("num_sleep_turns", *num_sleep_turns),
             (
                 "num_stat_weather_reveal_offset",
-                self.num_stat_weather_reveal_offset,
+                *num_stat_weather_reveal_offset,
             ),
-            ("num_sub_hp_fraction", self.num_sub_hp_fraction),
-            ("num_tier2_cb_pinned", self.num_tier2_cb_pinned),
-            (
-                "num_tier2_investment_pinned",
-                self.num_tier2_investment_pinned,
-            ),
-            ("num_tm2_present", self.num_tm2_present),
-            ("num_toxic_stage", self.num_toxic_stage),
-            ("num_trapper_alive", self.num_trapper_alive),
-            ("num_tt_abs_turn", self.num_tt_abs_turn),
-            ("num_tt_confusion_selfhit", self.num_tt_confusion_selfhit),
-            ("num_tt_opp_spikes", self.num_tt_opp_spikes),
-            ("num_tt_own_spikes", self.num_tt_own_spikes),
-            ("num_tt_turns_ago", self.num_tt_turns_ago),
-            ("num_turns_active", self.num_turns_active),
-            ("num_turn_count", self.num_turn_count),
-            ("num_uncertainty", self.num_uncertainty),
-            ("num_wake_known", self.num_wake_known),
-            ("num_weather_permanent", self.num_weather_permanent),
-            ("num_weather_turns", self.num_weather_turns),
-            ("cat_belief_ability_offset", self.cat_belief_ability_offset),
-            ("cat_belief_item_offset", self.cat_belief_item_offset),
-            ("cat_belief_move_offset", self.cat_belief_move_offset),
-            ("cat_last_used_move", self.cat_last_used_move),
-            ("cat_move_category", self.cat_move_category),
-            ("cat_move_effect", self.cat_move_effect),
-            ("cat_move_priority", self.cat_move_priority),
-            ("cat_primary", self.cat_primary),
-            ("cat_role", self.cat_role),
-            ("cat_secondary", self.cat_secondary),
-            ("cat_slot", self.cat_slot),
-            ("cat_tm_first_bp", self.cat_tm_first_bp),
-            ("cat_tm_first_cant", self.cat_tm_first_cant),
-            ("cat_tm_first_kind", self.cat_tm_first_kind),
-            ("cat_tm_second_action", self.cat_tm_second_action),
-            ("cat_tm_second_bp", self.cat_tm_second_bp),
-            ("cat_tm_second_cant", self.cat_tm_second_cant),
-            ("cat_tm_second_defender", self.cat_tm_second_defender),
-            (
-                "cat_tm_second_effectiveness",
-                self.cat_tm_second_effectiveness,
-            ),
-            ("cat_tm_second_kind", self.cat_tm_second_kind),
-            ("cat_tm_second_outcome", self.cat_tm_second_outcome),
-            ("cat_tm_second_side_effect", self.cat_tm_second_side_effect),
-            ("cat_tm_second_species", self.cat_tm_second_species),
-            ("cat_traced_ability", self.cat_traced_ability),
-            ("cat_type_1", self.cat_type_1),
-            ("cat_type_2", self.cat_type_2),
-            ("cat_volatile_offset", self.cat_volatile_offset),
-            ("off_action_candidates", self.off_action_candidates),
-            ("off_field", self.off_field),
-            ("off_opponent_pokemon", self.off_opponent_pokemon),
-            ("off_self_pokemon", self.off_self_pokemon),
-            ("off_stats", self.off_stats),
-            ("off_transition", self.off_transition),
+            ("num_sub_hp_fraction", *num_sub_hp_fraction),
+            ("num_tier2_cb_pinned", *num_tier2_cb_pinned),
+            ("num_tier2_investment_pinned", *num_tier2_investment_pinned),
+            ("num_tm2_present", *num_tm2_present),
+            ("num_toxic_stage", *num_toxic_stage),
+            ("num_trapper_alive", *num_trapper_alive),
+            ("num_tt_abs_turn", *num_tt_abs_turn),
+            ("num_tt_confusion_selfhit", *num_tt_confusion_selfhit),
+            ("num_tt_opp_spikes", *num_tt_opp_spikes),
+            ("num_tt_own_spikes", *num_tt_own_spikes),
+            ("num_tt_turns_ago", *num_tt_turns_ago),
+            ("num_turns_active", *num_turns_active),
+            ("num_turn_count", *num_turn_count),
+            ("num_uncertainty", *num_uncertainty),
+            ("num_wake_known", *num_wake_known),
+            ("num_weather_permanent", *num_weather_permanent),
+            ("num_weather_turns", *num_weather_turns),
+            ("cat_belief_ability_offset", *cat_belief_ability_offset),
+            ("cat_belief_item_offset", *cat_belief_item_offset),
+            ("cat_belief_move_offset", *cat_belief_move_offset),
+            ("cat_last_used_move", *cat_last_used_move),
+            ("cat_move_category", *cat_move_category),
+            ("cat_move_effect", *cat_move_effect),
+            ("cat_move_priority", *cat_move_priority),
+            ("cat_primary", *cat_primary),
+            ("cat_role", *cat_role),
+            ("cat_secondary", *cat_secondary),
+            ("cat_slot", *cat_slot),
+            ("cat_tm_first_bp", *cat_tm_first_bp),
+            ("cat_tm_first_cant", *cat_tm_first_cant),
+            ("cat_tm_first_kind", *cat_tm_first_kind),
+            ("cat_tm_second_action", *cat_tm_second_action),
+            ("cat_tm_second_bp", *cat_tm_second_bp),
+            ("cat_tm_second_cant", *cat_tm_second_cant),
+            ("cat_tm_second_defender", *cat_tm_second_defender),
+            ("cat_tm_second_effectiveness", *cat_tm_second_effectiveness),
+            ("cat_tm_second_kind", *cat_tm_second_kind),
+            ("cat_tm_second_outcome", *cat_tm_second_outcome),
+            ("cat_tm_second_side_effect", *cat_tm_second_side_effect),
+            ("cat_tm_second_species", *cat_tm_second_species),
+            ("cat_traced_ability", *cat_traced_ability),
+            ("cat_type_1", *cat_type_1),
+            ("cat_type_2", *cat_type_2),
+            ("cat_volatile_offset", *cat_volatile_offset),
+            ("off_action_candidates", *off_action_candidates),
+            ("off_field", *off_field),
+            ("off_opponent_pokemon", *off_opponent_pokemon),
+            ("off_self_pokemon", *off_self_pokemon),
+            ("off_stats", *off_stats),
+            ("off_transition", *off_transition),
         ]
     }
 }
@@ -498,12 +584,24 @@ struct Layout {
     // `base_stat_slots`, `actual_stat_slots` and `boost_stat_slots` carry (name, index)
     // pairs and are ALREADY read positionally; none of them calls `num_col`.
     //
-    // Those 22 sites still string-hash 63 distinct constant names per leaf -- more names
-    // than the 58 numeric ones migrated here -- and they include the per-transition-row
-    // TT/TM2 block (the `const FIRST`/`const SECOND: SubBlockColumns` sites), which is the
-    // hottest region in this file. The stopping point of this change is therefore
-    // ARBITRARY, chosen to keep one diff mechanical, and is not a claim that the residue is
-    // irreducible. Finishing it is the obvious next change.
+    // Those 22 sites still string-hash 63 distinct constant names per leaf -- more names than
+    // the 58 numeric ones migrated here. The stopping point is ARBITRARY, chosen to keep one
+    // diff mechanical, not a claim the residue is irreducible.
+    //
+    // AND MIND THE SCHEMA when sizing either half. An earlier version of this comment called the
+    // per-transition-row TT/TM2 block the hottest residue; re-review corrected it, and it cuts
+    // both the residue AND the win:
+    //   * `write_turn_merged_rows` holds 9 of the 22 survivors and is gated `if !layout.is_v4()`,
+    //     so at v4 -- the production schema -- it runs ZERO times per leaf. That named "hot"
+    //     residue is dead in production; 13 survivors are live.
+    //   * Symmetrically, 31 of the 131 sites converted HERE sit in those same v4-dead functions
+    //     (30 in `write_turn_merged_rows`, 1 in `write_sub_block_numerics`), so ~24% of what this
+    //     change optimizes never executes at production config.
+    //   * The live residue is dominated by `encode_expected_stats` (the `NUMERIC_EXPECTED_*`
+    //     family, per candidate mon, ungated by schema) plus 4 sites in `encode_pokemon_tokens`.
+    // Net: roughly half the per-leaf constant-name hashing at v4, and the half left is the live
+    // half. No wall-clock share is claimable from this change alone -- nothing here benchmarks
+    // encode, and `row_write` covers far more than column resolution.
     num: HashMap<String, usize>,
     /// Load-resolved indices for every constant column name the encode path reads.
     cols: Cols,
@@ -4673,13 +4771,15 @@ mod cols_mapping {
     /// (`num_present: num.get("NUMERIC_LEGAL")`) left `cargo test --features model`
     /// fully green at 555 passed. Nothing in the crate builds a `Layout`, and the
     /// Python parity tests skip in CI for want of a Showdown checkout, so all 131
-    /// rewritten call sites were unmeasured. A single mismapped field would write
+    /// rewritten call sites were unmeasured by anything cited. This test covers the
+    /// RESOLVE half; the call-site half is covered by the source lint below, added after
+    /// re-review showed a call-site mutant survived this test. A single mismapped field would write
     /// every value of one column into another column's slot at every leaf.
     ///
     /// The four byte-identity gates cannot close this either, and that is the
-    /// specific reason a Rust-side check is required: 18 of these fields do not
-    /// exist at v4 (the whole `CATEGORY_TM_*` family plus the TT/TM2 numerics) and 2
-    /// do not exist at v2.2/v3, so a mismapping confined to them passes a
+    /// specific reason a Rust-side check is required: 24 of these fields do not
+    /// exist at v4 (12 categorical -- the whole `CATEGORY_TM_*` family -- plus 12
+    /// numeric) and 2 do not exist at v2.2/v3, so a mismapping confined to them passes a
     /// single-schema corpus, differential window and live A/B alike.
     const EXPECTED: &[(&str, &str, &str)] = &[
         ("num_accuracy", "num", "NUMERIC_ACCURACY"),
@@ -4881,6 +4981,95 @@ mod cols_mapping {
                 "{field} must resolve {name} (index {index}), got {got:?} -- it is reading a different constant"
             );
         }
+    }
+
+    /// Every CALL SITE must read the field whose constant its own error message names.
+    ///
+    /// WHY THIS EXISTS SEPARATELY from the resolve check above. Re-review proved the resolve
+    /// check does NOT cover the call sites: mutating one site from `layout.cols.num_present` to
+    /// `layout.cols.num_legal`, leaving the message naming NUMERIC_PRESENT, left the whole suite
+    /// green at 557 passed. That is the higher-risk half -- `resolve` was generated as one block,
+    /// while the 125 message-carrying sites were edited across ~2,500 lines. An earlier version of
+    /// the comment above claimed to cover "all 131 rewritten call sites"; it did not, and that
+    /// overclaim is the same defect class as the two comments this PR already had to correct.
+    ///
+    /// A source lint is the honest instrument here: the message text is the independent oracle,
+    /// because it names the constant while the expression names the field.
+    #[test]
+    fn every_call_site_reads_the_field_its_message_names() {
+        // Scan PRODUCTION code only. `include_str!` pulls in this test module too, whose
+        // assertion messages contain the literal `.cols.{field}` -- the lint flagged its own
+        // template text as an unknown field. Truncating at the module marker is the fix, and the
+        // anti-vacuity floor below is what keeps that truncation from silently hiding real sites.
+        const WHOLE: &str = include_str!("encoder.rs");
+        const MARKER: &str = "mod cols_mapping {";
+        let src = &WHOLE[..WHOLE.find(MARKER).unwrap_or(WHOLE.len())];
+        let by_field: std::collections::HashMap<&str, &str> =
+            EXPECTED.iter().map(|(f, _, c)| (*f, *c)).collect();
+
+        // Sites appear in TWO textual forms and both must be seen: `.cols.field` and, where
+        // rustfmt wrapped the expression, `.cols` NEWLINE INDENT `.field`. Matching only
+        // `".cols."` found 33 of 125 and, worse, failed to BOUND the scan window, so a
+        // bare-Option site ran on and read the next site's message -- which surfaced as a false
+        // mismatch (num_opp_screens vs NUMERIC_TURN_COUNT). Skip whitespace after `.cols`.
+        let mut cursor = 0usize;
+        let mut sites: Vec<(usize, String)> = Vec::new();
+        while let Some(found) = src[cursor..].find(".cols") {
+            let at = cursor + found;
+            let after = &src[at + ".cols".len()..];
+            let trimmed = after.trim_start();
+            let skipped = after.len() - trimmed.len();
+            cursor = at + ".cols".len();
+            if !trimmed.starts_with('.') {
+                continue;
+            }
+            let ident: String = trimmed[1..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if ident.is_empty() {
+                continue;
+            }
+            sites.push((at + ".cols".len() + skipped + 1 + ident.len(), ident));
+        }
+
+        let mut checked = 0usize;
+        for (index, (body_at, field)) in sites.iter().enumerate() {
+            assert!(
+                by_field.contains_key(field.as_str()),
+                "call site reads .cols.{field}, which is not a Cols field in EXPECTED"
+            );
+            // Window ends at the NEXT site, so it can never read a neighbour's message.
+            let stop = sites
+                .get(index + 1)
+                .map(|(next, _)| *next)
+                .unwrap_or(src.len());
+            let window = &src[*body_at..stop.max(*body_at)];
+            let Some(msg) = window.find("layout missing ") else {
+                // The 6 bare-Option sites (previously `num_col_opt`) carry no message, so the
+                // field name is all there is to check. Counted, not oracled.
+                continue;
+            };
+            let tail = &window[msg + "layout missing ".len()..];
+            let Some(quote) = tail.find('"') else {
+                continue;
+            };
+            let named = tail[..quote].trim().rsplit(' ').next().unwrap_or("");
+            let expected = by_field[field.as_str()];
+            assert_eq!(
+                named, expected,
+                "call site reads .cols.{field} but its message names {named}; {field} resolves \
+                 {expected}. One of the two is wrong, and the value written would be another \
+                 column's at every leaf."
+            );
+            checked += 1;
+        }
+        // Anti-vacuity: the lint must actually have found the sites. 125 carry a message.
+        assert!(
+            checked >= 120,
+            "only {checked} call sites were cross-checked; the lint stopped seeing them, \
+             which is indistinguishable from having none to check"
+        );
     }
 
     /// Anti-vacuity: the assertion above must FAIL when a field is mismapped.
