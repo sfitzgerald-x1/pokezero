@@ -291,7 +291,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
     def test_transformer_policy_config_loads_legacy_fields_with_compatible_defaults(self) -> None:
         config = TransformerPolicyConfig.compact_category(
-            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,category_vocab=(1, 2, 3), category_oov_buckets=4)
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2, category_vocab=(1, 2, 3), category_oov_buckets=4)
         payload = config.to_dict()
         payload.pop("value_activation")
         payload.pop("temporal_aggregator")
@@ -309,9 +309,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         from pokezero.neural_policy import _validate_initial_model_config
 
         base = TransformerPolicyConfig.compact_category(
-            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,category_vocab=(1, 2, 3), category_oov_buckets=4)
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2, category_vocab=(1, 2, 3), category_oov_buckets=4)
         other = TransformerPolicyConfig.compact_category(
-            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,category_vocab=(1, 2, 3, 4), category_oov_buckets=4)
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2, category_vocab=(1, 2, 3, 4), category_oov_buckets=4)
         # Same config except policy_id is allowed (warm-start of the same embedding).
         _validate_initial_model_config(SimpleNamespace(config=replace(base, policy_id="warm")), base)
         # A different category vocabulary must be rejected (the retired-format resume guard).
@@ -324,16 +324,16 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
     def test_transformer_policy_config_validates_attention_shape(self) -> None:
         with self.assertRaisesRegex(ValueError, "divisible"):
             TransformerPolicyConfig.compact_category(
-            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,category_vocab=(1,), category_oov_buckets=1, embedding_dim=65, attention_heads=4)
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2, category_vocab=(1,), category_oov_buckets=1, embedding_dim=65, attention_heads=4)
         with self.assertRaisesRegex(ValueError, "token_count"):
             TransformerPolicyConfig.compact_category(
-            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,category_vocab=(1,), category_oov_buckets=1, token_count=ACTION_CANDIDATE_TOKEN_OFFSET + 8)
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2, category_vocab=(1,), category_oov_buckets=1, token_count=ACTION_CANDIDATE_TOKEN_OFFSET + 8)
         with self.assertRaisesRegex(ValueError, "value_activation"):
             TransformerPolicyConfig.compact_category(
-            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,category_vocab=(1,), category_oov_buckets=1, value_activation="sigmoid")
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2, category_vocab=(1,), category_oov_buckets=1, value_activation="sigmoid")
         with self.assertRaisesRegex(ValueError, "temporal_aggregator"):
             TransformerPolicyConfig.compact_category(
-            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,category_vocab=(1,), category_oov_buckets=1, temporal_aggregator="lstm")
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2, category_vocab=(1,), category_oov_buckets=1, temporal_aggregator="lstm")
 
     def test_zero_layer_transformer_policy_forward_smoke(self) -> None:
         if not torch_available():
@@ -346,8 +346,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             window_size=2,
             categorical_feature_count=1,
             numeric_feature_count=1,
-            token_count=ObservationSpec(categorical_feature_count=1, numeric_feature_count=1,
-            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2).token_count,
+            token_count=ObservationSpec(
+                categorical_feature_count=1,
+                numeric_feature_count=1,
+                schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+            ).token_count,
             embedding_dim=8,
             transformer_layers=0,
             attention_heads=1,
@@ -384,7 +387,6 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             window_size=4,
             categorical_feature_count=4,
             numeric_feature_count=2,
-            token_count=DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
             embedding_dim=8,
             transformer_layers=0,
             attention_heads=1,
@@ -436,7 +438,6 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             window_size=4,
             categorical_feature_count=4,
             numeric_feature_count=2,
-            token_count=DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
             embedding_dim=8,
             transformer_layers=1,
             attention_heads=1,
@@ -495,7 +496,6 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             window_size=4,
             categorical_feature_count=4,
             numeric_feature_count=2,
-            token_count=DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
             embedding_dim=8,
             transformer_layers=0,
             attention_heads=1,
@@ -603,8 +603,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         if not torch_available():
             self.skipTest("requires torch")
         torch = require_torch()
-        spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1,
-            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2)
+        spec = ObservationSpec(
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+        )
         config = TransformerPolicyConfig.compact_category(
             observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
             policy_id="fixture",
@@ -651,8 +654,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         if not torch_available():
             self.skipTest("requires torch")
         torch = require_torch()
-        spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1,
-            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2)
+        spec = ObservationSpec(
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+        )
         config = TransformerPolicyConfig.compact_category(
             observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
             policy_id="fixture",
@@ -691,8 +697,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         if not torch_available():
             self.skipTest("requires torch")
         torch = require_torch()
-        spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1,
-            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2)
+        spec = ObservationSpec(
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+        )
         config = TransformerPolicyConfig.compact_category(
             observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
             policy_id="fixture",
@@ -923,8 +932,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         if not torch_available():
             self.skipTest("requires torch")
         torch = require_torch()
-        spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1,
-            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2)
+        spec = ObservationSpec(
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+        )
         config = TransformerPolicyConfig.compact_category(
             observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
             policy_id="fixture",
@@ -967,8 +979,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         if not torch_available():
             self.skipTest("requires torch")
         torch = require_torch()
-        spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1,
-            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2)
+        spec = ObservationSpec(
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+        )
         config = TransformerPolicyConfig.compact_category(
             observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
             policy_id="fixture",
@@ -1023,8 +1038,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         if not torch_available():
             self.skipTest("requires torch")
         torch = require_torch()
-        spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1,
-            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2)
+        spec = ObservationSpec(
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+        )
         config = TransformerPolicyConfig.compact_category(
             observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
             policy_id="fixture",
@@ -1085,8 +1103,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
             policy_id="seam", category_vocab=("fixture",), category_oov_buckets=1, window_size=2,
             categorical_feature_count=1, numeric_feature_count=1,
-            token_count=ObservationSpec(categorical_feature_count=1, numeric_feature_count=1,
-            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2).token_count,
+            token_count=ObservationSpec(
+                categorical_feature_count=1,
+                numeric_feature_count=1,
+                schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+            ).token_count,
             embedding_dim=4, transformer_layers=1, attention_heads=1, feedforward_dim=8,
         )
 
@@ -1503,8 +1524,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         if not torch_available():
             self.skipTest("requires torch")
         torch = require_torch()
-        spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1,
-            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2)
+        spec = ObservationSpec(
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+        )
         config = TransformerPolicyConfig.compact_category(
             observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
             policy_id="fixture",
@@ -3239,6 +3263,19 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
     def test_neural_cli_benchmark_history_mask_k_wires_and_stamps(self) -> None:
         class FakePolicy:
             policy_id = "neural-smoke"
+            # Name the schema this fake checkpoint was trained under. `--history-mask-k` is bounded
+            # by the transition capacity of the CHECKPOINT's schema when the policy carries a
+            # model_config, and only falls back to the env's spec when it does not -- and that
+            # fallback is a legitimate default reader ("nobody said" -> use the environment).
+            # A bare stub took the fallback, so under a schema with no transition region the bound
+            # became `1..0` and the CLI rejected every k with `--history-mask-k must be in 1..0`.
+            # The subject here is that the knob reaches the loader and is stamped into the report,
+            # not which schema currently holds the default slot, so the fixture states its own.
+            result = SimpleNamespace(
+                model_config=SimpleNamespace(
+                    observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2
+                )
+            )
 
         class FakeReport:
             def to_dict(self) -> dict:
@@ -6864,7 +6901,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         fake_model = FakeModel()
         model_config = TransformerPolicyConfig.compact_category(
-            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,category_vocab=("species:a",), category_oov_buckets=2)
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2, category_vocab=("species:a",), category_oov_buckets=2)
         training_config = TransformerTrainingConfig(epochs=3)
         train_calls = 0
 
@@ -6964,7 +7001,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         fake_model = FakeModel()
         model_config = TransformerPolicyConfig.compact_category(
-            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,category_vocab=("species:a",), category_oov_buckets=2)
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2, category_vocab=("species:a",), category_oov_buckets=2)
         training_config = TransformerTrainingConfig(epochs=3)
 
         def fake_train(paths, *, model_config, training_config, initial_model=None, epoch_callback=None):
@@ -8624,7 +8661,6 @@ class TruncateHistoryTensorsTest(unittest.TestCase):
             window_size=1,
             categorical_feature_count=2,
             numeric_feature_count=3,
-            token_count=DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
             embedding_dim=8,
             transformer_layers=1,
             attention_heads=2,
