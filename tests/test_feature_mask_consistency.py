@@ -319,6 +319,105 @@ class EnvConfigVocabResolutionTest(unittest.TestCase):
         self.assertIs(resolved, config)
 
 
+class TheDefaultEqualsExplicitConflationTest(unittest.TestCase):
+    """`env_config_from_checkpoint_provenance` infers "explicitly set" from "differs from default".
+
+    Found by rotating this module to v2 while reviewing a fixture PR, and reproducible at TODAY's
+    default with no rotation at all. Two of the function's three axes gate their train/eval hard
+    fail on a VALUE comparison against the process-wide default:
+
+        :203  resolved.feature_masks    != DEFAULT_OBSERVATION_FEATURE_MASKS
+        :226  resolved.observation_spec != DEFAULT_REPLAY_OBSERVATION_SPEC
+        :245  resolved.category_vocab   is not None          <- the correct pattern
+
+    Because `LocalShowdownConfig.feature_masks` and `.observation_spec` default to the VALUE rather
+    than to a `None` sentinel, a caller who explicitly names the schema or the masks that happen to
+    equal the current default is indistinguishable from a caller who named nothing -- and loses the
+    documented guard against evaluating a checkpoint on a schema it never trained on.
+
+    These are `expectedFailure` rather than skipped, and rather than absorbed into a fix here. The
+    fix is a `None` sentinel on both fields, which changes resolution semantics at all 133 sites
+    the ledger records as resolving through `observation_spec`; that is production work and this is
+    a test-fixture PR. But a follow-up with no test attached is how a finding gets lost, so the live
+    behaviour is captured here and will flip to an unexpected success -- a LOUD signal -- the moment
+    the sentinel lands.
+    """
+
+    @unittest.expectedFailure
+    def test_an_explicit_spec_equal_to_the_default_should_still_hard_fail(self) -> None:
+        from pokezero.showdown import (
+            DEFAULT_REPLAY_OBSERVATION_SPEC,
+            V2_1_REPLAY_OBSERVATION_SPEC,
+        )
+
+        config = LocalShowdownConfig(observation_spec=DEFAULT_REPLAY_OBSERVATION_SPEC)
+        with self.assertRaisesRegex(ValueError, "conflicts with the loaded checkpoint"):
+            env_config_from_checkpoint_provenance(
+                config, (), context="t", required_specs=V2_1_REPLAY_OBSERVATION_SPEC,
+                required_vocabs=VOCAB,
+            )
+
+    @unittest.expectedFailure
+    def test_explicit_masks_equal_to_the_default_should_still_hard_fail(self) -> None:
+        from pokezero.observation import DEFAULT_OBSERVATION_FEATURE_MASKS
+
+        config = LocalShowdownConfig(feature_masks=DEFAULT_OBSERVATION_FEATURE_MASKS)
+        with self.assertRaisesRegex(ValueError, "conflict with the loaded checkpoint"):
+            env_config_from_checkpoint_provenance(
+                config, K32_MASKS, context="t", required_vocabs=VOCAB,
+            )
+
+    def test_the_non_default_arms_do_hard_fail(self) -> None:
+        """Non-vacuity: the guard works when the value happens NOT to equal the default.
+
+        Without this the two expectedFailures above are satisfied by a function that never raises,
+        and the record would say "the guard is broken" when it might simply be absent.
+        """
+        from pokezero.observation import ObservationFeatureMasks
+        from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC, V2_REPLAY_OBSERVATION_SPEC
+
+        with self.assertRaisesRegex(ValueError, "conflicts with the loaded checkpoint"):
+            env_config_from_checkpoint_provenance(
+                LocalShowdownConfig(observation_spec=V2_REPLAY_OBSERVATION_SPEC),
+                (), context="t", required_specs=V2_1_REPLAY_OBSERVATION_SPEC,
+                required_vocabs=VOCAB,
+            )
+        with self.assertRaisesRegex(ValueError, "conflict with the loaded checkpoint"):
+            env_config_from_checkpoint_provenance(
+                LocalShowdownConfig(
+                    feature_masks=ObservationFeatureMasks(transition_token_budget=64)
+                ),
+                K32_MASKS, context="t", required_vocabs=VOCAB,
+            )
+
+    def test_the_third_axis_uses_the_sentinel_and_is_therefore_correct(self) -> None:
+        """The fix already exists in this function, eleven lines below one of the defects."""
+        import ast
+        from pathlib import Path
+
+        source = (
+            Path(__file__).resolve().parents[1] / "src/pokezero/local_showdown.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        function = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef)
+            and n.name == "env_config_from_checkpoint_provenance"
+        )
+        sentinel_checks = [
+            ast.unparse(n) for n in ast.walk(function)
+            if isinstance(n, ast.Compare)
+            and any(isinstance(op, (ast.Is, ast.IsNot)) for op in n.ops)
+            and "resolved." in ast.unparse(n)
+        ]
+        self.assertTrue(
+            any("category_vocab" in c for c in sentinel_checks),
+            "the category_vocab axis no longer uses an `is not None` sentinel. It was the one "
+            f"correct example in this function and the model for fixing the other two. Found: "
+            f"{sentinel_checks}",
+        )
+
+
 class EnvConfigSpecResolutionTest(unittest.TestCase):
     """The dual-schema half of the latch: checkpoint-stamped observation specs resolve the
     env's encode schema + width with the same adopt/agree/conflict semantics as masks."""
