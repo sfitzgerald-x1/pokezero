@@ -3240,6 +3240,79 @@ class WorldAbortRateTests(unittest.TestCase):
         self.assertEqual(policy.stats.model_override_decisions, 1)
         self.assertEqual(policy.stats.to_dict()["model_override_rate"], 1.0)
 
+    def test_every_rung_row_is_stamped_and_only_one_is_the_decision(self) -> None:
+        # The same defect as the override rate, on a different surface.
+        # `_record_root_telemetry` appends one per-decision row per `_search_model`
+        # call, so a ladder decision leaves several -- and the Q-gap quartiles and
+        # the H4 opponent-arm join are computed over ROWS. Rewinding the counters
+        # while leaving the rows unlabelled would make the two surfaces disagree,
+        # which is worse than either being wrong alone.
+        from pokezero.policy import PolicyDecision
+
+        harness = EarlyStopPolicyIntegrationTests()
+        policy = harness._policy(early_stop=False)
+        policy._config = replace(policy._config, depth_min=2, worlds_min=1,
+                                 search_depth=3, search_sims=100)
+        policy.stats = EngineMctsStats()
+        policy.policy_id = "engine-mcts"
+        seen = []
+
+        def _fake_search_model(context, worlds, live_fold, rng):
+            index = len(seen)
+            seen.append(index)
+            policy.stats.root_decision_rows.append({"rung_marker": index})
+            policy._ladder_saturated = False
+            policy._ladder_worlds_agree = True
+            return PolicyDecision(action_index=0, policy_id=policy.policy_id)
+
+        policy._search_model = _fake_search_model
+        policy._search_ladder(object(), [(object(), object()) for _ in range(2)],
+                              object(), random.Random(0))
+        rows = policy.stats.root_decision_rows
+        self.assertEqual(len(rows), 2, "one row per rung, which is the point")
+        self.assertEqual([r["ladder_rung"] for r in rows], [0, 1])
+        # Exactly ONE row is the decision, and it is the LAST successful rung's --
+        # that is the decision the engine returned.
+        self.assertEqual([r["ladder_superseded"] for r in rows], [True, False])
+        self.assertEqual(
+            sum(1 for r in rows if not r["ladder_superseded"]), 1,
+            "a per-decision statistic filtering on this must get exactly one row",
+        )
+
+    def test_a_failed_rungs_row_is_superseded_not_the_decision(self) -> None:
+        # Rung 1 falls back, so rung 0's searched answer is what the engine
+        # returns -- and rung 0's row must be the one a per-decision analysis reads.
+        from pokezero.policy import PolicyDecision
+
+        harness = EarlyStopPolicyIntegrationTests()
+        policy = harness._policy(early_stop=False)
+        policy._config = replace(policy._config, depth_min=2, worlds_min=1,
+                                 search_depth=3, search_sims=100)
+        policy.stats = EngineMctsStats()
+        policy.policy_id = "engine-mcts"
+        seen = []
+
+        def _fake_search_model(context, worlds, live_fold, rng):
+            index = len(seen)
+            seen.append(index)
+            policy.stats.root_decision_rows.append({"rung_marker": index})
+            if index == 1:
+                policy.stats.fallback_decisions += 1
+                return PolicyDecision(action_index=8, policy_id=policy.policy_id)
+            policy._ladder_saturated = False
+            policy._ladder_worlds_agree = True
+            return PolicyDecision(action_index=0, policy_id=policy.policy_id)
+
+        policy._search_model = _fake_search_model
+        decision = policy._search_ladder(
+            object(), [(object(), object()) for _ in range(2)], object(), random.Random(0))
+        self.assertEqual(decision.action_index, 0, "rung 0's real search")
+        rows = policy.stats.root_decision_rows
+        self.assertEqual([r["ladder_superseded"] for r in rows], [False, True])
+        # And the decision did NOT fall back, so the rate must not charge it.
+        policy.stats.decisions = 1
+        self.assertEqual(policy.stats.to_dict()["fallback_rate"], 0.0)
+
     def test_the_stop_floor_is_untouched_when_there_is_no_rung(self) -> None:
         # And a fixed cell keeps the configured floor exactly, so the clamp cannot
         # change what a banked cell measured.

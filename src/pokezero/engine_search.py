@@ -1219,6 +1219,13 @@ class EngineMctsStats:
     # keeps no per-round copy of it. Capped, because a shard summary's size must
     # not be set by however many decisions a run happens to make; overflow is
     # counted, never silent.
+    #
+    # ON A LADDER CELL THERE IS ONE ROW PER RUNG, NOT PER DECISION. `_search_ladder`
+    # stamps each with `ladder_rung` and `ladder_superseded`; a per-decision
+    # statistic (the top-1/top-2 Q gap distribution, the H4 opponent-arm join) MUST
+    # filter `not row["ladder_superseded"]` or it is rung-weighted -- the same
+    # defect as the override rate, on a different surface. A cost analysis wants the
+    # unfiltered list. Fixed cells carry neither field.
     root_decision_rows: list[dict[str, Any]] = field(default_factory=list)
     root_decision_rows_dropped: int = 0
 
@@ -3063,6 +3070,17 @@ class EngineMctsPolicy:
         # taking the total after the last successful rung keeps every earlier rung's
         # vote too, which is the bug in a subtler form.
         winning_rung_delta = (0, 0, 0)
+        # AND THE SAME PROBLEM ON THE ROWS. `_record_root_telemetry` appends one
+        # per-decision row per `_search_model` call, so a ladder decision leaves
+        # several -- and any per-decision statistic computed over rows (the top-1/
+        # top-2 Q gap quartiles, the H4 opponent-arm join) would be rung-weighted
+        # exactly as the override rate was. Rewinding the counters and leaving the
+        # rows is worse than either alone, because then the two surfaces disagree.
+        # The rows are NOT deleted -- they are real searches and the cap already
+        # makes the list lossy -- they are STAMPED, so a consumer can take the
+        # decision's own row and a cost analysis can still see every rung.
+        rung_row_spans: list[tuple[int, int]] = []
+        winning_row_span: Optional[int] = None
         for index, (stage_worlds, stage_sims, stage_depth) in enumerate(ladder):
             # Snapshot BEFORE the rung so a fallback raised inside it is visible,
             # and reset the per-rung signals so a stale one cannot license an
@@ -3070,6 +3088,7 @@ class EngineMctsPolicy:
             # recomputes them.
             fallbacks_before = self.stats.fallback_decisions
             override_before_rung = _override_ledger()
+            rows_before_rung = len(self.stats.root_decision_rows)
             self._ladder_saturated = False
             self._ladder_worlds_agree = True
             self._ladder_depth_override = stage_depth
@@ -3081,6 +3100,7 @@ class EngineMctsPolicy:
             finally:
                 self._ladder_depth_override = None
                 self._ladder_sims_override = None
+            rung_row_spans.append((rows_before_rung, len(self.stats.root_decision_rows)))
             self.stats.ladder_rungs_run += 1
             if index:
                 # Rung 0's worlds were already charged at the dispatch point, with
@@ -3110,6 +3130,7 @@ class EngineMctsPolicy:
             winning_rung_delta = tuple(
                 now - before for now, before in zip(_override_ledger(), override_before_rung)
             )
+            winning_row_span = len(rung_row_spans) - 1
             if index + 1 >= len(ladder):
                 break
             next_worlds, next_sims, next_depth = ladder[index + 1]
@@ -3149,6 +3170,12 @@ class EngineMctsPolicy:
             start + delta
             for start, delta in zip(override_at_decision_start, winning_rung_delta)
         )
+        # Stamp the rows. `ladder_superseded` is the field a per-decision analysis
+        # must filter on; `ladder_rung` is what a cost analysis reads instead.
+        for rung_index, (start, stop) in enumerate(rung_row_spans):
+            for row in self.stats.root_decision_rows[start:stop]:
+                row["ladder_rung"] = rung_index
+                row["ladder_superseded"] = rung_index != winning_row_span
         assert decision is not None  # a ladder always has at least one rung
         return decision
 
