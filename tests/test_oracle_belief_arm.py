@@ -283,6 +283,36 @@ class DynamicBudgetConfigTest(unittest.TestCase):
                            engine_early_stop_min_sims=1024)
         self.assertEqual(cfg.engine_early_stop_min_sims, 1024)
 
+    def test_a_depth_floor_of_one_is_refused_here_too(self) -> None:
+        # Review's F11: the engine refuses depth_min=1 (a one-ply search is no
+        # better than the raw policy) but the bridge accepted it, so the refusal
+        # arrived only after the pod had claimed its GPUs and started a run. The
+        # bridge duplicates these checks precisely so the failure is a CLI failure.
+        with self.assertRaises(ValueError) as caught:
+            self._config(engine_depth=6, engine_depth_min=1)
+        self.assertIn("one-ply", str(caught.exception))
+        self.assertEqual(self._config(engine_depth=6, engine_depth_min=2).engine_depth_min, 2)
+
+    def test_a_worlds_floor_of_one_is_fine(self) -> None:
+        # The floors are NOT symmetric: one world is a real search of one belief,
+        # while one ply is not a search at all. The owner's default ladder is
+        # worlds 4 -> 1 precisely to concentrate the budget.
+        self.assertEqual(self._config(engine_worlds=4, engine_worlds_min=1).engine_worlds_min, 1)
+
+    def test_override_telemetry_is_refused_where_it_would_reach_nothing(self) -> None:
+        # Review's F8, and the reason it is worse than an ordinary no-op: this flag
+        # is deliberately EXCLUDED from config_id (it is observational, so cells with
+        # and without it must pool), which makes the shard's own
+        # `"override_telemetry": true` the ONLY record that the instrument ran.
+        # Under raw the flag reached no search while that record still said true --
+        # a false witness on the only witness there is.
+        for mode in ("raw", "root-puct"):
+            with self.subTest(mode=mode):
+                with self.assertRaises(ValueError) as caught:
+                    self._config(policy_mode=mode, engine_override_telemetry=True)
+                self.assertIn("engine_override_telemetry", str(caught.exception))
+        self.assertTrue(self._config(engine_override_telemetry=True).engine_override_telemetry)
+
 
 @requires_showdown("the truth source is only verifiable against real randbat teams")
 class TruthSourceAgainstRealBattlesTest(unittest.TestCase):

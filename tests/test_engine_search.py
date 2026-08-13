@@ -2752,17 +2752,36 @@ class WorldAbortRateTests(unittest.TestCase):
         self.assertIsNone(stats.to_dict()["world_search_abort_rate"])
 
     def test_the_two_failure_modes_are_separated(self) -> None:
-        # 10 attempts -> 8 built -> 6 searched. Those are two DIFFERENT defects
-        # (belief sampling / world building vs. the search aborting on an
-        # attribution-unsafe branch) and were previously only separable by
+        # 10 attempts -> 8 built -> 8 searches attempted -> 6 searched. Those are two
+        # DIFFERENT defects (belief sampling / world building vs. the search aborting
+        # on an attribution-unsafe branch) and were previously only separable by
         # parsing the `world_failure_reasons` taxonomy.
         stats = EngineMctsStats()
         stats.worlds_attempted = 10
         stats.worlds_constructed = 8
+        stats.world_search_attempts = 8
         stats.worlds_searched = 6
         payload = stats.to_dict()
         self.assertAlmostEqual(payload["belief_sample_rejection_rate"], 0.2)
         self.assertAlmostEqual(payload["world_search_abort_rate"], 0.25)
+
+    def test_a_ladder_reuses_its_worlds_and_the_abort_rate_survives_it(self) -> None:
+        # THREE denominators, and the reason there are three. A ladder searches the
+        # same 4 constructed worlds again at every rung -- 4 + 3 + 2 + 1 = 10 search
+        # attempts against 4 constructions -- so an abort rate computed against
+        # CONSTRUCTIONS reads 1 - 10/4 = -1.5. Measured at -1.75 on a real canary
+        # before review caught it.
+        stats = EngineMctsStats()
+        stats.worlds_attempted = 4
+        stats.worlds_constructed = 4
+        stats.world_search_attempts = 10
+        stats.worlds_searched = 10
+        payload = stats.to_dict()
+        self.assertEqual(payload["world_search_abort_rate"], 0.0)
+        self.assertEqual(payload["belief_sample_rejection_rate"], 0.0)
+        # And it still MEASURES: two of the ten searches abort.
+        stats.worlds_searched = 8
+        self.assertAlmostEqual(stats.to_dict()["world_search_abort_rate"], 0.2)
 
     def test_a_partial_abort_is_not_a_fallback_but_is_still_visible(self) -> None:
         """The case the whole counter exists for.
@@ -3103,10 +3122,55 @@ class WorldAbortRateTests(unittest.TestCase):
         self.assertAlmostEqual(stats["world_search_abort_rate"], 0.5)
         self.assertEqual(decision.metadata["engine_mcts"]["worlds_constructed"], 2)
 
+    def test_the_stop_floor_is_clamped_to_the_rung_not_the_total_budget(self) -> None:
+        # `early_stop_min_sims` is validated against `search_sims`, which on a ladder
+        # cell is the TOTAL for the decision. A floor of 20 against a 100 total split
+        # 4 ways is a floor ABOVE the 25-sim rung -- so on the cheap early rungs,
+        # exactly where a stop saves the most, the rule could never fire. Found in
+        # review; the floor is clamped to the rung's own per-world budget.
+        harness = EarlyStopPolicyIntegrationTests()
+        policy = harness._policy(early_stop=True)      # min_sims 20, search_sims 100
+        policy._ladder_sims_override = 8              # a rung far below the floor
+        native = harness._Native(
+            [harness._report(4, 4, requested=8, stopped=True)] * 4
+        )
+        import warnings as _w
+
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            harness._run(
+                policy, native, [harness._world("world-a"), harness._world("world-b")]
+            )
+        # The floor and its side_key are the last two positionals -- and they are
+        # only present at all when the floor is non-zero, so the full-budget REPLAY
+        # calls are two positionals shorter. Split on that rather than on call order.
+        stopping = [call for call in native.calls if len(call) == 14]
+        self.assertTrue(stopping, "the first pass must carry a floor")
+        self.assertEqual(
+            {call[-2] for call in stopping}, {8},
+            "the floor must not exceed the rung it gates",
+        )
+        self.assertEqual({call[1] for call in stopping}, {8}, "and the rung's sims")
+
+    def test_the_stop_floor_is_untouched_when_there_is_no_rung(self) -> None:
+        # And a fixed cell keeps the configured floor exactly, so the clamp cannot
+        # change what a banked cell measured.
+        harness = EarlyStopPolicyIntegrationTests()
+        policy = harness._policy(early_stop=True)
+        native = harness._Native([harness._report(56, 4, stopped=False)] * 2)
+        harness._run(
+            policy, native, [harness._world("world-a"), harness._world("world-b")]
+        )
+        self.assertEqual({call[-2] for call in native.calls}, {20})
+
     def test_a_healthy_decision_reports_a_zero_abort_rate(self) -> None:
         harness = EarlyStopPolicyIntegrationTests()
         policy = harness._policy(early_stop=False)
+        # Both denominators, because they count different things: constructions
+        # (once per decision) and SEARCH attempts (once per world per rung). This
+        # test enters at `_search_model`, past the dispatch point that charges them.
         policy.stats.worlds_constructed = 2
+        policy.stats.world_search_attempts = 2
         native = harness._Native(
             [
                 harness._report(56, 4, stopped=False),
@@ -4476,10 +4540,14 @@ class BudgetLadderTest(unittest.TestCase):
         policy._config = EngineMctsConfig(**base)
         return policy
 
-    def test_both_floors_unset_is_one_rung_at_the_caps(self) -> None:
-        # The no-op property: a fixed cell is one rung, and its per-world sims are
-        # the budget split across its worlds exactly as before the ladder existed.
-        self.assertEqual(self._policy(search_depth=4)._budget_rungs(4), [(4, 4096, 4)])
+    def test_both_floors_unset_is_one_rung_that_touches_nothing(self) -> None:
+        # THE NO-OP PROPERTY, and it is about `sims is None`, not about a number.
+        # An earlier revision returned `budget // worlds` here, which silently ran
+        # every fixed worlds>1 cell at a QUARTER of its budget (4,096 of 16,384 at
+        # the default worlds=4) under an unchanged config_id -- so it would have
+        # pooled with banked shards that ran the full budget. `None` means "use the
+        # configured budget untouched"; a number cannot mean that.
+        self.assertEqual(self._policy(search_depth=4)._budget_rungs(4), [(4, None, 4)])
 
     def test_worlds_step_down_by_one_and_sims_rise_to_hold_the_total(self) -> None:
         # The owner's example: 16k across 4w is 4k each; dropping to 3w scales sims
@@ -4494,6 +4562,22 @@ class BudgetLadderTest(unittest.TestCase):
         # one with the sims to fill the new plies.
         rungs = self._policy(worlds=4, worlds_min=2, depth_min=4)._budget_rungs(4)
         self.assertEqual(rungs[-2:], [(2, 8192, 5), (2, 8192, 6)])
+
+    def test_a_budget_smaller_than_the_world_count_does_not_overspend_or_repeat(self) -> None:
+        # Degenerate but reachable through a cell key. `budget // worlds` rounds to
+        # zero, so a naive rung asks for 0 sims; clamping to 1 then makes 4 worlds
+        # cost 4 against a budget of 2. The clamp drops the world count to what the
+        # budget can pay for -- and because several world counts collapse onto the
+        # same affordable one, the identical rungs must be deduped rather than billed
+        # as three escalations.
+        rungs = self._policy(
+            search_sims=2, search_batch=1, search_depth=3, depth_min=2, worlds_min=1
+        )._budget_rungs(4)
+        self.assertEqual(rungs, [(2, 1, 2), (1, 2, 2), (1, 2, 3)])
+        for worlds, sims, _ in rungs:
+            self.assertLessEqual(worlds * sims, 2)
+            self.assertGreaterEqual(sims, 1)
+        self.assertEqual(len(rungs), len(set(rungs)))
 
     def test_the_ladder_never_asks_for_worlds_that_were_not_sampled(self) -> None:
         rungs = self._policy(worlds=16, worlds_min=2, depth_min=6)._budget_rungs(3)
@@ -4638,20 +4722,272 @@ class LadderEscalationCriterionTest(unittest.TestCase):
         ordered = sorted(shares.values(), reverse=True)
         self.assertLess(ordered[0] - ordered[1], 0.25)
 
-    def test_a_comfortable_leader_clears_the_default_margin(self) -> None:
-        shares = _world_visit_shares(
+    def test_shares_separate_a_comfortable_leader_from_a_coin_flip(self) -> None:
+        # The contrast that motivated dropping `_locked_aggregate_choice`: both of
+        # these "lock" under it, and only one of them is actually settled. There is
+        # no `ladder_margin` knob any more -- worlds drop on per-world AGREEMENT and
+        # depth advances on SATURATION -- so this pins the arithmetic those signals
+        # are built on, not a threshold.
+        comfortable = _world_visit_shares(
             "side_one", self._report([("a", 700), ("b", 200), ("c", 100)])
         )
-        ordered = sorted(shares.values(), reverse=True)
+        ordered = sorted(comfortable.values(), reverse=True)
         self.assertGreaterEqual(ordered[0] - ordered[1], 0.25)
 
-    def test_the_margin_is_validated(self) -> None:
-        for bad in (-0.1, 1.5):
-            with self.subTest(margin=bad):
-                with self.assertRaises(ValueError):
-                    EngineMctsConfig(
-                        leaf_eval="model", worlds=4, search_sims=1024,
-                        search_batch=16, search_depth=6, model_path="/m",
-                        checkpoint_path="/c", tables_path="/t",
-                        depth_min=3, ladder_margin=bad,
-                    )
+    def test_the_removed_margin_knob_cannot_come_back_by_accident(self) -> None:
+        # It was assigned and never read: a knob a cell could set, that changed
+        # nothing. Refuse it rather than accept-and-ignore, so a cell key carrying
+        # it fails at config time instead of banking a mislabelled result.
+        with self.assertRaises(TypeError):
+            EngineMctsConfig(
+                leaf_eval="model", worlds=4, search_sims=1024, search_batch=16,
+                search_depth=6, model_path="/m", checkpoint_path="/c",
+                tables_path="/t", depth_min=3, ladder_margin=0.25,
+            )
+
+
+class LadderDriveTest(unittest.TestCase):
+    """Drives `_search_ladder` itself, not `_budget_rungs`.
+
+    Required by review, which found the wrapper had ZERO coverage: 7 of 9 seeded
+    mutants survived the full 408-test suite, including "never escalate" and
+    "escalate unconditionally" -- i.e. the suite could not tell a working ladder
+    from a ladder that was silently a fixed cell. Every test here fails against at
+    least one of those mutants, so the class is a mutant screen and not a
+    description of the code.
+
+    `_search_model` is replaced by a recorder. That is the point: this file already
+    has deep coverage of `_search_model`, and what was untested was the CONTROL FLOW
+    around it -- which rungs get run, on what signal, and which decision comes back.
+    """
+
+    def _policy(self, saturate=(), agree=(), fail_at=None, silent=(), **cfg):
+        """A policy whose `_search_model` records its rung and fakes the signals.
+
+        `saturate` / `agree` are the rung indices at which the callee reports
+        saturation / per-world agreement; `fail_at` is a rung index that raises the
+        fallback taxonomy's counter the way a real fallback would; `silent` is a rung
+        that succeeds while reaching NEITHER signal, which is what several of
+        `_search_model`'s real exits do -- they return before the block that
+        recomputes them, leaving whatever the previous rung wrote on the instance.
+        """
+        from pokezero.policy import PolicyDecision
+
+        base = dict(
+            leaf_eval="model", worlds=4, search_sims=16384, search_batch=16,
+            search_depth=6, model_path="/tmp/m.pt", checkpoint_path="/tmp/c.pt",
+            tables_path="/tmp/t.json",
+        )
+        base.update(cfg)
+        policy = EngineMctsPolicy.__new__(EngineMctsPolicy)
+        policy._config = EngineMctsConfig(**base)
+        policy.stats = EngineMctsStats()
+        policy.policy_id = "engine-mcts"
+        policy.rungs = []
+
+        def _fake_search_model(context, worlds, live_fold, rng):
+            index = len(policy.rungs)
+            policy.rungs.append(
+                {
+                    "worlds": len(worlds),
+                    "sims": getattr(policy, "_ladder_sims_override", None),
+                    "depth": getattr(policy, "_ladder_depth_override", None),
+                }
+            )
+            if index not in silent:
+                policy._ladder_saturated = index in saturate
+                policy._ladder_worlds_agree = index in agree
+            if index == fail_at:
+                # What `_fallback` does: bump the taxonomy counter and return a
+                # decision carrying THIS policy's own id. The id is why the old
+                # `policy_id != self.policy_id` guard was dead code.
+                policy.stats.fallback_decisions += 1
+                # 8 = the fallback's marker, distinguishable from any rung index.
+                # `PolicyDecision` refuses an out-of-range action, so a sentinel has
+                # to be a legal action.
+                return PolicyDecision(action_index=8, policy_id=policy.policy_id)
+            return PolicyDecision(action_index=index, policy_id=policy.policy_id)
+
+        policy._search_model = _fake_search_model
+        return policy
+
+    @staticmethod
+    def _worlds(n=4):
+        return [(object(), object()) for _ in range(n)]
+
+    # -- the no-op property, on the argv the crate actually receives ------------
+
+    def test_a_fixed_cell_renders_the_pre_ladder_argv_element_for_element(self) -> None:
+        # Review's first required change. The rung tuple is an implementation
+        # detail; what must be unchanged is the positional list handed to the
+        # crate, because that -- not the tuple -- is what determines whether a
+        # fixed cell is poolable with every shard banked before the ladder existed.
+        policy = self._policy()
+        policy._search_ladder(object(), self._worlds(4), object(), random.Random(0))
+        self.assertEqual(len(policy.rungs), 1, "a fixed cell must run exactly one rung")
+        rung = policy.rungs[0]
+        self.assertEqual(rung["worlds"], 4)
+        self.assertIsNone(rung["sims"], "sims must be untouched, not recomputed")
+
+        record = {"state_str": "s", "ctx_json": "{}", "seed": 1, "side_key": "side_one"}
+        kwargs = dict(
+            tables_json="{}", root_inputs="{}", rust_fold=None, early_stop_min_sims=0
+        )
+        before_the_ladder = native_search_args(policy._config, record, **kwargs)
+        through_the_ladder = native_search_args(
+            policy._config, record, sims=rung["sims"], depth=rung["depth"], **kwargs
+        )
+        self.assertEqual(before_the_ladder, through_the_ladder)
+
+    # -- worlds step down on AGREEMENT, and only on agreement -------------------
+
+    def test_worlds_do_not_drop_while_the_worlds_still_disagree(self) -> None:
+        # Kills "escalate unconditionally". agree=() everywhere: one rung only.
+        policy = self._policy(worlds_min=1, depth_min=2, agree=())
+        policy._search_ladder(object(), self._worlds(4), object(), random.Random(0))
+        self.assertEqual([r["worlds"] for r in policy.rungs], [4])
+        self.assertEqual(policy.stats.ladder_worlds_disagree_stops, 1)
+        self.assertEqual(policy.stats.ladder_escalations, 0)
+
+    def test_worlds_step_down_one_at_a_time_with_sims_rising(self) -> None:
+        # Kills "never escalate". Also pins the compute-neutrality the owner
+        # specified: 4x4096, 3x5461, 2x8192, 1x16384 are all the same 16,384.
+        policy = self._policy(worlds_min=1, depth_min=2, agree=(0, 1, 2, 3))
+        policy._search_ladder(object(), self._worlds(4), object(), random.Random(0))
+        self.assertEqual([r["worlds"] for r in policy.rungs], [4, 3, 2, 1])
+        self.assertEqual([r["sims"] for r in policy.rungs], [4096, 5461, 8192, 16384])
+        for rung in policy.rungs:
+            self.assertLessEqual(rung["worlds"] * rung["sims"], 16384)
+            self.assertEqual(rung["depth"], 2, "depth must not move on worlds rungs")
+        self.assertEqual(policy.stats.ladder_escalations, 3)
+
+    # -- depth marches on SATURATION alone -------------------------------------
+
+    def test_depth_does_not_advance_without_saturation(self) -> None:
+        # The owner's constraint, and the one with a strength argument behind it: a
+        # deeper search that did not fill the shallower depth explores its new plies
+        # too thinly to back them up. Worlds agree all the way down, nothing
+        # saturates -- so the ladder concentrates to 1w and then STOPS.
+        policy = self._policy(worlds_min=1, depth_min=2, agree=(0, 1, 2, 3), saturate=())
+        policy._search_ladder(object(), self._worlds(4), object(), random.Random(0))
+        self.assertEqual([r["depth"] for r in policy.rungs], [2, 2, 2, 2])
+        self.assertEqual(policy.stats.ladder_unsaturated_stops, 1)
+        self.assertEqual(policy.stats.ladder_depth_rungs, 0)
+
+    def test_depth_advances_one_ply_per_saturated_rung(self) -> None:
+        policy = self._policy(
+            worlds_min=2, depth_min=2, search_depth=4,
+            agree=(0, 1, 2), saturate=(2, 3, 4),
+        )
+        policy._search_ladder(object(), self._worlds(4), object(), random.Random(0))
+        self.assertEqual(
+            [(r["worlds"], r["depth"]) for r in policy.rungs],
+            [(4, 2), (3, 2), (2, 2), (2, 3), (2, 4)],
+        )
+        self.assertEqual(policy.stats.ladder_depth_rungs, 2)
+        # Depth rungs run at the MOST concentrated allocation, which is the one with
+        # the sims to fill the plies they add.
+        self.assertEqual(policy.rungs[-1]["sims"], 8192)
+
+    def test_saturation_alone_does_not_buy_a_world_drop(self) -> None:
+        # The two signals are not interchangeable. Saturated everywhere, agreeing
+        # nowhere: the worlds axis must refuse to move.
+        policy = self._policy(worlds_min=1, depth_min=2, saturate=(0, 1, 2, 3))
+        policy._search_ladder(object(), self._worlds(4), object(), random.Random(0))
+        self.assertEqual([r["worlds"] for r in policy.rungs], [4])
+
+    # -- fallbacks ------------------------------------------------------------
+
+    def test_a_failed_rung_stops_the_ladder_and_keeps_the_last_good_decision(self) -> None:
+        # Review's F2. `_fallback` returns this policy's own `policy_id`, so the
+        # original `decision.policy_id != self.policy_id` test was dead code: the
+        # ladder marched on past failed rungs reading STALE signals, and returned
+        # the failed rung's decision even though an earlier rung had produced a
+        # perfectly good searched answer. That made escalating strictly worse than
+        # not escalating.
+        policy = self._policy(
+            worlds_min=1, depth_min=2, agree=(0, 1, 2, 3), fail_at=1
+        )
+        decision = policy._search_ladder(
+            object(), self._worlds(4), object(), random.Random(0)
+        )
+        self.assertEqual(len(policy.rungs), 2, "the ladder must stop at the failure")
+        self.assertEqual(policy.stats.ladder_fallback_rungs, 1)
+        self.assertEqual(
+            decision.action_index, 0, "rung 0's good decision, not rung 1's fallback"
+        )
+
+    def test_a_failure_on_the_first_rung_is_still_returned(self) -> None:
+        # There is no last_good to fall back to, so the fallback IS the answer --
+        # the ladder must not return None or assert.
+        policy = self._policy(worlds_min=1, depth_min=2, agree=(0,), fail_at=0)
+        decision = policy._search_ladder(
+            object(), self._worlds(4), object(), random.Random(0)
+        )
+        self.assertEqual(decision.action_index, 8)
+        self.assertEqual(len(policy.rungs), 1)
+
+    def test_a_rung_that_reports_nothing_cannot_inherit_a_licence(self) -> None:
+        # `_search_model` has exits that return BEFORE recomputing the signals. If
+        # the ladder does not reset them per rung, rung 1's saturation licence is
+        # still sitting on the instance when rung 2 asks -- so the ladder deepens on
+        # evidence from a DIFFERENT rung at a different budget. Rung 1 here
+        # saturates, rung 2 reports nothing: the climb must stop at rung 2.
+        policy = self._policy(
+            worlds_min=3, depth_min=2, search_depth=6,
+            agree=(0,), saturate=(1,), silent=(2,),
+        )
+        policy._search_ladder(object(), self._worlds(4), object(), random.Random(0))
+        self.assertEqual(
+            [(r["worlds"], r["depth"]) for r in policy.rungs],
+            [(4, 2), (3, 2), (3, 3)],
+        )
+        self.assertEqual(policy.stats.ladder_unsaturated_stops, 1)
+
+    def test_stale_signals_cannot_license_an_escalation(self) -> None:
+        # `_fallback` returns BEFORE the block that recomputes the signals, so
+        # whatever the previous rung left on the instance is still there. The reset
+        # is what makes the fallback break reachable at all.
+        policy = self._policy(worlds_min=1, depth_min=2, agree=(0,), fail_at=1)
+        policy._search_ladder(object(), self._worlds(4), object(), random.Random(0))
+        self.assertEqual(len(policy.rungs), 2)
+
+    # -- accounting -----------------------------------------------------------
+
+    def test_the_cost_denominator_counts_decisions_not_rungs(self) -> None:
+        # The error this pins cost a real conclusion: `searched_decisions` counts
+        # RUNGS, and reading a rung-denominated rate as per-decision reported a 2x
+        # cost REGRESSION as a 23% saving. `ladder_decisions` is the per-decision
+        # denominator and must stay at one per call.
+        policy = self._policy(worlds_min=1, depth_min=2, agree=(0, 1, 2, 3))
+        policy._search_ladder(object(), self._worlds(4), object(), random.Random(0))
+        self.assertEqual(policy.stats.ladder_decisions, 1)
+        self.assertEqual(policy.stats.ladder_rungs_run, 4)
+        payload = policy.stats.to_dict()
+        self.assertEqual(payload["ladder_rungs_per_decision"], 4.0)
+
+    def test_the_ladder_charges_a_search_attempt_for_every_world_it_re_searches(self) -> None:
+        # The counter that keeps the abort rate honest. Rung 0's worlds are charged
+        # at `decide()`'s dispatch point (which this class enters past), so what the
+        # LADDER owes is every rung after the first: 3 + 2 + 1 for a 4->1 climb.
+        # Without it, `worlds_searched` outruns its denominator and the rate goes
+        # negative -- measured at -1.75 on a real canary.
+        policy = self._policy(worlds_min=1, depth_min=2, agree=(0, 1, 2, 3))
+        policy._search_ladder(object(), self._worlds(4), object(), random.Random(0))
+        self.assertEqual(policy.stats.world_search_attempts, 3 + 2 + 1)
+
+    def test_the_world_abort_rate_cannot_go_negative_on_a_ladder(self) -> None:
+        # Measured at -1.75 in review: `worlds_searched` accumulates per rung while
+        # `worlds_constructed` is charged once per decision, so the rate was built
+        # on denominators that count different things.
+        stats = EngineMctsStats()
+        stats.worlds_constructed = 4          # one decision's worth of construction
+        stats.world_search_attempts = 10      # 4 + 3 + 2 + 1 across four rungs
+        stats.worlds_searched = 10
+        self.assertEqual(stats.to_dict()["world_search_abort_rate"], 0.0)
+        stats.worlds_searched = 8
+        self.assertAlmostEqual(stats.to_dict()["world_search_abort_rate"], 0.2)
+
+
+if __name__ == "__main__":
+    unittest.main()

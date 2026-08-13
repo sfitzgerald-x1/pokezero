@@ -993,6 +993,40 @@ class SeatBlockTest(unittest.TestCase):
         self.assertEqual(block["wall_per_decision_p95"], 6.2)
         self.assertEqual(block["depth_reached_mean"], 3.1)
 
+    def test_a_dynamic_cell_surfaces_the_per_decision_wall_as_well(self) -> None:
+        # THREE walls on a ladder cell, and the reason: the gate field is
+        # per-RUNG there. `searched_decisions` is charged once per `_search_model`
+        # call and a ladder calls it once per rung, so a cell measured at 2,224 rungs
+        # against 1,062 decisions reported 4.24 s when the true per-decision cost was
+        # 8.88 s -- published once as a 23% saving when it was a 2x regression.
+        # Hoisted out of `policy_stats` so the analysis cannot reach for the per-rung
+        # figure by habit.
+        summary = {
+            "completed_games": 200,
+            "engine_mcts": {
+                "search_wall_per_searched_decision": 4.24,
+                "policy_stats": {
+                    "search_wall_per_ladder_decision": 8.88,
+                    "ladder_rungs_per_decision": 2.094,
+                },
+            },
+        }
+        block = _DRIVER.seat_block(summary, "p1")
+        self.assertEqual(block["search_wall_per_searched_decision"], 4.24)
+        self.assertEqual(block["search_wall_per_ladder_decision"], 8.88)
+        self.assertAlmostEqual(block["ladder_rungs_per_decision"], 2.094)
+
+    def test_a_fixed_cell_reports_no_ladder_wall_rather_than_a_zero(self) -> None:
+        # None, not 0.0: a fixed cell has no rungs, and a 0.0 would read as "free".
+        summary = {
+            "completed_games": 200,
+            "engine_mcts": {"search_wall_per_searched_decision": 12.51, "policy_stats": {}},
+        }
+        block = _DRIVER.seat_block(summary, "p1")
+        self.assertEqual(block["search_wall_per_searched_decision"], 12.51)
+        self.assertIsNone(block["search_wall_per_ladder_decision"])
+        self.assertIsNone(block["ladder_rungs_per_decision"])
+
     def test_raw_arm_block_survives_absent_engine_telemetry(self) -> None:
         block = _DRIVER.seat_block({"completed_games": 200, "wins": 90}, "p2")
         self.assertIsNone(block["search_wall_per_searched_decision"])

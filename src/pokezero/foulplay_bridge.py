@@ -671,11 +671,31 @@ class ControlledFoulPlayConfig:
                 raise ValueError(
                     f"{_name} requires policy_mode='engine-mcts' (got {self.policy_mode!r})."
                 )
-            if not 0 < _floor <= _cap:
+            _min = 2 if _name == "engine_depth_min" else 1
+            if not _min <= _floor <= _cap:
+                # Mirrors EngineMctsConfig's LADDER_MIN_DEPTH_FLOOR for depth. The
+                # bridge's whole reason for duplicating these checks is that the
+                # refusal must land at the CLI boundary rather than after the pod
+                # has claimed its GPUs; a floor of 1 previously passed here and
+                # died in-pod. Found in review.
                 raise ValueError(
-                    f"{_name} must be in 1..={_capname} "
-                    f"(got {_floor} with {_capname}={_cap})."
+                    f"{_name} must be in {_min}..={_capname} "
+                    f"(got {_floor} with {_capname}={_cap})"
+                    + ("; depth 1 is one-ply and no better than the raw policy."
+                       if _name == "engine_depth_min" else ".")
                 )
+        if self.engine_override_telemetry and self.policy_mode != "engine-mcts":
+            # Refused, like every sibling flag. It was the one that was merely
+            # ignored -- and worse than ignored: the shard still wrote
+            # "override_telemetry": true, and since this flag is deliberately OUT
+            # of config_id that witness is the ONLY record of whether the
+            # instrument ran. A false witness on the only record is strictly worse
+            # than a no-op. Found in review.
+            raise ValueError(
+                "engine_override_telemetry requires policy_mode='engine-mcts' "
+                f"(got {self.policy_mode!r}); outside it the flag reaches no "
+                "search and the shard's own witness would claim otherwise."
+            )
         if self.engine_early_stop and self.policy_mode != "engine-mcts":
             # Refused rather than ignored, same reasoning as the oracle arm: the
             # stop rule lives in the native search, so under 'raw' or 'root-puct'

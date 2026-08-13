@@ -456,12 +456,6 @@ class EngineMctsConfig:
     # max" is worlds_min=2 with worlds=16.
     depth_min: int | None = None
     worlds_min: int | None = None
-    #: Visit-share margin below which a decision counts as CONTESTED and the ladder
-    #: keeps escalating. Not the early-stop visit lock: that predicate compares the
-    #: leader's edge against UNSPENT simulations, so after a rung has run to
-    #: completion `remaining` is 0 and it is satisfied by any unique leader --
-    #: measured at 447 of 447 decisions, which collapsed the ladder to its floor.
-    ladder_margin: float = 0.25
     #: Share of a rung's worlds that must reach the depth ceiling (D-1, since
     #: `depth_reached == cap` is unreachable by construction) before DEPTH is
     #: allowed to advance. NEAR-FULL by default, deliberately: a deeper search that
@@ -533,10 +527,6 @@ class EngineMctsConfig:
             if not 0.0 <= self.ladder_saturation <= 1.0:
                 raise ValueError(
                     f"ladder_saturation must be in 0.0..=1.0 (got {self.ladder_saturation})."
-                )
-            if not 0.0 <= self.ladder_margin <= 1.0:
-                raise ValueError(
-                    f"ladder_margin must be in 0.0..=1.0 (got {self.ladder_margin})."
                 )
             if self.worlds_min is not None and not 0 < self.worlds_min <= self.worlds:
                 raise ValueError(
@@ -934,6 +924,12 @@ class EngineMctsStats:
     # `world_failure_reasons` taxonomy, which is why the second one has been
     # invisible. See `world_search_abort_rate` in `to_dict`.
     worlds_constructed: int = 0
+    #: World-SEARCH attempts, charged once per world per rung. Distinct from
+    #: `worlds_constructed`, which is a CONSTRUCTION count and is rightly charged
+    #: once per decision: a ladder re-searches the same constructed worlds at each
+    #: rung, so `worlds_searched` can exceed `worlds_constructed` and the abort rate
+    #: computed against construction went NEGATIVE (measured -1.75). Found in review.
+    world_search_attempts: int = 0
     worlds_searched: int = 0
     # Duplicate draws folded into another world's search (drawn N, searched 1
     # at N x budget), so `worlds_searched - worlds_collapsed ==
@@ -1059,16 +1055,24 @@ class EngineMctsStats:
     early_stop_sims_saved: int = 0
     # Dynamic budget ladder. `rungs_run` counts SEARCH PASSES, so it exceeds
     # `decisions` whenever the ladder escalates -- that is the cost, made visible
-    # rather than hidden. `settled_early` is the applied counter: decisions the
-    # ladder finished below its cap.
+    # rather than hidden.
     ladder_rungs_run: int = 0
     ladder_escalations: int = 0
-    ladder_settled_early: int = 0
+    #: Decisions that stopped because a WORLD was due to be dropped and the
+    #: per-world leaders still DISAGREED. Named for the condition, not for a
+    #: verdict: the previous name (`settled_early`) said the opposite of what the
+    #: counter measures -- the ladder stops there precisely because the belief is
+    #: NOT settled, so keeping the breadth is worth more than concentrating it.
+    ladder_worlds_disagree_stops: int = 0
     ladder_decisions: int = 0
     #: Decisions that stopped because depth WANTED to advance but the current depth
     #: was not saturated. The gate firing is the feature working, not a failure --
     #: but a cell where this dominates never deepened, and its range is decorative.
     ladder_unsaturated_stops: int = 0
+    #: Rungs that ended in a fallback. The ladder stops there and keeps the last
+    #: SUCCESSFUL rung's decision, so this is also the count of decisions whose
+    #: escalation was abandoned.
+    ladder_fallback_rungs: int = 0
     ladder_depth_rungs: int = 0
     fold_advanced_lines: int = 0
     fold_cross_checks: int = 0
@@ -1221,14 +1225,29 @@ class EngineMctsStats:
             # joint action, not when it draws an unlucky outcome. Distinct seeds
             # do not buy independence.
             #
-            # Caveat on the numerator: `worlds_constructed` is charged before
+            # Caveat on the numerator: `world_search_attempts` is charged before
             # `_search_model`'s own pre-flight, so a `root_inputs_failed` or
             # `early_stop_replay_failed` fallback charges W phantom aborts here.
             # Both are visible in `fallback_reasons`; check there before reading
             # a near-1.0 abort rate as a renderer-refusal problem.
+            #
+            # RUNGS PER DECISION is the ladder's cost multiplier, and the number to
+            # read before any other ladder rate: `searched_decisions` counts RUNGS,
+            # not decisions, so every rate built on it is per-rung on a ladder cell.
+            # Reading one of those as per-decision once turned a measured 2x cost
+            # REGRESSION into a reported 23% saving.
+            "ladder_rungs_per_decision": (
+                self.ladder_rungs_run / self.ladder_decisions
+                if self.ladder_decisions
+                else None
+            ),
+            "world_search_attempts": self.world_search_attempts,
+            # Against SEARCH ATTEMPTS, not constructions: on a ladder cell the same
+            # constructed world is searched once per rung, so the construction
+            # denominator undercounts and drove this negative. Found in review.
             "world_search_abort_rate": (
-                1.0 - (self.worlds_searched / self.worlds_constructed)
-                if self.worlds_constructed
+                1.0 - (self.worlds_searched / self.world_search_attempts)
+                if self.world_search_attempts
                 else None
             ),
             # NOT a per-world loss rate -- named for what it is. The denominator
@@ -1285,9 +1304,10 @@ class EngineMctsStats:
             "early_stop_sims_saved": self.early_stop_sims_saved,
             "ladder_rungs_run": self.ladder_rungs_run,
             "ladder_escalations": self.ladder_escalations,
-            "ladder_settled_early": self.ladder_settled_early,
+            "ladder_worlds_disagree_stops": self.ladder_worlds_disagree_stops,
             "ladder_decisions": self.ladder_decisions,
             "ladder_unsaturated_stops": self.ladder_unsaturated_stops,
+            "ladder_fallback_rungs": self.ladder_fallback_rungs,
             "ladder_depth_rungs": self.ladder_depth_rungs,
             "fold_advanced_lines": self.fold_advanced_lines,
             "fold_cross_checks": self.fold_cross_checks,
@@ -1366,11 +1386,24 @@ class EngineMctsStats:
                 self.model_override_decisions / self.override_measured_decisions
             )
         if self.searched_decisions:
+            # PER RUNG on a ladder cell: `searched_decisions` is charged once per
+            # `_search_model` call and the ladder calls it once per rung. The
+            # per-DECISION pair below is the one to compare across cells.
             payload["iterations_per_searched_decision"] = (
                 self.total_iterations / self.searched_decisions
             )
             payload["search_wall_per_searched_decision"] = (
                 self.search_wall_seconds / self.searched_decisions
+            )
+        if self.ladder_decisions:
+            # The COST DENOMINATOR for any cross-cell comparison. A ladder decision
+            # may run several rungs, so these are the only ladder rates that mean
+            # "per decision the engine was asked to make". Found in review.
+            payload["iterations_per_ladder_decision"] = (
+                self.total_iterations / self.ladder_decisions
+            )
+            payload["search_wall_per_ladder_decision"] = (
+                self.search_wall_seconds / self.ladder_decisions
             )
         if self.decisions:
             payload["wall_per_decision"] = self.decision_wall_seconds / self.decisions
@@ -1902,8 +1935,14 @@ class EngineMctsPolicy:
         # `_search_model`. Instance attributes rather than parameters so
         # `_search_model`'s signature -- which several tests and the fallback
         # taxonomy key on -- does not move.
+        # Ladder scratch state, owned by `_search_ladder` and read by
+        # `_search_model`. ALL of it declared here rather than relying on getattr
+        # defaults -- review found the comment claiming that while three of the
+        # five were missing.
         self._ladder_depth_override: int | None = None
-        self._ladder_locked = False
+        self._ladder_sims_override: int | None = None
+        self._ladder_saturated = False
+        self._ladder_worlds_agree = True
         # Measurement hook (fallback burndown plan 4 §3, direction 2): called
         # once per SUCCESSFULLY CONSTRUCTED world with the exact
         # `(context, EngineWorld, poke_engine.State)` triple search is about to
@@ -2125,9 +2164,13 @@ class EngineMctsPolicy:
 
         # Counted HERE, at the single dispatch point, rather than at the append
         # above: this is exactly the list every search path is about to receive,
-        # so the denominator cannot drift from what `worlds_searched` counts no
+        # so neither denominator can drift from what `worlds_searched` counts no
         # matter which leaf_eval runs.
         self.stats.worlds_constructed += len(worlds)
+        # And the SEARCH-attempt denominator, which starts equal to it. On every
+        # non-ladder path it stays equal, so `world_search_abort_rate` reads exactly
+        # as it always did; `_search_ladder` adds its extra rungs on top.
+        self.stats.world_search_attempts += len(worlds)
 
         if self._config.leaf_eval == "model":
             return self._search_ladder(context, worlds, live_fold, rng)
@@ -2833,7 +2876,7 @@ class EngineMctsPolicy:
         }
         self._absorb_lossy_subcases({"lossy_subcases": counts})
 
-    def _budget_rungs(self, available_worlds: int) -> list[tuple[int, int, int]]:
+    def _budget_rungs(self, available_worlds: int) -> list[tuple[int, int | None, int]]:
         """Escalation rungs as (worlds, sims_per_world, depth).
 
         `search_sims` is the TOTAL simulation budget for a decision, divided across
@@ -2866,11 +2909,39 @@ class EngineMctsPolicy:
             if cfg.worlds_min is None
             else max(1, min(int(cfg.worlds_min), worlds_start))
         )
-        rungs: list[tuple[int, int, int]] = []
+        if cfg.depth_min is None and cfg.worlds_min is None:
+            # NO LADDER. One rung, and sims is None meaning "use the configured
+            # budget untouched" -- so a fixed cell renders the byte-identical
+            # native positional list it rendered before this feature existed.
+            #
+            # This branch is why `search_sims` can mean two things safely. On a
+            # fixed cell it is the PER-WORLD budget, exactly as it always was and
+            # as every banked shard recorded it. On a ladder cell it is the TOTAL
+            # for the decision, divided across worlds. The two never pool, because
+            # a ladder cell always carries a range fragment in its config_id
+            # (`d3-6`, `w2-16`) and a fixed cell never does.
+            #
+            # An earlier revision divided unconditionally, which silently ran every
+            # fixed worlds>1 cell at budget/worlds -- a 4x compute cut at the
+            # default worlds=4, under an unchanged config_id. Found in review.
+            return [(worlds_start, None, depth_cap)]
+        rungs: list[tuple[int, int | None, int]] = []
         for w in range(worlds_start, worlds_floor - 1, -1):
-            # At least one sim per world, and integer division so the total is
-            # never exceeded -- a rung must not quietly cost more than the budget.
-            rungs.append((w, max(1, budget // w), depth_floor))
+            # Integer division so a rung never costs more than the budget, and a
+            # floor of 1 sim. F12: `budget < worlds` would otherwise round to 0.
+            per_world = max(1, budget // w)
+            if per_world * w > budget:
+                # Degenerate only (budget < worlds). Drop the world count to what
+                # the budget can actually pay for rather than overspend it.
+                per_world = 1
+                w = min(w, budget) or 1
+            if rungs and rungs[-1] == (w, per_world, depth_floor):
+                # Only reachable in the degenerate `budget < worlds` case, where the
+                # clamp above collapses several world counts onto the same
+                # affordable one. Three identical rungs would be three identical
+                # searches billed as escalation.
+                continue
+            rungs.append((w, per_world, depth_floor))
         # Then depth, one ply per rung, at the most concentrated allocation -- the
         # one that has the sims to fill the new plies.
         final_worlds, final_sims, _ = rungs[-1]
@@ -2885,7 +2956,8 @@ class EngineMctsPolicy:
         live_fold: Any,
         rng: random.Random,
     ) -> PolicyDecision:
-        """Run `_search_model` up the budget ladder, stopping once settled.
+        """Run `_search_model` up the budget ladder, stopping when the next rung
+        is not licensed.
 
         A thin wrapper on purpose. `_search_model` is long, heavily reviewed and
         carries the fallback taxonomy; escalation is expressed by CALLING it
@@ -2899,14 +2971,34 @@ class EngineMctsPolicy:
         stopping BELOW the cap, not from incremental reuse, and
         `ladder_rungs_run` is the honest cost denominator.
 
-        "Settled" is the same cross-world lock the early-stop path uses, so the
-        word means one thing in this file: the aggregate visit leader is
-        unambiguous, and escalating cannot change the mapped action.
+        NOT one "settled" test. Each axis is licensed by the uncertainty it can
+        actually reduce, and they are not interchangeable:
+
+        * a WORLD is dropped once the per-world visit leaders AGREE -- more draws of
+          a belief every draw already agrees on cannot buy information, so the
+          budget is better spent concentrating what remains;
+        * DEPTH advances only when the current depth is near-fully SATURATED, never
+          on how contested the decision looks, because a deeper search that did not
+          fill the shallower depth explores its new plies too thinly to back up.
+
+        The first version used `_locked_aggregate_choice` for both. After a rung has
+        run to completion `remaining` is 0 and that predicate reduces to "is there a
+        unique leader" -- true on 447 of 447 canary decisions, which pinned the
+        ladder to its floor and made a "dynamic 3..6" cell a fixed depth-3 cell
+        wearing a range in its name.
         """
         ladder = self._budget_rungs(len(worlds))
         self.stats.ladder_decisions += 1
         decision: Optional[PolicyDecision] = None
+        last_good: Optional[PolicyDecision] = None
         for index, (stage_worlds, stage_sims, stage_depth) in enumerate(ladder):
+            # Snapshot BEFORE the rung so a fallback raised inside it is visible,
+            # and reset the per-rung signals so a stale one cannot license an
+            # escalation: `_fallback` returns early, before the block that
+            # recomputes them.
+            fallbacks_before = self.stats.fallback_decisions
+            self._ladder_saturated = False
+            self._ladder_worlds_agree = True
             self._ladder_depth_override = stage_depth
             self._ladder_sims_override = stage_sims
             try:
@@ -2917,11 +3009,28 @@ class EngineMctsPolicy:
                 self._ladder_depth_override = None
                 self._ladder_sims_override = None
             self.stats.ladder_rungs_run += 1
-            if index + 1 >= len(ladder):
+            if index:
+                # Rung 0's worlds were already charged at the dispatch point, with
+                # `worlds_constructed`. Every rung after it searches the prefix
+                # AGAIN, which is what made `worlds_searched` exceed the
+                # construction count and drove the abort rate to -1.75.
+                self.stats.world_search_attempts += stage_worlds
+            # A FALLBACK, detected by the taxonomy counter rather than by the
+            # policy_id -- `_fallback` returns this policy's own id, so the
+            # previous `policy_id != self.policy_id` test was dead code and the
+            # ladder marched past failed rungs. Found in review.
+            #
+            # Keep the last SUCCESSFUL decision: rung 0 may have produced a
+            # perfectly good searched answer, and returning rung 2's fallback
+            # instead would make escalation a strength REGRESSION relative to not
+            # escalating at all.
+            if self.stats.fallback_decisions > fallbacks_before:
+                if last_good is not None:
+                    decision = last_good
+                self.stats.ladder_fallback_rungs += 1
                 break
-            # A fallback is not an unsettled decision -- escalating a decision
-            # that failed for a taxonomy reason would just fail again, louder.
-            if decision is None or decision.policy_id != self.policy_id:
+            last_good = decision
+            if index + 1 >= len(ladder):
                 break
             next_worlds, next_sims, next_depth = ladder[index + 1]
             if next_depth > stage_depth:
@@ -2945,9 +3054,8 @@ class EngineMctsPolicy:
                 # agrees on cannot buy more information, so the budget is better
                 # spent concentrating what remains.
                 if not getattr(self, "_ladder_worlds_agree", True):
-                    self.stats.ladder_settled_early += 1
+                    self.stats.ladder_worlds_disagree_stops += 1
                     break
-            self.stats.ladder_escalations += 1
             self.stats.ladder_escalations += 1
         assert decision is not None  # a ladder always has at least one rung
         return decision
@@ -2986,7 +3094,16 @@ class EngineMctsPolicy:
         turn = int(getattr(replay, "turn_number", 0) or 0)
         config = self._config
 
+        # Relative to THIS RUNG's per-world budget. `early_stop_min_sims` is
+        # validated against `search_sims`, which on a ladder cell is the TOTAL for
+        # the decision -- so a floor of 64 against a total of 128 across 4 worlds is
+        # a floor ABOVE the 32-sim rung, and the stop rule could never fire on the
+        # rungs that need it most. Clamped to the rung so the floor keeps meaning
+        # "don't stop before this much evidence". Found in review.
         stop_floor = config.early_stop_min_sims if config.early_stop else 0
+        _rung_sims = getattr(self, "_ladder_sims_override", None)
+        if stop_floor and _rung_sims:
+            stop_floor = max(1, min(stop_floor, int(_rung_sims)))
         world_runs: list[dict[str, Any]] = []
         # Duplicate belief completions, grouped per DECISION by search-problem
         # identity. Never shared across turns.
@@ -3283,7 +3400,19 @@ class EngineMctsPolicy:
                         final_runs.append(record)
                         continue
                     full_budget_replays += 1
-                    report = run_world(record, 0)
+                    # The RUNG's allocation, not the configured cap. Passing
+                    # neither ran the replay at the total budget per world AND at
+                    # the depth cap -- a depth the ladder had not licensed -- and
+                    # those reports then fed the saturation test, handing the
+                    # ladder a forged licence to deepen. Found in review.
+                    rung_sims = getattr(self, "_ladder_sims_override", None)
+                    multiplicity = max(1, int(record.get("_collapse_multiplicity", 1)))
+                    report = run_world(
+                        record,
+                        0,
+                        sims=None if rung_sims is None else rung_sims * multiplicity,
+                        depth=getattr(self, "_ladder_depth_override", None),
+                    )
                     if report is None:
                         replay_failed = True
                         break
@@ -3291,24 +3420,22 @@ class EngineMctsPolicy:
                     final_runs.append(record)
                 world_runs = final_runs
                 self.stats.early_stop_full_budget_replays += full_budget_replays
-        # THE LADDER'S STOP SIGNAL, per axis.
+        # THE LADDER'S SIGNALS. Two, each answering the question its own axis can
+        # act on.
         #
-        # NOT `_locked_aggregate_choice`. That predicate compares the leader's
-        # visit edge against UNSPENT simulations, which is exactly right where the
+        # NOT `_locked_aggregate_choice`: that predicate compares the visit
+        # leader's edge against UNSPENT simulations, which is right where the
         # early-stop path uses it -- mid-search, at a batch boundary. Here the rung
-        # has already run to completion, so `remaining` is 0 and the lock is
-        # satisfied by any unique leader: measured at 447 of 447 canary decisions,
-        # which made the ladder stop at its floor every time and turned a "dynamic
-        # 3..6" cell into a fixed depth-3 cell wearing a range in its name.
+        # has run to completion, `remaining` is 0, and it degenerates to "is there a
+        # unique leader": measured at 447 of 447 canary decisions, which pinned the
+        # ladder to its floor.
         #
-        # So each axis now tests the uncertainty it can actually reduce:
-        #
-        # * DEPTH resolves how close the decision is, so it escalates while the
-        #   leader's aggregate visit-share margin is under `ladder_margin`.
-        # * WORLDS resolve belief uncertainty, so they escalate while the
-        #   per-world leaders DISAGREE. Unanimity is the signal more samples of
-        #   the same belief cannot improve.
-        self._ladder_margin_met = False
+        # * SATURATION licenses DEPTH, and nothing else does. A deeper search that
+        #   did not fill the shallower depth explores its new plies too thinly to
+        #   back them up and can be worse than the depth beneath it.
+        # * AGREEMENT licenses dropping a WORLD. Once every world's leader agrees,
+        #   more draws of that belief cannot buy information, so the budget is
+        #   better spent concentrating what remains.
         self._ladder_worlds_agree = True
         # SATURATION: the share of this rung's worlds whose tree reached the depth
         # ceiling. D-1, not the cap: `depth_reached == cap` is unreachable by
@@ -3326,21 +3453,20 @@ class EngineMctsPolicy:
             sum(1 for x in reached if x >= ceiling) / len(reached)
         ) >= float(config.ladder_saturation)
         if world_runs:
-            shares: Counter[str] = Counter()
+            # PER-WORLD LEADERS, not an aggregate. Aggregating first would let one
+            # world's landslide hide two others' disagreement, and disagreement is
+            # the whole signal: it says another draw of this belief can still change
+            # the answer. `_world_visit_shares` normalises within each world so a
+            # collapsed group, searched at multiplicity x sims, does not outvote the
+            # rest on budget alone. A world whose report is unreadable is SKIPPED,
+            # never counted as agreeing.
             per_world_leaders: list[str] = []
             for record in world_runs:
                 side = _world_visit_shares(record["side_key"], record["report"])
                 if side is None:
                     continue
-                for move, share in side.items():
-                    shares[move] += share
                 per_world_leaders.append(max(side, key=lambda m: side[m]))
-            if shares and per_world_leaders:
-                ordered = shares.most_common()
-                n_worlds = len(per_world_leaders)
-                lead = ordered[0][1] / n_worlds
-                runner = (ordered[1][1] / n_worlds) if len(ordered) > 1 else 0.0
-                self._ladder_margin_met = (lead - runner) >= float(config.ladder_margin)
+            if per_world_leaders:
                 self._ladder_worlds_agree = len(set(per_world_leaders)) <= 1
         self.stats.search_wall_seconds += time.perf_counter() - search_started
 

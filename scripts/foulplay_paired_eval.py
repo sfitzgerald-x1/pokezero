@@ -412,6 +412,17 @@ def seat_block(summary: dict, seat: str) -> dict:
         "search_wall_per_searched_decision": engine.get(
             "search_wall_per_searched_decision"
         ),
+        # THREE walls on a dynamic cell, because the first one is per-RUNG there:
+        # `searched_decisions` is charged once per `_search_model` call and a ladder
+        # calls it once per rung (measured 2,224 rungs against 1,062 decisions).
+        # Hoisted rather than left inside `policy_stats` so the analysis cannot
+        # reach for the per-rung figure by habit. None on a fixed cell.
+        "search_wall_per_ladder_decision": (engine.get("policy_stats") or {}).get(
+            "search_wall_per_ladder_decision"
+        ),
+        "ladder_rungs_per_decision": (engine.get("policy_stats") or {}).get(
+            "ladder_rungs_per_decision"
+        ),
         "wall_per_decision_mean": timing.get("average_elapsed_seconds"),
         "wall_per_decision_p95": timing.get("p95_elapsed_seconds"),
         "fallback_rate": engine.get("fallback_rate"),

@@ -38,6 +38,24 @@ because the reasoning error is instructive, but the design that shipped is this:
 (`--engine-early-stop`), but it is a different axis and is not what these variants
 measure.
 
+## 0c. WHAT AN INDEPENDENT REVIEW FOUND, and what changed because of it
+
+Recorded here rather than only in the PR, because three of these are things the
+FIRST implementation got wrong in ways a green test suite did not notice, and the
+lesson is about the tests as much as the code.
+
+| # | finding | why it mattered | resolution |
+|---|---|---|---|
+| F1 | the no-op branch divided the budget by the world count | every **fixed** `worlds>1` cell silently ran at `budget//worlds` — 4,096 of 16,384 at the default `worlds=4` — under an *unchanged* `config_id`, so it would have pooled with banked shards that ran the full budget | the branch returns `sims=None` ("untouched"); a test asserts the native positional list element-for-element against the pre-ladder call |
+| F2 | the fallback guard tested `decision.policy_id != self.policy_id` | `_fallback` returns *this* policy's id, so the guard was dead code: the ladder marched past failed rungs on **stale** signals and returned the failed rung's decision even when an earlier rung had a good one — making escalation a strength regression | detect via the `fallback_decisions` counter delta; keep `last_good`; reset both signals per rung |
+| F3 | the early-stop replay ran at the total budget and the depth cap | it then fed the saturation test a licence to deepen that the rung had not earned | the replay receives the rung's `sims × collapse multiplicity` and `depth` |
+| F4 | five per-decision rates were per-**rung**; `world_search_abort_rate` was **−1.75** | `searched_decisions` counts rungs. Reading a rung-denominated rate as per-decision is exactly the error that once reported a measured 2× cost regression as a 23% saving | new `world_search_attempts` (per world **per rung**) carries the abort rate; `iterations_per_ladder_decision` / `search_wall_per_ladder_decision` are the cross-cell cost denominators; `ladder_rungs_per_decision` is emitted so a reader can see which denominator applies |
+| F6 | `_search_ladder` had **zero** coverage — 7 of 9 seeded mutants survived 408 tests | the suite could not distinguish a working ladder from a ladder that was silently a fixed cell | `LadderDriveTest` drives the wrapper with a recording `_search_model`; **11 of 11** seeded mutants now die, including "never escalate", "deepen without saturation", "march past a fallback" and the F1 regression |
+| F7 | `early_stop_min_sims` was validated against the total | a floor of 64 against a 128 total across 4 worlds is a floor *above* the 32-sim rung, so the stop rule could never fire on the rungs that need it | clamped to the rung's per-world budget |
+| F8 | `--engine-override-telemetry` had no refusal outside `engine-mcts` | worse than a no-op: the flag is deliberately **excluded** from `config_id`, so the shard's own `"override_telemetry": true` is the only record the instrument ran — and under `raw` that record was false | refused, like every sibling flag |
+| F11 | the bridge accepted `depth_min=1`, the engine refused it | the refusal arrived after the pod had claimed its GPUs | mirrored, with the "one-ply" reason in the message |
+| F5, F9, F10, F12 | duplicated `ladder_escalations += 1`; `ladder_margin` assigned and never read (with tests pinning it); comments describing the removed margin mechanism; `worlds × sims` overspending when `search_sims < worlds` | — | all removed/corrected; a test refuses `ladder_margin` by `TypeError` so a cell key carrying it fails at config time rather than banking a mislabelled result |
+
 ## 1. What "dynamic" means here, and why this target
 
 **Today the per-decision budget is fixed.** Every decision spends `search_sims`
