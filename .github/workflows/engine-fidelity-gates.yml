@@ -285,16 +285,16 @@ jobs:
             # touches nothing else -- so without this line the gate that would object
             # is not even a trigger.
             tests/test_roll_enumeration_scope.py
-            # The schema-default gate and everything it depends on. 332 of its 391 rows live
+            # The schema-default gate and everything it depends on. 332 of its 390 rows live
             # outside src/ (288 tests/, 43 scripts/, 1 docs/).
             #
             # ⚠ NAMING THESE FILES DOES NOT CLOSE THE HOLE, and an earlier revision of this comment
             # claimed it did, in the past tense. `mass-gate` runs only when this filter matches, and
-            # matching the filter's 89 patterns against the tree leaves 329 of 391 rows (84%)
+            # matching the filter's 89 patterns against the tree leaves 329 of 390 rows (84%)
             # untriggered, spread over 100 of the 126 files that hold a row. Both breakdowns, since
             # mixing the two units made an earlier revision of this comment read as though
             # 62+37+1 should total 329:
-            #     rows  untriggered: 286 tests/ + 42 scripts/ + 1 docs/ = 329 of 391
+            #     rows  untriggered: 286 tests/ + 42 scripts/ + 1 docs/ = 329 of 390
             #     files untriggered:  62 tests/ + 37 scripts/ + 1 docs/ = 100 of 126
             # So the PR-level claim "a new
             # default reader fails in the PR that introduces it" holds only for PRs that ALSO touch

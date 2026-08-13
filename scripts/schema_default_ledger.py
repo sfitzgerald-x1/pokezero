@@ -92,7 +92,7 @@ def dotted_segments(node: ast.AST) -> list[str]:
     return list(reversed(parts))
 
 
-def is_pokezero_submodule(node: ast.ImportFrom, name: str) -> bool:
+def is_pokezero_submodule(node: ast.ImportFrom, name: str, *, importer: Path | None = None) -> bool:
     """Is `name` in `from <node.module> import <name>` a pokezero SUBMODULE, or just a name?
 
     Derived from the filesystem, not from the name's shape. `from pokezero import observation`
@@ -106,7 +106,21 @@ def is_pokezero_submodule(node: ast.ImportFrom, name: str) -> bool:
     approximate.
     """
     if node.level > 0:
-        package = REPO / "src" / "pokezero"
+        # Resolve against the IMPORTING file's package, walking up `node.level - 1` directories, and
+        # then through `node.module` if there is one.
+        #
+        # The previous version hardcoded `src/pokezero` and discarded `node.module`, with a docstring
+        # claiming "the deepest node.level in the tree is 1, so treating any relative level as rooted
+        # at the package is exact here rather than approximate". The max level is **2**
+        # (src/pokezero/mcts_eval/lattice.py:31), and it was approximate in BOTH directions:
+        # `from .mcts_eval import lattice` scored 0 where it should score 1, and
+        # `from .mcts_eval import observation` -- a NAME, not a module -- scored 1 where it should
+        # score 0. That sentence was itself the enumeration-from-memory this file accuses itself of
+        # three lines away.
+        base = (importer.parent if importer is not None else REPO / "src" / "pokezero")
+        for _ in range(node.level - 1):
+            base = base.parent
+        package = base / Path(*(node.module or "").split(".")) if node.module else base
     else:
         parts = (node.module or "").split(".")
         package = REPO / "src" / Path(*parts)
@@ -159,7 +173,7 @@ def derive_surfaces() -> dict[str, set[str]]:
 
     SPELLING COVERAGE MATTERS MORE HERE THAN IN `sites_in`. A missed read in `sites_in` loses one
     row; a missed DECLARATION here loses the surface, and with it every one of its call sites --
-    `LocalShowdownConfig` alone is 133 of the 391. So an under-derived surface is the largest
+    `LocalShowdownConfig` alone is 133 of the 390. So an under-derived surface is the largest
     single way this denominator can be wrong, and for six rounds this function recognised exactly
     one spelling (`name: T = GLOBAL`) while `sites_in` accumulated four. The round-5 alias fix was
     applied to `sites_in` and never here.
@@ -192,7 +206,7 @@ def derive_surfaces() -> dict[str, set[str]]:
     # without this the Attribute arm below accepted ANY chain containing a global token, so
     # `numpy.OBSERVATION_SCHEMA_VERSION` as a class-attribute default derived a surface -- and a
     # spuriously derived surface costs EVERY call site of that class name, which is the more
-    # expensive of the two over-match directions by this file's own 133-of-391 argument.
+    # expensive of the two over-match directions by this file's own 133-of-390 argument.
     src_module_roots: set[str] = {"pokezero"}
     for path in (REPO / "src").rglob("*.py"):
         try:
@@ -203,7 +217,7 @@ def derive_surfaces() -> dict[str, set[str]]:
             if isinstance(node, ast.ImportFrom):
                 for a in node.names:
                     if node.level > 0 or (node.module or "").startswith("pokezero"):
-                        if is_pokezero_submodule(node, a.name):
+                        if is_pokezero_submodule(node, a.name, importer=path):
                             src_module_roots.add(a.asname or a.name)
             elif isinstance(node, ast.Import):
                 for a in node.names:
@@ -289,7 +303,48 @@ def derive_surfaces() -> dict[str, set[str]]:
                         for target in targets:
                             if isinstance(target, ast.Name):
                                 found.setdefault(node.name, set()).add(target.id)
-            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                # A CONSTRUCTOR's parameter defaults belong to the CLASS, not to `__init__`.
+                # Keying on `node.name` registered surface `__init__`, so every `Surf(...)` call site
+                # was invisible -- the "loses the surface and with it every call site" failure this
+                # file calls its worst -- and it planted a phantom `__init__` surface that would
+                # score rows on any literal `x.__init__(...)`. So it mis-answers rather than staying
+                # silent, which is the same shape as the posonly slice.
+                #
+                # 22 classes in src/ already define `__init__`/`__new__` with parameter defaults
+                # (LocalShowdownEnv, EngineEnv, _ReplayParser, ...) against 0 positional-only
+                # functions -- and round 8 treated the posonly case as blocking on the grounds that
+                # "has not landed" is no defence. This one has landed 22 times.
+                for statement in node.body:
+                    if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        continue
+                    if statement.name not in ("__init__", "__new__", "__post_init__"):
+                        continue
+                    a = statement.args
+                    positional = a.posonlyargs + a.args
+                    ctor_pairs = (
+                        list(zip(positional[-len(a.defaults):], a.defaults)) if a.defaults else []
+                    )
+                    ctor_pairs += [
+                        (k, d) for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None
+                    ]
+                    for arg, default in ctor_pairs:
+                        if dflt_name(default) in GLOBALS:
+                            found.setdefault(node.name, set()).add(arg.arg)
+            # ast.Lambda is DELIBERATELY EXCLUDED. Round 8 added it, claiming the lambda
+            # parameter-default spelling was "fixed and pinned"; both halves were false. `ast.Lambda`
+            # has no `.name`, so `found.setdefault(node.name, ...)` raised AttributeError -- and
+            # `SURFACES` is built at import, so ONE `f = lambda spec=GLOBAL: ...` anywhere in src/
+            # killed the script in every mode and turned the gate into "ledger derivation failed".
+            # There was no probe for it either. An anonymous callable has no call-site NAME for
+            # `sites_in` to match, so there is nothing to derive; excluding it is the fix, not
+            # including it. Pinned below by a negative that asserts the ledger still runs.
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # Constructors are handled above, attributed to their CLASS. Without this skip they
+                # ALSO register under their own name, leaving a phantom `__init__` surface that would
+                # score a row on any literal `x.__init__(...)` -- so the first half of this fix
+                # produced the right answer and kept the wrong one alongside it.
+                if node.name in ("__init__", "__new__", "__post_init__"):
+                    continue
                 a = node.args
                 # `posonlyargs + args`, because `ast.arguments.defaults` covers BOTH, combined.
                 # Slicing `a.args` alone misaligns the pairing, and this is the one escape in this
@@ -408,7 +463,7 @@ def sites_in(path: Path) -> list[dict]:
                     # which inflates the denominator and is the same failure as under-matching: the
                     # figure stops meaning what it says. Resolved against the filesystem rather
                     # than by guessing from the name's case or depth, so the answer is derived.
-                    if is_pokezero_submodule(node, a.name):
+                    if is_pokezero_submodule(node, a.name, importer=path):
                         module_roots.add(a.asname or a.name)
         elif isinstance(node, ast.Import):
             for a in node.names:
@@ -470,7 +525,7 @@ def sites_in(path: Path) -> list[dict]:
             # the process-wide default. TWO figures, which are easy to conflate and were:
             #   43 sites were hidden by the any-of bug; 41 of those 43 pin a WIDTH and default the
             #      SCHEMA -- precisely the shape of #1227 (token_count) and #1228 (the widths).
-            #   127 of ALL 391 rows have only a SCHEMA route open, under either kwarg name
+            #   127 of ALL 390 rows have only a SCHEMA route open, under either kwarg name
             #      (41 compact_category + 49 PokeZeroObservationV0 + 34 ObservationSpec +
             #      3 LinearPolicyModel). Of those, 44 are open specifically on
             #      `observation_schema_version`. An earlier comment quoted the 44 while

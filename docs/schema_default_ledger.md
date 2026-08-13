@@ -70,8 +70,8 @@ of these globals appear **0** times anywhere. Its cause was also the most embarr
 three lines below a comment disclaiming exactly that kind of enumeration-from-memory.
 
 The enumeration now lives in `tests/test_schema_default_ledger.py`:
-`LedgerSeesEverySpellingTest` (14 positive spellings, 6 lookalike negatives) and
-`SurfaceDerivationSeesEverySpellingTest` (10 declaration spellings, 3 negatives). Over-matching is
+`LedgerSeesEverySpellingTest` (14 positive spellings, 8 lookalike negatives) and
+`SurfaceDerivationSeesEverySpellingTest` (17 declaration spellings, 6 negatives). Over-matching is
 tested too, because an inflated denominator is the same defect as a deflated one — and that test
 immediately caught a live one: every name imported from a pokezero module was registered as a module
 base, so `ObservationSpec.OBSERVATION_SCHEMA_VERSION` scored a row. Module-vs-name is now resolved
@@ -92,8 +92,8 @@ with no command, cited three line numbers that were all wrong, and named the wro
 
 ```
    24  real imports                          ast.Import walk over tracked .py
- +  2  prose inside .py files                scripts/schema_default_ledger.py:300   (a comment)
-                                             tests/test_schema_default_ledger.py:413 (a probe string)
+ +  2  prose inside .py files                scripts/schema_default_ledger.py:431   (a comment)
+                                             tests/test_schema_default_ledger.py:521 (a probe string)
  = 26  git grep ... -- '*.py' | wc -l
  +  1  this document's own spelling table    docs/schema_default_ledger.md:45
  = 27  git grep ... | wc -l   (every tracked file)
@@ -123,14 +123,14 @@ Alternate constructors cannot be derived (they do not re-declare the field), so
 
 **Spelling coverage matters more here than for reads.** A missed read loses one row; a missed
 *declaration* loses the surface and with it every call site — `LocalShowdownConfig` alone is 133 of
-the 391. For six rounds this function recognised exactly one spelling (`name: T = GLOBAL`) while the
+the 390. For six rounds this function recognised exactly one spelling (`name: T = GLOBAL`) while the
 read matcher accumulated four, and the round-5 alias fix was applied to the read matcher and never
 here. Quantified: with the same defaulted field and ten constructions, the plain spelling moved N by
 +11 (1 declaration + 10 callers) while `field(default=GLOBAL)`, an aliased global, and an
 un-annotated attribute each moved it by **+1** — the ten callers invisible. Combined with a relative
 import, even the +1 vanished.
 
-Six spellings now derive, all pinned: annotated, un-annotated (`ast.Assign`), aliased,
+Nine spellings now derive, all pinned: annotated, un-annotated (`ast.Assign`), aliased,
 `field(default=…)` (**201** `field(default` uses in `src/`), `field(default_factory=lambda: …)`, and
 module-qualified at any depth. The last of those needed a whole-chain walk rather than checking the
 two ends: `a.b.GLOBAL.attr` puts the global in the middle, where neither the outermost `.attr` nor
@@ -167,7 +167,7 @@ it, not during the next rotation.
 Rows key as a **multiset** on `file::owner::kind::unclosed`:
 
 - Not a set — that let a plain ADDITION at an existing key pass unseen. A `Counter` difference
-  catches a key whose count grew (verified: 391 → 392 reddens; invisible to a set).
+  catches a key whose count grew (verified: 390 → 391 reddens; invisible to a set).
   **What it does NOT close:** migrating one site and adding another under the *same*
   `file::owner::kind::unclosed` leaves the count unchanged and passes. 26 keys carry more than one row, the
   largest 4. An earlier version of this document claimed the multiset closed that case; it does
@@ -196,7 +196,7 @@ type's own field default. A site that *consumes* the answer is a conflation.
 
 Enumerated because the alternative — this document's own earlier habit — is to state the closed
 holes and leave the open ones for a reviewer to find. Each was verified by probe against the
-committed tree (N = 391), and none is claimed to be closed:
+committed tree (N = 390), and none is claimed to be closed:
 
 | route | probe result |
 |---|---|

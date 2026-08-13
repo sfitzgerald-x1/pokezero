@@ -42,7 +42,7 @@ def _sweep_probe_residue() -> list[str]:
     for stale in (REPO / "src" / "pokezero").glob("_surface_probe_*.py"):
         swept.append(stale.name)
         stale.unlink(missing_ok=True)
-    for stale in REPO.glob("_ledger_spelling_probe_*.py"):
+    for stale in (REPO / "src" / "pokezero").rglob("_ledger_spelling_probe_*.py"):
         swept.append(stale.name)
         stale.unlink(missing_ok=True)
     return swept
@@ -290,7 +290,7 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
 
     This matters more than `sites_in`'s spelling coverage, and for six rounds it had none. A missed
     read loses one row; a missed DECLARATION loses the surface and with it EVERY call site --
-    `LocalShowdownConfig` alone is 133 of the 391. So an under-derived surface is the single largest
+    `LocalShowdownConfig` alone is 133 of the 390. So an under-derived surface is the single largest
     way this denominator can be wrong, and `derive_surfaces` recognised exactly one spelling while
     `sites_in` accumulated four. The round-5 alias fix was applied to `sites_in` and never here.
 
@@ -333,6 +333,16 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
         ("a function parameter default, not a class field",
          "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
          "def surf_fn(spec=DEFAULT_REPLAY_OBSERVATION_SPEC):\n    return spec\n"),
+        ("a CONSTRUCTOR parameter default -- must key on the CLASS, not on __init__",
+         "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "class Surf:\n"
+         "    def __init__(self, spec=DEFAULT_REPLAY_OBSERVATION_SPEC):\n"
+         "        self.spec = spec\n"),
+        ("__new__, same rule",
+         "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "class Surf:\n"
+         "    def __new__(cls, spec=DEFAULT_REPLAY_OBSERVATION_SPEC):\n"
+         "        return super().__new__(cls)\n"),
         ("a keyword-only parameter default",
          "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
          "def surf_fn(*, spec=DEFAULT_REPLAY_OBSERVATION_SPEC):\n    return spec\n"),
@@ -388,6 +398,15 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
         # A LOCAL VARIABLE in a method is not a field. Walking the whole ClassDef derived a bogus
         # `default_spec` kwarg from `from_dict`'s local, moving N 390 -> 398 and rewriting the
         # `unclosed` field of 101 rows -- which in a diff would have read as "eight new sites".
+        # A LAMBDA parameter default. Round 8 added `ast.Lambda` to the walked node types and
+        # claimed the spelling was "fixed and pinned"; both halves were false. `ast.Lambda` has no
+        # `.name`, so this raised AttributeError -- and since SURFACES is built at import, ONE such
+        # lambda anywhere in src/ killed the ledger in every mode and turned the gate into "ledger
+        # derivation failed". This negative is the pin that was missing: an anonymous callable has no
+        # call-site name to match, so deriving nothing is correct, and the ledger must still RUN.
+        ("a lambda parameter default -- derives nothing, and must not crash",
+         "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
+         "f = lambda spec=DEFAULT_REPLAY_OBSERVATION_SPEC: spec\n"),
         ("a local variable inside a method, not a field",
          "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC\n"
          "class Surf:\n"
@@ -425,13 +444,26 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
             with self.subTest(spelling=label):
                 surfaces = self._surfaces_with(source)
                 name = "Surf" if "class Surf" in source else "surf_fn"
+                self.assertNotIn(
+                    "__init__", surfaces,
+                    "a phantom `__init__` surface was derived alongside the class. Keying a "
+                    "constructor on its own name makes every `Surf(...)` call site invisible AND "
+                    "scores rows on any literal `x.__init__(...)`.",
+                )
                 self.assertIn(
                     name, surfaces,
                     f"{label}: the surface was NOT derived, so every call site of it is invisible "
                     f"to the ledger. Derived surfaces: {sorted(surfaces)}",
                 )
+                # A CONSTRUCTOR probe declares `class Surf` and defaults `spec`, so keying the
+                # expectation on "is there a class" alone gave the wrong answer for it.
+                expected_field = (
+                    {"spec"}
+                    if ("def __init__" in source or "def __new__" in source or name == "surf_fn")
+                    else {"v"}
+                )
                 self.assertEqual(
-                    surfaces[name], {"v"} if name == "Surf" else {"spec"},
+                    surfaces[name], expected_field,
                     f"{label}: derived the surface but named {sorted(surfaces[name])} as the open "
                     "route instead of the field that actually defaults. Naming the WRONG kwarg is "
                     "worse than naming none: a call site scores CLOSED as soon as it passes that "
@@ -514,9 +546,13 @@ class LedgerSeesEverySpellingTest(unittest.TestCase):
         ("relative and aliased",
          "from . import observation as O\n"
          "def f():\n    return O.OBSERVATION_SCHEMA_VERSION\n", 1),
-        ("relative, one level up",
+        # Written into the real `mcts_eval` subpackage, because `..` only means `src/pokezero`
+        # from INSIDE a subpackage -- from `src/pokezero/` itself it means `src/`, where no
+        # `showdown.py` exists. The tree's deepest relative import really is level 2
+        # (src/pokezero/mcts_eval/lattice.py:31), which is what this probe imitates.
+        ("relative, one level up  (from inside a subpackage)",
          "from .. import showdown as S\n"
-         "def f():\n    return S.DEFAULT_REPLAY_OBSERVATION_SPEC\n", 1),
+         "def f():\n    return S.DEFAULT_REPLAY_OBSERVATION_SPEC\n", 1, "mcts_eval"),
         ("relative import of the global itself, aliased",
          "from .observation import OBSERVATION_SCHEMA_VERSION as SV\n"
          "def f():\n    return SV\n", 1),
@@ -562,7 +598,7 @@ class LedgerSeesEverySpellingTest(unittest.TestCase):
          "OBSERVATION_SCHEMA_VERSION: str\n"),
     ]
 
-    def _rows_for(self, source: str) -> list[dict]:
+    def _rows_for(self, source: str, subdir: str = "") -> list[dict]:
         """Run the real `sites_in` over a probe written inside the repo.
 
         Inside the repo because `sites_in` derives its `rel` from `relative_to(REPO)`; untracked
@@ -575,7 +611,15 @@ class LedgerSeesEverySpellingTest(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(module)
-        probe = REPO / f"_ledger_spelling_probe_{id(source):x}.py"
+        # INSIDE src/pokezero/, not at the repo root. A relative import only means anything
+        # from inside the package: once `is_pokezero_submodule` began resolving
+        # `from . import X` against the IMPORTING file's own directory (round 9), a probe at
+        # the repo root correctly resolved nothing and the three relative-import probes went
+        # red. A probe has to live where the code it imitates lives, or it tests a different
+        # question than the one it claims to.
+        probe = (
+            REPO / "src" / "pokezero" / subdir / f"_ledger_spelling_probe_{id(source):x}.py"
+        )
         try:
             probe.write_text(source, encoding="utf-8")
             return module.sites_in(probe)
@@ -583,9 +627,11 @@ class LedgerSeesEverySpellingTest(unittest.TestCase):
             probe.unlink(missing_ok=True)
 
     def test_every_spelling_of_a_default_read_is_counted(self) -> None:
-        for label, source, expected in self.PROBES:
+        for probe in self.PROBES:
+            label, source, expected = probe[0], probe[1], probe[2]
+            subdir = probe[3] if len(probe) > 3 else ""
             with self.subTest(spelling=label):
-                rows = self._rows_for(source)
+                rows = self._rows_for(source, subdir)
                 self.assertEqual(
                     len(rows), expected,
                     f"{label}: expected {expected} row(s), got {len(rows)} -- this spelling can "
@@ -612,13 +658,16 @@ class LedgerSeesEverySpellingTest(unittest.TestCase):
     def test_the_probes_do_not_disturb_the_committed_denominator(self) -> None:
         """The probe files are untracked and deleted, so N is what it was."""
         before = len(_derive())
-        for _, source, _ in self.PROBES:
-            self._rows_for(source)
+        for probe in self.PROBES:
+            self._rows_for(probe[1], probe[3] if len(probe) > 3 else "")
         self.assertEqual(
             before, len(_derive()),
             "running the spelling probes changed the derived count; a probe leaked into the tree.",
         )
-        leftover = sorted(p.name for p in REPO.glob("_ledger_spelling_probe_*.py"))
+        leftover = sorted(
+            p.name
+            for p in (REPO / "src" / "pokezero").rglob("_ledger_spelling_probe_*.py")
+        )
         self.assertEqual(leftover, [], f"probe files left behind: {leftover}")
 
 
