@@ -38,16 +38,45 @@ without an established denominator and two of them from hand-picked file lists.
 
 ### Reads are matched in every spelling
 
-A default can be reached as a bare name, an alias, or a module attribute:
+A default can be reached as a bare name, an alias, or a module attribute at any depth:
 
     OBSERVATION_SCHEMA_VERSION                    # bare
     SV                                            # from ... import ... as SV
-    observation.OBSERVATION_SCHEMA_VERSION        # import pokezero.observation as observation
+    O.OBSERVATION_SCHEMA_VERSION                  # import pokezero.observation as O
+    pokezero.observation.OBSERVATION_SCHEMA_VERSION   # import pokezero.observation
+    pokezero.OBSERVATION_SCHEMA_VERSION           # import pokezero  (the PUBLIC spelling: the
+                                                  #   constant is in pokezero.__all__)
 
-Only the first was matched. The other two were demonstrated to add default reads with N unchanged
-and the gate green — the same defect class as the any-of bug: **a denominator blind to a spelling.**
-The idiom is not exotic; `import pokezero.<mod> as <alias>` appears 31 times in the tree. Aliases
-are now resolved per file, so the reported kind is the *global*, not the local name.
+Only the first was matched originally. **Each of the others was demonstrated to add default reads
+with N unchanged and the gate green** — the same defect class as the any-of bug: *a denominator
+blind to a spelling*. It recurred three times (round 2 any-of, round 5 the alias, round 6 the
+dotted base and the bare package import) for one reason: each fix was verified once by hand and
+pinned by no test. The enumeration now lives in
+`tests/test_schema_default_ledger.py::LedgerSeesEverySpellingTest` — 10 positive spellings and 4
+lookalike negatives, so over-matching fails too — and four mutants of the matcher were confirmed to
+redden it.
+
+Two figures in this section were previously wrong and are corrected here:
+
+| claim | stated | derived | how |
+|---|---|---|---|
+| `import pokezero.<mod> as <alias>` in the tree | 31 | **24** | `ast.Import` walk over `git ls-files '*.py'` — 524 files, 0 unparsed |
+| any dotted read of either global | (implied nonzero) | **0** | `git grep -hoE '\w+\.(OBSERVATION_SCHEMA_VERSION\|DEFAULT_REPLAY_OBSERVATION_SPEC)\b' -- '*.py' \| wc -l` |
+| module-qualified *defaults* in `src/` — the attr-side arm's stated motive | "31 times" | **0** | follows from the above: no dotted read exists, so none is a default |
+
+Grep gives **27** for the first row, not 24. The gap is not a judgement call: all three grep-only hits
+are prose *about* the idiom rather than uses of it — `scripts/schema_default_ledger.py:81` and `:189`
+(comments) and `tests/test_schema_default_ledger.py:165` (a probe source string). Conversely a
+`^`-anchored grep gives **0** bare `import pokezero` against the AST's 3, because all three are
+indented inside functions. The AST count is the one to quote; where the two disagree the difference
+is attributed above rather than resolved by preferring a number.
+
+No dotted read of either global exists in the tree today; bare `import pokezero` occurs 3 times
+(`scripts/hc_depth_grid.py:135`, `src/pokezero/public_projection.py:2283`,
+`src/pokezero/truth_differential.py:912`). The matcher covers these spellings as *guards against a
+spelling that has not landed yet*, which is the honest reason to keep them — not, as the earlier
+text implied, as a fix for sites already there. Aliases are resolved per file, so the reported kind
+is the *global*, not the local name.
 
 ### Surfaces are DERIVED, not listed
 
@@ -115,6 +144,24 @@ Rows key as a **multiset** on `file::owner::kind::unclosed`:
 shrink. A row is legitimate only if the site *answers* "nobody said" — the definition of the
 default, the CLI's `or` fallback, a fingerprint that must hash whatever is current, a config
 type's own field default. A site that *consumes* the answer is a conflation.
+
+### Routes that still add a default read with N unchanged
+
+Enumerated because the alternative — this document's own earlier habit — is to state the closed
+holes and leave the open ones for a reviewer to find. Each was verified by probe against the
+committed tree (N = 391), and none is claimed to be closed:
+
+| route | probe result |
+|---|---|
+| A *consuming* read added inside `src/pokezero/observation.py` | 0 rows. `DEFINITION_SITES` excludes the whole **file**, not the definition's lines, so the one file most able to conflate is the one file unmeasured. |
+| A surface declared **outside** `src/` | 1 row for the declaration, **0 for its callers** (5 callers → 0). `derive_surfaces()` only scans `src/`, so a test-local config class with a defaulted field is a private, uncounted surface. |
+| Rebinding a constructor — `LSC = LocalShowdownConfig` | 0 rows for 3 call sites. Only the original name is matched. |
+| `getattr` / `vars` / `importlib` | 0 rows. Any dynamic lookup is invisible to an AST matcher; this is a floor on the approach, not a bug in it. |
+| Migrating one site and adding another at the same `file::owner::kind::unclosed` | count unchanged, passes. 26 keys carry >1 row, largest 4 (above). |
+
+The first three are narrowable and the fourth is not. They are listed rather than fixed because
+each trade cost against a real hole, and an unstated hole is the failure mode this whole document
+exists to record: **the gate bounds exposure, it does not eliminate the class.**
 
 ## Exposure is not realised failure
 

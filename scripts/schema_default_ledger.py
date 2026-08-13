@@ -11,12 +11,27 @@ A "site reaching the global default" is any of:
   bare-const           a read of `OBSERVATION_SCHEMA_VERSION` itself                    (16)
   default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                        (54)
   implicit:<Surface>   a call to <Surface> leaving at least one default-bearing kwarg unnamed,
-                       one kind per DERIVED surface so a new one cannot join an existing bucket:
-                         LocalShowdownConfig      133      ObservationSpec           34
-                         compact_category          96      TransformerPolicyConfig    4
-                         PokeZeroObservationV0     49      LinearPolicyModel          3
-                                                           OnlineBattleAgent          2
-                       The row's `unclosed` field names which kwarg is still open.
+                       one kind per surface so a new one cannot join an existing bucket. All EIGHT
+                       surfaces, with provenance -- seven DERIVED from src/, one an alternate
+                       constructor that cannot be (marked *):
+
+                         LocalShowdownConfig            133    ObservationSpec            34
+                         compact_category *              96    TransformerPolicyConfig     4
+                         PokeZeroObservationV0           49    LinearPolicyModel           3
+                                                               OnlineBattleAgent           2
+                         observation_from_player_state    0
+
+                       `observation_from_player_state` is DERIVED and carries ZERO rows: all 130 of
+                       its call sites pass `spec=` explicitly. A modelled surface with no open sites
+                       is the goal state, not an absence -- it is listed so that a caller which
+                       later drops `spec=` lands in a named bucket instead of appearing to be a new
+                       surface. An earlier version of this table said "all seven derived surfaces"
+                       while listing compact_category (not derived) and omitting this one: the count
+                       was right and the membership was not.
+
+                       The row's `unclosed` field names which kwarg is still open. These nine counts
+                       are pinned by tests/test_schema_default_ledger.py -- a previous docstring
+                       table staled for several commits because nothing held it to the tool.
 
   Two retired names, `implicit-spec` and `implicit-cfg`, were listed here long after the code
   stopped emitting them -- the reader-facing vocabulary staled in the same change that derived the
@@ -69,9 +84,21 @@ def derive_surfaces() -> dict[str, set[str]]:
             return node.id
         if isinstance(node, ast.Attribute):
             # BOTH sides. `DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count` puts the
-            # global on the VALUE side; `observation.OBSERVATION_SCHEMA_VERSION` puts it on the
-            # ATTR side. Only the first was matched, so a module-qualified default -- an idiom
-            # used 31 times in this repo -- declared a surface that was never derived.
+            # global on the VALUE side (2 sites: neural_policy.py:245-246);
+            # `observation.OBSERVATION_SCHEMA_VERSION` puts it on the ATTR side.
+            #
+            # The ATTR-side arm currently matches ZERO sites. It was added with a comment claiming
+            # the spelling was "an idiom used 31 times in this repo", which is false in two ways:
+            # no default anywhere in src/ is written module-qualified, and no dotted read of either
+            # global exists in the tree at all --
+            #   git grep -hoE '\w+\.(OBSERVATION_SCHEMA_VERSION|DEFAULT_REPLAY_OBSERVATION_SPEC)\b' \
+            #     -- '*.py' | wc -l   ->   0
+            # The 31 appears to have been a garbled recollection of the aliased module import,
+            # which is 24 (see docs/schema_default_ledger.md). The arm is KEPT -- a surface with
+            # a module-qualified default would otherwise be derived-blind, and this file's whole
+            # thesis is that unmeasured spellings are how the denominator goes wrong -- but it is a
+            # guard against a spelling that does not occur yet, not a fix for observed sites. It is
+            # pinned by test_schema_default_ledger.py, not by this prose.
             if node.attr in GLOBALS:
                 return node.attr
             if isinstance(node.value, ast.Name):
@@ -149,6 +176,19 @@ def enclosing(tree: ast.AST) -> dict[int, str]:
     return owner
 
 
+def base_root(node: ast.AST) -> str | None:
+    """Leftmost Name of a pure Name/Attribute chain: `a.b.c` -> "a", `f().b` -> None.
+
+    Walking to the ROOT rather than testing `isinstance(node.value, ast.Name)` is what makes an
+    arbitrarily deep base match. The one-level test could only see `O.GLOBAL`, so every dotted
+    base -- `pokezero.observation.GLOBAL`, `pokezero.showdown.GLOBAL.numeric_feature_count` --
+    read the default with the denominator unmoved and the authorship gate green.
+    """
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
 def sites_in(path: Path) -> list[dict]:
     rel = str(path.relative_to(REPO))
     try:
@@ -166,19 +206,29 @@ def sites_in(path: Path) -> list[dict]:
     # N unchanged and the gate green -- the same defect class as the any-of bug: a denominator
     # blind to a spelling. Resolved here so the kind reported is the GLOBAL, not the local name.
     alias_to_global: dict[str, str] = {}
-    module_aliases: set[str] = set()
+    # Names bound in this file that a pokezero module (or the package) can be reached THROUGH.
+    # Matched by ROOT segment, not by whole dotted path: `import pokezero` binds only `pokezero`,
+    # yet `pokezero.observation.OBSERVATION_SCHEMA_VERSION` is then a legal read, so requiring the
+    # full base to have been imported by name is itself a spelling hole.
+    module_roots: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             for a in node.names:
                 if a.name in (CONST, DEFAULT_SPEC) and a.asname:
                     alias_to_global[a.asname] = a.name
-                elif a.name in ("observation", "showdown") and node.module \
-                        and node.module.startswith("pokezero"):
-                    module_aliases.add(a.asname or a.name)
+                elif node.module and node.module.startswith("pokezero"):
+                    # `from pokezero import observation [as O]`. Not restricted to a hand-listed
+                    # pair of module names: that list was ("observation", "showdown"), so
+                    # `from pokezero import replay` was blind, and the whole point of this map is
+                    # that the set of spellings is not something to enumerate from memory.
+                    module_roots.add(a.asname or a.name)
         elif isinstance(node, ast.Import):
             for a in node.names:
-                if a.name.startswith("pokezero."):
-                    module_aliases.add(a.asname or a.name.split(".")[0])
+                # `import pokezero` -- no dot -- binds the package and re-exports both globals
+                # via __all__. The previous `startswith("pokezero.")` test registered NOTHING for
+                # it, making the public spelling the one the ledger could not see.
+                if a.name == "pokezero" or a.name.startswith("pokezero."):
+                    module_roots.add(a.asname or a.name.split(".")[0])
 
     def add(node, kind, unclosed=None):
         row = {"file": rel, "line": node.lineno, "kind": kind,
@@ -201,8 +251,7 @@ def sites_in(path: Path) -> list[dict]:
         elif (
             isinstance(node, ast.Attribute)
             and node.attr in (CONST, DEFAULT_SPEC)
-            and isinstance(node.value, ast.Name)
-            and node.value.id in module_aliases
+            and base_root(node.value) in module_roots
             and rel not in DEFINITION_SITES
         ):
             add(node, "bare-const" if node.attr == CONST else "default-spec")
