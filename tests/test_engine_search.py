@@ -4516,9 +4516,6 @@ class WorldCacheKeyTest(unittest.TestCase):
         self.assertNotEqual(k, world_cache_key(base, "side_two"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class BudgetLadderTest(unittest.TestCase):
     """The rung ladder (docs/dynamic-search-budget-plan-20260812.md).
 

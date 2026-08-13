@@ -127,15 +127,15 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`2ec5bfd1c7292ed6…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`82ba92a48a7f1d8f…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
-legitimate, and it has now happened **four times**. Restricting `git log 7fcd9e19..HEAD` to **all** of
+legitimate, and it has now happened **seven times**. Restricting `git log 7fcd9e19..HEAD` to **all** of
 the fingerprint's inputs — the 74 gen3 patches, `poke-engine-gen3-patches.txt`,
 `poke-engine-base-source.json`, the 11 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
-exactly four commits. ⚠ **The `input` column is DERIVED, and the third row was wrong on
+exactly seven commits. ⚠ **The `input` column is DERIVED, and the third row was wrong on
 first write** — it carried `+403 −74`, which was neither this file's numstat nor any other
 figure in the tree. `git diff --numstat <base> <head> -- rust/pokezero-search/src/events.rs`
 is the derivation, and it returns the same pair against `83efbede`, `a6249971` and the
@@ -159,6 +159,24 @@ above.
 | `578287e7` (#1207) | `rust/pokezero-search/src/priors.rs`, +91 −4 | `236d1cac8a784898…` |
 | #1211 | `rust/pokezero-search/src/events.rs`, +420 −50 | `028a4c52a4ad9fe7…` |
 | #1221 | `rust/pokezero-search/src/encoder.rs`, +26 −0 | `2ec5bfd1c7292ed6…` |
+| `90f8e83d` (#1245) | `lib.rs`, `model.rs`, `tree.rs`, +589 −20 | `209a70af7a13da14…` |
+| `8006213f` (#1245) | `lib.rs`, `model.rs`, `tree.rs`, +51 −10 | `aae55818ea6808e8…` |
+| `6d7a59dc` (#1245) | `rust/pokezero-search/src/tree.rs`, +87 −0 | `82ba92a48a7f1d8f…` |
+
+⚠ **The last three rows are T1's argument happening again, and this time inside a single PR.**
+#1245 moved the stamp **three times** — FPU plus the within-batch collision counter, then
+root-decision telemetry, then the per-world visit-lock stop — so a register that recorded only
+"the head moved" would have understated it by two. It also demonstrates the failure mode T1
+names: this table had to be re-derived because
+`tests/test_terminal_disposition_register.py::test_every_value_re_derives` failed on the branch,
+not because anyone noticed. **That test is currently the only thing in the tree that catches a
+moved stamp**, which is precisely why T1 stays OPEN.
+⚠ And note what the three rows do NOT license: #1245's own dynamic-budget commits
+(`32c2d4a1` onward) touch no fingerprint input at all, so **`82ba92a4` is stable across every
+measurement that campaign banked** — but the stamp is `82ba92a4` and NOT `2ec5bfd1`, so those
+measurements are **not** poolable with anything taken on `main`. A PR that reads "no `.rs`
+change, so banked cells stay comparable" is making the first claim about its own last few
+commits and the second about the whole branch; only the first is true.
 
 ⚠ **And the second landed while this register was in review**, three days after C153's build. That
 is not an aside: it is T1's argument, live. C151 §3 deferred the terminal sweep precisely because
@@ -487,9 +505,9 @@ defect did not exist on either of their trees.** A typed `25` would have shipped
 Where CI gates on the merge, **local green and CI green are different measurements**; §6 declares
 that coupling and the assertion carries the fix in its own failure message.
 
-**Every measurement behind T2–T6 predates the head build**, and none is at `2ec5bfd1c7292ed6` —
-nor at `028a4c52a4ad9fe7` or `9517aab98d56a9ba`, the builds this document was reconciled against
-at the two preceding merges. Read the
+**Every measurement behind T2–T6 predates the head build**, and none is at `82ba92a48a7f1d8f` —
+nor at `2ec5bfd1c7292ed6`, `028a4c52a4ad9fe7` or `9517aab98d56a9ba`, the builds this document was
+reconciled against at the three preceding merges. Read the
 table in T1 before quoting that as a re-sweep scope: T3, T4 and T5 rest on an engine build; **T2 and
 T6 build no engine at all** and carry no `engine_fingerprint`.
 
@@ -704,7 +722,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.head_fingerprint` | 2ec5bfd1c7292ed6 |
+| `t1.head_fingerprint` | 82ba92a48a7f1d8f |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
