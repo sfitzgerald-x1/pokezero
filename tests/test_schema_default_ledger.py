@@ -207,11 +207,24 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
 
         doc = _ast.get_docstring(_ast.parse(LEDGER.read_text(encoding="utf-8"))) or ""
         found: dict[str, int] = {}
-        for kind in ("bare-const", "default-spec"):
+        for kind in self._non_surface_kinds():
             m = re.search(rf"^\s*{re.escape(kind)}\b[^\n]*?\((\d+)\)", doc, re.M)
             if m is not None:
                 found[kind] = int(m.group(1))
         return found
+
+    def _non_surface_kinds(self) -> list[str]:
+        """Every kind the tool emits that is not an `implicit:<Surface>` row, DERIVED not listed.
+
+        Hardcoding ("bare-const", "default-spec") reproduced the defect this test exists to fix,
+        one step out: a ninth kind would get a docstring row that nothing pinned, and the
+        docstring's "All EIGHT counts" would stale with no test failing. Derived from the tool, so
+        a new kind is pinned the moment it is emitted -- and if its row is missing from the
+        docstring, the sorted() comparison below fails rather than quietly skipping it.
+        """
+        return sorted(
+            {row["kind"] for row in _derive() if not row["kind"].startswith("implicit:")}
+        )
 
     def _derived_counts(self) -> dict[str, int]:
         counts = Counter(
@@ -259,12 +272,14 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         in between, which the surface-row pattern cannot match. A figure nothing holds is prose,
         and this docstring has already staled twice.
         """
+        expected = self._non_surface_kinds()
         documented = self._docstring_kind_counts()
         self.assertEqual(
-            sorted(documented), ["bare-const", "default-spec"],
-            "the docstring no longer states a count for both non-surface kinds in the parsed "
-            f"`kind ... (N)` form; found {sorted(documented)}. Renaming a kind or dropping its "
-            "count must fail here rather than silently unpin it.",
+            sorted(documented), expected,
+            "the docstring does not state a count for every non-surface kind the tool emits, in "
+            f"the parsed `kind ... (N)` form.\n  tool emits: {expected}\n  docstring:  "
+            f"{sorted(documented)}\nRenaming a kind, dropping its count, or adding a new kind must "
+            "fail here rather than silently leaving a row unpinned.",
         )
         derived = Counter(row["kind"] for row in _derive())
         for kind in sorted(documented):
@@ -292,10 +307,21 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
                 f"{n} surfaces, which this guard has no spelled word for. Add it to `words` -- do "
                 "NOT fall back to the digit, which is how this assertion went inert before."
             )
-        self.assertIn(
-            words[n], doc.split('"""')[1],
-            f"there are {n} surfaces; the docstring does not say so in words. The previous text "
-            "said 'seven derived surfaces' while listing an alternate constructor as derived and "
+        # ANCHORED on the table sentence, not searched for anywhere in the docstring. `assertIn`
+        # over the whole text was the second inert version of this guard: the word only had to
+        # appear SOMEWHERE, and this docstring says EIGHT twice in prose ("WAS EIGHT", "All EIGHT
+        # counts above"). So a regression from six surfaces back to eight -- the exact prior value
+        # this docstring narrates -- passed with the table still reading "All SIX". Spelling the
+        # number fixed digit-substring matching and left prose-substring matching wide open: a word
+        # is not a substring of other numbers, but it is a substring of sentences containing it.
+        body = doc.split('"""')[1]
+        m = re.search(rf"All {words[n]}\s*\n\s*surfaces\b", body)
+        self.assertIsNotNone(
+            m,
+            f"there are {n} surfaces; the docstring's surface table does not say so. It must read "
+            f"'All {words[n]}\\n surfaces' -- matched on that phrase specifically, so the count "
+            "cannot be satisfied by the word appearing in unrelated prose. The original text said "
+            "'seven derived surfaces' while listing an alternate constructor as derived and "
             "omitting a derived surface with no open sites.",
         )
 
