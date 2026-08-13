@@ -1,0 +1,32 @@
+# Every literal container of schema NAMES in src/ and scripts/, classified. The drill's injection
+# must register its synthetic schema in each REGISTER row; PARTIAL rows are deliberately not
+# exhaustive and must be left alone.
+#
+# WHY THIS FILE EXISTS. Six separate times a schema-keyed structure went unregistered and the drill
+# charged the resulting failures to the codebase: SUPPORTED, GROUPED_LAYOUT, FEATURE_PACK,
+# V2_1_LINEAGE, the two census maps, `_EXPORTABLE_TABLE_SCHEMAS`, and the exporter CLI's argparse
+# choices. Each was found by reading a stack trace after a full run -- 17 to 70 minutes per
+# discovery -- and each fix was "add the one I just found". That is not convergent: the instrument
+# had no way to know what it had missed, so every clean run was only evidence that the tables I had
+# thought of were registered.
+#
+# The precondition that reads this file enumerates the containers from the AST and ABORTS on any it
+# cannot find here. A new container is then a deliberate classification, before a verdict, rather
+# than a stack trace after one.
+#
+# Format:  REGISTER|PARTIAL  <file>  <comma-separated members>
+# Keyed on file + members, NOT on line number, which drifts.
+#
+# REGISTER -- means "every supported schema", so the synthetic schema belongs in it.
+REGISTER  scripts/export_encoder_tables.py  v2.2,v3,v4
+REGISTER  scripts/schema_identity_gate_scan.py  pokezero.observation.v2,pokezero.observation.v2.1,pokezero.observation.v2.2,pokezero.observation.v3,pokezero.observation.v4
+REGISTER  src/pokezero/engine_env.py  v2.2,v3,v4
+REGISTER  src/pokezero/mcts_eval/resolver.py  pokezero.observation.v2.2,pokezero.observation.v3,pokezero.observation.v4
+REGISTER  src/pokezero/neural_cli.py  v2.1,v2.2,v3,v4
+REGISTER  src/pokezero/rollout_cli.py  v2.1,v2.2,v3,v4
+#
+# PARTIAL -- a deliberately chosen subset, NOT "all schemas". Registering the synthetic schema here
+# would change what the code means rather than keep it equivalent. `vocab_shift_probe` compares one
+# named pair of schemas; a third member is not a wider version of that comparison, it is a different
+# one.
+PARTIAL   scripts/vocab_shift_probe.py  pokezero.observation.v2.2,pokezero.observation.v3

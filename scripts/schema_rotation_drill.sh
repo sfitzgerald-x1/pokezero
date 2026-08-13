@@ -437,18 +437,52 @@ open(q, "w").write(t)
 # of EngineEnvTest fails: 10 of the 19 "unexpected breakages" in the first scored run were this one
 # table. Fifth instance of the instrument manufacturing the failure it reports, and the second to
 # reach a verdict.
-_ee = f"{wt}/src/pokezero/engine_env.py"
-_et = open(_ee).read()
-_m_exp = re.search(r'^_EXPORTABLE_TABLE_SCHEMAS\s*=\s*frozenset\(\{(.*?)\}\)', _et, re.S | re.M)
-if _m_exp is None:
+# Register the synthetic schema in EVERY literal container of schema names classified REGISTER,
+# driven by tests/data/schema_drill_schema_containers.txt rather than by a hardcoded list. The
+# hardcoded version registered `_EXPORTABLE_TABLE_SCHEMAS` and missed the exporter CLI's argparse
+# `choices` eleven lines away in another file -- so `engine_env` shelled out to that script, argparse
+# refused 'v5-drill', and ten EngineEnvTest failures were reported as surviving conflations. Sixth
+# instance of that class; driving it from the census is what stops there being a seventh.
+#
+# PARTIAL containers are deliberately left alone: `vocab_shift_probe` compares one named PAIR of
+# schemas, and a third member changes what it does rather than widening it.
+_census = f"{wt}/tests/data/schema_drill_schema_containers.txt"
+_reg_targets = []
+for _raw in open(_census):
+    _l = _raw.strip()
+    if not _l or _l.startswith("#"):
+        continue
+    _kind, _path, _members = _l.split()
+    if _kind == "REGISTER":
+        _reg_targets.append((_path, sorted(_members.split(","))))
+if not _reg_targets:
     raise SystemExit(
-        "drill: could not locate _EXPORTABLE_TABLE_SCHEMAS in engine_env.py. It gates every "
-        "encoder-table export by SHORT schema name, and an unregistered synthetic schema makes "
-        "every env test fail on a ValueError the drill itself caused."
+        "drill: the container census lists no REGISTER rows. Either the file is empty or its format "
+        "changed; registering nothing would leave every schema-keyed container blind to the "
+        "synthetic schema."
     )
-_et = _et[:_m_exp.end(1)] + ', "v5-drill"' + _et[_m_exp.end(1):]
-open(_ee, "w").write(_et)
-print('  registered "v5-drill" in _EXPORTABLE_TABLE_SCHEMAS (short-name table)')
+_registered = 0
+for _path, _members in _reg_targets:
+    _f = f"{wt}/{_path}"
+    _txt = open(_f).read()
+    _short = not _members[0].startswith("pokezero.observation.")
+    _new = "v5-drill" if _short else "pokezero.observation.v5-drill"
+    # Anchor on the LAST member of the container, matched with its quotes, and insert after it. The
+    # members are literals, so this cannot splice into an expression.
+    _last = _members[-1]
+    _pat = re.compile(r'(["\']){}\1'.format(re.escape(_last)))
+    _n_before = len(_pat.findall(_txt))
+    if _n_before == 0:
+        raise SystemExit(
+            f"drill: could not find the literal {_last!r} in {_path} to anchor the synthetic "
+            "schema after. The census says this container must be registered; if its spelling "
+            "changed, re-run scripts/schema_container_census.py --check and reclassify."
+        )
+    _txt = _pat.sub(lambda m: f'{m.group(0)}, "{_new}"', _txt)
+    open(_f, "w").write(_txt)
+    _registered += _n_before
+print(f'  registered the synthetic schema in {len(_reg_targets)} classified container(s), '
+      f'{_registered} literal site(s)')
 print("  synthetic v5-drill schema injected; "
       + ("default LEFT in place (control arm)" if _control else "default rotated to it"))
 PY
@@ -456,6 +490,23 @@ PY
 # into a silent "injection succeeded, nothing injected" -- the same trap the snapshot copy guards.
 [ -s "$INJ" ] || { echo "ABORT: the injection script snapshot is empty"; exit 10; }
 python3 "$INJ" "$WT" || { echo "FAILED to inject the drill schema"; exit 3; }
+
+# PRECONDITION -1: every literal container of schema NAMES is classified. Run against the PRISTINE
+# repo, not the injected worktree, so the census sees the code as written rather than as mutated.
+#
+# Six times a schema-keyed structure went unregistered and the drill charged the resulting failures
+# to the codebase -- SUPPORTED, GROUPED_LAYOUT, FEATURE_PACK, V2_1_LINEAGE, the two census maps,
+# `_EXPORTABLE_TABLE_SCHEMAS`, and the exporter CLI's argparse `choices`. Each was found by running
+# the full drill, reading a stack trace, and adding the one table it named. That loop does not
+# converge: after each fix the instrument still had no way to say what it had missed, so a clean run
+# only proved that the tables I had thought of were registered. This enumerates them instead, and an
+# unclassified container aborts BEFORE anything is scored.
+"$VENV" "$REPO/scripts/schema_container_census.py" --check || {
+  echo "ABORT: a schema-name container is unclassified, so the drill cannot know whether to"
+  echo "       register its synthetic schema in it. An unregistered container makes its consumers"
+  echo "       fail on the drill's own omission, which reads as a surviving defect."
+  exit 15
+}
 
 # PRECONDITION 0: no unlisted schema identity gate exists. A line-oriented grep used to do this
 # and caught 2 of 7 evasive forms -- it missed `!=`, `in (literal tuple)`, string literals, dict
