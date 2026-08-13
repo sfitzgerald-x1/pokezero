@@ -1863,97 +1863,6 @@ jobs:
   # `mass-gate` at all, and its own job has no filter, so a PR that weakens it runs it
   # by construction. Adding it to FILTERS would only start the engine build for a
   # module that does not use the engine.
-  # Its OWN job, unconditional: no `if:` and no `needs:`, matching the seed-registry and
-  # harness-provenance precedent below. It was first written as step 12 of 43 inside `mass-gate`,
-  # which carries `if: needs.changes.outputs.fidelity == 'true'` -- so review measured it against
-  # the 50 most recent non-merge first-parent commits on main and found 5 that touched .py and
-  # would NOT have run it. Three specific holes, all closed by making it unconditional:
-  #   - `pyproject.toml` was not in FILTERS, so a PR CHANGING the declared floor never ran the
-  #     gate that derives from that declaration;
-  #   - `scripts/check_python_floor_syntax.py` was not in FILTERS either, so a PR gutting the
-  #     gate did not run it;
-  #   - it sat after "Build and install the gen3 engine", so an engine-build failure prevented a
-  #     check needing only `git` and `ruff` from ever running.
-  # A gate that runs only when you touch the thing it guards is the "guard nothing runs" shape
-  # this file already records three times.
-  #
-  # WHY: pyproject declares requires-python >= 3.11, but every other job here pins 3.12, so
-  # nothing compared the code against its own declared floor. One file used a backslash inside an
-  # f-string (legal 3.12+, SyntaxError on 3.11) and the breach was invisible in both directions:
-  # CI could not see it, and locally it failed COLLECTION for three test modules plus one script
-  # -- which read as "four files you work around", while the suite silently measured 116 tests and
-  # 1398 subtests fewer than it appeared to. Two artifacts rotted inside those modules.
-  #
-  # No pure-Python guard is possible: PEP 701 removed the restriction from CPython's parser, so
-  # ast.parse(feature_version=(3,11)) on 3.12 ACCEPTS what 3.11 rejects. Hence ruff.
-  python-floor-syntax:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install ruff
-        # PINNED. The whole gate rests on the literal diagnostic name `invalid-syntax`, and that
-        # name has not always existed: ruff 0.8.0 reports NOTHING for `type A = int` at
-        # --target-version=py311 (verified: rc=0, "All checks passed!"). An unpinned linter is a
-        # gate whose behaviour changes with no commit, and a rename would return this gate to
-        # permanent green. torch is pinned in this same workflow for the same reason.
-        run: python -m pip install --quiet 'ruff==0.16.2'
-
-      - name: The gate reddens on known-bad input
-        # Kill-confirm IN CI, before trusting the green run below. Without this, a ruff rename or
-        # an output-format change makes the gate silently permanent-green: the script exits 0 and
-        # still prints its success line, so the shape grep cannot see it. The fixture is created
-        # here rather than committed, so it can never be linted, imported, or collected.
-        run: |
-          set -o pipefail
-          mkdir -p /tmp/floorfixture
-          printf 'type Alias = int\n' > /tmp/floorfixture/known_bad.py
-          set +e
-          ruff check --target-version=py311 --no-cache --output-format=concise \
-            -- /tmp/floorfixture/known_bad.py > /tmp/floorfixture/out.txt 2>&1
-          rc=$?
-          set -e
-          cat /tmp/floorfixture/out.txt
-          if [ "$rc" -ne 1 ]; then
-            echo "::error::ruff exited $rc on known-bad input; expected 1. The gate below cannot"
-            echo "::error::be trusted -- it would report green without checking anything."
-            exit 1
-          fi
-          if ! grep -qE ':[0-9]+:[0-9]+: invalid-syntax:' /tmp/floorfixture/out.txt; then
-            echo "::error::ruff no longer emits an 'invalid-syntax' diagnostic in this format."
-            echo "::error::The gate greps for that token, so it would be permanently green."
-            exit 1
-          fi
-
-      - name: Python floor syntax gate
-        run: |
-          # `set +e` around the pipeline, deliberately. GitHub's default shell is `bash -e {0}`,
-          # so a nonzero exit aborted the step AT the pipeline and every ::error:: annotation
-          # below was unreachable -- the step still failed red, but by accident of -e rather than
-          # by the written logic, and the documented "exit 2 fails too" described a dead branch.
-          set -o pipefail
-          set +e
-          python scripts/check_python_floor_syntax.py 2>&1 | tee /tmp/floorsyntax.log
-          rc=${PIPESTATUS[0]}
-          set -e
-          if [ "$rc" -eq 2 ]; then
-            echo "::error::the floor-syntax gate could not run (exit 2) -- not treated as green"
-            exit 1
-          fi
-          if [ "$rc" -ne 0 ]; then
-            echo "::error::tracked file(s) use syntax newer than requires-python declares"
-            exit 1
-          fi
-          if ! grep -q 'every tracked .py file parses on' /tmp/floorsyntax.log; then
-            echo "::error::gate exited 0 without its success line -- output shape changed"
-            exit 1
-          fi
-
   seed-registry:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2136,6 +2045,110 @@ jobs:
             echo "::error::truth-differential suite must be OK, with only environment-gated skips"
             exit 1
           fi
+
+  # ---------------------------------------------------------------------------------------------
+  # Its OWN job, unconditional: no `if:` and no `needs:`, matching the seed-registry and
+  # harness-provenance precedent above. It was first written as step 12 of 43 inside `mass-gate`,
+  # which carries `if: needs.changes.outputs.fidelity == 'true'` -- so review measured it against
+  # the 50 most recent non-merge first-parent commits on main and found 5 that touched .py and
+  # would NOT have run it. Three specific holes, all closed by making it unconditional:
+  #   - `pyproject.toml` was not in FILTERS, so a PR CHANGING the declared floor never ran the
+  #     gate that derives from that declaration;
+  #   - `scripts/check_python_floor_syntax.py` was not in FILTERS either, so a PR gutting the
+  #     gate did not run it;
+  #   - it sat after "Build and install the gen3 engine", so an engine-build failure prevented a
+  #     check needing only `git` and `ruff` from ever running.
+  # A gate that runs only when you touch the thing it guards is the "guard nothing runs" shape
+  # this file already records three times.
+  #
+  # WHY: pyproject declares requires-python >= 3.11, but every other job here pins 3.12, so
+  # nothing compared the code against its own declared floor. One file used a backslash inside an
+  # f-string (legal 3.12+, SyntaxError on 3.11) and the breach was invisible in both directions:
+  # CI could not see it, and locally it failed COLLECTION for three test modules plus one script
+  # -- which read as "four files you work around", while the suite silently measured 116 tests and
+  # 1398 subtests fewer than it appeared to. Two artifacts rotted inside those modules.
+  #
+  # No pure-Python guard is possible: PEP 701 removed the restriction from CPython's parser, so
+  # ast.parse(feature_version=(3,11)) on 3.12 ACCEPTS what 3.11 rejects. Hence ruff.
+  python-floor-syntax:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        # PINNED. The whole gate rests on the literal diagnostic name `invalid-syntax`, and that
+        # name has not always existed: ruff 0.8.0 reports NOTHING for `type A = int` at
+        # --target-version=py311 (verified: rc=0, "All checks passed!"). An unpinned linter is a
+        # gate whose behaviour changes with no commit, and a rename would return this gate to
+        # permanent green. torch is pinned in this same workflow for the same reason.
+        run: python -m pip install --quiet 'ruff==0.16.2'
+
+      - name: The gate reddens on known-bad input
+        # Kill-confirm IN CI, before trusting the green run below. Without this, a ruff rename or
+        # an output-format change makes the gate silently permanent-green: the script exits 0 and
+        # still prints its success line, so the shape grep cannot see it. The fixture is created
+        # here rather than committed, so it can never be linted, imported, or collected.
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/floorfixture
+          printf 'type Alias = int\n' > /tmp/floorfixture/known_bad.py
+          set +e
+          # `--isolated` here TOO, and the two streams kept apart.
+          #
+          # --isolated: ruff resolves config by walking up from the CHECKED FILE's directory, so a
+          # fixture in /tmp sees none of the repo's ruff config. That made this kill-confirm pass
+          # while the gate on the repo tree was fully silenced by `force-exclude = true` -- the
+          # check and the thing it checks were in different config scopes. Both are isolated now,
+          # so they share one (empty) scope.
+          #
+          # Streams split: the gate parses ruff's STDOUT only. Merging stderr here would let a
+          # future ruff move diagnostics to stderr, pass this step, and silently green the gate.
+          ruff check --isolated --target-version=py311 --no-cache --output-format=concise \
+            -- /tmp/floorfixture/known_bad.py > /tmp/floorfixture/out.txt 2> /tmp/floorfixture/err.txt
+          rc=$?
+          set -e
+          cat /tmp/floorfixture/out.txt
+          cat /tmp/floorfixture/err.txt >&2
+          if [ "$rc" -ne 1 ]; then
+            echo "::error::ruff exited $rc on known-bad input; expected 1. The gate below cannot"
+            echo "::error::be trusted -- it would report green without checking anything."
+            exit 1
+          fi
+          if ! grep -qE ':[0-9]+:[0-9]+: invalid-syntax:' /tmp/floorfixture/out.txt; then
+            echo "::error::ruff no longer emits an 'invalid-syntax' diagnostic in this format."
+            echo "::error::The gate greps for that token, so it would be permanently green."
+            exit 1
+          fi
+
+      - name: Python floor syntax gate
+        run: |
+          # `set +e` around the pipeline, deliberately. GitHub's default shell is `bash -e {0}`,
+          # so a nonzero exit aborted the step AT the pipeline and every ::error:: annotation
+          # below was unreachable -- the step still failed red, but by accident of -e rather than
+          # by the written logic, and the documented "exit 2 fails too" described a dead branch.
+          set -o pipefail
+          set +e
+          python scripts/check_python_floor_syntax.py 2>&1 | tee /tmp/floorsyntax.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo "::error::the floor-syntax gate could not run (exit 2) -- not treated as green"
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::tracked file(s) use syntax newer than requires-python declares"
+            exit 1
+          fi
+          if ! grep -q 'every tracked .py file parses on' /tmp/floorsyntax.log; then
+            echo "::error::gate exited 0 without its success line -- output shape changed"
+            exit 1
+          fi
+
 
   # THE REQUIRED CHECK. Runs on every pull request, whatever it touches, so it can
   # always report. It is the only job in this workflow that should ever be marked

@@ -50,7 +50,14 @@ REPO = Path(__file__).resolve().parents[1]
 
 def declared_floor() -> str:
     """Derive the target from pyproject, so the gate cannot drift from the declaration."""
-    text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    try:
+        text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    except OSError as exc:
+        # Exit 2, not a traceback. An unreadable pyproject raised FileNotFoundError out of here,
+        # and an uncaught exception exits 1 -- which in this script's contract means "found a
+        # violation". "Could not run" and "found a violation" must not be the same code.
+        print(f"cannot read pyproject.toml ({exc}); the floor is undeclared", file=sys.stderr)
+        raise SystemExit(2) from exc
     m = re.search(r'^requires-python\s*=\s*"[><=~^]*\s*(\d+)\.(\d+)', text, re.M)
     if not m:
         print("no requires-python in pyproject.toml -- nothing to check against", file=sys.stderr)
@@ -59,6 +66,9 @@ def declared_floor() -> str:
 
 
 def ruff() -> str:
+    # The repo venv wins over PATH, so a LOCAL run uses whatever ruff the developer has installed
+    # while CI uses the pinned one from the workflow. That asymmetry is deliberate -- a local run is
+    # a convenience, and CI is the gate -- but it means a local green is weaker than a CI green.
     for cand in (REPO / ".venv/bin/ruff", Path("ruff")):
         path = shutil.which(str(cand)) or (str(cand) if Path(cand).exists() else None)
         if path:
@@ -97,20 +107,37 @@ def main() -> int:
     # unless `-z` is used. No such path exists in the tree today, so this is latent rather than
     # live, but it is the exact fail-open class this gate exists to close, and the correct idiom
     # is already used elsewhere in the repo (tests/test_roll_enumeration_scope.py).
-    files = [
-        f
-        for f in subprocess.run(
+    try:
+        listing = subprocess.run(
             ["git", "-C", str(REPO), "ls-files", "-z", "*.py"],
             capture_output=True, text=True, check=True,
-        ).stdout.split("\0")
-        if f
-    ]
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        # Same reason as declared_floor: `check=True` raised CalledProcessError, which exits 1 and
+        # therefore claimed a violation when the truth was that nothing was enumerated.
+        print(f"cannot list tracked files ({exc}); nothing was measured", file=sys.stderr)
+        raise SystemExit(2) from exc
+    files = [f for f in listing.split("\0") if f]
     if not files:
         print("no tracked .py files found -- the check measured nothing", file=sys.stderr)
         raise SystemExit(2)
 
     proc = subprocess.run(
-        [ruff(), "check", f"--target-version={floor}", "--no-cache",
+        # `--isolated` -- the fifth silent-green path, and the only one reachable by a CORRECT
+        # config rather than a typo. `force-exclude = true` alongside any `exclude` makes ruff skip
+        # even explicitly-passed paths and exit 0, so:
+        #   - the returncode check below never fires (ruff exited 0, not 2);
+        #   - `tracked_files` is unchanged at 522, because it counts `git ls-files` output, not what
+        #     ruff examined -- so a denominator pin would not catch it either;
+        #   - the success line prints, so the workflow's shape grep is green.
+        # Demonstrated on the real tree with the real historical defect restored: 41 diagnostics
+        # became `invalid-syntax=0 ... every tracked .py file parses on py311`, exit 0.
+        # `force-exclude = true` is the RECOMMENDED setting under pre-commit, not a mistake, so this
+        # is the competent config rather than the incompetent one. `--isolated` is strictly stronger
+        # than `--no-force-exclude`: it ignores every `[tool.ruff]` section, present or future, so
+        # the gate is hermetic. It costs nothing, because `invalid-syntax` is emitted regardless of
+        # rule selection.
+        [ruff(), "check", "--isolated", f"--target-version={floor}", "--no-cache",
          "--output-format=concise", "--", *files],
         capture_output=True, text=True, cwd=REPO,
     )
