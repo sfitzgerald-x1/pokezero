@@ -9,22 +9,22 @@ re-derivable rather than recalled.
 A "site reaching the global default" is any of:
 
   bare-const           a read of `OBSERVATION_SCHEMA_VERSION` itself                    (16)
-  default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                        (53)
+  default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                        (50)
   implicit:<Surface>   a call to <Surface> leaving at least one default-bearing kwarg unnamed,
                        one kind per surface so a new one cannot join an existing bucket. All SIX
                        surfaces, with provenance -- five DERIVED from src/, one an alternate
                        constructor that cannot be (marked *):
 
-                         LocalShowdownConfig            133    TransformerPolicyConfig     4
-                         compact_category *              96    LinearPolicyModel           3
+                         LocalShowdownConfig            135    TransformerPolicyConfig     4
+                         compact_category *              39    LinearPolicyModel           3
                          observation_from_player_state    0    OnlineBattleAgent           2
 
-                       WAS EIGHT. `ObservationSpec` (34 rows) and `PokeZeroObservationV0` (49) left
-                       the model when their `schema_version` field defaults stopped naming the global
-                       and named v2.2 instead -- `derive_surfaces` identifies a surface BY that
-                       default, so the class stops being one, and all 83 of their call sites stop
-                       being counted. That is the intended direction: those sites now inherit a named
-                       version rather than a mutable default. N went 390 -> 307 in the same change.
+                       WAS EIGHT. `ObservationSpec` (24 rows here) and `PokeZeroObservationV0` (49)
+                       left the model when their `schema_version` field defaults stopped naming the
+                       global and named v2.2 instead: `derive_surfaces` identifies a surface BY that
+                       default, so the class stops being one and all 73 of their call sites stop
+                       being counted. Intended direction -- those sites now inherit a named version.
+                       N went 322 -> 249 in the same change.
 
                        `observation_from_player_state` is DERIVED and carries ZERO rows: all 130 of
                        its call sites pass `spec=` explicitly. A modelled surface with no open sites

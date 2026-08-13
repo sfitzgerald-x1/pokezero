@@ -26,7 +26,7 @@ REPO = Path(__file__).resolve().parents[1]
 # everyone else and the gate silently cannot run. Caught by `git add` refusing the path.
 ALLOWLIST = REPO / "tests" / "data" / "schema_default_allowlist.json"
 # The most rows the allowlist has ever legitimately held. Only ever lowered.
-HIGH_WATER_MARK = 307
+HIGH_WATER_MARK = 249
 LEDGER = REPO / "scripts" / "schema_default_ledger.py"
 
 
