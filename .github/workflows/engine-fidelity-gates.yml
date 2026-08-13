@@ -2089,39 +2089,32 @@ jobs:
         run: python -m pip install --quiet 'ruff==0.16.2'
 
       - name: The gate reddens on known-bad input
-        # Kill-confirm IN CI, before trusting the green run below. Without this, a ruff rename or
-        # an output-format change makes the gate silently permanent-green: the script exits 0 and
-        # still prints its success line, so the shape grep cannot see it. The fixture is created
-        # here rather than committed, so it can never be linted, imported, or collected.
+        # Kill-confirm IN CI, before trusting the green run below. Without it, a ruff rename or an
+        # output-format change makes the gate silently permanent-green: the script exits 0 and still
+        # prints its success line, so the shape grep cannot see it. A pin stops accidental drift;
+        # this stops silent drift.
+        #
+        # Driven by the script's own `--self-test`, which derives the floor from pyproject and picks
+        # a fixture invalid AT THAT FLOOR. The previous version hardcoded `--target-version=py311`
+        # in this step, so raising requires-python to >=3.12 would have left it attesting a
+        # capability the gate no longer exercises -- verified: at floor py312 the py311 fixture
+        # returns "All checks passed!". A hardcoded duplicate of a derived value is the defect class
+        # this whole gate exists to close, and it was sitting in the gate's own kill-confirm.
+        #
+        # An unknown floor exits 2 rather than silently attesting nothing.
         run: |
           set -o pipefail
-          mkdir -p /tmp/floorfixture
-          printf 'type Alias = int\n' > /tmp/floorfixture/known_bad.py
           set +e
-          # `--isolated` here TOO, and the two streams kept apart.
-          #
-          # --isolated: ruff resolves config by walking up from the CHECKED FILE's directory, so a
-          # fixture in /tmp sees none of the repo's ruff config. That made this kill-confirm pass
-          # while the gate on the repo tree was fully silenced by `force-exclude = true` -- the
-          # check and the thing it checks were in different config scopes. Both are isolated now,
-          # so they share one (empty) scope.
-          #
-          # Streams split: the gate parses ruff's STDOUT only. Merging stderr here would let a
-          # future ruff move diagnostics to stderr, pass this step, and silently green the gate.
-          ruff check --isolated --target-version=py311 --no-cache --output-format=concise \
-            -- /tmp/floorfixture/known_bad.py > /tmp/floorfixture/out.txt 2> /tmp/floorfixture/err.txt
-          rc=$?
+          python scripts/check_python_floor_syntax.py --self-test 2>&1 | tee /tmp/floorselftest.log
+          rc=${PIPESTATUS[0]}
           set -e
-          cat /tmp/floorfixture/out.txt
-          cat /tmp/floorfixture/err.txt >&2
-          if [ "$rc" -ne 1 ]; then
-            echo "::error::ruff exited $rc on known-bad input; expected 1. The gate below cannot"
-            echo "::error::be trusted -- it would report green without checking anything."
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::the floor gate failed its own kill-confirm (exit $rc); the run below"
+            echo "::error::cannot be trusted -- it would report green without checking anything."
             exit 1
           fi
-          if ! grep -qE ':[0-9]+:[0-9]+: invalid-syntax:' /tmp/floorfixture/out.txt; then
-            echo "::error::ruff no longer emits an 'invalid-syntax' diagnostic in this format."
-            echo "::error::The gate greps for that token, so it would be permanently green."
+          if ! grep -q 'self-test OK: ruff rejects' /tmp/floorselftest.log; then
+            echo "::error::self-test exited 0 without its success line -- output shape changed"
             exit 1
           fi
 

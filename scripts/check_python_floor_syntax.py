@@ -85,13 +85,90 @@ def ruff() -> str:
     raise SystemExit(2)
 
 
+# Syntax that is INVALID at the given floor and valid at the next version, keyed by floor. Used by
+# --self-test to prove ruff still detects a floor breach, at the floor the project actually declares.
+#
+# A hand-written table is unavoidable -- "a construct newer than version X" is not derivable -- but
+# the FLOOR is not hardcoded, and an unknown floor exits 2 rather than silently attesting nothing.
+# That distinction is the point: the previous kill-confirm hardcoded `py311` in the workflow, so
+# raising `requires-python` to >=3.12 would have left it validating a capability the gate no longer
+# exercises. Verified: at floor py312 the py311 fixture returns "All checks passed!".
+KNOWN_BAD_BY_FLOOR = {
+    "py311": "type Alias = int\n",                              # PEP 695 type alias: 3.12
+    "py312": "def f[T = int](x: T) -> T:\n    return x\n",       # PEP 696 defaults: 3.13
+    "py313": "class C[T = int]:\n    pass\n",                    # PEP 696 on a class: 3.13
+}
+
+
+def self_test(floor: str) -> int:
+    """Prove ruff still reddens on syntax invalid at THIS floor. Exit 2 if it cannot be proven.
+
+    Without this, a ruff rename or output-format change returns the gate to permanent green with no
+    signal: the script would exit 0 and still print its success line, so the workflow's shape grep
+    cannot see it. A pinned version stops accidental drift; this stops silent drift.
+    """
+    import tempfile
+
+    source = KNOWN_BAD_BY_FLOOR.get(floor)
+    if source is None:
+        print(
+            f"no known-bad fixture for floor {floor}; the gate cannot be self-tested and is "
+            f"therefore unverified. Add an entry to KNOWN_BAD_BY_FLOOR for {floor} -- syntax that "
+            "is a SyntaxError at that version and valid at the next one.",
+            file=sys.stderr,
+        )
+        return 2
+    with tempfile.TemporaryDirectory() as tmp:
+        # Outside the repo, so it can never be linted, imported or collected. `--isolated` means it
+        # shares the gate's (empty) config scope regardless of where it lives -- which is what makes
+        # a temp location correct here rather than accidentally wrong.
+        probe = Path(tmp) / "known_bad.py"
+        probe.write_text(source, encoding="utf-8")
+        proc = subprocess.run(
+            [ruff(), "check", "--isolated", f"--target-version={floor}", "--no-cache",
+             "--output-format=concise", "--", str(probe)],
+            capture_output=True, text=True,
+        )
+    print(proc.stdout, end="")
+    if proc.stderr:
+        print(proc.stderr, end="", file=sys.stderr)
+    if proc.returncode != 1:
+        print(
+            f"ruff exited {proc.returncode} on input that cannot parse at {floor}; expected 1. The "
+            "gate cannot be trusted -- it would report green without checking anything.",
+            file=sys.stderr,
+        )
+        return 2
+    if not re.search(r":\d+:\d+: invalid-syntax:", proc.stdout):
+        print(
+            "ruff no longer emits an 'invalid-syntax' diagnostic in the expected format. The gate "
+            "greps for that token, so it would be permanently green.",
+            file=sys.stderr,
+        )
+        return 2
+    print(f"self-test OK: ruff rejects {floor}-invalid syntax at --target-version={floor}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--floor", default=None, help="override the pyproject floor, e.g. py311")
+    ap.add_argument(
+        "--print-floor", action="store_true",
+        help="print the derived floor and exit, so callers need not hardcode it",
+    )
+    ap.add_argument(
+        "--self-test", action="store_true",
+        help="prove ruff still reddens on syntax invalid AT THE DERIVED FLOOR, then exit",
+    )
     args = ap.parse_args()
     floor = args.floor or declared_floor()
     # N6: validated, not a free-text escape hatch. `--floor py99` made ruff exit 2, which (before
     # B1 above) printed the success line and returned 0 -- a one-flag silent-green switch.
+    if args.print_floor:
+        # So nothing downstream hardcodes what this script derives.
+        print(floor)
+        return 0
     if not re.fullmatch(r"py3\d{1,2}", floor):
         print(
             f"floor {floor!r} is not a ruff target-version of the form py3NN. A target ruff does "
@@ -99,6 +176,9 @@ def main() -> int:
             file=sys.stderr,
         )
         raise SystemExit(2)
+
+    if args.self_test:
+        return self_test(floor)
 
     # `-z` and split on NUL, NOT `.split()`. Whitespace splitting shreds any path containing a
     # space into two nonexistent paths: ruff reports nothing for either, the count is INFLATED by
@@ -156,6 +236,31 @@ def main() -> int:
             "pass: a gate that cannot run has not measured anything.",
             file=sys.stderr,
         )
+        raise SystemExit(2)
+
+    # E902 is "ruff could not READ this file", and an unread file is an UNCHECKED file. Counting
+    # only `invalid-syntax` made those indistinguishable from clean ones: a scratch repo with a
+    # tracked dangling symlink and a chmod-000 file containing `type B = int` -- a real 3.11
+    # SyntaxError -- reported `invalid-syntax=0`, printed the success line, and exited 0 while ruff
+    # was saying `E902 No such file or directory` and `E902 Permission denied`.
+    #
+    # This is the CLASS the whitespace-split bug was one instance of. That fix removed the cause
+    # (paths shredded into nonexistent ones, which ruff then reported as E902) and left the class
+    # standing. The structural gap it exposes: `tracked_files` is asserted from `git ls-files` and
+    # never reconciled against what ruff actually opened, so the gate could not distinguish
+    # "522 files parse" from "N parse and 522-N were never read". E902 is ruff telling us exactly
+    # that, per file, and exit 2 -- "could not run" -- is this contract's own answer to it.
+    unread = [l for l in proc.stdout.splitlines() if re.search(r":\s*E902\b", l)]
+    if unread:
+        print(
+            f"ruff could not READ {len(unread)} file(s), so they were NOT checked. This is not a "
+            "pass:",
+            file=sys.stderr,
+        )
+        for line in unread[:20]:
+            print(f"  {line}", file=sys.stderr)
+        if len(unread) > 20:
+            print(f"  ... and {len(unread) - 20} more", file=sys.stderr)
         raise SystemExit(2)
 
     # N5: match the RULE FIELD, not the line. `"invalid-syntax" in l` also matches a diagnostic
