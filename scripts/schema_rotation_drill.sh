@@ -224,7 +224,7 @@ export DRILL_WT="$WT"
 INJ="$(mktemp -t drill_inject)" || exit 3
 trap 'rm -f "$INJ"' EXIT
 cat > "$INJ" <<'PY'
-import pathlib, re, sys
+import ast, pathlib, re, sys
 wt = sys.argv[1]
 p = f"{wt}/src/pokezero/observation.py"
 s = open(p).read()
@@ -461,8 +461,123 @@ if not _reg_targets:
         "changed; registering nothing would leave every schema-keyed container blind to the "
         "synthetic schema."
     )
+# The CLI-choice DICT needs a key AND a value; the generic member-append would write a bare string
+# into a dict literal, which is a SyntaxError. Handled first and explicitly, because a silent syntax
+# error in showdown.py would make every import fail and the entire breakage set drill artifact.
+_cli = f"{wt}/src/pokezero/showdown.py"
+_ct = open(_cli).read()
+_m_cli = re.search(r'^OBSERVATION_SCHEMA_CLI_CHOICES[^=]*=\s*\{(.*?)\n\}', _ct, re.S | re.M)
+if _m_cli is None:
+    raise SystemExit(
+        "drill: could not locate the OBSERVATION_SCHEMA_CLI_CHOICES dict in showdown.py. "
+        "`observation_schema_version_from_choice` raises on an unknown key, so leaving the "
+        "synthetic schema out of it makes every consumer of the encoder-table exporter fail on the "
+        "drill's own omission -- which is how ten EngineEnvTest failures were reported as surviving "
+        "conflations."
+    )
+_ct = (_ct[:_m_cli.end(1)]
+       + '\n    "v5-drill": OBSERVATION_SCHEMA_VERSION_V5_DRILL,'
+       + _ct[_m_cli.end(1):])
+open(_cli, "w").write(_ct)
+print('  registered "v5-drill" in OBSERVATION_SCHEMA_CLI_CHOICES (dict: key AND value)')
+
+# CONSTANT-valued containers: `{OBSERVATION_SCHEMA_VERSION_V2_2, ..._V3, ..._V4}` in the exporter's
+# `main()`, and `{..._V4: "v4", ...}` in the lattice. Both are ad-hoc, inline in a function body, and
+# NOT module-level property tuples -- the census docstring used to claim containers of constants were
+# covered by the property mirroring, which was false for exactly this shape. Ninth and eighth
+# instances of the class. Each also needs the V5_DRILL constant IMPORTED, or the file NameErrors at
+# call time and every consumer fails on the drill's omission.
+# Anchored on the CONTAINER, matched as a whole multi-member literal -- NOT on a bare constant name.
+# The first cut anchored on "OBSERVATION_SCHEMA_VERSION_V4," and used replace(..., 1), which matched
+# the IMPORT LIST 329 lines above the set. The print said "registered", the set was untouched, and
+# EngineEnvTest failed again on the same `parser.error`. A print is not a verification, so each
+# registration is now ASSERTED below by re-parsing the file and checking the synthetic constant is
+# inside the intended container.
+for _cpath, _pat, _sub in (
+    # `if schema_version not in { V2_2, V3, V4 }:` in main()
+    ("scripts/export_encoder_tables.py",
+     re.compile(r'(not in \{\s*\n(?:\s*OBSERVATION_SCHEMA_VERSION_V[0-9_]+,\s*\n)+)(\s*\}\s*:)'),
+     r'\1        OBSERVATION_SCHEMA_VERSION_V5_DRILL,\n\2'),
+    # `_EXPORTER_SCHEMA_CHOICES = { V4: "v4", ... }`
+    ("src/pokezero/mcts_eval/lattice.py",
+     re.compile(r'(_EXPORTER_SCHEMA_CHOICES\s*=\s*\{\s*\n(?:\s*OBSERVATION_SCHEMA_VERSION_V[0-9_]+:\s*"[^"]*",\s*\n)+)(\s*\})'),
+     r'\1        OBSERVATION_SCHEMA_VERSION_V5_DRILL: "v5-drill",\n\2'),
+):
+    _cf = f"{wt}/{_cpath}"
+    _cx = open(_cf).read()
+    _cx2, _nsub = _pat.subn(_sub, _cx, count=1)
+    if _nsub != 1:
+        raise SystemExit(
+            f"drill: could not locate the schema container in {_cpath} to register the synthetic "
+            "schema in. It gates a per-schema path and raises on an unknown schema, so leaving it "
+            "unregistered makes its consumers fail on the drill's own omission -- which is how ten "
+            "EngineEnvTest failures were reported as surviving conflations, twice."
+        )
+    _cx = _cx2
+    # The constant must be IMPORTED there, or the module NameErrors at call time -- worse than
+    # leaving it unregistered, because the failure then looks like a codebase defect. It did: the
+    # first cut tested `^\s*OBSERVATION_SCHEMA_VERSION_V5_DRILL,\s*$`, which the set insertion two
+    # lines above had ALREADY satisfied, so the import was skipped and the exporter died on
+    # "NameError: name 'OBSERVATION_SCHEMA_VERSION_V5_DRILL' is not defined". Asked of the AST now,
+    # which distinguishes an imported name from a name that merely appears.
+    def _imports_drill(src: str) -> bool:
+        for _n in ast.walk(ast.parse(src)):
+            if isinstance(_n, ast.ImportFrom) and any(
+                a.name == "OBSERVATION_SCHEMA_VERSION_V5_DRILL" for a in _n.names
+            ):
+                return True
+        return False
+
+    if not _imports_drill(_cx):
+        # Anchor on the V4 constant INSIDE an ImportFrom's name list, located by AST position rather
+        # than by pattern, so it cannot match the container edit made above.
+        _ins = None
+        for _n in ast.walk(ast.parse(_cx)):
+            if isinstance(_n, ast.ImportFrom):
+                for _a in _n.names:
+                    if _a.name.startswith("OBSERVATION_SCHEMA_VERSION_V"):
+                        _ins = _a
+        if _ins is None:
+            raise SystemExit(
+                f"drill: {_cpath} imports no per-version schema constant, so there is no import list "
+                "to add the synthetic one to. Registering the container without the import would "
+                "NameError at call time."
+            )
+        _lines = _cx.split("\n")
+        _li = _ins.lineno - 1
+        _indent = _lines[_li][: len(_lines[_li]) - len(_lines[_li].lstrip())]
+        _lines.insert(_li + 1, f"{_indent}OBSERVATION_SCHEMA_VERSION_V5_DRILL,")
+        _cx = "\n".join(_lines)
+        if not _imports_drill(_cx):
+            raise SystemExit(
+                f"drill: tried to add the synthetic constant to {_cpath}'s imports and the AST still "
+                "does not see it imported. Refusing to proceed on an announcement."
+            )
+    open(_cf, "w").write(_cx)
+    # ASSERT the registration landed where it was meant to, by re-parsing.
+    _tree = ast.parse(_cx)
+    _ok = any(
+        isinstance(n, (ast.Set, ast.Dict))
+        and any(
+            isinstance(e, ast.Name) and e.id == "OBSERVATION_SCHEMA_VERSION_V5_DRILL"
+            for e in (n.elts if isinstance(n, ast.Set) else [k for k in n.keys if k])
+        )
+        for n in ast.walk(_tree)
+    )
+    if not _ok:
+        raise SystemExit(
+            f"drill: wrote the synthetic constant into {_cpath} but it is NOT a member of any set or "
+            "dict there -- the edit landed somewhere else (the first attempt landed in the import "
+            "list). Registration must be verified, not announced."
+        )
+    print(f"  registered the synthetic schema in {_cpath} (constant-valued container, re-parsed)")
+
 _registered = 0
 for _path, _members in _reg_targets:
+    if _path == "src/pokezero/showdown.py" and _members[0].startswith("v"):
+        continue  # the CLI-choices dict, handled above
+    if _members[0].startswith("OBSERVATION_SCHEMA_VERSION_"):
+        continue  # constant-valued, handled above
     _f = f"{wt}/{_path}"
     _txt = open(_f).read()
     _short = not _members[0].startswith("pokezero.observation.")
@@ -970,8 +1085,63 @@ else
   [ "$(wc -l < "$WT/control.txt")" -gt 12 ] && echo "    ... and $(( $(wc -l < "$WT/control.txt") - 12 )) more"
 fi
 
+# ===================== NATIVE-SCHEMA EXCLUSION, derived by CAUSE not by name =====================
+# The Rust leaf encoder dispatches on schema version in COMPILED code
+# (rust/pokezero-search/src/encoder.rs: "unsupported observation layout schema"). This drill edits
+# Python source in a git worktree and never rebuilds the crate, so a synthetic schema can NEVER
+# satisfy that match -- no amount of registration reaches it.
+#
+# That is a hard scope limit of the instrument, and it cost four rounds of chasing to establish:
+# registering `_EXPORTABLE_TABLE_SCHEMAS`, then the exporter's argparse `choices`, then
+# `OBSERVATION_SCHEMA_CLI_CHOICES`, then the exporter's inline validation set and the lattice's
+# `_EXPORTER_SCHEMA_CHOICES` -- each fix revealing the next gate down the same path, until the last
+# one turned out to be compiled.
+#
+# Excluded by CAUSE: a test is excluded only if its own failure output carries that Rust message.
+# A name list would go stale silently and would let an unrelated failure in the same test hide behind
+# the excuse; matching the message means the exclusion is justified per-test, per-run, by evidence in
+# the log. Printed in full below, never silently dropped.
+"$VENV" - "$WT" <<'NATIVE' > "$WT/native_schema.txt"
+import re, sys
+wt = sys.argv[1]
+text = open(f"{wt}/DRILL.txt", errors="replace").read()
+MSG = "unsupported observation layout schema"
+# pytest's FAILURES sections are delimited by `____ Class.test ____`; attribute the message to the
+# section it appears in.
+parts = re.split(r'\n_+ (\S+) _+\n', text)
+ids = []
+for i in range(1, len(parts), 2):
+    name = parts[i]
+    body = parts[i + 1] if i + 1 < len(parts) else ""
+    if MSG in body:
+        ids.append(name)
+print("\n".join(sorted(set(ids))))
+NATIVE
+_native_n=$(grep -c . "$WT/native_schema.txt" || true)
+if [ "${_native_n:-0}" -gt 0 ]; then
+  echo "  NATIVE-SCHEMA scope limit: $_native_n test(s) fail inside the COMPILED Rust encoder's"
+  echo "  schema dispatch, which this drill cannot register into. Excluded by cause (their own"
+  echo "  failure output carries the message), not by name:"
+  sed 's/^/    /' "$WT/native_schema.txt" | head -12
+  [ "$_native_n" -gt 12 ] && echo "    ... and $(( _native_n - 12 )) more"
+fi
+
 comm -23 "$WT/rotated.txt" "$WT/baseline.txt" > "$WT/attributable_pre_control.txt"
-comm -23 "$WT/attributable_pre_control.txt" "$WT/control.txt" > "$WT/attributable.txt"
+comm -23 "$WT/attributable_pre_control.txt" "$WT/control.txt" > "$WT/attributable_pre_native.txt"
+# Match on the CLASS.TEST form pytest uses in section headers against our normalised ids.
+"$VENV" - "$WT" <<'FILTER' > "$WT/attributable.txt"
+import sys
+wt = sys.argv[1]
+native = {l.strip() for l in open(f"{wt}/native_schema.txt") if l.strip()}
+def tail(i):  # "file.py::Class::test[p]" -> "Class.test"
+    core = i.split("[")[0]
+    bits = core.split("::")
+    return ".".join(bits[-2:]) if len(bits) >= 2 else core
+for line in open(f"{wt}/attributable_pre_native.txt"):
+    i = line.rstrip("\n")
+    if i and tail(i) not in native:
+        print(i)
+FILTER
 # Artifact matching is TEST-granular on purpose, while ids are SUBTEST-granular. A source-mutation
 # artifact (a citation-pinning test broken by the drill editing source) breaks in every subtest, so
 # listing 24 rows would be noise -- but the excusal has to be deliberate, not a side effect of

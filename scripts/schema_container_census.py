@@ -58,17 +58,42 @@ def containers() -> list[tuple[str, int, tuple[str, ...]]]:
             except (SyntaxError, UnicodeDecodeError):
                 continue
             for node in ast.walk(tree):
-                if not isinstance(node, (ast.Set, ast.List, ast.Tuple)):
+                # Sets/lists/tuples by MEMBER, dicts by KEY. Scanning only the first three left the
+                # enumerator's own denominator incomplete, and it cost a full scored run to find out:
+                # `OBSERVATION_SCHEMA_CLI_CHOICES` in showdown.py is a dict keyed by the short names,
+                # `observation_schema_version_from_choice` raises on an unknown key, and every
+                # EngineEnvTest failed on it -- reported as ten surviving conflations. The seventh
+                # instance of the class this tool exists to enumerate, missed by the tool because
+                # "container" had been defined by three node types rather than by what the code does.
+                if isinstance(node, (ast.Set, ast.List, ast.Tuple)):
+                    elts = node.elts
+                elif isinstance(node, ast.Dict):
+                    elts = [k for k in node.keys if k is not None]  # `**expr` has a None key
+                else:
                     continue
                 vals = {
-                    e.value for e in node.elts
+                    e.value for e in elts
                     if isinstance(e, ast.Constant) and isinstance(e.value, str)
                 }
-                # >= 2 members, and EVERY member a schema name in one naming convention. A single
-                # name is an ordinary string comparison, and a mixed container is not a schema table.
+                # ALSO containers built from the version CONSTANTS, not just string literals. An
+                # earlier version of this docstring asserted those were "covered by the drill's
+                # property-tuple mirroring plus PRECONDITION 2's membership check" -- which was FALSE
+                # for an ad-hoc set inline in a function body. `export_encoder_tables.py` gates on
+                # `{OBSERVATION_SCHEMA_VERSION_V2_2, ..._V3, ..._V4}` in `main()`, nothing mirrored
+                # it, and every EngineEnvTest failed on `parser.error("unsupported encoder-table
+                # schema")`. Eighth instance of the class, and the second missed because this tool's
+                # notion of "container" was narrower than the code's.
+                names = {
+                    e.id for e in elts
+                    if isinstance(e, ast.Name) and e.id.startswith("OBSERVATION_SCHEMA_VERSION_V")
+                }
+                # >= 2 members, and EVERY member a schema name in ONE convention. A single name is an
+                # ordinary comparison, and a mixed container is not a schema table.
+                rel = str(path.relative_to(REPO))
                 if len(vals) >= 2 and (vals <= SHORT or vals <= FULL):
-                    rel = str(path.relative_to(REPO))
                     found.add((rel, node.lineno, tuple(sorted(vals))))
+                elif len(names) >= 2 and not vals:
+                    found.add((rel, node.lineno, tuple(sorted(names))))
     return sorted(found)
 
 
@@ -85,7 +110,7 @@ def classification() -> dict[tuple[str, tuple[str, ...]], str]:
         if len(parts) != 3:
             raise SystemExit(f"census: malformed row (want 3 fields): {raw!r}")
         kind, path, members = parts
-        if kind not in ("REGISTER", "PARTIAL"):
+        if kind not in ("REGISTER", "PARTIAL", "MIRRORED"):
             raise SystemExit(f"census: unknown classification {kind!r} in {raw!r}")
         out[(path, tuple(sorted(members.split(","))))] = kind
     return out
