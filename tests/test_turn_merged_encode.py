@@ -72,15 +72,28 @@ SHOWDOWN_ROOT = Path(
 
 
 class SchemaTableTest(unittest.TestCase):
-    def test_v2_2_is_a_supported_schema_entry_and_the_default(self) -> None:
+    def test_v2_2_is_a_supported_schema_entry(self) -> None:
+        """Membership and spec identity, with NO read of the process default. See D2 below."""
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, REPLAY_OBSERVATION_SPECS_BY_SCHEMA)
         self.assertIs(
             observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2),
             V2_2_REPLAY_OBSERVATION_SPEC,
         )
-        # Turn-merged earned the fresh-selection default (2026-07-08 schedule-uncompressed
-        # reads); v2.1 stays a supported, checkpoint-latched schema.
+
+    def test_v2_2_IS_the_default(self) -> None:
+        """A CLEAN identity pin: one assertion, reading the process default and nothing else.
+
+        Split from the membership test above (D2). They were one test, so the pin broke under a
+        rotation for either of two reasons and the drill could not tell which -- delete the default
+        read and the test still broke on membership, so "expected but did not break", the only
+        detector for a pin that has gone dead, could never fire for it. The drill's injection ADDS a
+        synthetic schema to those tables rather than removing v2.2, so the membership half survives
+        a rotation by construction; only this line does not.
+
+        Turn-merged earned the fresh-selection default (2026-07-08 schedule-uncompressed reads);
+        v2.1 stays a supported, checkpoint-latched schema.
+        """
         self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
 
     def test_v2_2_widths_extend_the_v2_1_census(self) -> None:

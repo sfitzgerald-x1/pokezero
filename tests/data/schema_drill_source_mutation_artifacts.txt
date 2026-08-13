@@ -1,0 +1,14 @@
+# Tests that break because the DRILL EDITS SOURCE, not because the default rotated.
+#
+# The drill injects a synthetic schema by rewriting `src/pokezero/observation.py` and
+# `src/pokezero/showdown.py`. Any test that pins a line CITATION into those files, or into a file
+# whose line numbers shift as a result, breaks on the edit itself -- it would break identically if
+# the injected constant were named anything at all.
+#
+# Kept SEPARATE from schema_drill_expected_breakages.txt on purpose. That file means "the subject
+# of this test IS the default's identity"; this file means "the drill perturbed the tree in a way
+# unrelated to its question". Merging them would let a real conflation hide behind the word
+# "expected", which is the one failure mode that file's header warns about.
+#
+# Adding a row here requires showing the break is citation/line-shift, not schema-dependent.
+test_unreachable_readjudication.py::TheCitationsAreResolvedOnEveryRunTests::test_every_demonstration_re_derives_from_the_current_tree

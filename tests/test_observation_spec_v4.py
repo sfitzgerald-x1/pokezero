@@ -232,10 +232,26 @@ class V4EncodeTestBase(unittest.TestCase):
 class V4SchemaTableTest(unittest.TestCase):
     """The schema table, the CLI choice, and the specs the two resolve to."""
 
-    def test_v4_is_supported_turn_merged_grouped_and_feature_packed_but_not_the_default(self) -> None:
-        # Adding a schema must never move the fresh default: every running arm keeps collecting
-        # under the schema its checkpoints were trained on.
+    def test_v2_2_IS_the_default_not_v4(self) -> None:
+        """A CLEAN identity pin: one assertion, reading the process default and nothing else.
+
+        Split out of test_v4_is_supported_turn_merged_grouped_and_feature_packed below, which
+        asserted the default's identity AND four membership facts about tuples the rotation
+        drill mutates (SUPPORTED, TURN_MERGED, GROUPED_LAYOUT, FEATURE_PACK). It therefore
+        broke under a rotation whether or not its default assertion still bound, leaving the
+        drill's EXPECTED-BUT-DID-NOT-BREAK detector blind to this pin going stale.
+
+        Asserted POSITIVELY (default IS v2.2), not as "v4 is not the default". The negative
+        form survives a rotation -- under a rotation to v5-drill, v4 is still not the default --
+        so it would not break, and a non-breaking row in the drill's rubric is a false pin.
+        """
         self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
+
+    def test_v4_is_supported_turn_merged_grouped_and_feature_packed(self) -> None:
+        # Adding a schema must never move the fresh default: every running arm keeps collecting
+        # under the schema its checkpoints were trained on. That the default is still v2.2 is
+        # pinned by test_v2_2_IS_the_default_not_v4 above and is deliberately NOT re-asserted
+        # here; see that test's docstring.
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V4, SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertEqual(SUPPORTED_OBSERVATION_SCHEMA_VERSIONS[-1], OBSERVATION_SCHEMA_VERSION_V4)
         # V4 keeps v3's grouped projection but is NOT turn-merged — it has no transition

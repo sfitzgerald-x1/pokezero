@@ -1,0 +1,46 @@
+# Every container of schema names in src/ and scripts/, classified. Enumerated by
+# scripts/schema_container_census.py; `--check` aborts the drill on any container missing from here.
+#
+# WHY THIS FILE EXISTS. NINE separate structures keyed by schema went unregistered, one at a time,
+# and each time the drill charged the resulting failures to the codebase instead of to itself:
+# SUPPORTED, GROUPED_LAYOUT, FEATURE_PACK, V2_1_LINEAGE, the two census maps,
+# `_EXPORTABLE_TABLE_SCHEMAS`, the exporter CLI's argparse `choices`, `OBSERVATION_SCHEMA_CLI_CHOICES`,
+# the exporter's own inline validation set, and `_EXPORTER_SCHEMA_CHOICES` in the lattice. Each was
+# found by running the full drill (17-70 minutes), reading a stack trace, and adding the one it named.
+# That loop does not converge: after each fix the instrument still had no way to say what it had
+# MISSED, so a clean run only ever proved the structures I had thought of were registered.
+#
+# THE CENSUS'S OWN DENOMINATOR WAS WRONG TWICE, which is the same defect one level up:
+#   - it scanned Set/List/Tuple and not Dict, so `OBSERVATION_SCHEMA_CLI_CHOICES` was invisible;
+#   - it scanned string LITERALS only, and its docstring asserted that containers of version
+#     CONSTANTS were "covered by the property-tuple mirroring plus PRECONDITION 2". False for an
+#     ad-hoc set inline in a function body -- which is exactly what the exporter and the lattice have.
+# Extending it from 3 node types and 1 member shape to 4 and 2 took the count from 8 to 19.
+#
+# Format:  REGISTER|PARTIAL|MIRRORED  <file>  <members>  <variable name or <inline:LINE>>
+# Keyed on file + members + VARIABLE NAME. Every container needs its OWN row: `--check` aborts if the
+# counts differ, because a shared row means one container is classified by another's decision, which
+# is how a new table got registered for free twice. An unnamed container is keyed <inline:LINE>; that
+# does reintroduce line sensitivity for those, deliberately -- a drifting line is a loud reclassify,
+# whereas a silent collision is a free pass.
+#
+# ---------------------------------------------------------------------------------------------
+REGISTER  scripts/export_encoder_tables.py  v2.2,v3,v4  <inline:357>
+REGISTER  scripts/export_encoder_tables.py  OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  <inline:375>
+REGISTER  scripts/schema_identity_gate_scan.py  pokezero.observation.v2,pokezero.observation.v2.1,pokezero.observation.v2.2,pokezero.observation.v3,pokezero.observation.v4  VERSION_LITERALS
+PARTIAL   scripts/vocab_shift_probe.py  pokezero.observation.v2.2,pokezero.observation.v3  <inline:65>
+REGISTER  src/pokezero/engine_env.py  v2.2,v3,v4  _EXPORTABLE_TABLE_SCHEMAS
+REGISTER  src/pokezero/mcts_eval/lattice.py  OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  _EXPORTER_SCHEMA_CHOICES
+REGISTER  src/pokezero/mcts_eval/resolver.py  pokezero.observation.v2.2,pokezero.observation.v3,pokezero.observation.v4  SUPPORTED_OBSERVATION_SCHEMAS
+REGISTER  src/pokezero/neural_cli.py  v2.1,v2.2,v3,v4  <inline:467>
+REGISTER  src/pokezero/neural_cli.py  v2.1,v2.2,v3,v4  <inline:1951>
+MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  SUPPORTED_OBSERVATION_SCHEMA_VERSIONS
+MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3  TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS
+MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS
+MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA
+REGISTER  src/pokezero/rollout_cli.py  v2.1,v2.2,v3,v4  <inline:176>
+MIRRORED  src/pokezero/showdown.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  REPLAY_OBSERVATION_SPECS_BY_SCHEMA
+MIRRORED  src/pokezero/showdown.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  _MINIMUM_CATEGORICAL_CENSUS_BY_SCHEMA
+MIRRORED  src/pokezero/showdown.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  _MINIMUM_NUMERIC_CENSUS_BY_SCHEMA
+REGISTER  src/pokezero/showdown.py  v2.1,v2.2,v3,v4  OBSERVATION_SCHEMA_CLI_CHOICES
