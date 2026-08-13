@@ -116,7 +116,54 @@ _norm_id() {
   #
   # Width-dependent, too: pytest truncates the reason to the terminal width (80 in a pipe), so the
   # unnormalised ids differed between a tty and a pipe.
-  sed -E 's#[[:space:]]+-[[:space:]].*\$##; s#^(FAILED|ERROR)[[:space:]]+##; s#^SUBFAILED\(([^)]*)\)[[:space:]]+(.*)\$#\2[\1]#; s#^SUBFAILED[[:space:]]+##; s#(^|::)[^ ]*/tests/#\1#; s#^tests/##'
+  #
+  # The end-of-line anchors are `$`, NOT `\$`. They were written escaped, and inside sed's
+  # single-quoted expression `\$` matches a LITERAL DOLLAR SIGN -- so the suffix strip and the whole
+  # SUBFAILED rewrite matched nothing, and this function was INERT while the comment above it
+  # declared the defect fixed. Measured on real lines from a full run:
+  #
+  #   in   FAILED /tmp/.../tests/test_observation.py::T::test_x - AssertionError: 3 != 4
+  #   was  test_observation.py::T::test_x - AssertionError: 3 != 4      <- reason still attached
+  #   now  test_observation.py::T::test_x
+  #
+  #   in   SUBFAILED(row='R8') ../../../tmp/.../tests/test_unreachable_readjudication.py::T::t
+  #   was  SUBFAILED(row='R8') ../../../tmp/.../tests/test_unreachable_readjudication.py::T::t
+  #   now  test_unreachable_readjudication.py::T::t[row='R8']
+  #
+  # Self-tested by --self-test below, on those exact strings, so this cannot go inert again quietly.
+  sed -E 's#[[:space:]]+-[[:space:]].*$##; s#^(FAILED|ERROR)[[:space:]]+##; s#^SUBFAILED\(([^)]*)\)[[:space:]]+(.*)$#\2[\1]#; s#^SUBFAILED[[:space:]]+##; s#(^|::)[^ ]*/tests/#\1#; s#^tests/##'
+}
+
+# A normaliser whose output feeds BOTH the scorer and the rubric comparison is the single point
+# where the whole verdict can go silently wrong: if ids do not match the rubric, every breakage
+# reports as UNEXPECTED and every rubric row as MISSING, which reads as "the migration is
+# incomplete AND every pin is dead" rather than as a broken sed. It went inert exactly that way.
+# Runs before any suite, costs milliseconds.
+_norm_self_test() {
+  local bad=0 got want
+  while IFS='|' read -r raw want; do
+    [ -z "$raw" ] && continue
+    got=$(printf '%s\n' "$raw" | _norm_id)
+    if [ "$got" != "$want" ]; then
+      echo "  NORMALISER SELF-TEST FAILED"
+      echo "    in:   $raw"
+      echo "    want: $want"
+      echo "    got:  $got"
+      bad=1
+    fi
+  done <<'CASES'
+FAILED /tmp/schema-v5-drill/tests/test_observation.py::T::test_x - AssertionError: 3 != 4|test_observation.py::T::test_x
+SUBFAILED(row='R8') ../../../tmp/schema-v5-drill/tests/test_unreachable.py::T::t|test_unreachable.py::T::t[row='R8']
+FAILED tests/test_observation.py::T::t|test_observation.py::T::t
+ERROR /abs/path/tests/test_a.py::T::t|test_a.py::T::t
+FAILED tests/test_b.py::T::t_with_dash - E   assert 1 == 2|test_b.py::T::t_with_dash
+CASES
+  [ "$bad" = 0 ] || {
+    echo "ABORT: the id normaliser does not do what the scorer assumes. Every comparison against"
+    echo "       the rubric would be meaningless, in the direction that reports a false failure."
+    exit 14
+  }
+  echo "  id normaliser self-test: 5/5"
 }
 
 drill_targets() {
@@ -130,6 +177,7 @@ drill_targets() {
 }
 
 echo "== drill: synthetic v5 rotation =="
+_norm_self_test
 git -C "$REPO" worktree remove --force "$WT" 2>/dev/null
 git -C "$REPO" worktree add -q --detach "$WT" HEAD || exit 3
 cd "$WT" || exit 3
