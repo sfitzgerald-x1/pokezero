@@ -1,0 +1,17 @@
+# Pass condition for DRILL_SHAPE=differ ONLY. Do not merge with the naming rubric.
+#
+# The default rubric (`schema_drill_expected_breakages.txt`) means "this test's subject IS which
+# schema is currently default". Under a WIDTH change that population is different: every site that
+# legitimately NAMES a width -- a census assertion, a fixture pinning a v4 shape, an encoder
+# refusing an off-census spec -- is a legitimate break too, because the synthetic schema really is
+# one column narrower.
+#
+# Sharing one file would have two failure modes and both are bad: fail the run on correct
+# behaviour, or let a real SHAPE conflation hide behind an entry admitted for the naming run. That
+# second one is the whole reason the naming rubric carries an admission rule.
+#
+# UNPOPULATED ON PURPOSE. This mode has never produced a trustworthy run -- its first scored
+# attempt put a test in both "unexpected" and "did-not-break", and the census-floor defect meant
+# every encode raised at the validator. Populating this file from a run whose premise was broken
+# would launder that. The intended first use is: run it, read every breakage, and admit only the
+# ones demonstrated to be legitimate width-naming, one at a time, with the demonstration recorded.
