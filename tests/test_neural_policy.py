@@ -293,22 +293,37 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         The upper bound is the check the first revision of this PR argued against in a comment.
         It is one-sided on purpose: narrower is legal (the v2 119-numeric relic), wider is not.
+
+        EVERY SUPPORTED SCHEMA, not just v2. An earlier revision hard-coded v2, so the bound was
+        pinned on 1 of 5 schemas and four mutants survived: applying the categorical bound for v2
+        only, the numeric bound for v2 only, both for v2 only, and bypassing the categorical bound
+        for v4. All four left this file green at 364 passed.
+
+        The v4 one is the worst of them, because a v4 config carrying v2.2's 51/155 against v4's
+        41/132 is this PR's own headline scenario -- 4 of the 10 payloads the bound newly refuses
+        are v4-stamped. The guard against the exact case the PR exists to fix had no test.
+
+        This is also the identical defect round 1 found in
+        `test_transformer_policy_config_resolves_widths_from_its_own_schema`, whose hand-listed
+        schemas omitted v2.1. That one was fixed by looping `SUPPORTED_OBSERVATION_SCHEMA_VERSIONS`
+        and this one was not, which is the pattern: a fix applied to one test and not its sibling.
         """
-        spec = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2)
-        base = dict(
-            category_vocab=("species:a",),
-            category_oov_buckets=1,
-            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2,
-            transition_token_budget=spec.transition_token_count,
-        )
-        for field in ("categorical_feature_count", "numeric_feature_count"):
-            with self.subTest(field=field, case="zero"):
-                with self.assertRaisesRegex(ValueError, f"{field} must be positive"):
-                    TransformerPolicyConfig.compact_category(**base, **{field: 0})
-            with self.subTest(field=field, case="over census"):
-                over = getattr(spec, field) + 1
-                with self.assertRaisesRegex(ValueError, f"{field} {over} exceeds"):
-                    TransformerPolicyConfig.compact_category(**base, **{field: over})
+        for schema_version in SUPPORTED_OBSERVATION_SCHEMA_VERSIONS:
+            spec = observation_spec_for_schema(schema_version)
+            base = dict(
+                category_vocab=("species:a",),
+                category_oov_buckets=1,
+                observation_schema_version=schema_version,
+                transition_token_budget=spec.transition_token_count,
+            )
+            for field in ("categorical_feature_count", "numeric_feature_count"):
+                with self.subTest(schema_version=schema_version, field=field, case="zero"):
+                    with self.assertRaisesRegex(ValueError, f"{field} must be positive"):
+                        TransformerPolicyConfig.compact_category(**base, **{field: 0})
+                with self.subTest(schema_version=schema_version, field=field, case="over census"):
+                    over = getattr(spec, field) + 1
+                    with self.assertRaisesRegex(ValueError, f"{field} {over} exceeds"):
+                        TransformerPolicyConfig.compact_category(**base, **{field: over})
 
     def test_transformer_policy_config_resolves_token_count_for_a_trimmed_region(self) -> None:
         """Closes the gap a surviving mutant found in #1227's review.
