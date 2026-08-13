@@ -39,6 +39,7 @@ Exit 2 = the check could not run (no ruff, or no floor declared) -- never silent
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -93,6 +94,45 @@ def ruff() -> str:
 # That distinction is the point: the previous kill-confirm hardcoded `py311` in the workflow, so
 # raising `requires-python` to >=3.12 would have left it validating a capability the gate no longer
 # exercises. Verified: at floor py312 the py311 fixture returns "All checks passed!".
+def run_ruff_show_files(target: str, paths: list[str]) -> subprocess.CompletedProcess:
+    """What ruff WILL check, honouring exclusions. Same flags as the real run, plus --show-files."""
+    return _ruff(target, paths, extra=["--show-files"])
+
+
+def run_ruff(target: str, paths: list[str]) -> subprocess.CompletedProcess:
+    """The ONE ruff invocation. Every caller goes through here.
+
+    B2: the argv used to be written out three times -- once in `main`, once in `self_test`, once in
+    `check_fixture_table` -- so the kill-confirm validated a PARALLEL COPY of the flags rather than
+    the gate's. Demonstrated: drop `--isolated` from `main` alone, leaving both self-test copies
+    intact, add `[tool.ruff] force-exclude = true`, restore the historical defect -> the gate prints
+    "every tracked .py file parses on py311" and exits 0 AND the self-test prints "self-test OK" and
+    exits 0. Both CI steps green, 41 diagnostics suppressed. A guard that validates a copy of the
+    thing under test is not a guard, which is this PR's own thesis applied to its own kill-confirm.
+
+    `--color=never`, and the environment scrubbed of RUFF_*: `--isolated` makes the gate hermetic in
+    CONFIG but not in ENVIRONMENT. Three variables survived it and produced a full silent green with
+    the historical defect present -- ruff still exits 1, so the returncode branch does not fire, but:
+      FORCE_COLOR=1 / CLICOLOR_FORCE=1  ANSI bytes land between the ': ' and 'invalid-syntax', so
+                                        the diagnostic regex stops matching. NO_COLOR does NOT win.
+      RUFF_OUTPUT_FILE=<path>           diagnostics go to that file; stdout is empty.
+    In each case `tracked_files` stayed at 522, so a denominator pin could not see it either, and
+    the workflow's shape grep was green. `--color=never` fixes the first two and the env scrub fixes
+    the third; both are needed -- verified independently, 41 diagnostics recovered only with both.
+    """
+    return _ruff(target, paths)
+
+
+def _ruff(target: str, paths: list[str], *, extra: list[str] | None = None):
+    """The single argv. Both runners and the self-test go through here, so none can drift."""
+    scrubbed = {k: v for k, v in os.environ.items() if not k.startswith("RUFF_")}
+    return subprocess.run(
+        [ruff(), "check", "--isolated", "--color=never", f"--target-version={target}",
+         "--no-cache", *(extra or []), "--output-format=concise", "--", *paths],
+        capture_output=True, text=True, env=scrubbed,
+    )
+
+
 KNOWN_BAD_BY_FLOOR = {
     # Each value must be a SyntaxError at its key and valid at the next version. Enforced below by
     # `check_fixture_table`, not by these comments -- the first version of this table had py313
@@ -128,14 +168,8 @@ def check_fixture_table() -> list[str]:
         with tempfile.TemporaryDirectory() as tmp:
             probe = Path(tmp) / "fixture.py"
             probe.write_text(source, encoding="utf-8")
-            def run(target: str):
-                return subprocess.run(
-                    [ruff(), "check", "--isolated", f"--target-version={target}", "--no-cache",
-                     "--output-format=concise", "--", str(probe)],
-                    capture_output=True, text=True,
-                )
-            at_floor = run(floor)
-            at_next = run(_next_version(floor))
+            at_floor = run_ruff(floor, [str(probe)])
+            at_next = run_ruff(_next_version(floor), [str(probe)])
         if at_floor.returncode != 1 or not re.search(
             r":\d+:\d+: invalid-syntax:", at_floor.stdout
         ):
@@ -186,11 +220,7 @@ def self_test(floor: str) -> int:
         # a temp location correct here rather than accidentally wrong.
         probe = Path(tmp) / "known_bad.py"
         probe.write_text(source, encoding="utf-8")
-        proc = subprocess.run(
-            [ruff(), "check", "--isolated", f"--target-version={floor}", "--no-cache",
-             "--output-format=concise", "--", str(probe)],
-            capture_output=True, text=True,
-        )
+        proc = run_ruff(floor, [str(probe)])
     print(proc.stdout, end="")
     if proc.stderr:
         print(proc.stderr, end="", file=sys.stderr)
@@ -264,25 +294,39 @@ def main() -> int:
         print("no tracked .py files found -- the check measured nothing", file=sys.stderr)
         raise SystemExit(2)
 
-    proc = subprocess.run(
-        # `--isolated` -- the fifth silent-green path, and the only one reachable by a CORRECT
-        # config rather than a typo. `force-exclude = true` alongside any `exclude` makes ruff skip
-        # even explicitly-passed paths and exit 0, so:
-        #   - the returncode check below never fires (ruff exited 0, not 2);
-        #   - `tracked_files` is unchanged at 522, because it counts `git ls-files` output, not what
-        #     ruff examined -- so a denominator pin would not catch it either;
-        #   - the success line prints, so the workflow's shape grep is green.
-        # Demonstrated on the real tree with the real historical defect restored: 41 diagnostics
-        # became `invalid-syntax=0 ... every tracked .py file parses on py311`, exit 0.
-        # `force-exclude = true` is the RECOMMENDED setting under pre-commit, not a mistake, so this
-        # is the competent config rather than the incompetent one. `--isolated` is strictly stronger
-        # than `--no-force-exclude`: it ignores every `[tool.ruff]` section, present or future, so
-        # the gate is hermetic. It costs nothing, because `invalid-syntax` is emitted regardless of
-        # rule selection.
-        [ruff(), "check", "--isolated", f"--target-version={floor}", "--no-cache",
-         "--output-format=concise", "--", *files],
-        capture_output=True, text=True, cwd=REPO,
-    )
+    # RECONCILE THE DENOMINATOR. `tracked_files` counts what `git ls-files` returned; it has never
+    # said anything about what ruff actually opened, so the gate could not distinguish "522 files
+    # parse" from "N parse and 522-N were silently skipped". `--show-files` lists exactly the paths
+    # ruff will check, honouring every exclusion, so comparing its count against the paths passed in
+    # closes the class rather than one instance of it.
+    #
+    # This is what finally kills the config-silencing family. Measured on 60 paths with
+    # `[tool.ruff] force-exclude = true, exclude = ["scripts"]`: without `--isolated` ruff lists
+    # 2 of 60; with it, 60 of 60. An earlier attempt at this check placed a probe file inside the
+    # repo and required it to be flagged -- insufficient, because a hostile config excludes some
+    # directory and the probe sits in another, so it survived the very mutant it was written for.
+    # Counting what ruff will examine does not depend on guessing where the exclusion points.
+    shown = run_ruff_show_files(floor, files)
+    if shown.returncode != 0:
+        print(shown.stdout, end="")
+        print(shown.stderr, end="", file=sys.stderr)
+        print(
+            f"could not enumerate what ruff would check (exit {shown.returncode}); the denominator "
+            "is unverifiable, so this is not a pass.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    examined = len([line for line in shown.stdout.splitlines() if line.strip()])
+    if examined != len(files):
+        print(
+            f"ruff would check {examined} of the {len(files)} tracked .py files passed to it, so "
+            f"{len(files) - examined} would be silently SKIPPED and reported as clean. A config "
+            "section is excluding them, or a flag that prevents that is missing.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    proc = run_ruff(floor, files)
     # B1: ruff's OWN failure must not read as clean. ruff exits 0 = no findings, 1 = findings,
     # >=2 = it could not run (bad rule selector, unreadable config, unknown target). On >=2 it
     # writes to stderr and produces ZERO bytes of stdout -- so without this check `bad` is empty,
