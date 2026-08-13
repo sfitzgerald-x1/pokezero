@@ -152,19 +152,33 @@ _norm_id() {
   #   SUBFAILED(spelling='dataclasses field(default=...) -- 201 `field(default` uses in src/')
   #       the reason strip fired on the " -- 201" INSIDE the parameter and truncated the line.
   #
-  # My self-test had five cases and none carried a paren or a dash in the parameter, so it passed
-  # while the normaliser mangled four real ids. Most cases below are verbatim from a full run; the two
-  # msg-form ones were CONSTRUCTED -- one of them in a shape the drill does not emit (absolute path, no
-  # reason suffix). Valid and useful cases, but labelled honestly, because a commit of mine claimed all
-  # of them were captured and that is the same "invented probe data" this file documents twice.
+  # My self-test had five cases and none carried a paren or a dash in the parameter, so it passed while
+  # the normaliser mangled four real ids.
   #
-  # KNOWN LIMIT of both SUBFAILED rules: the capture is greedy to the LAST closing delimiter followed
-  # by whitespace and a token, so a REASON containing `) ` or `] ` mangles the id -- e.g. a reason
-  # reading `Lists differ: [1] != [2]` at a wide terminal. Unreachable here today (real ids are
-  # 150-163 chars, so at 80 columns pytest truncates the reason away before the delimiter matters) and
-  # it fails toward FAIL, since a mangled id matches no rubric row and is reported rather than
-  # excused. Recorded because it is now true of the bracket form as well as the paren form.
+  # PROVENANCE, stated accurately at the third attempt: the PARAMETER STRINGS are captured -- the
+  # `spelling=` and `kind=` values genuinely appear in tests/test_schema_default_ledger.py -- and the
+  # IDS ARE INVENTED (`T::t`, `C::t`, `test_led.py`, `test_m.py`; no such files exist). Two earlier
+  # labels were wrong: first "taken verbatim from a full run" for all of them, then "most are verbatim,
+  # the two msg-form ones constructed". Neither was true. The cases are valid and exercise the real
+  # rules; what was unreliable was my description of where they came from.
+  #
+  # KNOWN LIMIT of the SUBFAILED rules: the capture is greedy to the LAST closing delimiter followed by
+  # whitespace and a token, so a REASON containing `) ` or `] ` mangles the id -- e.g.
+  # `Lists differ: [1] != [2]`.
+  #
+  # AND IT IS REACHABLE BY ENVIRONMENT, not only by terminal width, which is what an earlier version of
+  # this comment got wrong. pytest appends the FULL untrimmed reason whenever `running_on_ci()` is true
+  # (`CI` or `BUILD_NUMBER` set), regardless of width -- so on CI the truncation this limit relied on
+  # does not happen. Demonstrated with CI=1 on real output. Still fails toward FAIL (a mangled id
+  # matches no rubric row and is reported, not excused), but the stated reason it could not happen was
+  # not the real reason.
+  #
+  # The "real ids are 150-163 chars" figure previously quoted here does not reproduce: an AST scan of
+  # the 36 subTest-bearing tests in the three files these lines come from gives 136-186. The conclusion
+  # is unaffected -- any id over ~60 chars loses its reason at 80 columns -- so the range was
+  # decorative, which is exactly why it should not have been stated as a measurement.
   sed -E '
+    s#^SUBFAILED\[(.*)\][[:space:]]+\((.*)\)[[:space:]]+([^[:space:]]+).*$#\3[\1,\2]#
     s#^SUBFAILED\((.*)\)[[:space:]]+([^[:space:]]+).*$#\2[\1]#
     s#^SUBFAILED\[(.*)\][[:space:]]+([^[:space:]]+).*$#\2[\1]#
     s#^(FAILED|ERROR)[[:space:]]+([^[:space:]]+).*$#\2#
@@ -206,6 +220,7 @@ SUBFAILED(spelling='dataclasses field(default=...) -- 201 `field(default` uses i
 SUBFAILED(spelling='field(default_factory=lambda: ...)') /abs/tests/test_led.py::C::t|test_led.py::C::t[spelling='field(default_factory=lambda: ...)']
 SUBFAILED(kind='bare-const') tests/test_led.py::C::t - AssertionError: 17 != 16|test_led.py::C::t[kind='bare-const']
 SUBFAILED[alpha] tests/test_m.py::MTest::test_msg_form - AssertionError: 1 != 2|test_m.py::MTest::test_msg_form[alpha]
+SUBFAILED[alpha] (i=1) tests/test_m.py::MTest::test_combined|test_m.py::MTest::test_combined[alpha,i=1]
 SUBFAILED[alpha] /tmp/schema-v5-drill/tests/test_m.py::MTest::test_msg_form|test_m.py::MTest::test_msg_form[alpha]
 CASES
   [ "$bad" = 0 ] || {
