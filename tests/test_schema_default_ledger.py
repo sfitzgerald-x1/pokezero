@@ -27,7 +27,7 @@ REPO = Path(__file__).resolve().parents[1]
 # everyone else and the gate silently cannot run. Caught by `git add` refusing the path.
 ALLOWLIST = REPO / "tests" / "data" / "schema_default_allowlist.json"
 # The most rows the allowlist has ever legitimately held. Only ever lowered.
-HIGH_WATER_MARK = 249
+HIGH_WATER_MARK = 205
 LEDGER = REPO / "scripts" / "schema_default_ledger.py"
 
 
@@ -296,6 +296,49 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
                     f"the docstring says {surface} has {documented[surface]} sites; the tool "
                     f"derives {derived[surface]}.",
                 )
+
+    def test_a_stale_extra_constructors_entry_is_refused(self) -> None:
+        """`EXTRA_CONSTRUCTORS` is EMPTY now, which makes its guard dead code unless something holds it.
+
+        The guard exists because an alternate constructor is listed against a type whose field default
+        IS one of the globals; if that type stops being a surface, the entry is stale and the count
+        would silently drift. It EARNED its keep on this very change -- it refused the first attempt at
+        naming `TransformerPolicyConfig`'s schema, which is why the 39 `compact_category` rows were
+        retired deliberately instead of drifting.
+
+        With the dict emptied, deleting the guard leaves the whole suite green -- reviewer-confirmed.
+        So it is pinned here rather than left as unpinned dead code: a stale entry must still abort.
+        """
+        import subprocess
+
+        src = LEDGER.read_text(encoding="utf-8")
+        assert "EXTRA_CONSTRUCTORS: dict[str, list[str]] = {}" in src, (
+            "EXTRA_CONSTRUCTORS is no longer the empty dict this test was written against; "
+            "re-derive what a stale entry means before trusting this guard."
+        )
+        stale = src.replace(
+            "EXTRA_CONSTRUCTORS: dict[str, list[str]] = {}",
+            'EXTRA_CONSTRUCTORS = {"TransformerPolicyConfig": ["compact_category"]}',
+            1,
+        )
+        probe = REPO / "scripts" / "_ledger_stale_ctor_probe.py"
+        probe.write_text(stale, encoding="utf-8")
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(probe), "--json"], capture_output=True, text=True
+            )
+        finally:
+            probe.unlink(missing_ok=True)
+        self.assertNotEqual(
+            proc.returncode, 0,
+            "a stale EXTRA_CONSTRUCTORS entry -- an alternate constructor listed against a type that "
+            "no longer defaults to a global -- must ABORT rather than silently drop that type's rows. "
+            f"Got exit {proc.returncode}.",
+        )
+        self.assertIn(
+            "EXTRA_CONSTRUCTORS", proc.stderr,
+            f"aborted, but not for the stale-entry reason:\n{proc.stderr[-800:]}",
+        )
 
     def test_the_docstring_kinds_table_is_byte_equal_to_the_tool_rendering(self) -> None:
         """The kinds table is GENERATED. Compare it byte-for-byte; do not parse it.

@@ -8,15 +8,15 @@ re-derivable rather than recalled.
 
 A "site reaching the global default" is any of:
 
-  bare-const           a read of `OBSERVATION_SCHEMA_VERSION` itself              (16)
+  bare-const           a read of `OBSERVATION_SCHEMA_VERSION` itself              (15)
   default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                (50)
   implicit:<Surface>   a call to <Surface> leaving at least one default-bearing kwarg unnamed,
-                       one kind per surface so a new one cannot join an existing bucket. All SIX
-                       surfaces, with provenance -- five DERIVED from src/, one an alternate
-                       constructor that cannot be (marked *):
+                       one kind per surface so a new one cannot join an existing bucket. All FOUR
+                       surfaces, and all four DERIVED from src/ -- the `*`-marked alternate-constructor
+                       row is gone, because `compact_category` stopped being one when
+                       TransformerPolicyConfig named its schema:
 
-                         LocalShowdownConfig            135    TransformerPolicyConfig     4
-                         compact_category *              39    LinearPolicyModel           3
+                         LocalShowdownConfig            135    LinearPolicyModel           3
                          observation_from_player_state    0    OnlineBattleAgent           2
 
                        WAS EIGHT. `ObservationSpec` (24 rows here) and `PokeZeroObservationV0` (49)
@@ -34,7 +34,7 @@ A "site reaching the global default" is any of:
                        while listing compact_category (not derived) and omitting this one: the count
                        was right and the membership was not.
 
-                       The row's `unclosed` field names which kwarg is still open. All EIGHT counts
+                       The row's `unclosed` field names which kwarg is still open. All SIX counts
                        above are held by tests/test_schema_default_ledger.py, by two different
                        mechanisms: the surface rows are PARSED and compared to the derivation, and
                        the kind rows at the top of this table are GENERATED -- the test
@@ -97,7 +97,11 @@ GLOBALS = {CONST, DEFAULT_SPEC}
 CONSTRUCTOR_NAMES = ("__init__", "__new__", "__post_init__")
 # Alternate constructors do not re-declare the field, so they cannot be derived; they are
 # listed against the type they build and asserted to exist.
-EXTRA_CONSTRUCTORS = {"TransformerPolicyConfig": ["compact_category"]}
+# EMPTY now that TransformerPolicyConfig names its schema. `compact_category` was listed here as an
+# alternate constructor of that type: it does not re-declare the field, so `derive_surfaces` cannot
+# find it by scanning for a default that IS one of the globals. Once the type stops being a surface,
+# the entry is stale -- and the guard below caught exactly that rather than letting the count drift.
+EXTRA_CONSTRUCTORS: dict[str, list[str]] = {}
 
 
 def dotted_segments(node: ast.AST) -> list[str]:

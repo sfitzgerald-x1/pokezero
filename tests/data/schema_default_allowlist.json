@@ -42,15 +42,6 @@
     ]
   },
   {
-    "file": "scripts/bench_crate_search.py",
-    "line": 51,
-    "kind": "implicit:compact_category",
-    "owner": "_template_inputs",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
     "file": "scripts/blank_target_slot_census.py",
     "line": 36,
     "kind": "implicit:LocalShowdownConfig",
@@ -310,15 +301,6 @@
     "line": 228,
     "kind": "default-spec",
     "owner": "value_of"
-  },
-  {
-    "file": "scripts/shaping_ranker.py",
-    "line": 393,
-    "kind": "implicit:compact_category",
-    "owner": "main",
-    "unclosed": [
-      "observation_schema_version"
-    ]
   },
   {
     "file": "scripts/silent_mutation_audit.py",
@@ -586,27 +568,9 @@
   },
   {
     "file": "src/pokezero/neural_cli.py",
-    "line": 2684,
-    "kind": "implicit:compact_category",
-    "owner": "_describe",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "src/pokezero/neural_cli.py",
     "line": 3025,
     "kind": "bare-const",
     "owner": "_train"
-  },
-  {
-    "file": "src/pokezero/neural_cli.py",
-    "line": 3092,
-    "kind": "implicit:compact_category",
-    "owner": "_train",
-    "unclosed": [
-      "observation_schema_version"
-    ]
   },
   {
     "file": "src/pokezero/neural_cli.py",
@@ -651,23 +615,8 @@
     "owner": "_iterate"
   },
   {
-    "file": "src/pokezero/neural_cli.py",
-    "line": 5697,
-    "kind": "implicit:compact_category",
-    "owner": "_iterate",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
     "file": "src/pokezero/neural_policy.py",
-    "line": 260,
-    "kind": "bare-const",
-    "owner": "TransformerPolicyConfig"
-  },
-  {
-    "file": "src/pokezero/neural_policy.py",
-    "line": 523,
+    "line": 535,
     "kind": "default-spec",
     "owner": "from_dict"
   },
@@ -825,30 +774,12 @@
     ]
   },
   {
-    "file": "tests/test_batch_replay.py",
-    "line": 93,
-    "kind": "implicit:compact_category",
-    "owner": "_model_config",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
     "file": "tests/test_belief_coherence.py",
     "line": 293,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_the_tracked_phase_never_changes_a_classification",
     "unclosed": [
       "observation_spec"
-    ]
-  },
-  {
-    "file": "tests/test_bench_model_eval.py",
-    "line": 25,
-    "kind": "implicit:compact_category",
-    "owner": "_tiny_config",
-    "unclosed": [
-      "observation_schema_version"
     ]
   },
   {
@@ -861,48 +792,12 @@
     ]
   },
   {
-    "file": "tests/test_crate_model_leafeval.py",
-    "line": 52,
-    "kind": "implicit:compact_category",
-    "owner": "_tiny_config",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_crate_model_leafeval.py",
-    "line": 202,
-    "kind": "implicit:compact_category",
-    "owner": "test_full_size_artifact_parity_when_present",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
     "file": "tests/test_determinization.py",
     "line": 76,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "integration_config",
     "unclosed": [
       "observation_spec"
-    ]
-  },
-  {
-    "file": "tests/test_distributed_training.py",
-    "line": 147,
-    "kind": "implicit:compact_category",
-    "owner": "test_ddp_two_rank_contiguous_shards_match_single_device_updates",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_distributed_training.py",
-    "line": 224,
-    "kind": "implicit:compact_category",
-    "owner": "test_ddp_two_rank_ppo_reports_global_metrics_within_parity_bounds",
-    "unclosed": [
-      "observation_schema_version"
     ]
   },
   {
@@ -966,15 +861,6 @@
     "owner": "test_trick_exchange_constructs_with_both_current_items",
     "unclosed": [
       "observation_spec"
-    ]
-  },
-  {
-    "file": "tests/test_export_model.py",
-    "line": 27,
-    "kind": "implicit:compact_category",
-    "owner": "_tiny_config",
-    "unclosed": [
-      "observation_schema_version"
     ]
   },
   {
@@ -1056,24 +942,6 @@
     "owner": "test_full_default_checkpoint_keeps_default_env",
     "unclosed": [
       "observation_spec"
-    ]
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
-    "line": 187,
-    "kind": "implicit:compact_category",
-    "owner": "test_tokens_come_from_the_checkpoint_not_the_build",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
-    "line": 210,
-    "kind": "implicit:compact_category",
-    "owner": "test_a_build_that_inserted_a_token_does_not_shift_the_trained_rows",
-    "unclosed": [
-      "observation_schema_version"
     ]
   },
   {
@@ -1240,15 +1108,6 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 756,
-    "kind": "implicit:compact_category",
-    "owner": "test_neural_cli_spec_mask_helper_covers_iterate_and_root_puct_paths",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
     "line": 761,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_neural_cli_spec_mask_helper_covers_iterate_and_root_puct_paths",
@@ -1276,24 +1135,6 @@
   },
   {
     "file": "tests/test_feature_mask_consistency.py",
-    "line": 1257,
-    "kind": "implicit:compact_category",
-    "owner": "test_payload_missing_field_resolves_off",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
-    "line": 1273,
-    "kind": "implicit:compact_category",
-    "owner": "test_explicit_value_round_trips_and_derives",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
     "line": 1302,
     "kind": "implicit:LocalShowdownConfig",
     "owner": "test_env_adopts_tier2_off_and_conflicts_fail",
@@ -1308,24 +1149,6 @@
     "owner": "test_env_adopts_tier2_off_and_conflicts_fail",
     "unclosed": [
       "observation_spec"
-    ]
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
-    "line": 1323,
-    "kind": "implicit:compact_category",
-    "owner": "test_defaults_and_missing_field_resolve_off",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
-    "line": 1339,
-    "kind": "implicit:compact_category",
-    "owner": "test_explicit_value_round_trips_and_derives",
-    "unclosed": [
-      "observation_schema_version"
     ]
   },
   {
@@ -1410,87 +1233,6 @@
     ]
   },
   {
-    "file": "tests/test_neural_category_vocab.py",
-    "line": 45,
-    "kind": "implicit:compact_category",
-    "owner": "test_sizing_and_dedup_sort",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_category_vocab.py",
-    "line": 56,
-    "kind": "implicit:compact_category",
-    "owner": "test_serialization_round_trip",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_category_vocab.py",
-    "line": 63,
-    "kind": "implicit:TransformerPolicyConfig",
-    "owner": "test_list_vocab_normalized_to_tuple_and_round_trips",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_category_vocab.py",
-    "line": 72,
-    "kind": "implicit:TransformerPolicyConfig",
-    "owner": "test_rejects_inconsistent_size",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_category_vocab.py",
-    "line": 78,
-    "kind": "implicit:TransformerPolicyConfig",
-    "owner": "test_rejects_oov_without_vocab",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_category_vocab.py",
-    "line": 81,
-    "kind": "implicit:compact_category",
-    "owner": "test_default_oov_constant",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_category_vocab.py",
-    "line": 92,
-    "kind": "implicit:compact_category",
-    "owner": "_model",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_category_vocab.py",
-    "line": 117,
-    "kind": "implicit:compact_category",
-    "owner": "test_save_load_preserves_string_vocab",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 204,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_policy_config_defaults_match_replay_observation_shape",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
     "file": "tests/test_neural_policy.py",
     "line": 208,
     "kind": "default-spec",
@@ -1507,33 +1249,6 @@
     "line": 210,
     "kind": "default-spec",
     "owner": "test_transformer_policy_config_defaults_match_replay_observation_shape"
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 344,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_policy_config_refuses_zero_and_over_census_widths",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 348,
-    "kind": "implicit:compact_category",
-    "owner": "test_transformer_policy_config_refuses_zero_and_over_census_widths",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_policy.py",
-    "line": 445,
-    "kind": "implicit:TransformerPolicyConfig",
-    "owner": "test_transformer_policy_config_requires_category_vocab",
-    "unclosed": [
-      "observation_schema_version"
-    ]
   },
   {
     "file": "tests/test_neural_policy.py",
@@ -1698,51 +1413,6 @@
     "owner": "test_neural_cli_root_puct_counterfactual_wires_continuation_policies"
   },
   {
-    "file": "tests/test_neural_selfplay.py",
-    "line": 58,
-    "kind": "implicit:compact_category",
-    "owner": "_entity_test_model_config",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_selfplay.py",
-    "line": 834,
-    "kind": "implicit:compact_category",
-    "owner": "test_neural_cli_iterate_can_disable_fixed_opponents_for_mirror_self_play",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_selfplay.py",
-    "line": 5511,
-    "kind": "implicit:compact_category",
-    "owner": "test_torch_smoke_runs_train_save_load_benchmark_chain",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_selfplay.py",
-    "line": 5556,
-    "kind": "implicit:compact_category",
-    "owner": "test_torch_smoke_trains_from_real_cache_chunks_and_deletes_them",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_neural_selfplay.py",
-    "line": 5654,
-    "kind": "implicit:compact_category",
-    "owner": "_write_loadable_fake_checkpoint",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
     "file": "tests/test_observation.py",
     "line": 48,
     "kind": "bare-const",
@@ -1767,33 +1437,6 @@
     "owner": "test_missing_observation_schema_version_is_refused_not_assumed_current"
   },
   {
-    "file": "tests/test_observation_spec_v2.py",
-    "line": 988,
-    "kind": "implicit:compact_category",
-    "owner": "test_missing_checkpoint_schema_version_is_refused",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_observation_spec_v2.py",
-    "line": 1022,
-    "kind": "implicit:compact_category",
-    "owner": "test_v1_model_config_refuses_with_pinned_tag_message",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_observation_spec_v2.py",
-    "line": 1046,
-    "kind": "implicit:compact_category",
-    "owner": "test_v1_checkpoint_file_load_refuses_cleanly",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
     "file": "tests/test_observation_spec_v2_1.py",
     "line": 122,
     "kind": "default-spec",
@@ -1804,15 +1447,6 @@
     "line": 123,
     "kind": "bare-const",
     "owner": "test_v2_2_IS_the_fresh_default"
-  },
-  {
-    "file": "tests/test_observation_spec_v2_1.py",
-    "line": 540,
-    "kind": "implicit:compact_category",
-    "owner": "_config",
-    "unclosed": [
-      "observation_schema_version"
-    ]
   },
   {
     "file": "tests/test_observation_spec_v3.py",
@@ -1851,24 +1485,6 @@
     "owner": "integration_config",
     "unclosed": [
       "observation_spec"
-    ]
-  },
-  {
-    "file": "tests/test_region_trim.py",
-    "line": 45,
-    "kind": "implicit:compact_category",
-    "owner": "_config",
-    "unclosed": [
-      "observation_schema_version"
-    ]
-  },
-  {
-    "file": "tests/test_remote_self_describe.py",
-    "line": 54,
-    "kind": "implicit:compact_category",
-    "owner": "_train_checkpoint",
-    "unclosed": [
-      "observation_schema_version"
     ]
   },
   {
@@ -1930,15 +1546,6 @@
     "line": 587,
     "kind": "bare-const",
     "owner": "test_run_selfplay_iterations_writes_checkpoint_and_manifests"
-  },
-  {
-    "file": "tests/test_shaping_provenance.py",
-    "line": 87,
-    "kind": "implicit:compact_category",
-    "owner": "_model_config",
-    "unclosed": [
-      "observation_schema_version"
-    ]
   },
   {
     "file": "tests/test_showdown.py",
