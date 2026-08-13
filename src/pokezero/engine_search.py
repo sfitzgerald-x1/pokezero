@@ -1116,23 +1116,26 @@ class EngineMctsStats:
     #: silent, since `override_disagreements` is also capped and a reader must be
     #: able to tell the two losses apart.
     override_addresses_superseded: int = 0
-    #: Decisions whose per-decision ROW is unrecoverable because the row cap filled
-    #: between an earlier rung and the winning one: the decision has rows in the
-    #: shard, none of which passes the `ladder_superseded` filter. At most one per
-    #: shard, biased toward escalating decisions.
-    ladder_decision_rows_lost: int = 0
     #: Ladder decisions where NO rung produced a searched answer, i.e. rung 0 fell
     #: back. These are in `ladder_decisions` but contribute nothing to the override
     #: ledger, which is why the ladder identity needs them as a third term.
     ladder_unsearched_decisions: int = 0
-    #: Of those, the ones where an EARLIER rung had already produced a searched
-    #: answer, so the decision the engine returned was a real search and not a
-    #: fallback. `_fallback` has already charged `fallback_decisions` by then and
-    #: there is nothing to un-charge it, so without this counter `fallback_rate`
-    #: reported 1.0 for a decision that was searched fine at rung 0 -- and the
-    #: power report's health gate would drop a healthy ladder cell on it.
-    ladder_recovered_fallbacks: int = 0
+    #: Depth BUMPS taken (a turn saturated, so the next turn tries one ply deeper).
     ladder_depth_rungs: int = 0
+    #: Worlds actually dropped (per-world leaders agreed), which is what raises
+    #: sims-per-world and clears the depth latch.
+    ladder_world_drops: int = 0
+    #: SHADOW searches run: a discarded second search at depth+1 whose only product is
+    #: the answer to "would this allocation fill one more ply?". Bounded to one per world
+    #: count per battle, so this is the honest overhead figure -- each one is an extra
+    #: full budget on that turn, and nothing else in the run costs extra.
+    ladder_shadow_probes: int = 0
+    #: Shadow probes that FELL BACK, i.e. answered nothing. No ceiling is latched on
+    #: these, because a latch must record a measurement rather than a failure.
+    ladder_shadow_probe_failures: int = 0
+    #: Ceilings LATCHED: the shadow said depth+1 would not fill, so this world count
+    #: stops probing until worlds drops. This is the count of "the gate discriminated".
+    ladder_depth_latches: int = 0
     fold_advanced_lines: int = 0
     fold_cross_checks: int = 0
     fold_cross_check_failures: int = 0
@@ -1278,21 +1281,15 @@ class EngineMctsStats:
             "searched_decisions": self.searched_decisions,
             "fallback_decisions": self.fallback_decisions,
             "oracle_belief_decisions": self.oracle_belief_decisions,
-            # NET of recovered ones. `fallback_decisions` counts RUNGS that fell
-            # back, and a ladder rung falling back after an earlier rung succeeded
-            # is not a fallen-back decision -- the engine returns the earlier
-            # rung's searched answer. Counting it charged `fallback_rate` 1.0 for a
-            # decision that searched fine. Both numbers are emitted so the taxonomy
-            # stays whole. Found in review.
-            "fallback_rate": (
-                max(0, self.fallback_decisions - self.ladder_recovered_fallbacks)
-                / self.decisions
-                if self.decisions
-                else 0.0
-            ),
-            "ladder_recovered_fallbacks": self.ladder_recovered_fallbacks,
+            # GROSS, and correctly so under the per-turn design: with ONE PLAYED
+            # search per decision a decision cannot fall back on a later rung after an
+            # earlier one succeeded, so there is nothing to net out.
+            # `ladder_recovered_fallbacks` existed only for the rung model and went
+            # with it. A SHADOW probe that falls back does not touch this either -- it
+            # is charged to `ladder_shadow_probe_failures`, because no played move
+            # depended on it.
+            "fallback_rate": self.fallback_decisions / self.decisions if self.decisions else 0.0,
             "override_addresses_superseded": self.override_addresses_superseded,
-            "ladder_decision_rows_lost": self.ladder_decision_rows_lost,
             "ladder_unsearched_decisions": self.ladder_unsearched_decisions,
             "removed_item_decisions": self.removed_item_decisions,
             "item_override_decisions": self.item_override_decisions,
@@ -1423,6 +1420,10 @@ class EngineMctsStats:
             "ladder_unsaturated_stops": self.ladder_unsaturated_stops,
             "ladder_fallback_rungs": self.ladder_fallback_rungs,
             "ladder_depth_rungs": self.ladder_depth_rungs,
+            "ladder_world_drops": self.ladder_world_drops,
+            "ladder_shadow_probes": self.ladder_shadow_probes,
+            "ladder_shadow_probe_failures": self.ladder_shadow_probe_failures,
+            "ladder_depth_latches": self.ladder_depth_latches,
             "fold_advanced_lines": self.fold_advanced_lines,
             "fold_cross_checks": self.fold_cross_checks,
             "fold_cross_check_failures": self.fold_cross_check_failures,
@@ -1656,9 +1657,10 @@ def native_search_args(
 #:   * `search_override_unmeasured_causes`, `world_failure_reasons`,
 #:     `fallback_reasons` -- CAUSE TAXONOMIES. A cause a discarded rung hit is still
 #:     a cause the run encountered, and none is anyone's denominator.
-#:   * `fallback_decisions` -- kept gross on purpose, with `fallback_rate` netting
-#:     `ladder_recovered_fallbacks` out, so the taxonomy and the rate stay
-#:     independently readable.
+#:   * `fallback_decisions` -- gross, and nothing to net: one PLAYED search per
+#:     decision. The SHADOW is the only second search a decision can contain, and it
+#:     the SHADOW's contribution out (see `_search_ladder`), which is the only
+#:     second search a decision can now contain.
 LADDER_PER_DECISION_CLAIMS = (
     "override_measured_decisions",
     "model_override_decisions",
@@ -2141,6 +2143,26 @@ class EngineMctsPolicy:
         #: which is the state every non-model path and every direct `_search_model`
         #: caller sees, so those commit straight through the cap as they always did.
         self._ladder_pending_addresses: Optional[list[dict[str, Any]]] = None
+        #: PER-BATTLE adaptive state. The budget ladder walks across TURNS, not within
+        #: one decision: every decision spends exactly `search_sims` sim-equivalents at
+        #: the current allocation, and the allocation for the NEXT turn is chosen from
+        #: what this turn actually did. Keyed on `battle_id` and reset when it changes,
+        #: so the reset is correct whether the bridge builds one policy per battle or
+        #: reuses one across a whole shard.
+        self._ladder_battle: Optional[str] = None
+        self._ladder_worlds: Optional[int] = None
+        self._ladder_depth: Optional[int] = None
+        #: worlds count -> the deepest depth observed to SATURATE at that count. Latched
+        #: on a failed probe and cleared when worlds drops, because dropping a world is
+        #: the only thing that changes sims-per-world and therefore the only thing that
+        #: can change the answer. Without the latch the state machine either parks one
+        #: depth PAST the ceiling (up-only) or oscillates D <-> D+1 forever (both-ways),
+        #: and in the oscillating case half of all turns run the thin tree the whole
+        #: saturation rule exists to avoid.
+        self._ladder_depth_ceiling: dict[int, int] = {}
+        #: True when the CURRENT turn is a speculative probe of depth+1, so a failure
+        #: can be attributed and charged rather than silently reverted.
+        self._ladder_probing: bool = False
         # Measurement hook (fallback burndown plan 4 §3, direction 2): called
         # once per SUCCESSFULLY CONSTRUCTED world with the exact
         # `(context, EngineWorld, poke_engine.State)` triple search is about to
@@ -3074,72 +3096,112 @@ class EngineMctsPolicy:
         }
         self._absorb_lossy_subcases({"lossy_subcases": counts})
 
-    def _budget_rungs(self, available_worlds: int) -> list[tuple[int, int | None, int]]:
-        """Escalation rungs as (worlds, sims_per_world, depth).
+    def _turn_allocation(self, available_worlds: int) -> tuple[int, int | None, int]:
+        """This TURN's allocation: (worlds, sims_per_world, depth).
 
-        `search_sims` is the TOTAL simulation budget for a decision, divided across
-        the belief worlds -- 16,384 across 4 worlds is 4,096 per world. So dropping
-        a world does not reduce the work, it CONCENTRATES it: 4w x 4,096 and
-        3w x 5,461 are the same 16,384 spent two ways, the first buying belief
-        breadth and the second buying depth-fill.
+        `search_sims` is the TOTAL sim-equivalents for ONE DECISION and it is spent
+        exactly once, at whatever allocation the per-battle state currently names.
+        4 worlds x 4,096 and 1 world x 16,384 are the same 16,384 spent two ways --
+        that is the compute-neutrality the whole design rests on, and it means a
+        dynamic cell costs the same per decision as a fixed one.
 
-        The rule, as the owner specified it:
+        THE LADDER WALKS ACROSS TURNS, NOT WITHIN A DECISION. An earlier revision read
+        the owner's "once you have enough information to drop to 3w, then you can scale
+        up sims" as a within-decision escalation and ran a FRESH full-budget search per
+        rung, so a decision that climbed 6.7 rungs spent 6.7 x 16,384 ~ 110,000 sims.
+        Measured on a canary against the banked fixed comparator: 36-63 s per decision
+        against 10.06 s, a 3.6x-6.3x cost REGRESSION rather than the saving the feature
+        is for. It also destroyed the saturation gate, because a rung that gets a fresh
+        full budget saturates as easily at depth 8 as at depth 2 -- measured at 0-3
+        unsaturated stops per ~25 decisions, i.e. depth marching unconditionally.
 
-        * worlds step DOWN one at a time, from `worlds` to `worlds_min`, and sims
-          per world rise to keep the total constant. These rungs are compute-neutral.
-        * depth MUST NOT advance until the current depth is SATURATED -- and rising
-          sims is what buys that saturation. When it happens, depth bumps by one.
+        With one budget per turn the gate becomes binding on its own: sims-per-world is
+        set by the world count, so as depth climbs the same allocation fills less of the
+        tree and the climb stops where the budget genuinely runs out.
 
-        Measured justification for the gate, from this campaign's own canary: at
-        1,024 sims per world, depth 4 saturates (96.7% of samples at D-1) while the
-        same budget at depth 6 reaches its ceiling on 4.8%. Deepening ahead of
-        saturation buys a thinly-populated tree and pays ~2x per decision for it.
+        Returns `sims_per_world=None` on a FIXED cell so the native positional list is
+        byte-identical to what it was before this feature existed.
         """
         cfg = self._config
         depth_cap = int(cfg.search_depth)
-        worlds_start = max(1, min(int(cfg.worlds), available_worlds))
-        budget = int(cfg.search_sims)
-        depth_floor = (
-            depth_cap if cfg.depth_min is None else max(1, min(int(cfg.depth_min), depth_cap))
-        )
-        worlds_floor = (
-            worlds_start
-            if cfg.worlds_min is None
-            else max(1, min(int(cfg.worlds_min), worlds_start))
-        )
+        worlds_cap = max(1, min(int(cfg.worlds), available_worlds))
         if cfg.depth_min is None and cfg.worlds_min is None:
-            # NO LADDER. One rung, and sims is None meaning "use the configured
-            # budget untouched" -- so a fixed cell renders the byte-identical
-            # native positional list it rendered before this feature existed.
-            #
-            # This branch is why `search_sims` can mean two things safely. On a
-            # fixed cell it is the PER-WORLD budget, exactly as it always was and
-            # as every banked shard recorded it. On a ladder cell it is the TOTAL
-            # for the decision, divided across worlds. The two never pool, because
-            # a ladder cell always carries a range fragment in its config_id
-            # (`d3-6`, `w2-16`) and a fixed cell never does.
-            #
-            # An earlier revision divided unconditionally, which silently ran every
-            # fixed worlds>1 cell at budget/worlds -- a 4x compute cut at the
-            # default worlds=4, under an unchanged config_id. Found in review.
-            return [(worlds_start, None, depth_cap)]
-        rungs: list[tuple[int, int | None, int]] = []
-        for w in range(worlds_start, worlds_floor - 1, -1):
-            # Integer division, so a rung never costs MORE than the budget: at
-            # worlds=3 and 16,384 the rung is 5,461 x 3 = 16,383, one short rather
-            # than one over. `__post_init__` refuses `search_sims < worlds` on a
-            # dynamic cell, which is what makes this division safe -- it cannot
-            # round to zero, so no clamp is needed and no two rungs can collapse
-            # onto the same world count.
-            per_world = budget // w
-            assert per_world >= 1, (budget, w)  # guaranteed by the config refusal
-            rungs.append((w, per_world, depth_floor))
-        # Then depth, one ply per rung, at the most concentrated allocation -- the
-        # one that has the sims to fill the new plies.
-        final_worlds, final_sims, _ = rungs[-1]
-        for d in range(depth_floor + 1, depth_cap + 1):
-            rungs.append((final_worlds, final_sims, d))
-        return rungs
+            # NO LADDER. `sims=None` means "use the configured budget untouched", which
+            # is what keeps a fixed cell poolable with every banked shard. A number here
+            # would silently run it at budget/worlds -- the F1 defect.
+            return (worlds_cap, None, depth_cap)
+        worlds = worlds_cap if self._ladder_worlds is None else min(
+            self._ladder_worlds, worlds_cap
+        )
+        depth = depth_cap if self._ladder_depth is None else min(
+            self._ladder_depth, depth_cap
+        )
+        # Integer division, so the turn never costs MORE than the budget: 3 worlds of
+        # 16,384 is 5,461 x 3 = 16,383, one short rather than one over.
+        # `__post_init__` refuses `search_sims < worlds` on a dynamic cell, so this
+        # cannot round to zero.
+        per_world = int(cfg.search_sims) // worlds
+        return (worlds, per_world, depth)
+
+    def _reset_ladder_for_battle(self, battle_id: str) -> None:
+        """Per-battle reset. A new team and a new opponent is a new problem."""
+        cfg = self._config
+        self._ladder_battle = battle_id
+        self._ladder_worlds = max(1, int(cfg.worlds))
+        self._ladder_depth = (
+            int(cfg.search_depth) if cfg.depth_min is None
+            else max(LADDER_MIN_DEPTH_FLOOR, int(cfg.depth_min))
+        )
+        self._ladder_depth_ceiling = {}
+        self._ladder_probing = False
+
+    def _advance_ladder_state(
+        self, worlds: int, depth: int, saturated: bool, agree: bool
+    ) -> None:
+        """Choose the NEXT turn's allocation from what THIS turn measured.
+
+        A WORLD is dropped once the per-world visit leaders AGREE -- more draws of a
+        belief every draw already agrees on cannot buy information. Dropping raises
+        sims-per-world, the only thing that can change the saturating depth, so it also
+        clears the depth latch for the level it is moving to.
+
+        DEPTH is NOT raised here. It moves only on evidence from a SHADOW search at
+        depth+1 (see `_search_ladder`), never on a bare "the current depth saturated",
+        because both naive rules are broken: up-only parks one depth PAST the ceiling
+        (it moves to D+1 on saturating at D and has no way back), and up-and-down
+        oscillates D <-> D+1 forever -- and in that case half of all turns play a move
+        chosen from exactly the thin tree the saturation rule exists to avoid.
+        """
+        cfg = self._config
+        worlds_floor = worlds if cfg.worlds_min is None else max(1, int(cfg.worlds_min))
+        if agree and worlds > worlds_floor:
+            self._ladder_worlds = worlds - 1
+            # NOTHING to clear. The latch is KEYED BY WORLD COUNT, and worlds only ever
+            # decrease within a battle, so the new count has no entry and probing is
+            # allowed again automatically. An earlier revision popped `worlds - 1` here
+            # to "clear the latch"; the latch is stored under `worlds`, so the pop
+            # removed a key that was never set -- dead code that read like a load-bearing
+            # invariant. Caught by a mutation screen: deleting it changed nothing.
+            self.stats.ladder_world_drops += 1
+        elif not agree:
+            self.stats.ladder_worlds_disagree_stops += 1
+        if not saturated:
+            self.stats.ladder_unsaturated_stops += 1
+
+    def _should_shadow_probe(self, worlds: int, depth: int, saturated: bool) -> bool:
+        """Is a shadow search at depth+1 worth its budget on this turn?
+
+        Only when the current depth SATURATED (so there is headroom to spend), the cap
+        allows, and this world count has no latched ceiling yet. That bounds probes to
+        at most one per world count per battle -- four for a 4->1 ladder -- which is what
+        makes the doubled budget on those turns affordable: about four extra budgets
+        across a ~30-turn battle, and `ladder_shadow_probes` reports the real count
+        rather than leaving it assumed.
+        """
+        cfg = self._config
+        if not saturated or depth >= int(cfg.search_depth):
+            return False
+        return depth < self._ladder_depth_ceiling.get(worlds, int(cfg.search_depth))
 
     def _search_ladder(
         self,
@@ -3148,258 +3210,104 @@ class EngineMctsPolicy:
         live_fold: Any,
         rng: random.Random,
     ) -> PolicyDecision:
-        """Run `_search_model` up the budget ladder, stopping when the next rung
-        is not licensed.
+        """ONE PLAYED search per decision, plus an occasional discarded shadow.
 
-        A thin wrapper on purpose. `_search_model` is long, heavily reviewed and
-        carries the fallback taxonomy; escalation is expressed by CALLING it
-        again with a smaller world prefix and a depth override rather than by
-        restructuring its loops, so every failure shape it already handles keeps
-        handling itself.
+        The move is always chosen from a depth already known to saturate. When there is
+        headroom, a SHADOW search runs at depth+1 purely to answer "would this
+        allocation fill one more ply?", and its decision is thrown away. That is what
+        makes this better than spending a real turn at depth+1 and reverting: no move is
+        ever played from a tree we then judge too thin.
 
-        The cost this pays for that safety, stated rather than buried: a worlds
-        rung re-searches the worlds it already searched, because the reuse would
-        have to live inside `_search_model`. So the ladder's saving comes from
-        stopping BELOW the cap, not from incremental reuse, and
-        `ladder_rungs_run` is the honest cost denominator.
-
-        NOT one "settled" test. Each axis is licensed by the uncertainty it can
-        actually reduce, and they are not interchangeable:
-
-        * a WORLD is dropped once the per-world visit leaders AGREE -- more draws of
-          a belief every draw already agrees on cannot buy information, so the
-          budget is better spent concentrating what remains;
-        * DEPTH advances only when the current depth is near-fully SATURATED, never
-          on how contested the decision looks, because a deeper search that did not
-          fill the shallower depth explores its new plies too thinly to back up.
-
-        The first version used `_locked_aggregate_choice` for both. After a rung has
-        run to completion `remaining` is 0 and that predicate reduces to "is there a
-        unique leader" -- true on 447 of 447 canary decisions, which pinned the
-        ladder to its floor and made a "dynamic 3..6" cell a fixed depth-3 cell
-        wearing a range in its name.
+        The shadow's CLAIMS are rewound and its WORK is not -- exactly the distinction
+        `LADDER_PER_DECISION_CLAIMS` was built to express. It made no decision, so it
+        gets no vote in any per-decision rate; it really did burn the simulations and
+        the wall, so a cost analysis must see them.
         """
-        # DYNAMIC = either floor set, which is exactly the condition `_budget_rungs`
-        # branches on. Computed first because three things below depend on it.
         dynamic = (
             self._config.depth_min is not None or self._config.worlds_min is not None
         )
-        ladder = self._budget_rungs(len(worlds))
+        battle = str(getattr(context, "battle_id", "?"))
+        if dynamic and battle != self._ladder_battle:
+            self._reset_ladder_for_battle(battle)
+        stage_worlds, stage_sims, stage_depth = self._turn_allocation(len(worlds))
         self.stats.ladder_decisions += 1
         if dynamic:
             self.stats.ladder_dynamic = True
-        decision: Optional[PolicyDecision] = None
-        last_good: Optional[PolicyDecision] = None
-        # THE OVERRIDE RATE IS ABOUT THE DECISION, NOT THE RUNGS. `_search_model`
-        # charges `override_measured_decisions` once per call, so on a ladder cell
-        # every escalating decision voted several times and the headline rate came
-        # out weighted by how far each decision climbed -- which also makes it
-        # incomparable to a fixed cell's, and `search_config_id` deliberately pools
-        # telemetry-on with telemetry-off, so nothing else would have caught it.
-        # Rewound below to the WINNING rung's contribution alone. Found in review.
-        def _override_ledger() -> tuple[float, ...]:
-            return tuple(
-                getattr(self.stats, name) for name in LADDER_PER_DECISION_CLAIMS
-            )
 
-        def _histogram_ledger() -> tuple[Counter, ...]:
-            # COPIES. `getattr` on a Counter hands back the live object, so a
-            # snapshot that is not copied is the same object the rung then mutates.
-            return tuple(
-                Counter(getattr(self.stats, name))
-                for name in LADDER_PER_DECISION_CLAIM_HISTOGRAMS
-            )
-
-        override_at_decision_start = _override_ledger()
-        histograms_at_decision_start = _histogram_ledger()
-        winning_histogram_delta: tuple[Counter, ...] = tuple(
-            Counter() for _ in LADDER_PER_DECISION_CLAIM_HISTOGRAMS
-        )
-        # The WINNING rung's contribution, as a delta. Not its cumulative total:
-        # taking the total after the last successful rung keeps every earlier rung's
-        # vote too, which is the bug in a subtler form.
-        winning_rung_delta: tuple[float, ...] = (0,) * len(LADDER_PER_DECISION_CLAIMS)
-        # AND THE SAME PROBLEM ON THE ROWS. `_record_root_telemetry` appends one
-        # per-decision row per `_search_model` call, so a ladder decision leaves
-        # several -- and any per-decision statistic computed over rows (the top-1/
-        # top-2 Q gap quartiles, the H4 opponent-arm join) would be rung-weighted
-        # exactly as the override rate was. Rewinding the counters and leaving the
-        # rows is worse than either alone, because then the two surfaces disagree.
-        # The rows are NOT deleted -- they are real searches and the cap already
-        # makes the list lossy -- they are STAMPED, so a consumer can take the
-        # decision's own row and a cost analysis can still see every rung.
-        rung_row_spans: list[tuple[int, int]] = []
-        # `None`, not 0, and the difference is load-bearing on an assumption worth
-        # stating: every `_fallback` site in `_search_model` returns BEFORE
-        # `_record_root_telemetry` appends, so no rung can both append a row and
-        # fail. Default 0 therefore looks equivalent today -- but a fallback added
-        # after the append would make a fully-fallen-back decision's row read as THE
-        # decision row. `None` fails the comparison instead. Raised in review as an
-        # equivalent mutant; recorded because the equivalence is a property of the
-        # other function, not of this one.
-        winning_row_span: Optional[int] = None
-        # AND THE ADDRESSES, which are the third surface of the same defect. An
-        # override address is forkable -- `(battle_id, round, seat)` is a complete
-        # replay handle -- so one left behind by a discarded rung makes the shard
-        # claim an override the returned decision did not make, and a fork probe
-        # replaying it lands on a decision that agreed with the model. Unlike the
-        # ROWS, which are real searches worth keeping for cost analysis, an address
-        # is purely a claim about the decision, so the superseded ones are DROPPED
-        # (counted, never silently).
-        # STAGED per rung rather than appended, so a rung the ladder discards cannot
-        # consume one of the 64 cap slots -- see `_record_override_address`.
-        winning_rung_addresses: list[dict[str, Any]] = []
-        total_staged_addresses = 0
-        for index, (stage_worlds, stage_sims, stage_depth) in enumerate(ladder):
-            # Snapshot BEFORE the rung so a fallback raised inside it is visible,
-            # and reset the per-rung signals so a stale one cannot license an
-            # escalation: `_fallback` returns early, before the block that
-            # recomputes them.
-            fallbacks_before = self.stats.fallback_decisions
-            override_before_rung = _override_ledger()
-            histograms_before_rung = _histogram_ledger()
-            rows_before_rung = len(self.stats.root_decision_rows)
-            self._ladder_pending_addresses = []
+        def _run(depth: int):
+            """One search. Returns (decision, fell_back, saturated, agree)."""
+            before = self.stats.fallback_decisions
+            self.stats.ladder_rungs_run += 1
             self._ladder_saturated = False
             self._ladder_worlds_agree = True
-            self._ladder_depth_override = stage_depth
+            self._ladder_depth_override = depth
             self._ladder_sims_override = stage_sims
+            self._ladder_pending_addresses = None
             try:
-                decision = self._search_model(
-                    context, worlds[:stage_worlds], live_fold, rng
-                )
+                out = self._search_model(context, worlds[:stage_worlds], live_fold, rng)
             finally:
                 self._ladder_depth_override = None
                 self._ladder_sims_override = None
-            rung_row_spans.append((rows_before_rung, len(self.stats.root_decision_rows)))
-            staged_addresses = self._ladder_pending_addresses or []
-            self._ladder_pending_addresses = None
-            total_staged_addresses += len(staged_addresses)
-            self.stats.ladder_rungs_run += 1
-            if index:
-                # Rung 0's worlds were already charged at the dispatch point, with
-                # `worlds_constructed`. Every rung after it searches the prefix
-                # AGAIN, which is what made `worlds_searched` exceed the
-                # construction count and drove the abort rate to -1.75.
-                self.stats.world_search_attempts += stage_worlds
-            # A FALLBACK, detected by the taxonomy counter rather than by the
-            # policy_id -- `_fallback` returns this policy's own id, so the
-            # previous `policy_id != self.policy_id` test was dead code and the
-            # ladder marched past failed rungs. Found in review.
-            #
-            # Keep the last SUCCESSFUL decision: rung 0 may have produced a
-            # perfectly good searched answer, and returning rung 2's fallback
-            # instead would make escalation a strength REGRESSION relative to not
-            # escalating at all.
-            if self.stats.fallback_decisions > fallbacks_before:
-                if last_good is not None:
-                    decision = last_good
-                    # RECOVERED: the returned decision is an earlier rung's real
-                    # search, so this decision did not fall back even though a rung
-                    # did. `fallback_rate` nets these out.
-                    self.stats.ladder_recovered_fallbacks += 1
-                self.stats.ladder_fallback_rungs += 1
-                break
-            last_good = decision
-            winning_rung_delta = tuple(
-                now - before for now, before in zip(_override_ledger(), override_before_rung)
+            return (
+                out,
+                self.stats.fallback_decisions > before,
+                bool(getattr(self, "_ladder_saturated", False)),
+                bool(getattr(self, "_ladder_worlds_agree", True)),
             )
-            winning_histogram_delta = tuple(
-                now - before
-                for now, before in zip(_histogram_ledger(), histograms_before_rung)
-            )
-            winning_row_span = len(rung_row_spans) - 1
-            winning_rung_addresses = list(staged_addresses)
-            if index + 1 >= len(ladder):
-                break
-            next_worlds, next_sims, next_depth = ladder[index + 1]
-            if next_depth > stage_depth:
-                # DEPTH MARCHES ON SATURATION PRESSURE ALONE. Not on how contested
-                # the decision looks: a deeper search that did not fill the
-                # shallower depth explores the new plies too thinly to back them up,
-                # and can be worse than the depth below it. So the ONLY licence to
-                # deepen is near-full saturation of the depth already being run.
-                #
-                # This is also what makes the ladder self-limiting: the budget is
-                # fixed, so each extra ply is harder to saturate than the last, and
-                # the climb stops on its own when the tree stops filling.
-                if not getattr(self, "_ladder_saturated", False):
-                    self.stats.ladder_unsaturated_stops += 1
-                    break
-                self.stats.ladder_depth_rungs += 1
-            elif next_worlds < stage_worlds:
-                # A world is dropped once the belief has told us what it can -- the
-                # owner's "enough information to drop to 3w". Per-world leaders
-                # agreeing is that signal: more draws of a belief every draw already
-                # agrees on cannot buy more information, so the budget is better
-                # spent concentrating what remains.
-                if not getattr(self, "_ladder_worlds_agree", True):
-                    self.stats.ladder_worlds_disagree_stops += 1
-                    break
-            self.stats.ladder_escalations += 1
-        # Rewind the override ledger to the winning rung. Nothing between the
-        # snapshots is a decision the engine made, so nothing between them belongs
-        # in a per-decision rate. A rung that fell back contributes nothing, which
-        # is right: it measured no override.
-        for name, start, delta in zip(
-            LADDER_PER_DECISION_CLAIMS, override_at_decision_start, winning_rung_delta
-        ):
-            setattr(self.stats, name, start + delta)
-        for name, start, hist_delta in zip(
-            LADDER_PER_DECISION_CLAIM_HISTOGRAMS,
-            histograms_at_decision_start,
-            winning_histogram_delta,
-        ):
-            # In place, because callers may hold a reference to the Counter, and
-            # `Counter.__sub__` already drops non-positive entries so the rebuild
-            # cannot leave a phantom zero bucket.
-            live = getattr(self.stats, name)
-            live.clear()
-            live.update(start + hist_delta)
-        # COMMIT only the winning rung's addresses, through the cap. Everything a
-        # superseded rung staged is counted and discarded without ever having taken a
-        # slot, so the cap is spent on decisions rather than on rungs.
-        self._ladder_pending_addresses = None
-        for address in winning_rung_addresses:
-            self._commit_override_address(address)
-        self.stats.override_addresses_superseded += (
-            total_staged_addresses - len(winning_rung_addresses)
-        )
-        # Stamp the rows -- but ONLY on a dynamic cell. `_search_ladder` is the
-        # dispatch for EVERY model decision, so an unconditional stamp put
-        # `ladder_rung`/`ladder_superseded` on a FIXED cell's rows, changing the
-        # banked row schema on the one branch whose central promise is that a fixed
-        # cell is untouched, and contradicting this module's own docstring. Found in
-        # review.
-        #
-        # `ladder_superseded` is the field a per-decision analysis must filter on;
-        # `ladder_rung` is what a cost analysis reads instead.
+
+        rows_before = len(self.stats.root_decision_rows)
+        decision, fell_back, saturated, agree = _run(stage_depth)
         if dynamic:
-            for rung_index, (start, stop) in enumerate(rung_row_spans):
-                for row in self.stats.root_decision_rows[start:stop]:
-                    row["ladder_rung"] = rung_index
-                    row["ladder_superseded"] = rung_index != winning_row_span
-            if winning_row_span is not None and not (
-                rung_row_spans[winning_row_span][1] - rung_row_spans[winning_row_span][0]
-            ) and any(stop > start for start, stop in rung_row_spans):
-                # THE CAP STRADDLED THIS DECISION. `_ROOT_DECISION_ROWS` filled
-                # between an earlier rung and the winning one, so the decision has
-                # rows in the shard and NONE of them passes the superseded filter --
-                # it vanishes from every per-decision statistic while
-                # `root_decision_rows_dropped` reports only a dropped rung. At most
-                # one decision per shard, and biased toward escalating ones, so it is
-                # counted rather than left to be inferred.
-                self.stats.ladder_decision_rows_lost += 1
-        if last_good is None:
-            # NO rung produced a searched answer. Counted because the ladder identity
-            # needs it: `measured + unmeasured == ladder_decisions` is FALSE here --
-            # `ladder_decisions` includes this decision and the override ledger does
-            # not, so the true identity carries this as a third term. Review found
-            # both this module and the campaign JSON asserting the two-term form and
-            # claiming it was tested.
+            for row in self.stats.root_decision_rows[rows_before:]:
+                row["ladder_rung"] = 0
+                row["ladder_superseded"] = False
+                row["ladder_worlds"] = stage_worlds
+                row["ladder_depth"] = stage_depth
+
+        if fell_back:
+            # Measured nothing, so it moves nothing: letting a broken turn choose the
+            # next allocation would adapt to an absence.
             self.stats.ladder_unsearched_decisions += 1
-        assert decision is not None  # a ladder always has at least one rung
+            return decision
+
+        if dynamic and self._should_shadow_probe(stage_worlds, stage_depth, saturated):
+            claims_before = tuple(
+                getattr(self.stats, name) for name in LADDER_PER_DECISION_CLAIMS
+            )
+            hists_before = tuple(
+                Counter(getattr(self.stats, name))
+                for name in LADDER_PER_DECISION_CLAIM_HISTOGRAMS
+            )
+            addresses_before = len(self.stats.override_disagreements)
+            rows_before_shadow = len(self.stats.root_decision_rows)
+            self.stats.ladder_shadow_probes += 1
+            _, shadow_failed, shadow_saturated, _ = _run(stage_depth + 1)
+            for name, value in zip(LADDER_PER_DECISION_CLAIMS, claims_before):
+                setattr(self.stats, name, value)
+            for name, hist in zip(LADDER_PER_DECISION_CLAIM_HISTOGRAMS, hists_before):
+                live = getattr(self.stats, name)
+                live.clear()
+                live.update(hist)
+            superseded = len(self.stats.override_disagreements) - addresses_before
+            if superseded > 0:
+                del self.stats.override_disagreements[addresses_before:]
+                self.stats.override_addresses_superseded += superseded
+            del self.stats.root_decision_rows[rows_before_shadow:]
+            if shadow_failed:
+                # No information either way, so latch NOTHING -- a latch on a failure
+                # would record a ceiling the search never measured.
+                self.stats.ladder_shadow_probe_failures += 1
+            elif shadow_saturated:
+                self._ladder_depth = stage_depth + 1
+                self.stats.ladder_depth_rungs += 1
+            else:
+                self._ladder_depth_ceiling[stage_worlds] = stage_depth
+                self.stats.ladder_depth_latches += 1
+
+        if dynamic:
+            self._advance_ladder_state(stage_worlds, stage_depth, saturated, agree)
         return decision
+
 
     def _search_model(
         self,
