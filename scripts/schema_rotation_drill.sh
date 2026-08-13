@@ -141,9 +141,21 @@ wt = sys.argv[1]
 p = f"{wt}/src/pokezero/observation.py"
 s = open(p).read()
 
-# A v5 that is byte-identical to v4 in shape. The drill is about NAMING, not about layout: any
-# shape difference would make breakages ambiguous between "reached the default" and "assumed a
-# layout". Identical shape means every breakage is unambiguously a naming failure.
+# A v5 that is byte-identical IN SHAPE AND ROUTING TO THE SCHEMA BEING ROTATED AWAY FROM. The
+# drill is about NAMING, not about layout: any shape difference makes a breakage ambiguous between
+# "reached the default" and "assumed a layout", and identical shape is what makes every breakage
+# unambiguously a naming failure.
+#
+# This used to clone v4 unconditionally, which satisfies the premise ONLY on a tree whose default
+# is already v4. On the pre-rotation tree the default is v2.2, so the "identical" arm moved the
+# default's shape from 155/51/151 to 132/41/23 -- every width and layout breakage in it was a
+# SHAPE artifact being reported as a naming failure, and the drill's central claim was false while
+# its own precondition passed, because that precondition also compared against v4 (see
+# PRECONDITION 2). Fifth instance of the instrument manufacturing the failure it reports, and the
+# only one that reached the verdict.
+#
+# Everything below therefore mirrors the OUTGOING DEFAULT: its spec, its four routing properties,
+# its transition-token count, its census floors. `identical` means identical to what was replaced.
 anchor = re.search(r'^OBSERVATION_SCHEMA_VERSION_V4\s*=.*$', s, re.M)
 if anchor is None:
     raise SystemExit(
@@ -159,20 +171,6 @@ _m = re.search(r'^SUPPORTED_OBSERVATION_SCHEMA_VERSIONS\s*=\s*\((.*?)\)', s, re.
 if _m is None:
     raise SystemExit("drill: could not locate SUPPORTED_OBSERVATION_SCHEMA_VERSIONS")
 s = s[:_m.end(1)] + "\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL," + s[_m.end(1):]
-s = re.sub(r'^(GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS\s*=\s*\()', r'\1\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL,', s, count=1, flags=re.M)
-s = s.replace("FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V4,)",
-              "FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V4, OBSERVATION_SCHEMA_VERSION_V5_DRILL)")
-# V2_1_LINEAGE was MISSED, and v4 is a member. It drives `schema_v2_1` in showdown.py (sub-HP
-# fraction, PP-validity bits, pinned Tier-2 investment, defender identity), so omitting it made
-# the synthetic schema encode DIFFERENTLY from v4 -- two numeric cells -- which falsifies the
-# drill's central premise that only NAMING can break. Third defect from this same class; the
-# encode-equivalence precondition below is what actually closes it.
-_m21 = re.search(r'^V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS\s*=\s*\((.*?)\)', s, re.S | re.M)
-if _m21 is None:
-    raise SystemExit("drill: could not locate V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS")
-s = s[:_m21.end(1)] + "\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL," + s[_m21.end(1):]
-s = re.sub(r'^(\s*)OBSERVATION_SCHEMA_VERSION_V4: (V4_TRANSITION_TOKEN_COUNT,)$',
-           r'\1OBSERVATION_SCHEMA_VERSION_V4: \2\n\1OBSERVATION_SCHEMA_VERSION_V5_DRILL: \2', s, count=1, flags=re.M)
 # Rotate WHATEVER the current default is, not a hardcoded v4. The previous line replaced the
 # literal `= OBSERVATION_SCHEMA_VERSION_V4`, which matches 0 times on any tree whose default is
 # not already v4 -- so the default never rotated, and precondition 1 aborted at exit 8. That made
@@ -188,9 +186,58 @@ if _mdef is None:
         "rotate a default it cannot find, and rotating nothing would score a PASS against an "
         "unrotated tree."
     )
-print(f"drill: rotating the default away from {_mdef.group(1)}")
+_out = _mdef.group(1)
+_suffix = _out[len("OBSERVATION_SCHEMA_VERSION_"):]
+print(f"drill: rotating the default away from {_out}")
 s = s[:_mdef.start()] + "OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V5_DRILL" + s[_mdef.end():]
+
+# Mirror the OUTGOING DEFAULT's routing properties, computed rather than hardcoded. This replaces
+# four separate regex insertions that each added v5-drill wherever v4 appeared: GROUPED_LAYOUT,
+# FEATURE_PACK, V2_1_LINEAGE and the transition-token table. Every one of them encoded "the
+# outgoing default is v4", so on a v2.2 tree they gave the synthetic schema v4's routing -- which
+# is the shape/naming ambiguity this drill exists to exclude.
+#
+# Appended at END of the module, after every tuple is defined: a mirror has to READ the tuples,
+# and referencing one from inside its own literal is a NameError. `V2_1_LINEAGE` is the member that
+# taught this -- it was missed by the hardcoded set, drove `schema_v2_1` in showdown.py, and made
+# the synthetic schema encode two numeric cells differently from its reference. Deriving membership
+# instead of listing it is what stops the next such tuple from being missed: a new property tuple
+# is mirrored automatically as long as it is named here, and PRECONDITION 2 fails loudly if it is
+# not.
+# `transition_region`, the fourth schema_with property, has no tuple of its own -- schema_with
+# derives it as `REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA[version] > 0`, so mirroring that map
+# below mirrors the property. Listing a nonexistent TRANSITION_REGION_* tuple here would abort the
+# run on the guard immediately after.
+_MIRRORED = (
+    "TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS",
+    "GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS",
+    "FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS",
+    "V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS",
+    "V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS",
+)
+_missing = [n for n in _MIRRORED if not re.search(rf'^{n}\s*=', s, re.M)]
+if _missing:
+    raise SystemExit(
+        "drill: property tuple(s) not found in observation.py: " + ", ".join(_missing) + ". "
+        "The mirror cannot copy a membership it cannot read, and an unmirrored property routes "
+        "the synthetic schema down a branch its reference does not take."
+    )
+s += f'''
+
+# --- appended by scripts/schema_rotation_drill.sh; not part of the repo ---
+_DRILL_OUTGOING = {_out}
+for _dn in {_MIRRORED!r}:
+    _dt = globals()[_dn]
+    if _DRILL_OUTGOING in _dt:
+        globals()[_dn] = _dt + (OBSERVATION_SCHEMA_VERSION_V5_DRILL,)
+REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA = dict(REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA) | {{
+    OBSERVATION_SCHEMA_VERSION_V5_DRILL: REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA[_DRILL_OUTGOING],
+}}
+'''
 open(p, "w").write(s)
+# Persisted so the preconditions and the scorer assert the premise against the schema actually
+# replaced, rather than re-deriving it and risking a different answer.
+open(f"{wt}/DRILL_OUTGOING.txt", "w").write(_out + "\n")
 
 q = f"{wt}/src/pokezero/showdown.py"
 t = open(q).read()
@@ -209,17 +256,26 @@ if m is None:
 # manufactures the failure it reports.
 import os as _os
 _shape = _os.environ.get("DRILL_SHAPE", "identical")
+# Clone the OUTGOING DEFAULT's spec, not v4's. The naming convention is exact and checked below:
+# OBSERVATION_SCHEMA_VERSION_<S>  <->  <S>_REPLAY_OBSERVATION_SPEC, for every supported <S>.
+_out_spec = f"{_suffix}_REPLAY_OBSERVATION_SPEC"
+if not re.search(rf'^{_out_spec}\s*=', t, re.M):
+    raise SystemExit(
+        f"drill: the outgoing default is {_out}, but showdown.py has no {_out_spec} to clone. "
+        "The synthetic schema must have the shape of the schema it replaces, or a breakage cannot "
+        "be attributed to NAMING rather than to layout."
+    )
 if _shape == "differ":
-    # One fewer numeric column than v4. Small enough that nothing structural changes, large
-    # enough that any consumer carrying v4's width against this schema mismatches loudly.
+    # One fewer numeric column than the OUTGOING DEFAULT. Small enough that nothing structural
+    # changes, large enough that any consumer carrying the old width mismatches loudly.
     _spec_expr = ("_dc_replace(\n"
-                  "        V4_REPLAY_OBSERVATION_SPEC,\n"
+                  f"        {_out_spec},\n"
                   "        schema_version=OBSERVATION_SCHEMA_VERSION_V5_DRILL,\n"
-                  "        numeric_feature_count=V4_REPLAY_OBSERVATION_SPEC.numeric_feature_count - 1,\n"
+                  f"        numeric_feature_count={_out_spec}.numeric_feature_count - 1,\n"
                   "    )")
 else:
     _spec_expr = ("_dc_replace(\n"
-                  "        V4_REPLAY_OBSERVATION_SPEC,\n"
+                  f"        {_out_spec},\n"
                   "        schema_version=OBSERVATION_SCHEMA_VERSION_V5_DRILL,\n"
                   "    )")
 t = t[:m.end()] + f"\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL: {_spec_expr}," + t[m.end():]
@@ -243,10 +299,14 @@ for table in _tables:
 # default-spec encode raised at the validator ("requires exactly 132 numeric columns, got 131")
 # and the entire breakage set was drill artifact -- the instrument manufacturing its own failure
 # for the fourth time. This is the defect the header listed as unknown.
+#
+# Keyed off the OUTGOING DEFAULT, not v4, for the same reason as the spec and the property tuples:
+# copying v4's floor onto a synthetic clone of v2.2 gives the schema a floor from a different
+# layout, and every default-spec encode fails the validator on a mismatch the drill itself created.
 _floor_delta = {"_MINIMUM_NUMERIC_CENSUS_BY_SCHEMA": (" - 1" if _shape == "differ" else "")}
 _reg = "\n\n" + "\n".join(
     f"{tb} = dict({tb}) | {{OBSERVATION_SCHEMA_VERSION_V5_DRILL: "
-    f"{tb}[OBSERVATION_SCHEMA_VERSION_V4]{_floor_delta.get(tb, '')}}}"
+    f"{tb}[{_out}]{_floor_delta.get(tb, '')}}}"
     for tb in _tables
 ) + "\n"
 # Anchor on the DEFINITION and brace-match it. A first cut used the last textual reference to
@@ -264,7 +324,12 @@ for tb in _tables:
 _eol = t.index("\n", max(_ends)) + 1
 t = t[:_eol] + _reg + t[_eol:]
 if "OBSERVATION_SCHEMA_VERSION_V5_DRILL" not in t.split("REPLAY_OBSERVATION_SPECS_BY_SCHEMA")[0]:
-    t = re.sub(r'^(from \.observation import \()', r'\1\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL,\n    OBSERVATION_SCHEMA_VERSION_V4,', t, count=1, flags=re.M)
+    # The OUTGOING DEFAULT's constant must come across too: the census registration above is keyed
+    # by it, and showdown.py only imports the versions it happens to mention. Injecting v4 alone
+    # left a NameError waiting for any tree whose default is not v4.
+    t = re.sub(r'^(from \.observation import \()',
+               "\\1\n    OBSERVATION_SCHEMA_VERSION_V5_DRILL,\n    OBSERVATION_SCHEMA_VERSION_V4,\n    "
+               + _out + ",", t, count=1, flags=re.M)
 open(q, "w").write(t)
 print("  synthetic v5-drill schema injected; default rotated to it")
 PY
@@ -295,31 +360,79 @@ assert v.endswith("v5-drill"), f"default is {v!r}, not the synthetic schema -- i
 assert SUP[-1] == v, f"synthetic schema is not LAST in SUPPORTED ({SUP[-1]!r}); schema_with() " \
                      "iterates reversed() and would never return it, leaving every " \
                      "property-selector site inert under the drill"
-assert schema_with(feature_pack=True) == v, (
-    f"schema_with(feature_pack=True) -> {schema_with(feature_pack=True)!r}, not the synthetic "
-    "schema; the migration's own vocabulary is untested by this run"
+# The migration's own vocabulary must resolve TO the synthetic schema, or every site the migration
+# moved onto the property selector is inert under the drill. Queried by the OUTGOING DEFAULT's
+# property profile, not by `feature_pack=True`: that hardcoded v4's distinguishing property, so on
+# a v2.2 tree it asserted that a query v2.2 does not even satisfy returns the v2.2 clone -- which
+# fails for the right reason by luck, or passes while testing nothing, depending on the tree.
+import os as _os
+from pokezero.observation import (
+    OBSERVATION_SCHEMA_VERSION_V5_DRILL,
+    FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS as FP,
+    GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS as GL,
+    TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS as TM,
+    REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA as TTC,
+)
+_outgoing = open(_os.environ["DRILL_WT"] + "/DRILL_OUTGOING.txt").read().strip()
+import pokezero.observation as _obs
+_out_v = getattr(_obs, _outgoing)
+_profile = {
+    "transition_region": TTC[_out_v] > 0,
+    "turn_merged": _out_v in TM,
+    "grouped_layout": _out_v in GL,
+    "feature_pack": _out_v in FP,
+}
+_got = schema_with(**_profile)
+assert _got == v, (
+    f"schema_with(**{_profile}) -> {_got!r}, not the synthetic schema. That profile is the "
+    f"OUTGOING default's ({_outgoing}), which the synthetic schema mirrors, so it must resolve to "
+    "the synthetic schema now that it is newest. Otherwise the migration's own vocabulary is "
+    "untested by this run."
 )
 print(f"  default is now: {v}")
-print(f"  schema_with(feature_pack=True) -> {schema_with(feature_pack=True)}")
+print(f"  outgoing default: {_outgoing} -> profile {_profile}")
+print(f"  schema_with(**outgoing profile) -> {_got}")
 PRE
 
-# PRECONDITION 2: the synthetic schema ENCODES IDENTICALLY to v4. This is the drill's central
-# premise -- "shape-identical, so every breakage is a naming failure" -- and it was FALSE:
-# V2_1_LINEAGE went unregistered and two numeric cells differed. Asserting the premise instead of
-# documenting it closes the whole "unregistered schema-keyed table" class, which has produced
-# THREE separate instrument defects. Any table the injection misses now shows up here as an
-# encode difference, before a single test is scored.
+# PRECONDITION 2: the synthetic schema is spec- and routing-equivalent to THE SCHEMA BEING ROTATED
+# AWAY FROM. This is the drill's central premise -- "shape-identical, so every breakage is a naming
+# failure" -- and it has now been false twice.
+#
+# First: V2_1_LINEAGE went unregistered and two numeric cells differed.
+#
+# Second, and far worse, this precondition itself compared against v4 while the injection also
+# cloned v4. On the pre-rotation tree the outgoing default is v2.2, so it verified "the v4 clone
+# equals v4" -- true by construction, and silent about the fact that the rotation moved the
+# default's shape from 155/51/151 to 132/41/23. The premise was false and its own guard passed. A
+# guard whose reference is the thing it is comparing cannot fail.
+#
+# The reference is now the outgoing default, read from the file the injection wrote rather than
+# re-derived, so the two halves cannot disagree about which schema was replaced. In `differ` mode
+# the numeric width is EXPECTED to be one narrower -- that is the arm's whole purpose -- so that
+# one field is compared against the intended delta instead of for equality.
 "$VENV" - <<'PRE' || exit 9
 import os, sys
 sys.path.insert(0, os.environ["DRILL_WT"] + "/src")
-from pokezero.observation import OBSERVATION_SCHEMA_VERSION as drill, OBSERVATION_SCHEMA_VERSION_V4 as v4
+import pokezero.observation as _obs
+from pokezero.observation import OBSERVATION_SCHEMA_VERSION as drill
 from pokezero.showdown import observation_spec_for_schema
-a, b = observation_spec_for_schema(v4), observation_spec_for_schema(drill)
+_outgoing = open(os.environ["DRILL_WT"] + "/DRILL_OUTGOING.txt").read().strip()
+ref = getattr(_obs, _outgoing)
+_shape = os.environ.get("DRILL_SHAPE", "identical")
+a, b = observation_spec_for_schema(ref), observation_spec_for_schema(drill)
 fields = ("token_count", "categorical_feature_count", "numeric_feature_count",
           "transition_token_count", "opponent_tendency_stats_token_count")
-bad = [(f, getattr(a, f), getattr(b, f)) for f in fields if getattr(a, f) != getattr(b, f)]
+_expected_delta = {"numeric_feature_count": -1} if _shape == "differ" else {}
+bad = [
+    (f, getattr(a, f), getattr(b, f))
+    for f in fields
+    if getattr(b, f) != getattr(a, f) + _expected_delta.get(f, 0)
+]
 if bad:
-    print("  SPEC MISMATCH v4 vs synthetic:", bad); sys.exit(9)
+    print(f"  SPEC MISMATCH {_outgoing} vs synthetic (shape={_shape}):", bad)
+    print("  Expected the synthetic schema to have the OUTGOING default's shape"
+          + (" with numeric_feature_count one narrower." if _shape == "differ" else "."))
+    sys.exit(9)
 from pokezero.observation import (
     FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS, GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS, V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS,
@@ -332,16 +445,30 @@ tuples = {
     "V2_1_LINEAGE": V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS,
     "V3_PROJECTION": V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS,
 }
-skew = [n for n, t in tuples.items() if (v4 in t) != (drill in t)]
-if REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA.get(v4) != REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA.get(drill):
+skew = [n for n, t in tuples.items() if (ref in t) != (drill in t)]
+if REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA.get(ref) != REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA.get(drill):
     skew.append("REPLAY_TRANSITION_TOKEN_COUNTS")
 if skew:
-    print("  MEMBERSHIP SKEW v4 vs synthetic in:", skew)
-    print("  The synthetic schema is not equivalent to v4, so a breakage cannot be attributed")
+    print(f"  MEMBERSHIP SKEW {_outgoing} vs synthetic in:", skew)
+    print(f"  The synthetic schema is not equivalent to {_outgoing}, so a breakage cannot be attributed")
     print("  to NAMING. Register it in these structures before trusting any verdict.")
     sys.exit(9)
-print("  premise verified: synthetic schema is spec- and membership-equivalent to v4")
+print(f"  premise verified: synthetic schema is spec- and membership-equivalent to {_outgoing}"
+      + (" (numeric width one narrower, as `differ` intends)" if _shape == "differ" else ""))
 PRE
+
+# Validate the INSTRUMENT without paying for a verdict. Everything above is the injection and its
+# preconditions -- the part that decides whether a breakage can be attributed to naming at all --
+# and it runs in seconds, while the two suites below take ~22 minutes. Every instrument defect this
+# script has recorded was in the part above. Exits 0 having produced NO verdict, and says so, so a
+# preconditions-only run can never be quoted as a PASS.
+if [ "${DRILL_STOP_AFTER_PRECONDITIONS:-0}" = "1" ]; then
+  echo "== preconditions only (DRILL_STOP_AFTER_PRECONDITIONS=1) =="
+  echo "NO VERDICT: the injection and its preconditions passed; no test was run and nothing was"
+  echo "            scored. This is an instrument check, not a result. Re-run without the flag."
+  echo "Worktree kept for inspection: $WT"
+  exit 0
+fi
 
 find "$WT/tests" -name __pycache__ -exec rm -rf {} + 2>/dev/null
 PYTHONPATH="$WT/src" "$VENV" -m pytest $(drill_targets "$WT") -q -p no:randomly > "$WT/DRILL.txt" 2>&1
@@ -627,8 +754,10 @@ if [ "$NU" -eq 0 ] && [ "$NM" -eq 0 ]; then
   fi
   echo "PASS ($_mode): the breakage set is EXACTLY the class-(iii) readers."
   echo "  SCOPE OF THIS CLAIM: no test reads the default's VERSION where it means a specific one."
-  echo "  It does NOT cover shape-dependent conflations -- the synthetic schema is shape-identical"
-  echo "  to v4 by design, so a site asserting a v4 width passes both arms. Pair with a shape probe."
+  echo "  It does NOT cover shape-dependent conflations. The synthetic schema is shape-identical to"
+  echo "  the OUTGOING DEFAULT by design, so a site hardcoding that schema's width sees no change"
+  echo "  in this arm and its conflation goes undetected here. DRILL_SHAPE=differ is the arm for"
+  echo "  that half; until it has been run and its result stated, the shape half is UNCOVERED."
 fi
 echo "Full log: $WT/DRILL.txt"
 exit $(( NU + NM == 0 ? 0 : 1 ))
