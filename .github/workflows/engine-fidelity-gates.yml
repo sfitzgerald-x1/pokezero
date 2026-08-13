@@ -502,25 +502,7 @@ jobs:
             exit 1
           fi
 
-      # C116 Phase 2. Roll enumeration is a flag-gated reference ORACLE consumed by
-      # tests; NOTHING that ships takes that path, the transition differential very
-      # much included. Two costs if that slips: enumeration measured 2.38 ms -> 8.88 s
-      # per midgame_3v3 decision at depth 4 / 1024 sims, and a differential running
-      # enumerated certifies a code path production never takes, which silently blinds
-      # the 200-game fidelity gate to the surface that actually ships.
-      #
-      # The gate is BEHAVIOURAL, after review defeated the textual version: a file
-      # containing only `import engine_transition_differential` mentioned no flag,
-      # matched no allowlist, and enabled enumeration process-wide (and in every child)
-      # while the scan stayed green. Each check now spawns a child, imports a surface
-      # into it, and requires the engine's fan back COLLAPSED at [112, 160]. The flag is
-      # latched per process by a OnceLock, so an in-process toggle would measure
-      # whichever path happened to be latched first.
-      #
-      # The surface list is DISCOVERED, not hardcoded. A second review pass showed the
-      # hardcoded five-tuple left 22 of 37 engine-touching modules outside every probe --
-      # including src/pokezero/engine_env.py, which runs pokezero_search.env_step and is
-       # The schema-default gate is worthless if it never runs, and it did not: it was authored
+      # The schema-default gate is worthless if it never runs, and it did not: it was authored
       # with no workflow step, so "fails at authorship" meant "fails for whoever remembers to run
       # it". A SKIP is treated as a FAILURE here -- the gate skips when the ledger reports an
       # unparsable file, and on this job that means something else broke, not that the check is
@@ -541,6 +523,24 @@ jobs:
             exit 1
           fi
 
+      # C116 Phase 2. Roll enumeration is a flag-gated reference ORACLE consumed by
+      # tests; NOTHING that ships takes that path, the transition differential very
+      # much included. Two costs if that slips: enumeration measured 2.38 ms -> 8.88 s
+      # per midgame_3v3 decision at depth 4 / 1024 sims, and a differential running
+      # enumerated certifies a code path production never takes, which silently blinds
+      # the 200-game fidelity gate to the surface that actually ships.
+      #
+      # The gate is BEHAVIOURAL, after review defeated the textual version: a file
+      # containing only `import engine_transition_differential` mentioned no flag,
+      # matched no allowlist, and enabled enumeration process-wide (and in every child)
+      # while the scan stayed green. Each check now spawns a child, imports a surface
+      # into it, and requires the engine's fan back COLLAPSED at [112, 160]. The flag is
+      # latched per process by a OnceLock, so an in-process toggle would measure
+      # whichever path happened to be latched first.
+      #
+      # The surface list is DISCOVERED, not hardcoded. A second review pass showed the
+      # hardcoded five-tuple left 22 of 37 engine-touching modules outside every probe --
+      # including src/pokezero/engine_env.py, which runs pokezero_search.env_step and is
       # reached by the pokezero-rollout console script. With an enabler there a real
       # search process came back ENUMERATED and this step still read `Ran 14 tests OK`.
       - name: Roll-enumeration scope gate

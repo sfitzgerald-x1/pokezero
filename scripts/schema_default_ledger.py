@@ -8,11 +8,21 @@ re-derivable rather than recalled.
 
 A "site reaching the global default" is any of:
 
-  bare-const     a read of `OBSERVATION_SCHEMA_VERSION` itself
-  default-spec   a read of `DEFAULT_REPLAY_OBSERVATION_SPEC` (defined AS the default's spec)
-  implicit-spec  `ObservationSpec(...)` with no `schema_version=` -- silently takes the default
-  implicit-cfg   `TransformerPolicyConfig(...)` / `.compact_category(...)` with no
-                 `observation_schema_version=` -- silently takes the default
+  bare-const           a read of `OBSERVATION_SCHEMA_VERSION` itself                    (16)
+  default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                        (54)
+  implicit:<Surface>   a call to <Surface> leaving at least one default-bearing kwarg unnamed,
+                       one kind per DERIVED surface so a new one cannot join an existing bucket:
+                         LocalShowdownConfig      133      ObservationSpec           34
+                         compact_category          96      TransformerPolicyConfig    4
+                         PokeZeroObservationV0     49      LinearPolicyModel          3
+                                                           OnlineBattleAgent          2
+                       The row's `unclosed` field names which kwarg is still open.
+
+  Two retired names, `implicit-spec` and `implicit-cfg`, were listed here long after the code
+  stopped emitting them -- the reader-facing vocabulary staled in the same change that derived the
+  surfaces and recovered 187 sites. Worse, a commit message claimed this list had been updated when
+  the edit had silently no-op'd: a `str.replace` whose target no longer existed, with no assertion
+  that it applied. Every figure above is re-derivable by running this script.
 
 Not counted, deliberately: reads of the per-version names (`..._V2_2`, `..._V4`) and of
 `SUPPORTED_...`/`REPLAY_OBSERVATION_SPECS_BY_SCHEMA`. Those NAME a schema, which is the state
@@ -108,7 +118,7 @@ def enclosing(tree: ast.AST) -> dict[int, str]:
     Innermost, not outermost. The first version used `ast.walk` (breadth-first) with
     `setdefault`, which locked in the OUTERMOST scope and contradicted this docstring: every
     method of a TestCase collapsed onto the class name, so
-    `test_neural_policy.py::NeuralPolicyScaffoldTest::implicit-cfg` covered 54 separate sites as
+    one TestCase's single key covered 54 separate call sites as
     one key. 202 rows collapsed to 87 distinct keys -- 115 rows, 57%, invisible to any
     key-based comparison. Assigning unconditionally in depth order makes the innermost scope win.
     """
