@@ -18,7 +18,7 @@
 # Those modules are collectable again (the c153 f-string fix), and if any file ever becomes
 # uncollectable the run now fails on the ERROR guard instead of quietly shrinking.
 #         DRILL_SCOPE=fast   ...  scope to the files that have ever broken + the expected set.
-#         DRILL_SHAPE=differ ...  EXPERIMENTAL, NOT SOUND YET. See the warning below.
+#         DRILL_SHAPE=differ ...  VERIFIED; see STATUS below and the verdict report.
 #
 # Why a shape-differing variant exists. The default synthetic schema is shape-IDENTICAL to v4 so
 # that every breakage is unambiguously a NAMING failure. The cost of that choice is that no
@@ -26,7 +26,10 @@
 # (#1227 token_count, #1228 the feature widths) were shape bugs. A drill that structurally
 # cannot reproduce its own motivating defects is not sufficient evidence on its own.
 #
-# STATUS: `differ` is CONSTRUCTED AND NOW VERIFIED (see reports/schema_rotation_drill_verdict.md). Its output was not quotable until the differ arm actually ran; it has, and its rubric is populated per its own admission rule until
+# STATUS: `differ` is CONSTRUCTED AND VERIFIED. It has been run to completion, three arms, and its
+#         rubric is populated per its own admission rule -- see
+#         reports/schema_rotation_drill_verdict.md. Its coverage is ONE site wide, which is a fact
+#         about how little of this suite pins the default's width, not a claim about the arm.
 # a real run on a tree where the drill can execute, and the exit-12 INCONCLUSIVE gate below
 # enforces that mechanically -- it cannot print a PASS-shaped summary.
 #
@@ -50,13 +53,15 @@
 # differ spec narrows `numeric_feature_count` by one AND `_MINIMUM_NUMERIC_CENSUS_BY_SCHEMA` by one,
 # so the spec and its floor move together rather than the floor refusing the schema it describes;
 # and differ has its own pass condition, because the class-(iii) set does not apply under a width
-# change. Its rubric is committed EMPTY for that reason -- populating it from an unverified run
+# change. Its rubric was committed EMPTY for that reason -- populating it from an unverified run
 # would launder a guess into a pin.
 #
 # So what remains is verification, not construction, and it needs a tree where the drill runs.
 # The acceptance test is specific: a canary asserting `numeric_feature_count == 132` must break
 # under the differ arm (131 columns there) and must not break under the identical arm. Until that
-# is observed, the shape half of the class is UNCOVERED and the honest verdict says so.
+# was observed, the shape half of the class was UNCOVERED. It HAS now been observed: a width pin
+# passes under `identical` and fails under `differ` (PRECONDITION 3), and one real site differs
+# between the arms. The paragraph above is kept as the reason the rubric started empty.
 #
 # `fast` exists because two full suites take ~22 minutes and get killed by most runners. It is
 # for ITERATION ONLY and is NOT the stop condition: a scoped drill cannot see a NEW breakage in
@@ -1314,7 +1319,8 @@ if [ "$NU" -eq 0 ] && [ "$NM" -eq 0 ]; then
     # not labels.
     echo "INCONCLUSIVE ($_mode): breakage set matches, but this configuration is NOT the stop"
     echo "  condition. fast cannot see a new breakage in a file that has never broken; differ is"
-    echo "  known-unsound. Re-run with no DRILL_SCOPE/DRILL_SHAPE before quoting a result."
+    echo "  a SCOPED arm. Re-run with no DRILL_SCOPE before quoting a result; DRILL_SHAPE=differ is"
+    echo "  verified and has its own rubric, but `fast` cannot see a new breakage in an unlisted file."
     exit 12
   fi
   echo "PASS ($_mode): the breakage set is EXACTLY the class-(iii) readers."

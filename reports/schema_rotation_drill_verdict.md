@@ -35,8 +35,9 @@ that the rubric does not sanction, and each is named below with what it actually
 
 | quantity | value | arm |
 |---|---|---|
-| tests collected | 6091 | rotated |
+| tests collected | 6092 rotated / 6088 baseline | both |
 | raw failures, rotated run | 42 | rotated |
+| *(the 6091 previously stated here was carried over from an earlier run and never re-derived against v8 -- corrected)* | | |
 | stable baseline failures, subtracted | 12 | two baseline runs, intersected |
 | unstable across the two baselines, NOT subtracted | 0 | a flake must not earn a permanent excuse |
 | caused by ADDING a schema, subtracted | 8 | control arm (inject, do not rotate) |
