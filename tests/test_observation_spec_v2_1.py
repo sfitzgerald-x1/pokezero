@@ -90,10 +90,6 @@ class SpecTableTest(unittest.TestCase):
         self.assertEqual(
             V2_1_REPLAY_OBSERVATION_SPEC.schema_version, OBSERVATION_SCHEMA_VERSION_V2_1
         )
-        # Fresh (checkpoint-free) encodes and fresh trains default to v2.2 (turn-merged,
-        # promoted 2026-07-08); v2/v2.1 stay checkpoint-driven modes.
-        self.assertEqual(DEFAULT_REPLAY_OBSERVATION_SPEC, V2_2_REPLAY_OBSERVATION_SPEC)
-        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
         # Both widths share every other dimension: the schemas differ ONLY in numeric census
         # (plus the schema-conditioned encode branches).
         self.assertEqual(
@@ -103,6 +99,28 @@ class SpecTableTest(unittest.TestCase):
         self.assertEqual(
             V2_REPLAY_OBSERVATION_SPEC.token_count, V2_1_REPLAY_OBSERVATION_SPEC.token_count
         )
+
+    def test_v2_2_IS_the_fresh_default(self) -> None:
+        """A CLEAN identity pin: the two reads of the process default, and nothing else.
+
+        Split out of `test_schema_keyed_censuses` (D2). That test asserted the v2/v2.1 numeric
+        censuses (121 and 140), their stamps, and that the two schemas differ only in numeric width
+        -- none of which a rotation touches -- alongside these two default reads, which a rotation
+        is designed to break. So the pin broke for either of two reasons and the drill could not
+        tell which: delete these two lines and the test still passes, but it would also still be
+        listed as an expected breakage, and "expected but did not break" -- the only detector for a
+        pin gone dead -- could not distinguish that from a census assertion failing.
+
+        Recorded because I first judged this row "a different split with a different risk" and left
+        it. It is the same split; the only difference is that it carries TWO default reads rather
+        than one, and both are class-(iii): they ANSWER "what does a fresh artifact get" rather than
+        consuming that answer.
+
+        Fresh (checkpoint-free) encodes and fresh trains default to v2.2 (turn-merged, promoted
+        2026-07-08); v2/v2.1 stay checkpoint-driven modes.
+        """
+        self.assertEqual(DEFAULT_REPLAY_OBSERVATION_SPEC, V2_2_REPLAY_OBSERVATION_SPEC)
+        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
 
     def test_v2_1_column_layout(self) -> None:
         # Investment reserve carries forward unchanged; the new columns follow the v2 census.

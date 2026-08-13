@@ -36,14 +36,26 @@ class ObservationSpecTest(unittest.TestCase):
             1 + 6 + 6 + ACTION_COUNT + OPPONENT_TENDENCY_STATS_TOKEN_COUNT + TRANSITION_TOKEN_COUNT,
         )
 
-    def test_schema_version_is_v2_2_with_v2_v2_1_v3_v4_supported_and_v1_legacy(self) -> None:
+    def test_the_fresh_artifact_default_is_v2_2(self) -> None:
+        """A CLEAN identity pin: one assertion, reading the process default and nothing else.
+
+        Split out of test_the_supported_window_and_the_legacy_refusal below. That test
+        asserted the default's identity AND the SUPPORTED tuple, which the rotation drill
+        mutates -- so it broke under a rotation for either reason, and the drill's
+        EXPECTED-BUT-DID-NOT-BREAK detector (the only guard against a pin silently going
+        stale) could never fire for it. This pin has one job and one assertion.
+        """
+        self.assertEqual(OBSERVATION_SCHEMA_VERSION, "pokezero.observation.v2.2")
+
+    def test_the_supported_window_and_the_legacy_refusal(self) -> None:
         # Checkpoint-driven schema window: v2.2 (turn-merged transitions) is the
         # fresh-artifact default since the 2026-07-08 promotion; v2 and v2.1 stay fully
         # supported checkpoint-driven modes, v3 is supported but opt-in (not the default
         # until the Rust fold encoder mirrors it), v4 (the k0 feature pack) is supported and
         # likewise opt-in — adding a schema never moves the default, which is what keeps every
         # running arm's artifacts on the schema they were collected under. v1 stays legacy-refused.
-        self.assertEqual(OBSERVATION_SCHEMA_VERSION, "pokezero.observation.v2.2")
+        # The default's identity is pinned by test_the_fresh_artifact_default_is_v2_2 above and
+        # is deliberately NOT re-asserted here; see that test's docstring.
         self.assertEqual(
             SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
             (

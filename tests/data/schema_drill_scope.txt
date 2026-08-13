@@ -1,0 +1,25 @@
+# Files that have EVER broken under a rotation, plus the expected class-(iii) set.
+# Used only by DRILL_SCOPE=fast, for iteration. A scoped drill cannot see a new breakage in a
+# file that has never broken, so it is not the stop condition -- the full drill is.
+test_distributed_training.py
+test_engine_env.py
+test_engine_stat_attestation.py
+test_fallback_replay_end_to_end.py
+test_foulplay_bridge.py
+test_golden_corpus.py
+test_investment_live_env.py
+test_linear_policy.py
+test_neural_policy.py
+test_neural_selfplay.py
+test_observation.py
+test_observation_schema_flag.py
+test_observation_spec_v2_1.py
+test_observation_spec_v3.py
+test_observation_spec_v4.py
+test_online_client.py
+test_remote_self_describe.py
+test_roll_enumeration_scope.py
+test_tier2_live_env.py
+test_token_format_doc.py
+test_transitions_fold.py
+test_turn_merged_encode.py
