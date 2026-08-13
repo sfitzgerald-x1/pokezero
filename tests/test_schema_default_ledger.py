@@ -379,10 +379,28 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         # plant "All NINE counts" in prose, and it passes. That is the identical weakness the surface
         # guard in this file already had and had fixed, reintroduced one guard over -- so a wrong
         # total is now caught wherever it sits, in exactly the form the right one takes.
-        # Case-INSENSITIVE, compared uppercased. `[A-Z]+` missed a wrong total written "All Nine
-        # counts" or "all nine counts" while the right one was also present -- a narrower version of
-        # the same present-somewhere hole this replaced.
-        stated_totals = {m.upper() for m in re.findall(r"[Aa]ll ([A-Za-z]+) counts", doc)}
+        # Case-insensitive, compared uppercased, and INTERSECTED WITH THIS GUARD'S OWN NUMBER
+        # VOCABULARY. `[A-Z]+` missed a wrong total written "All Nine counts", so it was widened to
+        # `[A-Za-z]+` -- which then swallowed any English word, so ordinary prose ("all the counts
+        # below come from one run", "All surface counts are parsed") was read as a STATED TOTAL and
+        # failed with a message telling the author they had stated a wrong total. They had stated no
+        # number at all. That is the misdiagnosis class, introduced by the commit whose purpose was
+        # to remove a misdiagnosing message -- and the sibling surface guard sixty lines below
+        # documents refusing exactly this broadening, which I did not read before widening.
+        #
+        # Intersecting with `words.values()` keeps every kill and drops the false positives: a wrong
+        # NUMBER WORD is still caught wherever it sits, and a sentence containing no number word is
+        # not a total at all.
+        #
+        # STATED NARROWNESS, because the sibling guard states its own and this one did not. Only
+        # `all <NUMBER-WORD> counts` is recognised. These still slip past while the correct total is
+        # also present: "All of the NINE counts", "NINE counts in total", "All TWENTY-NINE counts"
+        # (the hyphen breaks the word class), "All 9 counts", "All NINE derived counts" (any
+        # intervening word). Deliberate: catching them means matching prose, which is the defect
+        # above. A total absent entirely still fails, since the empty set is not `{words[total]}`.
+        stated_totals = {
+            m.upper() for m in re.findall(r"(?i)all ([A-Za-z]+) counts", doc)
+        } & set(words.values())
         self.assertEqual(
             stated_totals, {words[total]},
             f"the docstring must state 'All {words[total]} counts' and no other total -- {surfaces} "

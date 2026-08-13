@@ -36,8 +36,8 @@ A "site reaching the global default" is any of:
 
                        The row's `unclosed` field names which kwarg is still open. All EIGHT counts
                        above are held by tests/test_schema_default_ledger.py, by two different
-                       mechanisms: the six surface rows are PARSED and compared to the derivation,
-                       and the two kind rows at the top of this table are GENERATED -- the test
+                       mechanisms: the surface rows are PARSED and compared to the derivation, and
+                       the kind rows at the top of this table are GENERATED -- the test
                        asserts that region is byte-equal to `--render-kinds-table`. Regenerate it
                        with that flag rather than editing it by hand.
 
