@@ -227,21 +227,21 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
             f"kind(s) {kinds}. An empty or short rendering compared against an empty or short "
             "docstring region would pass while checking nothing.",
         )
-        if not kinds:
-            print(
-                "\nNOTE: the ledger emits NO non-surface kinds -- `bare-const` and `default-spec` "
-                "have burned down to zero, which is this migration's goal state. The docstring's "
-                "kinds table is correctly empty. This is the one case where both sides of the "
-                "comparison are empty legitimately."
-            )
         return rendered
 
-    def _docstring_kinds_region(self) -> str:
-        """The docstring lines between `is any of:` and the `implicit:` row, blank lines dropped.
+    def _docstring_kinds_region(self) -> tuple[str, int, int]:
+        """(region, start, end) -- the docstring span the tool owns, blank lines dropped in `region`.
 
         This is the region the tool owns. Extracting a REGION rather than matching rows means an
         extra row, a duplicated row, a stale row, or a reformatted row all land inside it and all
         show up as a diff.
+
+        The SPAN is returned alongside the text because the caller needs to look at everything
+        outside it. Computing "outside" as `doc.replace(region, "", 1)` was wrong: `region` has had
+        its blank lines dropped, so it is not necessarily a literal substring of the docstring, and a
+        single blank line inserted between two generated rows made the replace a no-op. Every kind
+        name then appeared "outside" and the test failed with a message naming the wrong cause --
+        the misdiagnosis class this file polices elsewhere. Slicing by index cannot do that.
         """
         doc = self._docstring()
         try:
@@ -254,7 +254,7 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
                 "so this guard has nothing to compare. An empty region would make the comparison "
                 "vacuous, which is the failure mode this whole test exists to prevent."
             )
-        return "\n".join(l for l in doc[start:end].split("\n") if l.strip())
+        return "\n".join(l for l in doc[start:end].split("\n") if l.strip()), start, end
 
     def _docstring(self) -> str:
         return ast.get_docstring(ast.parse(LEDGER.read_text(encoding="utf-8"))) or ""
@@ -318,7 +318,7 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
 
             python scripts/schema_default_ledger.py --render-kinds-table
         """
-        region = self._docstring_kinds_region()
+        region, span_start, span_end = self._docstring_kinds_region()
         self.assertEqual(
             region, self._rendered_kinds_table(),
             "the ledger docstring's kinds table is not byte-equal to what the tool renders.\n"
@@ -338,7 +338,7 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         # kind's name is still known here even though it no longer appears in the rows. Each such
         # name must occur in the docstring ONLY inside the generated region.
         doc = self._docstring()
-        outside = doc.replace(region, "", 1) if region else doc
+        outside = doc[:span_start] + doc[span_end:]  # by INDEX; see _docstring_kinds_region
         stray = sorted(k for k in self._kind_vocabulary() if k in outside)
         self.assertEqual(
             stray, [],
@@ -351,6 +351,43 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
             "from the emitted rows *and* moved out of the region would still escape. That is three "
             "deliberate edits, and the first of them is the one to review.",
         )
+        # THE SUMMARY WORD, which was unpinned prose. The docstring says "All EIGHT counts above are
+        # held" -- six surface rows plus the kind rows. Retire a kind, remove its row correctly and
+        # regenerate, and the sentence claims eight while seven exist: this docstring's own documented
+        # staling pattern, one level up from the rows it now pins. Derived from both halves so it
+        # tracks either changing.
+        surfaces = len(self._surfaces())
+        n_kinds = len([l for l in region.split("\n") if l.strip()])
+        total = surfaces + n_kinds
+        words = {
+            0: "ZERO", 1: "ONE", 2: "TWO", 3: "THREE", 4: "FOUR", 5: "FIVE", 6: "SIX",
+            7: "SEVEN", 8: "EIGHT", 9: "NINE", 10: "TEN", 11: "ELEVEN", 12: "TWELVE",
+        }
+        self.assertIn(
+            total, words,
+            f"{total} held counts, which this guard has no spelled word for. Add it -- do NOT fall "
+            "back to the digit, which is how a sibling guard in this file went inert.",
+        )
+        self.assertIn(
+            f"All {words[total]} counts", doc,
+            f"the docstring must say 'All {words[total]} counts' -- {surfaces} surface row(s) plus "
+            f"{n_kinds} kind row(s). It is the one figure in this table that describes the table "
+            "itself, and nothing held it until now.",
+        )
+        # NON-VACUITY, the case my own round-11 message overstated. `len(lines) == len(kinds)` binds a
+        # SHORT rendering; it does NOT bind empty-vs-empty, because 0 == 0. And an empty kinds table
+        # IS the migration's goal state, so it cannot simply be forbidden -- it has to be
+        # ACKNOWLEDGED, in the docstring, by a human. Round 11 printed a note instead, and pytest
+        # swallows stdout for passing tests, so the "announcement" was invisible exactly where it ran.
+        if n_kinds == 0:
+            self.assertIn(
+                "GOAL STATE REACHED", doc,
+                "the ledger emits no non-surface kinds, so `bare-const` and `default-spec` have "
+                "burned down to zero -- this migration's goal state. Both sides of the byte "
+                "comparison are then empty and it proves nothing, so the docstring must say "
+                "'GOAL STATE REACHED' to record that a human saw it. Without that, an empty table "
+                "and a broken tool are indistinguishable.",
+            )
 
     def _kind_vocabulary(self) -> list[str]:
         """Every non-surface kind the ledger KNOWS, from its own KIND_DESCRIPTIONS."""
