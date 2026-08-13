@@ -341,7 +341,7 @@ class SchemaTableTest(unittest.TestCase):
     def test_v3_is_supported(self) -> None:
         """Membership and spec identity. Deliberately holds NO read of the process default.
 
-        Split from `test_v3_is_not_the_default` below (D2). The two were one test, mixing schema
+        Split from `test_v2_2_IS_the_default_not_v3` below (D2). The two were one test, mixing schema
         MEMBERSHIP -- which the rotation drill's injection leaves passing, since it ADDS a synthetic
         schema to these tables rather than removing v3 -- with a read of the mutable default, which
         the rotation is designed to break. A pin that breaks for either of two reasons cannot tell
@@ -359,7 +359,7 @@ class SchemaTableTest(unittest.TestCase):
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V3, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
 
-    def test_v3_is_not_the_default(self) -> None:
+    def test_v2_2_IS_the_default_not_v3(self) -> None:
         """A CLEAN identity pin: one assertion, reading the process default and nothing else.
 
         This is the class-(iii) site -- it legitimately ANSWERS "which schema does a fresh artifact
