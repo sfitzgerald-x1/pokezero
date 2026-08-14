@@ -12,6 +12,28 @@
 > That is the difference between a figure that happens to be true and one that has been measured.
 
 Run on the union of #1244 and #1247 (the tree that exists once both land), full scope, three arms.
+
+> **SCOPE IN TIME, not just in coverage.** Every number below was measured with **v2.2 as the outgoing
+> default**, on a tree that predates #1251, #1252 and the v4 rotation. Three things have changed since,
+> and one of them is known to have changed what the instrument can see:
+>
+> - **#1251** named `TransformerPolicyConfig.observation_schema_version`, which killed the differ arm's
+>   only row — see the superseded box below. That is not a hypothetical: it is confirmed by execution.
+> - **#1252** named `LocalShowdownConfig.observation_spec`.
+> - **the rotation** makes v4 the outgoing default, so the synthetic clone, the mirrored property
+>   memberships, and PRECONDITION 3's width canary all re-derive against v4 rather than v2.2.
+>
+> The drill's design survives that last one without changes — the mirror only copies memberships the
+> outgoing default actually has, and PRECONDITION 2 compares memberships symmetrically, so v4's absence
+> from `TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS` produces no skew. Verified by reading
+> `schema_rotation_drill.sh:363` (`if _DRILL_OUTGOING in _dt:` — the mirror copies only memberships the
+> outgoing default has) and `:784` (`skew = [n for n, t in tuples.items() if (ref in t) != (drill in t)]`
+> — a symmetric comparison, so absent-in-both is not skew), not by running it.
+>
+> **What has NOT been done: re-running the drill with v4 outgoing.** Until that happens, the "12
+> attributable / 7 expected / 5 unexpected" headline is a correct measurement of a tree that no longer
+> exists. Treat it as the last known reading, not as the current state.
+
 Command:
 
 ```sh
