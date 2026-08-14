@@ -29,13 +29,15 @@ ALLOWLIST = REPO / "tests" / "data" / "schema_default_allowlist.json"
 # The most rows the allowlist has ever legitimately held. Lowered as the class is retired, and
 # raised ONLY with a justification in the PR body -- which the failure message below demands.
 # The moves, in order, so this number's provenance is readable here rather than in git log:
-#   65 -> 60  #1255, retiring six default readers across the rotation consumers
-#   59 -> 60  RAISED, when test_online_client's unpinned-agent test had to read the global to
-#             say what "unpinned" MEANS -- one instrumentation row bought behavioural coverage
-#             of the forfeit path, and the earlier form was silently insensitive to it
+#   65 -> 59  #1255, retiring six default readers across the rotation consumers
+#   59 -> 60  RAISED, in that SAME commit, when test_online_client's unpinned-agent test had
+#             to read the global to say what "unpinned" MEANS -- one instrumentation row
+#             bought behavioural coverage of the forfeit path, and the earlier form was
+#             silently insensitive to it
 #   60 -> 59  #1253, retiring scripts/shaping_ranker.py's read (it encoded with the process
 #             default while its model config named v2.2, so a rotation fed 132 columns to a
 #             155-column model)
+# (#1255's NET against main was 65 -> 60; the 59 above is the intermediate inside it.)
 # Ask the tool for the current value; these are the transitions, not a live figure.
 HIGH_WATER_MARK = 59
 LEDGER = REPO / "scripts" / "schema_default_ledger.py"
