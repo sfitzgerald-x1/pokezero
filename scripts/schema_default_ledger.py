@@ -9,15 +9,15 @@ re-derivable rather than recalled.
 A "site reaching the global default" is any of:
 
   bare-const           a read of `OBSERVATION_SCHEMA_VERSION` itself              (15)
-  default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                (50)
+  default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                (45)
   implicit:<Surface>   a call to <Surface> leaving at least one default-bearing kwarg unnamed,
-                       one kind per surface so a new one cannot join an existing bucket. All FOUR
-                       surfaces, and all four DERIVED from src/ -- the `*`-marked alternate-constructor
+                       one kind per surface so a new one cannot join an existing bucket. All THREE
+                       surfaces, and all three DERIVED from src/ -- the `*`-marked alternate-constructor
                        row is gone, because `compact_category` stopped being one when
                        TransformerPolicyConfig named its schema:
 
-                         LocalShowdownConfig            135    LinearPolicyModel           3
-                         observation_from_player_state    0    OnlineBattleAgent           2
+                         LinearPolicyModel                3    OnlineBattleAgent           2
+                         observation_from_player_state    0
 
                        WAS EIGHT. `ObservationSpec` (24 rows here) and `PokeZeroObservationV0` (49)
                        left the model when their `schema_version` field defaults stopped naming the
@@ -34,7 +34,7 @@ A "site reaching the global default" is any of:
                        while listing compact_category (not derived) and omitting this one: the count
                        was right and the membership was not.
 
-                       The row's `unclosed` field names which kwarg is still open. All SIX counts
+                       The row's `unclosed` field names which kwarg is still open. All FIVE counts
                        above are held by tests/test_schema_default_ledger.py, by two different
                        mechanisms: the surface rows are PARSED and compared to the derivation, and
                        the kind rows at the top of this table are GENERATED -- the test

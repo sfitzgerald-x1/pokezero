@@ -348,11 +348,33 @@ NUMERIC_TIER2_INVESTMENT_PINNED = NUMERIC_TIER2_CB_PINNED + 1  # 139
 _V2_1_NUMERIC_FEATURE_COUNT = NUMERIC_TIER2_INVESTMENT_PINNED + 1
 
 _CATEGORICAL_FEATURE_COUNT = CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT
-# Schema-keyed replay observation specs: BOTH schemas stay first-class encode modes during
-# the dual-schema window. Which one an env/harness uses resolves from the loaded checkpoint's
-# model_config (neural_policy.observation_spec_from_model_config through the
-# env_config_from_checkpoint_provenance latch); DEFAULT_REPLAY_OBSERVATION_SPEC is only the
-# checkpoint-free default (fresh trains, fresh encodes) and tracks the CURRENT schema.
+# Schema-keyed replay observation specs: EVERY supported schema stays a first-class encode mode.
+# Which one an env/harness uses resolves from the loaded checkpoint's model_config
+# (neural_policy.observation_spec_from_model_config through the
+# env_config_from_checkpoint_provenance latch).
+#
+# `DEFAULT_REPLAY_OBSERVATION_SPEC` TRACKS THE CURRENT SCHEMA, AND IS NO LONGER WHAT MOST
+# CHECKPOINT-FREE ENCODES USE. That sentence used to read "is only the checkpoint-free default
+# (fresh trains, fresh encodes)". It stopped being true when `LocalShowdownConfig.observation_spec`
+# -- the only dataclass field default that ever read THIS constant -- named its own version instead,
+# across ~135 call sites. A dataclass default is frozen at class-definition time, so reading this
+# constant there meant a rotation silently re-aimed every env that had not named a schema.
+#
+# Its three siblings read the OTHER global, `OBSERVATION_SCHEMA_VERSION`, and are counted separately
+# by the ledger as `bare-const` rather than `default-spec` -- a distinction kept as two kinds
+# precisely so this comment cannot blur it. They named a version too:
+# `TransformerPolicyConfig.observation_schema_version`, `ObservationSpec.schema_version`,
+# `PokeZeroObservationV0.schema_version`.
+#
+# So this constant is now the answer to "what does a caller who names NOTHING AT ALL get", and the
+# set of such callers is the rows `scripts/schema_default_ledger.py` enumerates -- deliberately
+# shrinking. The count is deliberately NOT repeated here: a comment that tells the reader to ask the
+# tool must not also answer for it. The first draft of this paragraph stated a count, and stated it
+# three HIGHER than the value the very same commit had just written into the allowlist. Run the tool.
+# Do not reach for this constant as "the schema fresh artifacts use"; ask the config, or the
+# entrypoint -- `neural_cli`'s `_train` and `_iterate` resolve the schema from
+# `OBSERVATION_SCHEMA_VERSION` at runtime and pass it in explicitly, so they never reach any of
+# these field defaults at all.
 V2_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=_CATEGORICAL_FEATURE_COUNT,
     numeric_feature_count=_V2_NUMERIC_FEATURE_COUNT,
