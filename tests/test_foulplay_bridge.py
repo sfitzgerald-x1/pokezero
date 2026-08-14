@@ -62,7 +62,7 @@ from pokezero.neural_policy import TransformerTrainingConfig, require_torch, tor
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
 from pokezero.search import RootPUCTSearchTiming
-from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC
+from pokezero.showdown import V2_2_REPLAY_OBSERVATION_SPEC
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 from pokezero.value_calibration import evaluate_value_calibration
 
@@ -734,7 +734,16 @@ class FoulPlayBridgeTest(unittest.TestCase):
             self.assertNotIn(other, retained, f"{seat} self side leaked the opponent's move")
 
     def test_capture_writes_p1_only_rollouts_and_preserves_partial_output(self) -> None:
-        spec = DEFAULT_REPLAY_OBSERVATION_SPEC
+        # NAMES v2.2 so the observation's SHAPE and its STAMP come from the same schema. This test
+        # builds a PokeZeroObservationV0 with widths taken from `spec` and lets `schema_version` fall
+        # to the dataclass default, which NAMES v2.2 since #1244. While the process default was also
+        # v2.2 those agreed; under a v4 rotation the widths came from v4 and the stamp stayed v2.2, and
+        # the assertion below -- `observation.schema_version == spec.schema_version`, deliberately
+        # relative rather than hardcoded -- failed `'v2.2' != 'v4'`. The drill verdict recorded this as
+        # "should be rotation-invariant, and is not; something in the path binds a fixed spec while the
+        # capture uses the default". That something is the field default, and naming the spec here
+        # closes the gap without weakening the relative comparison.
+        spec = V2_2_REPLAY_OBSERVATION_SPEC
         observation = PokeZeroObservationV0(
             categorical_ids=tuple(
                 tuple(0 for _ in range(spec.categorical_feature_count))

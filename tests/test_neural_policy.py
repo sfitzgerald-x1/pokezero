@@ -198,16 +198,42 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             timing.add_neural_forward(0.01, role="unknown")
 
     def test_transformer_policy_config_defaults_match_replay_observation_shape(self) -> None:
-        # NOT pinned, deliberately: this test's subject IS the default. It asserts that a config
-        # built with no schema matches DEFAULT_REPLAY_OBSERVATION_SPEC, so naming a schema here
-        # would make it tautological against the wrong target and hide a real divergence.
+        # THE PREMISE THIS TEST WAS WRITTEN ON IS NO LONGER TRUE, and a rotation is the only thing
+        # that shows it. The comment here used to read "NOT pinned, deliberately: this test's subject
+        # IS the default. It asserts that a config built with no schema matches
+        # DEFAULT_REPLAY_OBSERVATION_SPEC" -- correct while the config's field default WAS a read of
+        # the global. #1251 changed `TransformerPolicyConfig.observation_schema_version` to name
+        # v2.2, so an unpinned config is v2.2-stamped whatever the process default is. The two agreed
+        # by coincidence until the default rotated, then diverged: `151 != 23`.
+        #
+        # So the subject is now self-consistency, which is what it should have been all along and is
+        # a stronger claim than the original: a config built with no schema must match the spec of
+        # the schema IT STAMPS. That holds across every rotation, and it still catches the real
+        # divergence the original was guarding against -- a config whose widths disagree with its own
+        # stamp. Reading `observation_spec_for_schema(config.observation_schema_version)` is a lookup
+        # by name, not a read of the default, so this also retires two `default-spec` ledger rows.
         config = TransformerPolicyConfig.compact_category(category_vocab=(1, 2, 3), category_oov_buckets=4)
+        # THE NAMED CONSTANT, NOT `config.observation_schema_version`. My first cut keyed the lookup
+        # off the config's own stamp, which made this test blind in the stamp dimension: __post_init__
+        # ALREADY resolves all three widths from `observation_spec_for_schema(self.
+        # observation_schema_version)` (neural_policy.py:380, :425-428, :454-461), so recomputing that
+        # same lookup is `x == x`. A reviewer kill-confirmed it -- re-pinning the field default at
+        # neural_policy.py:271 to v2.1, and separately to v4, left this test GREEN where the original
+        # went red. That is the defect class #1244/#1251 exist to close, so losing sensitivity to it
+        # here is the wrong trade.
+        #
+        # Naming v2.2 buys both: the widths are checked against a fixed spec, and the stamp itself is
+        # asserted below, so a moved field default reddens again. Still a lookup by name rather than a
+        # read of the default, so it remains rotation-safe and still retires the three `default-spec`
+        # ledger rows the original held.
+        self.assertEqual(config.observation_schema_version, OBSERVATION_SCHEMA_VERSION_V2_2)
+        stamped = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2)
 
         # Spec v2 default: window=1 snapshots (transition tokens carry temporal context).
         self.assertEqual(config.window_size, 1)
-        self.assertEqual(config.token_count, DEFAULT_REPLAY_OBSERVATION_SPEC.token_count)
-        self.assertEqual(config.categorical_feature_count, DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count)
-        self.assertEqual(config.numeric_feature_count, DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count)
+        self.assertEqual(config.token_count, stamped.token_count)
+        self.assertEqual(config.categorical_feature_count, stamped.categorical_feature_count)
+        self.assertEqual(config.numeric_feature_count, stamped.numeric_feature_count)
         # categorical_vocab_size is derived: 1 padding + 3 vocab + 4 oov.
         self.assertEqual(config.categorical_vocab_size, 8)
         self.assertEqual(config.token_type_vocab_size, DEFAULT_TOKEN_TYPE_VOCAB_SIZE)
@@ -2727,7 +2753,25 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["torch_available"], torch_available())
-        self.assertEqual(payload["model_config"]["token_count"], DEFAULT_REPLAY_OBSERVATION_SPEC.token_count)
+        # Checked against a NAMED schema, not against the process default and not against the
+        # payload's own stamp. `describe` emits a TransformerPolicyConfig, whose
+        # `observation_schema_version` names v2.2 since #1251, so comparing token_count to
+        # DEFAULT_REPLAY_OBSERVATION_SPEC only agreed while the default was also v2.2 -- it broke
+        # `151 != 23` under a v4 rotation.
+        #
+        # Keying the lookup off `payload[...]["observation_schema_version"]` fixed the rotation and
+        # broke the test: __post_init__ derives the widths from exactly that lookup, so the comparison
+        # became `x == x` in the stamp dimension. A reviewer kill-confirmed it by re-pinning the field
+        # default to v4 -- red before, green after. Asserting the stamp against the named constant
+        # restores the sensitivity while staying rotation-safe.
+        self.assertEqual(
+            payload["model_config"]["observation_schema_version"],
+            OBSERVATION_SCHEMA_VERSION_V2_2,
+        )
+        self.assertEqual(
+            payload["model_config"]["token_count"],
+            observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2).token_count,
+        )
 
     def test_neural_cli_train_reports_missing_torch_extra(self) -> None:
         if torch_available():
