@@ -362,8 +362,16 @@ class TransitionKindLockstepTest(unittest.TestCase):
             + ACTION_CANDIDATE_TOKEN_COUNT,
         )
         self.assertEqual(TRANSITION_TOKEN_OFFSET, OPPONENT_TENDENCY_STATS_TOKEN_OFFSET + OPPONENT_TENDENCY_STATS_TOKEN_COUNT)
+        # NAMES v2, it does not read the default. These offsets and counts describe the PRE-v3 token
+        # layout -- 151 tokens, shared by v2/v2.1/v2.2 -- and the claim being made is that they tile
+        # that layout exactly with no gap and no overlap. That is a fact about a specific layout, not
+        # about whichever schema happens to be default: v3 has 87 tokens and v4 has 23, so reading
+        # DEFAULT_REPLAY_OBSERVATION_SPEC here asserted the v2 layout tiles a v4 token space and
+        # broke with `23 != 151` the moment the default rotated. v2 is the right name because this
+        # file and this class are about the v2 lineage; the tiling identity holds for v2.1 and v2.2
+        # too, and `test_v2_1_column_layout` covers those separately.
         self.assertEqual(
-            DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
+            V2_REPLAY_OBSERVATION_SPEC.token_count,
             TRANSITION_TOKEN_OFFSET + TRANSITION_TOKEN_COUNT,
         )
 

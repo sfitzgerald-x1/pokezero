@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from pokezero.category_vocab import build_category_vocabulary
+from pokezero.observation import TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
 from pokezero.online_client import (
     LoginError,
     OnlineBattleAgent,
@@ -144,20 +145,42 @@ class TurnMergedNormalizeThreadingTest(unittest.TestCase):
             "v2.2 agent must call normalize_for_player(include_turn_merged=True)",
         )
 
-    def test_default_schema_agent_requests_turn_merged(self) -> None:
-        # The default spec IS v2.2 since the 2026-07-08 promotion, so an unpinned agent
-        # must request turn-merged normalization.
+    def test_unpinned_agent_follows_its_own_resolved_spec_for_turn_merged(self) -> None:
+        """An agent that pins no spec must normalize for the schema it actually resolved to.
+
+        WAS `test_default_schema_agent_requests_turn_merged`, and it asserted turn-merged
+        UNCONDITIONALLY on the reasoning "the default spec IS v2.2 since the 2026-07-08 promotion".
+        True then, false the moment the default rotates: v4 carries no transition region at all and
+        is deliberately absent from TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS, so an unpinned agent
+        must NOT request turn-merged tokens under a v4 default. The old form failed with
+        "default-schema (v2.2) agent must request turn-merged tokens" -- an assertion message naming
+        a version the default no longer was.
+
+        The subject was never "the default is turn-merged"; it was "an unpinned agent is consistent
+        with whatever it resolved to". Now stated that way, which holds across rotations.
+
+        Derived from `agent.spec`, NOT from `OBSERVATION_SCHEMA_VERSION`, and that is deliberate:
+        the sibling tests pin v2.2 and v2.1 explicitly, so the only thing left for this one to check
+        is self-consistency, and reading the global here would have added a `bare-const` row to the
+        ledger against a HIGH_WATER_MARK that only lowers. Attribute access off the resolved agent
+        costs no row and is the stronger claim anyway.
+        """
         captured: dict = {}
 
         def fake_normalize(*args, **kwargs):
             captured.update(kwargs)
             raise ValueError("stop after capture")
 
+        agent = _agent()
         with patch("pokezero.online_client.normalize_for_player", side_effect=fake_normalize):
-            self.assertIsNone(_agent().choose(["|player|p1|PokeZeroBot|1"], "room"))
-        self.assertTrue(
-            captured.get("include_turn_merged"),
-            "default-schema (v2.2) agent must request turn-merged tokens",
+            self.assertIsNone(agent.choose(["|player|p1|PokeZeroBot|1"], "room"))
+        expected = agent.spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
+        self.assertEqual(
+            bool(captured.get("include_turn_merged")),
+            expected,
+            f"unpinned agent resolved to {agent.spec.schema_version} "
+            f"(turn-merged={expected}) but requested "
+            f"include_turn_merged={captured.get('include_turn_merged')!r}",
         )
 
     def test_explicit_v2_1_agent_does_not_request_turn_merged(self) -> None:

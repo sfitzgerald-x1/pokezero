@@ -39,6 +39,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from pokezero.env import PokeZeroEnv  # noqa: E402
 from pokezero.observation import ObservationFeatureMasks  # noqa: E402
+from pokezero.showdown import V2_2_REPLAY_OBSERVATION_SPEC  # noqa: E402
 
 _ENV_EXPORTS = ("env_step", "env_options", "env_battle_over")
 _TRANSITION_TOKEN_OFFSET = 23
@@ -95,8 +96,17 @@ class EngineEnvTest(unittest.TestCase):
         from pokezero.engine_env import EngineEnv, EngineEnvConfig
 
         cls.EngineEnv = EngineEnv
+        # NAMES v2.2 rather than following the process default. This class is about a transition
+        # region that EXISTS and is masked -- `test_k0_leaves_the_transition_region_present_but_masked`
+        # asserts `spec.transition_token_count > 0` and slices at `_TRANSITION_TOKEN_OFFSET = 23`,
+        # both facts about the v2-lineage 151-token layout. Left unnamed, the config resolves through
+        # `engine_env._default_observation_spec()`, which reads DEFAULT_REPLAY_OBSERVATION_SPEC; under
+        # a v4 default that gives a schema with NO transition region at all, and the test failed
+        # `0 not greater than 0` -- inapplicable rather than wrong. Naming the schema makes the
+        # premise explicit and is a no-op while v2.2 is the default.
         cls.config = EngineEnvConfig(
-            feature_masks=ObservationFeatureMasks(transition_token_budget=0)
+            feature_masks=ObservationFeatureMasks(transition_token_budget=0),
+            observation_spec=V2_2_REPLAY_OBSERVATION_SPEC,
         )
         # One env for the read-only assertions; tests that need isolation make
         # their own. Team generation spawns a Node process, so sharing matters.
