@@ -1,6 +1,10 @@
 # Encode efficiency closeout — finishing the program #1217 started
 
-Written 2026-08-12. Owner-directed: close out the encode work. This document is the execution
+Written 2026-08-12. **Amended 2026-08-13 from C0's measured evidence** — the amendment corrects
+this plan's base figure (encode is 80.8% of search wall at production config, not the ~70–75%
+forward estimate), restates the success criterion in denominator-proof units (the old share form
+was ill-posed; see §5), adds a fifth gate class the C1 review proved necessary (§4), and marks
+program state (§2). Owner-directed: close out the encode work. This document is the execution
 contract for finishing what `docs/encode_optimization_plan_20260810.md` (#1217) opened; that
 plan's gates and scope fences apply verbatim here and are not restated in full.
 
@@ -16,24 +20,27 @@ operator and cheaper leaves mostly made reports faster. Two things changed:
    high-sims ones. Sims are now a strength currency with a measured exchange rate.
 2. **Every planned consumer multiplies the payoff.** Larger per-decision budgets, the
    budget-allocating dynamic search under design, and any future search-in-training experiment
-   all spend sims; encode is the price of a sim. At the measured production config, encode-side
-   work is ~70–75% of search wall (post-#1221), so the two staged changes of #1217 — worth
-   ~41.5% of decision wall between them — are the difference between "s2048 economically
-   behaves like ~s800" and near-parity between nominal and effective budget.
+   all spend sims; encode is the price of a sim. C0 measured the production config on the
+   current build: **encode is 80.8% of search wall**, and the two staged targets are larger
+   than #1217 estimated — `row_write` 27.4% (Stage 1) and `row_input` 22.6% (Stage 2),
+   **50.0% of search wall combined**. (The original text here carried a ~70–75% forward
+   estimate and #1217's 41.5%; C0 showed no post-#1221 measurement existed anywhere in the
+   campaign data — every prior figure was from pre-#1221 builds.)
 
 Retiring encode as the dominant cost is therefore no longer an optimization nicety; it is the
 prerequisite economics for every search direction currently on the table.
 
-## 2. State of the program, verified against main 2026-08-12
+## 2. State of the program, updated 2026-08-13
 
 | item | state | evidence |
 |---|---|---|
 | Empty-cell short-circuit | **MERGED** | #1221 (`perf(encode): short-circuit empty cells before normalize_category`), −8.4% encode wall median |
-| Stage 1, first bite | **OPEN, unreviewed** | #1219: five per-leaf `format!` md keys become `&'static str` (`rust/pokezero-search/src/encoder.rs`, +29/−6) |
-| Stage 1 proper (~55 keyed reads → positional) | **NOT STARTED** | `encode_row_value` still reads row fields through string-keyed `get()`s |
-| Stage 2 (typed Row, retire per-leaf clone) | **NOT STARTED**, conditional per #1217 §3 | `leaf_row_inputs` still starts from `self.root.clone()` |
-| The "before" profile #1217 §2 relies on | **STALE BY THE PLAN'S OWN RULE** | the axis study was profiled on the pre-#1221 build; #1217 §2: wall-clock comparisons are valid only within one build |
-| Byte-identity harnesses | **IN PLACE** | golden corpus + fold comparison (`src/pokezero/golden_corpus*.py`, `test_golden_corpus_fold.py`), `assert_vocab_alignment`, differential windows, live A/B shard-byte protocol per #1217 §4 |
+| **C0 — the new "before"** | **DONE** | three-cell profile campaign on the current build, one render group; production config: encode 80.8% / tensor 63.0% / row_input 22.6% / products 3.4% / row_write 27.4%; the axis study never landed, so its method section landed with C0 per this plan's own fallback |
+| Stage 1, first bite (#1219) | **REVIEWED — correct, partial, stale base** | five static md keys; leaves ~60 `format!` allocations/leaf in the `encode_pokemon_tokens` loops (the larger half); built on the pre-#1221 base and must rebase before landing |
+| Stage 1 proper | **IN FLIGHT** | #1249 (constant column/offset lookups resolved once at table load); adversarial review found the cited test evidence had zero detection power (a mutated field mapping stayed green) — fixed with a frozen 91-triple field↔constant table + per-field distinct-index test, mutation-verified; **residue: 63 constant names still string-hashed per leaf across 22 dynamic sites** |
+| Stage 2 (typed Row, retire per-leaf clone) | **NOT STARTED**, conditional per #1217 §3 | `leaf_row_inputs` still starts from `self.root.clone()`; C0 sizes it at 22.6% of search wall |
+| C3 remainder | **SIZED** | the three sub-timers cover only ~85% of `tensor` (stable within 0.3% across four independent measurements), and ~19% of `encode` lies outside `tensor` — the unattributed remainder is real, not noise |
+| Byte-identity harnesses | **IN PLACE, WITH A PROVEN COVERAGE GAP** | golden corpus + fold comparison, `assert_vocab_alignment`, differential windows, live A/B shard-byte protocol per #1217 §4 — all schema-shaped; see §4's fifth gate |
 
 Also relevant: world collapse (#1009) reduced searches issued since the 17.2%/24.3% attribution
 was measured, and the fallback ladder reaching zero changed which decisions search at all — a
@@ -49,11 +56,15 @@ Stage 2 on the post-#1221, zero-fallback build. Half a day of fleet time; nothin
 it exists. If the study document itself has not landed by then, its method section lands with
 C0's numbers so the baseline is citable.
 
-**C1 — Stage 1 to completion.** Review and land #1219 (it is a strict subset of Stage 1 and has
-sat unreviewed since 08-10), then the load-time resolution of the remaining string paths in
-`encode_row_value` to positional indices — resolved once against the run-fixed schema at table
-load, read positionally per leaf. Mechanical, no data-shape change, no Python-side change.
-Target: the bulk of the (re-measured) lookup share, which #1217 sized at 24.3% of decision wall.
+**C1 — Stage 1 to completion.** (Amended with the review record.) The positional-resolution
+core is #1249; its review is part of the program's evidence and its mapping test is now Gate 5.
+Completing the stage means, beyond landing #1249: rebasing and absorbing #1219 (whose five
+static keys are the *smaller* half — ~60 `format!` allocations per leaf remain in the
+`encode_pokemon_tokens` loops), and migrating the **63 constant names still string-hashed per
+leaf across 22 dynamic sites**, which outnumber the 58 already moved. C0 sizes the whole stage
+at `row_write` = 27.4% of search wall. The C4 after-measurement must attribute against this
+inventory — a partial C1 read as "Stage 1 complete" would overstate capture and corrupt the C2
+go/no-go.
 
 **C2 — Stage 2, go/no-go from C1's after-walls.** The typed struct holding the invariant root
 plus a per-leaf delta (or copy-on-write on the mutated subtrees), subsuming the per-leaf
@@ -78,7 +89,7 @@ budget/depth-cap tables derived from realized-depth-vs-sims, which shift when si
 does); close with a one-page ledger: per-stage before/after walls, bytes-identical attestations,
 and the measured end state.
 
-## 4. Gates — #1217 §4 applies verbatim, per stage, no exceptions
+## 4. Gates — #1217 §4 applies verbatim, per stage, plus a fifth the C1 review proved necessary
 
 Golden-corpus bit-exactness, `assert_vocab_alignment`, differential windows with the standing
 "nothing opened" falsifier, and the live A/B shard-byte identity run on the same seed block —
@@ -87,12 +98,42 @@ time: any Rust source edit moves the source-bytes fingerprint, so each stage car
 surgical citation re-resolution (the c155 mechanism), never a cold regen. A performance win is
 never traded against encoder agreement; a reddened gate stops the stage.
 
+**Gate 5 — static mapping assertions for surfaces the byte gates cannot see.** The C1 review
+proved by mutation that all four gates above are **schema-shaped**: they compare emitted bytes at
+the schema version under test, and 18 of the 91 encoder fields do not exist at v4 (the
+`CATEGORY_TM_*` family, `TM2_PRESENT`, and the `TT_*` transition block) while 2 do not exist at
+v2.2/v3 (`LAST_USED_MOVE`, `TRACED_ABILITY`). A field mismapping confined to those fields passes
+a single-schema corpus, a single-schema differential window, and a single-schema live A/B alike
+— silently, forever. Any stage that rewires field resolution therefore also carries a
+**Rust-side static mapping test**: a frozen table of every `(field, source, constant)` triple,
+a per-field distinct-index assertion (so a swap cannot hide behind equal values), an
+anti-vacuity floor on the table's size, and a demonstrated mutation kill. The closeout ledger
+states per column whether identity was proven by bytes, by the static mapping, or both — the
+byte-identity claim is never silently narrowed to "the fields this schema happens to exercise."
+
 ## 5. Success criteria and sequencing
 
-**Numeric close condition:** encode-side share of search wall **≤ 40%** at production config
-after C1–C2 (from ~70–75% today) — equivalently ≥1.7× effective sims at fixed wall — with
-**≤ 25%** the stretch condition that C3 exists to reach if C2's residual justifies it. Every
-claim is a measured phase-wall from the C0-established harness, never an extrapolation.
+**Numeric close condition — restated 2026-08-13, because the share form was ill-posed.** The
+original "encode ≤ 40% of search wall" had a shifting denominator: removing encode work shrinks
+the wall it is a share of. At C0's measured base (encode 80.8%, stages worth 50.0% combined),
+even capturing the two stages *entirely* leaves encode at 30.8 points of the *original* wall —
+which is **61.6% of the new wall**. Under the honest denominator the old target is unreachable
+from stages 1–2 at any capture rate; under the original-wall denominator it quietly demanded
+~80% capture. The criterion is therefore restated in the units the program actually exists to
+move, which no denominator shift can distort:
+
+- **Close condition (C1–C2): per-decision search wall at production config reduced by ≥ 40%**
+  — equivalently **≥ 1.67× effective sims at fixed wall** — which at the measured shares means
+  capturing ≥ 80% of the two stages' combined 50.0%. Judged on `c0-d4-s2048-b64-w1`'s cell,
+  same render discipline, against C0's table.
+- **Stretch (with C3): wall reduced ≥ 60% (≥ 2.5× sims at fixed wall).** C3 is where the
+  stretch lives because C0 also sized what the stages cannot reach: ~15% of `tensor` is outside
+  all three sub-timers and ~19% of `encode` is outside `tensor` — encode remains the majority
+  share of the post-stage wall even at full stage capture, so closing past the stretch requires
+  the remainder, not more of stages 1–2.
+
+Every claim is a measured phase-wall from the C0-established harness, never an extrapolation,
+and never differenced across render groups or builds.
 
 **Sequencing fences:** no encode change lands mid-campaign (#1217 §2). Concretely: stages merge
 only between strength-panel waves — a mid-panel merge silently shifts the timing baselines every
