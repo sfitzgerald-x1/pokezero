@@ -280,13 +280,13 @@
   },
   {
     "file": "tests/test_observation_spec_v2.py",
-    "line": 967,
+    "line": 968,
     "kind": "bare-const",
     "owner": "test_examples_from_record_accepts_current_schema"
   },
   {
     "file": "tests/test_observation_spec_v2.py",
-    "line": 991,
+    "line": 992,
     "kind": "default-spec",
     "owner": "test_missing_observation_schema_version_is_refused_not_assumed_current"
   },
@@ -316,7 +316,7 @@
   },
   {
     "file": "tests/test_online_client.py",
-    "line": 35,
+    "line": 39,
     "kind": "implicit:OnlineBattleAgent",
     "owner": "_agent",
     "unclosed": [
@@ -325,7 +325,13 @@
   },
   {
     "file": "tests/test_online_client.py",
-    "line": 259,
+    "line": 208,
+    "kind": "bare-const",
+    "owner": "test_unpinned_agent_follows_its_own_resolved_spec_for_turn_merged"
+  },
+  {
+    "file": "tests/test_online_client.py",
+    "line": 263,
     "kind": "implicit:OnlineBattleAgent",
     "owner": "test_agent_threads_set_source_and_env_gate_controls_build",
     "unclosed": [

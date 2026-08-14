@@ -98,7 +98,8 @@ class EngineEnvTest(unittest.TestCase):
         cls.EngineEnv = EngineEnv
         # DELIBERATELY LEFT FOLLOWING THE PROCESS DEFAULT. I first pinned this to v2.2 to fix the one
         # test below that needs a transition region, and that was too broad: this config is shared by
-        # 15 of the class's 17 test methods, and measured on a rotated tree 14 of those 15 PASS under a
+        # 14 of the class's 17 test methods (15 before this change moved k0 onto its own config), and
+        # measured on a rotated tree every one of those PASSED under a
         # v4 default -- they exercise v4 encode/observe/validate, legal-mask-vs-engine-option
         # agreement, and anti-leakage end to end. Pinning the class would have run them at v2.2
         # forever and left nothing in this file encoding under the new default, i.e. traded real
@@ -159,8 +160,8 @@ class EngineEnvTest(unittest.TestCase):
         # schema with no transition region at all, and this failed `0 not greater than 0` --
         # inapplicable rather than wrong.
         #
-        # Scoped here rather than on `cls.config` on purpose: the shared config serves 15 of this
-        # class's 17 tests and 14 of them pass under a v4 default, so pinning the class would delete
+        # Scoped here rather than on `cls.config` on purpose: the shared config serves 14 of this
+        # class's 17 tests and all of them pass under a v4 default, so pinning the class would delete
         # this file's only post-rotation v4 coverage to satisfy one test. Building one extra env costs
         # a Node process; that is the right price.
         from pokezero.engine_env import EngineEnvConfig  # noqa: PLC0415

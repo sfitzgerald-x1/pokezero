@@ -216,7 +216,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         # THE NAMED CONSTANT, NOT `config.observation_schema_version`. My first cut keyed the lookup
         # off the config's own stamp, which made this test blind in the stamp dimension: __post_init__
         # ALREADY resolves all three widths from `observation_spec_for_schema(self.
-        # observation_schema_version)` (neural_policy.py:415, :426-428, :455-461), so recomputing that
+        # observation_schema_version)` (neural_policy.py:380, :425-428, :454-461), so recomputing that
         # same lookup is `x == x`. A reviewer kill-confirmed it -- re-pinning the field default at
         # neural_policy.py:271 to v2.1, and separately to v4, left this test GREEN where the original
         # went red. That is the defect class #1244/#1251 exist to close, so losing sensitivity to it
@@ -224,7 +224,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         #
         # Naming v2.2 buys both: the widths are checked against a fixed spec, and the stamp itself is
         # asserted below, so a moved field default reddens again. Still a lookup by name rather than a
-        # read of the default, so it remains rotation-safe and still retires the two `default-spec`
+        # read of the default, so it remains rotation-safe and still retires the three `default-spec`
         # ledger rows the original held.
         self.assertEqual(config.observation_schema_version, OBSERVATION_SCHEMA_VERSION_V2_2)
         stamped = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2)

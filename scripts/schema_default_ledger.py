@@ -8,7 +8,7 @@ re-derivable rather than recalled.
 
 A "site reaching the global default" is any of:
 
-  bare-const           a read of `OBSERVATION_SCHEMA_VERSION` itself              (15)
+  bare-const           a read of `OBSERVATION_SCHEMA_VERSION` itself              (16)
   default-spec         a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`                (39)
   implicit:<Surface>   a call to <Surface> leaving at least one default-bearing kwarg unnamed,
                        one kind per surface so a new one cannot join an existing bucket. All THREE
