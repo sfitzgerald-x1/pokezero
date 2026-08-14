@@ -76,33 +76,15 @@
   },
   {
     "file": "src/pokezero/showdown.py",
-    "line": 1147,
+    "line": 1159,
     "kind": "bare-const",
     "owner": "<module>"
   },
   {
     "file": "src/pokezero/showdown.py",
-    "line": 4301,
+    "line": 4313,
     "kind": "default-spec",
     "owner": "observation_from_player_state"
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
-    "line": 353,
-    "kind": "default-spec",
-    "owner": "test_an_explicit_spec_equal_to_the_default_should_still_hard_fail"
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
-    "line": 396,
-    "kind": "default-spec",
-    "owner": "test_the_non_default_arms_do_hard_fail"
-  },
-  {
-    "file": "tests/test_feature_mask_consistency.py",
-    "line": 405,
-    "kind": "default-spec",
-    "owner": "test_the_non_default_arms_do_hard_fail"
   },
   {
     "file": "tests/test_foulplay_bridge.py",

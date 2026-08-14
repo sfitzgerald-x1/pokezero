@@ -348,11 +348,23 @@ NUMERIC_TIER2_INVESTMENT_PINNED = NUMERIC_TIER2_CB_PINNED + 1  # 139
 _V2_1_NUMERIC_FEATURE_COUNT = NUMERIC_TIER2_INVESTMENT_PINNED + 1
 
 _CATEGORICAL_FEATURE_COUNT = CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT
-# Schema-keyed replay observation specs: BOTH schemas stay first-class encode modes during
-# the dual-schema window. Which one an env/harness uses resolves from the loaded checkpoint's
-# model_config (neural_policy.observation_spec_from_model_config through the
-# env_config_from_checkpoint_provenance latch); DEFAULT_REPLAY_OBSERVATION_SPEC is only the
-# checkpoint-free default (fresh trains, fresh encodes) and tracks the CURRENT schema.
+# Schema-keyed replay observation specs: EVERY supported schema stays a first-class encode mode
+# during the dual-schema window. Which one an env/harness uses resolves from the loaded
+# checkpoint's model_config (neural_policy.observation_spec_from_model_config through the
+# env_config_from_checkpoint_provenance latch).
+#
+# `DEFAULT_REPLAY_OBSERVATION_SPEC` TRACKS THE CURRENT SCHEMA, AND IS NO LONGER WHAT MOST
+# CHECKPOINT-FREE ENCODES USE. That sentence used to read "is only the checkpoint-free default
+# (fresh trains, fresh encodes)", which stopped being true as each config named its own schema:
+# `LocalShowdownConfig.observation_spec` and its ~135 call sites, plus
+# `TransformerPolicyConfig.observation_schema_version`, `ObservationSpec.schema_version` and
+# `PokeZeroObservationV0.schema_version`, all now name a version rather than reading this. A
+# dataclass default is frozen at class-definition time, so reading this constant there meant a
+# rotation silently re-aimed every config that had not named a schema.
+#
+# So this constant is now the answer to "what does a caller who names NOTHING AT ALL get", and the
+# set of such callers is the 68 rows `scripts/schema_default_ledger.py` enumerates -- deliberately
+# shrinking. Do not reach for it as "the schema fresh artifacts use"; ask the config.
 V2_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=_CATEGORICAL_FEATURE_COUNT,
     numeric_feature_count=_V2_NUMERIC_FEATURE_COUNT,
