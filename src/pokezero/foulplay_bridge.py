@@ -633,6 +633,18 @@ class ControlledFoulPlayConfig:
     record_refusals: bool = True
 
     def __post_init__(self) -> None:
+        # The opponent seat's DISPLAY NAME follows who actually sits there. Left at the
+        # default, a head-to-head shard records `winner: "FoulPlayBot"` for a game the raw
+        # model won -- observed on the first 16k probe -- and `_winner_name` /
+        # `_terminal_from_public_lines` both key off this string, so the battle log, the
+        # title line and the winner field would all name an opponent that never played.
+        # Only overridden when it is still the default, so an explicit --foulplay-username
+        # is respected.
+        if (
+            self.opponent_policy_mode != "foul-play"
+            and self.foulplay_username == "FoulPlayBot"
+        ):
+            object.__setattr__(self, "foulplay_username", f"PokeZero{self.opponent_policy_mode.title().replace('-', '')}Bot")
         if self.games <= 0:
             raise ValueError("games must be positive.")
         if self.seed_start < 0:

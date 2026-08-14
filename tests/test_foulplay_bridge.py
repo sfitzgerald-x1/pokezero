@@ -3110,6 +3110,27 @@ class HeadToHeadOpponentTest(unittest.TestCase):
                           engine_tables_path=Path("/tmp/t.json"))),
             "pokezero-raw")
 
+    def test_the_opponent_display_name_follows_who_actually_plays(self) -> None:
+        """A head-to-head shard must not record "FoulPlayBot" as the winner.
+
+        Observed on the first 16k probe: the raw model won and the summary said
+        `winner: "FoulPlayBot"`. `_winner_name` and `_terminal_from_public_lines` both key
+        off this string, so the battle log, the title line and the winner field would all
+        name an opponent that never played a move. An explicit --foulplay-username still
+        wins, so this cannot silently rename a deliberately-labelled run.
+        """
+        engine = dict(policy_mode="engine-mcts",
+                      engine_model_path=Path("/tmp/m.pt"),
+                      engine_tables_path=Path("/tmp/t.json"))
+        self.assertEqual(self._cfg(**engine).foulplay_username, "FoulPlayBot")
+        self.assertEqual(
+            self._cfg(**engine, opponent_policy_mode="raw").foulplay_username,
+            "PokeZeroRawBot")
+        self.assertEqual(
+            self._cfg(**engine, opponent_policy_mode="raw",
+                      foulplay_username="Explicit").foulplay_username,
+            "Explicit")
+
     def test_room_lines_are_a_no_op_only_when_explicitly_allowed(self) -> None:
         """With no foul-play client, a room-line send must not abort the battle.
 
