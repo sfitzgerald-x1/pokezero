@@ -1,5 +1,51 @@
 # The schema-rotation drill's verdict, with its scope
 
+> ## ⚠ THIS VERDICT'S NUMBERS ARE PRE-ROTATION. THE SCORED v4 RUN IS NOT DONE.
+>
+> The default rotated to v4 on 2026-08-14 (#1253, `e496e9b8`). Everything below was measured with
+> **v2.2 outgoing**, on a tree that no longer exists. It is kept because its scope statement and its
+> discarded-run history are still the honest record of how it was obtained — not because its figures
+> describe today.
+>
+> ### What HAS been established on the v4 tree, by execution
+>
+> ```sh
+> DRILL_REPO=$PWD bash scripts/schema_rotation_drill.sh
+> ```
+>
+> | | |
+> |---|---|
+> | every precondition (−1, 0, 1, 2, 3) | **pass** with v4 outgoing |
+> | outgoing profile, derived not hardcoded | `transition_region:F turn_merged:F grouped_layout:T feature_pack:T` |
+> | synthetic ≡ outgoing, spec AND membership | **verified** — v4's absence from `TURN_MERGED` yields no skew, because the mirror (`:363`) and the skew check (`:784`) both derive from the outgoing default |
+> | shape canary | pinned **132** from the pristine tree — v4's width, not a hardcoded 155 |
+> | arm discriminates | yes, under `shape=identical` |
+> | rotated arm, RAW | **42** failures |
+>
+> ### What has NOT been established, and must not be inferred
+>
+> **42 is a raw count and attributable to nothing.** The baseline (two runs, intersected), the control
+> (two runs, intersected) and the native-Rust exclusion have not been run on this tree, so there is no
+> attributable set, no sanctioned/unexplained split, and no dead-pin reading. Quoting 42 as a verdict
+> would be precisely the error this programme spent eleven PRs retiring.
+>
+> To finish: the full run is three arms plus a doubled control — roughly 100 minutes of suites — and
+> needs a session that outlives that. After one complete run, `DRILL_BASELINE_REUSE=1` makes
+> subsequent runs cheap; the stamp is `(SHA, scope, SHAPE, interpreter)`, so it will refuse a stale
+> reuse rather than subtract the wrong set.
+>
+> ### Two decays found in two days, and the reason
+>
+> - **#1251** killed the differ arm's last shape site, so the shape half now has **zero** coverage
+>   (confirmed by execution: the rotation moved the default's width 155 → 132, twenty-three columns
+>   where the arm narrows by one, and the row stayed green).
+> - **#1253** shifted `neural_cli.py`'s unnamed container from line 1951 to 1952, and the census
+>   aborted the first v4 run rather than guess.
+>
+> Neither was caught by review or CI — four review rounds and eight green checks passed over the
+> second — **because the drill is not a CI job.** An instrument nobody runs decays silently. Wiring it
+> into CI is worth more than any single defect on the follow-up list.
+
 > **AUTHORITATIVE RUN: v8**, the first whose scorer has no known path to drop a genuine breakage.
 > Two such paths (G1: the native exclusion matched any mention of the Rust message, including an
 > assertion message; G2: the section splitter could not parse pytest-subtests' spaced headers, so an
