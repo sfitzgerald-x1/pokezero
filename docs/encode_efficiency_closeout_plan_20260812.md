@@ -36,8 +36,8 @@ prerequisite economics for every search direction currently on the table.
 |---|---|---|
 | Empty-cell short-circuit | **MERGED** | #1221 (`perf(encode): short-circuit empty cells before normalize_category`), −8.4% encode wall median |
 | **C0 — the new "before"** | **DONE** | three-cell profile campaign on the current build, one render group; production config: encode 80.8% / tensor 63.0% / row_input 22.6% / products 3.4% / row_write 27.4%; the axis study never landed, so its method section landed with C0 per this plan's own fallback |
-| Stage 1, first bite (#1219) | **REVIEWED — correct, partial, stale base** | five static md keys; leaves ~60 `format!` allocations/leaf in the `encode_pokemon_tokens` loops (the larger half); built on the pre-#1221 base and must rebase before landing |
-| Stage 1 proper | **IN FLIGHT** | #1249 (constant column/offset lookups resolved once at table load); adversarial review found the cited test evidence had zero detection power (a mutated field mapping stayed green) — fixed with a frozen 91-triple field↔constant table + per-field distinct-index test, mutation-verified; **residue: 63 constant names still string-hashed per leaf across 22 dynamic sites** |
+| Stage 1, first bite (#1219) | **APPROVED — merging** | all 8 per-leaf `format!` md keys retired via `md_key!`, which derives both spellings from one suffix token so a transposition is inexpressible; `get(md, &format!(…))` is gone from `encoder.rs` |
+| Stage 1 proper | **MERGED** (01a06704) | #1249 (constant column/offset lookups resolved once at table load); adversarial review found the cited test evidence had zero detection power (a mutated field mapping stayed green) — fixed with a frozen 91-triple field↔constant table + per-field distinct-index test, mutation-verified; **residue: 63 constant names still string-hashed per leaf across 22 dynamic sites** |
 | Stage 2 (typed Row, retire per-leaf clone) | **NOT STARTED**, conditional per #1217 §3 | `leaf_row_inputs` still starts from `self.root.clone()`; C0 sizes it at 22.6% of search wall |
 | C3 remainder | **SIZED** | the three sub-timers cover only ~85% of `tensor` (stable within 0.3% across four independent measurements), and ~19% of `encode` lies outside `tensor` — the unattributed remainder is real, not noise |
 | Byte-identity harnesses | **IN PLACE, WITH A PROVEN COVERAGE GAP** | golden corpus + fold comparison, `assert_vocab_alignment`, differential windows, live A/B shard-byte protocol per #1217 §4 — all schema-shaped; see §4's fifth gate |
@@ -58,9 +58,8 @@ C0's numbers so the baseline is citable.
 
 **C1 — Stage 1 to completion.** (Amended with the review record.) The positional-resolution
 core is #1249; its review is part of the program's evidence and its mapping test is now Gate 5.
-Completing the stage means, beyond landing #1249: rebasing and absorbing #1219 (whose five
-static keys are the *smaller* half — ~60 `format!` allocations per leaf remain in the
-`encode_pokemon_tokens` loops), and migrating the **63 constant names still string-hashed per
+Completing the stage means, beyond landing #1249: absorbing #1219, now DONE: all 8 sites are converted, so zero `format!` md-key
+allocations per leaf remain (its original five were the smaller half), and migrating the **63 constant names still string-hashed per
 leaf across 22 dynamic sites**, which outnumber the 58 already moved. C0 sizes the whole stage
 at `row_write` = 27.4% of search wall. The C4 after-measurement must attribute against this
 inventory — a partial C1 read as "Stage 1 complete" would overstate capture and corrupt the C2
