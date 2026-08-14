@@ -213,7 +213,21 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         # stamp. Reading `observation_spec_for_schema(config.observation_schema_version)` is a lookup
         # by name, not a read of the default, so this also retires two `default-spec` ledger rows.
         config = TransformerPolicyConfig.compact_category(category_vocab=(1, 2, 3), category_oov_buckets=4)
-        stamped = observation_spec_for_schema(config.observation_schema_version)
+        # THE NAMED CONSTANT, NOT `config.observation_schema_version`. My first cut keyed the lookup
+        # off the config's own stamp, which made this test blind in the stamp dimension: __post_init__
+        # ALREADY resolves all three widths from `observation_spec_for_schema(self.
+        # observation_schema_version)` (neural_policy.py:415, :426-428, :455-461), so recomputing that
+        # same lookup is `x == x`. A reviewer kill-confirmed it -- re-pinning the field default at
+        # neural_policy.py:271 to v2.1, and separately to v4, left this test GREEN where the original
+        # went red. That is the defect class #1244/#1251 exist to close, so losing sensitivity to it
+        # here is the wrong trade.
+        #
+        # Naming v2.2 buys both: the widths are checked against a fixed spec, and the stamp itself is
+        # asserted below, so a moved field default reddens again. Still a lookup by name rather than a
+        # read of the default, so it remains rotation-safe and still retires the two `default-spec`
+        # ledger rows the original held.
+        self.assertEqual(config.observation_schema_version, OBSERVATION_SCHEMA_VERSION_V2_2)
+        stamped = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2)
 
         # Spec v2 default: window=1 snapshots (transition tokens carry temporal context).
         self.assertEqual(config.window_size, 1)
@@ -2739,19 +2753,24 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["torch_available"], torch_available())
-        # Checked against the schema the payload STAMPS, not against the process default. `describe`
-        # emits a TransformerPolicyConfig, whose `observation_schema_version` names v2.2 since #1251,
-        # so comparing its token_count to DEFAULT_REPLAY_OBSERVATION_SPEC only agreed while the
-        # default was also v2.2 -- it broke `151 != 23` under a v4 rotation. Verified the payload
-        # carries its own stamp rather than assuming it: describe --json reports
-        # model_config.observation_schema_version = pokezero.observation.v2.2 alongside
-        # token_count = 151. Self-consistency is also the stronger check, since a config emitting a
-        # width that disagrees with its own stamp is the actual defect worth catching here.
+        # Checked against a NAMED schema, not against the process default and not against the
+        # payload's own stamp. `describe` emits a TransformerPolicyConfig, whose
+        # `observation_schema_version` names v2.2 since #1251, so comparing token_count to
+        # DEFAULT_REPLAY_OBSERVATION_SPEC only agreed while the default was also v2.2 -- it broke
+        # `151 != 23` under a v4 rotation.
+        #
+        # Keying the lookup off `payload[...]["observation_schema_version"]` fixed the rotation and
+        # broke the test: __post_init__ derives the widths from exactly that lookup, so the comparison
+        # became `x == x` in the stamp dimension. A reviewer kill-confirmed it by re-pinning the field
+        # default to v4 -- red before, green after. Asserting the stamp against the named constant
+        # restores the sensitivity while staying rotation-safe.
+        self.assertEqual(
+            payload["model_config"]["observation_schema_version"],
+            OBSERVATION_SCHEMA_VERSION_V2_2,
+        )
         self.assertEqual(
             payload["model_config"]["token_count"],
-            observation_spec_for_schema(
-                payload["model_config"]["observation_schema_version"]
-            ).token_count,
+            observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V2_2).token_count,
         )
 
     def test_neural_cli_train_reports_missing_torch_extra(self) -> None:

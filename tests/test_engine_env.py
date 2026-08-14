@@ -96,17 +96,15 @@ class EngineEnvTest(unittest.TestCase):
         from pokezero.engine_env import EngineEnv, EngineEnvConfig
 
         cls.EngineEnv = EngineEnv
-        # NAMES v2.2 rather than following the process default. This class is about a transition
-        # region that EXISTS and is masked -- `test_k0_leaves_the_transition_region_present_but_masked`
-        # asserts `spec.transition_token_count > 0` and slices at `_TRANSITION_TOKEN_OFFSET = 23`,
-        # both facts about the v2-lineage 151-token layout. Left unnamed, the config resolves through
-        # `engine_env._default_observation_spec()`, which reads DEFAULT_REPLAY_OBSERVATION_SPEC; under
-        # a v4 default that gives a schema with NO transition region at all, and the test failed
-        # `0 not greater than 0` -- inapplicable rather than wrong. Naming the schema makes the
-        # premise explicit and is a no-op while v2.2 is the default.
+        # DELIBERATELY LEFT FOLLOWING THE PROCESS DEFAULT. I first pinned this to v2.2 to fix the one
+        # test below that needs a transition region, and that was too broad: this config is shared by
+        # 15 of the class's 17 test methods, and measured on a rotated tree 14 of those 15 PASS under a
+        # v4 default -- they exercise v4 encode/observe/validate, legal-mask-vs-engine-option
+        # agreement, and anti-leakage end to end. Pinning the class would have run them at v2.2
+        # forever and left nothing in this file encoding under the new default, i.e. traded real
+        # post-rotation coverage for one test's premise. Only that one test gets a named spec.
         cls.config = EngineEnvConfig(
-            feature_masks=ObservationFeatureMasks(transition_token_budget=0),
-            observation_spec=V2_2_REPLAY_OBSERVATION_SPEC,
+            feature_masks=ObservationFeatureMasks(transition_token_budget=0)
         )
         # One env for the read-only assertions; tests that need isolation make
         # their own. Team generation spawns a Node process, so sharing matters.
@@ -154,9 +152,29 @@ class EngineEnvTest(unittest.TestCase):
             self.assertEqual(len(observation.legal_action_mask), 9)
 
     def test_k0_leaves_the_transition_region_present_but_masked(self):
-        self.env.reset(seed=6)
-        observation = self.env.observe("p1")
-        spec = self.env._observation_spec()
+        # ITS OWN env, on a NAMED schema, because this is the one test in the class whose premise is a
+        # transition region that EXISTS: it asserts `spec.transition_token_count > 0` and slices at
+        # `_TRANSITION_TOKEN_OFFSET = 23`, both facts about the v2-lineage 151-token layout. Under a v4
+        # default the shared config resolves through `engine_env._default_observation_spec()` to a
+        # schema with no transition region at all, and this failed `0 not greater than 0` --
+        # inapplicable rather than wrong.
+        #
+        # Scoped here rather than on `cls.config` on purpose: the shared config serves 15 of this
+        # class's 17 tests and 14 of them pass under a v4 default, so pinning the class would delete
+        # this file's only post-rotation v4 coverage to satisfy one test. Building one extra env costs
+        # a Node process; that is the right price.
+        from pokezero.engine_env import EngineEnvConfig  # noqa: PLC0415
+
+        env = self.EngineEnv(
+            EngineEnvConfig(
+                feature_masks=ObservationFeatureMasks(transition_token_budget=0),
+                observation_spec=V2_2_REPLAY_OBSERVATION_SPEC,
+            )
+        )
+        self.addCleanup(env.close)
+        env.reset(seed=6)
+        observation = env.observe("p1")
+        spec = env._observation_spec()
         # The region still exists — k=0 is a mask, not a narrower spec.
         self.assertEqual(len(observation.attention_mask), spec.token_count)
         self.assertGreater(spec.transition_token_count, 0)

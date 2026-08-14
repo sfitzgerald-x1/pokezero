@@ -831,12 +831,18 @@ class NeuralSelfPlayTest(unittest.TestCase):
         # enumeration or the run is genuinely inconsistent, and the vocabulary latch now says
         # so. The previous stub paired a 64-token initial policy with a 3-token build vocab —
         # a state that could not encode coherently, which nothing detected before.
+        from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2_2
+
         fake_spec_config = TransformerPolicyConfig.compact_category(
             category_vocab=("move:c", "species:a", "species:b"),
             category_oov_buckets=16,
             policy_id="entity-test",
             embedding_dim=16,
             attention_heads=4,
+            # NAMED so the fixture is self-contained. Without it the stub and the --observation-schema
+            # below agree only via TransformerPolicyConfig's class default, so re-pinning that default
+            # would redden this test for a reason unrelated to its subject (opponent wiring).
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
         )
         with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run, patch(
             "pokezero.neural_cli.load_transformer_model_config", return_value=fake_spec_config
