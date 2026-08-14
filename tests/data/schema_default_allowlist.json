@@ -87,12 +87,6 @@
     "owner": "observation_from_player_state"
   },
   {
-    "file": "tests/test_foulplay_bridge.py",
-    "line": 737,
-    "kind": "default-spec",
-    "owner": "test_capture_writes_p1_only_rollouts_and_preserves_partial_output"
-  },
-  {
     "file": "tests/test_linear_policy.py",
     "line": 221,
     "kind": "bare-const",
@@ -124,157 +118,157 @@
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 3893,
+    "line": 3912,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_summary_out_persists_json"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 3893,
+    "line": 3912,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_summary_out_persists_json"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 3971,
+    "line": 3990,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_wires_raw_and_search_matchups"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 3971,
+    "line": 3990,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_wires_raw_and_search_matchups"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 4594,
+    "line": 4613,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 4595,
+    "line": 4614,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 4795,
+    "line": 4814,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_keeps_raw_priors_and_uses_explicit_value_checkpoint"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 4796,
+    "line": 4815,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_keeps_raw_priors_and_uses_explicit_value_checkpoint"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5022,
+    "line": 5041,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5023,
+    "line": 5042,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5159,
+    "line": 5178,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_defaults_root_prior_temperature_to_temperature"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5159,
+    "line": 5178,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_defaults_root_prior_temperature_to_temperature"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5217,
+    "line": 5236,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_average_checkpoint_opponent_action_scenarios"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5217,
+    "line": 5236,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_average_checkpoint_opponent_action_scenarios"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5339,
+    "line": 5358,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_policy_for_root_opponent_actions"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5339,
+    "line": 5358,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_policy_for_root_opponent_actions"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5430,
+    "line": 5449,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_opponent_for_leaf_rollouts"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5430,
+    "line": 5449,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_opponent_for_leaf_rollouts"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5508,
+    "line": 5527,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_sweep_leaf_depths"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5508,
+    "line": 5527,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_can_sweep_leaf_depths"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5590,
+    "line": 5609,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_tags_single_sweep_depth"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5590,
+    "line": 5609,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_play_benchmark_tags_single_sweep_depth"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5655,
+    "line": 5674,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_benchmark_wires_checkpoint_callbacks_and_source_policies"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5656,
+    "line": 5675,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_benchmark_wires_checkpoint_callbacks_and_source_policies"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5824,
+    "line": 5843,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_counterfactual_wires_continuation_policies"
   },
   {
     "file": "tests/test_neural_policy.py",
-    "line": 5825,
+    "line": 5844,
     "kind": "default-spec",
     "owner": "test_neural_cli_root_puct_counterfactual_wires_continuation_policies"
   },
@@ -331,7 +325,7 @@
   },
   {
     "file": "tests/test_online_client.py",
-    "line": 227,
+    "line": 259,
     "kind": "implicit:OnlineBattleAgent",
     "owner": "test_agent_threads_set_source_and_env_gate_controls_build",
     "unclosed": [
