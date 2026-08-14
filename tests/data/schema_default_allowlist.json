@@ -51,12 +51,6 @@
     ]
   },
   {
-    "file": "src/pokezero/local_showdown.py",
-    "line": 227,
-    "kind": "default-spec",
-    "owner": "env_config_from_checkpoint_provenance"
-  },
-  {
     "file": "src/pokezero/neural_cli.py",
     "line": 3025,
     "kind": "bare-const",

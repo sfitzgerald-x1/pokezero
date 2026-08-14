@@ -224,7 +224,16 @@ def env_config_from_checkpoint_provenance(
                 and replace(env_spec, transition_token_count=required_spec.transition_token_count)
                 == required_spec
             )
-            if resolved.observation_spec != DEFAULT_REPLAY_OBSERVATION_SPEC and not region_refinement:
+            # Compared against the FIELD DEFAULT, not the global. This line asks "did the caller
+            # NAME a spec?" and used `!= DEFAULT_REPLAY_OBSERVATION_SPEC` as the proxy. Once the
+            # field default names v2.2, the two stop being the same value the moment the global
+            # rotates -- so an UNTOUCHED env stops looking untouched and the provenance latch
+            # refuses to adopt the checkpoint's spec. Measured under a v4 rotation: 40 failures
+            # before this file changed, 48 with the field default named and this line still
+            # reading the global (14 fixed, 22 introduced, all on the adoption path). Fail-closed
+            # -- a loud refusal, never a silent wrong encode -- and invisible today because the
+            # two values are equal, which is why no test or ledger row could catch it.
+            if resolved.observation_spec != CONFIG_DEFAULT_OBSERVATION_SPEC and not region_refinement:
                 raise ValueError(
                     f"{context}: env observation spec {resolved.observation_spec!r} conflicts "
                     f"with the loaded checkpoint's trained spec {required_spec!r} "
@@ -264,6 +273,12 @@ def belief_set_source_env_enabled() -> bool:
     return os.environ.get("POKEZERO_BELIEF_SET_SOURCE", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
+#: The config's OWN default spec, named once. The field default and the "did the caller name a
+#: spec?" sentinel at the provenance latch must be the SAME value; when they were the field default
+#: and the global respectively, naming the field silently broke the sentinel under a rotation.
+CONFIG_DEFAULT_OBSERVATION_SPEC = V2_2_REPLAY_OBSERVATION_SPEC
+
+
 @dataclass(frozen=True)
 class LocalShowdownConfig:
     showdown_root: Path | str | None = None
@@ -273,7 +288,7 @@ class LocalShowdownConfig:
     # and the two in observation.py. A dataclass default is frozen at class-definition time, so
     # `= DEFAULT_REPLAY_OBSERVATION_SPEC` meant every env built without naming a spec silently
     # re-aimed the moment the process default rotated.
-    observation_spec: ObservationSpec = V2_2_REPLAY_OBSERVATION_SPEC
+    observation_spec: ObservationSpec = CONFIG_DEFAULT_OBSERVATION_SPEC
     # Ablation-arm feature masks (config, not spec): masked-off blocks are zeroed +
     # attention-masked at encode time. Callers pairing the env with a model must keep these
     # consistent with the model config's stats_block_enabled / exact_state_enabled /
