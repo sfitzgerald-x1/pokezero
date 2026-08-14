@@ -112,8 +112,7 @@ test_token_format_doc.py::TokenFormatDocSelfValidationTest::test_committed_dump_
 #     that makes a dead pin undetectable; and
 #   - as a SEPARATE test it was a new read of the global, which would have taken the ledger
 #     allowlist UP by one against a HIGH_WATER_MARK that is only ever lowered. The census
-#     refused it and was
-#     right to: `test_observation_spec_v4.py::test_v4_is_supported_turn_merged_grouped_and_feature
+#     refused it and was right to: `test_observation_spec_v4.py::test_v4_is_supported_turn_merged_grouped_and_feature
 #     _packed` already asserts `OBSERVATION_SCHEMA_VERSION_V4 not in TURN_MERGED_...` without
 #     reading the default at all, so the row would have bought no coverage.
 #
