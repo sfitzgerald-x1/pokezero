@@ -41,6 +41,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
+from pokezero.local_showdown import CONFIG_DEFAULT_OBSERVATION_SPEC  # noqa: E402
 from pokezero.observation import ObservationFeatureMasks  # noqa: E402
 
 
@@ -227,7 +228,7 @@ def _neural_policy(checkpoint: Path):
 # ---------------------------------------------------------------------------
 
 
-def run_engine_arm(args, policy_factory, masks) -> ArmResult:
+def run_engine_arm(args, policy_factory, masks, observation_spec) -> ArmResult:
     from pokezero.engine_env import EngineEnv, EngineEnvConfig
 
     env = EngineEnv(
@@ -236,6 +237,7 @@ def run_engine_arm(args, policy_factory, masks) -> ArmResult:
             node_binary=args.node_binary,
             feature_masks=masks,
             encoder_tables=args.encoder_tables,
+            observation_spec=observation_spec,
         )
     )
     arm = ArmResult("engine")
@@ -280,7 +282,7 @@ def run_engine_arm(args, policy_factory, masks) -> ArmResult:
     return arm
 
 
-def run_showdown_arm(args, policy_factory, masks) -> ArmResult:
+def run_showdown_arm(args, policy_factory, masks, observation_spec) -> ArmResult:
     from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
 
     env = LocalShowdownEnv(
@@ -288,6 +290,7 @@ def run_showdown_arm(args, policy_factory, masks) -> ArmResult:
             showdown_root=args.showdown_root,
             node_binary=args.node_binary,
             feature_masks=masks,
+            observation_spec=observation_spec,
         )
     )
     arm = ArmResult("showdown")
@@ -424,6 +427,31 @@ def main() -> int:
         return 0
 
     masks = ObservationFeatureMasks(transition_token_budget=0)
+    # ONE spec, named once, passed to BOTH arms. Left implicit, the two arms answered "nobody said"
+    # from different places and this script silently compared two schemas -- which is the one thing
+    # it exists not to do. `EngineEnvConfig` resolves through `engine_env._default_observation_spec()`
+    # (a read of `DEFAULT_REPLAY_OBSERVATION_SPEC`, so it follows the process default), while
+    # `LocalShowdownConfig.observation_spec` NAMES `CONFIG_DEFAULT_OBSERVATION_SPEC` and does not.
+    # Those were the same value until the default rotated to v4, at which point the engine arm went
+    # to v4 (132 numeric) and the Showdown arm stayed at v2.2 (155) -- a latent A/B corruption that
+    # would have shown up as a backend difference rather than as an error.
+    #
+    # Taken from the SHOWDOWN side and inherited by the engine side, which is the invariant
+    # `rollout_cli.py` already states in as many words: "the engine backend inherits exactly the
+    # contract the Showdown backend would have written -- which is what makes the two backends'
+    # shards schema-identical."
+    #
+    # Deliberately NOT `observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION)`, which was my first
+    # cut. That reads the global, and the census counted it: a new `bare-const` row in scripts/,
+    # taking the ledger from 68 to 69 against a HIGH_WATER_MARK that only ever lowers. Fixing a
+    # two-answers bug by adding a third read of the global is the wrong direction, and the gate said
+    # so before this was committed.
+    #
+    # Consequence worth knowing: this benchmark measures the CONFIG default, so after a rotation it
+    # keeps measuring v2.2 while `neural train` collects at the new default. That is a real gap, and
+    # it belongs to the two-answers split rather than to this script -- closing it means the engine
+    # and Showdown sides sharing one constant, not this line reaching for the global.
+    observation_spec = CONFIG_DEFAULT_OBSERVATION_SPEC
     if args.checkpoint is not None:
         from pokezero.neural_policy import load_transformer_model_config
 
@@ -441,9 +469,9 @@ def main() -> int:
         policy_factory = _random_legal_policy
 
     print(f"engine arm: {args.games} games...")
-    engine = run_engine_arm(args, policy_factory, masks)
+    engine = run_engine_arm(args, policy_factory, masks, observation_spec)
     print(f"showdown arm: {args.games} games...")
-    showdown = run_showdown_arm(args, policy_factory, masks)
+    showdown = run_showdown_arm(args, policy_factory, masks, observation_spec)
     report(engine, showdown, args)
 
     if args.json_out is not None:
