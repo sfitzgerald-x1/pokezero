@@ -20,18 +20,29 @@
 > | synthetic ≡ outgoing, spec AND membership | **verified** — v4's absence from `TURN_MERGED` yields no skew, because the mirror (`:363`) and the skew check (`:784`) both derive from the outgoing default |
 > | shape canary | pinned **132** from the pristine tree — v4's width, not a hardcoded 155 |
 > | arm discriminates | yes, under `shape=identical` |
-> | rotated arm, RAW | **42** failures |
+> | rotated arm, RAW | **35** — `35 failed, 6012 passed, 48 skipped, 2 xfailed, 18597 subtests in 1123s`; denominator 6097 collected; 29 FAILED + 6 SUBFAILED, 0 ERROR |
 >
 > ### What has NOT been established, and must not be inferred
 >
-> **42 is a raw count and attributable to nothing.** The baseline (two runs, intersected), the control
+> **MY FIRST FIGURE HERE WAS 42 AND DID NOT REPRODUCE.** A reviewer re-ran the rotated arm on this
+> exact commit and measured **35**, passing the drill's own `raw total == summary failures`
+> cross-check. 42 is withdrawn. Likely mechanism, hypothesis not finding: 42 − 35 = 7, and
+> `test_fallback_replay_end_to_end.py` contributes exactly 7 — the group this script's header
+> names as the historical `FAILED -> ERROR` double-bucket, and whose `@requires_showdown` gate
+> turns on whether the local checkout can actually play a game. I did not establish which, and
+> a figure I cannot reproduce is not a figure.
+>
+> **35 is a raw count and attributable to nothing either.** The baseline (two runs, intersected), the control
 > (two runs, intersected) and the native-Rust exclusion have not been run on this tree, so there is no
-> attributable set, no sanctioned/unexplained split, and no dead-pin reading. Quoting 42 as a verdict
+> attributable set, no sanctioned/unexplained split, and no dead-pin reading. Quoting 35 as a verdict
 > would be precisely the error this programme spent eleven PRs retiring.
 >
-> To finish: the full run is three arms plus a doubled control — roughly 100 minutes of suites — and
+> To finish: FIVE suites — rotated x1 (:875), baseline x2 (:951), control x2 (:1140) — about 94
+> minutes at the measured 18:43 per suite, and
 > needs a session that outlives that. After one complete run, `DRILL_BASELINE_REUSE=1` makes
-> subsequent runs cheap; the stamp is `(SHA, scope, SHAPE, interpreter)`, so it will refuse a stale
+> subsequent runs shorter -- but only by 2 of 5 suites, leaving rotated + control x2 at roughly 56
+> minutes; there is NO control cache. `DRILL_STOP_AFTER_PRECONDITIONS=1` (:866) is the supported
+> ~1-minute instrument check. The stamp is `(SHA, scope, SHAPE, interpreter)`, so it refuses a stale
 > reuse rather than subtract the wrong set.
 >
 > ### Two decays found in two days, and the reason
@@ -71,12 +82,16 @@ Run on the union of #1244 and #1247 (the tree that exists once both land), full 
 >
 > The drill's design survives that last one without changes — the mirror only copies memberships the
 > outgoing default actually has, and PRECONDITION 2 compares memberships symmetrically, so v4's absence
-> from `TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS` produces no skew. Verified by reading
+> from `TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS` produces no skew. **SUPERSEDED: now verified by
+> EXECUTION — see the v4 banner at the top of this file, which printed `premise verified` on a
+> real run. The reading below was correct and is kept as the argument.** Originally verified by reading
 > `schema_rotation_drill.sh:363` (`if _DRILL_OUTGOING in _dt:` — the mirror copies only memberships the
 > outgoing default has) and `:784` (`skew = [n for n, t in tuples.items() if (ref in t) != (drill in t)]`
 > — a symmetric comparison, so absent-in-both is not skew), not by running it.
 >
-> **What has NOT been done: re-running the drill with v4 outgoing.** Until that happens, the "12
+> **What has NOT been done: the SCORED run with v4 outgoing.** (The drill HAS been run with v4
+> outgoing through all five preconditions and a complete rotated arm — see the top banner. What is
+> missing is the baseline, control and native arms, hence the subtractions.) Until that happens, the "12
 > attributable / 7 expected / 5 unexpected" headline is a correct measurement of a tree that no longer
 > exists. Treat it as the last known reading, not as the current state.
 

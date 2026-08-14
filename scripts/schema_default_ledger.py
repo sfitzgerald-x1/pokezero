@@ -525,7 +525,7 @@ def sites_in(path: Path) -> list[dict]:
         # because "the file that DEFINES the default necessarily reads it" but names only
         # observation.py, so the file defining the OTHER global got no exemption; and the doc
         # insists over-matching is the same failure as under-matching. Exactly 2 non-Load
-        # occurrences of either global exist across all 524 tracked files -- observation.py:77
+        # occurrences of either global exist across all 524 tracked files -- observation.py:101
         # (excluded) and showdown.py:1143 (was counted) -- so the over-count was exactly 1.
         #
         # Note the SAME line also carries a legitimate `bare-const` row: the subscript reads

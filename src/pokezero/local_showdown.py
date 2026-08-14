@@ -293,7 +293,7 @@ class LocalShowdownConfig:
     # two dataclass field defaults reading a process-wide global:
     #
     #     OnlineBattleAgent      {'spec'}                       online_client.py:99
-    #     LinearPolicyModel      {'observation_schema_version'}  linear_policy.py:110
+    #     LinearPolicyModel      {'observation_schema_version'}  linear_policy.py:119
     #
     # so the figure is SIX such defaults, four named and two open. I wrote "the last of the four"
     # here and in the commit message while the tool three lines away printed the counterexamples --

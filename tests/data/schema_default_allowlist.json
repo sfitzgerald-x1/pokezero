@@ -46,13 +46,13 @@
   },
   {
     "file": "src/pokezero/neural_cli.py",
-    "line": 3025,
+    "line": 3027,
     "kind": "bare-const",
     "owner": "_train"
   },
   {
     "file": "src/pokezero/neural_cli.py",
-    "line": 5593,
+    "line": 5595,
     "kind": "bare-const",
     "owner": "_iterate"
   },

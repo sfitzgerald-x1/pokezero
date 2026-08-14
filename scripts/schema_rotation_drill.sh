@@ -495,7 +495,7 @@ for _raw in open(_census):
 # DEDUPED on (file, members). The substitution below is FILE-WIDE -- it rewrites every occurrence of
 # the anchor literal in one pass -- so running it once per ROW double-inserted when two containers in
 # one file share a member set. Live, not hypothetical: neural_cli.py has two argparse tuples with the
-# same choices (train at :467, iterate at :1951) and each ended up with `"v5-drill", "v5-drill"`.
+# same choices (train at :467, iterate at :1952) and each ended up with `"v5-drill", "v5-drill"`.
 # Caught by review; my own check missed it because `grep -c` counts LINES, and both insertions were on
 # the same line.
 _seen_reg = set()
