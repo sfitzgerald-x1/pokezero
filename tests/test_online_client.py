@@ -209,7 +209,7 @@ class TurnMergedNormalizeThreadingTest(unittest.TestCase):
 
         # Membership spelled from NAMED constants rather than by importing production's
         # TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS. That import was the vacuity: it made this line
-        # byte-for-byte `online_client.py`'s own expression, so it could not fail. Naming the members
+        # the same expression `online_client.py` itself uses (bar the receiver), so it could not fail.
         # keeps the check independent of the table production consults.
         self.assertEqual(
             captured["include_turn_merged"],
