@@ -504,6 +504,12 @@ class ControlledFoulPlayConfig:
     max_decision_rounds: int = 250
     format_id: str = "gen3randombattle"
     policy_mode: str = "root-puct"
+    # HEAD-TO-HEAD. "foul-play" keeps the existing opponent; anything else puts a SECOND
+    # pokezero policy in the opponent seat, built from the SAME checkpoint under that mode.
+    # Same checkpoint on purpose: the question is what the search buys over the model it
+    # searches with, so a different opponent checkpoint would confound search with
+    # training. It also means one vocab/spec/mask set covers both seats.
+    opponent_policy_mode: str = "foul-play"
     # Frozen Rust search configuration (policy_mode='engine-mcts'). These are the
     # axes of the study's config_id; every one changes search semantics or wall
     # time, so they are part of the frozen contract, never defaulted silently.
@@ -639,6 +645,24 @@ class ControlledFoulPlayConfig:
             raise ValueError("max_decision_rounds must be positive.")
         if self.policy_mode not in {"raw", "root-puct", "engine-mcts"}:
             raise ValueError("policy_mode must be 'raw', 'root-puct', or 'engine-mcts'.")
+        if self.opponent_policy_mode not in {"foul-play", "raw", "root-puct", "engine-mcts"}:
+            raise ValueError(
+                "opponent_policy_mode must be 'foul-play', 'raw', 'root-puct', or "
+                f"'engine-mcts' (got {self.opponent_policy_mode!r})."
+            )
+        if (
+            self.opponent_policy_mode == self.policy_mode
+            and self.opponent_policy_mode != "foul-play"
+        ):
+            # A mirror match measures nothing about search: both seats run the identical
+            # policy, so the expected score is 0.5 by construction and any deviation is
+            # seat advantage plus noise. Refused rather than run, because it would produce
+            # a plausible-looking 0.5 that reads as "search does not help".
+            raise ValueError(
+                f"opponent_policy_mode={self.opponent_policy_mode!r} equals policy_mode, "
+                "which is a mirror match: the expected score is 0.5 by construction and "
+                "the run would measure seat advantage, not search."
+            )
         if self.policy_mode == "engine-mcts":
             missing = [
                 name for name in ("engine_model_path", "engine_tables_path")
@@ -1650,7 +1674,7 @@ class ControlledFoulPlayBenchmarkResult:
             "format_id": self.config.format_id,
             "policy_id": self.policy_id,
             "policy_mode": self.config.policy_mode,
-            "opponent_policy_id": "foul-play",
+            "opponent_policy_id": _opponent_policy_id_label(self.config),
             "pokezero_player": self.config.pokezero_player,
             "foulplay_player": self.config.foulplay_player,
             "games": self.config.games,
@@ -1898,7 +1922,7 @@ class ControlledFoulPlayComparisonResult:
             "capture_driver": self.config.capture_driver,
             "audit_observation_schema": _audit_observation_schema_version(self.config),
             "format_id": self.config.format_id,
-            "opponent_policy_id": "foul-play",
+            "opponent_policy_id": _opponent_policy_id_label(self.config),
             "games": self.config.games,
             "seed_start": self.config.seed_start,
             "max_decision_rounds": self.config.max_decision_rounds,
@@ -2356,9 +2380,12 @@ class _ProcessLogBuffer:
 
 
 class _FoulPlayWebsocketServer:
-    def __init__(self, *, username: str, host: str) -> None:
+    def __init__(self, *, username: str, host: str, allow_missing_client: bool = False) -> None:
         self.username = username
         self.host = host
+        # HEAD-TO-HEAD: no foul-play client will ever connect, so room-line sends are
+        # no-ops instead of faults. Off by default -- see send_room_lines.
+        self.allow_missing_client = allow_missing_client
         self.port: int | None = None
         self.websocket: Any = None
         self.server: Any = None
@@ -2427,7 +2454,19 @@ class _FoulPlayWebsocketServer:
         await self.websocket.send(message)
 
     async def send_room_lines(self, battle_id: str, lines: Sequence[str]) -> None:
+        """Forward protocol lines to the foul-play client, if there is one.
+
+        In HEAD-TO-HEAD mode the opponent seat is a pokezero policy and no foul-play
+        client ever connects, so `self.websocket` is legitimately None. Raising here would
+        abort every battle at its first room line -- the init at :3757, the private-line
+        forwarding at :4342, and the terminal notify at :4382 -- for the sole reason that
+        nobody needed to be told. `allow_missing_client` is the head-to-head contract; the
+        default still raises, so a genuinely dropped foul-play connection is still a fault
+        rather than silence.
+        """
         if self.websocket is None:
+            if self.allow_missing_client:
+                return
             raise FoulPlayProtocolError("foul-play websocket is not connected.")
         if not lines:
             return
@@ -2658,9 +2697,32 @@ async def run_controlled_foulplay_benchmark(
         policy_id=policy_id,
     )
     benchmark_policy_id = policy.policy_id if hasattr(policy, "policy_id") else policy_id
+    # The opponent arm. `replace(config, policy_mode=...)` reuses _build_policy verbatim,
+    # so the opponent is constructed by exactly the same code as the pokezero seat -- a
+    # separate construction path could differ in a way that showed up as a strength
+    # difference. The engine axes (depth/sims/worlds) come along in the config, which is
+    # what makes "engine-mcts at depth N versus raw" a one-flag change.
+    opponent_policy: Policy | None = None
+    if config.opponent_policy_mode != "foul-play":
+        opponent_policy = _build_policy(
+            # opponent_policy_mode is reset to the default here on purpose. This derived
+            # config describes ONE policy being built, not a head-to-head pairing, and
+            # leaving it set would make policy_mode == opponent_policy_mode and trip the
+            # mirror-match guard on a configuration that is not a mirror at all. (It did:
+            # engine-mcts vs raw was refused as a mirror until this line was fixed.)
+            config=_opponent_seat_config(config),
+            model=model,
+            result=result,
+            value_model=value_model,
+            value_result=value_result,
+            env_config=env_config,
+            rollout_config=rollout_config,
+            policy_id=f"{policy_id}-opp-{config.opponent_policy_mode}",
+        )
     return await _run_controlled_foulplay_games(
         config,
         policy=policy,
+        opponent_policy=opponent_policy,
         policy_id=benchmark_policy_id,
         vocab=vocab,
         dex=dex,
@@ -2686,12 +2748,23 @@ async def _run_controlled_foulplay_games(
     value_leaf_provenance: Mapping[str, object] | None = None,
     progress_callback: ControlledFoulPlayProgressCallback | None = None,
     trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
+    opponent_policy: Policy | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
-    """Run a preconstructed legal policy through the shared FoulPlay bridge."""
+    """Run a preconstructed legal policy through the shared FoulPlay bridge.
+
+    `opponent_policy`, when given, replaces foul-play in the opponent seat with a second
+    pokezero policy -- the head-to-head mode. Both seats then run the same checkpoint under
+    different search settings, which is the only way to measure what search buys over the
+    raw model directly instead of through a third opponent.
+    """
 
     foulplay_random_seed_schedule = _per_seed_foulplay_random_seed_schedule(config, count=config.games)
 
-    server = _FoulPlayWebsocketServer(username=config.foulplay_username, host=config.websocket_host)
+    server = _FoulPlayWebsocketServer(
+        username=config.foulplay_username,
+        host=config.websocket_host,
+        allow_missing_client=opponent_policy is not None,
+    )
     bridge = _BattleBridge(showdown_root=config.showdown_root, node_binary=config.node_binary)
     game_results: list[ControlledFoulPlayGameResult] = []
     # ONE recorder for the whole run: the bridge reuses a single policy across every
@@ -2711,19 +2784,28 @@ async def _run_controlled_foulplay_games(
                 config,
                 foulplay_random_seed=foulplay_random_seed_schedule[offset],
             )
-            foulplay_process = await _spawn_foulplay(game_config, server.uri, run_count=1)
+            # With a NEURAL opponent there is no foul-play client, so none of its
+            # lifecycle applies: nothing to spawn, no challenge to wait for, nothing to
+            # stop. The battle itself is unaffected -- `_run_single_game` sends the
+            # `start` message to the Node BattleStream directly, and the challenge only
+            # ever existed because foul-play is a websocket client that had to join.
+            foulplay_process: asyncio.subprocess.Process | None = None
             foulplay_logs = _ProcessLogBuffer()
-            foulplay_log_tasks = [
-                asyncio.create_task(_drain_process_stream(foulplay_process.stdout, foulplay_logs.append_stdout)),
-                asyncio.create_task(_drain_process_stream(foulplay_process.stderr, foulplay_logs.append_stderr)),
-            ]
+            foulplay_log_tasks: list[asyncio.Task] = []
+            if opponent_policy is None:
+                foulplay_process = await _spawn_foulplay(game_config, server.uri, run_count=1)
+                foulplay_log_tasks = [
+                    asyncio.create_task(_drain_process_stream(foulplay_process.stdout, foulplay_logs.append_stdout)),
+                    asyncio.create_task(_drain_process_stream(foulplay_process.stderr, foulplay_logs.append_stderr)),
+                ]
             try:
-                await _wait_for_foulplay_challenge_or_exit(
-                    server=server,
-                    expected_target=config.pokezero_username,
-                    process=foulplay_process,
-                    logs=foulplay_logs,
-                )
+                if foulplay_process is not None:
+                    await _wait_for_foulplay_challenge_or_exit(
+                        server=server,
+                        expected_target=config.pokezero_username,
+                        process=foulplay_process,
+                        logs=foulplay_logs,
+                    )
                 game_results.append(
                     await _run_single_game(
                         config=config,
@@ -2739,10 +2821,12 @@ async def _run_controlled_foulplay_games(
                         foulplay_logs=foulplay_logs,
                         trajectory_callback=trajectory_callback,
                         refusal_capture=refusal_capture,
+                        opponent_policy=opponent_policy,
                     )
                 )
             finally:
-                await _stop_foulplay_process(foulplay_process, foulplay_log_tasks)
+                if foulplay_process is not None:
+                    await _stop_foulplay_process(foulplay_process, foulplay_log_tasks)
             if progress_callback is not None:
                 progress_callback(
                     ControlledFoulPlayBenchmarkResult(
@@ -3409,16 +3493,64 @@ def _validate_external_paths(config: ControlledFoulPlayConfig) -> None:
             f"{config.showdown_root}/dist/data/random-battles/gen3/teams.js; run `node build` in "
             "the Showdown checkout or disable via --belief-set-source off."
         )
-    if not (config.foulplay_root / "run.py").exists():
-        raise FileNotFoundError(
-            f"foul-play checkout not found at {config.foulplay_root}; initialize third_party/foul-play "
-            "or pass --foulplay-root."
-        )
-    if not config.resolved_foulplay_python.exists():
-        raise FileNotFoundError(
-            f"foul-play Python not found at {config.resolved_foulplay_python}; run "
-            "scripts/setup_foulplay_eval.sh or pass --foulplay-python."
-        )
+    # foul-play is only required when foul-play actually plays. In head-to-head mode the
+    # opponent seat is a pokezero policy, nothing is spawned, and demanding a foul-play
+    # checkout would refuse a runnable configuration for a dependency it never touches --
+    # including in images that deliberately ship without one.
+    if config.opponent_policy_mode == "foul-play":
+        if not (config.foulplay_root / "run.py").exists():
+            raise FileNotFoundError(
+                f"foul-play checkout not found at {config.foulplay_root}; initialize third_party/foul-play "
+                "or pass --foulplay-root."
+            )
+        if not config.resolved_foulplay_python.exists():
+            raise FileNotFoundError(
+                f"foul-play Python not found at {config.resolved_foulplay_python}; run "
+                "scripts/setup_foulplay_eval.sh or pass --foulplay-python."
+            )
+
+
+# Every field that __post_init__ refuses outside policy_mode='engine-mcts'. Each of these
+# refusals is deliberate -- a shard that carried the flag without running the search would
+# write a witness claiming an instrument that never ran -- so the opponent-seat config has
+# to CLEAR them rather than suppress the checks.
+_ENGINE_ONLY_FIELDS: tuple[tuple[str, Any], ...] = (
+    ("engine_oracle_belief", False),
+    ("engine_override_telemetry", False),
+    ("engine_early_stop", False),
+    ("engine_depth_min", None),
+    ("engine_worlds_min", None),
+    ("engine_early_stop_min_sims", None),
+)
+
+
+def _opponent_seat_config(config: ControlledFoulPlayConfig) -> ControlledFoulPlayConfig:
+    """The config that builds the OPPONENT seat's policy.
+
+    Three things have to change, and each was found by the validation refusing a run:
+
+    1. `policy_mode` becomes the opponent's mode -- the point of the exercise.
+    2. `opponent_policy_mode` resets to 'foul-play'. This derived config describes ONE
+       policy being built, not a pairing; leaving it set makes the two modes equal and
+       trips the mirror-match guard on engine-mcts-vs-raw, which is not a mirror.
+    3. The engine-only flags are CLEARED when the opponent is not engine-mcts. Carrying
+       `engine_override_telemetry` into a raw opponent is refused by design, because a
+       shard that recorded the flag without running a search would witness an instrument
+       that never ran.
+
+    The engine AXES (depth/sims/worlds/batch/c_puct) are deliberately left alone: they are
+    inert under 'raw', and preserving them keeps the opponent's config_id honest about the
+    pairing it came from.
+    """
+    overrides: dict[str, Any] = {
+        "policy_mode": config.opponent_policy_mode,
+        "opponent_policy_mode": "foul-play",
+    }
+    if config.opponent_policy_mode != "engine-mcts":
+        for name, cleared in _ENGINE_ONLY_FIELDS:
+            if getattr(config, name, cleared) != cleared:
+                overrides[name] = cleared
+    return replace(config, **overrides)
 
 
 def _build_policy(
@@ -3713,10 +3845,11 @@ async def _run_single_game(
     observation_spec: Any,
     feature_masks: "ObservationFeatureMasks" = DEFAULT_OBSERVATION_FEATURE_MASKS,
     seed: int,
-    foulplay_process: asyncio.subprocess.Process,
+    foulplay_process: asyncio.subprocess.Process | None,
     foulplay_logs: _ProcessLogBuffer,
     trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
     refusal_capture: "_RefusalCapture | None" = None,
+    opponent_policy: Policy | None = None,
 ) -> ControlledFoulPlayGameResult:
     battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
     state = _ControlledBattleState(
@@ -3728,7 +3861,7 @@ async def _run_single_game(
             format_id=config.format_id,
             seed=seed,
             metadata={
-                "opponent_policy_id": "foul-play",
+                "opponent_policy_id": _opponent_policy_id_label(config),
                 "controlled_foulplay_bridge": True,
                 "pokezero_player": config.pokezero_player,
                 "foulplay_player": config.foulplay_player,
@@ -3788,6 +3921,7 @@ async def _run_single_game(
                 requested_players=requested_players,
                 foulplay_process=foulplay_process,
                 foulplay_logs=foulplay_logs,
+                opponent_policy=opponent_policy,
             )
             decision_round += 1
             continue
@@ -4417,6 +4551,60 @@ def _line_chunks_safe_for_foulplay(lines: Sequence[str]) -> tuple[tuple[str, ...
     return tuple(chunks)
 
 
+def _context_for_seat(
+    *,
+    seat: PlayerId,
+    policy: Policy,
+    state: "_ControlledBattleState",
+    config: ControlledFoulPlayConfig,
+    observations: Mapping[PlayerId, Any],
+    requested_players: tuple[PlayerId, ...],
+    decision_round: int,
+    belief_set_source: str,
+) -> PolicyContext:
+    """Build a PolicyContext for ANY seat.
+
+    Extracted verbatim from the pokezero-seat block so a neural opponent is packed by
+    exactly the same code, rather than by a parallel copy that could drift. Everything it
+    touches was already per-seat: `observations` and `player_states` are built for every
+    requested player, `_public_materialization_state` takes the player, and the two
+    `_requested_*_for_context` helpers take `acting_player`. Only the seat argument changes.
+
+    That symmetry is the point of the head-to-head mode: if the opponent's observation were
+    packed differently from the pokezero seat's, a measured difference between the two arms
+    could be the packing rather than the search.
+    """
+    public_materialization_state = (
+        _public_materialization_state(state, seat, set_source=belief_set_source)
+        # Capability, not identity -- see the pokezero-seat comment. A raw policy needs
+        # none of this, so it stays None and costs nothing.
+        if getattr(policy, "requires_public_materialization_state", False)
+        or isinstance(policy, RootPUCTSearchPolicy)
+        else None
+    )
+    return PolicyContext(
+        player_id=seat,
+        decision_round_index=decision_round,
+        battle_id=state.battle_id,
+        format_id=config.format_id,
+        seed=state.seed,
+        observation=observations[seat],
+        requested_players=requested_players,
+        trajectory=state.trajectory,
+        requested_legal_action_masks=_requested_legal_action_masks_for_context(
+            observations,
+            acting_player=seat,
+            opponent_legal_mask_mode=config.opponent_legal_mask_mode,
+        ),
+        requested_observations=_requested_observations_for_context(
+            observations,
+            acting_player=seat,
+            opponent_legal_mask_mode=config.opponent_legal_mask_mode,
+        ),
+        public_materialization_state=public_materialization_state,
+    )
+
+
 async def _handle_decision_boundary(
     *,
     config: ControlledFoulPlayConfig,
@@ -4430,8 +4618,9 @@ async def _handle_decision_boundary(
     feature_masks: "ObservationFeatureMasks" = DEFAULT_OBSERVATION_FEATURE_MASKS,
     decision_round: int,
     requested_players: tuple[PlayerId, ...],
-    foulplay_process: asyncio.subprocess.Process,
+    foulplay_process: asyncio.subprocess.Process | None,
     foulplay_logs: _ProcessLogBuffer,
+    opponent_policy: Policy | None = None,
 ) -> TerminalState | None:
     assert state.trajectory is not None
     pokezero_player = config.pokezero_player
@@ -4465,41 +4654,20 @@ async def _handle_decision_boundary(
     decisions: dict[PlayerId, PolicyDecision] = {}
     pokezero_context: PolicyContext | None = None
     if pokezero_player in requested_players:
-        public_materialization_state = (
-            _public_materialization_state(
-                state,
-                pokezero_player,
-                set_source=belief_set_source,
-            )
-            # Capability, not identity: ANY policy that consumes a materialized
-            # public state needs one. Gating on isinstance(RootPUCTSearchPolicy)
-            # silently handed EngineMctsPolicy a None, so engine-MCTS fell back
-            # to uniform-legal on every decision and played random moves while
-            # reporting no error (0/20 vs the raw policy's 10/20).
-            if getattr(policy, "requires_public_materialization_state", False)
-            or isinstance(policy, RootPUCTSearchPolicy)
-            else None
-        )
-        pokezero_context = PolicyContext(
-            player_id=pokezero_player,
-            decision_round_index=decision_round,
-            battle_id=state.battle_id,
-            format_id=config.format_id,
-            seed=state.seed,
-            observation=observations[pokezero_player],
+        # Shared with the neural-opponent branch below via _context_for_seat, so the two
+        # seats cannot be packed differently. The capability gate that used to live inline
+        # here (isinstance(RootPUCTSearchPolicy) once handed EngineMctsPolicy a None and
+        # made engine-MCTS play uniform-legal while reporting no error, 0/20 against the
+        # raw policy's 10/20) moved into the helper unchanged.
+        pokezero_context = _context_for_seat(
+            seat=pokezero_player,
+            policy=policy,
+            state=state,
+            config=config,
+            observations=observations,
             requested_players=requested_players,
-            trajectory=state.trajectory,
-            requested_legal_action_masks=_requested_legal_action_masks_for_context(
-                observations,
-                acting_player=pokezero_player,
-                opponent_legal_mask_mode=config.opponent_legal_mask_mode,
-            ),
-            requested_observations=_requested_observations_for_context(
-                observations,
-                acting_player=pokezero_player,
-                opponent_legal_mask_mode=config.opponent_legal_mask_mode,
-            ),
-            public_materialization_state=public_materialization_state,
+            decision_round=decision_round,
+            belief_set_source=belief_set_source,
         )
         # BEFORE the wall-clock boundary below, on purpose: the packing is this
         # arm's instrument, not part of the search it measures, so charging it to
@@ -4535,7 +4703,52 @@ async def _handle_decision_boundary(
         # Capture the actual controller context that selected the decision. This is distinct from
         # a policy display id and remains useful when a checkpoint happens to use that same id.
         state.pokezero_decision_players.append(pokezero_context.player_id)
-    if foulplay_player in requested_players:
+    if foulplay_player in requested_players and opponent_policy is not None:
+        # NEURAL OPPONENT. The opponent seat is driven by a pokezero policy instead of the
+        # foul-play subprocess, which is what makes a search-vs-raw head-to-head possible:
+        # every game is directly informative about the difference between the two arms,
+        # rather than being diluted through a third party. Against foul-play the same
+        # control config scored 0.581 and then 0.596 on identical seeds, a 1.5-2.1pp noise
+        # floor that already swamped a +2.95pp effect five times.
+        #
+        # Deliberately the SAME code path as the pokezero seat: _context_for_seat for the
+        # packing, _select_policy_decision for the choice (its RNG is already keyed on
+        # f"{seed}:{player_id}:{round}", so the two seats draw independently without any
+        # new seeding logic), and showdown_choice_for_action for the wire format. A
+        # measured difference between the arms therefore cannot be an artifact of one seat
+        # being packed or seeded differently from the other.
+        opponent_context = _context_for_seat(
+            seat=foulplay_player,
+            policy=opponent_policy,
+            state=state,
+            config=config,
+            observations=observations,
+            requested_players=requested_players,
+            decision_round=decision_round,
+            belief_set_source=belief_set_source,
+        )
+        opponent_wall_start = time.perf_counter()
+        opponent_decision = await asyncio.to_thread(
+            _select_policy_decision,
+            opponent_policy,
+            observations[foulplay_player],
+            opponent_context,
+            seed=state.seed,
+        )
+        opponent_elapsed_seconds = time.perf_counter() - opponent_wall_start
+        choices[foulplay_player] = showdown_choice_for_action(
+            player_states[foulplay_player], opponent_decision.action_index,
+        )
+        decisions[foulplay_player] = PolicyDecision(
+            action_index=opponent_decision.action_index,
+            policy_id=opponent_decision.policy_id,
+            metadata={
+                **dict(opponent_decision.metadata),
+                "policy_elapsed_seconds": opponent_elapsed_seconds,
+                "seat_role": "opponent",
+            },
+        )
+    elif foulplay_player in requested_players:
         choice = await _wait_for_foulplay_choice_or_exit(
             server=server,
             battle_id=state.battle_id,
@@ -5022,6 +5235,18 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _opponent_policy_id_label(config: "ControlledFoulPlayConfig") -> str:
+    """What actually sat in the opponent seat.
+
+    Three summary sites hardcoded "foul-play". In head-to-head mode that string would
+    attribute every result to an opponent that never played a move -- and because the
+    downstream analyzers key arms off this field, two arms with different opponents would
+    pool as though they shared one.
+    """
+    mode = getattr(config, "opponent_policy_mode", "foul-play")
+    return "foul-play" if mode == "foul-play" else f"pokezero-{mode}"
+
+
 def _checkpoint_path_label(config: ControlledFoulPlayConfig) -> str | None:
     """Return a path only when a trained checkpoint actually drove the game."""
 
@@ -5107,6 +5332,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--policy-mode", choices=("raw", "root-puct", "engine-mcts"), default="root-puct",
         help="raw = the checkpoint's own argmax; root-puct = the Python root search; "
              "engine-mcts = the native Rust search over sampled belief worlds.",
+    )
+    parser.add_argument(
+        "--opponent-policy-mode",
+        choices=("foul-play", "raw", "root-puct", "engine-mcts"),
+        default="foul-play",
+        help="Who sits in the OPPONENT seat. 'foul-play' is the external engine (default, "
+             "unchanged). Anything else runs a second policy from the SAME checkpoint in "
+             "that mode -- a head-to-head. Use --opponent-policy-mode raw with "
+             "--policy-mode engine-mcts to measure directly what search buys over the "
+             "model it searches with, instead of inferring it from two win rates against "
+             "a third opponent.",
     )
     # engine-mcts axes. Every one changes search semantics or wall time, so the
     # config treats them as a frozen contract -- surfaced here rather than
@@ -5420,7 +5656,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def build_comparison_arg_parser() -> argparse.ArgumentParser:
     parser = build_arg_parser()
     _remove_optional_argument(parser, "--policy-mode")
-    parser.set_defaults(policy_mode="root-puct")
+    # The comparison driver runs BOTH arms against foul-play by construction, so a
+    # head-to-head opponent is meaningless here -- and accepting the flag while ignoring
+    # it would be worse than refusing it. Removed rather than defaulted, which also keeps
+    # this parser's help free of the `--policy-mode` string the CLI-surface test pins.
+    _remove_optional_argument(parser, "--opponent-policy-mode")
+    parser.set_defaults(policy_mode="root-puct", opponent_policy_mode="foul-play")
     parser.add_argument(
         "--comparison-mode",
         choices=tuple(sorted(_COMPARISON_MODES)),
@@ -5491,6 +5732,11 @@ def _config_from_args(
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
         policy_mode=policy_mode if policy_mode is not None else args.policy_mode,
+        # getattr with a default: the comparison driver strips --policy-mode from its
+        # parser (_remove_optional_argument) and other entry points build Namespaces that
+        # never saw this flag. A bare args.opponent_policy_mode would AttributeError on
+        # those paths rather than defaulting to the existing foul-play behaviour.
+        opponent_policy_mode=getattr(args, "opponent_policy_mode", "foul-play"),
         engine_model_path=getattr(args, "engine_model_path", None),
         engine_tables_path=getattr(args, "engine_tables_path", None),
         engine_depth=getattr(args, "engine_depth", 4),

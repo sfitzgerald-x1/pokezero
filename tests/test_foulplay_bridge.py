@@ -3058,5 +3058,117 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["complete"], False)
 
 
+class HeadToHeadOpponentTest(unittest.TestCase):
+    """The opponent seat can be a second pokezero policy instead of foul-play.
+
+    Why this mode exists: measuring what search buys over the raw model THROUGH foul-play
+    is underpowered. The same control config scored 0.581 then 0.596 on identical seeds --
+    a 1.5-2.1pp noise floor -- while the effect being chased was +2.95pp at p=0.56. A
+    direct head-to-head spends every game on the difference instead of diluting it through
+    a third party.
+    """
+
+    def _cfg(self, **kw):
+        from pokezero.foulplay_bridge import ControlledFoulPlayConfig
+        base = dict(checkpoint=Path("/tmp/ckpt.pt"), showdown_root=Path("/tmp/showdown"))
+        base.update(kw)
+        return ControlledFoulPlayConfig(**base)
+
+    def test_default_is_unchanged_foul_play(self) -> None:
+        # The whole existing campaign history depends on this default. A silent change
+        # would re-point every banked comparison at a different opponent.
+        self.assertEqual(self._cfg(policy_mode="raw").opponent_policy_mode, "foul-play")
+
+    def test_a_mirror_match_is_refused(self) -> None:
+        """Identical policies on both seats score 0.5 by construction.
+
+        Refused rather than run: it would produce a plausible 0.5 that reads as "search
+        does not help" when in fact nothing was compared.
+        """
+        with self.assertRaises(ValueError) as caught:
+            self._cfg(policy_mode="raw", opponent_policy_mode="raw")
+        self.assertIn("mirror match", str(caught.exception))
+
+    def test_an_unknown_opponent_mode_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self._cfg(policy_mode="raw", opponent_policy_mode="totally-bogus")
+
+    def test_the_summary_names_the_opponent_that_actually_played(self) -> None:
+        """Three summary sites hardcoded "foul-play".
+
+        Downstream analyzers key arms off `opponent_policy_id`, so leaving the hardcode in
+        place would pool a head-to-head arm with a foul-play arm as though they shared an
+        opponent.
+        """
+        from pokezero.foulplay_bridge import _opponent_policy_id_label
+        self.assertEqual(
+            _opponent_policy_id_label(self._cfg(policy_mode="raw")), "foul-play")
+        self.assertEqual(
+            _opponent_policy_id_label(
+                self._cfg(policy_mode="engine-mcts", opponent_policy_mode="raw",
+                          engine_model_path=Path("/tmp/m.pt"),
+                          engine_tables_path=Path("/tmp/t.json"))),
+            "pokezero-raw")
+
+    def test_room_lines_are_a_no_op_only_when_explicitly_allowed(self) -> None:
+        """With no foul-play client, a room-line send must not abort the battle.
+
+        Every room-line call site is "tell the foul-play client what happened" -- the init
+        line, the private-line forwarding, the terminal notify. In head-to-head there is
+        nobody to tell, and raising would kill each battle at its first line. But the
+        default MUST still raise, or a genuinely dropped foul-play connection becomes
+        silence instead of a fault.
+        """
+        from pokezero.foulplay_bridge import _FoulPlayWebsocketServer, FoulPlayProtocolError
+        strict = _FoulPlayWebsocketServer(username="fp", host="127.0.0.1")
+        with self.assertRaises(FoulPlayProtocolError):
+            asyncio.run(strict.send_room_lines("battle-1", ["|init|battle"]))
+        lenient = _FoulPlayWebsocketServer(
+            username="fp", host="127.0.0.1", allow_missing_client=True)
+        asyncio.run(lenient.send_room_lines("battle-1", ["|init|battle"]))  # must not raise
+
+    def test_both_seats_are_packed_by_the_same_code(self) -> None:
+        """_context_for_seat must be seat-agnostic.
+
+        If the opponent's observation were packed differently from the pokezero seat's, a
+        measured strength difference could be the packing rather than the search -- the
+        exact confound this mode exists to avoid. Asserted by building a context for each
+        seat from one observations dict and checking the seat-dependent fields track the
+        seat argument.
+        """
+        from pokezero.foulplay_bridge import _context_for_seat
+
+        class _Obs:
+            legal_action_mask = (True,) * ACTION_COUNT
+            schema_version = 1
+            metadata: dict = {}
+
+        observations = {"p1": _Obs(), "p2": _Obs()}
+        state = SimpleNamespace(battle_id="battle-x", seed=7, trajectory=None)
+        cfg = self._cfg(policy_mode="raw")
+        contexts = {
+            seat: _context_for_seat(
+                seat=seat,
+                policy=SimpleNamespace(),          # no public materialization needed
+                state=state,
+                config=cfg,
+                observations=observations,
+                requested_players=("p1", "p2"),
+                decision_round=3,
+                belief_set_source="public",
+            )
+            for seat in ("p1", "p2")
+        }
+        self.assertEqual(contexts["p1"].player_id, "p1")
+        self.assertEqual(contexts["p2"].player_id, "p2")
+        for seat, ctx in contexts.items():
+            with self.subTest(seat=seat):
+                self.assertEqual(ctx.decision_round_index, 3)
+                self.assertEqual(ctx.battle_id, "battle-x")
+                self.assertEqual(ctx.requested_players, ("p1", "p2"))
+                # the acting seat is always present in its own mask set
+                self.assertIn(seat, ctx.requested_legal_action_masks)
+
+
 if __name__ == "__main__":
     unittest.main()
