@@ -76,13 +76,13 @@
   },
   {
     "file": "src/pokezero/showdown.py",
-    "line": 1159,
+    "line": 1169,
     "kind": "bare-const",
     "owner": "<module>"
   },
   {
     "file": "src/pokezero/showdown.py",
-    "line": 4313,
+    "line": 4323,
     "kind": "default-spec",
     "owner": "observation_from_player_state"
   },
