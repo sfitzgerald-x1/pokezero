@@ -81,7 +81,40 @@ fresh artifact get" — the legitimate question — and the rubric simply does n
 - `test_observation_spec_v2_1.py::ConfigDualSchemaTest::test_observation_spec_from_model_config_resolves_schema_and_width`
   compares two whole `ObservationSpec`s that differ only in `schema_version`.
 
-## The shape half: now COVERED, and one site wide
+## The shape half: was one site wide, and is now ZERO
+
+> **SUPERSEDED AS OF #1251 — read this before the section below.** The single site that gave the
+> `differ` arm its coverage, `test_from_dict_width_defaults_are_schema_keyed`, no longer reads the
+> default's width. #1251 named `TransformerPolicyConfig.observation_schema_version`
+> (`neural_policy.py:271`), so the config it restores is v2.2-stamped whatever the global says, and
+> the arm — which narrows the *outgoing* default's width by one — cannot move it.
+>
+> Confirmed by execution on the v4-rotated tree, and the confirmation is stronger than a differ run:
+> the rotation moved the default's numeric width 155 → **132**, twenty-three columns where `differ`
+> narrows by one, and the row stayed green.
+>
+> ```sh
+> python -c "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC as D; \
+>            from pokezero.observation import OBSERVATION_SCHEMA_VERSION as V; \
+>            print(V, D.numeric_feature_count)"
+> #   pokezero.observation.v4 132     <- the process default;  the row asserts 155
+> python -m pytest -q -p no:randomly \
+>   "tests/test_observation_spec_v2_1.py::ConfigDualSchemaTest::test_from_dict_width_defaults_are_schema_keyed"
+> #   1 passed
+> ```
+>
+> So `DRILL_SHAPE=differ` will now fire its dead-pin detector and exit non-zero, and **the shape half
+> of this class has no coverage at all.** This is not a regression in #1251 — naming the version is
+> the fix this programme exists to make. It is the instrument losing its last shape example *because*
+> the codebase improved. The honest reading of "one site wide" was always that almost nothing in this
+> suite pins the default's width; it is now zero sites wide, the same fact with the last example
+> removed. A replacement site must be found or written, and deliberately has not been admitted by
+> reasoning alone.
+>
+> Everything below this box describes the measurement as it stood BEFORE #1251 and is kept as the
+> record of that run, not as a current claim.
+
+## The shape half, as measured before #1251: COVERED, and one site wide
 
 `DRILL_SHAPE=differ` has been run to completion on the same tree, full scope, three arms. It was
 previously "constructed but unverified" and is no longer.
@@ -129,8 +162,9 @@ asserts is the laundering the emptiness was protecting against.
 
 ## What this claim does NOT cover
 
-- **The shape half is now covered** -- see the section above. Its coverage is ONE site wide, which is a
-  fact about the suite rather than about the arm.
+- **The shape half has NO coverage as of #1251** -- see the superseded box above. It was one site wide;
+  that site stopped reading the default's width when `TransformerPolicyConfig` named its schema, which
+  is a fact about the suite rather than about the arm. Confirmed by execution on the v4-rotated tree.
 - **The compiled Rust encoder.** `rust/pokezero-search/src/encoder.rs` dispatches on schema version in
   compiled code. This drill edits Python in a worktree and never rebuilds the crate, so 10
   `EngineEnvTest` failures are excluded by cause. Anything the rotation would break *inside* the

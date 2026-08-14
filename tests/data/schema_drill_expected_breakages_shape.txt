@@ -59,9 +59,9 @@ test_token_format_doc.py::TokenFormatDocSelfValidationTest::test_committed_dump_
 # almost nothing in this suite pins the default's width, not that the arm is powerful.
 #
 # ################################################################################################
-# THIS ROW IS PREDICTED DEAD AS OF #1251, AND THE PREDICTION IS NOT YET MEASURED. Read this before
-# trusting a differ run. The demonstration above was recorded on the tree with #1244 landed, i.e.
-# BEFORE #1251, and #1251 is what breaks it:
+# THIS ROW IS DEAD AS OF #1251. CONFIRMED BY EXECUTION, not predicted. Read this before trusting a
+# differ run. The demonstration above was recorded on the tree with #1244 landed, i.e. BEFORE #1251,
+# and #1251 is what breaks it:
 #
 #   - the row's width comes from `self._config()`, which is
 #     `TransformerPolicyConfig.compact_category(...)` with no schema named;
@@ -71,17 +71,31 @@ test_token_format_doc.py::TokenFormatDocSelfValidationTest::test_committed_dump_
 #     process default is, and the differ arm -- which narrows the OUTGOING default's width -- can no
 #     longer move it.
 #
-# If that is right, the differ arm's dead-pin detector ("expected but did not break") FIRES on this
-# row, the arm exits non-zero, and THE SHAPE HALF OF THE CLASS HAS ZERO COVERAGE. That is not a
-# regression in #1251 -- naming the version is exactly the fix this programme is for -- it is the
-# instrument losing its last shape site BECAUSE the codebase got better, which is a thing this file
-# has no other way to notice.
+# THE CONFIRMATION, and it is stronger than a differ run would be. The v4 rotation moved the default's
+# numeric width from 155 to 132 -- 23 columns, where the differ arm narrows by ONE. If this row read
+# the default's width at all, a 23-column move could not leave it green. It is green:
+#
+#   $ python -c "from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC as D; \
+#                from pokezero.observation import OBSERVATION_SCHEMA_VERSION as V; \
+#                print(V, D.numeric_feature_count)"
+#     pokezero.observation.v4 132          <- the process default
+#     the row asserts                155
+#   $ python -m pytest -q -p no:randomly \
+#       "tests/test_observation_spec_v2_1.py::ConfigDualSchemaTest::test_from_dict_width_defaults_are_schema_keyed"
+#     1 passed
+#
+# So the differ arm's dead-pin detector ("expected but did not break") WILL fire on this row, the arm
+# WILL exit non-zero, and THE SHAPE HALF OF THE CLASS HAS ZERO COVERAGE. That is not a regression in
+# #1251 -- naming the version is exactly the fix this programme is for -- it is the instrument losing
+# its last shape site BECAUSE the codebase got better, which is a thing this file has no other way to
+# notice.
 #
 # Deliberately NOT removed, and no replacement admitted, for two reasons: a row deleted quietly
 # leaves this file empty and the drill refuses a verdict at exit 7 without saying why, and admitting
 # a substitute chosen by reasoning rather than by a measured breakage is the laundering this file's
-# admission rule exists to prevent. The next differ run decides it. Derived by reading the source,
-# NOT by running the arm; a shape run is 17-70 minutes and has not been done since #1251 landed.
+# admission rule exists to prevent. A NEW shape site has to be found in the suite -- or written -- and
+# the honest reading of "one site wide" was always that almost nothing here pins the default's width.
+# It is now zero sites wide, which is the same fact with the last example removed.
 # ################################################################################################
 test_observation_spec_v2_1.py::ConfigDualSchemaTest::test_from_dict_width_defaults_are_schema_keyed
 
