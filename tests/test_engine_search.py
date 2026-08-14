@@ -4778,14 +4778,105 @@ class FreeDecisionFeatureTest(unittest.TestCase):
 
     @staticmethod
     def _ctx(moves, switches, turn=7):
-        cands = ([{"kind": "move", "legal": True}] * moves
-                 + [{"kind": "switch", "legal": True}] * switches
-                 + [{"kind": "move", "legal": False}])  # illegal must not count
+        """Build the observation the way `showdown.py` publishes it, not the way the
+        reader wishes it looked.
+
+        The first version of this fixture handed the function
+        `SimpleNamespace(observation=SimpleNamespace(candidates=[...]))`. That shape does
+        not exist: `PokeZeroObservationV0` has no `candidates` field -- the candidates are
+        `metadata["action_candidates"]` -- so the code under test read None, counted zero
+        legal actions, and marked every decision FORCED, while this test passed. It cost a
+        collection run: 29 of 29 shard rows came back `f_legal_actions == 0` with
+        `top_arms` listing real moves beside them.
+
+        So the fixture now mirrors `_action_candidate_metadata`: ALL nine slots present (4
+        move, 5 switch) whether legal or not, each carrying its `action_index`, and a
+        `legal_action_mask` that must agree. Anything that reads a different field, or
+        skips the mask cross-check, fails here.
+        """
+        cands, mask = [], []
+        for slot in range(4):                      # move slots 0-3
+            legal = slot < moves
+            cands.append({"action_index": slot, "kind": "move", "legal": legal,
+                          "move_slot": slot, "move_id": f"move{slot}",
+                          "move_name": f"Move {slot}", "disabled": not legal})
+            mask.append(legal)
+        for slot in range(5):                      # switch slots 4-8
+            legal = slot < switches
+            cands.append({"action_index": 4 + slot, "kind": "switch", "legal": legal,
+                          "switch_slot": slot, "team_index": slot,
+                          "pokemon": {"species": f"mon{slot}"}})
+            mask.append(legal)
         return SimpleNamespace(
-            observation=SimpleNamespace(candidates=cands),
+            observation=SimpleNamespace(
+                metadata={"action_candidates": cands},
+                legal_action_mask=tuple(mask),
+            ),
             public_materialization_state=SimpleNamespace(
                 replay=SimpleNamespace(turn_number=turn)),
         )
+
+    def test_the_candidates_are_read_from_metadata_not_an_attribute(self) -> None:
+        """The regression pin for the shape defect above.
+
+        An observation carrying a decoy `candidates` attribute AND the real
+        `metadata["action_candidates"]` must be counted from metadata. Reading the
+        attribute would give 1; reading metadata gives 6.
+        """
+        ctx = self._ctx(3, 3)
+        ctx.observation.candidates = [{"kind": "move", "legal": True}]  # decoy
+        f = free_decision_features(ctx, 4096, {"a": 1.0})
+        self.assertEqual(f["f_legal_actions"], 6)
+        self.assertFalse(f["f_forced"])
+
+    def test_an_unreadable_candidate_list_reports_ABSENCE_not_zero(self) -> None:
+        """A failed read must not manufacture the strongest available claim.
+
+        `f_forced` is `actions <= 1`, so a reader that silently returns 0 asserts "there
+        was nothing to decide" from no evidence. That is exactly how the metadata-path
+        defect survived: it never raised, it just labelled all 29 rows of the first
+        collection shard `forced` with zero legal actions, beside `top_arms` listing real
+        moves. None propagates; 0 lies.
+        """
+        bare = SimpleNamespace(
+            observation=SimpleNamespace(metadata={}, legal_action_mask=None),
+            public_materialization_state=None,
+        )
+        f = free_decision_features(bare, 4096, {"a": 1.0})
+        for key in ("f_legal_moves", "f_legal_switches", "f_legal_actions", "f_forced"):
+            with self.subTest(key=key):
+                self.assertIsNone(f[key])
+        # The features that ARE readable from a bare context still report.
+        self.assertEqual(f["f_sims_per_world"], 4096)
+        self.assertEqual(f["f_turn"], 0)
+
+    def test_admission_needs_BOTH_the_legal_flag_and_the_mask_bit(self) -> None:
+        """Either filter alone must be able to reject.
+
+        `showdown.py` derives `legal` and `legal_action_mask` from the same source, so a
+        disagreement is not an observed production state -- this pins the AND as
+        deliberate rather than redundant, and mirrors `_choice_vocabulary`'s admission
+        rule. Without it, dropping the `legal` check is a silent no-op change here and a
+        live overcount anywhere the two sources ever diverge.
+        """
+        ctx = self._ctx(4, 5)
+        cands = ctx.observation.metadata["action_candidates"]
+        cands[1] = {**cands[1], "legal": False}   # flag says no, mask still says yes
+        f = free_decision_features(ctx, 4096, {"a": 1.0})
+        self.assertEqual((f["f_legal_moves"], f["f_legal_switches"]), (3, 5))
+
+    def test_the_mask_vetoes_a_candidate_that_claims_legal(self) -> None:
+        """`legal` and the mask must AGREE. Admission mirrors `_choice_vocabulary`.
+
+        A feature that counted a wider action set than the search chooses from would key
+        the depth table on a branching factor the search never faced.
+        """
+        ctx = self._ctx(4, 5)
+        vetoed = list(ctx.observation.legal_action_mask)
+        vetoed[2] = False                       # mask says no; the candidate says legal
+        ctx.observation.legal_action_mask = tuple(vetoed)
+        f = free_decision_features(ctx, 4096, {"a": 1.0})
+        self.assertEqual((f["f_legal_moves"], f["f_legal_switches"]), (3, 5))
 
     def test_branching_is_split_into_moves_and_switches(self) -> None:
         # Split deliberately: a switch changes the active mon and a move does not, so

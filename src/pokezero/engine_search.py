@@ -1563,16 +1563,41 @@ def free_decision_features(context, sims_per_world, prior_share) -> dict[str, An
     Returned flat and prefixed `f_` so a consumer can select the input columns without
     knowing the schema.
     """
+    # The candidates live on `observation.metadata["action_candidates"]`, NOT on an
+    # `observation.candidates` attribute -- `PokeZeroObservationV0` has no such field, so
+    # reading it returned None and made every decision look FORCED with zero legal
+    # actions. That shipped: the first collection shard carried f_legal_actions == 0 on
+    # all 29 rows while `top_arms` listed real moves. The unit test did not catch it
+    # because its fixture fabricated the attribute the code expected instead of the shape
+    # `showdown.py` publishes.
+    #
+    # `action_candidates` always has 9 entries -- 4 move slots then 5 switch slots --
+    # including illegal ones, so BOTH the `legal` flag and the mask bit are required.
+    # Admission mirrors `_choice_vocabulary`, deliberately: a feature that counted a
+    # different action set than the search chooses from would key the table on a
+    # branching factor the search never faced.
     obs = getattr(context, "observation", None)
+    mask = getattr(obs, "legal_action_mask", None)
+    candidates = (getattr(obs, "metadata", None) or {}).get("action_candidates")
+    readable = (isinstance(candidates, Sequence)
+                and not isinstance(candidates, (str, bytes))
+                and bool(candidates))
     moves = switches = 0
-    for candidate in (getattr(obs, "candidates", None) or []):
-        if not isinstance(candidate, Mapping) or not candidate.get("legal"):
-            continue
-        kind = candidate.get("kind")
-        if kind == "move":
-            moves += 1
-        elif kind == "switch":
-            switches += 1
+    if readable:
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping) or not candidate.get("legal"):
+                continue
+            index = candidate.get("action_index")
+            if mask is not None:
+                if not isinstance(index, int) or not (0 <= index < len(mask)):
+                    continue
+                if not mask[index]:
+                    continue
+            kind = candidate.get("kind")
+            if kind == "move":
+                moves += 1
+            elif kind == "switch":
+                switches += 1
     replay = getattr(
         getattr(context, "public_materialization_state", None), "replay", None
     )
@@ -1586,12 +1611,17 @@ def free_decision_features(context, sims_per_world, prior_share) -> dict[str, An
     return {
         # Branching, split because a switch changes the active mon and a move does not,
         # so they do not cost the same in tree width.
-        "f_legal_moves": moves,
-        "f_legal_switches": switches,
-        "f_legal_actions": moves + switches,
+        # None, never 0, when the candidate list could not be read. A count of 0 is a
+        # CLAIM -- and via `f_forced` below it is the strongest one available, "there was
+        # nothing to decide" -- so manufacturing it from a failed read is how the
+        # metadata-path defect stayed invisible for a whole collection run. An absence
+        # propagates as an absence, and the offline fitter reports it as missing data.
+        "f_legal_moves": moves if readable else None,
+        "f_legal_switches": switches if readable else None,
+        "f_legal_actions": (moves + switches) if readable else None,
         # FORCED: nothing to decide, so no depth is worth buying. Measured at 1.6% of
         # decisions overall and 3.2% past turn 30 -- a late-game phenomenon.
-        "f_forced": (moves + switches) <= 1,
+        "f_forced": ((moves + switches) <= 1) if readable else None,
         # The model's own confidence, from the forward pass already done. This is the
         # cheapest predictor of "was this decision ever going to be close".
         "f_root_prior_top1": ordered[0] / total if total > 0 else None,

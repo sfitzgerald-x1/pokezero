@@ -1370,7 +1370,7 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          if ! grep -qE 'Ran 197 tests' /tmp/enginesearch.log; then
+          if ! grep -qE 'Ran 201 tests' /tmp/enginesearch.log; then
             echo "::error::expected 197 engine-search tests; the suite shrank or grew"
             exit 1
           fi
