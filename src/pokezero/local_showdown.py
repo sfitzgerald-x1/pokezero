@@ -35,6 +35,7 @@ from .observation import (
 from .randbat import load_gen3_randbat_source_cached
 from .randbat_vocab import gen3_category_vocabulary
 from .showdown import (
+    V2_2_REPLAY_OBSERVATION_SPEC,
     DEFAULT_REPLAY_OBSERVATION_SPEC,
     PlayerRelativeBattleState,
     ShowdownPokemon,
@@ -268,7 +269,11 @@ class LocalShowdownConfig:
     showdown_root: Path | str | None = None
     bridge_path: Path | str = BRIDGE_PATH
     node_binary: str = "node"
-    observation_spec: ObservationSpec = DEFAULT_REPLAY_OBSERVATION_SPEC
+    # NAMES v2.2, it does not read the global -- the same fix as TransformerPolicyConfig's stamp
+    # and the two in observation.py. A dataclass default is frozen at class-definition time, so
+    # `= DEFAULT_REPLAY_OBSERVATION_SPEC` meant every env built without naming a spec silently
+    # re-aimed the moment the process default rotated.
+    observation_spec: ObservationSpec = V2_2_REPLAY_OBSERVATION_SPEC
     # Ablation-arm feature masks (config, not spec): masked-off blocks are zeroed +
     # attention-masked at encode time. Callers pairing the env with a model must keep these
     # consistent with the model config's stats_block_enabled / exact_state_enabled /
