@@ -17,6 +17,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from pokezero.local_showdown import CONFIG_DEFAULT_OBSERVATION_SPEC
 from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION_V2_1,
     OBSERVATION_SCHEMA_VERSION_V2_2,
@@ -167,18 +168,32 @@ class SchemaFlagEndToEndTest(unittest.TestCase):
                 V2_1_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
             )
 
-            # Default (flag-less) collect: stamps the CURRENT default — v2.2 since the
-            # 2026-07-08 promotion (this assertion is deliberately about the default).
+            # Default (flag-less) collect: stamps the ENV CONFIG's default, which since #1252 is NOT
+            # the process default. Measured under a v4 rotation: this collect still produces v2.2.
+            #
+            # The comment here used to read "stamps the CURRENT default -- v2.2 since the 2026-07-08
+            # promotion (this assertion is deliberately about the default)". Both halves were true when
+            # written and the second is still the right intent -- but "the default" now has TWO
+            # answers. `rollout_cli`'s collect builds a LocalShowdownConfig, whose `observation_spec`
+            # NAMES v2.2 since #1252, so it does not follow the global. `neural_cli`'s `_train` and
+            # `_iterate` resolve `<flag> or OBSERVATION_SCHEMA_VERSION` at runtime and DO. Which answer
+            # a fresh artifact gets depends on the entrypoint, and this arm is the config one.
+            #
+            # Pinned to the config's own constant, so it is rotation-invariant for the right reason and
+            # will start tracking the process default again the day
+            # `LocalShowdownConfig.observation_spec` is re-aimed -- the deliberate, reviewable act that
+            # naming these defaults existed to make possible.
             self._collect(default_cache)
             default_metadata = json.loads(
                 (default_cache / "metadata.json").read_text(encoding="utf-8")
             )
             self.assertEqual(
-                default_metadata["observation_schema"], OBSERVATION_SCHEMA_VERSION_V2_2
+                default_metadata["observation_schema"],
+                CONFIG_DEFAULT_OBSERVATION_SPEC.schema_version,
             )
             self.assertEqual(
                 default_metadata["observation_shapes"]["numeric_features"][-1],
-                V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+                CONFIG_DEFAULT_OBSERVATION_SPEC.numeric_feature_count,
             )
 
             # Cross-check hard-fails both directions through the real CLI (run BEFORE
@@ -187,7 +202,13 @@ class SchemaFlagEndToEndTest(unittest.TestCase):
             import io
 
             for data, schema_args, expectation in (
-                (v2_1_cache, [], "cross-schema"),  # v2.2 default train on a v2.1 cache
+                # NAMES v2.2 rather than relying on the default BEING v2.2. The subject is "a
+                # v2.2 train on a v2.1 cache is refused cross-schema", and leaving the flag off
+                # made that depend on the process default. Under a v4 default the train run
+                # mints transition_token_budget=0 (v4 has no transition region) and the MASK
+                # guard fires before the SCHEMA guard, so the run still failed -- with the wrong
+                # message, i.e. this arm stopped testing what it names.
+                (v2_1_cache, ["--observation-schema", "v2.2"], "cross-schema"),
                 (v2_2_cache, ["--observation-schema", "v2.1"], "cross-schema"),
             ):
                 stderr = io.StringIO()
