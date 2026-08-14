@@ -35,6 +35,7 @@ import argparse
 import hashlib
 import json
 import logging
+import math
 import random
 import time
 import warnings
@@ -1547,6 +1548,58 @@ class EngineMctsStats:
         if self.decisions:
             payload["wall_per_decision"] = self.decision_wall_seconds / self.decisions
         return payload
+
+
+def free_decision_features(context, sims_per_world, prior_share) -> dict[str, Any]:
+    """The features a production depth rule may key on: FREE at decision time.
+
+    "Free" is the whole discipline. Every value here is knowable BEFORE the search runs
+    -- from the request's legal-action mask, from the root prior forward pass we already
+    do, or from the replay's turn counter -- so a rule fitted on them can actually be
+    evaluated in production. Anything that requires searching first (occupancy, the
+    top-1 visit share, the Q gap, whether search overrode the model) is a LABEL and is
+    recorded elsewhere on the row; mixing the two produces a rule that cannot be run.
+
+    Returned flat and prefixed `f_` so a consumer can select the input columns without
+    knowing the schema.
+    """
+    obs = getattr(context, "observation", None)
+    moves = switches = 0
+    for candidate in (getattr(obs, "candidates", None) or []):
+        if not isinstance(candidate, Mapping) or not candidate.get("legal"):
+            continue
+        kind = candidate.get("kind")
+        if kind == "move":
+            moves += 1
+        elif kind == "switch":
+            switches += 1
+    replay = getattr(
+        getattr(context, "public_materialization_state", None), "replay", None
+    )
+    ordered = sorted((float(v) for v in (prior_share or {}).values()), reverse=True)
+    total = sum(ordered)
+    entropy = None
+    if total > 0:
+        entropy = -sum(
+            (v / total) * math.log(v / total) for v in ordered if v > 0
+        )
+    return {
+        # Branching, split because a switch changes the active mon and a move does not,
+        # so they do not cost the same in tree width.
+        "f_legal_moves": moves,
+        "f_legal_switches": switches,
+        "f_legal_actions": moves + switches,
+        # FORCED: nothing to decide, so no depth is worth buying. Measured at 1.6% of
+        # decisions overall and 3.2% past turn 30 -- a late-game phenomenon.
+        "f_forced": (moves + switches) <= 1,
+        # The model's own confidence, from the forward pass already done. This is the
+        # cheapest predictor of "was this decision ever going to be close".
+        "f_root_prior_top1": ordered[0] / total if total > 0 else None,
+        "f_root_prior_entropy": entropy,
+        "f_turn": int(getattr(replay, "turn_number", 0) or 0),
+        # The allocation itself: the table is indexed on this.
+        "f_sims_per_world": sims_per_world,
+    }
 
 
 def native_search_args(
@@ -3966,6 +4019,26 @@ class EngineMctsPolicy:
             "opponent_top_arm": opponent_choice,
             "opponent_prior_arm": opponent_prior_choice,
         }
+        # FREE features, for the static depth rule. Kept separate from the labels above
+        # by the `f_` prefix: a rule may only be fitted on these, because only these are
+        # knowable before the search that produced everything else.
+        row.update(free_decision_features(
+            context,
+            getattr(self, "_ladder_sims_override", None) or int(self._config.search_sims),
+            arms.prior_share,
+        ))
+        # OCCUPANCY, the label the rule is fitted AGAINST, pooled over this decision's
+        # searched worlds. Distinct from `max_depth_reached`, which is a MAX and so
+        # cannot tell a filled depth from a single deep line.
+        occupancy: Counter = Counter()
+        for record in world_runs:
+            for depth, count in enumerate(record.get("_depth_occupancy") or []):
+                if count:
+                    occupancy[depth] += int(count)
+        if occupancy:
+            row["depth_occupancy"] = {
+                str(depth): occupancy[depth] for depth in sorted(occupancy)
+            }
         if len(self.stats.root_decision_rows) < _ROOT_DECISION_ROWS:
             self.stats.root_decision_rows.append(row)
         else:

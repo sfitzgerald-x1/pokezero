@@ -32,6 +32,7 @@ from pokezero.engine_search import (  # noqa: E402
     _FALLBACK_SAMPLES_PER_CLASS,
     _REASON_DETAIL_LIMIT,
     _bounded_reason_detail,
+    free_decision_features,
     _latch_encoder_tables_to_model_config,
     _locked_aggregate_choice,
     _world_visit_shares,
@@ -4763,6 +4764,71 @@ class WorldCacheKeyTest(unittest.TestCase):
         self.assertNotEqual(k, world_cache_key({**base, "state_str": "S2"}, "side_one"))
         self.assertNotEqual(k, world_cache_key({**base, "ctx_json": "C2"}, "side_one"))
         self.assertNotEqual(k, world_cache_key(base, "side_two"))
+
+
+class FreeDecisionFeatureTest(unittest.TestCase):
+    """The inputs a production depth rule may key on, and the line it must not cross.
+
+    Every feature here is knowable BEFORE the search runs. That is the whole discipline:
+    a rule fitted on a post-search quantity -- occupancy, the top-1 visit share, the Q
+    gap, whether search overrode the model -- cannot be evaluated in production, because
+    there you must choose the depth first. The `f_` prefix is that boundary, made
+    mechanical so a consumer can select input columns without knowing the schema.
+    """
+
+    @staticmethod
+    def _ctx(moves, switches, turn=7):
+        cands = ([{"kind": "move", "legal": True}] * moves
+                 + [{"kind": "switch", "legal": True}] * switches
+                 + [{"kind": "move", "legal": False}])  # illegal must not count
+        return SimpleNamespace(
+            observation=SimpleNamespace(candidates=cands),
+            public_materialization_state=SimpleNamespace(
+                replay=SimpleNamespace(turn_number=turn)),
+        )
+
+    def test_branching_is_split_into_moves_and_switches(self) -> None:
+        # Split deliberately: a switch changes the active mon and a move does not, so
+        # they do not cost the same in tree width. An illegal candidate counts as neither.
+        f = free_decision_features(self._ctx(4, 5), 4096, {"a": 1.0})
+        self.assertEqual((f["f_legal_moves"], f["f_legal_switches"]), (4, 5))
+        self.assertEqual(f["f_legal_actions"], 9)
+        self.assertFalse(f["f_forced"])
+
+    def test_a_single_legal_action_is_forced(self) -> None:
+        # Nothing to decide, so no depth is worth buying. Measured at 1.6% of decisions
+        # overall and 3.2% past turn 30 -- a late-game phenomenon.
+        for moves, switches in ((1, 0), (0, 1)):
+            with self.subTest(moves=moves, switches=switches):
+                self.assertTrue(free_decision_features(
+                    self._ctx(moves, switches), 4096, {"a": 1.0})["f_forced"])
+
+    def test_the_root_prior_summarises_to_confidence_and_entropy(self) -> None:
+        sharp = free_decision_features(self._ctx(4, 0), 4096, {"a": 0.97, "b": 0.03})
+        flat = free_decision_features(self._ctx(4, 0), 4096, {"a": 0.5, "b": 0.5})
+        self.assertAlmostEqual(sharp["f_root_prior_top1"], 0.97, places=3)
+        self.assertAlmostEqual(flat["f_root_prior_top1"], 0.5, places=3)
+        self.assertLess(sharp["f_root_prior_entropy"], flat["f_root_prior_entropy"],
+                        "a confident prior must read as LOWER entropy")
+
+    def test_an_absent_prior_is_None_not_a_confident_zero(self) -> None:
+        # The prior is unavailable when the crate refused to price the root. Reporting
+        # 0.0 would be a claim about confidence; None is an absence.
+        f = free_decision_features(self._ctx(4, 0), 4096, {})
+        self.assertIsNone(f["f_root_prior_top1"])
+        self.assertIsNone(f["f_root_prior_entropy"])
+
+    def test_the_allocation_and_turn_are_carried(self) -> None:
+        f = free_decision_features(self._ctx(2, 1, turn=23), 1024, {"a": 1.0})
+        self.assertEqual(f["f_sims_per_world"], 1024)
+        self.assertEqual(f["f_turn"], 23)
+
+    def test_no_label_can_leak_into_the_input_set(self) -> None:
+        f = free_decision_features(self._ctx(4, 5), 4096, {"a": 1.0})
+        self.assertTrue(all(k.startswith("f_") for k in f), sorted(f))
+        for label in ("depth_occupancy", "max_depth_reached", "top_arms",
+                      "model_override", "visit_share"):
+            self.assertNotIn(label, f)
 
 
 class TurnAllocationTest(unittest.TestCase):
