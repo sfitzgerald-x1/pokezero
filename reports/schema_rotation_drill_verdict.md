@@ -22,6 +22,49 @@
 > | arm discriminates | yes, under `shape=identical` |
 > | rotated arm, RAW | **35** — `35 failed, 6012 passed, 48 skipped, 2 xfailed, 18597 subtests in 1123s`; denominator 6097 collected; 29 FAILED + 6 SUBFAILED, 0 ERROR |
 >
+> ### THE CLAIM, STATED WITH ITS SCOPE — and it does not depend on the drill's arms
+>
+> The honest claim is narrower than "the class is dead", and narrower than the drill was ever asked to
+> prove. It rests on two tools that run in seconds, not on a scored rotation:
+>
+> **No test reads the default's version string where it means a SPECIFIC version.**
+>
+> `python scripts/schema_default_assertion_scan.py --texts` over **254 test files** reports **PIN 5 /
+> MIXED 4**, and the five PINs are exactly the five class-(iii) rows in
+> `tests/data/schema_drill_expected_breakages.txt`:
+>
+> ```
+> test_observation.py::test_the_fresh_artifact_default_is_v4                       1/1 asserts
+> test_observation_spec_v2_1.py::test_v4_IS_the_fresh_default                      2/2 asserts
+> test_observation_spec_v3.py::test_v4_IS_the_default_not_v3                       1/1 asserts
+> test_observation_spec_v4.py::test_v4_IS_the_default                              1/1 asserts
+> test_turn_merged_encode.py::test_v4_IS_the_default_and_the_default_is_NOT_turn_merged  1/1
+> ```
+>
+> Those five ANSWER "which schema does a fresh artifact get" — the legitimate question — rather than
+> consuming the answer while meaning a fixed version. That agreement between the scan and the rubric is
+> the check that the identity half is complete rather than merely non-empty.
+>
+> **The residue is 4 MIXED tests, not zero.** Each reads the default to BUILD something and also
+> asserts on it, which blinds the dead-pin detector for its own read (D2). They are named by the scan on
+> every run. Four is the honest number; "the class is dead" was never true.
+>
+> **Exposure: 59 sites across 21 files**, from `python scripts/schema_default_ledger.py` (scanning 530
+> tracked `.py` files): 38 `default-spec`, 16 `bare-const`, 3 `implicit:LinearPolicyModel`, 2
+> `implicit:OnlineBattleAgent`. Frozen by `tests/test_schema_default_ledger.py` at
+> `HIGH_WATER_MARK = 59`, which only ever lowers — raised exactly once in this programme, deliberately,
+> with the justification recorded at the constant.
+>
+> That is down from **391** at the start and from the **213** the plan quoted. Every reduction is a site
+> that named its schema instead of reading the global, and each is enumerated in the allowlist by
+> `file::owner::kind::unclosed` — deliberately without a line number, so a reformat cannot launder a new
+> site in as an old one.
+>
+> **What the rotation itself proved, independently of all of the above:** the one-line change to v4
+> breaks ZERO tests by set equality against main — baseline and rotated both 7 failed / 6034 passed /
+> 18601 subtests, difference empty in both directions, re-derived by an independent reviewer on a fresh
+> clone with a crate fingerprint-verified against the same tree.
+>
 > ### THE SCORED RUN WAS ATTEMPTED AND THE DRILL ABORTED. That abort is the verdict.
 >
 > A full run on this tree completed the rotated arm and BOTH baseline runs, then stopped itself:
