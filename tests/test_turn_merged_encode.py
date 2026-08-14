@@ -113,7 +113,7 @@ class SchemaTableTest(unittest.TestCase):
         I first wrote it as a companion test here, phrased against the default
         (`assertNotIn(OBSERVATION_SCHEMA_VERSION, TURN_MERGED_...)`) so it would track future
         rotations. The ledger census refused it, correctly: that phrasing is a NEW read of the global,
-        it took the allowlist from 68 rows to 69, and HIGH_WATER_MARK is only ever lowered. Paying a
+        it took the allowlist UP by one row, and HIGH_WATER_MARK is only ever lowered. Paying a
         ledger row for an assertion already made elsewhere is the wrong trade -- the census is the
         instrument this whole programme rests on, and its monotonicity is worth more than the
         convenience of stating the fact twice.

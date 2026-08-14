@@ -31,7 +31,7 @@ ALLOWLIST = REPO / "tests" / "data" / "schema_default_allowlist.json"
 # Raised once, 59 -> 60, when test_online_client's unpinned-agent test had to read the global
 # to say what "unpinned" means; that bought behavioural coverage of the forfeit path in
 # exchange for one instrumentation row. Net against main that commit still went 65 -> 60.
-HIGH_WATER_MARK = 60
+HIGH_WATER_MARK = 59
 LEDGER = REPO / "scripts" / "schema_default_ledger.py"
 
 

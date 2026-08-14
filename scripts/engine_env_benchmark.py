@@ -443,7 +443,7 @@ def main() -> int:
     #
     # Deliberately NOT `observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION)`, which was my first
     # cut. That reads the global, and the census counted it: a new `bare-const` row in scripts/,
-    # taking the ledger from 68 to 69 against a HIGH_WATER_MARK that only ever lowers. Fixing a
+    # taking the ledger UP by one against a HIGH_WATER_MARK that only ever lowers. Fixing a
     # two-answers bug by adding a third read of the global is the wrong direction, and the gate said
     # so before this was committed.
     #

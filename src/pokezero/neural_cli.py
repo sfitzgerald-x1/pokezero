@@ -467,7 +467,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=("v2.1", "v2.2", "v3", "v4"),
         default=None,
         help=(
-            "Observation schema for a FRESH train: v2.1, v2.2 (default; turn-merged "
+            "Observation schema for a FRESH train: v4 (default since 2026-08-13), v2.2 (turn-merged "
             "transition tokens; stamps the model config, sizes the widths, and flips the "
             "schema-derived vocabulary), v3 (turn-merged grouped layout with the V3 public "
             "signals), or v4 (v3 plus the k0 feature pack — forced recharge, last executed "
@@ -1951,7 +1951,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=("v2.1", "v2.2", "v3", "v4"),
         default=None,
         help=(
-            "Observation schema for a FRESH iterate run: v2.1, v2.2 (default; "
+            "Observation schema for a FRESH iterate run: v4 (default since 2026-08-13), v2.2 ("
             "turn-merged transition tokens; sizes the model config, the env spec, and the "
             "schema-derived vocabulary), v3 (turn-merged grouped layout with the V3 public "
             "signals), or v4 (v3 plus the k0 feature pack; also flips the feature-pack "

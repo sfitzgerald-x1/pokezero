@@ -84,8 +84,18 @@ OBSERVATION_SCHEMA_VERSION_V4 = "pokezero.observation.v4"
 # `ObservationSpec.schema_version` (#1244), `PokeZeroObservationV0.schema_version` (#1244),
 # `TransformerPolicyConfig.observation_schema_version` (#1251), and
 # `LocalShowdownConfig.observation_spec` (#1252). Each named its own schema instead, taking the
-# count 41 -> 29 -> 23. `scripts/schema_default_ledger.py` is the census of what still reads this
-# global (68 sites, frozen by tests/test_schema_default_ledger.py so it can only shrink), and
+# count 41 -> 29 -> 15, and this PR's invariants plus the eight consumer fixes in #1255 took 15 to
+# ZERO -- measured by set equality against main, same command and same crate.
+#
+# WHAT THE FOUR NAMINGS DID NOT DO, and it is the thing a future reader most needs: all four
+# stamp defaults still say v2.2 (observation.py's two, neural_policy.py's, local_showdown.py's)
+# while this line says v4. So a `rollout collect` with no flag stamps v2.2, and a `neural train`
+# with no flag stamps v4 -- WHAT A FRESH ARTIFACT GETS DEPENDS ON THE ENTRYPOINT. Chaining them
+# flagless is refused loudly (cross-schema at the cache/model check), not silently. Re-aiming
+# those four to v4 is the deliberate follow-up that naming them was for.
+# `scripts/schema_default_ledger.py` is the census of what still reads this
+# global -- run that script for the count, which is frozen by
+# tests/test_schema_default_ledger.py so it can only shrink -- and
 # `scripts/schema_rotation_drill.sh` is the instrument that measures a rotation's blast radius
 # before it lands.
 OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V4

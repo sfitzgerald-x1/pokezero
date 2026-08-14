@@ -91,7 +91,11 @@ test_token_format_doc.py::TokenFormatDocSelfValidationTest::test_committed_dump_
 # notice.
 #
 # Deliberately NOT removed, and no replacement admitted, for two reasons: a row deleted quietly
-# leaves this file empty and the drill refuses a verdict at exit 7 without saying why, and admitting
+# leaves SEVEN other rows here, so the file is not empty and exit 7 never fires -- under `differ`
+# the arm would match its own narrowed rubric and exit 12 INCONCLUSIVE, looking exactly as healthy
+# as it ever looks with zero shape coverage. The real protection is the LOUD named
+# EXPECTED-BUT-DID-NOT-BREAK on this row (exit 1). An earlier draft of this note claimed the
+# emptiness/exit-7 mechanism; that inverts how the file is read. And admitting
 # a substitute chosen by reasoning rather than by a measured breakage is the laundering this file's
 # admission rule exists to prevent. A NEW shape site has to be found in the suite -- or written -- and
 # the honest reading of "one site wide" was always that almost nothing here pins the default's width.

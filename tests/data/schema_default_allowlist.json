@@ -18,12 +18,6 @@
     "owner": "main"
   },
   {
-    "file": "scripts/shaping_ranker.py",
-    "line": 228,
-    "kind": "default-spec",
-    "owner": "value_of"
-  },
-  {
     "file": "src/pokezero/engine_env.py",
     "line": 1140,
     "kind": "default-spec",

@@ -103,7 +103,7 @@ from pokezero.shaping import (
     potential_from_components,
     resolve_shaping_config,
 )
-from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC, observation_from_player_state
+from pokezero.showdown import observation_from_player_state, observation_spec_for_schema
 
 SPIKES_LAYERS_PROBE = 3
 VALIDITY_INVERTED_LABEL = "validity-inverted(builtin)"
@@ -224,8 +224,17 @@ def _std(values: list[float]) -> float:
 
 def evaluate_candidate_model(model, result, *, shaping, heldout_records, corpus, vocab, dex, value_states: int):
     def value_of(state) -> float:
+        # ENCODES WITH THE SPEC THE MODEL STAMPS, not the process default. `main` builds its
+        # TransformerPolicyConfig without naming a schema, and since #1251 that config NAMES v2.2 --
+        # while DEFAULT_REPLAY_OBSERVATION_SPEC follows the global and is v4 after the rotation. The
+        # two agreed by coincidence until then; afterwards this fed 132/41/23 observations to a
+        # 155/51/151 model. Found by the #1253 reviewer, and it is the SECOND committed tool of this
+        # class -- the commit that fixed scripts/engine_env_benchmark.py called it "the one".
         observation = observation_from_player_state(
-            state, category_vocab=vocab, spec=DEFAULT_REPLAY_OBSERVATION_SPEC, dex=dex
+            state,
+            category_vocab=vocab,
+            spec=observation_spec_for_schema(result.model_config.observation_schema_version),
+            dex=dex,
         )
         return evaluate_transformer_observation_value(model=model, result=result, observations=[observation])
 
