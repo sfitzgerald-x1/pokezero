@@ -22,6 +22,36 @@
 > | arm discriminates | yes, under `shape=identical` |
 > | rotated arm, RAW | **35** — `35 failed, 6012 passed, 48 skipped, 2 xfailed, 18597 subtests in 1123s`; denominator 6097 collected; 29 FAILED + 6 SUBFAILED, 0 ERROR |
 >
+> ### THE SCORED RUN WAS ATTEMPTED AND THE DRILL ABORTED. That abort is the verdict.
+>
+> A full run on this tree completed the rotated arm and BOTH baseline runs, then stopped itself:
+>
+> ```
+> == rotated ==   raw total: 35   denominator 6095
+> == baseline ==  stable across two runs (subtracted): 8   denominator 6089
+> ABORT: rotated and baseline denominators differ by 6 (6095 vs 6089).
+>        One run measured a different suite; the subtraction is meaningless.
+> DRILL_EXIT=11
+> ```
+>
+> **The guard is correct and the instrument is now self-blocking.** The drill works by INJECTING a
+> synthetic sixth schema and rotating the default to it. This tree contains tests that ENUMERATE the
+> schema table — `test_schema_property_membership.py` and `test_schema_with_selector.py`, both added by
+> #1244 — so a sixth schema creates six additional collected cases. The rotated arm therefore always
+> measures a slightly larger suite than the baseline, and the denominator guard (added because a
+> scope-mismatched subtraction silently shrinks the residue) refuses to subtract across them.
+>
+> So the honest verdict for the v4 tree is: **there is no scored verdict, because the drill cannot
+> produce one here.** Not "the run is too slow", not "it was not attempted" — attempted, and it
+> correctly refused. Two of its own improvements now conflict: the injection design (#1247) and the
+> tests that enumerate the schema table (#1244).
+>
+> Fixing it means one of: excluding schema-enumerating tests from the drill's target set; comparing
+> failure SETS without requiring equal denominators (which is what `_norm_id` already makes possible,
+> and which the guard was written to prevent for a different reason); or having the control arm supply
+> the denominator delta it already measures. That is instrument work with its own review surface, and
+> it should not be decided inside a docs PR.
+>
 > ### What has NOT been established, and must not be inferred
 >
 > **MY FIRST FIGURE HERE WAS 42 AND DID NOT REPRODUCE.** A reviewer re-ran the rotated arm on this
