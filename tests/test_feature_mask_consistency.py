@@ -326,9 +326,19 @@ class TheDefaultEqualsExplicitConflationTest(unittest.TestCase):
     default with no rotation at all. Two of the function's three axes gate their train/eval hard
     fail on a VALUE comparison against the process-wide default:
 
-        :203  resolved.feature_masks    != DEFAULT_OBSERVATION_FEATURE_MASKS
-        :226  resolved.observation_spec != DEFAULT_REPLAY_OBSERVATION_SPEC
-        :245  resolved.category_vocab   is not None          <- the correct pattern
+        :204  resolved.feature_masks    != DEFAULT_OBSERVATION_FEATURE_MASKS
+        :236  resolved.observation_spec != CONFIG_DEFAULT_OBSERVATION_SPEC
+        :257  resolved.category_vocab   is not None          <- the correct pattern
+
+    THE SPEC LINE'S REFERENCE MOVED, and every test in this class had to move with it. It used to read
+    `!= DEFAULT_REPLAY_OBSERVATION_SPEC`, the process-wide global. Naming
+    `LocalShowdownConfig.observation_spec` decoupled the field default from that global, so the guard
+    now compares against `CONFIG_DEFAULT_OBSERVATION_SPEC` -- the config's OWN default, which is the
+    only value that can mean "the caller named nothing".
+
+    A test in this class that still referenced the global would be testing a different constant from
+    the one the guard reads. That is not hypothetical: under a rotation the two differ, and both the
+    conflation cases below and the non-vacuity arm silently changed meaning. See each test.
 
     Because `LocalShowdownConfig.feature_masks` and `.observation_spec` default to the VALUE rather
     than to a `None` sentinel, a caller who explicitly names the schema or the masks that happen to
@@ -345,12 +355,23 @@ class TheDefaultEqualsExplicitConflationTest(unittest.TestCase):
 
     @unittest.expectedFailure
     def test_an_explicit_spec_equal_to_the_default_should_still_hard_fail(self) -> None:
-        from pokezero.showdown import (
-            DEFAULT_REPLAY_OBSERVATION_SPEC,
-            V2_1_REPLAY_OBSERVATION_SPEC,
-        )
+        """The explicit value must equal the CONFIG's default, which is what the guard compares to.
 
-        config = LocalShowdownConfig(observation_spec=DEFAULT_REPLAY_OBSERVATION_SPEC)
+        It used to be `DEFAULT_REPLAY_OBSERVATION_SPEC`. That was the same object until the field
+        default was named, and is a DIFFERENT one under a rotation -- at which point this test stops
+        constructing the conflation at all: an explicit v4 spec against a v2.2 config default really
+        does differ, the guard fires correctly, and the expectedFailure flips to XPASS.
+
+        An XPASS here is documented as meaning "the None sentinel landed". Reached this way it would
+        mean nothing of the kind -- only that the test's own value had drifted away from the config
+        default -- so the loud signal would be loud and false. Naming
+        CONFIG_DEFAULT_OBSERVATION_SPEC keeps the value equal to the guard's reference by
+        construction, so an XPASS can only be caused by the guard changing.
+        """
+        from pokezero.local_showdown import CONFIG_DEFAULT_OBSERVATION_SPEC
+        from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC
+
+        config = LocalShowdownConfig(observation_spec=CONFIG_DEFAULT_OBSERVATION_SPEC)
         with self.assertRaisesRegex(ValueError, "conflicts with the loaded checkpoint"):
             env_config_from_checkpoint_provenance(
                 config, (), context="t", required_specs=V2_1_REPLAY_OBSERVATION_SPEC,
@@ -373,11 +394,9 @@ class TheDefaultEqualsExplicitConflationTest(unittest.TestCase):
         Without this the two expectedFailures above are satisfied by a function that never raises,
         and the record would say "the guard is broken" when it might simply be absent.
         """
+        from pokezero.local_showdown import CONFIG_DEFAULT_OBSERVATION_SPEC
         from pokezero.observation import ObservationFeatureMasks
-        from pokezero.showdown import (
-            DEFAULT_REPLAY_OBSERVATION_SPEC,
-            REPLAY_OBSERVATION_SPECS_BY_SCHEMA,
-        )
+        from pokezero.showdown import REPLAY_OBSERVATION_SPECS_BY_SCHEMA
 
         # SELECTED against the live default, not hardcoded. An earlier version of this test named
         # `V2_REPLAY_OBSERVATION_SPEC` as its "non-default" arm -- and under a v2 rotation that value
@@ -390,10 +409,20 @@ class TheDefaultEqualsExplicitConflationTest(unittest.TestCase):
         # Exactly one supported schema's spec equals the default at any time, and WHICH one depends
         # on the rotation, so the only default-independent choice is to pick relative to the live
         # value. Two distinct non-default specs are needed: one for the env, one for the checkpoint.
+        #
+        # SELECTED AGAINST THE GUARD'S OWN REFERENCE, `CONFIG_DEFAULT_OBSERVATION_SPEC`. It used to
+        # be DEFAULT_REPLAY_OBSERVATION_SPEC, and that was wrong the moment the field default was
+        # named: the guard compares against the config default, so filtering on the global leaves
+        # the guard's actual default IN the candidate pool. Under a rotation `others` contained
+        # v2.2 -- the config default -- and this test passed only because
+        # REPLAY_OBSERVATION_SPECS_BY_SCHEMA's insertion order happens to put v2 first. Retire v2
+        # and v2.1, or reorder that dict, and `others[0]` becomes the config default, the guard
+        # correctly does not fire, and this test reports "the guard is broken" -- which is exactly
+        # the misreading the paragraph above says it exists to prevent.
         others = [
             spec
             for spec in REPLAY_OBSERVATION_SPECS_BY_SCHEMA.values()
-            if spec != DEFAULT_REPLAY_OBSERVATION_SPEC
+            if spec != CONFIG_DEFAULT_OBSERVATION_SPEC
         ]
         self.assertGreaterEqual(
             len(others), 2,
@@ -402,9 +431,9 @@ class TheDefaultEqualsExplicitConflationTest(unittest.TestCase):
         )
         env_spec, checkpoint_spec = others[0], others[1]
         self.assertNotEqual(
-            env_spec, DEFAULT_REPLAY_OBSERVATION_SPEC,
-            "the env spec chosen for this arm equals the default; the guard would not fire and "
-            "this test would report a broken guard where there is merely no explicit value.",
+            env_spec, CONFIG_DEFAULT_OBSERVATION_SPEC,
+            "the env spec chosen for this arm equals the CONFIG default; the guard would not fire "
+            "and this test would report a broken guard where there is merely no explicit value.",
         )
 
         with self.assertRaisesRegex(ValueError, "conflicts with the loaded checkpoint"):

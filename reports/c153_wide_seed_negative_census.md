@@ -443,7 +443,7 @@ committed artifact.
   than a first draft placed it: the payload reaching this raise is not one the differential builds
   at all. `world_battle_spec` constructs its own at `engine_world.py:911`, calling
   `_public_materialization_payload(state)` with **neither** deferred argument (both keyword-only,
-  defaulting to `None`; `dict(... or {})` at `local_showdown.py:2324`), then hands it to
+  defaulting to `None`; `dict(... or {})` at `local_showdown.py:2359`), then hands it to
   `battle_spec_from_payload`, which reaches `_reject_unsupported_globals` at `:397`. An empty dict
   is falsy, so the guard never fires **for any caller of `world_battle_spec`** — stronger than a
   claim about the differential's own `:2649` payload, which exist but feed the truant

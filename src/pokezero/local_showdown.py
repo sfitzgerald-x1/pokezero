@@ -36,7 +36,6 @@ from .randbat import load_gen3_randbat_source_cached
 from .randbat_vocab import gen3_category_vocabulary
 from .showdown import (
     V2_2_REPLAY_OBSERVATION_SPEC,
-    DEFAULT_REPLAY_OBSERVATION_SPEC,
     PlayerRelativeBattleState,
     ShowdownPokemon,
     ShowdownReplayState,
@@ -288,6 +287,18 @@ class LocalShowdownConfig:
     # and the two in observation.py. A dataclass default is frozen at class-definition time, so
     # `= DEFAULT_REPLAY_OBSERVATION_SPEC` meant every env built without naming a spec silently
     # re-aimed the moment the process default rotated.
+    #
+    # NOT "the last of four". This one is the largest by call sites (~135), not the last by count.
+    # `scripts/schema_default_ledger.py`'s `derive_surfaces()` is the authority and it still names
+    # two dataclass field defaults reading a process-wide global:
+    #
+    #     OnlineBattleAgent      {'spec'}                       online_client.py:99
+    #     LinearPolicyModel      {'observation_schema_version'}  linear_policy.py:110
+    #
+    # so the figure is SIX such defaults, four named and two open. I wrote "the last of the four"
+    # here and in the commit message while the tool three lines away printed the counterexamples --
+    # a recalled figure contradicted by the census, which is the exact class this whole programme
+    # exists to retire. Ask `derive_surfaces()` rather than trusting a count word in a comment.
     observation_spec: ObservationSpec = CONFIG_DEFAULT_OBSERVATION_SPEC
     # Ablation-arm feature masks (config, not spec): masked-off blocks are zeroed +
     # attention-masked at encode time. Callers pairing the env with a model must keep these
