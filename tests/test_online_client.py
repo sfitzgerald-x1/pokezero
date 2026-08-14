@@ -166,8 +166,8 @@ class TurnMergedNormalizeThreadingTest(unittest.TestCase):
         TWO EARLIER FORMS WERE VACUOUS, and I claimed the second was unavoidable. Both wrong.
 
         The first computed `expected = agent.spec.schema_version in
-        TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS`, which is byte-for-byte `OnlineBattleAgent.choose`'s
-        own expression, so it could not fail. A reviewer kill-confirmed it: re-pinning
+        TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS`, which is the same expression as `OnlineBattleAgent.choose`
+        uses (differing only in the receiver), so it could not fail. A reviewer kill-confirmed it: re-pinning
         `OnlineBattleAgent.spec`'s field default to v2.1 left this whole file GREEN (13 passed) where
         the pre-existing form went red -- so the PR was strictly less sensitive than what it replaced,
         on a path where an agent normalizing for the wrong schema dies mid-battle and forfeits.
