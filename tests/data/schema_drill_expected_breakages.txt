@@ -65,7 +65,7 @@ test_token_format_doc.py::TokenFormatDocSelfValidationTest::test_committed_dump_
 # this rubric's identity half is complete, not merely non-empty. Of the 4 MIXED, three are NOT rows
 # here: they read the default to BUILD something rather than to assert its identity, which makes
 # them unmigrated sites owned by the ledger's census, not class (iii). The seventh IS a row here
-# (the fingerprint payload, 1 of 13 assertions) and is discussed at that row.
+# (the fourth) IS a row here (the fingerprint payload, 1 of 13 assertions), discussed at that row.
 # The five mixed tests, all now split into a clean pin plus a residual that holds no default read:
 #   test_observation_spec_v3.py    test_v3_is_supported_but_not_the_default
 #   test_turn_merged_encode.py     test_v2_2_is_a_supported_schema_entry_and_the_default

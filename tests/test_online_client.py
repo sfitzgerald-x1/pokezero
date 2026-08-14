@@ -182,7 +182,7 @@ class TurnMergedNormalizeThreadingTest(unittest.TestCase):
         production: FAILS.
 
         Cost, measured rather than argued: reading the global adds one `bare-const` census row, so
-        HIGH_WATER_MARK is 60 here rather than 59 -- still only ever lowered, from 65. One
+        HIGH_WATER_MARK is 59 here rather than 58 -- still only ever lowered, from 65. One
         instrumentation row for behavioural coverage of the forfeit path is the right trade, and
         "it cannot be done" was a claim I should have tested before writing it down.
         """

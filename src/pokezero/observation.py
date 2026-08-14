@@ -84,7 +84,7 @@ OBSERVATION_SCHEMA_VERSION_V4 = "pokezero.observation.v4"
 # `ObservationSpec.schema_version` (#1244), `PokeZeroObservationV0.schema_version` (#1244),
 # `TransformerPolicyConfig.observation_schema_version` (#1251), and
 # `LocalShowdownConfig.observation_spec` (#1252). Each named its own schema instead, taking the
-# count 41 -> 29 -> 15, and this PR's invariants plus the eight consumer fixes in #1255 took 15 to
+# count 41 -> 29 -> 15, and this PR's invariants plus two consumer fixes here and the six in #1255 took 15 to
 # ZERO -- measured by set equality against main, same command and same crate.
 #
 # WHAT THE FOUR NAMINGS DID NOT DO, and it is the thing a future reader most needs: all four
