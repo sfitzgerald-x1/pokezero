@@ -26,8 +26,12 @@ REPO = Path(__file__).resolve().parents[1]
 # tests/data, not corpus/: corpus/ is gitignored, so an allowlist there is invisible to
 # everyone else and the gate silently cannot run. Caught by `git add` refusing the path.
 ALLOWLIST = REPO / "tests" / "data" / "schema_default_allowlist.json"
-# The most rows the allowlist has ever legitimately held. Only ever lowered.
-HIGH_WATER_MARK = 65
+# The most rows the allowlist has ever legitimately held. Lowered as the class is retired, and
+# raised ONLY with a justification in the PR body -- which the failure message below demands.
+# Raised once, 59 -> 60, when test_online_client's unpinned-agent test had to read the global
+# to say what "unpinned" means; that bought behavioural coverage of the forfeit path in
+# exchange for one instrumentation row. Net against main that commit still went 65 -> 60.
+HIGH_WATER_MARK = 60
 LEDGER = REPO / "scripts" / "schema_default_ledger.py"
 
 
