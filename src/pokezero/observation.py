@@ -71,10 +71,24 @@ OBSERVATION_SCHEMA_VERSION_V3 = "pokezero.observation.v3"
 OBSERVATION_SCHEMA_VERSION_V4 = "pokezero.observation.v4"
 # The CURRENT schema: what fresh artifacts (new trains, checkpoint-free encodes) are stamped
 # with. Loading a checkpoint always overrides this default with the checkpoint's own schema.
-# v2.2 earned the default slot (2026-07-08): under the schedule-uncompressed A/B reads the
-# turn-merged arm matched or beat v2.1/v2 on every yardstick and holds the current bests;
-# v2.1/v2 artifacts remain first-class via the checkpoint-driven latch.
-OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V2_2
+# v4 took the default slot from v2.2 (2026-08-13). v2.2 had held it since 2026-07-08, when the
+# schedule-uncompressed A/B reads put the turn-merged arm at or above v2.1/v2 on every yardstick;
+# v2.2/v2.1/v2/v3 artifacts all remain first-class via the checkpoint-driven latch, which
+# overrides this line for anything that loads a checkpoint.
+#
+# ROTATING THIS LINE IS NOT A ONE-LINE CHANGE, and the sequence that established that is worth
+# recording here because the next rotation will look equally cheap. Split out of a 42-file branch,
+# this line alone broke 41 tests. They were not 41 defects: FOUR dataclass field defaults read
+# this global, and a dataclass default is frozen at class-definition time, so every config that
+# did not name its schema silently re-aimed the moment this line moved --
+# `ObservationSpec.schema_version` (#1244), `PokeZeroObservationV0.schema_version` (#1244),
+# `TransformerPolicyConfig.observation_schema_version` (#1251), and
+# `LocalShowdownConfig.observation_spec` (#1252). Each named its own schema instead, taking the
+# count 41 -> 29 -> 23. `scripts/schema_default_ledger.py` is the census of what still reads this
+# global (68 sites, frozen by tests/test_schema_default_ledger.py so it can only shrink), and
+# `scripts/schema_rotation_drill.sh` is the instrument that measures a rotation's blast radius
+# before it lands.
+OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V4
 SUPPORTED_OBSERVATION_SCHEMA_VERSIONS = (
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,

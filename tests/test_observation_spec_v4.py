@@ -232,7 +232,7 @@ class V4EncodeTestBase(unittest.TestCase):
 class V4SchemaTableTest(unittest.TestCase):
     """The schema table, the CLI choice, and the specs the two resolve to."""
 
-    def test_v2_2_IS_the_default_not_v4(self) -> None:
+    def test_v4_IS_the_default(self) -> None:
         """A CLEAN identity pin: one assertion, reading the process default and nothing else.
 
         Split out of test_v4_is_supported_turn_merged_grouped_and_feature_packed below, which
@@ -241,17 +241,24 @@ class V4SchemaTableTest(unittest.TestCase):
         broke under a rotation whether or not its default assertion still bound, leaving the
         drill's EXPECTED-BUT-DID-NOT-BREAK detector blind to this pin going stale.
 
-        Asserted POSITIVELY (default IS v2.2), not as "v4 is not the default". The negative
-        form survives a rotation -- under a rotation to v5-drill, v4 is still not the default --
-        so it would not break, and a non-breaking row in the drill's rubric is a false pin.
+        Asserted POSITIVELY (default IS v4), and the reason is the same one that made the v2.2
+        version of this pin positive rather than "v4 is not the default": a NEGATIVE form survives a
+        rotation -- under a rotation to v5-drill, v3 is still not the default either -- so it would
+        not break, and a non-breaking row in the drill's rubric is a false pin. The v2.2 pin's name
+        carried a `_not_v4` clause because v4 was then the schema most likely to be mistaken for the
+        default; now that it IS the default there is nothing left to negate, so the clause is gone.
         """
-        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
+        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V4)
 
     def test_v4_is_supported_turn_merged_grouped_and_feature_packed(self) -> None:
-        # Adding a schema must never move the fresh default: every running arm keeps collecting
-        # under the schema its checkpoints were trained on. That the default is still v2.2 is
-        # pinned by test_v2_2_IS_the_default_not_v4 above and is deliberately NOT re-asserted
-        # here; see that test's docstring.
+        # This test is about SUPPORT and shape, not about which schema is default. Which one is
+        # default is pinned by test_v4_IS_the_default above and is deliberately NOT re-asserted
+        # here; see that test's docstring for why the two must stay separate.
+        #
+        # The comment this replaces read "Adding a schema must never move the fresh default" --
+        # true of ADDING v4 (2026-07), and it stayed true right up until the deliberate rotation
+        # that moved the default to v4 on 2026-08-13. Kept in the record because the invariant is
+        # still the real one: no schema addition may move the default, only an explicit rotation.
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V4, SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertEqual(SUPPORTED_OBSERVATION_SCHEMA_VERSIONS[-1], OBSERVATION_SCHEMA_VERSION_V4)
         # V4 keeps v3's grouped projection but is NOT turn-merged — it has no transition

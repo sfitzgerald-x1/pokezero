@@ -25,14 +25,15 @@
 # condition.
 
 # ---------------------------------------------------------------------------------------------
-# (1) THE SEVEN IDENTITY PINS. A width change also moves the version string -- v5-drill is not v2.2 --
-# so every class-(iii) pin breaks here too. Listed rather than included by reference, so this file is
-# a complete pass condition on its own and cannot silently diverge from a file it points at.
-test_observation.py::ObservationSpecTest::test_the_fresh_artifact_default_is_v2_2
-test_observation_spec_v3.py::SchemaTableTest::test_v2_2_IS_the_default_not_v3
-test_observation_spec_v4.py::V4SchemaTableTest::test_v2_2_IS_the_default_not_v4
-test_turn_merged_encode.py::SchemaTableTest::test_v2_2_IS_the_default
-test_observation_spec_v2_1.py::SpecTableTest::test_v2_2_IS_the_fresh_default
+# (1) THE SEVEN IDENTITY PINS. A width change also moves the version string -- v5-drill is not the
+# outgoing default, whatever that is -- so every class-(iii) pin breaks here too. Listed rather than
+# included by reference, so this file is a complete pass condition on its own and cannot silently
+# diverge from a file it points at.
+test_observation.py::ObservationSpecTest::test_the_fresh_artifact_default_is_v4
+test_observation_spec_v3.py::SchemaTableTest::test_v4_IS_the_default_not_v3
+test_observation_spec_v4.py::V4SchemaTableTest::test_v4_IS_the_default
+test_turn_merged_encode.py::SchemaTableTest::test_v4_IS_the_default_and_the_default_is_NOT_turn_merged
+test_observation_spec_v2_1.py::SpecTableTest::test_v4_IS_the_fresh_default
 test_linear_policy.py::LinearPolicyTest::test_linear_feature_fingerprint_payload_tracks_extractor_source_and_schemas
 test_token_format_doc.py::TokenFormatDocSelfValidationTest::test_committed_dump_matches_live_regeneration_byte_for_byte
 
@@ -56,6 +57,32 @@ test_token_format_doc.py::TokenFormatDocSelfValidationTest::test_committed_dump_
 # So the shape half of the class is COVERED rather than merely constructed, and its coverage is ONE
 # site wide on this tree. That is a small number and it is the real one; the honest reading is that
 # almost nothing in this suite pins the default's width, not that the arm is powerful.
+#
+# ################################################################################################
+# THIS ROW IS PREDICTED DEAD AS OF #1251, AND THE PREDICTION IS NOT YET MEASURED. Read this before
+# trusting a differ run. The demonstration above was recorded on the tree with #1244 landed, i.e.
+# BEFORE #1251, and #1251 is what breaks it:
+#
+#   - the row's width comes from `self._config()`, which is
+#     `TransformerPolicyConfig.compact_category(...)` with no schema named;
+#   - #1251 changed `neural_policy.py:271` to `observation_schema_version: str =
+#     OBSERVATION_SCHEMA_VERSION_V2_2` -- a NAMED version, no longer a read of the global;
+#   - so the restored config is v2.2-stamped and its schema-keyed width default is 155 whatever the
+#     process default is, and the differ arm -- which narrows the OUTGOING default's width -- can no
+#     longer move it.
+#
+# If that is right, the differ arm's dead-pin detector ("expected but did not break") FIRES on this
+# row, the arm exits non-zero, and THE SHAPE HALF OF THE CLASS HAS ZERO COVERAGE. That is not a
+# regression in #1251 -- naming the version is exactly the fix this programme is for -- it is the
+# instrument losing its last shape site BECAUSE the codebase got better, which is a thing this file
+# has no other way to notice.
+#
+# Deliberately NOT removed, and no replacement admitted, for two reasons: a row deleted quietly
+# leaves this file empty and the drill refuses a verdict at exit 7 without saying why, and admitting
+# a substitute chosen by reasoning rather than by a measured breakage is the laundering this file's
+# admission rule exists to prevent. The next differ run decides it. Derived by reading the source,
+# NOT by running the arm; a shape run is 17-70 minutes and has not been done since #1251 landed.
+# ################################################################################################
 test_observation_spec_v2_1.py::ConfigDualSchemaTest::test_from_dict_width_defaults_are_schema_keyed
 
 # ---------------------------------------------------------------------------------------------

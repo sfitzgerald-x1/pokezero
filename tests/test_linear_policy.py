@@ -313,11 +313,11 @@ class LinearPolicyTest(unittest.TestCase):
         self.assertEqual(
             linear_feature_fingerprint(),
             # Pinned hash tracks the fingerprint payload; the observation spec version
-            # (pokezero.observation.v2.2 since the 2026-07-08 default flip) is
-            # intentionally part of it. The v2- and v2.1-era fingerprints live in
+            # (pokezero.observation.v4 since the 2026-08-13 default rotation) is
+            # intentionally part of it. The v2-, v2.1- and v2.2-era fingerprints live in
             # LEGACY_LINEAR_FEATURE_FINGERPRINTS so older linear artifacts stay loadable
             # through the dual-schema window.
-            "016206c05d4d65a409ebf55d4dfda6adb441bfe2ff719cfa6094b05c16f973d7",
+            "925de5e1d833a325b36180300689008b609325548db3882a6632574ec3e3064a",
         )
         self.assertIn(
             "2c58350d2d4f34d7a19e10ddcf2ccf6886903089bcfb5124d09f2d29465f393d",
@@ -325,6 +325,15 @@ class LinearPolicyTest(unittest.TestCase):
         )
         self.assertIn(
             "16b258abc6de07cc7940f93f730513ddda62233d3d80191f43d7c272f23d8903",
+            LEGACY_LINEAR_FEATURE_FINGERPRINTS,
+        )
+        # The OUTGOING fingerprint, retired by this rotation. Asserted here and not merely
+        # appended to the tuple, because this is the entry that keeps every linear artifact
+        # collected during v2.2's five weeks as the default loadable -- which is all of them.
+        # Dropping it would be a silent load failure for existing checkpoints, not a test
+        # failure, so the tuple needs a test that names this specific value.
+        self.assertIn(
+            "016206c05d4d65a409ebf55d4dfda6adb441bfe2ff719cfa6094b05c16f973d7",
             LEGACY_LINEAR_FEATURE_FINGERPRINTS,
         )
 
