@@ -1156,6 +1156,13 @@ class EngineMctsStats:
     depth_reached_sum: int = 0
     depth_reached_max: int = 0
     depth_reached_histogram: Counter = field(default_factory=Counter)
+    #: depth -> traversals that OPENED a decision node there, summed over searched
+    #: worlds. The occupancy PROFILE, as distinct from `depth_reached_histogram`, which
+    #: is a histogram of per-world MAXIMA and therefore cannot tell a tree filled to
+    #: depth 3 from one that sent a single traversal to depth 7. Every saturation
+    #: decision in this module was made on the latter; this is the instrument that can
+    #: answer it properly, and it makes the saturating depth a READ off one search.
+    depth_occupancy: Counter = field(default_factory=Counter)
     # Override telemetry (config.override_telemetry; zero when it is off, and
     # zero on every non-model leaf_eval, which is why the config refuses that
     # combination instead of reporting it as "search never overrides").
@@ -1433,6 +1440,9 @@ class EngineMctsStats:
             "fold_annotation_resettle_boundaries": self.fold_annotation_resettle_boundaries,
             "depth_reached_samples": self.depth_reached_samples,
             "depth_reached_max": self.depth_reached_max,
+            "depth_occupancy": {
+                str(depth): count for depth, count in sorted(self.depth_occupancy.items())
+            },
             "depth_reached_histogram": {
                 str(depth): count
                 for depth, count in sorted(self.depth_reached_histogram.items())
@@ -3456,6 +3466,19 @@ class EngineMctsPolicy:
                 self.stats.depth_reached_sum += reached * weight
                 self.stats.depth_reached_histogram[reached] += weight
                 self.stats.depth_reached_max = max(self.stats.depth_reached_max, reached)
+            # OCCUPANCY, which is a different question from the max above and the one the
+            # saturation gate actually needs. `max_depth_reached` is satisfied by a single
+            # deep line, so a ceiling share computed from it means "the ceiling was
+            # REACHABLE", not "the depth is filled" -- measured on this campaign at a gate
+            # that fired on only 14-16% of turns. `depth_occupancy[d]` counts traversals
+            # that opened a decision node at depth d, so ONE search at the cap yields the
+            # whole profile and the saturating depth is a read rather than a scan.
+            occ = report.get("depth_occupancy")
+            if isinstance(occ, list) and occ:
+                for depth, count in enumerate(occ):
+                    if count:
+                        self.stats.depth_occupancy[depth] += int(count) * weight
+                record["_depth_occupancy"] = [int(c) for c in occ]
             # Crate-measured phase walls are per-INVOCATION compute, exactly like
             # iterations/model_evals above: a conservatively replayed world spent
             # that encode/model/tree time twice and must report it.
