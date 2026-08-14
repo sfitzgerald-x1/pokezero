@@ -16,6 +16,7 @@ from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2_1,
     OBSERVATION_SCHEMA_VERSION_V2_2,
+    OBSERVATION_SCHEMA_VERSION_V4,
     SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
     ObservationFeatureMasks,
 )
@@ -81,20 +82,43 @@ class SchemaTableTest(unittest.TestCase):
             V2_2_REPLAY_OBSERVATION_SPEC,
         )
 
-    def test_v2_2_IS_the_default(self) -> None:
+    def test_v4_IS_the_default_and_the_default_is_NOT_turn_merged(self) -> None:
         """A CLEAN identity pin: one assertion, reading the process default and nothing else.
 
         Split from the membership test above (D2). They were one test, so the pin broke under a
         rotation for either of two reasons and the drill could not tell which -- delete the default
         read and the test still broke on membership, so "expected but did not break", the only
         detector for a pin that has gone dead, could never fire for it. The drill's injection ADDS a
-        synthetic schema to those tables rather than removing v2.2, so the membership half survives
-        a rotation by construction; only this line does not.
+        synthetic schema to those tables rather than removing the outgoing default, so the membership
+        half survives a rotation by construction; only this line does not.
 
-        Turn-merged earned the fresh-selection default (2026-07-08 schedule-uncompressed reads);
-        v2.1 stays a supported, checkpoint-latched schema.
+        THE FACT THIS PIN NOW CARRIES IS THE INTERESTING ONE, and it is why the name grew a second
+        clause rather than just swapping a version. Turn-merged held the fresh-selection default from
+        2026-07-08 (v2.2) until 2026-08-13, when v4 took it -- and v4 is deliberately absent from
+        TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS, because it has no transition region for a
+        turn-merged surface to live in. So as of the rotation, THE DEFAULT IS NO LONGER A TURN-MERGED
+        SCHEMA. A pin in this file asserting the default is worth keeping precisely because of that:
+        every turn-merged path here is now reached only via an explicitly named schema or a
+        checkpoint latch, never by falling through to the default, and if that ever stops being true
+        this is the line that says so.
+
+        ONE assertion, still, and the "v4 is not turn-merged" half is deliberately NOT asserted here.
+        Two reasons, and the second is the one that decided it:
+
+          - a second assertion in this method is exactly the D2 shape the split above removed; and
+          - `test_observation_spec_v4.py::test_v4_is_supported_turn_merged_grouped_and_feature_packed`
+            already asserts `OBSERVATION_SCHEMA_VERSION_V4 not in TURN_MERGED_...`, and does it
+            WITHOUT reading the process default.
+
+        I first wrote it as a companion test here, phrased against the default
+        (`assertNotIn(OBSERVATION_SCHEMA_VERSION, TURN_MERGED_...)`) so it would track future
+        rotations. The ledger census refused it, correctly: that phrasing is a NEW read of the global,
+        it would have taken the allowlist UP by one row, and HIGH_WATER_MARK is only ever lowered. Paying a
+        ledger row for an assertion already made elsewhere is the wrong trade -- the census is the
+        instrument this whole programme rests on, and its monotonicity is worth more than the
+        convenience of stating the fact twice.
         """
-        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
+        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V4)
 
     def test_v2_2_widths_extend_the_v2_1_census(self) -> None:
         self.assertEqual(

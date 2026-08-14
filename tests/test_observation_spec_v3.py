@@ -20,6 +20,7 @@ from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
+    OBSERVATION_SCHEMA_VERSION_V4,
     SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
 )
@@ -341,7 +342,7 @@ class SchemaTableTest(unittest.TestCase):
     def test_v3_is_supported(self) -> None:
         """Membership and spec identity. Deliberately holds NO read of the process default.
 
-        Split from `test_v2_2_IS_the_default_not_v3` below (D2). The two were one test, mixing schema
+        Split from `test_v4_IS_the_default_not_v3` below (D2). The two were one test, mixing schema
         MEMBERSHIP -- which the rotation drill's injection leaves passing, since it ADDS a synthetic
         schema to these tables rather than removing v3 -- with a read of the mutable default, which
         the rotation is designed to break. A pin that breaks for either of two reasons cannot tell
@@ -359,7 +360,7 @@ class SchemaTableTest(unittest.TestCase):
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V3, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
 
-    def test_v2_2_IS_the_default_not_v3(self) -> None:
+    def test_v4_IS_the_default_not_v3(self) -> None:
         """A CLEAN identity pin: one assertion, reading the process default and nothing else.
 
         This is the class-(iii) site -- it legitimately ANSWERS "which schema does a fresh artifact
@@ -367,10 +368,12 @@ class SchemaTableTest(unittest.TestCase):
         listed in the drill's rubric. Because it now breaks for exactly one reason, removing the
         assertion makes it stop breaking, and the drill's dead-pin detector fires.
 
-        v2.2 keeps the fresh-selection default: v3 launches only after the fresh golden corpus and
-        EOC audit pass (spec coordination section).
+        v3 never took the default slot and now never will: v4 took it directly from v2.2
+        (2026-08-13). v3 remains supported and checkpoint-latched. This file's pin therefore says
+        what it always said -- "v3 is not what a fresh artifact gets" -- with the positive half
+        re-aimed at v4.
         """
-        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
+        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V4)
 
     def test_v3_widths_are_cutover_specific(self) -> None:
         # V3 removes fourteen source-unreachable numeric columns and reuses the resulting width

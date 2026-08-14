@@ -71,10 +71,34 @@ OBSERVATION_SCHEMA_VERSION_V3 = "pokezero.observation.v3"
 OBSERVATION_SCHEMA_VERSION_V4 = "pokezero.observation.v4"
 # The CURRENT schema: what fresh artifacts (new trains, checkpoint-free encodes) are stamped
 # with. Loading a checkpoint always overrides this default with the checkpoint's own schema.
-# v2.2 earned the default slot (2026-07-08): under the schedule-uncompressed A/B reads the
-# turn-merged arm matched or beat v2.1/v2 on every yardstick and holds the current bests;
-# v2.1/v2 artifacts remain first-class via the checkpoint-driven latch.
-OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V2_2
+# v4 took the default slot from v2.2 (2026-08-13). v2.2 had held it since 2026-07-08, when the
+# schedule-uncompressed A/B reads put the turn-merged arm at or above v2.1/v2 on every yardstick;
+# v2.2/v2.1/v2/v3 artifacts all remain first-class via the checkpoint-driven latch, which
+# overrides this line for anything that loads a checkpoint.
+#
+# ROTATING THIS LINE IS NOT A ONE-LINE CHANGE, and the sequence that established that is worth
+# recording here because the next rotation will look equally cheap. Split out of a 42-file branch,
+# this line alone broke 41 tests. They were not 41 defects: FOUR dataclass field defaults read
+# this global, and a dataclass default is frozen at class-definition time, so every config that
+# did not name its schema silently re-aimed the moment this line moved --
+# `ObservationSpec.schema_version` (#1244), `PokeZeroObservationV0.schema_version` (#1244),
+# `TransformerPolicyConfig.observation_schema_version` (#1251), and
+# `LocalShowdownConfig.observation_spec` (#1252). Each named its own schema instead, taking the
+# count 41 -> 29 -> 15, and this PR's invariants plus two consumer fixes here and the six in #1255 took 15 to
+# ZERO -- measured by set equality against main, same command and same crate.
+#
+# WHAT THE FOUR NAMINGS DID NOT DO, and it is the thing a future reader most needs: all four
+# stamp defaults still say v2.2 (observation.py's two, neural_policy.py's, local_showdown.py's)
+# while this line says v4. So a `rollout collect` with no flag stamps v2.2, and a `neural train`
+# with no flag stamps v4 -- WHAT A FRESH ARTIFACT GETS DEPENDS ON THE ENTRYPOINT. Chaining them
+# flagless is refused loudly (cross-schema at the cache/model check), not silently. Re-aiming
+# those four to v4 is the deliberate follow-up that naming them was for.
+# `scripts/schema_default_ledger.py` is the census of what still reads this
+# global -- run that script for the count, which is frozen by
+# tests/test_schema_default_ledger.py so it can only shrink -- and
+# `scripts/schema_rotation_drill.sh` is the instrument that measures a rotation's blast radius
+# before it lands.
+OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V4
 SUPPORTED_OBSERVATION_SCHEMA_VERSIONS = (
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,

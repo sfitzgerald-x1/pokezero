@@ -1,7 +1,7 @@
 [
   {
     "file": "docs/token-format/extract_turn16.py",
-    "line": 665,
+    "line": 671,
     "kind": "bare-const",
     "owner": "<module>"
   },
@@ -18,12 +18,6 @@
     "owner": "main"
   },
   {
-    "file": "scripts/shaping_ranker.py",
-    "line": 228,
-    "kind": "default-spec",
-    "owner": "value_of"
-  },
-  {
     "file": "src/pokezero/engine_env.py",
     "line": 1140,
     "kind": "default-spec",
@@ -31,19 +25,19 @@
   },
   {
     "file": "src/pokezero/linear_policy.py",
-    "line": 80,
+    "line": 89,
     "kind": "bare-const",
     "owner": "_linear_feature_fingerprint_payload"
   },
   {
     "file": "src/pokezero/linear_policy.py",
-    "line": 110,
+    "line": 119,
     "kind": "bare-const",
     "owner": "LinearPolicyModel"
   },
   {
     "file": "src/pokezero/linear_policy.py",
-    "line": 503,
+    "line": 512,
     "kind": "implicit:LinearPolicyModel",
     "owner": "train_linear_policy",
     "unclosed": [
@@ -100,7 +94,7 @@
   },
   {
     "file": "tests/test_linear_policy.py",
-    "line": 510,
+    "line": 519,
     "kind": "implicit:LinearPolicyModel",
     "owner": "test_train_linear_policy_can_warm_start_from_initial_model",
     "unclosed": [
@@ -109,7 +103,7 @@
   },
   {
     "file": "tests/test_linear_policy.py",
-    "line": 551,
+    "line": 560,
     "kind": "implicit:LinearPolicyModel",
     "owner": "test_linear_softmax_policy_respects_legal_mask",
     "unclosed": [
@@ -274,9 +268,9 @@
   },
   {
     "file": "tests/test_observation.py",
-    "line": 48,
+    "line": 52,
     "kind": "bare-const",
-    "owner": "test_the_fresh_artifact_default_is_v2_2"
+    "owner": "test_the_fresh_artifact_default_is_v4"
   },
   {
     "file": "tests/test_observation_spec_v2.py",
@@ -292,27 +286,27 @@
   },
   {
     "file": "tests/test_observation_spec_v2_1.py",
-    "line": 122,
+    "line": 129,
     "kind": "default-spec",
-    "owner": "test_v2_2_IS_the_fresh_default"
+    "owner": "test_v4_IS_the_fresh_default"
   },
   {
     "file": "tests/test_observation_spec_v2_1.py",
-    "line": 123,
+    "line": 130,
     "kind": "bare-const",
-    "owner": "test_v2_2_IS_the_fresh_default"
+    "owner": "test_v4_IS_the_fresh_default"
   },
   {
     "file": "tests/test_observation_spec_v3.py",
-    "line": 373,
+    "line": 376,
     "kind": "bare-const",
-    "owner": "test_v2_2_IS_the_default_not_v3"
+    "owner": "test_v4_IS_the_default_not_v3"
   },
   {
     "file": "tests/test_observation_spec_v4.py",
-    "line": 248,
+    "line": 251,
     "kind": "bare-const",
-    "owner": "test_v2_2_IS_the_default_not_v4"
+    "owner": "test_v4_IS_the_default"
   },
   {
     "file": "tests/test_online_client.py",
@@ -370,8 +364,8 @@
   },
   {
     "file": "tests/test_turn_merged_encode.py",
-    "line": 97,
+    "line": 121,
     "kind": "bare-const",
-    "owner": "test_v2_2_IS_the_default"
+    "owner": "test_v4_IS_the_default_and_the_default_is_NOT_turn_merged"
   }
 ]

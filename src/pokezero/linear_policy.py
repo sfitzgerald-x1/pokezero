@@ -41,6 +41,15 @@ LEGACY_LINEAR_FEATURE_FINGERPRINTS = (
     # rotated to v2.2 when turn-merged earned the fresh-selection default, 2026-07-08).
     # Same rationale as above: v2.1-era linear artifacts stay load-compatible.
     "16b258abc6de07cc7940f93f730513ddda62233d3d80191f43d7c272f23d8903",
+    # Observation-schema-v2.2-era fingerprint (identical extractor sources; the constant
+    # rotated to v4 when the feature pack took the fresh-selection default, 2026-08-13).
+    # THIS ENTRY IS LOAD-BEARING FOR EVERY LINEAR ARTIFACT COLLECTED BEFORE THAT DATE, which
+    # is all of them: v2.2 held the default for five weeks. Without it,
+    # `_supported_linear_feature_fingerprints()` stops containing the fingerprint every
+    # existing linear checkpoint was stamped with, and they all refuse to load. The
+    # fingerprint hashes observation METADATA and masks, not the numeric census, so the
+    # feature values are unchanged and the compatibility is real rather than asserted.
+    "016206c05d4d65a409ebf55d4dfda6adb441bfe2ff719cfa6094b05c16f973d7",
 )
 LinearTrainingObjective = Literal["behavior-cloning", "reward-weighted"]
 ALL_ACTIONS_LEGAL_MASK = tuple(True for _ in range(ACTION_COUNT))
