@@ -96,6 +96,25 @@ def _json_hi(hi: float):
     return None if hi == float("inf") else hi
 
 
+def spread_prefixes(usable: Sequence[int], k: int) -> list[int]:
+    """Sample k prefixes spanning the WHOLE game, endpoints included.
+
+    The previous rule was `usable[::max(1, len(usable)//k)][:k]`, whose stride collapses to
+    1 whenever `k <= len(usable) < 2k` -- 11 usable rounds and k=6 then took rounds 0..5 and
+    nothing after, so 45% of the game supplied every sample and the late game supplied none.
+    Value-head error is not stationary across a game (an early position is nearly a coin
+    flip; a late one is often decided), so an early-game sample answers a different question
+    than the one asked and would bias the headline in an unknown direction.
+    """
+    u = list(usable)
+    if not u or k <= 0:
+        return []
+    k = min(k, len(u))
+    if k == 1:
+        return [u[0]]
+    return sorted({u[round(i * (len(u) - 1) / (k - 1))] for i in range(k)})
+
+
 def score_pairs(pairs: Sequence[Mapping[str, Any]], buckets: Sequence[float]) -> dict:
     """Sign-agreement between the head's ordering and ground truth, per true-gap bucket."""
     # The open-ended top bucket. float("inf") serialises as a bare `Infinity` token, which
@@ -153,7 +172,9 @@ def main() -> int:
     ap.add_argument("--json", type=Path, default=None)
     args = ap.parse_args()
 
-    from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+    from pokezero.local_showdown import (
+        LocalShowdownConfig, LocalShowdownEnv, env_config_from_checkpoint_provenance,
+    )
     from pokezero.neural_policy import (
         category_vocab_from_model_config, evaluate_transformer_action_priors,
         evaluate_transformer_observation_value, feature_masks_from_model_config,
@@ -186,9 +207,37 @@ def main() -> int:
           flush=True)
 
     def make_env():
-        return LocalShowdownEnv(LocalShowdownConfig(
-            showdown_root=args.showdown_root, observation_spec=env_spec,
-            category_vocab=env_vocab, feature_masks=env_masks))
+        """Env bound to the checkpoint on ALL FOUR axes, through the mandated entry point.
+
+        Three axes (spec, vocab, masks) were latched by hand in the previous revision. The
+        fourth -- BELIEF SET SOURCE -- was left to `belief_set_source_env_enabled()`, which
+        defaults to "0" = DISABLED, while this checkpoint was trained belief-ON. That fails
+        silently and shape-compatibly: candidate-set columns go unpopulated and
+        `tier2_residuals_active()` returns False even with the checkpoint's
+        `tier2_residuals=True` mask latched, so transition tokens lose their Tier-2
+        residuals. Nothing raises, both arms are affected equally, and the probe reports a
+        confident "the head cannot rank siblings" about observations the head never saw --
+        the exact error class this file exists to avoid making about itself.
+
+        Hand-setting the fields also skipped `env_config_from_checkpoint_provenance`, the
+        repo's fail-closed single entry point -- the very function the comment above quotes
+        as "every harness must route through this". Routed through it now, so a conflict
+        raises instead of being silently resolved.
+        """
+        base = LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True)
+        cfg_env = env_config_from_checkpoint_provenance(
+            base, env_masks, context="value_head_sibling_probe",
+            required_specs=env_spec, required_vocabs=env_vocab)
+        env = LocalShowdownEnv(cfg_env)
+        # The datum exists, so assert on it rather than trusting the wiring.
+        want = getattr(result, "belief_set_source_hash", None)
+        got = getattr(env, "belief_set_source_hash", None)
+        if want is not None and got is not None and want != got:
+            raise SystemExit(
+                f"CANNOT RUN: belief-set-source mismatch. checkpoint {want!r} vs env {got!r}. "
+                "Scoring the head on observations trained under a different belief "
+                "condition would produce a confident wrong verdict.")
+        return env
 
     def head_value(observations) -> float:
         """The raw value head on an observation history. NOT a backed-up Q.
@@ -248,8 +297,7 @@ def main() -> int:
         if len(usable) < 2:
             skipped["no_usable_joint_rounds"] += 1
             continue
-        stride = max(1, len(usable) // args.decisions_per_game)
-        prefixes = usable[::stride][: args.decisions_per_game]
+        prefixes = spread_prefixes(usable, args.decisions_per_game)
         print(f"  {len(usable)} rounds have BOTH seats acting; sampling {prefixes}", flush=True)
 
         for prefix in prefixes:
@@ -309,9 +357,25 @@ def main() -> int:
                                 else (0.5 if branch_terminal.winner is None else 0.0))
                             rec[f"terminal_{label}"] = True
                             continue
-                        skipped["seat_not_requested_after_branch"] += 1
-                        ok = False
-                        break
+                        # DO WHAT SEARCH DOES. `search.py:3743-3745` falls back to
+                        # `env.observe(player_id)` when the branch step returns no
+                        # observation for the seat -- so a state the head is asked to
+                        # evaluate in production was being dropped here as unmeasurable.
+                        # Dropping it is not neutral: it is exactly the "seat does not act
+                        # next" states (the opponent forced, this seat locked in) that get
+                        # filtered, and those are systematically different positions.
+                        try:
+                            fallback_obs = renv.observe(seat)
+                        except Exception as exc:          # noqa: BLE001
+                            skipped[f"observe_fallback:{type(exc).__name__}"] += 1
+                            ok = False
+                            break
+                        if fallback_obs is None:
+                            skipped["seat_not_requested_after_branch"] += 1
+                            ok = False
+                            break
+                        rec[f"observe_fallback_{label}"] = True
+                        hist = (*prefix_history, fallback_obs)
                     rec[f"head_{label}"] = head_value(hist)
                 except Exception as exc:                  # noqa: BLE001
                     skipped[f"branch:{type(exc).__name__}: {str(exc)[:120]}"] += 1
@@ -321,6 +385,7 @@ def main() -> int:
                 wins = 0.0
                 done = 0
                 failed_trials: set[int] = set()
+                trial_outcomes: list[tuple[int, float]] = []
                 for trial in range(args.rollouts):
                     rseed = rollout_seed(seed, f"probe-{seed}", prefix,
                                          0 if label == "a" else 1, trial,
@@ -340,6 +405,16 @@ def main() -> int:
                         br2 = replay_trajectory_branch(
                             renv, traj, prefix_decision_round_count=prefix,
                             branch_actions=branch_actions, check_prefix_observations=False)
+                        # M2 -- WHAT THE PAIRED SEED ACTUALLY PAIRS. `rollout_seed` varies
+                        # per (pair, trial) so the two ARMS share a tape within a trial and
+                        # differ across trials. But the env was reset from the source
+                        # trajectory's seed, so the SHOWDOWN PRNG tape (damage rolls, crits,
+                        # speed ties, secondary effects) is identical across all trials of a
+                        # pair; only policy sampling varies. Trials are therefore NOT
+                        # independent draws over battle randomness, and the paired SE below
+                        # is a variance over policy sampling alone. It understates the total
+                        # uncertainty in the true gap. Stated because a reader would
+                        # otherwise read "64 rollouts" as 64 independent games.
                         cont = continue_rollout_from_current_state(
                             env=renv,
                             policies={"p1": make_policy(), "p2": make_policy()},
@@ -363,9 +438,18 @@ def main() -> int:
                     # exactly the long grindy lines that stall.
                     if term.winner is None and term.capped:
                         rec[f"capped_{label}"] = rec.get(f"capped_{label}", 0) + 1
-                        wins += 0.5
+                        outcome = 0.5
+                    elif term.winner is None:
+                        # A genuine DRAW, not a cap. Scored 0.5 here and 0.5 in the
+                        # terminal-branch path; an earlier revision scored it 0.0 here and
+                        # 0.5 there, so the same outcome had two values in one file and a
+                        # tie-forcing arm was systematically undervalued.
+                        rec[f"drawn_{label}"] = rec.get(f"drawn_{label}", 0) + 1
+                        outcome = 0.5
                     else:
-                        wins += 1.0 if term.winner == seat else 0.0
+                        outcome = 1.0 if term.winner == seat else 0.0
+                    wins += outcome
+                    trial_outcomes.append((trial, outcome))
                     done += 1
                 if done == 0:
                     skipped["no_rollouts_completed"] += 1
@@ -374,6 +458,12 @@ def main() -> int:
                 rec[f"true_{label}"] = wins / done
                 rec[f"rollouts_{label}"] = done
                 rec[f"failed_{label}"] = sorted(failed_trials)
+                # Retained for the PAIRED standard error. The design is common random
+                # numbers, so the quantity score_pairs consumes is the per-trial DIFFERENCE
+                # d_i = w_a,i - w_b,i, whose SE is sd(d)/sqrt(N). Reporting the unpaired
+                # per-arm 0.5/sqrt(N) describes a different estimator and understates the
+                # design -- and these outcomes were being computed and thrown away.
+                rec[f"outcomes_{label}"] = dict(trial_outcomes)
             if not ok:
                 continue
             # PAIRING RECONCILIATION. Common random numbers only cancel variance if the two
@@ -405,7 +495,6 @@ def main() -> int:
         print(f"CANNOT RUN: no scorable pairs. skipped={dict(skipped)}")
         return 2
 
-    scored = score_pairs(pairs, buckets)
     # Resolution from what actually RAN. Printing 0.5/sqrt(--rollouts) would overstate the
     # precision of every pair that lost a trial, and the whole point of the probe is that
     # the ground truth's own noise is the thing most likely to fool it.
@@ -413,6 +502,53 @@ def main() -> int:
                 if p.get("rollouts_a") and p.get("rollouts_b")]
     n_eff = min(realised) if realised else 0
     se = (0.5 / math.sqrt(n_eff)) if n_eff else None
+    # The PAIRED SE, which is the one that describes this design. Per pair, over the trials
+    # both arms completed: d_i = w_a,i - w_b,i, SE = sd(d)/sqrt(N). Reported beside the
+    # unpaired figure so the reader can see how much the common random numbers actually
+    # bought, rather than taking "(paired seeds reduce this)" on faith.
+    paired_ses = []
+    for pr in pairs:
+        oa, ob = pr.get("outcomes_a") or {}, pr.get("outcomes_b") or {}
+        shared = sorted(set(oa) & set(ob))
+        if len(shared) < 2:
+            continue
+        d = [oa[t] - ob[t] for t in shared]
+        m = sum(d) / len(d)
+        sd = math.sqrt(sum((x - m) ** 2 for x in d) / (len(d) - 1))
+        paired_ses.append(sd / math.sqrt(len(d)))
+    paired_se = statistics.median(paired_ses) if paired_ses else None
+
+    # M4: THE BUCKETS MUST NOT BE FINER THAN THE GROUND TRUTH CAN RESOLVE. With R
+    # completed rollouts per arm the true gap is quantised to multiples of 1/R, so a bucket
+    # narrower than 1/R either is empty or contains a single attainable value -- and since
+    # a bucket [lo,hi) with lo=0 excludes true_gap==0, the modal small-gap outcome, the
+    # narrowest bucket can report an accuracy computed on a handful of pairs that happened
+    # to land on one quantum. That reads as "the head is 55% accurate on small gaps" when
+    # the instrument cannot see a small gap at all. Coarsen, and say so.
+    resolution = (1.0 / n_eff) if n_eff else None
+    dropped_edges = []
+    if resolution is not None:
+        keep = [b for b in buckets if b == 0.0 or b >= resolution]
+        dropped_edges = [b for b in buckets if b not in keep]
+        if dropped_edges:
+            print(f"\nBUCKET FLOOR: {n_eff} completed rollouts per arm quantises the true "
+                  f"gap to multiples of {resolution:.4f}, so edges {dropped_edges} are "
+                  f"below the resolution of the instrument and are MERGED, not reported. "
+                  f"An accuracy on a bucket narrower than one quantum is an artefact.")
+        buckets = keep
+    scored = score_pairs(pairs, buckets)
+    scored["gap_resolution"] = resolution
+    scored["dropped_bucket_edges"] = dropped_edges
+    # The zero bucket is the modal outcome and is reported on its own, never folded into a
+    # "small gap" bucket where it would masquerade as measured discrimination.
+    exact_zero = sum(1 for pr in pairs if pr.get("true_gap") == 0.0)
+    scored["n_true_gap_exactly_zero"] = exact_zero
+    if exact_zero:
+        print(f"  {exact_zero} of {len(pairs)} pairs have true_gap EXACTLY 0.0 -- the two "
+              f"siblings were indistinguishable at this rollout count, so there is no "
+              f"ordering for the head to get right or wrong. They are excluded from every "
+              f"bucket by construction ([lo,hi) with lo=0), which is stated here because "
+              f"silently excluding the modal outcome would inflate the headline.")
     exact = len(terminal_pairs)
     print(f"\n=== sibling discrimination, {len(pairs)} pairs ===")
     if se is None:
@@ -422,6 +558,12 @@ def main() -> int:
         print(f"ground-truth resolution: worst-case {n_eff} rollouts/arm actually completed "
               f"-> SE ~{se:.4f} near 0.5"
               f"{' (paired seeds reduce this)' if args.paired_seeds else ''}")
+    if paired_se is not None:
+        print(f"  PAIRED SE on the true gap (the estimator actually scored): median "
+              f"{paired_se:.4f} across {len(paired_ses)} pairs -- this is the figure that "
+              f"describes the design; the unpaired one above does not")
+    else:
+        print("  PAIRED SE: unavailable (no pair had >=2 shared completed trials)")
     if exact:
         print(f"  {exact} pairs had an arm END the battle: exact ground truth, but NO head "
               f"estimate exists for a state that does not exist, so they are excluded from "
@@ -445,7 +587,8 @@ def main() -> int:
         args.json.write_text(json.dumps(
             {"config": {k: (str(v) if isinstance(v, Path) else v)
                         for k, v in vars(args).items()},
-             "ground_truth_se": se, "scored": scored, "pairs": pairs,
+             "ground_truth_se": se, "paired_se_median": paired_se,
+             "scored": scored, "pairs": pairs,
              "terminal_pairs_excluded": terminal_pairs,
              "skipped": dict(skipped)}, indent=1, default=str))
         print(f"wrote {args.json}")

@@ -228,3 +228,61 @@ class TerminalArmHandlingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpreadPrefixesTest(unittest.TestCase):
+    """The sampler must span the whole game, not the first `k` rounds.
+
+    The regression it guards: `stride = max(1, len(usable) // k)` is 1 for every length in
+    [k, 2k), so the old rule silently degenerated to "take the first k" on exactly the
+    short-to-medium games that dominate a small probe run.
+    """
+
+    def test_reaches_the_last_usable_round_in_the_degenerate_band(self):
+        # len 11, k 6 -> the old rule gave [0..5] and never sampled past the midpoint.
+        usable = list(range(11))
+        got = vhsp.spread_prefixes(usable, 6)
+        self.assertEqual(got[0], 0)
+        self.assertEqual(got[-1], 10, f"late game unsampled: {got}")
+
+    def test_old_stride_rule_would_have_failed_this(self):
+        usable = list(range(11))
+        stride = max(1, len(usable) // 6)
+        old = usable[::stride][:6]
+        self.assertEqual(old, [0, 1, 2, 3, 4, 5])
+        self.assertNotEqual(old, vhsp.spread_prefixes(usable, 6))
+
+    def test_respects_the_usable_set_and_never_invents_a_round(self):
+        usable = [3, 9, 14, 27, 31]
+        for k in range(1, 9):
+            got = vhsp.spread_prefixes(usable, k)
+            self.assertTrue(set(got) <= set(usable))
+            self.assertEqual(got, sorted(set(got)))
+            self.assertLessEqual(len(got), min(k, len(usable)))
+
+    def test_k_at_or_above_length_takes_everything(self):
+        self.assertEqual(vhsp.spread_prefixes([1, 2, 3], 3), [1, 2, 3])
+        self.assertEqual(vhsp.spread_prefixes([1, 2, 3], 99), [1, 2, 3])
+
+    def test_empty_and_singleton(self):
+        self.assertEqual(vhsp.spread_prefixes([], 5), [])
+        self.assertEqual(vhsp.spread_prefixes([7], 5), [7])
+        self.assertEqual(vhsp.spread_prefixes([7, 8], 0), [])
+
+
+class BucketResolutionTest(unittest.TestCase):
+    """Buckets narrower than 1/rollouts describe the instrument, not the head."""
+
+    def test_zero_gap_pairs_fall_in_no_bucket(self):
+        # [lo, hi) with lo == 0.0 excludes an exact zero. That is the modal outcome at low
+        # rollout counts, so it must be reported separately, never folded into "small gap".
+        pairs = [{"true_gap": 0.0, "head_gap": 0.1, "agree": False}] * 4
+        out = vhsp.score_pairs(pairs, [0.0, 0.02])
+        self.assertEqual(sum(b["n"] for b in out["buckets"]), 0)
+
+    def test_a_bucket_below_resolution_can_only_hold_one_attainable_value(self):
+        # At 64 rollouts the gap is a multiple of 1/64 = 0.015625, so [0.00, 0.02) admits
+        # exactly one non-zero value. An "accuracy" there is one quantum, not a curve.
+        q = 1.0 / 64
+        attainable = [v for v in (i * q for i in range(0, 3)) if 0.0 < v < 0.02]
+        self.assertEqual(len(attainable), 1)
