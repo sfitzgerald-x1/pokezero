@@ -150,6 +150,12 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
         return w * (1 - w) / (r - 1) if r > 1 else 0.0   # fallback only
 
     def noise_var(p):
+        # A precomputed value wins, so a SHARDED run can be merged from JSON without the
+        # per-trial outcome dumps: the outcomes are what the sample variance needs, and
+        # they are deliberately not serialized. Without this, merging would silently fall
+        # back to the Bernoulli form and reintroduce the tie bias across every shard.
+        if p.get("noise_var") is not None:
+            return p["noise_var"]
         return (_arm_var(p.get("outcomes_a"), p["true_a"], p["rollouts_a"])
                 + _arm_var(p.get("outcomes_b"), p["true_b"], p["rollouts_b"]))
 
@@ -160,6 +166,8 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
         nv = sum(noise_var(q) for q in sample) / len(sample)
         return var_d - nv, var_d, nv
 
+    for q in usable:
+        q["noise_var"] = noise_var(q)
     raw, var_d, nv = point(usable)
     rng = random.Random(seed)
     boot = []
@@ -774,7 +782,8 @@ def main() -> int:
         print(f"skipped: {dict(skipped)}")
     if args.json:
         args.json.write_text(json.dumps(
-            {"config": {k: (str(v) if isinstance(v, Path) else v)
+            {"belief_set_source_hash": getattr(result, "belief_set_source_hash", None),
+             "config": {k: (str(v) if isinstance(v, Path) else v)
                         for k, v in vars(args).items()},
              "ground_truth_se": se,
              "ground_truth_se_note": "gap SE = 0.5*sqrt(2/n), not the per-arm 0.5/sqrt(n)",
