@@ -641,5 +641,67 @@ class MainUsesTheConversionHelperTest(unittest.TestCase):
                               f"the units conversion cannot be bypassed")
 
 
+class VerdictLinesTest(unittest.TestCase):
+    """The advisory a reader acts on. It was wrong twice while living inline in main()."""
+
+    @staticmethod
+    def _sd(sigma, n=300, at_floor=False):
+        return {"sigma_diff": sigma, "n": n, "at_floor": at_floor,
+                "ci95": [0.0, sigma if sigma else 0.0]}
+
+    def test_an_at_floor_run_gets_NO_VERDICT_and_no_affirmative_line(self):
+        # sigma_diff == 0.0 is the clip. This used to fall into the low arm and print
+        # "a low reading is well supported" right after "NOT RESOLVABLE".
+        out = " ".join(vhsp.verdict_lines(self._sd(0.0, at_floor=True), (0.0, 0.0)))
+        self.assertIn("NO VERDICT", out)
+        self.assertNotIn("well supported", out)
+        self.assertNotIn("suggestive", out)
+
+    def test_an_in_band_estimate_is_INDETERMINATE_not_well_supported(self):
+        for sigma in (0.016, 0.0207, 0.025, 0.034):
+            out = " ".join(vhsp.verdict_lines(self._sd(sigma), (0.05, 0.0)))
+            self.assertIn("INDETERMINATE", out, f"sigma={sigma}")
+            self.assertNotIn("well supported", out, f"sigma={sigma}")
+
+    def test_a_clearly_high_estimate_is_supported_when_the_rate_is_low(self):
+        out = " ".join(vhsp.verdict_lines(self._sd(0.06), (0.05, 0.0)))
+        self.assertIn("high reading is well supported", out)
+
+    def test_a_clearly_high_estimate_is_hedged_when_the_rate_is_high(self):
+        out = " ".join(vhsp.verdict_lines(self._sd(0.06), (0.27, 0.0)))
+        self.assertIn("WEAKLY SUPPORTED", out)
+
+    def test_a_clearly_low_estimate_is_supported_only_when_false_fine_is_small(self):
+        self.assertIn("low reading is well supported",
+                      " ".join(vhsp.verdict_lines(self._sd(0.005), (0.0, 0.0))))
+        self.assertIn("suggestive, not decisive",
+                      " ".join(vhsp.verdict_lines(self._sd(0.005), (0.0, 0.05))))
+
+    def test_underpowered_beats_everything(self):
+        out = " ".join(vhsp.verdict_lines(self._sd(0.06, n=100), (0.0, 0.0)))
+        self.assertIn("UNDERPOWERED", out)
+        self.assertNotIn("well supported", out)
+
+    def test_missing_rates_refuses_to_qualify_rather_than_asserting(self):
+        out = " ".join(vhsp.verdict_lines(self._sd(0.06), None))
+        self.assertIn("NO ERROR RATES", out)
+        self.assertNotIn("well supported", out)
+
+    def test_no_reachable_input_produces_both_a_refusal_and_an_affirmation(self):
+        # The defect class was two contradictory lines from one state. Sweep the space.
+        for at_floor in (False, True):
+            for n in (100, 150, 300):
+                for sigma in (0.0, 0.005, 0.015, 0.02, 0.035, 0.06):
+                    for rates in (None, (0.0, 0.0), (0.27, 0.05)):
+                        out = " ".join(vhsp.verdict_lines(
+                            self._sd(sigma, n=n, at_floor=at_floor), rates))
+                        refuses = any(k in out for k in
+                                      ("NO VERDICT", "UNDERPOWERED", "NO ERROR RATES"))
+                        affirms = "well supported" in out
+                        self.assertFalse(refuses and affirms,
+                                         f"contradictory advisory for at_floor={at_floor} "
+                                         f"n={n} sigma={sigma} rates={rates}: {out}")
+
+
 if __name__ == "__main__":
     unittest.main()

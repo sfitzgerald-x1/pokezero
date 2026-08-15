@@ -156,6 +156,64 @@ def measured_error_rates(pvr: float, n: int) -> tuple[float, float, float, int]:
     )
 
 
+# The verdict band. 0.025 -- the midpoint -- is where the ERROR RATES were measured, and is
+# deliberately not a verdict boundary: an estimate of 0.02 must not decide a training
+# programme in either direction.
+VERDICT_LOW, VERDICT_HIGH = 0.015, 0.035
+
+
+def verdict_lines(sd: Mapping[str, Any],
+                  rates: tuple[float, float] | None) -> list[str]:
+    """The advisory the reader acts on. Extracted so it can be TESTED.
+
+    It lived inline in main() and was wrong twice in a row there, both times in ways a
+    two-line test would have caught:
+
+    1. It branched on `sigma_diff`, which is 0.0 whenever the estimate CLIPS, so an
+       at-floor run printed "a low reading is well supported" ten lines below "NOT
+       RESOLVABLE ... no upper bound can be quoted from this run". The affirmative line is
+       the one that gets acted on, so the run asserted exactly the measured zero this
+       module promises never to assert.
+    2. It partitioned on 0.025 alone, so every estimate in the 0.015-0.035 band was called
+       "well supported" -- contradicting the HOW TO READ line printed immediately above.
+
+    This PR has now had to move a guard up a level five times because the thing being
+    guarded was one call away from the assertion. Returning lines instead of printing them
+    is what makes that unnecessary here.
+    """
+    n = sd.get("n") or 0
+    if n < 150:
+        return [f"  *** UNDERPOWERED: {n} pairs. 150 is the smallest size any error rate "
+                f"has been measured at. ***"]
+    if sd.get("at_floor"):
+        return ["  NO VERDICT: the estimate is at the clip, so there is no point value to "
+                "compare against the thresholds. The error rates above do not apply -- they "
+                "were measured on runs that produced an estimate. Raise the pair count or "
+                "the rollouts per arm."]
+    if rates is None:
+        return ["  NO ERROR RATES: the coupling could not be measured, so this run's "
+                "verdict cannot be qualified. Treat it as indicative only."]
+    pt = sd["sigma_diff"]
+    fb, ff = rates
+    if VERDICT_LOW < pt < VERDICT_HIGH:
+        return [f"  INDETERMINATE: {pt:.4f} falls between {VERDICT_LOW} and {VERDICT_HIGH}. "
+                f"That is a real answer, not a rounding problem -- this run does not decide "
+                f"whether the head is the binding constraint, in either direction."]
+    if pt >= VERDICT_HIGH:
+        if fb >= 0.10:
+            return [f"  *** A HIGH READING IS WEAKLY SUPPORTED: at this run's coupling and "
+                    f"n={n}, {fb:.0%} of genuinely-fine heads read above the boundary. "
+                    f"Raise the pair count, or improve the coupling, before spending "
+                    f"training compute on this. ***"]
+        return [f"  A high reading is well supported here: only {fb:.0%} of genuinely-fine "
+                f"heads reach this side at this coupling and n."]
+    if ff >= 0.02:
+        return [f"  NOTE: {ff:.0%} of genuinely-BINDING heads read below the boundary at "
+                f"this coupling and n. A low reading is suggestive, not decisive."]
+    return [f"  A low reading is well supported here: only {ff:.0%} of genuinely-binding "
+            f"heads read this low at this coupling and n."]
+
+
 def head_gap_win_prob(head_a: float, head_b: float) -> float:
     """Convert a +/-1 return-scale head DIFFERENCE into a win-probability difference.
 
@@ -1016,49 +1074,8 @@ def main() -> int:
               "a single 0.025 boundary -- the midpoint of that band -- because a "
               "false-positive rate needs one line; they are therefore the rates for the "
               "most permissive reading, and the band edges are strictly better.")
-        pt = sd["sigma_diff"]
-        # Branch on the POINT ESTIMATE, the statistic the rates were measured on -- but
-        # ONLY when there is a point estimate to branch on. Two traps, both of which this
-        # block fell into:
-        #
-        # 1. `sigma_diff` is 0.0 whenever the estimate CLIPS, so an at-floor run used to
-        #    land in the low arm and print "a low reading is well supported" ten lines
-        #    below "NOT RESOLVABLE ... no upper bound can be quoted". The affirmative line
-        #    is the one a reader acts on, so the run asserted exactly the measured zero
-        #    this file promises never to assert. Reproduced at 1 seed in 3 at n=300.
-        # 2. Partitioning on 0.025 alone labels EVERYTHING outside it "well supported",
-        #    including the whole 0.015-0.035 indeterminate band -- contradicting the HOW TO
-        #    READ line printed just above. 0.025 is where the error RATES were measured; it
-        #    is not a verdict boundary.
-        LO, HI_B = 0.015, 0.035
-        if sd["n"] < 150:
-            print(f"  *** UNDERPOWERED: {sd['n']} pairs. 150 is the smallest size any "
-                  f"error rate has been measured at. ***")
-        elif sd["at_floor"]:
-            print("  NO VERDICT: the estimate is at the clip, so there is no point value to "
-                  "compare against the thresholds. The error rates above do not apply -- "
-                  "they were measured on runs that produced an estimate. Raise the pair "
-                  "count or the rollouts per arm.")
-        elif rates is not None:
-            fb, ff = rates
-            if LO < pt < HI_B:
-                print(f"  INDETERMINATE: {pt:.4f} falls between {LO} and {HI_B}. That is a "
-                      f"real answer, not a rounding problem -- this run does not decide "
-                      f"whether the head is the binding constraint, in either direction.")
-            elif pt >= HI_B and fb >= 0.10:
-                print(f"  *** A HIGH READING IS WEAKLY SUPPORTED: at this run's coupling "
-                      f"and n={sd['n']}, {fb:.0%} of genuinely-fine heads read above the "
-                      f"boundary. Raise the pair count, or improve the coupling, before "
-                      f"spending training compute on this. ***")
-            elif pt <= LO and ff >= 0.02:
-                print(f"  NOTE: {ff:.0%} of genuinely-BINDING heads read below the boundary "
-                      f"at this coupling and n. A low reading is suggestive, not decisive.")
-            elif pt >= HI_B:
-                print(f"  A high reading is well supported here: only {fb:.0%} of "
-                      f"genuinely-fine heads reach this side at this coupling and n.")
-            else:
-                print(f"  A low reading is well supported here: only {ff:.0%} of "
-                      f"genuinely-binding heads read this low at this coupling and n.")
+        for line in verdict_lines(sd, rates):
+            print(line)
     o = scored.get("overall")
     if o:
         print(f"{'OVERALL':>18s} {o['n']:5d} {o['accuracy']:9.3f} "
