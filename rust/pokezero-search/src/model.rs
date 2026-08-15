@@ -438,8 +438,11 @@ fn batched_search_core<E: BatchLeafEval>(
         let mut resolved: Vec<(usize, usize, f32)> = Vec::new();
         for offset in 0..round_size {
             let parent_visits = (completed + offset) as u32;
-            let i = select(&s1_stats, parent_visits, c_puct, true);
-            let j = select(&s2_stats, parent_visits, c_puct, false);
+            // No FPU on the one-ply batched core, for the same reason as the
+            // one-ply skeleton in lib.rs: it has no tree to deepen, and the
+            // flag exists to move the plies-per-sim exchange rate.
+            let i = select(&s1_stats, parent_visits, c_puct, true, None);
+            let j = select(&s2_stats, parent_visits, c_puct, false, None);
             // Virtual loss: provisional side-one loss until the real value lands.
             s1_stats[i].visits += 1;
             s2_stats[j].visits += 1;
@@ -509,8 +512,8 @@ fn batched_search_core<E: BatchLeafEval>(
         elapsed,
         completed as f64 / elapsed,
         1.0 / elapsed,
-        stats_to_json(&s1_stats),
-        stats_to_json(&s2_stats),
+        stats_to_json(&s1_stats, false),
+        stats_to_json(&s2_stats, false),
     ))
 }
 
@@ -562,6 +565,9 @@ fn multiply_batched_core<E: BatchLeafEval>(
         // Template-stub core: placeholder observations with no seat, so there
         // is no meaningful opponent head to gather. Throughput bench only.
         use_opponent_priors: false,
+        // Same reason: this core prices every leaf from one state-independent
+        // template, so there is no value surface for FPU to reduce against.
+        fpu_reduction: None,
     };
     let mut tree = Tree::from_root(&state)?;
     let mut counters = SearchCounters::default();
@@ -631,6 +637,9 @@ fn multiply_batched_core<E: BatchLeafEval>(
         seed,
         "torchscript",
         &extra,
+        // The one-ply template-observation path: no caller measures overrides
+        // off it, and its reports are pinned byte for byte by the POC gates.
+        false,
     ))
 }
 
@@ -779,6 +788,8 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     seed: u64,
     early_stop_min_sims: usize,
     early_stop_side_one: bool,
+    fpu_reduction: Option<f32>,
+    arm_priors: bool,
     lossy_subcases: &mut crate::abort_telemetry::LossySubcaseLedger,
 ) -> PyResult<String> {
     let mut state = parse_state(state_str)?;
@@ -790,9 +801,17 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         c_puct,
         deep_ko_split,
         use_opponent_priors,
+        fpu_reduction,
     };
     let mut tree = Tree::from_root(&state)?;
     let mut counters = SearchCounters::default();
+    // Within-round selection collisions, per seat (stage 0 of the selection
+    // tuning plan). Only THIS core carries it: it is the only one that batches
+    // real leaves, and a collision is a property of a batch — the sequential
+    // core finalizes every selection before taking the next, so its rate is
+    // zero by construction and the counter would only add a field that can
+    // never move.
+    let mut collisions = crate::tree::CollisionLedger::default();
     let mut rng = StdRng::seed_from_u64(seed);
     let mut completed = 0usize;
     let mut rounds = 0usize;
@@ -1115,6 +1134,16 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         if let Some(error) = leaf_error {
             return Err(error);
         }
+        // Fold the round's collected paths into the collision ledger. Done HERE,
+        // after the `tree_nanos` span has closed and over traversals that are
+        // already built, for two reasons: the hot selection loop stays exactly
+        // the code every recorded result ran, and the ledger's own cost does not
+        // land in the phase attribution this same panel reads off `tree_s`.
+        collisions.begin_round();
+        for traversal in &traversals {
+            collisions.record(traversal);
+        }
+        collisions.end_round(pending.len());
         let row_values = if pending.is_empty() {
             Vec::new()
         } else {
@@ -1210,6 +1239,17 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 .join(",")
         ),
     };
+    // Seat-labelled, because the deferred-leaf audit is a self-vs-opponent
+    // question — but the underlying asymmetry is SIDE-absolute (the virtual loss
+    // is always written to `s2_stats`), so the searching seat's side ships with
+    // the counts. Without it a pooled read across worlds would silently average
+    // p1 decisions against p2 decisions in opposite frames.
+    let collisions = collisions.counts;
+    let (self_repeats, opponent_repeats) = if self_side_one {
+        (collisions.side_one_repeats, collisions.side_two_repeats)
+    } else {
+        (collisions.side_two_repeats, collisions.side_one_repeats)
+    };
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"lossy_subcases\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
@@ -1217,7 +1257,12 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
          \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
-         \"early_stop_leader_visits\":{},\"early_stop_runner_up_visits\":{}",
+         \"early_stop_leader_visits\":{},\"early_stop_runner_up_visits\":{},\
+         \"collision_rounds\":{},\"collision_pending_rounds\":{},\
+         \"collision_selections\":{},\"collision_joint_repeats\":{},\
+         \"collision_self_repeats\":{},\"collision_opponent_repeats\":{},\
+         \"collision_self_side\":\"{}\",\
+         \"collision_traversals\":{},\"collision_leaf_repeats\":{}",
         batch_size,
         rounds,
         model_evals,
@@ -1252,6 +1297,15 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         if early_stop_side_one { "side_one" } else { "side_two" },
         early_stop_leader_visits,
         early_stop_runner_up_visits,
+        collisions.rounds,
+        collisions.pending_rounds,
+        collisions.selections,
+        collisions.joint_repeats,
+        self_repeats,
+        opponent_repeats,
+        if self_side_one { "side_one" } else { "side_two" },
+        collisions.traversals,
+        collisions.leaf_repeats,
     );
     Ok(multiply_report_json(
         &outcome,
@@ -1260,6 +1314,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         seed,
         "torchscript",
         &extra,
+        arm_priors,
     ))
 }
 
@@ -1580,7 +1635,12 @@ impl NativeLeafModel {
     /// list (never reflected -- see `LeafContext::opponent_action_map`).
     /// Returns the search report as JSON (with `encoder: "native_leaf"`,
     /// lossy-render accounting, and `root_priors`/`prior_branches`/
-    /// `prior_fallbacks` telemetry). Runs with the GIL released.
+    /// `prior_fallbacks` telemetry). With `arm_priors` every root arm entry on
+    /// BOTH seats also carries its `prior` — the only way a caller can say WHICH
+    /// move the raw policy head would play (the entries are visit-sorted, so the
+    /// `root_priors` vector cannot be paired with them positionally), and the
+    /// only surface on which the OPPONENT seat's applied priors are visible at
+    /// all. Runs with the GIL released.
     #[pyo3(signature = (
         state_str,
         iterations,
@@ -1600,6 +1660,16 @@ impl NativeLeafModel {
         // byte-for-byte unaffected: flag-off must be the uniform-opponent
         // search every recorded result was produced under.
         use_opponent_priors = false,
+        // Same rule, one slot further out: appended AFTER `use_opponent_priors`
+        // so the pre-FPU positional contract keeps its exact shape. `None` is
+        // the flat-0.5 first-play urgency every recorded result was produced
+        // under; see `crate::fpu_value`.
+        fpu_reduction = None,
+        // Same rule again, one slot further out still. PURE TELEMETRY: it adds
+        // one column to each root arm's report entry and touches nothing the
+        // search reads, so flag-off is byte-identical for a reason stronger than
+        // a recomputation -- there is no new code on the search's path at all.
+        arm_priors = false,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -1620,6 +1690,8 @@ impl NativeLeafModel {
         early_stop_min_sims: usize,
         early_stop_side_one: bool,
         use_opponent_priors: bool,
+        fpu_reduction: Option<f32>,
+        arm_priors: bool,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -1634,6 +1706,7 @@ impl NativeLeafModel {
                 "early_stop_min_sims must be <= iterations",
             ));
         }
+        let fpu_reduction = crate::tree::validate_fpu_reduction(fpu_reduction)?;
         let root_state = parse_state(state_str)?;
         let leaf_ctx =
             crate::leaf::LeafContext::new(tables_json, root_inputs_json, ctx_json, &root_state)?;
@@ -1692,6 +1765,8 @@ impl NativeLeafModel {
                     seed,
                     early_stop_min_sims,
                     early_stop_side_one,
+                    fpu_reduction,
+                    arm_priors,
                     lossy_subcases,
                 )
             })

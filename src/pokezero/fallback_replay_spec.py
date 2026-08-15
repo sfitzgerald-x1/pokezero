@@ -749,6 +749,24 @@ def _acceptance_fields(
     # would go `underspecified` and the runner would refuse a perfectly
     # resolvable address.
     for part in config_id.split("@", 1)[0].split("-"):
+        # Drop a `+`-suffixed marker before the digit scan. `config_id_for`
+        # glues the opponent-priors marker straight onto the last axis token
+        # with no separator (`f"{base}+opp-priors"`,
+        # scripts/foulplay_paired_eval.py:142-143), so `w8+opp-priors` splits to
+        # `["w8+opp", "priors"]` and `"8+opp".isdigit()` is False -- the worlds
+        # axis silently vanished while d/s/b still parsed, which is what made it
+        # easy to miss: the spec looked populated.
+        #
+        # Fixed HERE rather than by respelling the marker: the id bytes are
+        # load-bearing. `tests/test_opponent_priors_flag.py:101-104` pins the
+        # exact string `d4-s1024-b64-w4+opp-priors@k0`, and the id is the merge
+        # key for banked shards, so changing it would un-merge every cell
+        # recorded under the old spelling.
+        #
+        # The `-fpu…`/`-c…` suffixes never had this problem -- they ARE `-`
+        # separated, so they split into their own tokens and are dropped by the
+        # `part[0] in "dsbw"` filter.
+        part = part.split("+", 1)[0]
         if len(part) > 1 and part[0] in "dsbw" and part[1:].isdigit():
             parsed[part[0]] = int(part[1:])
     fields: dict[str, Any] = {

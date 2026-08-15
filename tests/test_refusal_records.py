@@ -212,6 +212,12 @@ class _EnginePolicyStub:
         attempted, constructed, searched = worlds
         self.stats.worlds_attempted += attempted
         self.stats.worlds_constructed += constructed
+        # The real path charges this beside `worlds_constructed`, at `decide()`'s
+        # single dispatch point, because the abort rate divides by SEARCH attempts
+        # rather than constructions -- a ladder re-searches the same constructed
+        # worlds per rung, and on the construction denominator the rate went
+        # negative. A stub that skips it makes the rate unexercised.
+        self.stats.world_search_attempts += constructed
         self.stats.worlds_searched += searched
         if aggregated is not None:
             self._map_choices(context, aggregated)
@@ -224,6 +230,7 @@ class _EnginePolicyStub:
         self.stats.decisions += 1
         self.stats.worlds_attempted += 4
         self.stats.worlds_constructed += 4
+        self.stats.world_search_attempts += 4
         self.stats.worlds_searched += 4
 
 
@@ -586,10 +593,11 @@ _STATS_KEYS_EXERCISED = {
     "world_failure_reasons",
     "worlds_attempted",
     "worlds_constructed",
+    "world_search_attempts",
     "worlds_searched",
     # Derived, and they move because their inputs did: `wall_per_decision` is
     # wall/decisions (None -> 0.0 once `decisions` is non-zero) and
-    # `world_search_abort_rate` is a ratio over `worlds_attempted`.
+    # `world_search_abort_rate` is a ratio over `world_search_attempts`.
     "wall_per_decision",
     "world_search_abort_rate",
 }

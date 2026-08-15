@@ -41,7 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 import sys
 
@@ -128,7 +128,29 @@ def collect_rows(shards: list[dict]) -> tuple[dict, dict]:
         cid = shard["config_id"]
         meta.setdefault(cid, {"arm": shard["arm"], "shards": [], "per_seat": [],
                               "checkpoint": shard.get("checkpoint"),
-                              "opponent_priors": shard.get("opponent_priors", False)})
+                              "opponent_priors": shard.get("opponent_priors", False),
+                              # config_id CARRIES this one, so every shard of a
+                              # cell must agree; disagreement is asserted below.
+                              "oracle_belief": bool(shard.get("oracle_belief", False)),
+                              # config_id deliberately does NOT carry this one --
+                              # it is observational, so telemetry-on and
+                              # telemetry-off are the same search and pool into one
+                              # cell. Counted per shard rather than collapsed to a
+                              # boolean, because an override rate whose denominator
+                              # is a SUBSET of the cell's games has to be readable
+                              # as such (see search_config_id's note).
+                              "override_telemetry_shards": Counter()})
+        if bool(shard.get("oracle_belief", False)) != meta[cid]["oracle_belief"]:
+            # Not a warning. The oracle and sampled arms are the two halves of
+            # §4a's split; pooled, the centerpiece figure is their average.
+            raise SystemExit(
+                f"cell {cid} pools oracle-belief and sampled-belief shards "
+                f"({shard['_path']}). config_id must carry +oracle-belief -- an "
+                "older driver wrote one of these shards."
+            )
+        meta[cid]["override_telemetry_shards"][
+            "on" if shard.get("override_telemetry") else "off"
+        ] += 1
         meta[cid]["shards"].append(shard["_path"])
         meta[cid]["per_seat"].append(shard.get("per_seat", {}))
         for row in shard.get("rows", []):
@@ -145,18 +167,51 @@ def collect_rows(shards: list[dict]) -> tuple[dict, dict]:
 
 
 def latency_of(meta_entry: dict) -> dict:
-    """Mean/p95 of the GATE field across a cell's seats, plus the other wall."""
-    gate, p95, other = [], [], []
+    """Mean/p95 of the GATE field across a cell's seats, plus the other wall.
+
+    THE GATE FIELD IS PER-DECISION WHEN THE SHARD OFFERS ONE. On a dynamic-budget
+    cell `search_wall_per_searched_decision` is per-RUNG -- `searched_decisions` is
+    charged once per `_search_model` call and a ladder calls it once per rung
+    (measured 2,224 rungs against 1,062 decisions) -- so gating on it lets a cell
+    at 2.1 rungs/decision report 5.7 s while its true per-decision wall is 12 s,
+    and the 20 s/turn cap silently stops gating on exactly the cells this feature
+    exists to produce. `search_wall_per_ladder_decision` is hoisted into every
+    shard's seat block for this reason; prefer it, and say which one was used so a
+    reader is never guessing. Found in review.
+    """
+    gate, p95, other, rungs = [], [], [], []
+    per_decision_seats = 0
+    per_rung_seats = 0
     for per_seat in meta_entry["per_seat"]:
         for seat in (per_seat or {}).values():
-            if seat.get("search_wall_per_searched_decision") is not None:
+            ladder_wall = seat.get("search_wall_per_ladder_decision")
+            if ladder_wall is not None:
+                gate.append(float(ladder_wall))
+                per_decision_seats += 1
+            elif seat.get("search_wall_per_searched_decision") is not None:
                 gate.append(float(seat["search_wall_per_searched_decision"]))
+                per_rung_seats += 1
+            if seat.get("ladder_rungs_per_decision") is not None:
+                rungs.append(float(seat["ladder_rungs_per_decision"]))
             if seat.get("wall_per_decision_p95") is not None:
                 p95.append(float(seat["wall_per_decision_p95"]))
             if seat.get("wall_per_decision_mean") is not None:
                 other.append(float(seat["wall_per_decision_mean"]))
     return {
         "search_wall_per_searched_decision_mean": (sum(gate) / len(gate)) if gate else None,
+        # WHICH denominator the line above is on. A cell that mixes them is a cell
+        # whose shards were not all built from one image, which `assert_single_build`
+        # already refuses -- but if it ever happens, the reader must see it.
+        "gate_denominator": (
+            None
+            if not gate
+            else "per_ladder_decision"
+            if per_decision_seats and not per_rung_seats
+            else "per_searched_decision_PER_RUNG"
+            if per_rung_seats and not per_decision_seats
+            else "MIXED - do not compare"
+        ),
+        "ladder_rungs_per_decision_mean": (sum(rungs) / len(rungs)) if rungs else None,
         "wall_per_decision_p95_max": max(p95) if p95 else None,
         "wall_per_decision_mean": (sum(other) / len(other)) if other else None,
     }
@@ -164,6 +219,7 @@ def latency_of(meta_entry: dict) -> dict:
 
 def health_of(meta_entry: dict) -> dict:
     fallback, depth = [], []
+    opponent_fallback: list[float] = []
     reasons: dict[str, int] = {}
     for per_seat in meta_entry["per_seat"]:
         for seat in (per_seat or {}).values():
@@ -173,8 +229,18 @@ def health_of(meta_entry: dict) -> dict:
                 depth.append(float(seat["depth_reached_mean"]))
             for reason, count in (seat.get("world_failure_reasons") or {}).items():
                 reasons[reason] = reasons.get(reason, 0) + int(count)
+            # HEAD-TO-HEAD: the opponent seat searches too, and its health is not in
+            # `fallback_rate`, which describes the pokezero seat alone. A cell whose
+            # OPPONENT was falling back is contaminated in exactly the way the eligibility
+            # gate exists to catch, and without this it clears the gate on the other
+            # seat's clean number.
+            opp = seat.get("opponent_engine_mcts") or {}
+            if opp.get("fallback_rate") is not None:
+                opponent_fallback.append(float(opp["fallback_rate"]))
     return {
         "fallback_rate": (sum(fallback) / len(fallback)) if fallback else None,
+        "opponent_fallback_rate": ((sum(opponent_fallback) / len(opponent_fallback))
+                                   if opponent_fallback else None),
         "depth_reached_mean": (sum(depth) / len(depth)) if depth else None,
         "world_failure_reasons": dict(sorted(reasons.items())),
     }
@@ -299,6 +365,11 @@ def main(argv=None) -> int:
         campaign = json.loads(Path(args.campaign).read_text(encoding="utf-8"))
         by_cell = {c["cell_id"]: c for c in campaign.get("cells", [])}
 
+        # THE driver's builder, imported rather than re-implemented. The two
+        # copies drifting is a silent failure of exactly the kind the tag
+        # comment below records, and the selection knobs doubled the surface.
+        from foulplay_paired_eval import search_config_id  # noqa: PLC0415
+
         def cid_of(cell):
             # The campaign KEY (k0/k1), matching what the launcher passes as
             # --checkpoint-tag. Deriving it from the checkpoint path instead
@@ -308,10 +379,29 @@ def main(argv=None) -> int:
             tag = cell["checkpoint"]
             if cell["arm"] == "raw":
                 return f"raw@{tag}"
-            base = f"d{cell['depth']}-s{cell['sims']}-b{cell['batch']}-w{cell['worlds']}"
-            if cell.get("opponent_priors"):
-                base += "+opp-priors"
-            return f"{base}@{tag}"
+            return search_config_id(
+                depth=cell["depth"], sims=cell["sims"],
+                batch=cell["batch"], worlds=cell["worlds"], tag=tag,
+                opponent_priors=bool(cell.get("opponent_priors")),
+                fpu_reduction=cell.get("fpu_reduction"),
+                c_puct=cell.get("c_puct"),
+                oracle_belief=bool(cell.get("oracle_belief")),
+                # Lockstep with the driver's builder. The shared docstring warns that the
+                # two drifting apart is a SILENT failure -- the reference matches no shard
+                # -- so the opponent fragment has to land in BOTH or fixing one creates
+                # exactly that drift.
+                opponent_policy_mode=cell.get("opponent_policy_mode") or "foul-play",
+                opponent_engine_depth=cell.get("opponent_engine_depth"),
+                opponent_engine_sims=cell.get("opponent_engine_sims"),
+                # Kept in lockstep with the driver's builder deliberately. The
+                # shared docstring warns that these two drifting apart is a
+                # SILENT failure -- the reference simply matches no shard -- and
+                # it has already happened once, on the checkpoint tag.
+                early_stop=bool(cell.get("early_stop")),
+                early_stop_min_sims=cell.get("early_stop_min_sims"),
+                depth_min=cell.get("depth_min"),
+                worlds_min=cell.get("worlds_min"),
+            )
 
         for cell in campaign.get("cells", []):
             ref = cell.get("reads_against")
@@ -343,6 +433,12 @@ def main(argv=None) -> int:
         scored["latency"] = latency_of(meta[cid])
         scored["health"] = health_of(meta[cid])
         scored["opponent_priors"] = meta[cid]["opponent_priors"]
+        # Arm identity witnessed from the shards, not from the cell id alone --
+        # and for the telemetry the cell id says nothing at all.
+        scored["oracle_belief"] = meta[cid]["oracle_belief"]
+        scored["override_telemetry_shards"] = dict(
+            meta[cid]["override_telemetry_shards"]
+        )
         if scored.get("pairs", 0) < args.min_pairs:
             scored["min_pairs_shortfall"] = (
                 f"{scored.get('pairs', 0)} pairs < the required minimum of {args.min_pairs}"
@@ -374,6 +470,14 @@ def main(argv=None) -> int:
         fb = (cell.get("health") or {}).get("fallback_rate")
         if fb is not None and fb > FALLBACK_LIMIT:
             reasons.append(f"fallback {fb:.1%} over {FALLBACK_LIMIT:.0%}")
+        # The OPPONENT seat is held to the same bar. In a head-to-head the opponent is half
+        # the experiment, so a cell whose opponent was falling back is exactly as
+        # contaminated as one whose pokezero seat was -- and reads as a tie rather than as
+        # a fault, which is worse.
+        ofb = (cell.get("health") or {}).get("opponent_fallback_rate")
+        if ofb is not None and ofb > FALLBACK_LIMIT:
+            reasons.append(
+                f"OPPONENT fallback {ofb:.1%} over {FALLBACK_LIMIT:.0%}")
         if cell.get("min_pairs_shortfall"):
             reasons.append(cell["min_pairs_shortfall"])
         # Depth cells: a d6/d8 cell that did not out-reach its reference is

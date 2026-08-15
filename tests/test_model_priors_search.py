@@ -349,6 +349,8 @@ class _EncodedSearchFixture:
         early_stop_side_one: bool = True,
         ctx_json: str | None = None,
         use_opponent_priors: bool | None = None,
+        fpu_reduction: float | None = None,
+        arm_priors: bool = False,
         position: dict | None = None,
     ) -> dict:
         position = self.position if position is None else position
@@ -371,8 +373,15 @@ class _EncodedSearchFixture:
         ]
         # Appended only when asked for, so every pre-existing call in this file
         # keeps making the historical 14-positional call byte for byte.
-        if use_opponent_priors is not None:
-            args.append(use_opponent_priors)
+        # `fpu_reduction` sits one slot past `use_opponent_priors`, so asking for
+        # it has to materialize that flag too -- the same cascade
+        # `engine_search.native_search_args` implements in production.
+        if use_opponent_priors is not None or fpu_reduction is not None or arm_priors:
+            args.append(bool(use_opponent_priors))
+        if fpu_reduction is not None or arm_priors:
+            args.append(fpu_reduction)
+        if arm_priors:
+            args.append(True)
         return json.loads(self.native.search_batched_multi_encoded(*args))
 
     # -- opponent-seat helpers (used only by OpponentPriorsEncodedSearchTest) --
@@ -472,6 +481,10 @@ class _EncodedSearchFixture:
         opponent_row = torch.softmax(opponent_logits, dim=-1)[0].tolist()
         return {
             "acting": gathered(policy_row, self_map),
+            # Mirrors `opponent_arms`: the acting seat's option displays in the
+            # order its priors are gathered in, which is the pairing the report's
+            # visit-SORTED entries destroy and `arm_priors` restores.
+            "acting_arms": [display for display, _slot in self_map],
             "opponent": gathered(opponent_row, opponent_map),
             # The head-swap null: the ACTING head read through the OPPONENT's
             # map, i.e. exactly what a transposed `impl HeadSource` produces.
@@ -577,6 +590,214 @@ class ModelPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
                 sum(entry["visits"] for entry in stopped[side]),
                 stopped["iterations"],
             )
+
+    def test_fpu_reduction_changes_the_encoded_search_and_none_is_the_default(
+        self,
+    ) -> None:
+        """The FPU flag through the MODEL core, not just `select`.
+
+        Two claims, and the second is the one the campaign rests on:
+
+        * `Some(r)` moves the root visit distribution -- otherwise the crate
+          could accept the argument, thread it through `MultiPlyConfig`, and
+          drop it before `traverse`, and every bit-identity gate would still
+          pass because they all run with the flag OFF;
+        * omitting the argument and passing it as the crate's default produce
+          the SAME report modulo wall clock, so the extra two positionals the
+          cascade appends are inert on their own.
+
+        Skewed priors are what make an FPU reduction visible at all (PUCT's
+        exploration term for an unvisited arm grows as `sqrt(N)` regardless of
+        Q), so this runs with `model_priors=True` -- the production setting.
+        """
+        drop = {"elapsed_s", "iterations_per_s"}
+        drop |= {k for k in ("encode_s", "model_s", "tree_s", "fold_clone_s",
+                             "render_s", "fold_advance_s", "tensor_s",
+                             "action_map_s", "row_input_s", "products_s",
+                             "row_write_s")}
+
+        def stable(report: dict) -> dict:
+            return {k: v for k, v in report.items() if k not in drop}
+
+        legacy = self._search(sims=128, batch=8, seed=5, model_priors=True)
+        explicit_zero_flags = self._search(
+            sims=128, batch=8, seed=5, model_priors=True, use_opponent_priors=False
+        )
+        self.assertEqual(
+            stable(legacy),
+            stable(explicit_zero_flags),
+            "the appended flag positionals must be inert when they are at their defaults",
+        )
+
+        reduced = self._search(
+            sims=128, batch=8, seed=5, model_priors=True, fpu_reduction=0.3
+        )
+        self.assertNotEqual(
+            [entry["visits"] for entry in legacy["side_one"]],
+            [entry["visits"] for entry in reduced["side_one"]],
+            "fpu_reduction reached the config but not the search",
+        )
+        self.assertEqual(reduced["fpu_reduction"], 0.3)
+        self.assertNotIn(
+            "fpu_reduction", legacy, "a legacy report must keep the bytes it always had"
+        )
+        for side in ("side_one", "side_two"):
+            self.assertEqual(
+                sum(entry["visits"] for entry in reduced[side]), reduced["iterations"]
+            )
+
+    def test_the_collision_counter_reports_both_seats_and_its_denominators(
+        self,
+    ) -> None:
+        """The stage-0 instrument, through a real batched search.
+
+        Pins the FIELD NAMES (the analysis wires to these), the seat label, and
+        the two identities that make the rates readable: one traversal per
+        completed simulation, and at least one selection per traversal. A
+        counter whose denominator is wrong reports a rate that is wrong by the
+        same factor and looks perfectly plausible.
+        """
+        report = self._search(sims=128, batch=16, seed=5, model_priors=True)
+        self.assertEqual(report["collision_traversals"], report["iterations"])
+        self.assertEqual(report["collision_rounds"], report["rounds"])
+        self.assertGreaterEqual(
+            report["collision_selections"], report["collision_traversals"]
+        )
+        self.assertEqual(
+            report["collision_self_side"], self.position["self_side"]
+        )
+        for field in (
+            "collision_pending_rounds",
+            "collision_joint_repeats",
+            "collision_self_repeats",
+            "collision_opponent_repeats",
+            "collision_leaf_repeats",
+        ):
+            self.assertGreaterEqual(report[field], 0, field)
+        self.assertLessEqual(
+            report["collision_pending_rounds"], report["collision_rounds"]
+        )
+        # Batch 16 vs batch 1: a batch of one finalizes before the next
+        # selection, so it has no round to collide inside. If the counter read
+        # the same for both it would not be measuring virtual-loss failure.
+        serial = self._search(sims=128, batch=1, seed=5, model_priors=True)
+        self.assertEqual(serial["collision_joint_repeats"], 0)
+        self.assertEqual(serial["collision_self_repeats"], 0)
+        self.assertEqual(serial["collision_opponent_repeats"], 0)
+        self.assertGreater(
+            report["collision_self_repeats"] + report["collision_opponent_repeats"],
+            0,
+            "a 16-selection round that never repeats a seat's arm would mean the "
+            "ledger is not reading the paths it was given",
+        )
+
+
+    # -- the per-arm prior column (`arm_priors`) --------------------------------
+    #
+    # `root_priors` alone cannot say WHICH arm the model likes: entries are
+    # visit-sorted, so entry i is not option i. These gate the column that fixes
+    # that, and the flag that keeps it off every report nobody asked for it on.
+
+    @staticmethod
+    def _entry_priors(entries: list[dict]) -> dict[str, float]:
+        return {entry["move"]: entry["prior"] for entry in entries}
+
+    @staticmethod
+    def _strip_priors(report: dict) -> dict:
+        """A report with the prior column and the wall-clock removed."""
+        timing = {
+            "elapsed_s", "iterations_per_s", "encode_s", "model_s", "tree_s",
+            "fold_clone_s", "render_s", "fold_advance_s", "tensor_s",
+            "action_map_s", "row_input_s", "products_s", "row_write_s",
+        }
+        return {
+            key: (
+                [{k: v for k, v in entry.items() if k != "prior"} for entry in value]
+                if key in ("side_one", "side_two") else value
+            )
+            for key, value in sorted(report.items())
+            if key not in timing
+        }
+
+    def test_the_arm_prior_column_is_opt_in_and_changes_nothing_else(self) -> None:
+        """Flag off: no column. Flag on: the same search, plus the column.
+
+        The second half is the bit-identity claim at its narrowest -- one build,
+        one seed, the flag as the only difference -- and it holds for a reason
+        stronger than a recomputation: nothing on the search's path reads the
+        flag. The cross-BUILD half (this build's flag-off report against one
+        produced before the flag existed) cannot live in a unit test and is
+        recorded in the branch's evidence instead.
+        """
+        off = self._search(sims=48, batch=8, seed=5, model_priors=True)
+        on = self._search(sims=48, batch=8, seed=5, model_priors=True, arm_priors=True)
+        for entry in off["side_one"] + off["side_two"]:
+            self.assertNotIn("prior", entry, "flag off must add no column")
+        for entry in on["side_one"] + on["side_two"]:
+            self.assertIn("prior", entry, "flag on prices BOTH seats' arms")
+        self.assertEqual(
+            self._strip_priors(off), self._strip_priors(on),
+            "the column is the ONLY difference: same visits, same values, same "
+            "counters, same seed",
+        )
+
+    def test_each_arms_prior_is_the_policy_head_gathered_onto_that_arm(self) -> None:
+        """The PAIRING, against a torch oracle -- not just the values.
+
+        `root_priors` already pins the value multiset (see the opponent class), so
+        the only thing left to get wrong is which arm each value lands on, and
+        that is exactly what the model's argmax is read off. The oracle is the
+        crate's own public map surface (`LeafEncoder.self_action_map`, option
+        order) plus a torch forward on the same artifact.
+        """
+        # `_root_head_priors` prices BOTH seats, and the opponent's map needs the
+        # supplied order to resolve at all -- so the ctx carries it. The acting
+        # seat is unaffected by that key (`test_the_order_channel_is_inert_while_
+        # the_flag_is_off` is the standing pin) and the flag stays off here.
+        ctx_json = self._ctx_with_opponent_order()
+        oracle = self._root_head_priors(ctx_json)
+        expected = dict(zip(oracle["acting_arms"], oracle["acting"]))
+        self.assertEqual(
+            len(expected), len(oracle["acting_arms"]), "displays must be distinct here"
+        )
+        # DISCRIMINATING POWER: with the priors permuted across the arms, the
+        # oracle would disagree -- so agreement below is evidence of the pairing
+        # and not of a rounding coincidence.
+        permuted = dict(zip(oracle["acting_arms"], oracle["acting"][1:] + oracle["acting"][:1]))
+        self.assertNotEqual(
+            {arm: round(value, 6) for arm, value in permuted.items()},
+            {arm: round(value, 6) for arm, value in expected.items()},
+            "a permuted pairing must be distinguishable, or this gate is vacuous",
+        )
+        report = self._search(
+            sims=48, batch=8, seed=5, model_priors=True, arm_priors=True,
+            ctx_json=ctx_json,
+        )
+        self.assertEqual(
+            {arm: round(value, 6)
+             for arm, value in self._entry_priors(report[self.position["self_side"]]).items()},
+            {arm: round(value, 6) for arm, value in expected.items()},
+        )
+
+    def test_the_kill_switch_leaves_uniform_arms_the_python_side_refuses(self) -> None:
+        """`model_priors=False`: every arm at 1/n, and `root_priors` null.
+
+        Both halves matter. The uniform column is what a refused prior path
+        leaves behind, so it is a REAL state and not a hypothetical -- and it is
+        indistinguishable from a flat model prior, which is why
+        `engine_search._aggregate_root_arms` treats `root_priors` as the authority
+        rather than reading the arms.
+        """
+        report = self._search(
+            sims=48, batch=8, seed=5, model_priors=False, arm_priors=True
+        )
+        arms = self._entry_priors(report[self.position["self_side"]])
+        self.assertIsNone(report["root_priors"], "the authority says unmeasurable")
+        self.assertEqual(
+            {round(value, 6) for value in arms.values()},
+            {round(1.0 / len(arms), 6)},
+            "a refused prior path leaves the constructed uniform prior in place",
+        )
 
 
 @unittest.skipIf(numpy is None, "requires numpy")
@@ -894,6 +1115,44 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
         )
         for side in ("side_one", "side_two"):
             self.assertEqual(sum(entry["visits"] for entry in on[side]), 48)
+
+    def test_the_opponent_arms_carry_the_opponent_head_only_when_it_is_seeded(
+        self,
+    ) -> None:
+        """H4's model-prior leg, and the state Python refuses when it is absent.
+
+        The crate exports no `root_opponent_priors`, so the opponent seat has no
+        authority field saying whether it was priced from the model -- the arm
+        column is the whole surface. With the flag ON it must be the opponent
+        HEAD (not the acting head, the null this class exists for); with the flag
+        OFF it must be flat 1/n, which is what makes uniformity a sound refusal
+        signal for that seat rather than a guess.
+        """
+        ctx_json = self._ctx_with_opponent_order()
+        oracle = self._root_head_priors(ctx_json)
+        expected = dict(zip(oracle["opponent_arms"], oracle["opponent"]))
+        null = dict(zip(oracle["opponent_arms"], oracle["opponent_from_acting_head"]))
+        self.assertNotEqual(
+            {arm: round(value, 6) for arm, value in null.items()},
+            {arm: round(value, 6) for arm, value in expected.items()},
+            "the acting-head null must be distinguishable here",
+        )
+        on = self._flag_on(ctx_json=ctx_json, arm_priors=True)
+        self.assertEqual(
+            {entry["move"]: round(entry["prior"], 6)
+             for entry in on[self._opponent_side]},
+            {arm: round(value, 6) for arm, value in expected.items()},
+        )
+        off = self._search(
+            sims=48, batch=1, seed=5, model_priors=True,
+            use_opponent_priors=False, ctx_json=ctx_json, arm_priors=True,
+        )
+        arms = [entry["prior"] for entry in off[self._opponent_side]]
+        self.assertEqual(
+            {round(value, 6) for value in arms}, {round(1.0 / len(arms), 6)},
+            "flag off leaves the opponent seat uniform -- the state "
+            "engine_search refuses to argmax",
+        )
 
 
 if __name__ == "__main__":

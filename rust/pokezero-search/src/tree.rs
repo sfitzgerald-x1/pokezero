@@ -229,15 +229,169 @@ pub(crate) struct MultiPlyConfig {
     /// search is behaviourally identical to the uniform-opponent design that
     /// every recorded result was produced under.
     pub use_opponent_priors: bool,
+    /// First-play-urgency reduction for UNVISITED arms (`crate::fpu_value`).
+    /// `None` is the legacy flat 0.5 that `MoveStats::mean` returns at zero
+    /// visits — the value every recorded result was produced under, and the
+    /// setting the bit-identity gate is asserted at. `Some(r)` prices an
+    /// unvisited arm at `clamp(parent mean in that seat's frame - r, 0, 1)`.
+    pub fpu_reduction: Option<f32>,
 }
 
-#[derive(Default)]
+/// Traversals that OPENED a decision node at each depth, index == depth.
+///
+/// WHY, and why `max_depth_reached` beside it is not enough: that field is a MAX over
+/// traversals, so one lucky line to depth 7 sets it to 7 even when 99% of traversals
+/// stopped at depth 3. Every "is this depth saturated" question the Python ladder asks
+/// was answered from that max, which makes "saturated" mean `at least one line reached
+/// the ceiling` rather than `the depth is filled` -- a near-vacuous condition, and the
+/// likely reason the gate fired on only 14-16% of turns.
+///
+/// This is OCCUPANCY: how much of the search actually sits at each level, so ONE search
+/// at the depth cap yields the whole profile and the saturating depth becomes a READ
+/// rather than a scan -- 1x cost instead of 3x for a binary search or 7x for a sweep.
+pub(crate) const DEPTH_OCCUPANCY_SLOTS: usize = 32;
+
 pub(crate) struct SearchCounters {
     pub leaf_evals: usize,
     pub expansions: usize,
     pub deep_ko_triggers: usize,
     pub terminal_branches: usize,
     pub max_depth_reached: u8,
+    /// Index == depth. Depths at or past the slot count fold into the last slot;
+    /// `max_depth` is validated far below 32, so folding is unreachable and exists only
+    /// so the array cannot be indexed out of bounds.
+    pub depth_occupancy: [u64; DEPTH_OCCUPANCY_SLOTS],
+}
+
+impl Default for SearchCounters {
+    fn default() -> Self {
+        Self {
+            leaf_evals: 0,
+            expansions: 0,
+            deep_ko_triggers: 0,
+            terminal_branches: 0,
+            max_depth_reached: 0,
+            depth_occupancy: [0; DEPTH_OCCUPANCY_SLOTS],
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Within-batch selection collisions
+// ---------------------------------------------------------------------------
+
+/// How often a batched round's selections land where the SAME round has already
+/// been, kept PER SEAT.
+///
+/// Virtual loss is the only thing keeping a 64-selection round spread out, so
+/// the rate at which it fails to is the batch axis's own mechanism metric — and
+/// it is the only instrument that can test the deferred-leaf theory (the
+/// selection-tuning plan's finding 3, explicitly unverified).
+///
+/// The provisionals a round leaves behind are SIDE-ONE ABSOLUTE. A deferred leaf
+/// is priced `(value_sum 0.0, visits 1)` and a traversed branch takes a bare
+/// `visits += 1`; both drag a chance node's expectation toward 0 until the
+/// owning traversal's `finalize` reconciles them, and `finalize` runs in
+/// collection order, so an early traversal's backup reads the depression a later
+/// one has not paid off yet. That expectation reaches the side-one arm as itself
+/// (near 0: a loss, as intended) and the side-two arm as `expectation - 1.0`,
+/// which that seat reads back through `1 - mean` as a WIN. So the same
+/// unreconciled placeholder that repels one seat may ATTRACT the other — and a
+/// single pooled repeat count cannot see it, because the two effects land in one
+/// total. Hence a tally per seat, not one tally.
+///
+/// NOTE the asymmetry is SIDE-absolute, not seat-relative: it falls on
+/// `s2_stats` whichever seat is searching. Consumers that want the self/opponent
+/// view must condition on which side the searching seat sat; the encoded core
+/// ships that alongside these counts.
+///
+/// Recorded from the FINISHED [`Traversal`], never from inside `traverse`: the
+/// path is already there, so the hot selection loop is not touched at all and
+/// the counter cannot perturb what it measures. The four sets are allocated once
+/// per search and `clear`ed per round, so steady state allocates nothing either.
+#[derive(Default)]
+#[cfg_attr(not(feature = "model"), allow(dead_code))]
+pub(crate) struct CollisionLedger {
+    /// (decision node, i, j) joint cells this round has already taken.
+    joint_seen: std::collections::HashSet<(usize, usize, usize)>,
+    /// (decision node, arm), per seat.
+    side_one_seen: std::collections::HashSet<(usize, usize)>,
+    side_two_seen: std::collections::HashSet<(usize, usize)>,
+    /// (chance node, descended branch) a traversal has already bottomed out on.
+    leaf_seen: std::collections::HashSet<(usize, Option<usize>)>,
+    pub counts: CollisionCounts,
+}
+
+/// Whole-search totals over every round's [`CollisionLedger`]. Rates are left to
+/// the consumer: the denominators are here so a caller pooling several worlds
+/// into one decision can pool numerator and denominator together instead of
+/// averaging ratios.
+#[derive(Default, Clone, Copy)]
+#[cfg_attr(not(feature = "model"), allow(dead_code))]
+pub(crate) struct CollisionCounts {
+    pub rounds: usize,
+    /// Rounds that actually deferred at least one leaf. The deferred-leaf theory
+    /// is a claim about PENDING batches specifically, so the audit needs to know
+    /// what share of rounds could exhibit it; a round that expanded nothing has
+    /// no placeholder in it to be asymmetric.
+    pub pending_rounds: usize,
+    /// Decision-node visits recorded — the denominator for the three
+    /// per-selection repeat counts below (one traversal contributes one per ply
+    /// it descended).
+    pub selections: usize,
+    pub joint_repeats: usize,
+    pub side_one_repeats: usize,
+    pub side_two_repeats: usize,
+    /// Traversals recorded — the denominator for `leaf_repeats`.
+    pub traversals: usize,
+    pub leaf_repeats: usize,
+}
+
+#[cfg_attr(not(feature = "model"), allow(dead_code))]
+impl CollisionLedger {
+    /// Forget the previous round's cells, keeping their allocation.
+    pub(crate) fn begin_round(&mut self) {
+        self.joint_seen.clear();
+        self.side_one_seen.clear();
+        self.side_two_seen.clear();
+        self.leaf_seen.clear();
+    }
+
+    /// Fold one collected traversal into this round's cells.
+    pub(crate) fn record(&mut self, traversal: &Traversal) {
+        for step in &traversal.path {
+            self.counts.selections += 1;
+            if !self.joint_seen.insert((step.decision, step.i, step.j)) {
+                self.counts.joint_repeats += 1;
+            }
+            if !self.side_one_seen.insert((step.decision, step.i)) {
+                self.counts.side_one_repeats += 1;
+            }
+            if !self.side_two_seen.insert((step.decision, step.j)) {
+                self.counts.side_two_repeats += 1;
+            }
+        }
+        self.counts.traversals += 1;
+        if let Some(step) = traversal.path.last() {
+            // An EXPANSION can never repeat — `traverse` inserts the edge into
+            // `children` before the round's next selection, so no second
+            // traversal can expand it — but it is still recorded, under its own
+            // fresh chance index, so `traversals` stays the honest denominator
+            // rather than one that quietly excludes the productive selections.
+            if !self.leaf_seen.insert((step.chance, step.branch)) {
+                self.counts.leaf_repeats += 1;
+            }
+        }
+    }
+
+    /// Close a round. `pending_rows` is that round's deferred-leaf count, which
+    /// is what makes the round eligible for the deferred-leaf reading.
+    pub(crate) fn end_round(&mut self, pending_rows: usize) {
+        self.counts.rounds += 1;
+        if pending_rows > 0 {
+            self.counts.pending_rounds += 1;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -361,11 +515,26 @@ pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
     let end = loop {
         let depth = tree.decisions[node_idx].depth;
         counters.max_depth_reached = counters.max_depth_reached.max(depth);
+        // OCCUPANCY, counted on the same line as the max so the two can never disagree
+        // about which traversals were seen.
+        counters.depth_occupancy[(depth as usize).min(DEPTH_OCCUPANCY_SLOTS - 1)] += 1;
         // --- decision node: decoupled per-side PUCT + virtual loss ---
         let (i, j) = {
             let node = &tree.decisions[node_idx];
-            let i = select(&node.s1_stats, node.visits, cfg.c_puct, true);
-            let j = select(&node.s2_stats, node.visits, cfg.c_puct, false);
+            let i = select(
+                &node.s1_stats,
+                node.visits,
+                cfg.c_puct,
+                true,
+                cfg.fpu_reduction,
+            );
+            let j = select(
+                &node.s2_stats,
+                node.visits,
+                cfg.c_puct,
+                false,
+                cfg.fpu_reduction,
+            );
             (i, j)
         };
         {
@@ -812,6 +981,11 @@ pub(crate) fn multiply_search_with_eval<E: LeafEval>(
     })
 }
 
+/// `arm_priors` is threaded rather than read off `cfg`: it changes only what the
+/// report SAYS, and putting it in `MultiPlyConfig` would put a reporting knob in
+/// the struct whose fields are the search's semantics -- where a future
+/// `cfg`-derived cache key or equality check would treat two identical searches
+/// as different ones.
 pub(crate) fn multiply_report_json(
     outcome: &MultiPlyOutcome,
     iterations: usize,
@@ -819,6 +993,7 @@ pub(crate) fn multiply_report_json(
     seed: u64,
     evaluator_name: &str,
     extra_fields: &str,
+    arm_priors: bool,
 ) -> String {
     let root = &outcome.tree.decisions[0];
     let root_visits: u32 = root.s1_stats.iter().map(|s| s.visits).sum();
@@ -833,13 +1008,21 @@ pub(crate) fn multiply_report_json(
     } else {
         f64::INFINITY
     };
+    // Emitted only when SET, so a legacy run's report keeps the bytes it has
+    // always had (the bit-identity gate reads these reports) while a tuned run
+    // still carries the knob it was tuned at. A field spelled `null` on every
+    // legacy report would have made every one of them a new artifact.
+    let fpu_field = match cfg.fpu_reduction {
+        Some(r) => format!(",\"fpu_reduction\":{r}"),
+        None => String::new(),
+    };
     format!(
         "{{\"iterations\":{},\"search\":\"multi_ply\",\"max_depth\":{},\"evaluator\":\"{}\",\
-         \"c_puct\":{},\"seed\":{},\"deep_ko_split\":{},\
+         \"c_puct\":{},\"seed\":{},\"deep_ko_split\":{}{},\
          \"elapsed_s\":{:.6},\"iterations_per_s\":{:.1},\
          \"leaf_evals\":{},\"expansions\":{},\"deep_ko_triggers\":{},\
          \"terminal_branches\":{},\"decision_nodes\":{},\"chance_nodes\":{},\
-         \"max_depth_reached\":{},\"root_value\":{:.6}{}{}\
+         \"max_depth_reached\":{},\"depth_occupancy\":{},\"root_value\":{:.6}{}{}\
          ,\"side_one\":{},\"side_two\":{}}}",
         iterations,
         cfg.max_depth,
@@ -847,6 +1030,7 @@ pub(crate) fn multiply_report_json(
         cfg.c_puct,
         seed,
         cfg.deep_ko_split,
+        fpu_field,
         outcome.elapsed_s,
         iterations_per_s,
         outcome.counters.leaf_evals,
@@ -856,12 +1040,28 @@ pub(crate) fn multiply_report_json(
         outcome.tree.decisions.len(),
         outcome.tree.chances.len(),
         outcome.counters.max_depth_reached,
+        depth_occupancy_json(&outcome.counters.depth_occupancy),
         root_value,
         if extra_fields.is_empty() { "" } else { "," },
         extra_fields,
-        stats_to_json(&root.s1_stats),
-        stats_to_json(&root.s2_stats),
+        stats_to_json(&root.s1_stats, arm_priors),
+        stats_to_json(&root.s2_stats, arm_priors),
     )
+}
+
+/// Reject an out-of-range first-play-urgency reduction at the Python boundary.
+///
+/// Q lives in `[0, 1]` here (the value head is a win probability), so a
+/// reduction outside it cannot mean anything the clamp would not already have
+/// flattened, and a NEGATIVE one is a first-play BONUS — the opposite of the
+/// mechanism, silently. Same standing as the `max_depth` bound above it.
+pub(crate) fn validate_fpu_reduction(fpu_reduction: Option<f32>) -> PyResult<Option<f32>> {
+    match fpu_reduction {
+        Some(r) if !(0.0..=1.0).contains(&r) => Err(PyValueError::new_err(format!(
+            "fpu_reduction must be in 0.0..=1.0, got {r}"
+        ))),
+        other => Ok(other),
+    }
 }
 
 /// Multi-ply decision/chance PUCT with the trivial HP-fraction leaf evaluator
@@ -870,7 +1070,18 @@ pub(crate) fn multiply_report_json(
 /// engine's own plies-1-2 policy, plus KO-threshold splits at deeper plies
 /// while `deep_ko_split` is set. Deterministic for a fixed seed.
 #[pyfunction]
-#[pyo3(signature = (state_str, iterations, max_depth = 2, c_puct = 1.4, seed = 0, deep_ko_split = true))]
+#[pyo3(signature = (
+    state_str,
+    iterations,
+    max_depth = 2,
+    c_puct = 1.4,
+    seed = 0,
+    deep_ko_split = true,
+    // Default None, and last in the signature, so every existing caller is
+    // byte-for-byte unaffected: flag-off must be the flat-0.5 first-play
+    // urgency every recorded result was produced under.
+    fpu_reduction = None,
+))]
 pub(crate) fn puct_search_multi(
     state_str: &str,
     iterations: usize,
@@ -878,6 +1089,7 @@ pub(crate) fn puct_search_multi(
     c_puct: f32,
     seed: u64,
     deep_ko_split: bool,
+    fpu_reduction: Option<f32>,
 ) -> PyResult<String> {
     if iterations == 0 {
         return Err(PyValueError::new_err("iterations must be > 0"));
@@ -885,6 +1097,7 @@ pub(crate) fn puct_search_multi(
     if max_depth == 0 || max_depth > 32 {
         return Err(PyValueError::new_err("max_depth must be in 1..=32"));
     }
+    let fpu_reduction = validate_fpu_reduction(fpu_reduction)?;
     let mut state = parse_state(state_str)?;
     let cfg = MultiPlyConfig {
         max_depth,
@@ -892,6 +1105,7 @@ pub(crate) fn puct_search_multi(
         deep_ko_split,
         // No model in this core, so there is no opponent head to gather.
         use_opponent_priors: false,
+        fpu_reduction,
     };
     let evaluator = HpFractionEval;
     // Contain poke-engine's panics here too. This is the hp_fraction path, and
@@ -911,6 +1125,9 @@ pub(crate) fn puct_search_multi(
         seed,
         "hp_fraction",
         "",
+        // Uniform by construction on this path -- there is no model to price the
+        // arms -- so the column would be a constant 1/n on every entry.
+        false,
     ))
 }
 
@@ -918,6 +1135,15 @@ pub(crate) fn puct_search_multi(
 // Tests (fixture states generated by src/pokezero/poke_engine_adapter.py —
 // see tests/test_multiply_chance_search.py for the Python-side gates)
 // ---------------------------------------------------------------------------
+
+/// `[u64; N]` as a JSON array, trimmed to the deepest non-zero slot, because a fixed
+/// 32-slot array on every world's report would dominate a payload that already carries
+/// per-decision rows, and every slot past the deepest occupied one is structurally zero.
+fn depth_occupancy_json(occ: &[u64]) -> String {
+    let last = occ.iter().rposition(|&n| n > 0).map_or(0, |i| i + 1);
+    let body: Vec<String> = occ[..last].iter().map(|n| n.to_string()).collect();
+    format!("[{}]", body.join(","))
+}
 
 /// The abort seam, exercised BEHAVIOURALLY and only on a `model` build.
 ///
@@ -1090,12 +1316,347 @@ mod tests {
     fn an_applied_prior_changes_which_arm_puct_picks() {
         let mut node = prior_node(&[0.5, 0.5], &[0.5, 0.5]);
         assert_eq!(
-            crate::select(&node.s2_stats, 16, 1.4, false),
+            crate::select(&node.s2_stats, 16, 1.4, false, None),
             0,
             "uniform priors leave the first arm winning the tie"
         );
         assert!(apply_self_priors(&mut node, false, &[0.1, 0.9]));
-        assert_eq!(crate::select(&node.s2_stats, 16, 1.4, false), 1);
+        assert_eq!(crate::select(&node.s2_stats, 16, 1.4, false, None), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // First-play urgency (`MultiPlyConfig::fpu_reduction`)
+    // -----------------------------------------------------------------
+
+    /// `(prior, visits, total_value)` per arm. `total_value` is SIDE-ONE
+    /// ABSOLUTE in both seats' vectors — that is the tree's convention
+    /// (`finalize` adds the same chance expectation to both) and the whole point
+    /// of the seat-frame tests below.
+    fn valued_stats(arms: &[(f32, u32, f32)]) -> Vec<MoveStats> {
+        arms.iter()
+            .enumerate()
+            .map(|(i, (prior, visits, total_value))| MoveStats {
+                display: format!("arm{i}"),
+                prior: *prior,
+                visits: *visits,
+                total_value: *total_value,
+            })
+            .collect()
+    }
+
+    /// The flag has to change WHICH ARM IS SELECTED, not merely which number is
+    /// stored — a reduction that never reaches the argmax is the failure this
+    /// programme keeps hitting.
+    ///
+    /// Constructed so the two settings disagree: one visited arm at Q 0.2 (16
+    /// visits, prior 0.99) and one unvisited arm at prior 0.01.
+    ///   * legacy: unvisited Q = 0.5, score 0.5 + 1.4*0.01*4/1 = 0.556, and the
+    ///     visited arm scores 0.2 + 1.4*0.99*4/17 = 0.526 — the untried arm wins
+    ///     purely on the flat 0.5, which is the defect the plan names;
+    ///   * `Some(0.2)`: unvisited Q = clamp(0.2 - 0.2) = 0.0, score 0.056 — the
+    ///     visited arm keeps the node.
+    ///
+    /// The SKEWED PRIOR is load-bearing and is itself the mechanism's shape:
+    /// PUCT's `u` term for an unvisited arm is `c_puct * prior * sqrt(N)`, which
+    /// grows without bound in `N`, so under UNIFORM priors every unvisited
+    /// sibling is selected eventually no matter what Q it is priced at. FPU can
+    /// only bite where the policy head has concentrated mass — which is exactly
+    /// the regime the opponent-priors stage puts the search into.
+    #[test]
+    fn fpu_reduction_prices_an_unvisited_arm_off_the_parent_mean() {
+        let stats = valued_stats(&[(0.99, 16, 3.2), (0.01, 0, 0.0)]);
+        assert_eq!(
+            crate::select(&stats, 16, 1.4, true, None),
+            1,
+            "flat 0.5 first-play urgency must hand the node to the untried arm"
+        );
+        assert_eq!(
+            crate::select(&stats, 16, 1.4, true, Some(0.2)),
+            0,
+            "an unvisited arm priced at the parent mean minus 0.2 must lose"
+        );
+    }
+
+    /// THE SEAT-FRAME PIN. Selection is decoupled per-side PUCT and side two
+    /// scores on `1 - value`, so the reduction has to be subtracted AFTER the
+    /// reflection, in the seat's own frame.
+    ///
+    /// Mirror of the test above: the visited arm holds side-one-absolute mean
+    /// 0.8, which side two reads as 0.2, and the arithmetic is then identical —
+    /// correct frame gives the unvisited arm `clamp(0.2 - 0.2) = 0.0` and the
+    /// visited arm keeps the node.
+    ///
+    /// A build that subtracted in the side-ONE frame would price the unvisited
+    /// arm at `clamp(0.8 - 0.2) = 0.6`, i.e. HIGHER than the legacy 0.5 it
+    /// replaces: the reduction would arrive at this seat as a first-play BONUS
+    /// and the untried arm would win by MORE than before the flag existed. That
+    /// mutant scores 0.656 against the visited arm's 0.526 and fails here.
+    #[test]
+    fn fpu_reduction_uses_the_selecting_seats_own_frame() {
+        let stats = valued_stats(&[(0.99, 16, 12.8), (0.01, 0, 0.0)]);
+        assert_eq!(
+            crate::select(&stats, 16, 1.4, false, None),
+            1,
+            "flat 0.5 first-play urgency must hand the node to the untried arm"
+        );
+        assert_eq!(
+            crate::select(&stats, 16, 1.4, false, Some(0.2)),
+            0,
+            "side two's baseline is 1 - 0.8 = 0.2; the side-one frame would read 0.8"
+        );
+    }
+
+    /// A node with no visits has no running value to reduce, and the flag is a
+    /// documented no-op there: every arm is unvisited, every `u` term is
+    /// `c_puct * prior * sqrt(0) / 1 == 0`, so the argmax is index 0 for any
+    /// constant Q. Pinned because the alternative — inventing a baseline for a
+    /// node that has none — would make the flag's FIRST touch on every node
+    /// depend on a number the node never produced.
+    #[test]
+    fn fpu_reduction_is_a_no_op_at_a_node_with_no_visits() {
+        let stats = valued_stats(&[(0.1, 0, 0.0), (0.9, 0, 0.0)]);
+        for reduction in [None, Some(0.0), Some(0.3), Some(1.0)] {
+            assert_eq!(crate::select(&stats, 0, 1.4, true, reduction), 0);
+            assert_eq!(crate::select(&stats, 0, 1.4, false, reduction), 0);
+        }
+    }
+
+    /// End to end through `MultiPlyConfig`, not just `select`: the knob has to
+    /// survive the config, the traversal and the backup and land in the root's
+    /// visit distribution. Same fixture, same seed, same budget — only the flag
+    /// differs.
+    ///
+    /// This is the companion to the bit-identity gate. That gate proves `None`
+    /// changes nothing; without this one, a flag that was silently dropped on
+    /// the way into `traverse` would pass it perfectly.
+    #[test]
+    fn fpu_reduction_changes_a_real_multi_ply_search() {
+        let visits = |outcome: &MultiPlyOutcome| -> Vec<u32> {
+            outcome.tree.decisions[0]
+                .s1_stats
+                .iter()
+                .map(|s| s.visits)
+                .collect()
+        };
+        let legacy = run_with_fpu(STRADDLE, 512, 4, 11, true, None);
+        let reduced = run_with_fpu(STRADDLE, 512, 4, 11, true, Some(0.3));
+        assert_ne!(
+            visits(&legacy),
+            visits(&reduced),
+            "fpu_reduction reached the config but not the search"
+        );
+        // Sanity: the flag steers the budget, it does not lose any of it.
+        assert_eq!(
+            visits(&legacy).iter().sum::<u32>(),
+            visits(&reduced).iter().sum::<u32>()
+        );
+    }
+
+    #[test]
+    fn an_out_of_range_fpu_reduction_is_refused_at_the_python_boundary() {
+        for bad in [-0.1f32, 1.5] {
+            let error = validate_fpu_reduction(Some(bad))
+                .expect_err("a reduction outside [0, 1] must not reach the search");
+            assert!(error.to_string().contains("fpu_reduction"), "{error}");
+        }
+        assert_eq!(validate_fpu_reduction(Some(0.0)).unwrap(), Some(0.0));
+        assert_eq!(validate_fpu_reduction(None).unwrap(), None);
+    }
+
+    // -----------------------------------------------------------------
+    // Override telemetry (`arm_priors`) — REPORTING ONLY
+    // -----------------------------------------------------------------
+
+    /// Remove every `,"prior":<number>` that `stats_to_json` inserts.
+    fn strip_prior_columns(report: &str) -> String {
+        let mut out = String::with_capacity(report.len());
+        let mut rest = report;
+        while let Some(at) = rest.find(",\"prior\":") {
+            out.push_str(&rest[..at]);
+            let tail = &rest[at..];
+            let end = tail
+                .find('}')
+                .expect("a prior column must end inside its own arm entry");
+            rest = &tail[end..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// `arm_priors` adds a column and changes NOTHING else.
+    ///
+    /// The value-gap plan's §2 override measurement is switched on per shard, and
+    /// `scripts/foulplay_paired_eval.py` deliberately keeps the flag OUT of
+    /// `config_id` on the strength of this claim: telemetry-on and telemetry-off
+    /// are one cell, so a shard that measured an override rate pools with a banked
+    /// shard that did not. If the flag perturbed selection, §2 would be measuring a
+    /// different engine than every other stage under the same cell id — a wrong
+    /// number, not an error.
+    ///
+    /// The STRUCTURAL half of the argument is visible in the signatures rather than
+    /// here: `arm_priors` is not an input to the search at all. It is threaded to
+    /// `multiply_report_json`, which takes a FINISHED [`MultiPlyOutcome`], and
+    /// [`MultiPlyConfig`] — the struct whose fields ARE the search's semantics —
+    /// has no such field, for the reason stated above `multiply_report_json`.
+    ///
+    /// The MEASURED half is this: one search, both renderings, and the on-report
+    /// with its added key removed is byte-identical to the off-report. Rendering
+    /// the SAME outcome twice is the point — it removes run-to-run variation from
+    /// the comparison entirely, so a difference could only come from the flag.
+    #[test]
+    fn arm_priors_only_adds_a_reported_column() {
+        let cfg = MultiPlyConfig {
+            max_depth: 4,
+            c_puct: 1.4,
+            deep_ko_split: true,
+            use_opponent_priors: false,
+            fpu_reduction: None,
+        };
+        let outcome = run_with_fpu(STRADDLE, 256, cfg.max_depth, 11, cfg.deep_ko_split, None);
+        let off = multiply_report_json(&outcome, 256, &cfg, 11, "hp_fraction", "", false);
+        let on = multiply_report_json(&outcome, 256, &cfg, 11, "hp_fraction", "", true);
+        // Positive control on the query: if `prior` never appeared, the strip
+        // below would trivially "prove" identity on two identical strings.
+        assert!(on.contains(",\"prior\":"), "the flag added no column: {on}");
+        assert!(!off.contains("\"prior\":"), "flag-off must add none: {off}");
+        assert_ne!(off, on);
+        assert_eq!(
+            strip_prior_columns(&on),
+            off,
+            "arm_priors changed something other than the arm-prior column"
+        );
+    }
+
+    /// The complement: a knob that DOES belong in `config_id` must be visible in
+    /// the same rendering, so the test above is a statement about `arm_priors` and
+    /// not about a report that ignores its config.
+    #[test]
+    fn fpu_reduction_by_contrast_reaches_the_report_and_the_search() {
+        let base = MultiPlyConfig {
+            max_depth: 4,
+            c_puct: 1.4,
+            deep_ko_split: true,
+            use_opponent_priors: false,
+            fpu_reduction: None,
+        };
+        let tuned = MultiPlyConfig {
+            fpu_reduction: Some(0.3),
+            ..base
+        };
+        let outcome = run_with_fpu(STRADDLE, 256, base.max_depth, 11, base.deep_ko_split, None);
+        let plain = multiply_report_json(&outcome, 256, &base, 11, "hp_fraction", "", false);
+        let with_fpu = multiply_report_json(&outcome, 256, &tuned, 11, "hp_fraction", "", false);
+        assert!(!plain.contains("fpu_reduction"));
+        assert!(with_fpu.contains("\"fpu_reduction\":0.3"));
+    }
+
+    // -----------------------------------------------------------------
+    // Within-batch collision ledger
+    // -----------------------------------------------------------------
+
+    fn step(decision: usize, i: usize, j: usize, chance: usize, branch: Option<usize>) -> PathStep {
+        PathStep {
+            decision,
+            i,
+            j,
+            chance,
+            branch,
+        }
+    }
+
+    fn traversal(path: Vec<PathStep>) -> Traversal {
+        Traversal {
+            path,
+            end: TraversalEnd::Ready(0.5),
+        }
+    }
+
+    /// The per-seat split is the whole instrument. A round in which side one
+    /// takes a fresh arm every time while side two keeps returning to arm 0 is
+    /// exactly the shape the deferred-leaf theory predicts (the provisional loss
+    /// is a provisional WIN for that seat), and a pooled counter reports the
+    /// same total whichever seat is doing the repeating.
+    ///
+    /// Three selections at one node: (0,0), (1,0), (2,0).
+    ///   joint cells   — all distinct, 0 repeats;
+    ///   side one arms — 0, 1, 2, all distinct, 0 repeats;
+    ///   side two arms — 0, 0, 0, so 2 repeats.
+    #[test]
+    fn the_collision_ledger_separates_the_two_seats() {
+        let mut ledger = CollisionLedger::default();
+        ledger.begin_round();
+        for i in 0..3 {
+            ledger.record(&traversal(vec![step(0, i, 0, i, Some(0))]));
+        }
+        ledger.end_round(3);
+        assert_eq!(ledger.counts.selections, 3);
+        assert_eq!(ledger.counts.joint_repeats, 0);
+        assert_eq!(ledger.counts.side_one_repeats, 0);
+        assert_eq!(
+            ledger.counts.side_two_repeats, 2,
+            "a pooled counter cannot tell this round from its mirror image"
+        );
+        assert_eq!(ledger.counts.rounds, 1);
+        assert_eq!(ledger.counts.pending_rounds, 1);
+    }
+
+    /// Joint cells and leaves are counted per ROUND, and a round is where the
+    /// batch's virtual loss lives: cells repeated ACROSS rounds are ordinary
+    /// tree refinement, not a collision, because `finalize` has already replaced
+    /// the provisionals in between.
+    #[test]
+    fn the_collision_ledger_forgets_its_cells_between_rounds() {
+        let mut ledger = CollisionLedger::default();
+        for _ in 0..2 {
+            ledger.begin_round();
+            ledger.record(&traversal(vec![step(0, 1, 1, 4, Some(2))]));
+            ledger.record(&traversal(vec![step(0, 1, 1, 4, Some(2))]));
+            ledger.end_round(0);
+        }
+        assert_eq!(ledger.counts.selections, 4);
+        assert_eq!(ledger.counts.joint_repeats, 2, "one per round, not three");
+        assert_eq!(ledger.counts.leaf_repeats, 2);
+        assert_eq!(ledger.counts.traversals, 4);
+        assert_eq!(ledger.counts.rounds, 2);
+        assert_eq!(
+            ledger.counts.pending_rounds, 0,
+            "a round that deferred no leaf cannot exhibit the placeholder"
+        );
+    }
+
+    /// An EXPANSION (`branch: None`) is a distinct leaf per chance node and can
+    /// never repeat inside a round, but it still counts toward `traversals` —
+    /// otherwise the repeat RATE would be taken over a denominator that quietly
+    /// excludes the productive selections and would read far too high.
+    #[test]
+    fn expansions_count_as_traversals_and_never_as_leaf_repeats() {
+        let mut ledger = CollisionLedger::default();
+        ledger.begin_round();
+        ledger.record(&traversal(vec![step(0, 0, 0, 7, None)]));
+        ledger.record(&traversal(vec![step(0, 0, 1, 8, None)]));
+        ledger.record(&traversal(vec![step(0, 0, 2, 3, Some(1))]));
+        ledger.record(&traversal(vec![step(0, 0, 3, 3, Some(1))]));
+        ledger.end_round(9);
+        assert_eq!(ledger.counts.traversals, 4);
+        assert_eq!(ledger.counts.leaf_repeats, 1, "only the two Some(1) share a leaf");
+    }
+
+    /// Multi-ply paths contribute one selection PER PLY, and cells are keyed on
+    /// the decision node — the same arm index at two different nodes is not a
+    /// collision.
+    #[test]
+    fn collisions_are_keyed_on_the_decision_node_not_the_arm_index() {
+        let mut ledger = CollisionLedger::default();
+        ledger.begin_round();
+        ledger.record(&traversal(vec![
+            step(0, 0, 0, 1, Some(0)),
+            step(5, 0, 0, 2, Some(0)),
+        ]));
+        ledger.end_round(1);
+        assert_eq!(ledger.counts.selections, 2);
+        assert_eq!(ledger.counts.joint_repeats, 0);
+        assert_eq!(ledger.counts.side_one_repeats, 0);
+        assert_eq!(ledger.counts.side_two_repeats, 0);
     }
 
     fn priored_branch(
@@ -1238,7 +1799,7 @@ mod tests {
         poisoned.side_one.get_active().rest_turns = 32;
         let poisoned_str = poisoned.serialize();
 
-        let error = puct_search_multi(&poisoned_str, 32, 2, 1.4, 7, true)
+        let error = puct_search_multi(&poisoned_str, 32, 2, 1.4, 7, true, None)
             .expect_err("an out-of-range rest counter must surface as an error");
         pyo3::Python::attach(|py| {
             assert!(
@@ -1254,7 +1815,7 @@ mod tests {
 
         // The point of containing rather than crashing: the NEXT world still runs.
         let healthy = parse_state(MINIMAL.trim()).expect("fixture parses").serialize();
-        let report = puct_search_multi(&healthy, 32, 2, 1.4, 7, true)
+        let report = puct_search_multi(&healthy, 32, 2, 1.4, 7, true, None)
             .expect("a good state must still search after a contained panic");
         assert!(report.contains("visits"), "{report}");
     }
@@ -1295,12 +1856,24 @@ mod tests {
         seed: u64,
         deep_ko_split: bool,
     ) -> MultiPlyOutcome {
+        run_with_fpu(state_str, iterations, max_depth, seed, deep_ko_split, None)
+    }
+
+    fn run_with_fpu(
+        state_str: &str,
+        iterations: usize,
+        max_depth: u8,
+        seed: u64,
+        deep_ko_split: bool,
+        fpu_reduction: Option<f32>,
+    ) -> MultiPlyOutcome {
         let mut state = parse_state(state_str.trim()).expect("fixture state parses");
         let cfg = MultiPlyConfig {
             max_depth,
             c_puct: 1.4,
             deep_ko_split,
             use_opponent_priors: false,
+            fpu_reduction,
         };
         multiply_search_with_eval(&mut state, iterations, &cfg, seed, &HpFractionEval)
             .expect("search runs")
@@ -1325,6 +1898,43 @@ mod tests {
             .expect("root has arms")
             .display
             .clone()
+    }
+
+    #[test]
+    fn depth_occupancy_is_occupancy_not_a_maximum() {
+        // THE POINT OF THE FIELD. `max_depth_reached` is satisfied by ONE deep line, so
+        // it cannot distinguish a tree filled to depth 3 from one that sent a single
+        // traversal to depth 7. Occupancy can, and the Python saturation gate needs the
+        // difference: reading a max made "saturated" mean "reachable", which is why it
+        // fired on only 14-16% of turns.
+        let mut c = SearchCounters::default();
+        for _ in 0..99 {
+            c.depth_occupancy[3] += 1;
+            c.max_depth_reached = c.max_depth_reached.max(3);
+        }
+        c.depth_occupancy[7] += 1;
+        c.max_depth_reached = c.max_depth_reached.max(7);
+        assert_eq!(c.max_depth_reached, 7, "the max is set by the single deep line");
+        assert_eq!(c.depth_occupancy[7], 1, "and occupancy shows it was ONE traversal");
+        assert_eq!(c.depth_occupancy[3], 99);
+        // A ceiling share computed from the max would call depth 8 saturated here; from
+        // occupancy it is 1 of 100.
+        let total: u64 = c.depth_occupancy.iter().sum();
+        assert_eq!(total, 100);
+        assert!((c.depth_occupancy[7] as f64) / (total as f64) < 0.02);
+    }
+
+    #[test]
+    fn depth_occupancy_json_trims_to_the_deepest_occupied_slot() {
+        let mut occ = [0u64; DEPTH_OCCUPANCY_SLOTS];
+        assert_eq!(depth_occupancy_json(&occ), "[]", "no traversals, no array");
+        occ[0] = 5;
+        occ[2] = 7;
+        assert_eq!(depth_occupancy_json(&occ), "[5,0,7]", "trimmed, zeros kept INSIDE");
+        occ[DEPTH_OCCUPANCY_SLOTS - 1] = 1;
+        let full = depth_occupancy_json(&occ);
+        assert!(full.ends_with(",1]"), "the last slot is reachable: {full}");
+        assert_eq!(full.matches(',').count(), DEPTH_OCCUPANCY_SLOTS - 1);
     }
 
     #[test]
@@ -1509,6 +2119,7 @@ mod tests {
                 c_puct: 1.4,
                 deep_ko_split: true,
                 use_opponent_priors: false,
+                fpu_reduction: None,
             };
             let mut tree = Tree::from_root(&state).expect("root builds");
             let toxic = tree.decisions[0]
@@ -1711,6 +2322,7 @@ mod tests {
             c_puct: 1.4,
             deep_ko_split: true,
             use_opponent_priors: false,
+            fpu_reduction: None,
         };
         let mut tree = Tree::from_root(&state).expect("root builds");
         let mut counters = SearchCounters::default();

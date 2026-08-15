@@ -33,7 +33,8 @@ _SPEC.loader.exec_module(_R)
 FP = "f" * 64
 
 
-def shard(config_id, arm, checkpoint, scores, *, gate=4.0, fingerprint=FP):
+def shard(config_id, arm, checkpoint, scores, *, gate=4.0, fingerprint=FP,
+          opponent_engine_mcts=None):
     """`scores` maps (seed, seat) -> score."""
     return {
         "schema_version": "pokezero.foulplay-paired-shard.v1",
@@ -53,6 +54,7 @@ def shard(config_id, arm, checkpoint, scores, *, gate=4.0, fingerprint=FP):
                 "fallback_rate": 0.008,
                 "depth_reached_mean": 3.1,
                 "world_failure_reasons": {},
+                "opponent_engine_mcts": opponent_engine_mcts,
             }
             for seat in ("p1", "p2")
         },
@@ -177,6 +179,45 @@ class LatencyGateTest(unittest.TestCase):
         rep = self._two_cells(19.0)
         self.assertIn("PASS", rep["cells"]["slow@k0"]["cap"])
         self.assertIn("slow@k0", rep["ranking_eligible"])
+
+    def test_the_gate_prefers_the_per_decision_wall_on_a_dynamic_cell(self) -> None:
+        # `search_wall_per_searched_decision` is per-RUNG on a ladder cell:
+        # `searched_decisions` is charged once per `_search_model` call and a ladder
+        # calls it once per rung (measured 2,224 rungs against 1,062 decisions). So
+        # gating on it lets a cell at ~2.1 rungs/decision report 5.7s when its true
+        # per-decision wall is 12s, and the 20s/turn cap silently stops gating on
+        # exactly the cells this feature exists to produce. Found in review.
+        entry = {"per_seat": [{"p1": {
+            "search_wall_per_searched_decision": 5.71,
+            "search_wall_per_ladder_decision": 12.0,
+            "ladder_rungs_per_decision": 2.1,
+            "wall_per_decision_mean": 12.4,
+            "wall_per_decision_p95": 18.0,
+        }}]}
+        lat = _R.latency_of(entry)
+        self.assertEqual(lat["search_wall_per_searched_decision_mean"], 12.0)
+        self.assertEqual(lat["gate_denominator"], "per_ladder_decision")
+        self.assertAlmostEqual(lat["ladder_rungs_per_decision_mean"], 2.1)
+
+    def test_a_fixed_cell_still_gates_on_the_field_it_always_did(self) -> None:
+        # No ladder field means a fixed cell, where the gate field IS per-decision.
+        # Every banked cell must keep reading exactly as it did.
+        entry = {"per_seat": [{"p1": {"search_wall_per_searched_decision": 12.51}}]}
+        lat = _R.latency_of(entry)
+        self.assertEqual(lat["search_wall_per_searched_decision_mean"], 12.51)
+        self.assertEqual(lat["gate_denominator"], "per_searched_decision_PER_RUNG")
+        self.assertIsNone(lat["ladder_rungs_per_decision_mean"])
+
+    def test_mixing_the_two_denominators_is_labelled_not_averaged(self) -> None:
+        # Should be impossible -- assert_single_build refuses cross-fingerprint
+        # merges -- but averaging a per-rung figure with a per-decision one produces
+        # a number that is neither, so if it ever happens the reader must see it.
+        entry = {"per_seat": [
+            {"p1": {"search_wall_per_ladder_decision": 12.0}},
+            {"p1": {"search_wall_per_searched_decision": 6.0}},
+        ]}
+        self.assertEqual(_R.latency_of(entry)["gate_denominator"],
+                         "MIXED - do not compare")
 
     def test_missing_gate_field_is_unevaluable_not_a_pass(self) -> None:
         # A fully-fallen-back cell emits no search_wall_per_searched_decision.
@@ -546,6 +587,127 @@ class DepthRuleTest(unittest.TestCase):
         cell = rep["cells"]["d6-s2048-b64-w4@k0"]
         self.assertEqual(cell["ineligible_because"], [])
         self.assertIn("d6-s2048-b64-w4@k0", rep["ranking_eligible"])
+
+
+class ArmWitnessTest(unittest.TestCase):
+    """The merger must SAY which arm a cell was, for the two axes cell ids cannot.
+
+    `+oracle-belief` is in config_id, so its risk is the opposite one: a shard
+    written by an older driver would carry the flag in its body and NOT in its id,
+    pooling the oracle arm into its own sampled control. Override telemetry is not
+    in config_id at all by design, so the merger has to report the split or an
+    override rate read off the cell's pair count is wrong by the telemetry-off
+    share.
+    """
+
+    def _cell(self, report, cid):
+        return report["cells"][cid]
+
+    def test_the_oracle_arm_is_witnessed_and_the_sampled_twin_is_not(self) -> None:
+        scores = {(0, "p1"): 1.0, (1, "p1"): 0.0}
+        oracle = shard("d8-s1024-b64-w1+oracle-belief@k0", "search", "k0", scores)
+        oracle["oracle_belief"] = True
+        report = run([
+            oracle,
+            shard("d8-s1024-b64-w1@k0", "search", "k0", scores),
+            shard("raw@k0", "raw", "k0", scores),
+        ])
+        self.assertIs(
+            self._cell(report, "d8-s1024-b64-w1+oracle-belief@k0")["oracle_belief"],
+            True,
+        )
+        self.assertIs(
+            self._cell(report, "d8-s1024-b64-w1@k0")["oracle_belief"], False
+        )
+
+    def test_pooling_the_two_beliefs_into_one_cell_is_terminal(self) -> None:
+        # An older driver, or a hand-edited shard, is the only way to reach this.
+        # It must not merge: pooled, §4a's centerpiece figure is the average of
+        # the two arms it contrasts.
+        mixed = shard("d8-s1024-b64-w1@k0", "search", "k0", {(0, "p1"): 1.0})
+        mixed["oracle_belief"] = True
+        with self.assertRaises(SystemExit) as caught:
+            run([
+                shard("d8-s1024-b64-w1@k0", "search", "k0", {(1, "p1"): 0.0}),
+                mixed,
+                shard("raw@k0", "raw", "k0", {(0, "p1"): 0.5, (1, "p1"): 0.5}),
+            ])
+        self.assertIn("oracle-belief", str(caught.exception))
+
+    def test_the_telemetry_split_inside_one_cell_is_counted(self) -> None:
+        # Pooling here is CORRECT -- same search -- so the count is the only way a
+        # reader learns the override rate's denominator covers half the games.
+        on = shard("d8-s1024-b64-w1@k0", "search", "k0", {(0, "p1"): 1.0})
+        on["override_telemetry"] = True
+        off = shard("d8-s1024-b64-w1@k0", "search", "k0", {(1, "p1"): 0.0})
+        report = run([
+            on, off, shard("raw@k0", "raw", "k0", {(0, "p1"): 0.5, (1, "p1"): 0.5}),
+        ])
+        cell = self._cell(report, "d8-s1024-b64-w1@k0")
+        self.assertEqual(cell["override_telemetry_shards"], {"on": 1, "off": 1})
+        # And the pooling itself still happened: both seeds are in the cell.
+        self.assertEqual(cell["pairs"], 2)
+
+
+
+
+class OpponentHealthGateTest(unittest.TestCase):
+    """A head-to-head cell is only as clean as its OPPONENT seat.
+
+    Every engine health figure describes the pokezero seat. In a budget comparison the
+    opponent is half the experiment, so an opponent falling back produces a flat result
+    that reads as "the two budgets are equivalent" -- a contaminated cell presenting as a
+    tie, which is worse than presenting as a fault.
+    """
+
+    def _health(self, **seat):
+        import importlib.util as u
+        from pathlib import Path
+        sp = u.spec_from_file_location(
+            "pr", Path(__file__).resolve().parents[1] / "scripts" / "foulplay_power_report.py")
+        m = u.module_from_spec(sp); sp.loader.exec_module(m)
+        return m, m.health_of({"per_seat": [{"p1": seat}]})
+
+    def test_a_clean_opponent_reports_a_rate(self) -> None:
+        _, h = self._health(fallback_rate=0.0,
+                            opponent_engine_mcts={"fallback_rate": 0.01})
+        self.assertEqual(h["opponent_fallback_rate"], 0.01)
+
+    def test_no_neural_opponent_reports_None_not_zero(self) -> None:
+        """Absence must not read as a clean opponent. A vs-foul-play cell has no opponent
+        engine at all, and 0.0 would assert health that was never measured."""
+        _, h = self._health(fallback_rate=0.0)
+        self.assertIsNone(h["opponent_fallback_rate"])
+
+    def test_a_falling_back_opponent_makes_the_cell_ineligible(self) -> None:
+        """Drives the REAL report, not a restatement of the threshold.
+
+        The first version of this test asserted only that 0.75 > FALLBACK_LIMIT, which
+        stays green if the gate is deleted outright. That is the same "does not traverse
+        production" weakness that let a blocker through earlier in this PR: a config_id
+        fragment was tested on the helper while the production caller never passed it.
+        """
+        sick = shard("d3-s2048-b16-w1+vs-engine-mcts-d6-s16384@k0", "search", "k0",
+                     {(0, "p1"): 1.0, (1, "p1"): 0.0},
+                     opponent_engine_mcts={"fallback_rate": 0.75, "decisions": 100,
+                                           "policy_mode": "engine-mcts"})
+        rep = run([sick, shard("raw@k0", "raw", "k0",
+                               {(0, "p1"): 1.0, (1, "p1"): 0.0}, gate=None)])
+        cell = rep["cells"]["d3-s2048-b16-w1+vs-engine-mcts-d6-s16384@k0"]
+        self.assertAlmostEqual(cell["health"]["opponent_fallback_rate"], 0.75)
+        self.assertIn("OPPONENT fallback", json.dumps(cell.get("ineligible_because")),
+                      "an opponent over the limit must disqualify the cell")
+
+    def test_a_healthy_opponent_does_not_disqualify(self) -> None:
+        ok = shard("d3-s2048-b16-w1+vs-engine-mcts-d6-s16384@k0", "search", "k0",
+                   {(0, "p1"): 1.0, (1, "p1"): 0.0},
+                   opponent_engine_mcts={"fallback_rate": 0.005, "decisions": 100,
+                                         "policy_mode": "engine-mcts"})
+        rep = run([ok, shard("raw@k0", "raw", "k0",
+                             {(0, "p1"): 1.0, (1, "p1"): 0.0}, gate=None)])
+        cell = rep["cells"]["d3-s2048-b16-w1+vs-engine-mcts-d6-s16384@k0"]
+        self.assertAlmostEqual(cell["health"]["opponent_fallback_rate"], 0.005)
+        self.assertNotIn("OPPONENT fallback", json.dumps(cell.get("ineligible_because")))
 
 
 if __name__ == "__main__":

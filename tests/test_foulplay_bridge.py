@@ -1511,6 +1511,103 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(policy.start_override_samples_per_scenario, 3)
         self.assertEqual(policy.max_opponent_action_scenarios, 1)
 
+    def test_build_policy_hands_the_selection_knobs_to_the_search_config(self) -> None:
+        """The last bridge-side link of the selection-tuning chain.
+
+        `engine_c_puct` and `engine_fpu_reduction` are inert unless this
+        construction copies them onto `EngineMctsConfig`, which is the object
+        `native_search_args` reads (c_puct at positional slot 8, fpu behind the
+        widening cascade). A dropped assignment here does not fail: the shard
+        completes, at the default, under a config_id that claims otherwise.
+        """
+        import pokezero.engine_search as engine_search
+
+        captured = {}
+
+        class FakeEnginePolicy:
+            def __init__(self, *, config=None, policy_id=None, **_: object) -> None:
+                captured["config"] = config
+                self.policy_id = policy_id
+
+        fake_result = type(
+            "FakeTrainingResult",
+            (),
+            {"model_config": type("FakeModelConfig", (), {"policy_id": "fake-base"})()},
+        )()
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            policy_mode="engine-mcts",
+            engine_model_path=Path("/art/model_ts.pt"),
+            engine_tables_path=Path("/art/encoder_tables.json"),
+            engine_c_puct=0.8,
+            engine_fpu_reduction=0.2,
+        )
+
+        with patch.object(engine_search, "EngineMctsPolicy", FakeEnginePolicy), patch(
+            "pokezero.foulplay_bridge.load_showdown_dex_cached", return_value=object()
+        ), patch(
+            "pokezero.foulplay_bridge.load_gen3_randbat_source_cached",
+            return_value=object(),
+        ):
+            _build_policy(
+                config=config,
+                model=object(),
+                result=fake_result,
+                value_model=object(),
+                value_result=fake_result,
+                env_config=object(),
+                rollout_config=object(),
+                policy_id="fake-base",
+            )
+
+        self.assertEqual(captured["config"].c_puct, 0.8)
+        self.assertEqual(captured["config"].fpu_reduction, 0.2)
+
+    def test_build_policy_leaves_the_selection_knobs_at_their_recorded_defaults(self) -> None:
+        # The other half: an untuned cell must reach the crate as the search
+        # every banked result was produced under -- flat 0.5 FPU, c_puct 1.4.
+        import pokezero.engine_search as engine_search
+
+        captured = {}
+
+        class FakeEnginePolicy:
+            def __init__(self, *, config=None, **_: object) -> None:
+                captured["config"] = config
+
+        fake_result = type(
+            "FakeTrainingResult",
+            (),
+            {"model_config": type("FakeModelConfig", (), {"policy_id": "fake-base"})()},
+        )()
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            policy_mode="engine-mcts",
+            engine_model_path=Path("/art/model_ts.pt"),
+            engine_tables_path=Path("/art/encoder_tables.json"),
+        )
+
+        with patch.object(engine_search, "EngineMctsPolicy", FakeEnginePolicy), patch(
+            "pokezero.foulplay_bridge.load_showdown_dex_cached", return_value=object()
+        ), patch(
+            "pokezero.foulplay_bridge.load_gen3_randbat_source_cached",
+            return_value=object(),
+        ):
+            _build_policy(
+                config=config,
+                model=object(),
+                result=fake_result,
+                value_model=object(),
+                value_result=fake_result,
+                env_config=object(),
+                rollout_config=object(),
+                policy_id="fake-base",
+            )
+
+        self.assertEqual(captured["config"].c_puct, 1.4)
+        self.assertIsNone(captured["config"].fpu_reduction)
+
     def test_foulplay_process_command_seeds_python_random(self) -> None:
         config = ControlledFoulPlayConfig(
             checkpoint=Path("checkpoint.pt"),
@@ -2968,6 +3065,219 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["wins"], 1)
         self.assertEqual(payload["status"], "partial")
         self.assertEqual(payload["complete"], False)
+
+
+class HeadToHeadOpponentTest(unittest.TestCase):
+    """The opponent seat can be a second pokezero policy instead of foul-play.
+
+    Why this mode exists: measuring what search buys over the raw model THROUGH foul-play
+    is underpowered. The same control config scored 0.581 then 0.596 on identical seeds --
+    a 1.5-2.1pp noise floor -- while the effect being chased was +2.95pp at p=0.56. A
+    direct head-to-head spends every game on the difference instead of diluting it through
+    a third party.
+    """
+
+    def _cfg(self, **kw):
+        from pokezero.foulplay_bridge import ControlledFoulPlayConfig
+        base = dict(checkpoint=Path("/tmp/ckpt.pt"), showdown_root=Path("/tmp/showdown"))
+        base.update(kw)
+        return ControlledFoulPlayConfig(**base)
+
+    def test_default_is_unchanged_foul_play(self) -> None:
+        # The whole existing campaign history depends on this default. A silent change
+        # would re-point every banked comparison at a different opponent.
+        self.assertEqual(self._cfg(policy_mode="raw").opponent_policy_mode, "foul-play")
+
+    def test_a_mirror_match_is_refused(self) -> None:
+        """Identical policies on both seats score 0.5 by construction.
+
+        Refused rather than run: it would produce a plausible 0.5 that reads as "search
+        does not help" when in fact nothing was compared.
+        """
+        with self.assertRaises(ValueError) as caught:
+            self._cfg(policy_mode="raw", opponent_policy_mode="raw")
+        self.assertIn("mirror match", str(caught.exception))
+
+    def test_an_unknown_opponent_mode_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self._cfg(policy_mode="raw", opponent_policy_mode="totally-bogus")
+
+    def test_the_summary_names_the_opponent_that_actually_played(self) -> None:
+        """Three summary sites hardcoded "foul-play".
+
+        Downstream analyzers key arms off `opponent_policy_id`, so leaving the hardcode in
+        place would pool a head-to-head arm with a foul-play arm as though they shared an
+        opponent.
+        """
+        from pokezero.foulplay_bridge import _opponent_policy_id_label
+        self.assertEqual(
+            _opponent_policy_id_label(self._cfg(policy_mode="raw")), "foul-play")
+        self.assertEqual(
+            _opponent_policy_id_label(
+                self._cfg(policy_mode="engine-mcts", opponent_policy_mode="raw",
+                          engine_model_path=Path("/tmp/m.pt"),
+                          engine_tables_path=Path("/tmp/t.json"))),
+            "pokezero-raw")
+
+    def test_the_opponent_display_name_follows_who_actually_plays(self) -> None:
+        """A head-to-head shard must not record "FoulPlayBot" as the winner.
+
+        Observed on the first 16k probe: the raw model won and the summary said
+        `winner: "FoulPlayBot"`. `_winner_name` and `_terminal_from_public_lines` both key
+        off this string, so the battle log, the title line and the winner field would all
+        name an opponent that never played a move. An explicit --foulplay-username still
+        wins, so this cannot silently rename a deliberately-labelled run.
+        """
+        engine = dict(policy_mode="engine-mcts",
+                      engine_model_path=Path("/tmp/m.pt"),
+                      engine_tables_path=Path("/tmp/t.json"))
+        self.assertEqual(self._cfg(**engine).foulplay_username, "FoulPlayBot")
+        self.assertEqual(
+            self._cfg(**engine, opponent_policy_mode="raw").foulplay_username,
+            "PokeZeroRawBot")
+        self.assertEqual(
+            self._cfg(**engine, opponent_policy_mode="raw",
+                      foulplay_username="Explicit").foulplay_username,
+            "Explicit")
+
+    def test_budget_versus_budget_is_expressible_and_not_a_mirror(self) -> None:
+        """d3/s2048 against d6/s16384 on one board.
+
+        Without per-seat axes the opponent inherits depth and sims, so engine-vs-engine is
+        necessarily a mirror and the only head-to-head expressible is search-vs-raw. This
+        is the comparison that decides whether a cheap configuration can replace an
+        expensive one, and it is far more sensitive than scoring each against a third
+        policy and differencing.
+        """
+        from pokezero.foulplay_bridge import _opponent_seat_config
+        engine = dict(engine_model_path=Path("/tmp/m.pt"), engine_tables_path=Path("/tmp/t.json"))
+        cfg = self._cfg(policy_mode="engine-mcts", engine_depth=3, engine_sims=2048,
+                        opponent_policy_mode="engine-mcts",
+                        opponent_engine_depth=6, opponent_engine_sims=16384, **engine)
+        opp = _opponent_seat_config(cfg)
+        self.assertEqual((cfg.engine_depth, cfg.engine_sims), (3, 2048))
+        self.assertEqual((opp.engine_depth, opp.engine_sims), (6, 16384))
+        self.assertEqual(opp.policy_mode, "engine-mcts")
+        # The derived config builds ONE policy, so the pairing fields must be cleared --
+        # otherwise an opponent axis survives with opponent_policy_mode reset to
+        # foul-play, which the axis guard rejects. (It did, before this was fixed.)
+        self.assertIsNone(opp.opponent_engine_depth)
+        self.assertIsNone(opp.opponent_engine_sims)
+        self.assertEqual(opp.opponent_policy_mode, "foul-play")
+
+    def test_same_mode_and_same_axes_is_still_refused_as_a_mirror(self) -> None:
+        engine = dict(engine_model_path=Path("/tmp/m.pt"), engine_tables_path=Path("/tmp/t.json"))
+        with self.assertRaises(ValueError) as caught:
+            self._cfg(policy_mode="engine-mcts", engine_depth=6, engine_sims=16384,
+                      opponent_policy_mode="engine-mcts", **engine)
+        self.assertIn("mirror match", str(caught.exception))
+
+    def test_an_opponent_axis_on_a_non_engine_opponent_is_refused(self) -> None:
+        """Refused, not ignored: the shard's config echo is the only record of WHICH two
+        things were compared, so an opponent depth the opponent never used would
+        misdescribe the pairing."""
+        engine = dict(engine_model_path=Path("/tmp/m.pt"), engine_tables_path=Path("/tmp/t.json"))
+        with self.assertRaises(ValueError):
+            self._cfg(policy_mode="engine-mcts", opponent_policy_mode="raw",
+                      opponent_engine_depth=6, **engine)
+
+    def test_oracle_belief_with_an_engine_opponent_is_refused(self) -> None:
+        """The oracle override is installed for the pokezero seat only.
+
+        _install_oracle_belief_override runs inside the pokezero-seat branch, so an
+        engine-mcts opponent would search SAMPLED beliefs while the shard echoes
+        oracle_belief: true for the whole cell. That is a false witness on the only record,
+        and the run would silently be oracle-vs-sampled on top of whatever it meant to
+        compare. Refused until the override is installed for both seats.
+        """
+        engine = dict(engine_model_path=Path("/tmp/m.pt"), engine_tables_path=Path("/tmp/t.json"))
+        with self.assertRaises(ValueError) as caught:
+            self._cfg(policy_mode="engine-mcts", engine_oracle_belief=True,
+                      opponent_policy_mode="engine-mcts", opponent_engine_depth=6, **engine)
+        self.assertIn("oracle", str(caught.exception).lower())
+        # Still allowed where the override does apply, and where there is no engine opponent.
+        self._cfg(policy_mode="engine-mcts", engine_oracle_belief=True, **engine)
+        self._cfg(policy_mode="engine-mcts", opponent_policy_mode="raw", **engine)
+
+    def test_the_opponent_seats_search_health_is_recorded_separately(self) -> None:
+        """A budget comparison whose opponent silently fell back would read as a tie.
+
+        Every engine health aggregate is derived from state.decisions, which is gated on
+        the pokezero seat, so a d6 opponent falling back on most decisions would leave the
+        shard reporting fallback_rate 0.0 -- a figure describing only the OTHER seat -- and
+        the campaign would conclude the cheap config matches the expensive one. This is the
+        already-observed failure shape: a None public state once made engine-MCTS play
+        uniform-legal while reporting no error (0/20 against raw's 10/20).
+        """
+        from pokezero.foulplay_bridge import ControlledFoulPlayGameResult, _ControlledBattleState
+        import dataclasses
+        fields = {f.name for f in dataclasses.fields(ControlledFoulPlayGameResult)}
+        for name in ("opponent_engine_mcts_decisions", "opponent_engine_mcts_fallbacks",
+                     "opponent_engine_mcts_fallback_reasons"):
+            self.assertIn(name, fields, f"{name} must reach the game result")
+        state_fields = {f.name for f in dataclasses.fields(_ControlledBattleState)}
+        self.assertIn("opponent_decisions", state_fields)
+        # The pokezero-seat aggregate keeps its own name, so existing readers are unchanged.
+        self.assertIn("engine_mcts_decisions", fields)
+
+    def test_room_lines_are_a_no_op_only_when_explicitly_allowed(self) -> None:
+        """With no foul-play client, a room-line send must not abort the battle.
+
+        Every room-line call site is "tell the foul-play client what happened" -- the init
+        line, the private-line forwarding, the terminal notify. In head-to-head there is
+        nobody to tell, and raising would kill each battle at its first line. But the
+        default MUST still raise, or a genuinely dropped foul-play connection becomes
+        silence instead of a fault.
+        """
+        from pokezero.foulplay_bridge import _FoulPlayWebsocketServer, FoulPlayProtocolError
+        strict = _FoulPlayWebsocketServer(username="fp", host="127.0.0.1")
+        with self.assertRaises(FoulPlayProtocolError):
+            asyncio.run(strict.send_room_lines("battle-1", ["|init|battle"]))
+        lenient = _FoulPlayWebsocketServer(
+            username="fp", host="127.0.0.1", allow_missing_client=True)
+        asyncio.run(lenient.send_room_lines("battle-1", ["|init|battle"]))  # must not raise
+
+    def test_both_seats_are_packed_by_the_same_code(self) -> None:
+        """_context_for_seat must be seat-agnostic.
+
+        If the opponent's observation were packed differently from the pokezero seat's, a
+        measured strength difference could be the packing rather than the search -- the
+        exact confound this mode exists to avoid. Asserted by building a context for each
+        seat from one observations dict and checking the seat-dependent fields track the
+        seat argument.
+        """
+        from pokezero.foulplay_bridge import _context_for_seat
+
+        class _Obs:
+            legal_action_mask = (True,) * ACTION_COUNT
+            schema_version = 1
+            metadata: dict = {}
+
+        observations = {"p1": _Obs(), "p2": _Obs()}
+        state = SimpleNamespace(battle_id="battle-x", seed=7, trajectory=None)
+        cfg = self._cfg(policy_mode="raw")
+        contexts = {
+            seat: _context_for_seat(
+                seat=seat,
+                policy=SimpleNamespace(),          # no public materialization needed
+                state=state,
+                config=cfg,
+                observations=observations,
+                requested_players=("p1", "p2"),
+                decision_round=3,
+                belief_set_source="public",
+            )
+            for seat in ("p1", "p2")
+        }
+        self.assertEqual(contexts["p1"].player_id, "p1")
+        self.assertEqual(contexts["p2"].player_id, "p2")
+        for seat, ctx in contexts.items():
+            with self.subTest(seat=seat):
+                self.assertEqual(ctx.decision_round_index, 3)
+                self.assertEqual(ctx.battle_id, "battle-x")
+                self.assertEqual(ctx.requested_players, ("p1", "p2"))
+                # the acting seat is always present in its own mask set
+                self.assertIn(seat, ctx.requested_legal_action_masks)
 
 
 if __name__ == "__main__":

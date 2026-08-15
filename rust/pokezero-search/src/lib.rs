@@ -211,11 +211,30 @@ impl MoveStats {
     }
 
     /// PUCT score. `for_side_one` flips Q so side two minimizes side one's value.
-    fn puct(&self, parent_visits: u32, c_puct: f32, for_side_one: bool) -> f32 {
-        let q = if for_side_one {
-            self.mean()
-        } else {
-            1.0 - self.mean()
+    ///
+    /// `fpu` is the first-play-urgency value for an UNVISITED arm, ALREADY in
+    /// this seat's frame (see [`fpu_value`]). `None` is the legacy path: an
+    /// unvisited arm falls through to `mean()`'s flat 0.5 and is reflected like
+    /// any other, which is bit-for-bit what this function did before the flag.
+    fn puct(
+        &self,
+        parent_visits: u32,
+        c_puct: f32,
+        for_side_one: bool,
+        fpu: Option<f32>,
+    ) -> f32 {
+        let q = match fpu {
+            // Not reflected here: `fpu_value` already priced it from the arms
+            // this seat selects on, and flipping it again would undo that.
+            Some(unvisited_q) if self.visits == 0 => unvisited_q,
+            _ => {
+                let mean = self.mean();
+                if for_side_one {
+                    mean
+                } else {
+                    1.0 - mean
+                }
+            }
         };
         let u = c_puct * self.prior * ((parent_visits as f32).sqrt() / (1.0 + self.visits as f32));
         q + u
@@ -235,11 +254,65 @@ fn make_stats(side: &Side, options: &[MoveChoice]) -> Vec<MoveStats> {
         .collect()
 }
 
-fn select(stats: &[MoveStats], parent_visits: u32, c_puct: f32, for_side_one: bool) -> usize {
+/// Price an UNVISITED arm of `stats` off the node's own running value, in the
+/// frame the seat owning `stats` selects in — KataGo/Leela's first-play-urgency
+/// reduction (`fpuReductionMax`), minus the sqrt-of-visited-policy-mass scaling,
+/// which the selection-tuning plan defers on purpose (one new mechanism per
+/// stage). `None` reduction returns `None`: the caller then keeps `mean()`'s
+/// flat 0.5, which is every result this crate has ever produced.
+///
+/// WHY THE SEAT'S OWN STAT VECTOR, NOT A SHARED ABSOLUTE ONE. Selection here is
+/// decoupled per-side PUCT and side two scores on `1 - value`, so a reduction
+/// subtracted in the side-one-absolute frame and then handed to side two would
+/// arrive as a first-play BONUS for that seat — the exact opposite of the
+/// mechanism. Reading the mean off the seat's own arms and reflecting it the way
+/// `puct` reflects a visited arm puts the unvisited sibling on the one scale
+/// FPU needs it on: the scale its visited siblings are already scored against.
+///
+/// The two vectors are NOT interchangeable mid-batch, even though `finalize`
+/// leaves them holding the same expectation sums. `traverse`'s provisional adds
+/// `0.0` to the side-one arm and `1.0` to the side-two arm — a loss in each
+/// seat's OWN frame, but opposite numbers in the absolute one — so between
+/// collection and `finalize` the two absolute-frame means diverge by the round's
+/// outstanding selection count. Reading each seat's own vector gives that seat
+/// the same view its visited arms are being scored under, virtual loss included.
+///
+/// `None` at a node with no visits, where there is no running value to reduce.
+/// That is a no-op rather than a gap: at zero parent visits every arm is
+/// unvisited, every `u` term is `c_puct * prior * sqrt(0) / 1 == 0`, and the
+/// argmax is index 0 for ANY constant Q — so the legacy 0.5 and any FPU value
+/// select the same arm there.
+fn fpu_value(stats: &[MoveStats], for_side_one: bool, reduction: Option<f32>) -> Option<f32> {
+    let reduction = reduction?;
+    let mut visits = 0u32;
+    let mut total = 0.0f32;
+    for stat in stats {
+        visits += stat.visits;
+        total += stat.total_value;
+    }
+    if visits == 0 {
+        return None;
+    }
+    let mean = total / visits as f32;
+    let parent = if for_side_one { mean } else { 1.0 - mean };
+    Some((parent - reduction).clamp(0.0, 1.0))
+}
+
+fn select(
+    stats: &[MoveStats],
+    parent_visits: u32,
+    c_puct: f32,
+    for_side_one: bool,
+    fpu_reduction: Option<f32>,
+) -> usize {
+    // Priced once per (node, seat): the baseline is a property of the node, and
+    // recomputing it per arm would put a second pass over `stats` inside the
+    // hot selection loop for a value that cannot change within it.
+    let fpu = fpu_value(stats, for_side_one, fpu_reduction);
     let mut best = 0;
     let mut best_score = f32::MIN;
     for (index, stat) in stats.iter().enumerate() {
-        let score = stat.puct(parent_visits, c_puct, for_side_one);
+        let score = stat.puct(parent_visits, c_puct, for_side_one, fpu);
         if score > best_score {
             best_score = score;
             best = index;
@@ -268,8 +341,10 @@ pub(crate) fn puct_search_with_eval<E: LeafEval>(
 
     let start = Instant::now();
     for parent_visits in 0..iterations as u32 {
-        let i = select(&s1_stats, parent_visits, c_puct, true);
-        let j = select(&s2_stats, parent_visits, c_puct, false);
+        // No FPU on the one-ply skeleton: it has no tree to deepen, and the
+        // flag exists to change the plies-per-sim exchange rate.
+        let i = select(&s1_stats, parent_visits, c_puct, true, None);
+        let j = select(&s2_stats, parent_visits, c_puct, false, None);
         let branches =
             generate_instructions_from_move_pair(state, &s1_options[i], &s2_options[j], true);
         let value = if branches.is_empty() {
@@ -297,18 +372,33 @@ pub(crate) fn puct_search_with_eval<E: LeafEval>(
     Ok((s1_stats, s2_stats, elapsed))
 }
 
-fn stats_to_json(stats: &[MoveStats]) -> String {
+/// `with_prior` adds each arm's PUCT prior to its entry, and is off for every
+/// caller that has not asked for it: this block's bytes are compared across
+/// eras, and a column present on every report would have made every historical
+/// one a new artifact (the argument `multiply_report_json`'s `fpu_field` makes).
+///
+/// The prior is what makes an arm's identity measurable from a report at all.
+/// Entries are VISIT-SORTED, so entry i is not option i and the `root_priors`
+/// vector cannot be paired with them positionally; carrying the value on the
+/// entry is the only pairing that survives the sort.
+fn stats_to_json(stats: &[MoveStats], with_prior: bool) -> String {
     let mut order: Vec<usize> = (0..stats.len()).collect();
     order.sort_by(|&a, &b| stats[b].visits.cmp(&stats[a].visits));
     let entries: Vec<String> = order
         .iter()
         .map(|&index| {
             let stat = &stats[index];
+            let prior = if with_prior {
+                format!(",\"prior\":{:.6}", stat.prior)
+            } else {
+                String::new()
+            };
             format!(
-                "{{\"move\":\"{}\",\"visits\":{},\"q\":{:.6}}}",
+                "{{\"move\":\"{}\",\"visits\":{},\"q\":{:.6}{}}}",
                 json_escape(&stat.display),
                 stat.visits,
-                stat.mean()
+                stat.mean(),
+                prior
             )
         })
         .collect();
@@ -347,8 +437,8 @@ fn puct_search(state_str: &str, iterations: usize, c_puct: f32, seed: u64) -> Py
         seed,
         elapsed,
         iterations_per_s,
-        stats_to_json(&s1_stats),
-        stats_to_json(&s2_stats),
+        stats_to_json(&s1_stats, false),
+        stats_to_json(&s2_stats, false),
     ))
 }
 

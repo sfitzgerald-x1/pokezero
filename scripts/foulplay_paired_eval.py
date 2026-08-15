@@ -59,6 +59,18 @@ SCHEMA_VERSION = "pokezero.foulplay-paired-shard.v1"
 # delta is measuring the opponent instead of the search config.
 FOULPLAY_SEARCH_TIME_MS = 1000
 
+# The bridge's own --engine-c-puct default, mirrored so config_id can normalise
+# an explicitly-passed 1.4 back to the unsuffixed string. Stage 3 reads its
+# arms against a BANKED control -- the stage-2 winner, run before c_puct was a
+# knob at all -- so a cell that names the default value must land on that
+# control's id rather than on an id of its own with no games behind it.
+BRIDGE_DEFAULT_C_PUCT = 1.4
+
+# EngineMctsConfig's own early-stop floor, mirrored for the same reason as the
+# c_puct default above: a cell that spells 64 out must land on the same id as a
+# cell that leaves it unset, or one budget policy acquires two cells.
+BRIDGE_DEFAULT_EARLY_STOP_MIN_SIMS = 64
+
 # The full FoulPlay-family thread pin. Unpinned BLAS in a CPU-capped pod is a
 # ~10x thrash, and it lands on the FoulPlay side, which silently weakens the
 # opponent. Mirrors foundation/foulplay-k8s-probe.sh.
@@ -95,6 +107,130 @@ def checkpoint_tag(checkpoint: str, explicit: str | None = None) -> str:
     return stem
 
 
+def _knob_label(value: float) -> str:
+    """Render a float knob into an id fragment.
+
+    `%g` rather than `str`, so `2` and `2.0` -- the same search, typed two ways
+    in a campaign JSON -- cannot split one cell into two ids.
+    """
+    return f"{value:g}"
+
+
+def search_config_id(
+    *,
+    depth: int,
+    sims: int,
+    batch: int,
+    worlds: int,
+    tag: str,
+    opponent_priors: bool = False,
+    fpu_reduction: float | None = None,
+    c_puct: float | None = None,
+    oracle_belief: bool = False,
+    early_stop: bool = False,
+    early_stop_min_sims: int | None = None,
+    depth_min: int | None = None,
+    worlds_min: int | None = None,
+    opponent_policy_mode: str = "foul-play",
+    opponent_engine_depth: int | None = None,
+    opponent_engine_sims: int | None = None,
+) -> str:
+    """The search-arm cell identity, over primitives rather than a Namespace.
+
+    Shared with ``foulplay_power_report.cid_of``, which builds the same id from
+    a campaign cell dict. Two builders drifting apart is not a loud failure: the
+    report's depth_reference simply matches no shard, `depth_rule_applied`
+    reports true, and the non-starvation rule silently never fires. That already
+    happened once on the checkpoint tag.
+    """
+    # A dynamic axis renders as its RANGE, so the id reads as the budget policy
+    # it is: d3-6 is "min 3, max 6", d6 is the fixed cap. Two ranges with the same
+    # cap are different searches and must not pool.
+    depth_label = f"{depth}" if depth_min is None or int(depth_min) >= int(depth) else f"{int(depth_min)}-{depth}"
+    worlds_label = f"{worlds}" if worlds_min is None or int(worlds_min) >= int(worlds) else f"{int(worlds_min)}-{worlds}"
+    base = f"d{depth_label}-s{sims}-b{batch}-w{worlds_label}"
+    # WHO PLAYED. The strongest possible cell difference: a head-to-head cell shares no
+    # comparison basis with a vs-foul-play cell -- different opponent, different scale,
+    # different null. Without this fragment both render the same id, and
+    # foulplay_power_report.collect_rows merges them into ONE pooled win rate with no
+    # warning (demonstrated in review: a banked vs-foul-play shard and a vs-raw shard at
+    # d4-s512-b8-w16 pooled to a single 0.75). If their seed bands overlap it is worse --
+    # the conflicting-scores check hard-exits the whole report.
+    #
+    # Omitted at the default, so every banked vs-foul-play shard keeps byte-for-byte the
+    # id it already has and stays mergeable across this change.
+    if opponent_policy_mode != "foul-play":
+        opp = f"+vs-{opponent_policy_mode}"
+        if opponent_engine_depth is not None or opponent_engine_sims is not None:
+            od = opponent_engine_depth if opponent_engine_depth is not None else depth
+            os_ = opponent_engine_sims if opponent_engine_sims is not None else sims
+            opp += f"-d{od}-s{os_}"
+        base += opp
+    # Each of these changes search SEMANTICS, so each is part of the cell
+    # identity: two cells differing only by one of them must not merge, or an
+    # experimental arm is pooled into its own control.
+    #
+    # Each is also omitted at its default, so a cell that varies none of them
+    # keeps byte-for-byte the id it had before these knobs existed -- the banked
+    # depth/axis shards stay mergeable across this change rather than becoming
+    # a second, empty cell.
+    #
+    # DELIBERATELY ABSENT: `--engine-override-telemetry`. It is the one knob on
+    # this driver that is OBSERVATIONAL -- it asks the crate for one extra
+    # reported column per root arm (`arm_priors`) and nothing on the search's path
+    # reads it, so telemetry-on and telemetry-off are the same search. A fragment
+    # for it would therefore split ONE cell into two, and plan §1/H1 depends on
+    # the opposite: the production override rate is read by turning the instrument
+    # on in an axis-study cell whose shards must still pool with the banked ones.
+    # The behavioural claim is not argued, it is pinned -- crate-side by
+    # `rust/pokezero-search/src/tree.rs::arm_priors_only_adds_a_reported_column`,
+    # call-side by
+    # `tests/test_opponent_priors_flag.py::OverrideTelemetryIsObservationalTest`,
+    # and this exclusion itself by
+    # `tests/test_foulplay_paired_eval.py::OverrideTelemetryPassthroughTest`.
+    # The flag is still WITNESSED per shard (`override_telemetry` in the report
+    # body), because "did the instrument run" is exactly what an id that omits it
+    # cannot say.
+    #
+    # One consequence, stated rather than absorbed: pooling means a cell can hold
+    # shards that measured an override rate and shards that did not, so read the
+    # rate on `policy_stats.override_measured_decisions`, never on the cell's pair
+    # count (`foulplay_power_report` reports the on/off shard split for that
+    # reason). Wall-clock per decision is likewise only comparable within a shard
+    # set that agrees on this flag.
+    if opponent_priors:
+        base = f"{base}+opp-priors"
+    if oracle_belief:
+        # The belief itself, which is the most semantic axis there is: this arm
+        # searches the TRUE hidden state. §4a's whole reading is truth-arm vs
+        # sampled-arm, so pooling them would erase the experiment.
+        base = f"{base}+oracle-belief"
+    if early_stop:
+        # IN the id, unlike --engine-override-telemetry above, because this
+        # changes how many simulations a decision receives -- i.e. the search
+        # itself. The whole measurement is early-stop-on against the same config
+        # off, so pooling them would erase the experiment exactly as pooling the
+        # oracle arm with its sampled twin would.
+        #
+        # The floor is carried too, and only when it differs from the default:
+        # two cells that stop at different minimum budgets are two budget
+        # policies, not one. A cell that names the default keeps the plain
+        # `+early-stop` id so it pools with a cell that left it unset.
+        base = f"{base}+early-stop"
+        if (
+            early_stop_min_sims is not None
+            and int(early_stop_min_sims) != BRIDGE_DEFAULT_EARLY_STOP_MIN_SIMS
+        ):
+            base = f"{base}{int(early_stop_min_sims)}"
+    if fpu_reduction is not None:
+        # `is not None`, never truthiness: `Some(0.0)` prices an unvisited arm
+        # at the parent mean, which is NOT the legacy flat 0.5 that `None` is.
+        base = f"{base}-fpu{_knob_label(fpu_reduction)}"
+    if c_puct is not None and float(c_puct) != BRIDGE_DEFAULT_C_PUCT:
+        base = f"{base}-c{_knob_label(c_puct)}"
+    return f"{base}@{tag}"
+
+
 def config_id_for(args: argparse.Namespace) -> str:
     """The cell identity that provenance and the merger key on."""
     # EVERY arm is checkpoint-qualified. Two collisions motivate this, and both
@@ -105,13 +241,42 @@ def config_id_for(args: argparse.Namespace) -> str:
     #     id pools them -- and cell G's entire job is the checkpoint contrast.
     tag = checkpoint_tag(args.checkpoint, getattr(args, "checkpoint_tag", None))
     if args.arm == "raw":
+        # The raw arm is the DENOMINATOR of every paired delta, and its id carries no
+        # search config -- so it also carries no opponent fragment, and a raw cell run
+        # against a non-foul-play opponent would pool into the control silently. Both id
+        # builders agree on that shape, so no drift check catches it either. Refused at
+        # the boundary instead: unreachable in every queued campaign today (every cell
+        # with an opponent has arm=search), and this keeps it that way.
+        if args.opponent_policy_mode != "foul-play":
+            raise SystemExit(
+                f"--arm raw with --opponent-policy-mode {args.opponent_policy_mode!r} is "
+                "refused: the raw arm's cell id carries no opponent fragment, so such a "
+                "shard would pool into the paired delta's control."
+            )
         return f"raw@{tag}"
-    base = f"d{args.depth}-s{args.sims}-b{args.batch}-w{args.worlds}"
-    # The flag changes search semantics, so it is part of the cell identity --
-    # two cells that differ only by opponent priors must not merge.
-    if args.opponent_priors:
-        base = f"{base}+opp-priors"
-    return f"{base}@{tag}"
+    # Attributes read directly, not through getattr: a caller whose Namespace
+    # predates a knob must raise here rather than be handed the default id and
+    # merged into the control.
+    return search_config_id(
+        depth=args.depth, sims=args.sims, batch=args.batch, worlds=args.worlds,
+        tag=tag,
+        opponent_priors=args.opponent_priors,
+        fpu_reduction=args.engine_fpu_reduction,
+        c_puct=args.engine_c_puct,
+        oracle_belief=args.engine_oracle_belief,
+        early_stop=args.engine_early_stop,
+        early_stop_min_sims=args.engine_early_stop_min_sims,
+        # Read DIRECTLY, matching the note above: a Namespace predating these knobs must
+        # raise rather than be handed the default id. An earlier revision added the
+        # fragment to search_config_id but NOT here, the only production caller -- so the
+        # helper worked in isolation while every real shard still rendered the pooled id,
+        # and the tests were green because they called the helper directly.
+        opponent_policy_mode=args.opponent_policy_mode,
+        opponent_engine_depth=args.opponent_engine_depth,
+        opponent_engine_sims=args.opponent_engine_sims,
+        depth_min=args.engine_depth_min,
+        worlds_min=args.engine_worlds_min,
+    )
 
 
 def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
@@ -126,6 +291,15 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
         "--policy-mode", "raw" if args.arm == "raw" else "engine-mcts",
         "--summary-out", str(seat_summary_path(args, seat)),
     ]
+    # HEAD-TO-HEAD. Forwarded only when it is not the default, so every existing
+    # campaign renders a byte-identical argv and no banked comparison shifts.
+    if getattr(args, "opponent_policy_mode", "foul-play") != "foul-play":
+        argv += ["--opponent-policy-mode", str(args.opponent_policy_mode)]
+        for _flag, _attr in (("--opponent-engine-depth", "opponent_engine_depth"),
+                             ("--opponent-engine-sims", "opponent_engine_sims")):
+            _v = getattr(args, _attr, None)
+            if _v is not None:
+                argv += [_flag, str(_v)]
     # The bridge defaults these to a REPO-RELATIVE checkout
     # (DEFAULT_FOULPLAY_ROOT = <repo>/third_party/foul-play) and there is no
     # environment fallback, so a deployment that ships foul-play anywhere else
@@ -150,6 +324,43 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
             argv += ["--engine-tables-path", str(args.engine_tables_path)]
         if args.opponent_priors:
             argv.append("--engine-opponent-priors")
+        # Selection knobs, forwarded ONLY when set. Unset must leave the child
+        # argv byte-identical to the pre-tuning one, so an untuned cell inherits
+        # the bridge's own defaults -- the crate's flat 0.5 FPU and c_puct 1.4 --
+        # and stays comparable to every banked shard.
+        if args.engine_fpu_reduction is not None:
+            argv += ["--engine-fpu-reduction", str(args.engine_fpu_reduction)]
+        if args.engine_c_puct is not None:
+            argv += ["--engine-c-puct", str(args.engine_c_puct)]
+        # OBSERVATIONAL, forwarded on the same "only when set" rule as the
+        # selection knobs above -- an unset cell must render the byte-identical
+        # child argv it rendered before this flag existed. Unlike them it stays
+        # out of config_id; see search_config_id for why.
+        if args.engine_override_telemetry:
+            argv.append("--engine-override-telemetry")
+        # Same "only when set" rule, but this one IS in config_id: it changes the
+        # belief the search runs on, which is the one thing §4a varies.
+        if args.engine_oracle_belief:
+            argv.append("--engine-oracle-belief")
+        # Same "only when set" rule. Both IN config_id: they change how many
+        # simulations a decision gets, which is the search itself.
+        if args.engine_depth_min is not None:
+            argv += ["--engine-depth-min", str(args.engine_depth_min)]
+        if args.engine_worlds_min is not None:
+            argv += ["--engine-worlds-min", str(args.engine_worlds_min)]
+        if args.engine_early_stop:
+            argv.append("--engine-early-stop")
+            if args.engine_early_stop_min_sims is not None:
+                argv += ["--engine-early-stop-min-sims",
+                         str(args.engine_early_stop_min_sims)]
+    # OUTSIDE the search block on purpose: the opponent journal records FoulPlay's
+    # own decoded choice, which exists in every arm including raw. Scoping it to
+    # search arms would make the raw anchor the one cell whose opponent moves
+    # cannot be read, and raw is a comparator in this campaign, not a spectator.
+    # Same "only when set" rule as the knobs above, so an unset cell renders the
+    # byte-identical child argv it rendered before this flag existed.
+    if args.opponent_journal is not None:
+        argv += ["--opponent-journal", args.opponent_journal]
     if args.device:
         argv += ["--device", args.device]
     return argv
@@ -250,10 +461,28 @@ def seat_block(summary: dict, seat: str) -> dict:
         "search_wall_per_searched_decision": engine.get(
             "search_wall_per_searched_decision"
         ),
+        # THREE walls on a dynamic cell, because the first one is per-RUNG there:
+        # `searched_decisions` is charged once per `_search_model` call and a ladder
+        # calls it once per rung (measured 2,224 rungs against 1,062 decisions).
+        # Hoisted rather than left inside `policy_stats` so the analysis cannot
+        # reach for the per-rung figure by habit. None on a fixed cell.
+        "search_wall_per_ladder_decision": (engine.get("policy_stats") or {}).get(
+            "search_wall_per_ladder_decision"
+        ),
+        "ladder_rungs_per_decision": (engine.get("policy_stats") or {}).get(
+            "ladder_rungs_per_decision"
+        ),
         "wall_per_decision_mean": timing.get("average_elapsed_seconds"),
         "wall_per_decision_p95": timing.get("p95_elapsed_seconds"),
         "fallback_rate": engine.get("fallback_rate"),
         "fallback_reasons": engine.get("fallback_reasons"),
+        # THE OPPONENT SEAT'S HEALTH, lifted so it reaches the merged shard the report
+        # reads. Without this the block exists in the bridge summary and dies there: a d6
+        # opponent falling back on 75% of decisions leaves the merged shard reporting only
+        # the pokezero seat's clean 0.0, the cell clears the 2% eligibility gate, and a
+        # budget comparison is adopted as "the two are equivalent" when the expensive side
+        # was not searching. None when there is no neural opponent.
+        "opponent_engine_mcts": summary.get("opponent_engine_mcts"),
         "world_failure_reasons": (engine.get("policy_stats") or {}).get(
             "world_failure_reasons"
         ),
@@ -278,6 +507,20 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--showdown-root", required=True)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--arm", choices=("search", "raw"), required=True)
+    ap.add_argument("--opponent-engine-depth", type=int, default=None,
+                    help="Engine depth for the OPPONENT seat (head-to-head budget "
+                         "comparison). Defaults to --depth.")
+    ap.add_argument("--opponent-engine-sims", type=int, default=None,
+                    help="Engine sims for the OPPONENT seat. Defaults to --sims.")
+    ap.add_argument(
+        "--opponent-policy-mode",
+        choices=("foul-play", "raw", "root-puct", "engine-mcts"),
+        default="foul-play",
+        help="Who sits in the OPPONENT seat. Default foul-play (unchanged). Anything else "
+             "runs a second policy from the SAME checkpoint in that mode, so "
+             "--arm search --opponent-policy-mode raw measures what the search buys over "
+             "the model it searches with, directly rather than through a third opponent.",
+    )
     ap.add_argument("--seed-start", type=int, required=True,
                     help="first BATTLE seed of this shard's band")
     ap.add_argument("--pairs", type=int, required=True,
@@ -288,6 +531,60 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--worlds", type=int, default=4)
     ap.add_argument("--opponent-priors", action="store_true",
                     help="engine-mcts opponent-side model priors (cells B/E)")
+    ap.add_argument("--engine-fpu-reduction", type=float, default=None,
+                    help="first-play-urgency reduction for unvisited arms in the native "
+                         "search (selection-tuning stage 2). Unset = the crate's flat "
+                         "0.5, which every recorded result was produced under.")
+    ap.add_argument("--engine-c-puct", type=float, default=None,
+                    help=f"PUCT exploration constant for the native search "
+                         f"(selection-tuning stage 3). Unset = the bridge's "
+                         f"{BRIDGE_DEFAULT_C_PUCT}, which is the banked control.")
+    ap.add_argument("--engine-override-telemetry", action="store_true",
+                    help="per-decision override telemetry in the native search "
+                         "(docs/mcts_value_gap_investigation_20260811.md §2): the raw "
+                         "policy head's root argmax beside the search's own choice, on "
+                         "its own denominator. OBSERVATIONAL -- it does not change the "
+                         "search and so is NOT part of config_id; the shard reports it "
+                         "as `override_telemetry` instead.")
+    ap.add_argument("--engine-oracle-belief", action="store_true",
+                    help="search the TRUE hidden state instead of sampled belief worlds "
+                         "(docs/mcts_value_gap_investigation_20260811.md §4a / H5). Its "
+                         "sampled-belief twin is the SAME cell with this flag off, so run "
+                         "both on the same seed band. Carries a `+oracle-belief` fragment "
+                         "in config_id: this one does change the search.")
+    ap.add_argument("--engine-depth-min", type=int, default=None,
+                    help="DYNAMIC DEPTH floor; --depth stays the max. 'depth 3 min 6 max' "
+                         "is --engine-depth-min 3 --depth 6. Renders as d3-6 in config_id.")
+    ap.add_argument("--engine-worlds-min", type=int, default=None,
+                    help="DYNAMIC WORLDS floor; --worlds stays the max. Renders as w2-16.")
+    ap.add_argument("--engine-early-stop", action="store_true",
+                    help="DYNAMIC per-decision budget "
+                         "(docs/dynamic-search-budget-plan-20260812.md): stop a world "
+                         "once the root visit leader cannot be overtaken. Sound by "
+                         "construction for a visit-argmax policy. This CHANGES the "
+                         "search, so it carries a `+early-stop` fragment in config_id "
+                         "and will not pool with its own control.")
+    ap.add_argument("--engine-early-stop-min-sims", type=int, default=None,
+                    help="Simulations before the lock is consulted. Requires "
+                         "--engine-early-stop. Unset means the bridge default "
+                         f"({BRIDGE_DEFAULT_EARLY_STOP_MIN_SIMS}), which renders the "
+                         "plain `+early-stop` id so it pools with an unset cell.")
+    ap.add_argument("--opponent-journal", default=None,
+                    choices=("off", "addressed", "full"),
+                    help="what the opponent journal EMITS. The bridge already RECORDS "
+                         "FoulPlay's decoded choice every round in every mode but 'off'; "
+                         "the mode decides only what survives into the shard JSON. "
+                         "'addressed' (the bridge default) keeps the prefix up to a "
+                         "battle's last refusal address and NOTHING when the battle has "
+                         "no address -- so on a healthy shard it emits nothing, which is "
+                         "why the header can read recorded_decisions=35 beside "
+                         "emitted_decisions=0. Pass 'full' when the question needs "
+                         "FoulPlay's ACTUAL moves per round "
+                         "(docs/mcts_value_gap_investigation_20260811.md H4). "
+                         "OBSERVATIONAL: recording is unconditional, retention happens "
+                         "at result-build time after the battle is over, so this cannot "
+                         "reach the search. Not part of config_id; the shard reports the "
+                         "mode in its `opponent_journal` header.")
     ap.add_argument("--checkpoint-tag", default=None,
                     help="explicit short label for this checkpoint (e.g. k0). Keeps cells "
                          "distinct when two checkpoints share a filename, which the "
@@ -339,17 +636,49 @@ def main(argv=None) -> int:
     # A wrong gather does not fail. It returns a confident paired delta and the
     # campaign reads "opponent priors do not help" off a permutation. Cells B
     # and E stay refused until the §8 in-image gate trio clears them.
-    if args.opponent_priors:
-        raise SystemExit(
-            "--opponent-priors is REFUSED pending review. The switch-ordering "
-            "defect is fixed -- the opponent's request order is now computed "
-            "from its switch history and passed through ctx, pinned by a "
-            "three-switch test the golden corpus could not provide -- but the "
-            "fix has not cleared independent review, and nothing has run "
-            "against a real checkpoint. Four prior attempts each looked correct "
-            "under their own tests. Lift this only after review passes and the "
-            "section 8 in-image gate confirms applied priors end to end."
-        )
+    # LIFTED 2026-08-11. The refusal's own terms were "lift this only after
+    # review passes and the section 8 in-image gate confirms applied priors end
+    # to end". Both are now met; recorded here so the next reader can re-check
+    # rather than trust.
+    #
+    # Review: #1194 (crate fails closed when the opponent request order is
+    # absent), #1192 (crate-side gather/apply path test) and #1207 (applied-
+    # priors gate, keyed on visits as the observable) are merged to origin/main
+    # and are ancestors of this commit.
+    #
+    # In-image, fixture weights: tests.test_model_priors_search plus
+    # tests.test_opponent_priors_flag, 29 tests, all pass inside the shipped
+    # image against that image's own crate.
+    #
+    # In-image, REAL CHECKPOINT -- the gap the refusal actually named, since the
+    # tests above use random-weight fixtures at the v3 shape. Against
+    # v4prod-entfull-15m-20260807084357 iteration-1563 (sha256 85ba08ef...):
+    #
+    #   * End to end, 39 searched decisions with priors ON through the bridge:
+    #     prior_fallbacks == 0. #1194 makes a withheld order cost a COUNTED
+    #     fallback, so zero refusals over 39 decisions means the opponent map
+    #     resolved every time -- the fail-closed path is demonstrably not what
+    #     is happening.
+    #   * Same state, same seed, deterministic: one real search input was
+    #     captured mid-game and replayed three times in-process -- OFF, OFF
+    #     again, then ON. The two OFF replays are IDENTICAL field for field
+    #     (minus timing), which is what makes the third comparison mean
+    #     anything; the crate is deterministic given identical arguments. ON
+    #     differs from OFF in 19 fields including the visit counters that
+    #     #1207's gate keys on: early_stop_leader_visits 51 -> 72,
+    #     early_stop_runner_up_visits 36 -> 54, decision_nodes 61 -> 77. So the
+    #     priors are APPLIED and change selection, not merely accepted.
+    #
+    # The control matters and is not decoration: comparing whole GAMES on a
+    # fixed seed does NOT work here. FoulPlay's opponent is time-budgeted
+    # (--search-time-ms), so two identical priors-off games diverged (34 vs 39
+    # decisions). Any on-vs-off game comparison would have been confounded, and
+    # would have "confirmed" applied priors for the wrong reason.
+    #
+    # Still true, and the reason the marker parsing was fixed alongside this:
+    # a wrong gather does not fail loudly, it returns a confident paired delta.
+    # Anything read off an opponent-priors cell should be checked against
+    # prior_fallbacks staying near zero for that cell.
 
     # HARD STOP before any game. A stale build does not error, it produces a
     # plausible number -- same standing as in mcts_acceptance_h2h.
@@ -432,6 +761,27 @@ def main(argv=None) -> int:
         "pairs": args.pairs,
         "foulplay_search_time_ms": FOULPLAY_SEARCH_TIME_MS,
         "opponent_priors": bool(args.opponent_priors),
+        # Recorded as well as encoded in config_id: the id normalises (an
+        # explicit c_puct 1.4 leaves no suffix), so the id alone cannot say what
+        # the child was actually told.
+        "fpu_reduction": args.engine_fpu_reduction,
+        "c_puct": args.engine_c_puct,
+        # The ONLY record that the instrument ran, since config_id omits it on
+        # purpose. A cell may hold telemetry-on and telemetry-off shards; an
+        # override rate read off the cell's pair count instead of off
+        # `policy_stats.override_measured_decisions` would then be wrong by
+        # exactly the telemetry-off share, silently.
+        "override_telemetry": bool(args.engine_override_telemetry),
+        # WHO PLAYED, witnessed in the body as well as keyed into config_id. The id keeps
+        # the cells apart; this says what the cell actually was, which is what a reader of
+        # a single shard needs. Both, because the id can be recomputed wrongly and the
+        # witness cannot.
+        "opponent_policy_mode": getattr(args, "opponent_policy_mode", "foul-play"),
+        "opponent_engine_depth": getattr(args, "opponent_engine_depth", None),
+        "opponent_engine_sims": getattr(args, "opponent_engine_sims", None),
+        # In config_id AND here, same reason c_puct is: arm identity witnessed
+        # from the shard body, never from a job label.
+        "oracle_belief": bool(args.engine_oracle_belief),
         # Named, never silently dropped: an incomplete seat makes the paired
         # delta unscoreable for those seeds and the merger must see it.
         "missing_seeds": missing,
