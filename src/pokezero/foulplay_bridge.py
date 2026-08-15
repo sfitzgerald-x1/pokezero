@@ -510,6 +510,15 @@ class ControlledFoulPlayConfig:
     # searches with, so a different opponent checkpoint would confound search with
     # training. It also means one vocab/spec/mask set covers both seats.
     opponent_policy_mode: str = "foul-play"
+    # Per-seat ENGINE AXES for the opponent. None means "same as the pokezero seat".
+    # Without these the opponent inherits depth/sims, so engine-mcts vs engine-mcts is
+    # necessarily a mirror and the only head-to-head expressible is search-vs-raw. These
+    # make budget-vs-budget possible -- e.g. d3/s2048 against d6/s16384 -- which is the
+    # comparison that decides whether the cheap configuration can replace the expensive
+    # one, and it is far more sensitive than scoring each against a third policy and
+    # differencing.
+    opponent_engine_depth: int | None = None
+    opponent_engine_sims: int | None = None
     # Frozen Rust search configuration (policy_mode='engine-mcts'). These are the
     # axes of the study's config_id; every one changes search semantics or wall
     # time, so they are part of the frozen contract, never defaulted silently.
@@ -657,14 +666,34 @@ class ControlledFoulPlayConfig:
             raise ValueError("max_decision_rounds must be positive.")
         if self.policy_mode not in {"raw", "root-puct", "engine-mcts"}:
             raise ValueError("policy_mode must be 'raw', 'root-puct', or 'engine-mcts'.")
+        for _axis in ("opponent_engine_depth", "opponent_engine_sims"):
+            if getattr(self, _axis) is not None and self.opponent_policy_mode != "engine-mcts":
+                # Refused, not ignored: a shard whose config echoed an opponent depth the
+                # opponent never used would misdescribe which two things were compared,
+                # and that echo is the only record of the pairing.
+                raise ValueError(
+                    f"{_axis} requires opponent_policy_mode='engine-mcts' "
+                    f"(got {self.opponent_policy_mode!r})."
+                )
         if self.opponent_policy_mode not in {"foul-play", "raw", "root-puct", "engine-mcts"}:
             raise ValueError(
                 "opponent_policy_mode must be 'foul-play', 'raw', 'root-puct', or "
                 f"'engine-mcts' (got {self.opponent_policy_mode!r})."
             )
+        _axes_differ = (
+            (self.opponent_engine_depth is not None
+             and self.opponent_engine_depth != self.engine_depth)
+            or (self.opponent_engine_sims is not None
+                and self.opponent_engine_sims != self.engine_sims)
+        )
         if (
             self.opponent_policy_mode == self.policy_mode
             and self.opponent_policy_mode != "foul-play"
+            # Same mode at DIFFERENT axes is not a mirror -- it is budget-vs-budget, the
+            # comparison that decides whether a cheap config can replace an expensive one.
+            # Refusing it would have blocked the one experiment this feature was extended
+            # for.
+            and not _axes_differ
         ):
             # A mirror match measures nothing about search: both seats run the identical
             # policy, so the expected score is 0.5 by construction and any deviation is
@@ -3557,7 +3586,19 @@ def _opponent_seat_config(config: ControlledFoulPlayConfig) -> ControlledFoulPla
     overrides: dict[str, Any] = {
         "policy_mode": config.opponent_policy_mode,
         "opponent_policy_mode": "foul-play",
+        # The per-seat OPPONENT axes describe a pairing, not a policy. The derived config
+        # builds ONE policy, so carrying them through would leave an opponent-axis set
+        # with opponent_policy_mode reset to foul-play -- which the axis guard correctly
+        # rejects. Cleared for the same reason opponent_policy_mode is.
+        "opponent_engine_depth": None,
+        "opponent_engine_sims": None,
     }
+    # Per-seat axes. Applied BEFORE the engine-only clearing below so that an axis
+    # override on a non-engine opponent is still inert rather than silently retained.
+    if config.opponent_engine_depth is not None:
+        overrides["engine_depth"] = config.opponent_engine_depth
+    if config.opponent_engine_sims is not None:
+        overrides["engine_sims"] = config.opponent_engine_sims
     if config.opponent_policy_mode != "engine-mcts":
         for name, cleared in _ENGINE_ONLY_FIELDS:
             if getattr(config, name, cleared) != cleared:
@@ -5345,6 +5386,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="raw = the checkpoint's own argmax; root-puct = the Python root search; "
              "engine-mcts = the native Rust search over sampled belief worlds.",
     )
+    parser.add_argument("--opponent-engine-depth", type=int, default=None,
+        help="Engine depth for the OPPONENT seat. Defaults to --engine-depth. Set it to "
+             "compare two budgets head-to-head, e.g. --engine-depth 3 --engine-sims 2048 "
+             "--opponent-policy-mode engine-mcts --opponent-engine-depth 6 "
+             "--opponent-engine-sims 16384.")
+    parser.add_argument("--opponent-engine-sims", type=int, default=None,
+        help="Engine sims for the OPPONENT seat. Defaults to --engine-sims.")
     parser.add_argument(
         "--opponent-policy-mode",
         choices=("foul-play", "raw", "root-puct", "engine-mcts"),
@@ -5673,7 +5721,10 @@ def build_comparison_arg_parser() -> argparse.ArgumentParser:
     # it would be worse than refusing it. Removed rather than defaulted, which also keeps
     # this parser's help free of the `--policy-mode` string the CLI-surface test pins.
     _remove_optional_argument(parser, "--opponent-policy-mode")
-    parser.set_defaults(policy_mode="root-puct", opponent_policy_mode="foul-play")
+    _remove_optional_argument(parser, "--opponent-engine-depth")
+    _remove_optional_argument(parser, "--opponent-engine-sims")
+    parser.set_defaults(policy_mode="root-puct", opponent_policy_mode="foul-play",
+                        opponent_engine_depth=None, opponent_engine_sims=None)
     parser.add_argument(
         "--comparison-mode",
         choices=tuple(sorted(_COMPARISON_MODES)),
@@ -5749,6 +5800,8 @@ def _config_from_args(
         # never saw this flag. A bare args.opponent_policy_mode would AttributeError on
         # those paths rather than defaulting to the existing foul-play behaviour.
         opponent_policy_mode=getattr(args, "opponent_policy_mode", "foul-play"),
+        opponent_engine_depth=getattr(args, "opponent_engine_depth", None),
+        opponent_engine_sims=getattr(args, "opponent_engine_sims", None),
         engine_model_path=getattr(args, "engine_model_path", None),
         engine_tables_path=getattr(args, "engine_tables_path", None),
         engine_depth=getattr(args, "engine_depth", 4),

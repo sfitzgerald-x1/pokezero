@@ -255,6 +255,11 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
     # campaign renders a byte-identical argv and no banked comparison shifts.
     if getattr(args, "opponent_policy_mode", "foul-play") != "foul-play":
         argv += ["--opponent-policy-mode", str(args.opponent_policy_mode)]
+        for _flag, _attr in (("--opponent-engine-depth", "opponent_engine_depth"),
+                             ("--opponent-engine-sims", "opponent_engine_sims")):
+            _v = getattr(args, _attr, None)
+            if _v is not None:
+                argv += [_flag, str(_v)]
     # The bridge defaults these to a REPO-RELATIVE checkout
     # (DEFAULT_FOULPLAY_ROOT = <repo>/third_party/foul-play) and there is no
     # environment fallback, so a deployment that ships foul-play anywhere else
@@ -455,6 +460,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--showdown-root", required=True)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--arm", choices=("search", "raw"), required=True)
+    ap.add_argument("--opponent-engine-depth", type=int, default=None,
+                    help="Engine depth for the OPPONENT seat (head-to-head budget "
+                         "comparison). Defaults to --depth.")
+    ap.add_argument("--opponent-engine-sims", type=int, default=None,
+                    help="Engine sims for the OPPONENT seat. Defaults to --sims.")
     ap.add_argument(
         "--opponent-policy-mode",
         choices=("foul-play", "raw", "root-puct", "engine-mcts"),

@@ -3131,6 +3131,47 @@ class HeadToHeadOpponentTest(unittest.TestCase):
                       foulplay_username="Explicit").foulplay_username,
             "Explicit")
 
+    def test_budget_versus_budget_is_expressible_and_not_a_mirror(self) -> None:
+        """d3/s2048 against d6/s16384 on one board.
+
+        Without per-seat axes the opponent inherits depth and sims, so engine-vs-engine is
+        necessarily a mirror and the only head-to-head expressible is search-vs-raw. This
+        is the comparison that decides whether a cheap configuration can replace an
+        expensive one, and it is far more sensitive than scoring each against a third
+        policy and differencing.
+        """
+        from pokezero.foulplay_bridge import _opponent_seat_config
+        engine = dict(engine_model_path=Path("/tmp/m.pt"), engine_tables_path=Path("/tmp/t.json"))
+        cfg = self._cfg(policy_mode="engine-mcts", engine_depth=3, engine_sims=2048,
+                        opponent_policy_mode="engine-mcts",
+                        opponent_engine_depth=6, opponent_engine_sims=16384, **engine)
+        opp = _opponent_seat_config(cfg)
+        self.assertEqual((cfg.engine_depth, cfg.engine_sims), (3, 2048))
+        self.assertEqual((opp.engine_depth, opp.engine_sims), (6, 16384))
+        self.assertEqual(opp.policy_mode, "engine-mcts")
+        # The derived config builds ONE policy, so the pairing fields must be cleared --
+        # otherwise an opponent axis survives with opponent_policy_mode reset to
+        # foul-play, which the axis guard rejects. (It did, before this was fixed.)
+        self.assertIsNone(opp.opponent_engine_depth)
+        self.assertIsNone(opp.opponent_engine_sims)
+        self.assertEqual(opp.opponent_policy_mode, "foul-play")
+
+    def test_same_mode_and_same_axes_is_still_refused_as_a_mirror(self) -> None:
+        engine = dict(engine_model_path=Path("/tmp/m.pt"), engine_tables_path=Path("/tmp/t.json"))
+        with self.assertRaises(ValueError) as caught:
+            self._cfg(policy_mode="engine-mcts", engine_depth=6, engine_sims=16384,
+                      opponent_policy_mode="engine-mcts", **engine)
+        self.assertIn("mirror match", str(caught.exception))
+
+    def test_an_opponent_axis_on_a_non_engine_opponent_is_refused(self) -> None:
+        """Refused, not ignored: the shard's config echo is the only record of WHICH two
+        things were compared, so an opponent depth the opponent never used would
+        misdescribe the pairing."""
+        engine = dict(engine_model_path=Path("/tmp/m.pt"), engine_tables_path=Path("/tmp/t.json"))
+        with self.assertRaises(ValueError):
+            self._cfg(policy_mode="engine-mcts", opponent_policy_mode="raw",
+                      opponent_engine_depth=6, **engine)
+
     def test_room_lines_are_a_no_op_only_when_explicitly_allowed(self) -> None:
         """With no foul-play client, a room-line send must not abort the battle.
 
