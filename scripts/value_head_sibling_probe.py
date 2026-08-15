@@ -155,8 +155,9 @@ def main() -> int:
 
     from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
     from pokezero.neural_policy import (
-        evaluate_transformer_action_priors, evaluate_transformer_observation_value,
-        load_transformer_checkpoint,
+        category_vocab_from_model_config, evaluate_transformer_action_priors,
+        evaluate_transformer_observation_value, feature_masks_from_model_config,
+        load_transformer_checkpoint, observation_spec_from_model_config,
     )
     from pokezero.replay_branching import replay_trajectory_branch, replay_trajectory_branch_rollout
     from pokezero.rollout import RolloutConfig, continue_rollout_from_current_state
@@ -165,6 +166,29 @@ def main() -> int:
     buckets = [float(x) for x in args.buckets.split(",")]
     print(f"loading checkpoint {args.checkpoint}", flush=True)
     model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
+
+    # THE ENV MUST BE BUILT UNDER THE CHECKPOINT'S OWN SCHEMA, not the repo default.
+    # feature_masks_from_model_config's docstring calls itself "THE single derivation point
+    # from stamped provenance to env behavior. Every harness that builds an env for a
+    # loaded checkpoint must route through this" -- and an earlier revision of this probe
+    # did not, so the env emitted observations under the current default spec (rotated to
+    # v4 on main) while this checkpoint was trained on an older one. The model rejected
+    # them outright:
+    #     ValueError: categorical_ids shape does not match TransformerPolicyConfig.
+    # A loud failure, fortunately. The same mismatch in a shape-compatible direction would
+    # have silently scored the head on observations it was never trained on -- which is
+    # precisely the error class this probe exists to avoid making about itself.
+    model_config = result.model_config
+    env_spec = observation_spec_from_model_config(model_config)
+    env_masks = feature_masks_from_model_config(model_config)
+    env_vocab = category_vocab_from_model_config(model_config, args.showdown_root)
+    print(f"env bound to the checkpoint's schema: spec={getattr(env_spec, 'schema_version', env_spec)}",
+          flush=True)
+
+    def make_env():
+        return LocalShowdownEnv(LocalShowdownConfig(
+            showdown_root=args.showdown_root, observation_spec=env_spec,
+            category_vocab=env_vocab, feature_masks=env_masks))
 
     def head_value(observations) -> float:
         """The raw value head on an observation history. NOT a backed-up Q.
@@ -176,9 +200,19 @@ def main() -> int:
             model=model, result=result, observations=observations, device=args.device)
 
     def make_policy():
+        """Rollout policy. Kwargs taken from the bridge's own construction
+        (`foulplay_bridge.py:3688`) rather than guessed: the real knobs are
+        `deterministic` and `sampling_temperature`, not `sample` and `temperature`.
+
+        `deterministic=False` on purpose. Ground truth is a win RATE over N rollouts, so
+        the continuation has to vary between trials; a deterministic policy would replay
+        one identical line N times and report a rate of exactly 0 or 1 with a spuriously
+        tiny interval.
+        """
         from pokezero.neural_policy import TransformerSoftmaxPolicy
         return TransformerSoftmaxPolicy(
-            model=model, result=result, device=args.device, temperature=1.0, sample=True)
+            model=model, result=result, device=args.device,
+            deterministic=False, sampling_temperature=1.0)
 
     cfg = RolloutConfig(max_decision_rounds=args.max_decision_rounds)
     pairs: list[dict] = []
@@ -187,7 +221,7 @@ def main() -> int:
 
     for gi in range(args.games):
         seed = args.seed_start + gi
-        env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=args.showdown_root))
+        env = make_env()
         env.reset(seed=seed)
         policies = {"p1": make_policy(), "p2": make_policy()}
         source = continue_rollout_from_current_state(
@@ -201,14 +235,24 @@ def main() -> int:
         # Sample decisions spread across the game rather than clustered at the opening:
         # the banked row cap already biases toward early-game and repeating that bias here
         # would make the probe unrepresentative of the decisions search actually faces.
-        if rounds < 4:
-            skipped["game_too_short"] += 1
+        seat = "p1"
+        # Only rounds where THIS SEAT has a step, and where the OPPONENT also has one --
+        # both are needed, since a successor is only defined by a joint action. An evenly
+        # spaced prefix ignores that: a seat does not act every decision round (waits,
+        # forced switches), so most sampled rounds raised LookupError.
+        seat_rounds = {st.turn_index for st in traj.steps if st.player_id == seat}
+        opp_rounds = {st.turn_index for st in traj.steps if st.player_id != seat}
+        usable = sorted(seat_rounds & opp_rounds)
+        # Drop the last: branching AT the final round has no successor to evaluate.
+        usable = [r for r in usable if r < rounds - 1]
+        if len(usable) < 2:
+            skipped["no_usable_joint_rounds"] += 1
             continue
-        step = max(1, rounds // (args.decisions_per_game + 1))
-        prefixes = list(range(step, rounds, step))[: args.decisions_per_game]
+        stride = max(1, len(usable) // args.decisions_per_game)
+        prefixes = usable[::stride][: args.decisions_per_game]
+        print(f"  {len(usable)} rounds have BOTH seats acting; sampling {prefixes}", flush=True)
 
         for prefix in prefixes:
-            seat = "p1"
             # The two arms to compare. Taken from the POLICY's top-2 priors rather than from
             # a search, so the probe measures the head on the pair a searcher would be
             # deciding between without needing a search in the loop.
@@ -226,7 +270,7 @@ def main() -> int:
                     traj, seat, prefix, model, result, args.device,
                     evaluate_transformer_action_priors, obs_hist)
             except Exception as exc:                      # noqa: BLE001
-                skipped[f"arm_selection:{type(exc).__name__}"] += 1
+                skipped[f"arm_selection:{type(exc).__name__}: {str(exc)[:80]}"] += 1
                 continue
             if arm_a is None or arm_b is None:
                 skipped["fewer_than_two_legal_arms"] += 1
@@ -239,7 +283,7 @@ def main() -> int:
                 branch_actions = {seat: arm, ("p2" if seat == "p1" else "p1"): opp_action}
                 # HEAD value at this arm's successor -- one branch, no rollout.
                 try:
-                    benv = LocalShowdownEnv(LocalShowdownConfig(showdown_root=args.showdown_root))
+                    benv = make_env()
                     benv.reset(seed=seed)
                     br = replay_trajectory_branch(
                         benv, traj, prefix_decision_round_count=prefix,
@@ -270,7 +314,7 @@ def main() -> int:
                         break
                     rec[f"head_{label}"] = head_value(hist)
                 except Exception as exc:                  # noqa: BLE001
-                    skipped[f"branch:{type(exc).__name__}"] += 1
+                    skipped[f"branch:{type(exc).__name__}: {str(exc)[:120]}"] += 1
                     ok = False
                     break
                 # GROUND TRUTH: N rollouts to terminal from that same successor.
@@ -282,13 +326,29 @@ def main() -> int:
                                          0 if label == "a" else 1, trial,
                                          paired=args.paired_seeds)
                     try:
-                        renv = LocalShowdownEnv(LocalShowdownConfig(showdown_root=args.showdown_root))
+                        renv = make_env()
                         renv.reset(seed=seed)
-                        rr = replay_trajectory_branch_rollout(
+                        # NOT replay_trajectory_branch_rollout: it hardcodes
+                        # seed=trajectory.seed (replay_branching.py:337), so every trial
+                        # replays IDENTICALLY and N rollouts are one sample repeated N
+                        # times. The smoke run showed it -- 8/8 trials returned the same
+                        # winner and every true rate came out exactly 0.000, with a
+                        # reported SE of 0.177 that described nothing. Driving the two
+                        # primitives it wraps lets the per-trial seed actually reach the
+                        # continuation's player RNGs, which is what makes the win rate a
+                        # rate. The PREFIX still replays under the source seed, as it must.
+                        br2 = replay_trajectory_branch(
                             renv, traj, prefix_decision_round_count=prefix,
-                            branch_actions=branch_actions,
+                            branch_actions=branch_actions, check_prefix_observations=False)
+                        cont = continue_rollout_from_current_state(
+                            env=renv,
                             policies={"p1": make_policy(), "p2": make_policy()},
-                            rollout_config=cfg, check_prefix_observations=False)
+                            config=cfg, seed=rseed,
+                            battle_id=f"probe-roll-{seed}-{prefix}-{label}-{trial}",
+                            starting_decision_round_index=prefix + 1,
+                            available_observations=br2.step_result.observations,
+                            reset_policies=True)
+                        rr = type("R", (), {"continuation": cont})()
                     except Exception:                     # noqa: BLE001
                         # Counted, never silent. A dropped trial also BREAKS the paired-seed
                         # design: if arm A's trial 7 fails and arm B's does not, the two
