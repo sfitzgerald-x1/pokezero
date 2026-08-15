@@ -483,5 +483,107 @@ class HeadGapConversionTest(unittest.TestCase):
             self.assertAlmostEqual(vhsp.head_gap_win_prob(va, vb), pa - pb, places=12)
 
 
+class FinalizePairGapsTest(unittest.TestCase):
+    """Guards the units fix AT THE RECORD, which is where it was actually missing.
+
+    HeadGapConversionTest covers the pure function. It is not sufficient: reverting the call
+    site to `rec["head_gap"] = rec["head_a"] - rec["head_b"]` left all 42 tests green,
+    because nothing asserted the record was built through the conversion. These tests fail
+    on that revert.
+    """
+
+    def test_head_gap_on_the_record_is_the_win_probability_gap(self):
+        rec = vhsp.finalize_pair_gaps(
+            {"head_a": 0.0753, "head_b": 0.1035, "true_a": 0.828, "true_b": 0.781})
+        # NOT head_a - head_b (-0.0282). Halved, because the head is on the +/-1 scale.
+        self.assertAlmostEqual(rec["head_gap"], -0.0141, places=12)
+        self.assertNotAlmostEqual(rec["head_gap"], 0.0753 - 0.1035, places=6)
+
+    def test_the_return_scale_gap_is_retained_unhalved(self):
+        rec = vhsp.finalize_pair_gaps(
+            {"head_a": 0.4, "head_b": -0.2, "true_a": 0.6, "true_b": 0.4})
+        self.assertAlmostEqual(rec["head_gap_return_scale"], 0.6, places=12)
+        self.assertAlmostEqual(rec["head_gap"], 0.3, places=12)
+
+    def test_the_marker_the_merger_gates_on_is_always_stamped(self):
+        rec = vhsp.finalize_pair_gaps(
+            {"head_a": 0.0, "head_b": 0.0, "true_a": 0.5, "true_b": 0.5})
+        self.assertIn("head_gap_return_scale", rec)
+
+    def test_head_and_true_gaps_share_units(self):
+        # A perfectly calibrated head must produce exactly the rollout gap on the record.
+        pa, pb = 0.828, 0.781
+        rec = vhsp.finalize_pair_gaps({"head_a": 2 * pa - 1, "head_b": 2 * pb - 1,
+                                       "true_a": pa, "true_b": pb})
+        self.assertAlmostEqual(rec["head_gap"], rec["true_gap"], places=12)
+
+
+class MeasuredErrorRatesTest(unittest.TestCase):
+    """The advisory rates must come from the measured table, not from invented bands.
+
+    The revision before this one hardcoded three coupling bands whose quoted rates were
+    wrong by up to 6 points, and gated a warning on `n >= 1200` -- a figure that had already
+    been retracted in the analysis it cited, which measured only n=150 and n=300.
+    """
+
+    def test_rates_fall_as_coupling_strengthens(self):
+        # pvr 1.0 = no coupling (worst), 0.0 = perfect coupling (best).
+        worst = vhsp.measured_error_rates(1.00, 150)[0]
+        mid = vhsp.measured_error_rates(0.59, 150)[0]
+        best = vhsp.measured_error_rates(0.00, 150)[0]
+        self.assertGreater(worst, mid)
+        self.assertGreater(mid, best)
+        self.assertEqual(best, 0.0)
+
+    def test_rates_fall_as_pairs_increase(self):
+        at150 = vhsp.measured_error_rates(0.59, 150)[0]
+        at300 = vhsp.measured_error_rates(0.59, 300)[0]
+        self.assertGreater(at150, at300)
+
+    def test_reports_which_cell_was_substituted(self):
+        fb, ff, tp, tn = vhsp.measured_error_rates(0.61, 280)
+        self.assertEqual((tp, tn), (0.59, 300))
+
+    def test_no_retracted_sample_size_constant_is_used_as_a_gate(self):
+        """1200 may appear in prose explaining its retraction, never in live logic.
+
+        Scanned over the AST, not the text. A first version of this test grepped the raw
+        source and failed on the clean tree, because the comment that documents the
+        removal contains the literal `n < 1200` -- a guard that fires on its own
+        explanation is a guard nobody keeps.
+        """
+        import ast as _ast
+        src = (Path(__file__).resolve().parents[1] / "scripts"
+               / "value_head_sibling_probe.py").read_text()
+        consts = [n.value for n in _ast.walk(_ast.parse(src))
+                  if isinstance(n, _ast.Constant) and isinstance(n.value, int)]
+        self.assertNotIn(1200, consts,
+                         "the retracted n>=1200 sample-size constant is live in code again")
+
+    def test_every_table_cell_is_a_valid_rate(self):
+        for pvr, n, fb, ff in vhsp.MEASURED_ERROR_RATES:
+            self.assertTrue(0.0 <= pvr <= 1.0)
+            self.assertIn(n, (150, 300))
+            self.assertTrue(0.0 <= fb <= 1.0 and 0.0 <= ff <= 1.0)
+
+
+class AtFloorReportingTest(unittest.TestCase):
+    """A clipped estimate must never be reported as a proven zero."""
+
+    def test_a_fully_clipped_bootstrap_is_flagged_at_floor(self):
+        # Identical arms, zero head gap: nothing to detect, everything clips.
+        R = 8
+        pairs = [{"head_gap": 0.0, "true_gap": 0.0, "true_a": 0.5, "true_b": 0.5,
+                  "rollouts_a": R, "rollouts_b": R,
+                  "outcomes_a": {t: 0.5 for t in range(R)},
+                  "outcomes_b": {t: 0.5 for t in range(R)}} for _ in range(30)]
+        got = vhsp.estimate_sigma_diff(pairs, n_boot=50)
+        self.assertTrue(got["at_floor"])
+        self.assertEqual(got["sigma_diff"], 0.0)
+        self.assertEqual(got["ci95"][1], 0.0)
+        # The caller must be able to distinguish "bound is 0" from "no bound available",
+        # which is exactly what ci95[1] == 0.0 alongside at_floor signals.
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,7 +7,7 @@ The value-gap investigation reported a top-1/top-2 root Q gap of 0.0192 against 
 calibration error of 0.0516 and concluded the search cannot resolve its own arms. Both of
 those are properties of SEARCH OUTPUT: `top_arms[].q` is the crate's `MoveStats::mean()`
 -- `total_value / visits`, the backed-up subtree mean over every simulation through an arm
-(`rust/pokezero-search/src/tree.rs:120`) -- and the ECE was computed from that same
+(`rust/pokezero-search/src/lib.rs:205`) -- and the ECE was computed from that same
 backed-up Q against the realized outcome
 (`deployment/mcts/analyze_value_gap.py:618-624`). The raw value head appears in no banked
 shard at all.
@@ -97,6 +97,50 @@ def _json_hi(hi: float):
     return None if hi == float("inf") else hi
 
 
+# Measured error rates of the sigma_diff verdict, as a function of the coupling the run
+# actually achieves and the number of pairs. 200 repeats per cell, R=64, boundary 0.025
+# (the midpoint of the 0.015/0.035 verdict band -- see the HOW TO READ note below).
+#
+# Indexed by paired_variance_ratio, i.e. by the quantity the probe MEASURES, not by a
+# simulated crn knob nobody can read off a run. An earlier revision hardcoded three bands
+# with rates that were wrong by up to 6 points and a gate at "n >= 1200" -- a figure that had
+# already been RETRACTED in the analysis it cited, which measured only n=150 and n=300. The
+# fix is to carry the measurements rather than prose about them.
+#
+# Caveat that no amount of repeats removes: the coupling here is a monotone-coupling model,
+# while the real run shares one Showdown tape across every trial of a pair. So read these as
+# the shape of the dependence, and the measured ratio as the input to it.
+MEASURED_ERROR_RATES = (
+    # (paired_variance_ratio, n_pairs, false "head binds", false "head is fine")
+    (1.00, 150, 0.235, 0.045),
+    (1.00, 300, 0.180, 0.010),
+    (0.88, 150, 0.225, 0.030),
+    (0.88, 300, 0.190, 0.000),
+    (0.75, 150, 0.200, 0.020),
+    (0.75, 300, 0.135, 0.000),
+    (0.59, 150, 0.165, 0.005),
+    (0.59, 300, 0.065, 0.000),
+    (0.37, 150, 0.065, 0.005),
+    (0.37, 300, 0.010, 0.000),
+    (0.00, 150, 0.000, 0.000),
+    (0.00, 300, 0.000, 0.000),
+)
+
+
+def measured_error_rates(pvr: float, n: int) -> tuple[float, float, float, int]:
+    """Nearest measured cell for this run's coupling and sample size.
+
+    Returns (false_binds, false_fine, table_pvr, table_n). Nearest rather than interpolated:
+    the cells are 200-repeat tail estimates, so interpolating between them would imply more
+    precision than they carry. The cell used is reported so the reader can see the
+    substitution.
+    """
+    return min(
+        ((fb, ff, tp, tn) for tp, tn, fb, ff in MEASURED_ERROR_RATES),
+        key=lambda r: (abs(r[2] - pvr) * 4.0 + abs(r[3] - n) / 300.0),
+    )
+
+
 def head_gap_win_prob(head_a: float, head_b: float) -> float:
     """Convert a +/-1 return-scale head DIFFERENCE into a win-probability difference.
 
@@ -110,6 +154,25 @@ def head_gap_win_prob(head_a: float, head_b: float) -> float:
     conversion -- so the fix for the units blocker had no regression guard of its own.
     """
     return (head_a - head_b) / 2.0
+
+
+def finalize_pair_gaps(rec: dict) -> dict:
+    """Stamp head_gap / head_gap_return_scale / true_gap onto a pair record, in one place.
+
+    Exists because a pure `head_gap_win_prob` helper was NOT enough of a guard. Reverting
+    the CALL SITE to `rec["head_gap"] = rec["head_a"] - rec["head_b"]` left the whole suite
+    green: the conversion test exercised the function, and nothing asserted that main()
+    actually used it. That is the units blocker -- the one that made a perfect head read
+    0.0225 against a 0.015 boundary -- sitting unguarded behind a test that looked like it
+    covered it.
+
+    `head_gap_return_scale` is also the marker the shard merger uses to reject pre-fix
+    records, so this function is the single point where a post-fix pair is defined.
+    """
+    rec["head_gap_return_scale"] = rec["head_a"] - rec["head_b"]
+    rec["head_gap"] = head_gap_win_prob(rec["head_a"], rec["head_b"])
+    rec["true_gap"] = rec["true_a"] - rec["true_b"]
+    return rec
 
 
 def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
@@ -239,6 +302,11 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
         # are rare -- the comparable 200-game head-to-head had 1 tie and 0 caps -- so the
         # merged coupling figure is exact to well within its own use. Written down because
         # the alternative was re-running 8 GPUs to recover a difference that is zero.
+        #
+        # DIRECTION, when it is not zero: with a 0.5 present the fallback OVERSTATES the
+        # independent sum, so the ratio reads lower, i.e. coupling looks stronger and the
+        # error rates look better than they are. That is the permissive direction, which is
+        # why the magnitude is bounded above rather than merely mentioned.
         indep = (_arm_var(q.get("outcomes_a"), q["true_a"], q["rollouts_a"])
                  + _arm_var(q.get("outcomes_b"), q["true_b"], q["rollouts_b"]))
         if indep > 0:
@@ -478,9 +546,22 @@ def main() -> int:
     # the 0.015/0.035 boundaries, a multiplicative error of the same class as the units
     # blocker (a bias cancels in a gap; a scale does not). Recorded and checked, not assumed.
     _vct = getattr(result, "value_calibration_transform", None)
-    _vct_scale = getattr(_vct, "scale", 1.0) if _vct is not None else 1.0
+    _vct_method = getattr(_vct, "method", None) if _vct is not None else None
+    # `.scale` is MEANINGLESS for an isotonic transform -- apply() ignores it entirely
+    # (neural_policy.py:862-867) and warps through fitted points instead. Reading .scale
+    # there would record `value_calibration_scale: 1.0` for a transform that is not
+    # identity, which is worse than recording nothing: it is an affirmative false
+    # reassurance on the axis the verdict thresholds live on.
+    _vct_scale = (getattr(_vct, "scale", 1.0)
+                  if _vct is not None and _vct_method == "affine" else 1.0)
     print(f"value calibration transform: {'NONE (identity)' if _vct is None else _vct}")
-    if _vct is not None and abs(_vct_scale - 1.0) > 1e-9:
+    if _vct is not None and _vct_method != "affine":
+        print(f"  WARNING: method={_vct_method!r} is not affine, so no single scale factor "
+              f"describes it and the crate applies none of it. head_gap may sit on a "
+              f"different axis from the Q gaps behind the 0.015/0.035 thresholds by an "
+              f"amount this run cannot summarise. Re-derive the thresholds before quoting "
+              f"a verdict.")
+    elif _vct is not None and abs(_vct_scale - 1.0) > 1e-9:
         print(f"  WARNING: scale={_vct_scale} != 1. The crate applies no calibration, so "
               f"head_gap is on a {_vct_scale}x axis relative to the Q gaps behind the "
               f"verdict thresholds. Treat the sigma_diff boundaries as rescaled by that "
@@ -718,7 +799,7 @@ def main() -> int:
                 skipped["pairing_broken_by_failed_trials"] += 1
                 continue
             # ONE SCALE. The head is on the +/-1 RETURN scale -- ValueCalibrationTransform
-            # clips to [-1, 1] (neural_policy.py:839-840) and is fitted against returns of
+            # clips to [-1, 1] (neural_policy.py:841-842) and is fitted against returns of
             # win +1 / draw 0 / loss -1 (dataset.py:2146-2156). The rollout ground truth is
             # a win RATE in [0, 1]. So head_gap was ~2x true_gap, the true_gap term did NOT
             # cancel in their difference, and the estimator returned
@@ -733,9 +814,7 @@ def main() -> int:
             # the required-head-error analysis are in (a 0.0078 median Q gap, a 0.0516 ECE
             # against a 0/1 outcome). Sign-agreement is scale-invariant, which is why this
             # defect arrived with the sigma_diff readout and was invisible before it.
-            rec["head_gap_return_scale"] = rec["head_a"] - rec["head_b"]
-            rec["head_gap"] = head_gap_win_prob(rec["head_a"], rec["head_b"])
-            rec["true_gap"] = rec["true_a"] - rec["true_b"]
+            finalize_pair_gaps(rec)
             pairs.append(rec)
             # Per-arm values printed in WIN-PROBABILITY units, the same units as the gap
             # beside them and as the rollout truth. Printing the raw +/-1 head values next
@@ -894,15 +973,17 @@ def main() -> int:
         print(f"  var(head_gap - measured_gap) {sd['var_of_difference']:.6f} minus paired "
               f"rollout-noise var {sd['subtracted_noise_var']:.6f} ({share_txt} was noise)")
         pvr = sd.get("paired_variance_ratio")
+        rates = None
         if pvr is not None:
-            regime = ("STRONG (the estimator is sharp; simulated false-verdict rates at "
-                      "n=150 are ~0% both ways)" if pvr <= 0.35 else
-                      "PARTIAL (~12% false 'the head binds' at n=150)" if pvr <= 0.75 else
-                      "WEAK -- the paired seeds bought little (~22% false 'the head binds' "
-                      "and ~8% false 'the head is fine' at n=150)")
+            fb, ff, tp, tn = measured_error_rates(pvr, sd["n"])
+            rates = (fb, ff)
             print(f"  MEASURED COUPLING: var(w_a-w_b) is {pvr:.2f}x the independent sum, "
-                  f"over {sd['paired_variance_ratio_n']} pairs. Regime: {regime}. The "
-                  f"error rates below are selected by THIS number, not assumed.")
+                  f"over {sd['paired_variance_ratio_n']} pairs. 1.0 means the paired seeds "
+                  f"bought nothing; 0.0 means the arms move together perfectly.")
+            print(f"  ERROR RATES AT THIS COUPLING AND n, measured (200 repeats, nearest "
+                  f"cell pvr={tp:.2f} n={tn}): false 'the head binds' {fb:.1%}, "
+                  f"false 'the head is fine' {ff:.1%}. These are selected by the measured "
+                  f"ratio, not assumed.")
         print("  DIRECTION OF THE REMAINING BIAS. Do not read a confident sign into this "
               "-- an earlier revision asserted 'both known biases inflate sigma_diff' and "
               "one of the two could not be reproduced (holding the head perfect and adding "
@@ -915,23 +996,34 @@ def main() -> int:
         # tree, so a public-repo reader cannot resolve a reference to it.
         print("  HOW TO READ: sigma_diff <= 0.015 -> the head is NOT the binding "
               "constraint. >= 0.035 -> it is, and no quantity of sims fixes it (more sims "
-              "reduce variance; this is bias). Between the two -> indeterminate.")
-        hi = sd["ci95"][1]
+              "reduce variance; this is bias). Between the two -> INDETERMINATE, which is "
+              "a real answer and not a rounding problem. The error rates quoted below use "
+              "a single 0.025 boundary -- the midpoint of that band -- because a "
+              "false-positive rate needs one line; they are therefore the rates for the "
+              "most permissive reading, and the band edges are strictly better.")
         pt = sd["sigma_diff"]
-        # Branch on the POINT ESTIMATE, because that is the statistic the simulated error
-        # rates were measured on. An earlier revision branched on ci95[1] while quoting
-        # rates measured on the point -- the printed rate then described a different
-        # quantity than the condition that printed it.
+        # Branch on the POINT ESTIMATE, the statistic the rates were measured on. And warn
+        # with THIS run's measured rate rather than a constant: the previous gate fired on
+        # `n < 1200`, a number that had been retracted in the very analysis it cited.
         if sd["n"] < 150:
-            print(f"  *** UNDERPOWERED: {sd['n']} pairs. 150 is the smallest size at which "
-                  f"either verdict has been characterised. ***")
-        elif pvr is not None and pvr > 0.75 and pt > 0.025 and sd["n"] < 1200:
-            print(f"  *** A HIGH READING IS WEAKLY SUPPORTED HERE: coupling is weak "
-                  f"({pvr:.2f}) and n={sd['n']}, where ~22% of genuinely-fine heads read "
-                  f"above threshold. Scale n before spending training compute. ***")
-        elif pvr is not None and pvr > 0.75 and pt <= 0.025:
-            print(f"  NOTE: with weak coupling, ~8% of genuinely-BINDING heads read below "
-                  f"threshold at n=150. A low reading here is suggestive, not decisive.")
+            print(f"  *** UNDERPOWERED: {sd['n']} pairs. 150 is the smallest size any "
+                  f"error rate has been measured at. ***")
+        elif rates is not None:
+            fb, ff = rates
+            if pt > 0.025 and fb >= 0.10:
+                print(f"  *** A HIGH READING IS WEAKLY SUPPORTED: at this run's coupling "
+                      f"and n={sd['n']}, {fb:.0%} of genuinely-fine heads read above the "
+                      f"boundary. Raise the pair count, or improve the coupling, before "
+                      f"spending training compute on this. ***")
+            elif pt <= 0.025 and ff >= 0.02:
+                print(f"  NOTE: {ff:.0%} of genuinely-BINDING heads read below the boundary "
+                      f"at this coupling and n. A low reading is suggestive, not decisive.")
+            elif pt > 0.025:
+                print(f"  A high reading is well supported here: only {fb:.0%} of "
+                      f"genuinely-fine heads reach this side at this coupling and n.")
+            else:
+                print(f"  A low reading is well supported here: only {ff:.0%} of "
+                      f"genuinely-binding heads read this low at this coupling and n.")
     o = scored.get("overall")
     if o:
         print(f"{'OVERALL':>18s} {o['n']:5d} {o['accuracy']:9.3f} "
@@ -952,6 +1044,7 @@ def main() -> int:
             {"belief_set_source_hash": getattr(result, "belief_set_source_hash", None),
              "value_calibration_transform": (None if _vct is None else str(_vct)),
              "value_calibration_scale": _vct_scale,
+             "value_calibration_method": _vct_method,
              "config": {k: (str(v) if isinstance(v, Path) else v)
                         for k, v in vars(args).items()},
              "ground_truth_se": se,
