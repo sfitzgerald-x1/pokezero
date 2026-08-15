@@ -55,6 +55,7 @@ import hashlib
 import json
 import math
 import os
+import random
 import statistics
 import sys
 from pathlib import Path
@@ -94,6 +95,76 @@ def rollout_seed(base: int, battle_id: str, round_index: int, arm: int, trial: i
 def _json_hi(hi: float):
     """None for the open-ended bucket, so the payload stays valid JSON."""
     return None if hi == float("inf") else hi
+
+
+def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
+                        n_boot: int = 2000, seed: int = 20260815) -> dict:
+    """Estimate the SIBLING-DIFFERENTIAL head error by subtracting the known rollout noise.
+
+    Why this exists, and why sign-agreement is not enough. The agreement metric compares the
+    head against an ordering estimated from R rollouts. At R=64 that estimate has SE
+    sqrt(2*0.25/64) = 0.088, while the median gap it must resolve is 0.0078 -- 11x smaller.
+    Simulated over 6,000 pairs, a PERFECT head (sigma_diff = 0) scores 0.563 agreement and a
+    useless one (0.20) scores 0.492: seven points of range, and the ground truth, not the
+    head, is what the number describes. Reporting agreement as the verdict would certify a
+    training programme off a figure a flawless head also produces.
+
+    The fix is not more rollouts -- resolving 0.0078 by Monte Carlo needs ~33,000 per arm.
+    It is that the noise variance is KNOWN, being R Bernoulli trials, so it can be removed
+    analytically:
+
+        head_gap     = true_gap + differential_head_error     var: s_true^2 + s_diff^2
+        measured_gap = true_gap + rollout_noise               var: s_true^2 + s_noise^2
+        =>  s_diff^2 = var(head_gap - measured_gap) - s_noise^2
+
+    The true_gap term cancels in the difference, which is what makes this work without ever
+    knowing the true gap. s_noise^2 is the plug-in per-pair Bernoulli variance of the
+    difference of two independent arm means.
+
+    Clipped at zero: a negative estimate means the differential is BELOW the noise floor, so
+    the reading is an upper bound and is reported as such, never as a measured zero.
+    """
+    usable = [p for p in pairs
+              if p.get("head_gap") is not None and p.get("true_gap") is not None
+              and (p.get("rollouts_a") or 0) > 1 and (p.get("rollouts_b") or 0) > 1
+              and not p.get("terminal_a") and not p.get("terminal_b")]
+    if len(usable) < 2:
+        return {"sigma_diff": None, "n": len(usable),
+                "why": "CANNOT RUN: fewer than 2 pairs with rollouts on both arms"}
+
+    def noise_var(p):
+        # Unbiased per-arm variance of a mean of R Bernoulli draws, from the realized rate.
+        wa, wb = p["true_a"], p["true_b"]
+        ra, rb = p["rollouts_a"], p["rollouts_b"]
+        return wa * (1 - wa) / (ra - 1) + wb * (1 - wb) / (rb - 1)
+
+    def point(sample):
+        d = [q["head_gap"] - q["true_gap"] for q in sample]
+        m = sum(d) / len(d)
+        var_d = sum((x - m) ** 2 for x in d) / len(d)
+        nv = sum(noise_var(q) for q in sample) / len(sample)
+        return var_d - nv, var_d, nv
+
+    raw, var_d, nv = point(usable)
+    rng = random.Random(seed)
+    boot = []
+    for _ in range(n_boot):
+        sample = [usable[rng.randrange(len(usable))] for _ in range(len(usable))]
+        boot.append(math.sqrt(max(point(sample)[0], 0.0)))
+    boot.sort()
+    lo = boot[int(0.025 * len(boot))]
+    hi = boot[min(len(boot) - 1, int(0.975 * len(boot)))]
+    return {
+        "sigma_diff": math.sqrt(max(raw, 0.0)),
+        "ci95": [lo, hi],
+        "at_floor": raw <= 0.0,
+        "n": len(usable),
+        "var_of_difference": var_d,
+        "subtracted_noise_var": nv,
+        # If the noise term is most of the observed variance the estimate is a small
+        # difference of two larger numbers, and the CI, not the point, is the result.
+        "noise_share_of_variance": (nv / var_d) if var_d > 0 else None,
+    }
 
 
 def spread_prefixes(usable: Sequence[int], k: int) -> list[int]:
@@ -169,6 +240,10 @@ def main() -> int:
                     help="rollout cap; 250 is effectively 'play to terminal'")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--buckets", default="0.0,0.02,0.05,0.10,0.20")
+    ap.add_argument("--allow-unstamped-belief", action="store_true",
+                    help="run against a checkpoint with no belief_set_source_hash. The "
+                         "env is pinned belief-ON regardless, so this asserts you know "
+                         "the checkpoint was trained that way. Record it in the write-up.")
     ap.add_argument("--json", type=Path, default=None)
     args = ap.parse_args()
 
@@ -180,9 +255,9 @@ def main() -> int:
         evaluate_transformer_observation_value, feature_masks_from_model_config,
         load_transformer_checkpoint, observation_spec_from_model_config,
     )
-    from pokezero.replay_branching import replay_trajectory_branch, replay_trajectory_branch_rollout
+    from pokezero.replay_branching import replay_trajectory_branch
     from pokezero.rollout import RolloutConfig, continue_rollout_from_current_state
-    from pokezero.search import player_observation_history, terminal_value_for_player
+    from pokezero.search import player_observation_history
 
     buckets = [float(x) for x in args.buckets.split(",")]
     print(f"loading checkpoint {args.checkpoint}", flush=True)
@@ -232,11 +307,34 @@ def main() -> int:
         # The datum exists, so assert on it rather than trusting the wiring.
         want = getattr(result, "belief_set_source_hash", None)
         got = getattr(env, "belief_set_source_hash", None)
-        if want is not None and got is not None and want != got:
+        # `want is None` is the DANGEROUS case, not the safe one. Per neural_policy.py
+        # 915-918 it means the checkpoint had belief source disabled, or mixed provenance,
+        # or predates the stamp -- so pinning the env ON is the exact mirror of B1, silent
+        # and shape-compatible in the other direction. An earlier revision skipped the
+        # check when either side was None, i.e. it was inert in precisely the case it was
+        # written for.
+        if want is None and not args.allow_unstamped_belief:
+            raise SystemExit(
+                "CANNOT RUN: this checkpoint carries no belief_set_source_hash, which means "
+                "belief source was DISABLED, provenance was mixed, or it predates the stamp "
+                "(neural_policy.py:915-918). The env here is pinned belief-ON, so running "
+                "anyway would score the head on observations it was not trained on -- the "
+                "mirror image of the fault this pin exists to prevent. Pass "
+                "--allow-unstamped-belief to override, and say so in the write-up.")
+        if want is not None and got != want:
             raise SystemExit(
                 f"CANNOT RUN: belief-set-source mismatch. checkpoint {want!r} vs env {got!r}. "
                 "Scoring the head on observations trained under a different belief "
                 "condition would produce a confident wrong verdict.")
+        # Printed, not just checked: a reader of the log must be able to tell "verified"
+        # from "skipped", and only one of those two is worth staking a conclusion on.
+        if want is None:
+            print("belief set source: PINNED ON, but the checkpoint carries NO HASH and "
+                  "--allow-unstamped-belief was passed. UNVERIFIED -- state this in any "
+                  "write-up that quotes this run.")
+        else:
+            print(f"belief set source: PINNED ON, hash VERIFIED equal to the checkpoint's "
+                  f"({want[:16]}...)")
         return env
 
     def head_value(observations) -> float:
@@ -333,9 +431,15 @@ def main() -> int:
                 try:
                     benv = make_env()
                     benv.reset(seed=seed)
+                    # check_prefix_observations ON here: this branch runs ONCE per pair,
+                    # and it is the only proof the replayed prefix reproduced the sampled
+                    # decision. Without it a divergent prefix silently yields head and true
+                    # values for a DIFFERENT position. Left off for the rollout branches
+                    # below only because those run N times per pair, and this one has
+                    # already pinned the prefix they share.
                     br = replay_trajectory_branch(
                         benv, traj, prefix_decision_round_count=prefix,
-                        branch_actions=branch_actions, check_prefix_observations=False)
+                        branch_actions=branch_actions, check_prefix_observations=True)
                     hist, branch_terminal = _post_branch_history(br, seat, obs_hist)
                     if hist is None:
                         if branch_terminal is not None:
@@ -365,17 +469,21 @@ def main() -> int:
                         # next" states (the opponent forced, this seat locked in) that get
                         # filtered, and those are systematically different positions.
                         try:
-                            fallback_obs = renv.observe(seat)
+                            fallback_obs = benv.observe(seat)
                         except Exception as exc:          # noqa: BLE001
                             skipped[f"observe_fallback:{type(exc).__name__}"] += 1
                             ok = False
                             break
                         if fallback_obs is None:
-                            skipped["seat_not_requested_after_branch"] += 1
+                            # Unreachable today -- LocalShowdownEnv.observe always returns
+                            # an observation -- but a drop must never be silent if that
+                            # changes, and it must not reuse the old label, which now means
+                            # something else.
+                            skipped["observe_fallback_returned_none"] += 1
                             ok = False
                             break
                         rec[f"observe_fallback_{label}"] = True
-                        hist = (*prefix_history, fallback_obs)
+                        hist = (*obs_hist, fallback_obs)
                     rec[f"head_{label}"] = head_value(hist)
                 except Exception as exc:                  # noqa: BLE001
                     skipped[f"branch:{type(exc).__name__}: {str(exc)[:120]}"] += 1
@@ -423,7 +531,7 @@ def main() -> int:
                             starting_decision_round_index=prefix + 1,
                             available_observations=br2.step_result.observations,
                             reset_policies=True)
-                        rr = type("R", (), {"continuation": cont})()
+                        rr = cont
                     except Exception:                     # noqa: BLE001
                         # Counted, never silent. A dropped trial also BREAKS the paired-seed
                         # design: if arm A's trial 7 fails and arm B's does not, the two
@@ -432,7 +540,7 @@ def main() -> int:
                         failed_trials.add(trial)
                         skipped["rollout_failed"] += 1
                         continue
-                    term = rr.continuation.terminal
+                    term = rr.terminal
                     # A capped game has no winner. Counted as a half, and counted
                     # SEPARATELY, because silently treating it as a loss would bias
                     # exactly the long grindy lines that stall.
@@ -501,7 +609,16 @@ def main() -> int:
     realised = [min(p["rollouts_a"], p["rollouts_b"]) for p in pairs
                 if p.get("rollouts_a") and p.get("rollouts_b")]
     n_eff = min(realised) if realised else 0
-    se = (0.5 / math.sqrt(n_eff)) if n_eff else None
+    median_realised = statistics.median(realised) if realised else 0
+    if realised and min(realised) != max(realised):
+        print(f"  realized rollouts/arm vary: min {min(realised)}, median "
+              f"{median_realised}, max {max(realised)} over {len(realised)} pairs -- "
+              f"the resolution below uses the median, so individual pairs are coarser.")
+    # sqrt(2) matters here: 0.5/sqrt(n) is the SE of ONE ARM's rate, but the quantity being
+    # resolved is the GAP between two arms, whose SE is 0.5*sqrt(2/n). Comparing a gap
+    # against a per-arm SE understates the noise by 41% and made the pairing look worse than
+    # it is. The module docstring repeated the same conflation.
+    se = (0.5 * math.sqrt(2.0 / n_eff)) if n_eff else None
     # The PAIRED SE, which is the one that describes this design. Per pair, over the trials
     # both arms completed: d_i = w_a,i - w_b,i, SE = sd(d)/sqrt(N). Reported beside the
     # unpaired figure so the reader can see how much the common random numbers actually
@@ -525,14 +642,26 @@ def main() -> int:
     # narrowest bucket can report an accuracy computed on a handful of pairs that happened
     # to land on one quantum. That reads as "the head is 55% accurate on small gaps" when
     # the instrument cannot see a small gap at all. Coarsen, and say so.
-    resolution = (1.0 / n_eff) if n_eff else None
+    # TWO corrections over the first attempt, both of which changed the reported table.
+    #
+    # 1. The quantum is 0.5/R, not 1/R. A trial can score 0.5 (a cap, or a draw), so an
+    #    arm's rate moves in half-win steps and the gap's attainable spacing is half what
+    #    the earlier version claimed. It over-merged by 2x while stating the wrong quantum
+    #    as a fact.
+    # 2. MEDIAN, not min. `min(realised)` lets a single degenerate pair -- one that
+    #    completed 2 trials -- set resolution 0.25, drop every bucket edge below it, and
+    #    collapse the whole per-bucket table, the probe's headline, to one [0.0, inf) row
+    #    for the entire run. One bad pair must not silently redefine the output for all the
+    #    others.
+    resolution = (0.5 / median_realised) if median_realised else None
     dropped_edges = []
     if resolution is not None:
         keep = [b for b in buckets if b == 0.0 or b >= resolution]
         dropped_edges = [b for b in buckets if b not in keep]
         if dropped_edges:
-            print(f"\nBUCKET FLOOR: {n_eff} completed rollouts per arm quantises the true "
-                  f"gap to multiples of {resolution:.4f}, so edges {dropped_edges} are "
+            print(f"\nBUCKET FLOOR: a median {median_realised} completed rollouts per "
+                  f"arm, with half-win outcomes possible, quantises the true gap to "
+                  f"multiples of {resolution:.4f}, so edges {dropped_edges} are "
                   f"below the resolution of the instrument and are MERGED, not reported. "
                   f"An accuracy on a bucket narrower than one quantum is an artefact.")
         buckets = keep
@@ -559,9 +688,16 @@ def main() -> int:
               f"-> SE ~{se:.4f} near 0.5"
               f"{' (paired seeds reduce this)' if args.paired_seeds else ''}")
     if paired_se is not None:
-        print(f"  PAIRED SE on the true gap (the estimator actually scored): median "
-              f"{paired_se:.4f} across {len(paired_ses)} pairs -- this is the figure that "
-              f"describes the design; the unpaired one above does not")
+        zero_sd = sum(1 for x in paired_ses if x == 0.0)
+        print(f"  PAIRED SE on the true gap: median {paired_se:.4f} across "
+              f"{len(paired_ses)} pairs. CAVEAT, and it is not a small one: every trial of "
+              f"a pair resets from the SAME source seed, so the Showdown PRNG tape is "
+              f"shared and only policy sampling varies. These are correlated replays, not "
+              f"independent games, so this SE covers policy-sampling variance ALONE and "
+              f"understates the true uncertainty by an unmeasured amount.")
+        if zero_sd:
+            print(f"    {zero_sd} pairs have SE exactly 0.0 -- every trial returned the "
+                  f"same result, which is degeneracy, not precision.")
     else:
         print("  PAIRED SE: unavailable (no pair had >=2 shared completed trials)")
     if exact:
@@ -575,20 +711,57 @@ def main() -> int:
         hi = "inf" if b["hi"] is None else f"{b['hi']:.2f}"
         print(f"{b['lo']:.2f}-{hi:>6s}{'':>5s} {b['n']:5d} {b['accuracy']:9.3f} "
               f"[{b['ci95'][0]:.3f},{b['ci95'][1]:.3f}] {str(b['beats_chance']):>8s}")
+    sd = estimate_sigma_diff(pairs)
+    scored["sigma_diff"] = sd
+    print("\n=== SIBLING-DIFFERENTIAL HEAD ERROR (the quantity that decides this) ===")
+    if sd.get("sigma_diff") is None:
+        print(f"  {sd.get('why')}")
+    else:
+        b = "UPPER BOUND (estimate fell below the noise floor)" if sd["at_floor"] else "estimate"
+        print(f"  sigma_diff {b}: {sd['sigma_diff']:.4f}  95% CI [{sd['ci95'][0]:.4f}, "
+              f"{sd['ci95'][1]:.4f}]  from n={sd['n']} pairs")
+        print(f"  var(head_gap - measured_gap) {sd['var_of_difference']:.6f} minus known "
+              f"rollout-noise var {sd['subtracted_noise_var']:.6f} "
+              f"({sd['noise_share_of_variance']:.0%} of it was noise)")
+        print("  READ AGAINST reports/required-head-error-20260815.md: <=0.015 the head is "
+              "NOT the binding constraint; >=0.035 it is and no quantity of sims fixes it.")
+        if sd["n"] < 150:
+            print(f"  *** UNDERPOWERED: {sd['n']} pairs. Simulation puts the separating "
+                  "sample size at 150; below it the two hypotheses' intervals overlap and "
+                  "this figure cannot decide between them. ***")
     o = scored.get("overall")
     if o:
         print(f"{'OVERALL':>18s} {o['n']:5d} {o['accuracy']:9.3f} "
               f"[{o['ci95'][0]:.3f},{o['ci95'][1]:.3f}]")
     print("\nA bucket whose CI includes 0.500 has NOT shown the head can rank at that gap.")
-    print("The bucket that matters is the SMALLEST one -- search lives at gaps near 0.02.")
+    # This line used to say "the bucket that matters is the SMALLEST one", printed even
+    # after that bucket had been merged away -- inviting a reader to read a merged
+    # [0.00, 0.20) row as the narrow one. It also pointed at the wrong readout entirely.
+    print("DO NOT read the verdict off this table. Sign-agreement is measured against an "
+          "ordering estimated from R rollouts, whose SE at R=64 is 0.088 against a 0.0078 "
+          "median gap, so at the gaps search actually lives at a PERFECT head scores ~0.563 "
+          "(simulated, 6,000 pairs) and a useless one ~0.492. The table is a coarse "
+          "sanity check on wide-gap pairs only. The verdict is sigma_diff above.")
     if skipped:
         print(f"skipped: {dict(skipped)}")
     if args.json:
         args.json.write_text(json.dumps(
             {"config": {k: (str(v) if isinstance(v, Path) else v)
                         for k, v in vars(args).items()},
-             "ground_truth_se": se, "paired_se_median": paired_se,
-             "scored": scored, "pairs": pairs,
+             "ground_truth_se": se,
+             "ground_truth_se_note": "gap SE = 0.5*sqrt(2/n), not the per-arm 0.5/sqrt(n)",
+             "paired_se_median": paired_se,
+             "paired_se_caveat": (
+                 "Trials of a pair share the source reset seed, so the Showdown PRNG tape "
+                 "is common and only policy sampling varies. Correlated replays, not "
+                 "independent games: this SE is policy-sampling variance alone and "
+                 "understates total uncertainty by an unmeasured amount."),
+             "scored": scored,
+             # outcomes_a/outcomes_b are 2xR entries per pair and exist only to compute the
+             # paired SE, which is retained. Dropped from the payload so the artifact stays
+             # readable rather than being mostly raw trial dumps.
+             "pairs": [{k: val for k, val in pr.items()
+                        if not k.startswith("outcomes_")} for pr in pairs],
              "terminal_pairs_excluded": terminal_pairs,
              "skipped": dict(skipped)}, indent=1, default=str))
         print(f"wrote {args.json}")

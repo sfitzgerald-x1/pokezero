@@ -226,8 +226,6 @@ class TerminalArmHandlingTest(unittest.TestCase):
         self.assertFalse(isinstance(se, float) and math.isnan(se))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class SpreadPrefixesTest(unittest.TestCase):
@@ -286,3 +284,81 @@ class BucketResolutionTest(unittest.TestCase):
         q = 1.0 / 64
         attainable = [v for v in (i * q for i in range(0, 3)) if 0.0 < v < 0.02]
         self.assertEqual(len(attainable), 1)
+
+
+class SigmaDiffEstimatorTest(unittest.TestCase):
+    """The estimator must recover a KNOWN sigma_diff from synthetic pairs.
+
+    This is the readout the verdict rests on, so it is tested against ground truth it
+    cannot see rather than against its own output.
+    """
+
+    @staticmethod
+    def _pairs(sigma_diff, R, n, seed):
+        import random as _r
+        rng = _r.Random(seed)
+        out = []
+        for _ in range(n):
+            tg = rng.expovariate(1 / 0.0113) * rng.choice([1, -1])
+            pa, pb = 0.5 + tg / 2, 0.5 - tg / 2
+            wa = sum(rng.random() < pa for _ in range(R)) / R
+            wb = sum(rng.random() < pb for _ in range(R)) / R
+            head = tg + rng.gauss(0, sigma_diff)
+            out.append({"head_gap": head, "true_gap": wa - wb, "true_a": wa, "true_b": wb,
+                        "rollouts_a": R, "rollouts_b": R})
+        return out
+
+    def test_recovers_a_large_differential_on_average(self):
+        # Averaged over seeds, not asserted on one. The per-run sd at n=400 is ~0.009, so a
+        # single-seed assertion with a tight delta is a coin flip on the RNG -- the first
+        # version of this test used seed 1, which lands 2 sd low (0.0335), and failed. A
+        # test that fails on an unlucky seed teaches nothing about the estimator.
+        import statistics as _st
+        got = [vhsp.estimate_sigma_diff(self._pairs(0.0516, 64, 400, s), n_boot=1)
+               ["sigma_diff"] for s in range(12)]
+        self.assertAlmostEqual(_st.mean(got), 0.0516, delta=0.008)
+
+    def test_a_small_differential_reads_small_on_average(self):
+        import statistics as _st
+        got = [vhsp.estimate_sigma_diff(self._pairs(0.009, 64, 400, s), n_boot=1)
+               ["sigma_diff"] for s in range(12)]
+        self.assertLess(_st.mean(got), 0.025)
+
+    def test_the_error_is_one_directional_which_is_the_load_bearing_property(self):
+        """A LOW reading is trustworthy at modest n; a HIGH reading is not.
+
+        Measured over 60 repeats at n=150: a truly-fine head (0.009) reads above the 0.025
+        threshold 27% of the time, while a truly-binding head (0.0516) reads below it 0% of
+        the time. The zero-clip biases small values upward, so the ONLY direction the
+        estimator errs in is "the head binds" -- which is the direction that would launch a
+        training programme. This test pins the safe half: a binding head must not read fine.
+        """
+        for seed in range(8):
+            got = vhsp.estimate_sigma_diff(self._pairs(0.0516, 64, 150, 500 + seed),
+                                           n_boot=1)
+            self.assertGreater(got["sigma_diff"], 0.025,
+                               f"a truly-binding head read as fine on seed {seed}")
+
+    def test_a_perfect_head_is_reported_at_or_near_the_floor(self):
+        # sigma_diff == 0 is the case the RETRACTED agreement metric scored 0.563 on, i.e.
+        # indistinguishable from a hopeless head. This estimator must not repeat that.
+        got = vhsp.estimate_sigma_diff(self._pairs(0.0, 64, 300, 5), n_boot=200)
+        self.assertLess(got["sigma_diff"], 0.020)
+
+    def test_refuses_rather_than_guesses_on_too_few_pairs(self):
+        got = vhsp.estimate_sigma_diff([], n_boot=10)
+        self.assertIsNone(got["sigma_diff"])
+        self.assertIn("CANNOT RUN", got["why"])
+
+    def test_terminal_arms_are_excluded(self):
+        ps = self._pairs(0.02, 64, 20, 6)
+        ps[0]["terminal_a"] = True
+        self.assertEqual(vhsp.estimate_sigma_diff(ps, n_boot=10)["n"], 19)
+
+    def test_reports_how_much_of_the_variance_was_noise(self):
+        got = vhsp.estimate_sigma_diff(self._pairs(0.009, 64, 200, 7), n_boot=50)
+        self.assertGreater(got["noise_share_of_variance"], 0.5)
+
+
+if __name__ == "__main__":
+    unittest.main()
