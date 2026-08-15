@@ -132,11 +132,26 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
         return {"sigma_diff": None, "n": len(usable),
                 "why": "CANNOT RUN: fewer than 2 pairs with rollouts on both arms"}
 
+    def _arm_var(outcomes, w, r):
+        """Variance of one arm's mean.
+
+        NOT the Bernoulli w(1-w)/(r-1) the first version used. A trial can score 0.5 -- a
+        draw, or a decision-round cap -- so outcomes live in {0, 0.5, 1} and the Bernoulli
+        formula OVERSTATES the variance of any arm that drew ties (a half is closer to the
+        mean than a 0/1 mix with the same average). Overstating the subtracted noise
+        understates sigma_diff, which is the direction that would wrongly clear the head.
+        The retained per-trial outcomes make the sample variance available, so use it and
+        assume nothing.
+        """
+        vals = list(outcomes.values()) if outcomes else []
+        if len(vals) >= 2:
+            m = sum(vals) / len(vals)
+            return (sum((v - m) ** 2 for v in vals) / (len(vals) - 1)) / len(vals)
+        return w * (1 - w) / (r - 1) if r > 1 else 0.0   # fallback only
+
     def noise_var(p):
-        # Unbiased per-arm variance of a mean of R Bernoulli draws, from the realized rate.
-        wa, wb = p["true_a"], p["true_b"]
-        ra, rb = p["rollouts_a"], p["rollouts_b"]
-        return wa * (1 - wa) / (ra - 1) + wb * (1 - wb) / (rb - 1)
+        return (_arm_var(p.get("outcomes_a"), p["true_a"], p["rollouts_a"])
+                + _arm_var(p.get("outcomes_b"), p["true_b"], p["rollouts_b"]))
 
     def point(sample):
         d = [q["head_gap"] - q["true_gap"] for q in sample]
@@ -281,6 +296,8 @@ def main() -> int:
     print(f"env bound to the checkpoint's schema: spec={getattr(env_spec, 'schema_version', env_spec)}",
           flush=True)
 
+    _belief_reported: set[int] = set()   # print the verification once, not once per rollout
+
     def make_env():
         """Env bound to the checkpoint on ALL FOUR axes, through the mandated entry point.
 
@@ -328,6 +345,9 @@ def main() -> int:
                 "condition would produce a confident wrong verdict.")
         # Printed, not just checked: a reader of the log must be able to tell "verified"
         # from "skipped", and only one of those two is worth staking a conclusion on.
+        if _belief_reported:
+            return env
+        _belief_reported.add(1)
         if want is None:
             print("belief set source: PINNED ON, but the checkpoint carries NO HASH and "
                   "--allow-unstamped-belief was passed. UNVERIFIED -- state this in any "
@@ -723,6 +743,14 @@ def main() -> int:
         print(f"  var(head_gap - measured_gap) {sd['var_of_difference']:.6f} minus known "
               f"rollout-noise var {sd['subtracted_noise_var']:.6f} "
               f"({sd['noise_share_of_variance']:.0%} of it was noise)")
+        print("  THIS IS AN UPPER BOUND, in two independent ways that push the SAME "
+              "direction. (1) The estimate is clipped at zero, which lifts small values. "
+              "(2) All trials of a pair share the post-branch Showdown PRNG tape, so the "
+              "variance measured here is WITHIN-tape and omits tape-to-tape variation -- "
+              "real rollout noise is larger than the term subtracted, so what is left over "
+              "and attributed to the head is too big. Both biases inflate sigma_diff, i.e. "
+              "both push toward 'the head is the problem'. A LOW reading is therefore "
+              "trustworthy; a HIGH one is a ceiling, not a measurement.")
         print("  READ AGAINST reports/required-head-error-20260815.md: <=0.015 the head is "
               "NOT the binding constraint; >=0.035 it is and no quantity of sims fixes it.")
         if sd["n"] < 150:

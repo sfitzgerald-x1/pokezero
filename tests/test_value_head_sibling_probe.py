@@ -345,6 +345,31 @@ class SigmaDiffEstimatorTest(unittest.TestCase):
         got = vhsp.estimate_sigma_diff(self._pairs(0.0, 64, 300, 5), n_boot=200)
         self.assertLess(got["sigma_diff"], 0.020)
 
+    def test_uses_the_sample_variance_when_trials_can_tie(self):
+        """Outcomes live in {0, 0.5, 1}, so the Bernoulli formula is the wrong variance.
+
+        An arm whose trials are all exactly 0.5 has ZERO variance, but w(1-w) calls it
+        0.25 -- the maximum. Over-subtracting noise understates sigma_diff, which is the
+        direction that would wrongly clear the head.
+        """
+        R = 8
+        tie = {i: 0.5 for i in range(R)}
+        pairs = [{"head_gap": 0.10, "true_gap": 0.0, "true_a": 0.5, "true_b": 0.5,
+                  "rollouts_a": R, "rollouts_b": R,
+                  "outcomes_a": dict(tie), "outcomes_b": dict(tie)} for _ in range(40)]
+        got = vhsp.estimate_sigma_diff(pairs, n_boot=20)
+        # Zero rollout noise, so the whole 0.10 offset is differential. With no spread in
+        # head_gap the variance is 0 -- what must NOT happen is a large subtracted noise
+        # term. Assert directly on it.
+        self.assertEqual(got["subtracted_noise_var"], 0.0)
+
+    def test_bernoulli_fallback_when_outcomes_absent(self):
+        R = 16
+        pairs = [{"head_gap": 0.02, "true_gap": 0.0, "true_a": 0.5, "true_b": 0.5,
+                  "rollouts_a": R, "rollouts_b": R} for _ in range(20)]
+        got = vhsp.estimate_sigma_diff(pairs, n_boot=10)
+        self.assertAlmostEqual(got["subtracted_noise_var"], 2 * 0.25 / (R - 1), places=9)
+
     def test_refuses_rather_than_guesses_on_too_few_pairs(self):
         got = vhsp.estimate_sigma_diff([], n_boot=10)
         self.assertIsNone(got["sigma_diff"])
