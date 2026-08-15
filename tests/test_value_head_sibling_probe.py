@@ -163,6 +163,33 @@ class ScorePairsTest(unittest.TestCase):
         self.assertTrue(all(b["n"] == 0 for b in out["buckets"]))
 
 
+class JsonSerialisabilityTest(unittest.TestCase):
+    """The payload must be valid JSON.
+
+    The open-ended top bucket held float("inf"), which json.dumps writes as a bare
+    `Infinity` token: jq accepts it, Node's JSON.parse rejects the whole file. Untested
+    until now, and doubly invisible because the table path renders f"{inf:.2f}" as "inf"
+    too, so even stdout looked identical. Same "test cannot see its own subject" weakness
+    the surrounding commit was written to remove.
+    """
+
+    def test_no_Infinity_or_NaN_token_reaches_the_json(self) -> None:
+        import json
+        out = vhsp.score_pairs([pair(+1.0, +0.5), pair(-0.3, -0.01)],
+                               [0.0, 0.02, 0.05, 0.10, 0.20])
+        blob = json.dumps(out)
+        self.assertNotIn("Infinity", blob)
+        self.assertNotIn("NaN", blob)
+        # allow_nan=False is the strict check: it RAISES on inf/nan rather than emitting
+        # a token, so this fails loudly if either ever creeps back in.
+        json.dumps(out, allow_nan=False)
+
+    def test_the_open_bucket_is_null_not_a_sentinel_number(self) -> None:
+        out = vhsp.score_pairs([pair(+1.0, +0.5)], [0.0, 0.2])
+        self.assertIsNone(out["buckets"][-1]["hi"],
+                          "the open-ended bucket must serialise as null")
+
+
 class TerminalArmHandlingTest(unittest.TestCase):
     """A branch that ends the battle has no successor, so the head cannot be scored on it.
 

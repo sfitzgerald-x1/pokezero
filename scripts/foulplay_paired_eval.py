@@ -241,6 +241,18 @@ def config_id_for(args: argparse.Namespace) -> str:
     #     id pools them -- and cell G's entire job is the checkpoint contrast.
     tag = checkpoint_tag(args.checkpoint, getattr(args, "checkpoint_tag", None))
     if args.arm == "raw":
+        # The raw arm is the DENOMINATOR of every paired delta, and its id carries no
+        # search config -- so it also carries no opponent fragment, and a raw cell run
+        # against a non-foul-play opponent would pool into the control silently. Both id
+        # builders agree on that shape, so no drift check catches it either. Refused at
+        # the boundary instead: unreachable in every queued campaign today (every cell
+        # with an opponent has arm=search), and this keeps it that way.
+        if args.opponent_policy_mode != "foul-play":
+            raise SystemExit(
+                f"--arm raw with --opponent-policy-mode {args.opponent_policy_mode!r} is "
+                "refused: the raw arm's cell id carries no opponent fragment, so such a "
+                "shard would pool into the paired delta's control."
+            )
         return f"raw@{tag}"
     # Attributes read directly, not through getattr: a caller whose Namespace
     # predates a knob must raise here rather than be handed the default id and

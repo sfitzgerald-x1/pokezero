@@ -1212,6 +1212,27 @@ class HeadToHeadCellIdentityTest(unittest.TestCase):
             self.assertIn(name, src,
                           f"{name} must reach the report's cid_of or the two ids drift")
 
+    def test_the_raw_arm_refuses_a_non_default_opponent(self) -> None:
+        """The raw arm is the DENOMINATOR of every paired delta.
+
+        Its id carries no search config and therefore no opponent fragment, so a raw shard
+        run against a non-foul-play opponent renders `raw@k0` and pools straight into the
+        control. Both id builders agree on that shape, so no drift check catches it, and
+        the launcher forwards --opponent-policy-mode for any cell that sets it with no arm
+        guard. Unreachable in every queued campaign today; refused so it stays that way.
+        """
+        import argparse, importlib.util as u
+        from pathlib import Path
+        sp = u.spec_from_file_location(
+            "pe", Path(__file__).resolve().parents[1] / "scripts" / "foulplay_paired_eval.py")
+        m = u.module_from_spec(sp); sp.loader.exec_module(m)
+        ns = args(arm="raw", checkpoint="/c/k0.pt", opponent_policy_mode="raw")
+        with self.assertRaises(SystemExit) as caught:
+            m.config_id_for(ns)
+        self.assertIn("raw arm", str(caught.exception))
+        # The ordinary raw arm is untouched.
+        self.assertEqual(m.config_id_for(args(arm="raw", checkpoint="/c/k0.pt")), "raw@k0")
+
     def test_the_banked_vs_foulplay_id_is_byte_identical(self) -> None:
         """Load-bearing: every banked shard must stay mergeable across this change."""
         self.assertEqual(self._f(), "d4-s512-b8-w16@c")
