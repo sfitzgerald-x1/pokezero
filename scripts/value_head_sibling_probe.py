@@ -174,6 +174,7 @@ def main() -> int:
 
     cfg = RolloutConfig(max_decision_rounds=args.max_decision_rounds)
     pairs: list[dict] = []
+    terminal_pairs: list[dict] = []
     skipped = collections.Counter()
 
     for gi in range(args.games):
@@ -238,15 +239,23 @@ def main() -> int:
                     hist, branch_terminal = _post_branch_history(br, seat, obs_hist)
                     if hist is None:
                         if branch_terminal is not None:
-                            # The branch decided the game. Ground truth is exact -- no
-                            # rollouts needed -- and the head is scored on the last
-                            # observation it actually saw, which is what it would have had.
+                            # The branch ENDED the battle, so there is no successor state
+                            # and the head cannot be asked about one. An earlier revision
+                            # scored it on the PRE-BRANCH position: for a pair where both
+                            # arms end the game that makes head_a == head_b exactly, so
+                            # head_gap == 0, which score_pairs counts as a miss -- turning
+                            # every decisive pair into a deterministic zero in the widest
+                            # bucket, for a reason that has nothing to do with the head.
+                            #
+                            # Recorded with its exact ground truth and EXCLUDED from the
+                            # ranking metric. The exclusion is a real limitation of the
+                            # measurement, not a defect: the wide-gap bucket is
+                            # under-sampled by construction, and the count is printed so a
+                            # reader can see that rather than infer a head failure.
                             rec[f"true_{label}"] = (
                                 1.0 if branch_terminal.winner == seat
                                 else (0.5 if branch_terminal.winner is None else 0.0))
-                            rec[f"rollouts_{label}"] = 0
                             rec[f"terminal_{label}"] = True
-                            rec[f"head_{label}"] = head_value(obs_hist)
                             continue
                         skipped["seat_not_requested_after_branch"] += 1
                         ok = False
@@ -306,6 +315,12 @@ def main() -> int:
             # disagree on which trials survived is marked and excluded from the paired
             # claim, because using it would quietly reintroduce the variance the design
             # exists to remove.
+            if rec.get("terminal_a") or rec.get("terminal_b"):
+                # Exact ground truth, but no head estimate for the terminal arm, so the
+                # pair cannot test the head's ORDERING. Kept in the record and counted.
+                skipped["terminal_branch_no_head_estimate"] += 1
+                terminal_pairs.append(rec)
+                continue
             fa, fb = set(rec.get("failed_a", ())), set(rec.get("failed_b", ()))
             rec["pairing_intact"] = (fa == fb)
             if not rec["pairing_intact"]:
@@ -326,18 +341,23 @@ def main() -> int:
     # Resolution from what actually RAN. Printing 0.5/sqrt(--rollouts) would overstate the
     # precision of every pair that lost a trial, and the whole point of the probe is that
     # the ground truth's own noise is the thing most likely to fool it.
-    realised = [min(p.get("rollouts_a", 0), p.get("rollouts_b", 0)) for p in pairs
-                if p.get("rollouts_a") or p.get("rollouts_b")]
+    realised = [min(p["rollouts_a"], p["rollouts_b"]) for p in pairs
+                if p.get("rollouts_a") and p.get("rollouts_b")]
     n_eff = min(realised) if realised else 0
-    se = 0.5 / math.sqrt(n_eff) if n_eff else float("nan")
-    exact = sum(1 for p in pairs if p.get("terminal_a") or p.get("terminal_b"))
+    se = (0.5 / math.sqrt(n_eff)) if n_eff else None
+    exact = len(terminal_pairs)
     print(f"\n=== sibling discrimination, {len(pairs)} pairs ===")
-    print(f"ground-truth resolution: worst-case {n_eff} rollouts/arm actually completed "
-          f"-> SE ~{se:.4f} near 0.5"
-          f"{' (paired seeds reduce this)' if args.paired_seeds else ''}")
+    if se is None:
+        print("ground-truth resolution: CANNOT RUN -- no pair completed rollouts on both "
+              "arms, so no rollout-based gap is resolvable")
+    else:
+        print(f"ground-truth resolution: worst-case {n_eff} rollouts/arm actually completed "
+              f"-> SE ~{se:.4f} near 0.5"
+              f"{' (paired seeds reduce this)' if args.paired_seeds else ''}")
     if exact:
-        print(f"  {exact} pairs had at least one arm end the battle outright -- exact "
-              f"ground truth, no rollout noise")
+        print(f"  {exact} pairs had an arm END the battle: exact ground truth, but NO head "
+              f"estimate exists for a state that does not exist, so they are excluded from "
+              f"the ranking metric. The widest bucket is under-sampled by that much.")
     print(f"{'true-gap bucket':>18s} {'n':>5s} {'accuracy':>9s} {'95% CI':>16s} {'>chance':>8s}")
     for b in scored["buckets"]:
         if not b["n"]:
@@ -358,6 +378,7 @@ def main() -> int:
             {"config": {k: (str(v) if isinstance(v, Path) else v)
                         for k, v in vars(args).items()},
              "ground_truth_se": se, "scored": scored, "pairs": pairs,
+             "terminal_pairs_excluded": terminal_pairs,
              "skipped": dict(skipped)}, indent=1, default=str))
         print(f"wrote {args.json}")
     return 0

@@ -254,6 +254,14 @@ def config_id_for(args: argparse.Namespace) -> str:
         oracle_belief=args.engine_oracle_belief,
         early_stop=args.engine_early_stop,
         early_stop_min_sims=args.engine_early_stop_min_sims,
+        # Read DIRECTLY, matching the note above: a Namespace predating these knobs must
+        # raise rather than be handed the default id. An earlier revision added the
+        # fragment to search_config_id but NOT here, the only production caller -- so the
+        # helper worked in isolation while every real shard still rendered the pooled id,
+        # and the tests were green because they called the helper directly.
+        opponent_policy_mode=args.opponent_policy_mode,
+        opponent_engine_depth=args.opponent_engine_depth,
+        opponent_engine_sims=args.opponent_engine_sims,
         depth_min=args.engine_depth_min,
         worlds_min=args.engine_worlds_min,
     )

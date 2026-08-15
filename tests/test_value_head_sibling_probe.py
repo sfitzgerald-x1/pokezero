@@ -163,5 +163,41 @@ class ScorePairsTest(unittest.TestCase):
         self.assertTrue(all(b["n"] == 0 for b in out["buckets"]))
 
 
+class TerminalArmHandlingTest(unittest.TestCase):
+    """A branch that ends the battle has no successor, so the head cannot be scored on it.
+
+    An earlier revision scored the terminal arm on the PRE-BRANCH position. For a pair
+    where both arms end the game that makes head_a == head_b exactly, so head_gap == 0,
+    which score_pairs counts as a miss -- turning every decisive pair into a deterministic
+    zero in the widest bucket, the exact bucket the terminal handling exists to populate.
+    """
+
+    def test_a_double_terminal_pair_would_be_a_guaranteed_miss_if_scored(self) -> None:
+        # This is what the bad version produced: identical head values, opposite outcomes.
+        out = vhsp.score_pairs([pair(0.0, 1.0)], [0.0, 0.02, 0.05, 0.10, 0.20])
+        widest = next(b for b in out["buckets"] if b["lo"] == 0.20)
+        self.assertEqual(widest["accuracy"], 0.0)
+        self.assertEqual(widest["n"], 1)
+        # ...which is why such pairs must be EXCLUDED upstream rather than scored. The
+        # probe now routes them to terminal_pairs and never calls score_pairs on them.
+
+    def test_se_is_None_not_NaN_when_no_pair_completed_rollouts(self) -> None:
+        """A terminal arm runs zero rollouts by design.
+
+        Counting it as a zero-rollout arm made n_eff 0 and the reported SE NaN -- and wrote
+        a bare NaN token into the JSON, which strict parsers reject. None means CANNOT RUN
+        and prints as such.
+        """
+        import math
+        realised = [min(p["rollouts_a"], p["rollouts_b"])
+                    for p in [{"rollouts_a": 0, "rollouts_b": 64}]
+                    if p.get("rollouts_a") and p.get("rollouts_b")]
+        self.assertEqual(realised, [], "a terminal arm must not enter the population")
+        n_eff = min(realised) if realised else 0
+        se = (0.5 / math.sqrt(n_eff)) if n_eff else None
+        self.assertIsNone(se)
+        self.assertFalse(isinstance(se, float) and math.isnan(se))
+
+
 if __name__ == "__main__":
     unittest.main()

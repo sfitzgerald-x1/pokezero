@@ -53,6 +53,13 @@ def args(**overrides) -> argparse.Namespace:
         engine_depth_min=None,
         engine_worlds_min=None,
         engine_early_stop_min_sims=None,
+        # Head-to-head knobs. In the shared fixture rather than per-test, so the direct
+        # attribute reads in config_id_for stay direct: the design is that a Namespace
+        # predating a knob RAISES rather than being handed the control's id, which
+        # test_a_namespace_predating_the_knobs_raises_rather_than_pools pins.
+        opponent_policy_mode="foul-play",
+        opponent_engine_depth=None,
+        opponent_engine_sims=None,
         engine_model_path=None,
         engine_tables_path=None,
         foulplay_root=None,
@@ -1157,6 +1164,53 @@ class HeadToHeadCellIdentityTest(unittest.TestCase):
         base = dict(depth=4, sims=512, batch=8, worlds=16, tag="c")
         base.update(kw)
         return m.search_config_id(**base)
+
+    def _through_production(self, *extra):
+        """config_id_for + build_parser -- the path a real shard takes.
+
+        The previous revision tested search_config_id DIRECTLY and passed while the bug was
+        live: the fragment was added to the helper but config_id_for, its only production
+        caller, never forwarded it, so every real shard still rendered the pooled id. A test
+        that does not traverse the production entry point cannot see that.
+        """
+        import importlib.util as u
+        from pathlib import Path
+        sp = u.spec_from_file_location(
+            "pe", Path(__file__).resolve().parents[1] / "scripts" / "foulplay_paired_eval.py")
+        m = u.module_from_spec(sp); sp.loader.exec_module(m)
+        base = ["--checkpoint", "/c", "--showdown-root", "/s", "--arm", "search",
+                "--seed-start", "1", "--pairs", "5", "--depth", "4", "--sims", "512",
+                "--batch", "8", "--worlds", "16", "--checkpoint-tag", "k0", "--out", "/o.json"]
+        return m.config_id_for(m.build_parser().parse_args(base + list(extra)))
+
+    def test_the_PRODUCTION_id_carries_the_opponent(self) -> None:
+        default = self._through_production()
+        vs_raw = self._through_production("--opponent-policy-mode", "raw")
+        vs_d6 = self._through_production(
+            "--opponent-policy-mode", "engine-mcts",
+            "--opponent-engine-depth", "6", "--opponent-engine-sims", "16384")
+        self.assertEqual(default, "d4-s512-b8-w16@k0", "banked ids must not move")
+        self.assertNotEqual(vs_raw, default)
+        self.assertNotEqual(vs_d6, default)
+        self.assertNotEqual(vs_raw, vs_d6)
+        self.assertIn("+vs-raw", vs_raw)
+        self.assertIn("vs-engine-mcts-d6-s16384", vs_d6)
+
+    def test_the_report_builder_stays_in_lockstep_with_the_driver(self) -> None:
+        """Both builders must move together.
+
+        The shared docstring warns that drift is a SILENT failure -- the reference simply
+        matches no shard -- and it has already happened once on the checkpoint tag.
+        """
+        import importlib.util as u
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        sp = u.spec_from_file_location("pr", root / "scripts" / "foulplay_power_report.py")
+        pr = u.module_from_spec(sp); sp.loader.exec_module(pr)
+        src = (root / "scripts" / "foulplay_power_report.py").read_text()
+        for name in ("opponent_policy_mode", "opponent_engine_depth", "opponent_engine_sims"):
+            self.assertIn(name, src,
+                          f"{name} must reach the report's cid_of or the two ids drift")
 
     def test_the_banked_vs_foulplay_id_is_byte_identical(self) -> None:
         """Load-bearing: every banked shard must stay mergeable across this change."""

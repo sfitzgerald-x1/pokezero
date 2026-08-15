@@ -375,6 +375,13 @@ def main(argv=None) -> int:
                 fpu_reduction=cell.get("fpu_reduction"),
                 c_puct=cell.get("c_puct"),
                 oracle_belief=bool(cell.get("oracle_belief")),
+                # Lockstep with the driver's builder. The shared docstring warns that the
+                # two drifting apart is a SILENT failure -- the reference matches no shard
+                # -- so the opponent fragment has to land in BOTH or fixing one creates
+                # exactly that drift.
+                opponent_policy_mode=cell.get("opponent_policy_mode") or "foul-play",
+                opponent_engine_depth=cell.get("opponent_engine_depth"),
+                opponent_engine_sims=cell.get("opponent_engine_sims"),
                 # Kept in lockstep with the driver's builder deliberately. The
                 # shared docstring warns that these two drifting apart is a
                 # SILENT failure -- the reference simply matches no shard -- and
