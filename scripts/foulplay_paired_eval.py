@@ -251,6 +251,10 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
         "--policy-mode", "raw" if args.arm == "raw" else "engine-mcts",
         "--summary-out", str(seat_summary_path(args, seat)),
     ]
+    # HEAD-TO-HEAD. Forwarded only when it is not the default, so every existing
+    # campaign renders a byte-identical argv and no banked comparison shifts.
+    if getattr(args, "opponent_policy_mode", "foul-play") != "foul-play":
+        argv += ["--opponent-policy-mode", str(args.opponent_policy_mode)]
     # The bridge defaults these to a REPO-RELATIVE checkout
     # (DEFAULT_FOULPLAY_ROOT = <repo>/third_party/foul-play) and there is no
     # environment fallback, so a deployment that ships foul-play anywhere else
@@ -451,6 +455,15 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--showdown-root", required=True)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--arm", choices=("search", "raw"), required=True)
+    ap.add_argument(
+        "--opponent-policy-mode",
+        choices=("foul-play", "raw", "root-puct", "engine-mcts"),
+        default="foul-play",
+        help="Who sits in the OPPONENT seat. Default foul-play (unchanged). Anything else "
+             "runs a second policy from the SAME checkpoint in that mode, so "
+             "--arm search --opponent-policy-mode raw measures what the search buys over "
+             "the model it searches with, directly rather than through a third opponent.",
+    )
     ap.add_argument("--seed-start", type=int, required=True,
                     help="first BATTLE seed of this shard's band")
     ap.add_argument("--pairs", type=int, required=True,
