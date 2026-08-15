@@ -526,23 +526,44 @@ class MeasuredErrorRatesTest(unittest.TestCase):
     been retracted in the analysis it cited, which measured only n=150 and n=300.
     """
 
-    def test_every_adjacent_pair_is_monotone_in_coupling(self):
-        """ALL adjacent cells, not three samples.
+    # SE of a single cell at 600 repeats is ~1.8 points near p=0.25, so the SE of the
+    # DIFFERENCE between two cells is ~2.5 points. Adjacent cells are separated by less than
+    # that in places, which means strict adjacent monotonicity is NOT a measured property of
+    # the table -- it is a coincidence of one seed stream.
+    ADJACENT_TOLERANCE = 0.05          # ~2 SE of a difference
 
-        The first published table sampled pvr 1.00/0.59/0.00 at n=150 only, and the one
-        non-monotone cell -- (0.88, 300) at 0.190 against (1.00, 300)'s 0.180 -- sat
-        precisely where nothing looked. The commit message claimed monotonicity anyway.
+    def test_adjacent_cells_are_monotone_WITHIN_SAMPLING_ERROR(self):
+        """Adjacent monotonicity is a smoothing assumption, not an invariant.
+
+        An earlier version asserted STRICT monotonicity over every adjacent pair. An
+        independent 600-repeat replication of this same table came out non-monotone at
+        (1.00, 150)=0.250 vs (0.88, 150)=0.260 -- within noise, but enough to fail a strict
+        test. That would have put the next person who re-measures in the position of either
+        failing CI or nudging cells to satisfy it: a test that pins Monte Carlo noise as an
+        invariant manufactures exactly the pressure to fabricate constants this file exists
+        to avoid. Tolerance is 2 SE of a difference; the strict claim is made only where the
+        separation is real (below).
         """
         for n in (150, 300):
             rows = sorted([r for r in vhsp.MEASURED_ERROR_RATES if r[1] == n],
                           key=lambda r: -r[0])
             for (pvr_hi, _, fb_hi, ff_hi), (pvr_lo, _, fb_lo, ff_lo) in zip(rows, rows[1:]):
                 self.assertGreaterEqual(
-                    fb_hi, fb_lo,
-                    f"false-binds rises as coupling improves: pvr {pvr_hi}->{pvr_lo} at n={n}")
+                    fb_hi, fb_lo - self.ADJACENT_TOLERANCE,
+                    f"false-binds rises beyond sampling error as coupling improves: "
+                    f"pvr {pvr_hi}->{pvr_lo} at n={n}")
                 self.assertGreaterEqual(
-                    ff_hi, ff_lo,
-                    f"false-fine rises as coupling improves: pvr {pvr_hi}->{pvr_lo} at n={n}")
+                    ff_hi, ff_lo - self.ADJACENT_TOLERANCE,
+                    f"false-fine rises beyond sampling error: pvr {pvr_hi}->{pvr_lo} at n={n}")
+
+    def test_well_separated_couplings_are_STRICTLY_ordered(self):
+        """Where the effect is many SE wide, assert it strictly -- that part IS measured."""
+        for n in (150, 300):
+            cells = {r[0]: r for r in vhsp.MEASURED_ERROR_RATES if r[1] == n}
+            self.assertGreater(cells[1.00][2], cells[0.37][2] + 0.10)
+            self.assertGreater(cells[0.75][2], cells[0.00][2] + 0.10)
+            self.assertEqual(cells[0.00][2], 0.0)
+            self.assertEqual(cells[0.00][3], 0.0)
 
     def test_every_coupling_level_improves_with_more_pairs(self):
         by_pvr = {}
@@ -701,6 +722,34 @@ class VerdictLinesTest(unittest.TestCase):
                         self.assertFalse(refuses and affirms,
                                          f"contradictory advisory for at_floor={at_floor} "
                                          f"n={n} sigma={sigma} rates={rates}: {out}")
+
+
+class PrintedConstantsMatchTheCodeTest(unittest.TestCase):
+    """The printed band must be the band the code branches on.
+
+    Nothing tied the HOW TO READ text to VERDICT_LOW/VERDICT_HIGH, so the two could drift
+    apart silently -- and a printed band that disagrees with the branch is how the previous
+    round's contradiction reached a reader in the first place.
+    """
+
+    def test_the_thresholds_are_not_hardcoded_in_the_printed_text(self):
+        src = (Path(__file__).resolve().parents[1] / "scripts"
+               / "value_head_sibling_probe.py").read_text()
+        printed = [ln for ln in src.splitlines() if "HOW TO READ: sigma_diff" in ln]
+        self.assertEqual(len(printed), 1)
+        self.assertIn("{VERDICT_LOW}", printed[0])
+
+    def test_the_band_constants_bracket_the_rate_boundary(self):
+        # 0.025 is the midpoint the error rates were measured at; it must stay inside.
+        self.assertLess(vhsp.VERDICT_LOW, 0.025)
+        self.assertGreater(vhsp.VERDICT_HIGH, 0.025)
+        self.assertAlmostEqual((vhsp.VERDICT_LOW + vhsp.VERDICT_HIGH) / 2, 0.025, places=12)
+
+    def test_calibration_scale_is_none_for_a_method_that_ignores_it(self):
+        # Guards the field itself: mutating it back to _vct_scale previously left all green.
+        src = (Path(__file__).resolve().parents[1] / "scripts"
+               / "value_head_sibling_probe.py").read_text()
+        self.assertIn('_vct_scale if _vct_method == "affine" else None', src)
 
 
 if __name__ == "__main__":

@@ -117,7 +117,17 @@ MEASURED_ERROR_RATES = (
     # RISE as coupling improved. That was Monte Carlo noise in a tail estimate, confirmed by
     # an independent replication, but the table had been committed with a claim of
     # monotonicity that no test checked at the failing cell. At 600 repeats both axes are
-    # monotone and the test below verifies every adjacent pair rather than three samples.
+    # monotone. But monotonicity is a SMOOTHING ASSUMPTION, not a measured invariant: at 600
+    # repeats a cell near p=0.25 has SE ~1.8 points, so a DIFFERENCE of two cells has SE ~2.5
+    # points, and adjacent cells are separated by less than that in places. An independent
+    # replication of this table came out non-monotone at (1.00, 150) vs (0.88, 150) -- within
+    # noise. The test therefore allows 2 SE of slack on adjacent pairs and asserts strict
+    # ordering only between well-separated ones.
+    #
+    # Two cells sit within noise of the ff >= 0.02 gate that chooses "well supported" over
+    # "suggestive, not decisive" -- (0.75, 150) and (0.37, 300). At those couplings, which of
+    # the two phrasings prints is decided by sampling error, not by the run. Neither
+    # phrasing changes the verdict itself.
     (1.00, 150, 0.275, 0.052),
     (1.00, 300, 0.212, 0.012),
     (0.88, 150, 0.232, 0.033),
@@ -1067,13 +1077,17 @@ def main() -> int:
               "unmeasured in BOTH directions.")
         # Thresholds inlined, not cited by path: the analysis lives in a gitignored private
         # tree, so a public-repo reader cannot resolve a reference to it.
-        print("  HOW TO READ: sigma_diff <= 0.015 -> the head is NOT the binding "
-              "constraint. >= 0.035 -> it is, and no quantity of sims fixes it (more sims "
-              "reduce variance; this is bias). Between the two -> INDETERMINATE, which is "
-              "a real answer and not a rounding problem. The error rates quoted below use "
-              "a single 0.025 boundary -- the midpoint of that band -- because a "
-              "false-positive rate needs one line; they are therefore the rates for the "
-              "most permissive reading, and the band edges are strictly better.")
+        # Interpolated from the constants, never retyped. Hardcoding them here is the drift
+        # the extraction of verdict_lines() was for: the printed band and the band the code
+        # branches on must be the same two numbers by construction.
+        print(f"  HOW TO READ: sigma_diff <= {VERDICT_LOW} -> the head is NOT the binding "
+              f"constraint. >= {VERDICT_HIGH} -> it is, and no quantity of sims fixes it "
+              f"(more sims reduce variance; this is bias). Between the two -> INDETERMINATE, "
+              f"which is a real answer and not a rounding problem. The error rates quoted "
+              f"below use a single {(VERDICT_LOW + VERDICT_HIGH) / 2:g} boundary -- the "
+              f"midpoint of that band -- because a false-positive rate needs one line; they "
+              f"are therefore the rates for the most permissive reading, and the band edges "
+              f"are strictly better.")
         for line in verdict_lines(sd, rates):
             print(line)
     o = scored.get("overall")
