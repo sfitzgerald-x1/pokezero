@@ -676,9 +676,17 @@ def main() -> int:
             rec["head_gap"] = (rec["head_a"] - rec["head_b"]) / 2.0
             rec["true_gap"] = rec["true_a"] - rec["true_b"]
             pairs.append(rec)
-            print(f"  prefix {prefix}: head {rec['head_a']:+.4f}/{rec['head_b']:+.4f} "
-                  f"(gap {rec['head_gap']:+.4f})  true {rec['true_a']:.3f}/{rec['true_b']:.3f} "
-                  f"(gap {rec['true_gap']:+.3f})", flush=True)
+            # Per-arm values printed in WIN-PROBABILITY units, the same units as the gap
+            # beside them and as the rollout truth. Printing the raw +/-1 head values next
+            # to a halved gap made the line fail its own arithmetic -- a reader subtracting
+            # 0.1035 - 0.0753 got 0.0282 against a printed gap of 0.0141 and would
+            # reasonably conclude one of the two was wrong.
+            pa_ = (rec["head_a"] + 1.0) / 2.0
+            pb_ = (rec["head_b"] + 1.0) / 2.0
+            print(f"  prefix {prefix}: head p {pa_:.4f}/{pb_:.4f} "
+                  f"(gap {rec['head_gap']:+.4f})  true {rec['true_a']:.3f}/"
+                  f"{rec['true_b']:.3f} (gap {rec['true_gap']:+.3f})  "
+                  f"[head raw +/-1: {rec['head_a']:+.4f}/{rec['head_b']:+.4f}]", flush=True)
 
     if not pairs:
         print(f"CANNOT RUN: no scorable pairs. skipped={dict(skipped)}")
