@@ -1136,5 +1136,51 @@ class NoDuplicateDefinitionsTest(unittest.TestCase):
                          "stale round-4 rationale is back in the live guard")
 
 
+
+
+class HeadToHeadCellIdentityTest(unittest.TestCase):
+    """The opponent must be part of the cell identity.
+
+    Demonstrated in review: without it, a banked vs-foul-play shard and a head-to-head
+    vs-raw shard both render `d4-s512-b8-w16@c`, and foulplay_power_report.collect_rows
+    merges them into ONE pooled win rate with no warning. Two experiments against different
+    opponents, at different scales, with different nulls, become a single number. If their
+    seed bands overlap it is worse -- the conflicting-scores check hard-exits the report.
+    """
+
+    def _f(self, **kw):
+        import importlib.util as u
+        from pathlib import Path
+        sp = u.spec_from_file_location(
+            "pe", Path(__file__).resolve().parents[1] / "scripts" / "foulplay_paired_eval.py")
+        m = u.module_from_spec(sp); sp.loader.exec_module(m)
+        base = dict(depth=4, sims=512, batch=8, worlds=16, tag="c")
+        base.update(kw)
+        return m.search_config_id(**base)
+
+    def test_the_banked_vs_foulplay_id_is_byte_identical(self) -> None:
+        """Load-bearing: every banked shard must stay mergeable across this change."""
+        self.assertEqual(self._f(), "d4-s512-b8-w16@c")
+        self.assertEqual(self._f(opponent_policy_mode="foul-play"), "d4-s512-b8-w16@c")
+
+    def test_a_head_to_head_cell_gets_a_distinct_id(self) -> None:
+        self.assertNotEqual(self._f(opponent_policy_mode="raw"), self._f())
+        self.assertIn("+vs-raw", self._f(opponent_policy_mode="raw"))
+
+    def test_two_budgets_against_each_other_carry_BOTH_budgets(self) -> None:
+        cid = self._f(depth=3, sims=2048, batch=16, worlds=1,
+                      opponent_policy_mode="engine-mcts",
+                      opponent_engine_depth=6, opponent_engine_sims=16384)
+        self.assertIn("d3-s2048", cid)
+        self.assertIn("vs-engine-mcts-d6-s16384", cid)
+
+    def test_cells_differing_only_in_the_opponent_budget_do_not_pool(self) -> None:
+        a = self._f(opponent_policy_mode="engine-mcts", opponent_engine_depth=6,
+                    opponent_engine_sims=16384)
+        b = self._f(opponent_policy_mode="engine-mcts", opponent_engine_depth=2,
+                    opponent_engine_sims=1024)
+        self.assertNotEqual(a, b, "different opponents are different experiments")
+
+
 if __name__ == "__main__":
     unittest.main()

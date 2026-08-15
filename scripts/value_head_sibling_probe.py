@@ -152,7 +152,7 @@ def main() -> int:
     )
     from pokezero.replay_branching import replay_trajectory_branch, replay_trajectory_branch_rollout
     from pokezero.rollout import RolloutConfig, continue_rollout_from_current_state
-    from pokezero.search import terminal_value_for_player
+    from pokezero.search import player_observation_history, terminal_value_for_player
 
     buckets = [float(x) for x in args.buckets.split(",")]
     print(f"loading checkpoint {args.checkpoint}", flush=True)
@@ -204,10 +204,18 @@ def main() -> int:
             # a search, so the probe measures the head on the pair a searcher would be
             # deciding between without needing a search in the loop.
             try:
-                obs_hist = _history_for_seat(traj, seat, prefix)
+                # The SAME builder search uses (search.py:3846, called with
+                # through_decision_round=prefix at search.py:2021). An earlier revision
+                # filtered turn_index < prefix, deleting the observation AT the decision.
+                # The head consumes a sliding window, so that is a non-contiguous input it
+                # was never trained on -- and because both arms shared the hole, nothing
+                # would have looked wrong. It would have produced a confident
+                # "the head cannot rank siblings" from an input search never produces.
+                obs_hist = player_observation_history(
+                    traj, player_id=seat, through_decision_round=prefix)
                 arm_a, arm_b, opp_action = _top_two_and_opponent(
                     traj, seat, prefix, model, result, args.device,
-                    evaluate_transformer_action_priors)
+                    evaluate_transformer_action_priors, obs_hist)
             except Exception as exc:                      # noqa: BLE001
                 skipped[f"arm_selection:{type(exc).__name__}"] += 1
                 continue
@@ -227,8 +235,23 @@ def main() -> int:
                     br = replay_trajectory_branch(
                         benv, traj, prefix_decision_round_count=prefix,
                         branch_actions=branch_actions, check_prefix_observations=False)
-                    rec[f"head_{label}"] = head_value(
-                        _post_branch_history(br, seat, obs_hist))
+                    hist, branch_terminal = _post_branch_history(br, seat, obs_hist)
+                    if hist is None:
+                        if branch_terminal is not None:
+                            # The branch decided the game. Ground truth is exact -- no
+                            # rollouts needed -- and the head is scored on the last
+                            # observation it actually saw, which is what it would have had.
+                            rec[f"true_{label}"] = (
+                                1.0 if branch_terminal.winner == seat
+                                else (0.5 if branch_terminal.winner is None else 0.0))
+                            rec[f"rollouts_{label}"] = 0
+                            rec[f"terminal_{label}"] = True
+                            rec[f"head_{label}"] = head_value(obs_hist)
+                            continue
+                        skipped["seat_not_requested_after_branch"] += 1
+                        ok = False
+                        break
+                    rec[f"head_{label}"] = head_value(hist)
                 except Exception as exc:                  # noqa: BLE001
                     skipped[f"branch:{type(exc).__name__}"] += 1
                     ok = False
@@ -236,6 +259,7 @@ def main() -> int:
                 # GROUND TRUTH: N rollouts to terminal from that same successor.
                 wins = 0.0
                 done = 0
+                failed_trials: set[int] = set()
                 for trial in range(args.rollouts):
                     rseed = rollout_seed(seed, f"probe-{seed}", prefix,
                                          0 if label == "a" else 1, trial,
@@ -249,6 +273,12 @@ def main() -> int:
                             policies={"p1": make_policy(), "p2": make_policy()},
                             rollout_config=cfg, check_prefix_observations=False)
                     except Exception:                     # noqa: BLE001
+                        # Counted, never silent. A dropped trial also BREAKS the paired-seed
+                        # design: if arm A's trial 7 fails and arm B's does not, the two
+                        # arms no longer share their common random numbers and the variance
+                        # cancellation the whole design rests on is gone for that pair.
+                        failed_trials.add(trial)
+                        skipped["rollout_failed"] += 1
                         continue
                     term = rr.continuation.terminal
                     # A capped game has no winner. Counted as a half, and counted
@@ -266,7 +296,20 @@ def main() -> int:
                     break
                 rec[f"true_{label}"] = wins / done
                 rec[f"rollouts_{label}"] = done
+                rec[f"failed_{label}"] = sorted(failed_trials)
             if not ok:
+                continue
+            # PAIRING RECONCILIATION. Common random numbers only cancel variance if the two
+            # arms ran the SAME trials. If either arm lost trials, the shared component is
+            # gone for the trials the other kept, so the pair's true_gap is no longer a
+            # paired estimate. Recorded rather than silently accepted; a pair whose arms
+            # disagree on which trials survived is marked and excluded from the paired
+            # claim, because using it would quietly reintroduce the variance the design
+            # exists to remove.
+            fa, fb = set(rec.get("failed_a", ())), set(rec.get("failed_b", ()))
+            rec["pairing_intact"] = (fa == fb)
+            if not rec["pairing_intact"]:
+                skipped["pairing_broken_by_failed_trials"] += 1
                 continue
             rec["head_gap"] = rec["head_a"] - rec["head_b"]
             rec["true_gap"] = rec["true_a"] - rec["true_b"]
@@ -280,10 +323,21 @@ def main() -> int:
         return 2
 
     scored = score_pairs(pairs, buckets)
-    se = 0.5 / math.sqrt(args.rollouts)
+    # Resolution from what actually RAN. Printing 0.5/sqrt(--rollouts) would overstate the
+    # precision of every pair that lost a trial, and the whole point of the probe is that
+    # the ground truth's own noise is the thing most likely to fool it.
+    realised = [min(p.get("rollouts_a", 0), p.get("rollouts_b", 0)) for p in pairs
+                if p.get("rollouts_a") or p.get("rollouts_b")]
+    n_eff = min(realised) if realised else 0
+    se = 0.5 / math.sqrt(n_eff) if n_eff else float("nan")
+    exact = sum(1 for p in pairs if p.get("terminal_a") or p.get("terminal_b"))
     print(f"\n=== sibling discrimination, {len(pairs)} pairs ===")
-    print(f"ground-truth resolution: {args.rollouts} rollouts/arm -> SE ~{se:.4f} near 0.5"
+    print(f"ground-truth resolution: worst-case {n_eff} rollouts/arm actually completed "
+          f"-> SE ~{se:.4f} near 0.5"
           f"{' (paired seeds reduce this)' if args.paired_seeds else ''}")
+    if exact:
+        print(f"  {exact} pairs had at least one arm end the battle outright -- exact "
+              f"ground truth, no rollout noise")
     print(f"{'true-gap bucket':>18s} {'n':>5s} {'accuracy':>9s} {'95% CI':>16s} {'>chance':>8s}")
     for b in scored["buckets"]:
         if not b["n"]:
@@ -309,12 +363,6 @@ def main() -> int:
     return 0
 
 
-def _history_for_seat(traj, seat, prefix):
-    """Observation history for `seat` through the first `prefix` decision rounds."""
-    return tuple(step.observation for step in traj.steps
-                 if step.player_id == seat and step.turn_index < prefix)
-
-
 def _post_branch_history(branch_result, seat, prefix_history):
     """Prefix history plus the observation at the branched successor.
 
@@ -325,15 +373,23 @@ def _post_branch_history(branch_result, seat, prefix_history):
     arms would then have produced identical values and every pair would have tied.
     """
     step_result = getattr(branch_result, "step_result", None)
+    terminal = getattr(step_result, "terminal", None)
     obs = dict(getattr(step_result, "observations", {}) or {})
     nxt = obs.get(seat)
     if nxt is None:
-        raise LookupError(f"branch produced no observation for {seat}")
-    return tuple(prefix_history) + (nxt,)
+        # Two legitimate reasons the seat has no observation: the branch ENDED the battle
+        # (LocalShowdownEnv.step returns observations only for next_requested, and nothing
+        # on terminal), or the seat is simply not requested next. A terminal branch is the
+        # most informative pair in the sample -- arm A a winning KO against arm B a whiff
+        # is |true_gap| ~ 1.0 -- so discarding it would systematically restrict the sample
+        # to non-decisive positions and empty the wide-gap bucket for a reason that has
+        # nothing to do with the head. Signalled, not raised.
+        return None, terminal
+    return tuple(prefix_history) + (nxt,), terminal
 
 
 def _top_two_and_opponent(traj, seat, prefix, model, result, device,
-                          evaluate_transformer_action_priors):
+                          evaluate_transformer_action_priors, history):
     """The two arms to compare, plus the opponent's reply to hold fixed.
 
     The opponent's action is FIXED across the two arms on purpose. This is a
@@ -349,8 +405,13 @@ def _top_two_and_opponent(traj, seat, prefix, model, result, device,
     legal = [i for i, ok in enumerate(mask) if ok]
     if len(legal) < 2:
         return None, None, 0
+    # The FULL seat history, not a single observation. TransformerSoftmaxPolicy tensorises
+    # history[-window_size:] (neural_policy.py:1725-1741), so a length-1 call returns a
+    # different prior vector and the "top two" would not be the pair the model would
+    # actually be deciding between -- worst exactly at the mid-game positions this probe
+    # deliberately samples, where the history is longest.
     priors = evaluate_transformer_action_priors(
-        model=model, result=result, observations=(step.observation,), device=device)
+        model=model, result=result, observations=tuple(history), device=device)
     ranked = sorted(legal, key=lambda i: -priors[i])
     opp = "p2" if seat == "p1" else "p1"
     ostep = next((s for s in traj.steps

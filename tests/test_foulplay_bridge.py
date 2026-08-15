@@ -3172,6 +3172,45 @@ class HeadToHeadOpponentTest(unittest.TestCase):
             self._cfg(policy_mode="engine-mcts", opponent_policy_mode="raw",
                       opponent_engine_depth=6, **engine)
 
+    def test_oracle_belief_with_an_engine_opponent_is_refused(self) -> None:
+        """The oracle override is installed for the pokezero seat only.
+
+        _install_oracle_belief_override runs inside the pokezero-seat branch, so an
+        engine-mcts opponent would search SAMPLED beliefs while the shard echoes
+        oracle_belief: true for the whole cell. That is a false witness on the only record,
+        and the run would silently be oracle-vs-sampled on top of whatever it meant to
+        compare. Refused until the override is installed for both seats.
+        """
+        engine = dict(engine_model_path=Path("/tmp/m.pt"), engine_tables_path=Path("/tmp/t.json"))
+        with self.assertRaises(ValueError) as caught:
+            self._cfg(policy_mode="engine-mcts", engine_oracle_belief=True,
+                      opponent_policy_mode="engine-mcts", opponent_engine_depth=6, **engine)
+        self.assertIn("oracle", str(caught.exception).lower())
+        # Still allowed where the override does apply, and where there is no engine opponent.
+        self._cfg(policy_mode="engine-mcts", engine_oracle_belief=True, **engine)
+        self._cfg(policy_mode="engine-mcts", opponent_policy_mode="raw", **engine)
+
+    def test_the_opponent_seats_search_health_is_recorded_separately(self) -> None:
+        """A budget comparison whose opponent silently fell back would read as a tie.
+
+        Every engine health aggregate is derived from state.decisions, which is gated on
+        the pokezero seat, so a d6 opponent falling back on most decisions would leave the
+        shard reporting fallback_rate 0.0 -- a figure describing only the OTHER seat -- and
+        the campaign would conclude the cheap config matches the expensive one. This is the
+        already-observed failure shape: a None public state once made engine-MCTS play
+        uniform-legal while reporting no error (0/20 against raw's 10/20).
+        """
+        from pokezero.foulplay_bridge import ControlledFoulPlayGameResult, _ControlledBattleState
+        import dataclasses
+        fields = {f.name for f in dataclasses.fields(ControlledFoulPlayGameResult)}
+        for name in ("opponent_engine_mcts_decisions", "opponent_engine_mcts_fallbacks",
+                     "opponent_engine_mcts_fallback_reasons"):
+            self.assertIn(name, fields, f"{name} must reach the game result")
+        state_fields = {f.name for f in dataclasses.fields(_ControlledBattleState)}
+        self.assertIn("opponent_decisions", state_fields)
+        # The pokezero-seat aggregate keeps its own name, so existing readers are unchanged.
+        self.assertIn("engine_mcts_decisions", fields)
+
     def test_room_lines_are_a_no_op_only_when_explicitly_allowed(self) -> None:
         """With no foul-play client, a room-line send must not abort the battle.
 

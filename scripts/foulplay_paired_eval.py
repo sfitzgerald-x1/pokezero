@@ -131,6 +131,9 @@ def search_config_id(
     early_stop_min_sims: int | None = None,
     depth_min: int | None = None,
     worlds_min: int | None = None,
+    opponent_policy_mode: str = "foul-play",
+    opponent_engine_depth: int | None = None,
+    opponent_engine_sims: int | None = None,
 ) -> str:
     """The search-arm cell identity, over primitives rather than a Namespace.
 
@@ -146,6 +149,23 @@ def search_config_id(
     depth_label = f"{depth}" if depth_min is None or int(depth_min) >= int(depth) else f"{int(depth_min)}-{depth}"
     worlds_label = f"{worlds}" if worlds_min is None or int(worlds_min) >= int(worlds) else f"{int(worlds_min)}-{worlds}"
     base = f"d{depth_label}-s{sims}-b{batch}-w{worlds_label}"
+    # WHO PLAYED. The strongest possible cell difference: a head-to-head cell shares no
+    # comparison basis with a vs-foul-play cell -- different opponent, different scale,
+    # different null. Without this fragment both render the same id, and
+    # foulplay_power_report.collect_rows merges them into ONE pooled win rate with no
+    # warning (demonstrated in review: a banked vs-foul-play shard and a vs-raw shard at
+    # d4-s512-b8-w16 pooled to a single 0.75). If their seed bands overlap it is worse --
+    # the conflicting-scores check hard-exits the whole report.
+    #
+    # Omitted at the default, so every banked vs-foul-play shard keeps byte-for-byte the
+    # id it already has and stays mergeable across this change.
+    if opponent_policy_mode != "foul-play":
+        opp = f"+vs-{opponent_policy_mode}"
+        if opponent_engine_depth is not None or opponent_engine_sims is not None:
+            od = opponent_engine_depth if opponent_engine_depth is not None else depth
+            os_ = opponent_engine_sims if opponent_engine_sims is not None else sims
+            opp += f"-d{od}-s{os_}"
+        base += opp
     # Each of these changes search SEMANTICS, so each is part of the cell
     # identity: two cells differing only by one of them must not merge, or an
     # experimental arm is pooled into its own control.
@@ -725,6 +745,13 @@ def main(argv=None) -> int:
         # `policy_stats.override_measured_decisions` would then be wrong by
         # exactly the telemetry-off share, silently.
         "override_telemetry": bool(args.engine_override_telemetry),
+        # WHO PLAYED, witnessed in the body as well as keyed into config_id. The id keeps
+        # the cells apart; this says what the cell actually was, which is what a reader of
+        # a single shard needs. Both, because the id can be recomputed wrongly and the
+        # witness cannot.
+        "opponent_policy_mode": getattr(args, "opponent_policy_mode", "foul-play"),
+        "opponent_engine_depth": getattr(args, "opponent_engine_depth", None),
+        "opponent_engine_sims": getattr(args, "opponent_engine_sims", None),
         # In config_id AND here, same reason c_puct is: arm identity witnessed
         # from the shard body, never from a job label.
         "oracle_belief": bool(args.engine_oracle_belief),

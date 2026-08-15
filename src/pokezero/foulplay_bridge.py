@@ -675,6 +675,18 @@ class ControlledFoulPlayConfig:
                     f"{_axis} requires opponent_policy_mode='engine-mcts' "
                     f"(got {self.opponent_policy_mode!r})."
                 )
+        if self.engine_oracle_belief and self.opponent_policy_mode == "engine-mcts":
+            # _install_oracle_belief_override runs only inside the pokezero-seat branch, so
+            # an engine opponent would search SAMPLED beliefs while the shard echoes
+            # oracle_belief: true for the whole cell -- a false witness on the only record,
+            # and the run would silently be oracle-vs-sampled on top of whatever else it
+            # was comparing. Refused until the override is installed for both seats.
+            raise ValueError(
+                "engine_oracle_belief with opponent_policy_mode='engine-mcts' is refused: "
+                "the oracle override is installed for the pokezero seat only, so the "
+                "opponent would run on sampled beliefs while the shard claims oracle for "
+                "the cell."
+            )
         if self.opponent_policy_mode not in {"foul-play", "raw", "root-puct", "engine-mcts"}:
             raise ValueError(
                 "opponent_policy_mode must be 'foul-play', 'raw', 'root-puct', or "
@@ -1286,6 +1298,11 @@ class ControlledFoulPlayGameResult:
     engine_mcts_decisions: int = 0
     engine_mcts_fallbacks: int = 0
     engine_mcts_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
+    # The OPPONENT seat's search health in head-to-head mode. Separate fields, so every
+    # existing aggregate keyed on the unprefixed names keeps meaning "the pokezero seat".
+    opponent_engine_mcts_decisions: int = 0
+    opponent_engine_mcts_fallbacks: int = 0
+    opponent_engine_mcts_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     # Actual planner identities emitted by executed Root-PUCT decisions. This
     # is evidence for the primary hidden-information capstone contract.
     root_puct_opponent_action_policies: Mapping[str, int] = field(default_factory=dict)
@@ -1607,6 +1624,15 @@ class ControlledFoulPlayBenchmarkResult:
         root_fallbacks = sum(game.root_puct_fallbacks for game in self.games)
         engine_decisions = sum(game.engine_mcts_decisions for game in self.games)
         engine_fallbacks = sum(game.engine_mcts_fallbacks for game in self.games)
+        opp_engine_decisions_total = sum(
+            game.opponent_engine_mcts_decisions for game in self.games)
+        opp_engine_fallbacks_total = sum(
+            game.opponent_engine_mcts_fallbacks for game in self.games)
+        opp_engine_fallback_reasons_total: dict[str, int] = {}
+        for game in self.games:
+            for reason, count in (game.opponent_engine_mcts_fallback_reasons or {}).items():
+                opp_engine_fallback_reasons_total[reason] = (
+                    opp_engine_fallback_reasons_total.get(reason, 0) + count)
         engine_fallback_reasons: dict[str, int] = {}
         for game in self.games:
             for reason, count in (game.engine_mcts_fallback_reasons or {}).items():
@@ -1738,6 +1764,24 @@ class ControlledFoulPlayBenchmarkResult:
             # construct a single belief world and played uniform-legal instead,
             # so a run without this block cannot distinguish a clean strength
             # measurement from a contaminated one.
+            # OPPONENT-seat search health. Present only in head-to-head mode. A budget
+            # comparison whose opponent was silently falling back would otherwise read as
+            # "the two budgets are equivalent", so this block is what makes the comparison
+            # checkable rather than merely plausible.
+            "opponent_engine_mcts": ({
+                "decisions": opp_engine_decisions_total,
+                "fallback_decisions": opp_engine_fallbacks_total,
+                "fallback_rate": ((opp_engine_fallbacks_total / opp_engine_decisions_total)
+                                  if opp_engine_decisions_total else None),
+                "fallback_reasons": dict(sorted(opp_engine_fallback_reasons_total.items())),
+                "policy_mode": self.config.opponent_policy_mode,
+                "depth": (self.config.opponent_engine_depth
+                          if self.config.opponent_engine_depth is not None
+                          else self.config.engine_depth),
+                "sims": (self.config.opponent_engine_sims
+                         if self.config.opponent_engine_sims is not None
+                         else self.config.engine_sims),
+            } if self.config.opponent_policy_mode != "foul-play" else None),
             "engine_mcts": {
                 "decisions": engine_decisions,
                 "fallback_decisions": engine_fallbacks,
@@ -2627,6 +2671,15 @@ class _ControlledBattleState:
     request_lines: dict[PlayerId, str] = field(default_factory=dict)
     trajectory: BattleTrajectory | None = None
     decisions: list[PolicyDecision] = field(default_factory=list)
+    # HEAD-TO-HEAD: the opponent seat's decisions, kept separately so every existing
+    # aggregate keyed on `decisions` keeps describing the pokezero seat exactly as before.
+    # Without this the opponent's search health is recorded NOWHERE: a d6 opponent falling
+    # back on most decisions would leave the shard reporting fallback_rate 0.0 -- which
+    # describes only the pokezero seat -- and a budget comparison would read "the cheap
+    # config matches the expensive one" when the expensive one was not searching at all.
+    # Exactly the failure shape already seen once, when a None public state made
+    # engine-MCTS play uniform-legal while reporting no error (0/20 vs raw's 10/20).
+    opponent_decisions: list[PolicyDecision] = field(default_factory=list)
     pokezero_decision_players: list[PlayerId] = field(default_factory=list)
     pokezero_submitted_choice_players: list[PlayerId] = field(default_factory=list)
     public_line_cursor: int = 0
@@ -3032,7 +3085,8 @@ async def capture_controlled_foulplay_rollouts(
             battle_id=p1_trajectory.battle_id,
             seed=p1_trajectory.seed,
             format_id=p1_trajectory.format_id,
-            policy_ids={"p1": f"neural:{_checkpoint_path_label(config)}", "p2": "foul-play"},
+            policy_ids={"p1": f"neural:{_checkpoint_path_label(config)}",
+                            "p2": _opponent_policy_id_label(config)},
             decision_round_count=len(p1_trajectory.steps),
             elapsed_seconds=now - previous_capture_time,
             terminal=p1_trajectory.terminal,
@@ -4018,6 +4072,18 @@ async def _run_single_game(
     engine_decisions = sum(
         1 for decision in state.decisions if "engine_mcts" in (decision.metadata or {})
     )
+    opp_engine_decisions = sum(
+        1 for decision in state.opponent_decisions
+        if "engine_mcts" in (decision.metadata or {})
+    )
+    opp_engine_fallback_reasons: dict[str, int] = {}
+    for decision in state.opponent_decisions:
+        block = (decision.metadata or {}).get("engine_mcts") or {}
+        reason = block.get("fallback") if isinstance(block, Mapping) else None
+        if reason:
+            opp_engine_fallback_reasons[str(reason)] = (
+                opp_engine_fallback_reasons.get(str(reason), 0) + 1)
+    opp_engine_fallbacks = sum(opp_engine_fallback_reasons.values())
     engine_fallback_reasons: dict[str, int] = {}
     for decision in state.decisions:
         block = (decision.metadata or {}).get("engine_mcts") or {}
@@ -4237,6 +4303,9 @@ async def _run_single_game(
         engine_mcts_decisions=engine_decisions,
         engine_mcts_fallbacks=engine_fallbacks,
         engine_mcts_fallback_reasons=dict(engine_fallback_reasons),
+        opponent_engine_mcts_decisions=opp_engine_decisions,
+        opponent_engine_mcts_fallbacks=opp_engine_fallbacks,
+        opponent_engine_mcts_fallback_reasons=dict(opp_engine_fallback_reasons),
         root_puct_opponent_action_policies=root_opponent_action_policies,
         root_puct_total_visits=root_total_visits,
         root_puct_effective_total_visits=root_effective_total_visits,
@@ -4861,6 +4930,8 @@ async def _handle_decision_boundary(
         )
         if player == pokezero_player:
             state.decisions.append(decision)
+        elif opponent_policy is not None:
+            state.opponent_decisions.append(decision)
 
     await bridge.send({"type": "choices", "battleId": state.battle_id, "choices": choices})
     if pokezero_context is not None and pokezero_context.player_id in choices:
