@@ -982,6 +982,8 @@ function applyPublicState(snapshot, publicState) {
         row.active ? publicSide.volatiles : [],
         sideId,
         leechSeedSourceSides,
+        publicSide,
+        Boolean(row.active),
       );
       if (row.currentItem !== undefined) {
         applyKnownCurrentItem(serializedSide.pokemon[index], row.currentItem, sideId, row.species);
@@ -1126,6 +1128,9 @@ const TIMED_SIDE_CONDITIONS = new Set(["reflect", "lightscreen", "safeguard", "m
 const STATIC_PUBLIC_VOLATILES = new Set([
   "flashfire", "focusenergy", "ingrain", "mudsport", "watersport",
 ]);
+// A public `substituteHealthState` that is compatible with NO Substitute volatile.
+// `""`/absent are the parser's resting values; `broken` is a Substitute that publicly ended.
+const ABSENT_SUBSTITUTE_HEALTH_STATES = new Set(["", "absent", "broken"]);
 
 function applyPublicWeather(field, publicState) {
   const weather = normalizeId(publicState.weather);
@@ -1283,7 +1288,83 @@ function normalizedBoosts(boosts) {
   return normalized;
 }
 
-function applyPublicVolatiles(pokemon, rawVolatiles, sideId, leechSeedSourceSides) {
+// Public Substitute HP, mirroring `engine_world.py:1415-1598` -- the SIBLING consumer of the
+// same three payload keys (`substituteHealthState`, `substituteDepletion`,
+// `substituteMinDepletion`), which `_public_materialization_payload` has always sent to BOTH
+// lanes. This lane simply never read them, so the direct channel refused every decision with
+// a Substitute up while the crate channel built one from the identical bytes.
+//
+// WHAT IS DERIVABLE, measured rather than asserted. Over 200 real gen3 randbat battles
+// (15,370 decisions) 556 decisions had a Substitute up; of those slot-observations 508 were
+// `full` and 52 `unknown`, so 90.7% carry exactly-derivable HP and none of that 90.7% needs a
+// guess. gen 3 fixes a fresh Substitute at `floor(maxhp / 4)` (Showdown `moves.ts`
+// substitute.condition.onStart: `this.effectState.hp = Math.floor(target.maxhp / 4)`), and the
+// sampled world's own `maxhp` is committed by the time this runs.
+//
+// WHAT IS NOT, and why it FAILS CLOSED here rather than sampling. `unknown` means a
+// non-breaking hit landed whose damage the public record does not reveal. `engine_world`
+// samples that from `[1, initial - minDepletion]` because it is handed an `rng` and each
+// world commits to its own hypothesis. THIS path has no rng -- `materialize` is a
+// deterministic reconstruction op -- so sampling here would mint one unowned guess and call
+// it public state. A wrong materialized Substitute is a silently wrong searched world, which
+// is strictly worse than a refusal. The refusal is therefore kept, but it is now NAMED so it
+// lands in a counted bucket instead of the `materializer_error` catch-all.
+function publicSubstituteHp(pokemon, publicSide, sideId) {
+  const rawState = publicSide?.substituteHealthState;
+  const state = typeof rawState === "string" ? normalizeId(rawState) : "";
+  const rawDepletion = publicSide?.substituteDepletion;
+  const initial = Math.floor(pokemon.maxhp / 4);
+  // The Shedinja clause makes `floor(maxhp / 4) === 0` unreachable for a Substitute that
+  // really started (`onTryHit` refuses at `maxhp === 1`), so this is a contradiction between
+  // the sampled world and the public record, not a game state.
+  if (!Number.isInteger(initial) || initial < 1) {
+    throw new Error(
+      `Materialize found contradictory Substitute health provenance for ${sideId}: ` +
+      `sampled max HP ${pokemon.maxhp} cannot size a Substitute.`,
+    );
+  }
+  // Validate the state/value PAIR before construction, so a malformed companion value cannot
+  // ride along behind a valid state name. `Number.isInteger(true)` is `false` in JS, so a
+  // boolean cannot pose as a depletion the way it can in the Python sibling.
+  const depletionAbsent = rawDepletion === null || rawDepletion === undefined || rawDepletion === 0;
+  if ((state === "full" || state === "unknown") && !depletionAbsent) {
+    throw new Error(
+      `Materialize found contradictory Substitute health provenance for ${sideId}: ` +
+      `state ${rawState} cannot carry depletion ${rawDepletion}.`,
+    );
+  }
+  if (state === "full") return initial;
+  if (state === "exact") {
+    if (!Number.isInteger(rawDepletion) || rawDepletion <= 0) {
+      throw new Error(
+        `Materialize found contradictory Substitute health provenance for ${sideId}: ` +
+        `exact state with depletion ${rawDepletion}.`,
+      );
+    }
+    const remaining = initial - rawDepletion;
+    if (remaining <= 0) {
+      // THIS WORLD is inconsistent with the public record, not the record with itself.
+      // Refusing one world is correct and the retry budget samples another; the Python
+      // sibling files the analogous case the same way.
+      throw new Error(
+        `Materialize sampled a ${sideId} world whose initial Substitute HP ${initial} could ` +
+        `not survive public Substitute depletion ${rawDepletion}.`,
+      );
+    }
+    return remaining;
+  }
+  if (state === "unknown") {
+    throw new Error(
+      `Materialize cannot reconstruct unknown Substitute health for ${sideId}.`,
+    );
+  }
+  throw new Error(
+    `Materialize found contradictory Substitute health provenance for ${sideId}: ` +
+    `active Substitute with state ${rawState}.`,
+  );
+}
+
+function applyPublicVolatiles(pokemon, rawVolatiles, sideId, leechSeedSourceSides, publicSide, isActive) {
   if (!Array.isArray(rawVolatiles)) {
     throw new Error(`Materialize received invalid volatile effects for ${sideId}.`);
   }
@@ -1313,6 +1394,22 @@ function applyPublicVolatiles(pokemon, rawVolatiles, sideId, leechSeedSourceSide
       };
       continue;
     }
+    if (volatile === "substitute") {
+      if (seen.has(volatile)) {
+        throw new Error(`Materialize received duplicate volatile effect ${rawVolatile}.`);
+      }
+      seen.add(volatile);
+      // Exactly the shape the scenario path already builds and round-trips
+      // (`applyScenarioVolatiles` + `scenarioStateSummary`): `hp` and no source. Showdown reads
+      // only `volatiles.substitute.hp` in `onTryPrimaryHit`.
+      pokemon.volatiles[volatile] = {
+        id: volatile,
+        effectOrder: 0,
+        target: `[Pokemon:${sideId}a]`,
+        hp: publicSubstituteHp(pokemon, publicSide, sideId),
+      };
+      continue;
+    }
     if (!STATIC_PUBLIC_VOLATILES.has(volatile)) {
       throw new Error(`Materialize does not yet support volatile effect ${rawVolatile}.`);
     }
@@ -1325,6 +1422,29 @@ function applyPublicVolatiles(pokemon, rawVolatiles, sideId, leechSeedSourceSide
       effectOrder: 0,
       target: `[Pokemon:${sideId}a]`,
     };
+  }
+  // The REVERSE direction, on the active slot only: public Substitute provenance with no
+  // Substitute volatile to hang it on. Defence in depth rather than a live path -- a
+  // Baton-Passed Substitute already trips the producer's `baton-pass:substitute` blocker at
+  // the top of this file's side loop, and the producer zeroes the provenance on every switch
+  // (`showdown.py:2588`). Without this the payload's two halves could disagree silently, which
+  // is the shape the Python sibling's own `else` branch exists to catch.
+  if (isActive && !seen.has("substitute")) {
+    const rawState = publicSide?.substituteHealthState;
+    const state = typeof rawState === "string" ? normalizeId(rawState) : "";
+    if (!ABSENT_SUBSTITUTE_HEALTH_STATES.has(state)) {
+      throw new Error(
+        `Materialize found contradictory Substitute health provenance for ${sideId}: ` +
+        `state ${rawState} with no Substitute volatile.`,
+      );
+    }
+    const rawDepletion = publicSide?.substituteDepletion;
+    if (rawDepletion !== null && rawDepletion !== undefined) {
+      throw new Error(
+        `Materialize found contradictory Substitute health provenance for ${sideId}: ` +
+        `depletion ${rawDepletion} with no Substitute volatile.`,
+      );
+    }
   }
 }
 

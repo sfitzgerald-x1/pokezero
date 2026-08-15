@@ -20,6 +20,7 @@ from pokezero.observation import (
     OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2_2,
     OBSERVATION_SCHEMA_VERSION_V3,
+    OBSERVATION_SCHEMA_VERSION_V4,
     SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
 )
@@ -338,19 +339,41 @@ def _assert_shared_non_numeric_surface(test, v2_2, v3) -> None:
 
 
 class SchemaTableTest(unittest.TestCase):
-    def test_v3_is_supported_but_not_the_default(self) -> None:
+    def test_v3_is_supported(self) -> None:
+        """Membership and spec identity. Deliberately holds NO read of the process default.
+
+        Split from `test_v4_IS_the_default_not_v3` below (D2). The two were one test, mixing schema
+        MEMBERSHIP -- which the rotation drill's injection leaves passing, since it ADDS a synthetic
+        schema to these tables rather than removing v3 -- with a read of the mutable default, which
+        the rotation is designed to break. A pin that breaks for either of two reasons cannot tell
+        the drill which one fired: delete the default read and the test still breaks, so
+        "expected but did not break" -- the only detector for a pin that has gone dead -- can never
+        fire for it. One assertion class per test is what makes that detector meaningful.
+        """
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V3, SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V3, REPLAY_OBSERVATION_SPECS_BY_SCHEMA)
         self.assertIs(
             observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V3),
             V3_REPLAY_OBSERVATION_SPEC,
         )
-        # v2.2 keeps the fresh-selection default: v3 launches only after the fresh
-        # golden corpus and EOC audit pass (spec coordination section).
-        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V2_2)
         # v3 shares v2.2's turn-merged transition surface.
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V3, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
         self.assertIn(OBSERVATION_SCHEMA_VERSION_V2_2, TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS)
+
+    def test_v4_IS_the_default_not_v3(self) -> None:
+        """A CLEAN identity pin: one assertion, reading the process default and nothing else.
+
+        This is the class-(iii) site -- it legitimately ANSWERS "which schema does a fresh artifact
+        get" rather than consuming that answer, so it is EXPECTED to break under a rotation and is
+        listed in the drill's rubric. Because it now breaks for exactly one reason, removing the
+        assertion makes it stop breaking, and the drill's dead-pin detector fires.
+
+        v3 never took the default slot and now never will: v4 took it directly from v2.2
+        (2026-08-13). v3 remains supported and checkpoint-latched. This file's pin therefore says
+        what it always said -- "v3 is not what a fresh artifact gets" -- with the positive half
+        re-aimed at v4.
+        """
+        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V4)
 
     def test_v3_widths_are_cutover_specific(self) -> None:
         # V3 removes fourteen source-unreachable numeric columns and reuses the resulting width

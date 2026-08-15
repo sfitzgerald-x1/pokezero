@@ -515,8 +515,9 @@ class TestStatsBlockDiscovery:
         assert scan.addresses_dropped == 2002
 
     def test_per_game_delta_blocks_are_not_summed_with_the_cumulative(self):
-        # engine_search.py:2645-2654 appends a per-game DELTA block per game, and
-        # :2683-2684 writes them beside the cumulative totals. The deltas sum exactly
+        # `engine_search.main` appends a per-game DELTA block per game (the
+        # `games.append({..."world_failure_reasons": Counter(...) - world_failures_before})`
+        # block) and writes them beside the cumulative totals. The deltas sum exactly
         # to the cumulative, so accepting them doubles every count. Deltas carry no
         # `fallback_samples`, which is the marker that separates them.
         document = {

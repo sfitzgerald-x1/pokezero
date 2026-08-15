@@ -907,9 +907,49 @@ class TheDerivedClaimsAreDerivedTests(unittest.TestCase):
             "a second live entry point reaches `heal_subcase`; R10's unemittability "
             "argument is scoped to the Sleep Talk block and must be re-traced",
         )
+        # DE-NUMBERED, not re-pointed, and this is the one edit this change makes to a gate.
+        #
+        # The assertion's message says "the NUMBER of ways into the subgraph ... changed",
+        # which is the claim R10's unemittability argument rests on. What it COMPARED was a
+        # pair of line ADDRESSES inside `render_move_phase`, so it fired on any edit that
+        # shifted that function -- a docstring insert would do it -- while reporting a
+        # semantic change that had not happened. That is the landmine shape report 4 §4.8
+        # records: "de-number a stale citation; never re-point it." Two changes hit it
+        # independently (#1234 and this one), which is the argument for not re-pointing a
+        # third time.
+        #
+        # THE COUNT ALONE IS NOT ENOUGH, and that is the one thing added back here.
+        # `assertEqual(committed, rederived)` above does compare the whole graph, line
+        # numbers included -- but BOTH of its sides come from `c154.rust_call_graph`, so it
+        # is an oracle whose two sides derive from one source and it gets quieter, not
+        # louder, if that builder's own matching drifts. The two edges are therefore ALSO
+        # resolved here straight out of the file text, by call-site strings that are unique
+        # in it (the definitions read `fn <name>(`, and the thin wrappers call the
+        # non-`_with_protect` form). A MOVED edge updates itself; a DELETED or DUPLICATED
+        # one is a loud failure; and the addresses stay out of this file.
+        chokepoint_calls = ("if !sleeptalk_refusal_is_unsafe_with_protect(",
+                            "&ambiguous_unrenderable_slug_with_protect(")
+        with open(os.path.join(REPO, c154.EV), encoding="utf-8") as handle:
+            events_lines = handle.read().splitlines()
+        expected_edges = []
+        for needle in chokepoint_calls:
+            hits = [n for n, line in enumerate(events_lines, 1) if needle in line]
+            self.assertEqual(
+                len(hits), 1,
+                f"{needle!r} is no longer a unique call site in {c154.EV}; an ambiguous "
+                "anchor is a wrong citation waiting to happen",
+            )
+            expected_edges.append(hits[0])
         self.assertEqual(
-            rederived["edges_out_of_the_chokepoint"], [2155, 2176],
-            "the number of ways into the subgraph from `render_move_phase` changed",
+            rederived["edges_out_of_the_chokepoint"], sorted(expected_edges),
+            "the identity of the ways into the subgraph from `render_move_phase` changed, "
+            "derived from the file text rather than from the graph builder",
+        )
+        self.assertEqual(
+            len(rederived["edges_out_of_the_chokepoint"]), 2,
+            "the number of ways into the subgraph from `render_move_phase` changed; R10's "
+            "unemittability argument is scoped to its Sleep Talk block and must be "
+            "re-traced",
         )
         self.assertEqual(len(rederived["dead_wrappers_with_no_production_caller"]), 5)
 
@@ -1098,14 +1138,19 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
     trap this module has now hit three times.
 
     ⚠ **THE LINE NUMBER OF THAT COMMENT IS NOT WRITTEN DOWN ANYWHERE, and the reason is
-    C156's own defect.** Its first revision cited it as `:1202` in three places in this
+    C156's own defect.** Its first revision cited it BY LINE NUMBER in three places in this
     module and once in `reports/c156`, and C156's own eleven-line workflow comment moved it
     to a different line IN THE SAME COMMIT -- four citations stale inside the change that
     staled them, in a pass whose subject is stale typed numbers. Review found it, and then
     found the FIRST TWO FIXES for it defective in turn; the record is in
     `test_the_scan_sees_every_invocation_a_flat_scan_sees`, which is where the working one
     lives. (`#1202` elsewhere in this module is the PULL REQUEST, not a line, and is not
-    affected.)
+    affected: the guard below matches `":%d" % number`, so a `#`-prefixed reference cannot
+    collide with a workflow line. A previous pass de-numbered those PR references too, on the
+    stated grounds that the guard "cannot distinguish a PR reference from a line citation" --
+    which is false, and cost this paragraph the sentence that had said so correctly. Verified by
+    mutation: restoring `#1202` leaves the guard green; inserting `:<a live invocation line>`
+    reddens it.)
     """
 
     WORKFLOW = ".github/workflows/engine-fidelity-gates.yml"
@@ -1314,7 +1359,7 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
         then review's finding on each of the two fixes for it. All three are recorded,
         because the later ones are worse than the first.
 
-          * **The defect.** C156's first revision cited the comment as `:1202` three times
+          * **The defect.** C156's first revision cited the comment BY LINE NUMBER three times
             here and once in `reports/c156`, and C156's own workflow comment moved it in
             the same commit. Four citations stale inside the change that staled them.
           * **Fix 1 reddened on NOISE.** It pinned the typed citation to the computed line,
@@ -1344,7 +1389,7 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
             cannot go stale and is not in scope here.
           * ⚠ **It catches a citation typed at its CORRECT value, and cannot catch one that
             is already wrong.** Authoring time is exactly when this defect is born -- C156
-            typed `:1202` while the comment WAS at 1202 -- so the guard fires as the mistake
+            typed the line number while the comment WAS at it -- so the guard fires as the mistake
             is made, before the edit that stales it. But a citation that has ALREADY drifted
             equals no computed value and is invisible here. Not hypothetical: the
             contact-ability step's citation named line 469 and had been wrong since #1204

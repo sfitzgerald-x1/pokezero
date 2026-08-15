@@ -140,13 +140,13 @@ _ROOT_PUCT_TIMING_FIELD_NAMES = tuple(entry.name for entry in fields(RootPUCTSea
 # -- those battles are over and their opponent moves were never written down. Only
 # addresses recorded by a run WITH journaling on become replayable.
 #
-# A JOURNALLED ADDRESS IS NOT A ONE-TURN REPLAY. The comment on `fallback_samples`
-# (`engine_search.py:662-664`) says "any entry here replays as a single turn"; that
+# A JOURNALLED ADDRESS IS NOT A ONE-TURN REPLAY. The comment on
+# `EngineMctsStats.fallback_samples` says "any entry here replays as a single turn"; that
 # is wrong for the mode this bridge runs, and a replay driver written to it would
 # start in the wrong place. `EngineMctsPolicy._live_folds` is keyed
 # `(battle_id, seat)` and advanced over
-# exactly the new public lines at EVERY decision (`engine_search.py:983-987`,
-# `:1035-1039`), never refolded from a whole log, and `leaf_eval="model"` refuses the
+# exactly the new public lines at EVERY decision (`EngineMctsPolicy._advance_live_fold`),
+# never refolded from a whole log, and `leaf_eval="model"` refuses the
 # decision outright when that fold is missing (`live_fold_broken`). So reaching round
 # R means replaying rounds 0..R-1 first. That is why the `addressed` mode below keeps
 # a PREFIX rather than the single addressed round.
@@ -158,10 +158,10 @@ _ROOT_PUCT_TIMING_FIELD_NAMES = tuple(entry.name for entry in fields(RootPUCTSea
 # shard that carries `fallback_samples` at all was produced by exactly one path:
 #
 #   * `leaf_eval="model"` reaches the crate through
-#     `native.search_batched_multi_encoded(*search_args)` (`engine_search.py:1732`),
-#     with the seed passed POSITIONALLY as `record["seed"]` (`:1704-1716`), drawn at
-#     `world_seed = rng.getrandbits(63)` (`:1829`). It does NOT call
-#     `puct_search_multi` -- that is the `hp_fraction_crate` branch (`:1197`), a
+#     `native.search_batched_multi_encoded(*search_args)` (in `_search_model`'s
+#     `run_world`), with the seed passed POSITIONALLY as `record["seed"]` (assembled by
+#     `native_search_args`), drawn at `world_seed = rng.getrandbits(63)`. It does NOT
+#     call `puct_search_multi` -- that is the `_search_hp_fraction_crate` branch, a
 #     different mode this bridge cannot select. An earlier revision of this comment
 #     cited the wrong function for the only path that ships.
 #   * `rng` there is `random.Random(f"{seed}:{player_id}:{decision_round_index}")`
@@ -223,10 +223,10 @@ OPPONENT_JOURNAL_SCHEMA_VERSION = "pokezero.opponent-journal.v1"
 # measures:
 #
 #   * `fallback_sample_addresses_dropped` counts ONLY the 256-KEY ceiling
-#     (`engine_search.py:2405-2411`). It is 0 across all 552 shards of eras 61-64,
-#     and that fact says nothing about the drop below.
-#   * `_FALLBACK_SAMPLES_PER_CLASS = 3` (`engine_search.py:457`, applied at `:2413`)
-#     and the one-address-per-battle rule (`:2421`) both `continue` with NO COUNTER.
+#     (`_fallback`'s `_FALLBACK_SAMPLE_KEY_CEILING` arm). It is 0 across all 552 shards
+#     of eras 61-64, and that fact says nothing about the drop below.
+#   * `_FALLBACK_SAMPLES_PER_CLASS = 3` (applied in `_fallback`'s `len(bucket) >=` guard)
+#     and the one-address-per-battle rule beside it both `continue` with NO COUNTER.
 #     That is where the addresses actually go.
 #
 # HOW BIG, measured per CUMULATIVE STATS BLOCK on ONE shard family (the 377 bridge
@@ -238,9 +238,10 @@ OPPONENT_JOURNAL_SCHEMA_VERSION = "pokezero.opponent-journal.v1"
 #                both ways, 0 per-block mismatches.
 #   numerator    DISTINCT (battle_id, round, seat) across all keys of that block's
 #                `fallback_samples` = decisions that have a replayable address.
-#                DISTINCT is load-bearing: `:2404` files one address PER KEY, so a
-#                single decision appears under `fallback:<reason>` AND under every
-#                world-failure class in its delta.
+#                DISTINCT is load-bearing: `_fallback`'s
+#                `for key in [f"fallback:{reason}", *delta]` loop files one address
+#                PER KEY, so a single decision appears under `fallback:<reason>` AND
+#                under every world-failure class in its delta.
 #
 #   2,093 fallback decisions -> 609 addressed -> 1,484 (70.9%) with NO address.
 #
@@ -254,9 +255,10 @@ OPPONENT_JOURNAL_SCHEMA_VERSION = "pokezero.opponent-journal.v1"
 # WHICH RULE DOES THE DROPPING -- the cap of 3 is NOT the main one. Per-key bucket
 # sizes within a block are 719 x 1, 140 x 2, 47 x 3 (906 keys, none over 3). Only
 # those 47 (5.2%) ever reached `_FALLBACK_SAMPLES_PER_CLASS`; the other 859 (94.8%)
-# were never limited by it, so every address they did not retain was refused by the
-# one-address-per-battle rule at `:2421`. The per-battle rule is the dominant
-# mechanism and the cap is the ~5% tail.
+# were never limited by it, so every address they did not retain was refused by
+# `_fallback`'s "One address per BATTLE" guard
+# (`any(entry["battle_id"] == str(battle_id) for entry in bucket)`). The per-battle
+# rule is the dominant mechanism and the cap is the ~5% tail.
 #
 # That split is in KEYS, which is what these shards can support. The DECISION-level
 # split is NOT measurable from them: attributing an unaddressed decision needs to know
@@ -358,8 +360,8 @@ OPPONENT_JOURNAL_MODES = ("off", "addressed", "full")
 #    game row and the cumulative write into the hundreds of MB.
 #
 #    So the payload is CAPPED rather than argued about, the way the producer it
-#    mirrors caps (`_FALLBACK_SAMPLES_PER_CLASS = 3` plus one-address-per-battle,
-#    `engine_search.py:457`, `:2421`). See `_REFUSAL_RECORDS_PER_BATTLE` and
+#    mirrors caps (`_FALLBACK_SAMPLES_PER_CLASS = 3` plus the one-address-per-battle
+#    rule, both in `EngineMctsPolicy._fallback`). See `_REFUSAL_RECORDS_PER_BATTLE` and
 #    `_REFUSAL_RECORDS_PER_RUN` below for the ceilings and the arithmetic that
 #    picked them. What the cap drops is COUNTED and published, because
 #    `fallback_sample_addresses_dropped` is right there as the example of a

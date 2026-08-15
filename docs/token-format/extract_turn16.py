@@ -661,20 +661,34 @@ masks_section = {
         ),
     },
     "dual_schema_story": {
+        # HALF OF THIS STRING USED TO BE HARDCODED, and the v4 rotation made it contradict
+        # itself: the version was interpolated from the global while the sentence after it said
+        # "v2.2 holds the slot since 2026-07-08", so the regenerated dump read
+        # "pokezero.observation.v4 (... v2.2 holds the slot ...)". The slot history is now stated
+        # as history -- which it is, and which no longer changes when the default moves -- and the
+        # only derived part is the version itself.
         "current_default": (
             f"{OBSERVATION_SCHEMA_VERSION} (fresh-selection default, derived from "
-            "pokezero.observation.OBSERVATION_SCHEMA_VERSION at extraction time; "
-            "v2.2 holds the slot since 2026-07-08 after the schedule-uncompressed reads)"
+            "pokezero.observation.OBSERVATION_SCHEMA_VERSION at extraction time. Slot history: "
+            "v2.2 held it from 2026-07-08 after the schedule-uncompressed reads; v4 took it on "
+            "2026-08-13.)"
         ),
         "v2": "151 tokens x 121 numeric x 39 categorical; per-action transition tokens; accepts pre-#509 checkpoints and stays byte-identical to the pre-v2.1 encoder (119-column relic family floors lower by design)",
         "v2.1": "151 tokens x 140 numeric x 39 categorical; adds defender identity on move transition rows, per-bucket revealed-move PP-validity bits, substitute HP fraction, per-mon pinned Tier-2 CB/investment surface",
         "v2.2": "151 tokens x 155 numeric x 51 categorical; every v2.1 block carried forward; transition surface swapped to turn-merged tokens (this dump)",
+        "v3": "87 tokens x 155 numeric x 51 categorical; v2.2's census with fourteen source-unreachable numeric columns removed and the width reused for a grouped layout; never held the default",
+        "v4": "23 tokens x 132 numeric x 41 categorical; grouped like v3 but with NO transition region at all, plus the k0 feature pack; holds the default since 2026-08-13",
+        # This dump is a v2.2 encode and stays one: the extractor pins
+        # V2_2_REPLAY_OBSERVATION_SPEC rather than following the default, so a rotation moves
+        # `current_default` above and nothing else in this file. v3 and v4 are described here
+        # rather than dumped because the default now names v4, and a story that omitted the
+        # schema it declares current would be incoherent to a reader.
         "resolution": (
             "which schema an env/harness encodes resolves from the loaded checkpoint's "
             "stamped model_config (feature_masks_from_model_config / "
             "env_config_from_checkpoint_provenance latch family); "
             "DEFAULT_REPLAY_OBSERVATION_SPEC only covers checkpoint-free encodes. All "
-            "three schemas pass require_current_observation_schema; v1/unversioned "
+            "five schemas pass require_current_observation_schema; v1/unversioned "
             "artifacts refuse with replay-from-pinned-tag guidance."
         ),
     },

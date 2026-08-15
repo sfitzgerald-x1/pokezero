@@ -831,12 +831,18 @@ class NeuralSelfPlayTest(unittest.TestCase):
         # enumeration or the run is genuinely inconsistent, and the vocabulary latch now says
         # so. The previous stub paired a 64-token initial policy with a 3-token build vocab —
         # a state that could not encode coherently, which nothing detected before.
+        from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2_2
+
         fake_spec_config = TransformerPolicyConfig.compact_category(
             category_vocab=("move:c", "species:a", "species:b"),
             category_oov_buckets=16,
             policy_id="entity-test",
             embedding_dim=16,
             attention_heads=4,
+            # NAMED so the fixture is self-contained. Without it the stub and the --observation-schema
+            # below agree only via TransformerPolicyConfig's class default, so re-pinning that default
+            # would redden this test for a reason unrelated to its subject (opponent wiring).
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
         )
         with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run, patch(
             "pokezero.neural_cli.load_transformer_model_config", return_value=fake_spec_config
@@ -851,6 +857,26 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         "1",
                         "--games-per-iteration",
                         "8",
+                        # PINNED to the schema `fake_spec_config` stamps, and it has to be. This test
+                        # is about opponent wiring, not about schema resolution, but it admits a
+                        # stubbed --initial-policy checkpoint into a run whose schema `iterate`
+                        # resolves from the process default. `TransformerPolicyConfig` names v2.2
+                        # (#1251), so the stub carries transition_token_budget=128; under a v4 default
+                        # the run mints 0, because v4 has no transition region at all. The mask latch
+                        # then refuses, correctly:
+                        #
+                        #   error: neural iterate: checkpoints require conflicting observation
+                        #   feature masks (... transition_token_budget=128 ...),
+                        #   (... transition_token_budget=0 ...); one env cannot encode both --
+                        #   evaluate them in separate runs.
+                        #
+                        # That is production behaviour working, not a defect: a v2.2 checkpoint
+                        # genuinely cannot share an env with a v4 run. The stale thing was the
+                        # FIXTURE, which paired a v2.2 stub with a run that followed the default.
+                        # Naming the schema makes both sides agree by construction and is a no-op
+                        # while v2.2 is the default.
+                        "--observation-schema",
+                        "v2.2",
                         "--showdown-root",
                         "/tmp/showdown",
                         "--initial-policy",

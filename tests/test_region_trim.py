@@ -33,7 +33,15 @@ trimmed_model_config_dict = convert_region_trim.trimmed_model_config_dict
 
 
 def _config(**kwargs):
-    """Minimal buildable config (category_vocab is mandatory)."""
+    """Minimal buildable config (category_vocab is mandatory).
+
+    Defaults to v2.2 rather than the process default. Region trimming is only meaningful for a
+    schema that HAS a transition region to trim: v2/v2.1/v2.2 carry 128 and v3 carries 64, while
+    v4 carries none and refuses any nonzero budget outright. Taking the fresh default made this
+    whole module contingent on which schema held that slot. `setdefault` so the tests that name
+    their own schema -- there is already a v3 one below -- still win.
+    """
+    kwargs.setdefault("observation_schema_version", OBSERVATION_SCHEMA_VERSION_V2_2)
     return TransformerPolicyConfig.compact_category(category_vocab=("a", "b"), **kwargs)
 
 

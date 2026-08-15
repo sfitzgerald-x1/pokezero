@@ -71,10 +71,34 @@ OBSERVATION_SCHEMA_VERSION_V3 = "pokezero.observation.v3"
 OBSERVATION_SCHEMA_VERSION_V4 = "pokezero.observation.v4"
 # The CURRENT schema: what fresh artifacts (new trains, checkpoint-free encodes) are stamped
 # with. Loading a checkpoint always overrides this default with the checkpoint's own schema.
-# v2.2 earned the default slot (2026-07-08): under the schedule-uncompressed A/B reads the
-# turn-merged arm matched or beat v2.1/v2 on every yardstick and holds the current bests;
-# v2.1/v2 artifacts remain first-class via the checkpoint-driven latch.
-OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V2_2
+# v4 took the default slot from v2.2 (2026-08-13). v2.2 had held it since 2026-07-08, when the
+# schedule-uncompressed A/B reads put the turn-merged arm at or above v2.1/v2 on every yardstick;
+# v2.2/v2.1/v2/v3 artifacts all remain first-class via the checkpoint-driven latch, which
+# overrides this line for anything that loads a checkpoint.
+#
+# ROTATING THIS LINE IS NOT A ONE-LINE CHANGE, and the sequence that established that is worth
+# recording here because the next rotation will look equally cheap. Split out of a 42-file branch,
+# this line alone broke 41 tests. They were not 41 defects: FOUR dataclass field defaults read
+# this global, and a dataclass default is frozen at class-definition time, so every config that
+# did not name its schema silently re-aimed the moment this line moved --
+# `ObservationSpec.schema_version` (#1244), `PokeZeroObservationV0.schema_version` (#1244),
+# `TransformerPolicyConfig.observation_schema_version` (#1251), and
+# `LocalShowdownConfig.observation_spec` (#1252). Each named its own schema instead, taking the
+# count 41 -> 29 -> 15, and this PR's invariants plus two consumer fixes here and the six in #1255 took 15 to
+# ZERO -- measured by set equality against main, same command and same crate.
+#
+# WHAT THE FOUR NAMINGS DID NOT DO, and it is the thing a future reader most needs: all four
+# stamp defaults still say v2.2 (observation.py's two, neural_policy.py's, local_showdown.py's)
+# while this line says v4. So a `rollout collect` with no flag stamps v2.2, and a `neural train`
+# with no flag stamps v4 -- WHAT A FRESH ARTIFACT GETS DEPENDS ON THE ENTRYPOINT. Chaining them
+# flagless is refused loudly (cross-schema at the cache/model check), not silently. Re-aiming
+# those four to v4 is the deliberate follow-up that naming them was for.
+# `scripts/schema_default_ledger.py` is the census of what still reads this
+# global -- run that script for the count, which is frozen by
+# tests/test_schema_default_ledger.py so it can only shrink -- and
+# `scripts/schema_rotation_drill.sh` is the instrument that measures a rotation's blast radius
+# before it lands.
+OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V4
 SUPPORTED_OBSERVATION_SCHEMA_VERSIONS = (
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,
@@ -107,6 +131,86 @@ GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS = (
 # them as an opt-in latch (``gen3_category_vocabulary(include_feature_pack_v4=...)``) exactly as it
 # does the turn-merged families — and this tuple is what every such latch tests.
 FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V4,)
+
+# Schemas using v3's numeric projection. Exists so `numeric_index_for_schema` can ask a PROPERTY
+# ("which projection does this schema use") instead of naming a version -- the identity form
+# silently routed any unlisted schema to the UNPROJECTED legacy path, returning
+# wrong-but-plausible indices rather than raising.
+V3_PROJECTION_OBSERVATION_SCHEMA_VERSIONS = (OBSERVATION_SCHEMA_VERSION_V3,)
+
+# Schemas carrying the v2.1 block set forward: the PP-validity bits and substitute HP. Everything
+# except v2. Named as a lineage because that is what the encode gate means; it was previously
+# spelled as a three-term disjunction over other gates, which is the same set stated in a form no
+# future schema can join.
+#
+# NOT the per-mon pinned Tier-2 conclusions, which an earlier version of this comment listed. v4
+# RETIRES those -- `showdown.py` spells the exclusion `schema_v2_1 and not schema_v4` and says so
+# explicitly ("RETIRED AT V4 (and only at v4) ... that flag means 'carries the v2.1 blocks' and v4
+# inherits it for the PP-validity bits and sub HP"). The membership was right and the stated RULE
+# was wrong, which is the worse of the two errors here: the set can be checked against the tuple,
+# but a v6 author deciding whether their schema joins this lineage has only the rule to go on, and
+# this comment is the place that decision gets made. Inherited from the old inline gate comment,
+# where it was an aside; promoting it to a definition is what made it load-bearing.
+V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS = (
+    OBSERVATION_SCHEMA_VERSION_V2_1,
+    OBSERVATION_SCHEMA_VERSION_V2_2,
+    OBSERVATION_SCHEMA_VERSION_V3,
+    OBSERVATION_SCHEMA_VERSION_V4,
+)
+
+def schema_with(
+    *,
+    transition_region: bool | None = None,
+    turn_merged: bool | None = None,
+    grouped_layout: bool | None = None,
+    feature_pack: bool | None = None,
+) -> str:
+    """Return the newest supported schema having the requested properties.
+
+    Say what you NEED, not "whatever is currently default". A test that wants a history-window
+    budget needs a schema with a transition region -- it does not care which one, and it must
+    not silently become a v4 test (no region at all) the day the default rotates. That silent
+    re-aiming is the defect class this function exists to remove: it is what made a one-line
+    default rotation break 94 tests, and what hid two real production bugs (#1227 token_count,
+    #1228 feature widths) until the default finally moved.
+
+    Newest-first so a caller tracks forward as schemas land, rather than pinning the oldest
+    match forever. Raises rather than returning a default when nothing matches: an unsatisfiable
+    property set is an authorship error, and returning "the default" is exactly the behaviour
+    being retired.
+
+    Use a named version constant instead when the subject genuinely IS one version -- a
+    v2.2-census assertion wants `OBSERVATION_SCHEMA_VERSION_V2_2`, not a property query.
+    """
+    wanted = {
+        "transition_region": transition_region,
+        "turn_merged": turn_merged,
+        "grouped_layout": grouped_layout,
+        "feature_pack": feature_pack,
+    }
+    # Keyword-only with no **kwargs, deliberately: a `**_ignored` signature would silently drop a
+    # misspelled constraint (`turn_mergd=False`) and return a schema that does not satisfy what
+    # the caller asked for -- a quieter version of the very defect this function replaces.
+    if all(v is None for v in wanted.values()):
+        raise ValueError(
+            "schema_with() needs at least one property. With none, it would be a spelling of "
+            "'the current default', which is the conflation this function exists to remove."
+        )
+    for version in reversed(SUPPORTED_OBSERVATION_SCHEMA_VERSIONS):
+        have = {
+            "transition_region": REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA[version] > 0,
+            "turn_merged": version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
+            "grouped_layout": version in GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS,
+            "feature_pack": version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
+        }
+        if all(v is None or have[k] is v for k, v in wanted.items()):
+            return version
+    asked = ", ".join(f"{k}={v}" for k, v in wanted.items() if v is not None)
+    raise ValueError(
+        f"no supported observation schema has {asked}. Supported: "
+        f"{', '.join(SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)}."
+    )
+
 LEGACY_OBSERVATION_SCHEMA_VERSIONS = ("pokezero.observation.v1",)
 # Sentinel for artifacts whose payload carries NO observation schema version. For a one-way
 # door, absent means unknown/legacy and must refuse — never "assume current spec".
@@ -138,6 +242,15 @@ V3_TRANSITION_TOKEN_COUNT = 64
 # v4 checkpoint cannot silently be fed synthesized history, because there is nowhere to put it.
 V4_TRANSITION_TOKEN_COUNT = 0
 
+REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA: dict[str, int] = {
+    OBSERVATION_SCHEMA_VERSION_V2: TRANSITION_TOKEN_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V2_1: TRANSITION_TOKEN_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V2_2: TRANSITION_TOKEN_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V3: V3_TRANSITION_TOKEN_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V4: V4_TRANSITION_TOKEN_COUNT,
+}
+
+
 
 @dataclass(frozen=True)
 class ObservationSpec:
@@ -156,7 +269,20 @@ class ObservationSpec:
     numeric_feature_count: int
     opponent_tendency_stats_token_count: int = OPPONENT_TENDENCY_STATS_TOKEN_COUNT
     transition_token_count: int = TRANSITION_TOKEN_COUNT
-    schema_version: str = OBSERVATION_SCHEMA_VERSION
+    # v2.2 by NAME, not the global default. Every other default on this dataclass is a v2-family
+    # constant -- `transition_token_count` is `TRANSITION_TOKEN_COUNT` (128) and `token_count` is
+    # computed from the v2-family module constants above -- so a hand-built spec has a v2.2 SHAPE
+    # whatever this field says. Taking the global default here therefore stamps whatever schema
+    # currently holds the default slot onto a v2.2-shaped object, and `validate()` accepts it:
+    # the incoherence is silent. Under a v4 default that is a spec claiming 41/132/23 while
+    # carrying 51/155/151.
+    #
+    # Real v3/v4 specs come from `REPLAY_OBSERVATION_SPECS_BY_SCHEMA`, which passes
+    # `schema_version` explicitly, so this default is reached only by CONSTRUCTING a spec by hand.
+    # "Only in tests" would be wrong: `teacher_scenarios._observation` does exactly that, and is
+    # reachable from the `pokezero-bootstrap` CLI via bootstrap.py. Which strengthens the case --
+    # a default that has to be remembered is one a production path can get wrong too.
+    schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2
 
     @property
     def token_count(self) -> int:
@@ -307,7 +433,13 @@ class PokeZeroObservationV0:
     legal_action_mask: Any
     perspective: ObservationPerspective | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
-    schema_version: str = OBSERVATION_SCHEMA_VERSION
+    # v2.2 by name, for the same reason as `ObservationSpec.schema_version` and NECESSARILY in
+    # step with it: `validate()` below refuses an observation whose stamp differs from the spec's,
+    # so a hand-built pair has to agree. Moving one default without the other would turn a silent
+    # incoherence into a loud one, which is better but still wrong -- they are one decision.
+    # Production observations come from the encoder, which stamps this from the spec it actually
+    # encoded under; this default is reachable only by hand construction.
+    schema_version: str = OBSERVATION_SCHEMA_VERSION_V2_2
 
     def validate(self, spec: ObservationSpec) -> None:
         require_current_observation_schema(self.schema_version, context="observation")

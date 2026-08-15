@@ -32,8 +32,23 @@
 //! Some real-protocol distinctions are NOT recoverable from the instruction
 //! stream, because the engine itself merges outcomes with identical deltas
 //! (`combine_duplicate_instructions`):
-//! - full-paralysis vs. miss (both: empty delta) — rendered as `|cant|..|par`
-//!   (the usually-larger probability mass), documented ambiguity;
+//! - "it hit and did nothing" vs. a miss (both: empty delta). Split by STATE where the
+//!   state decides it — an already-statused defender (`status_fail`) or one already
+//!   carrying the move's volatile (`volatile_fail`) — and the residual ambiguity is that
+//!   a real miss renders identically. Which render wins is a MASS comparison, made in the
+//!   code (`no_effect_hit_outweighs_miss`) rather than asserted in a comment:
+//!   `P(hit, no effect) = accuracy` against `P(miss) = 1 - accuracy`, crossing at 50%.
+//!   NOT covered, and measured rather than believed absent: a blocked OPPONENT-side boost
+//!   is the same shape and is still labelled `|[miss]|`; 0 of 1682 gen3 randbat variants
+//!   carry a sub-100%-accuracy member of that family (`scripts/c157_no_effect_hit_reach.py`);
+//! - full-paralysis vs. miss was ALSO this shape and is now decided, not guessed: the
+//!   engine marks both MOVE-TIME immobilizers — full paralysis and Attract
+//!   (`Instruction::MoveImmobilized`) — so `|cant|..|par` is emitted from the marker and an
+//!   unmarked empty tail is provably not one of those two. NOT a claim about every `|cant|`:
+//!   the SLEEP and FREEZE gates in `consume_move_prelude` still render `|cant|..|slp` and
+//!   `|cant|..|frz` from an empty unmarked remainder, deliberately, and they return before
+//!   this arm. The old probability-mass guess, and PR #1140's proposal to gate it, both
+//!   describe a branch that no longer exists;
 //! - the KO-straddle branch conflates "high roll" and "crit" at the level of
 //!   BRANCH STRUCTURE — one arm carries both masses. Its damage IS now labelled
 //!   `|-crit|` when it exceeds the maximum non-crit roll, since that is decidable;
@@ -42,9 +57,17 @@
 //!   attribution-unsafe rather than assigned to an invented action window.
 //!
 //! Lines the fold provably ignores (fold.rs `process_line`) are deliberately
-//! NOT rendered: `|-singleturn|`, `|-curestatus|`, `|-fail|`, `|-ability|`,
+//! NOT rendered: `|-singleturn|`, `|-curestatus|`, `|-ability|`,
 //! `|-enditem|`, `|-mustrecharge|`, `|-start|` (except absorb signatures),
 //! `|-anim|`, `|debug|`. Omissions are part of the documented contract.
+//!
+//! `|-fail|` WAS ON THAT LIST AND DOES NOT BELONG ON IT. The fold reads it —
+//! `fold.rs`'s `process_line` sets `window.fail` on `-fail` (and
+//! `transitions_fold.py` mirrors it), which reaches the encoder as its own numeric
+//! column (`encoder.rs`, `columns.fail`). It is also RENDERED, on three paths
+//! (`status_fail`, `side_condition_fail`, `volatile_fail`), so the list was wrong in
+//! both directions at once. Corrected here rather than left standing because the
+//! fail-vs-miss choice below turns on which flag the fold ends up carrying.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -231,13 +254,33 @@ fn active_status_transition(
     state: &State,
     change: &ChangeStatusInstruction,
 ) -> Option<ActiveStatusTransition> {
-    (state.get_side_immutable(&change.side_ref).active_index == change.pokemon_index).then_some(
-        ActiveStatusTransition {
-            line_offset: 0,
-            side: side_usize(change.side_ref),
-            new_status: change.new_status,
-        },
-    )
+    changes_the_active_slot(state, change).then_some(ActiveStatusTransition {
+        line_offset: 0,
+        side: side_usize(change.side_ref),
+        new_status: change.new_status,
+    })
+}
+
+/// Does this `ChangeStatus` land on the slot that is CURRENTLY ON THE FIELD for
+/// its own side?
+///
+/// `ChangeStatus` carries a `pokemon_index` and the party-wide cures
+/// (`Choices::HEALBELL`, `Choices::AROMATHERAPY`) emit one per statused party
+/// member — so `side_ref` alone does NOT mean "the mon that is acting". Every
+/// status change the ENGINE emits for a wake, a thaw or a self-inflicted status
+/// carries `current_active_index`
+/// (`gen3/generate_instructions.rs::generate_instructions_from_existing_status_conditions`),
+/// so this predicate separates "the acting mon's own status moved" from "a
+/// benched party member was cured".
+///
+/// Extracted rather than inlined because it now has TWO consumers that must not
+/// drift: [`active_status_transition`], which decides whether a status change is
+/// worth recording as a public transition, and `consume_move_prelude`'s
+/// wake/thaw arms, which decide whether a status change belongs to the PRE-MOVE
+/// phase at all. The second consumer is the one this predicate was missing: see
+/// the arms' own comments.
+fn changes_the_active_slot(state: &State, change: &ChangeStatusInstruction) -> bool {
+    state.get_side_immutable(&change.side_ref).active_index == change.pokemon_index
 }
 
 impl RenderedEvents {
@@ -435,11 +478,25 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     // The SUCCESS-side counter for the Protect marker. Registered even though the
     // caller does not currently reach this gate: `mark_lossy_subcase` asserts only
     // `starts_with(lossy_tag)` and, unlike `mark_attribution_unsafe_subcase`, never
-    // calls `assert_subcase_vocabulary`. That asymmetry is a latent trap rather than
-    // a licence -- the moment anyone closes it (a sensible hardening, since the lossy
-    // sub-case channel is otherwise unbounded) an unregistered token becomes a
-    // PRODUCTION panic on a `--release` wheel, and a pyo3 panic escapes
-    // `except Exception` and kills the campaign worker. Registering costs one line.
+    // calls `assert_subcase_vocabulary`.
+    //
+    // WHAT THAT ASYMMETRY MEANS, corrected. This block used to say an unregistered token
+    // "becomes a PRODUCTION panic", present tense, which overstates it in the direction that
+    // makes the entry look self-enforcing. It is not: for THESE tokens the registration is
+    // INERT on the production path, and review measured the consequence -- deregistering one
+    // of them survived the whole suite. The conditional is what is true: registration
+    // matters the moment anyone routes `mark_lossy_subcase` through the gate, which is a
+    // sensible hardening since the lossy sub-case channel is otherwise unbounded.
+    //
+    // WHY THAT ROUTING IS NOT DONE HERE, so the next reader does not assume it was an
+    // oversight: `the_paired_tag_assert_in_mark_lossy_subcase` deliberately passes
+    // `attract_empty_tail_ambiguous:miss`, whose tokens this vocabulary DEREGISTERED, so
+    // routing would panic an existing pin that is testing something else entirely. Closing
+    // the asymmetry means dealing with that pin first.
+    //
+    // What makes these entries load-bearing today is `PROTECT_MARKER_COUNTERS`: the emit
+    // site's own array, iterated by `the_live_subcase_slugs_are_all_in_vocabulary`, so a
+    // token that reaches the emit site and not this list fails there.
     //
     // Prefixed for the same reason as the `shape_*` and `heal_*` tokens: this
     // vocabulary is shared across every lossy tag and validated per token with no
@@ -451,6 +508,14 @@ const SUBCASE_VOCABULARY: &[&str] = &[
     // impossible. Separate from the bare token so the two reclaims can be differenced;
     // see the emit site for why summing them would make this one unmeasurable.
     "protect_marker_rendered_absorb_headroom",
+    // The third half of that counter, and the one this campaign's census block actually
+    // reaches: a Protect marker rendered on a FULL-HP absorber, where the HP axis says the
+    // absorb no-op WAS possible and the callee scan says no candidate could have produced it.
+    // Its own token for the reason the header above gives -- `_absorb_headroom` would be a
+    // false statement about this render (there is no headroom), and summing it into either
+    // existing token would make the reclaim unmeasurable inside a series a reader is
+    // differencing across eras.
+    "protect_marker_rendered_absorb_full_hp",
     // the escape hatch both paths use when no predicate fired
     "unclassified",
 ];
@@ -1633,8 +1698,27 @@ fn consume_move_prelude(
                 sim.apply(ins);
                 *cursor += 1;
             }
+            // ON THE ACTIVE SLOT ONLY. `side_ref` alone is not enough: gen3's
+            // party-wide cures walk `pokemon_index_iter()` in SLOT ORDER
+            // (`gen3/choice_effects.rs`, `Choices::HEALBELL` /
+            // `Choices::AROMATHERAPY`) and emit a `ChangeStatus { SLEEP -> NONE }`
+            // for every statused party member — so when a BENCHED member below
+            // the active is asleep, the FIRST instruction of a Sleep Talk
+            // callee's own transition is a status clear on a NON-ACTIVE slot.
+            // Without this predicate the arm ate it as "the sleeper woke up",
+            // which broke the callee identification in `identify_sleep_talk_called`
+            // twice over: the tail was cut one instruction too late, AND
+            // `sim.apply` had already cured the bench, so re-running the
+            // candidate cure regenerated a SHORTER list. The regenerated branch
+            // came out equal to `tail[1..]` — a proper SUFFIX, which the
+            // containment split cannot see either way, so a transition that was
+            // exactly right was refused as `none_matched:shape_length`.
+            //
+            // A genuine wake cannot be excluded by this: every wake the engine
+            // emits here carries `current_active_index`.
             Instruction::ChangeStatus(change)
                 if change.side_ref == side
+                    && changes_the_active_slot(sim.state, change)
                     && change.old_status == PokemonStatus::SLEEP
                     && change.new_status == PokemonStatus::NONE =>
             {
@@ -1650,8 +1734,17 @@ fn consume_move_prelude(
                     out.active_status_transitions.push(transition);
                 }
             }
+            // Same predicate, same reason: a party-wide cure clears a benched
+            // FREEZE too, and this arm had the identical defect. It presents
+            // differently and worse — the benched thaw was eaten, which left the
+            // ACTIVE's own clear next in line for the wake arm above, so BOTH
+            // status changes were consumed, the callee regenerated an empty
+            // transition and the render silently dropped
+            // `|move|..|healbell|..|[from] Sleep Talk` with NO refusal at all.
+            // Guarding only the SLEEP arm would leave that silent drop standing.
             Instruction::ChangeStatus(change)
                 if change.side_ref == side
+                    && changes_the_active_slot(sim.state, change)
                     && change.old_status == PokemonStatus::FREEZE
                     && change.new_status == PokemonStatus::NONE =>
             {
@@ -1867,6 +1960,30 @@ fn self_faint_move_can_be_self_only(
     protected || effectiveness == 0.0 || ability_blocks
 }
 
+/// Does "it hit and did nothing" outweigh "it missed", for one empty delta?
+///
+/// The engine merges same-delta branches, so when a move's ENTIRE effect cannot apply to
+/// the current defender its successful no-op hit and its miss are one branch. Within that
+/// branch, conditioned on the move having been attempted:
+///
+/// ```text
+/// P(hit, no effect) = accuracy
+/// P(miss)           = 1 - accuracy
+/// ```
+///
+/// They cross at 50%. Any immobilizer factor (the 0.25 paralysis roll, Attract's 1/2)
+/// multiplies BOTH and cancels, so the crossover does not move with the attacker's status
+/// — the immobilized branch is a separate, marked branch anyway.
+///
+/// WHY THE MASSES ARE COMPARED HERE RATHER THAN A THRESHOLD HARD-CODED. The
+/// `|cant|..|par` guess this renderer used to carry was justified by "the paralysis
+/// outcome carries the larger probability mass" and never checked it, and PR #1140 was
+/// opened to gate it. The lesson that outlived that branch is that a dominance claim in a
+/// comment and a dominance TEST in the code are different things, so this one is a test.
+fn no_effect_hit_outweighs_miss(accuracy: f32) -> bool {
+    accuracy > 100.0 - accuracy
+}
+
 /// A `(move, ...)` action phase. `called_tag` marks a caller-invoked move
 /// (Sleep Talk): the prelude is skipped and the `|move|` line carries the
 /// `[from]` caller attribution (fold: `called` token flag).
@@ -2050,13 +2167,17 @@ fn render_move_phase(
             out.lines
                 .push(format!("|move|{attacker_ident}|sleeptalk|{attacker_ident}"));
             let called_tail: Vec<Instruction> = tail.to_vec();
-            let ident = identify_sleep_talk_called(
+            let SleepTalkProbe {
+                ident,
+                callee_can_convert_an_opponent_heal,
+            } = identify_sleep_talk_called(
                 sim.state,
                 side,
                 defender_choice,
                 choice,
                 &called_tail,
                 branch_on_damage,
+                NoneMatchedTailOrigin { segment, cursor },
             );
             match ident {
                 SleepTalkIdent::Matched(called_choice) => {
@@ -2132,6 +2253,7 @@ fn render_move_phase(
                     let (
                         defender_protected,
                         defender_has_absorb_ability,
+                        defender_absorb_heal_clamps_to_zero,
                         defender_absorb_zero_heal_possible,
                     ) = {
                         let d = match other_side(side) {
@@ -2141,15 +2263,43 @@ fn render_move_phase(
                         let active = d.get_active_immutable();
                         let has_absorb =
                             absorb_ability_can_emit_a_zero_heal(active.ability);
+                        // NARROWED from ability PRESENCE to "that ability could have
+                        // produced THIS instruction". The absorb no-op only exists
+                        // when the engine's own clamp took the 25% heal to zero.
+                        let clamps =
+                            has_absorb && absorb_heal_clamps_to_zero(active.hp, active.maxhp);
                         (
                             d.volatile_statuses
                                 .contains(&PokemonVolatileStatus::PROTECT),
                             has_absorb,
-                            // NARROWED from ability PRESENCE to "that ability could have
-                            // produced THIS instruction". The absorb no-op only exists
-                            // when the engine's own clamp took the 25% heal to zero.
-                            has_absorb
-                                && absorb_heal_clamps_to_zero(active.hp, active.maxhp),
+                            clamps,
+                            // NARROWED AGAIN, from a NECESSARY condition on the defender to
+                            // the producer's OWN condition on the callee. The HP clamp answers
+                            // "could a converted absorb heal have come out as zero"; it does
+                            // not answer "was there a converted absorb heal at all", and on
+                            // the census block the answer to the second question is no at
+                            // every occurrence of this refusal.
+                            //
+                            // MEASURED, on the 31 decisions of
+                            // `ambiguous_unrenderable:heal_zero_marker` at `--truth-sims 64`:
+                            // all 31 hold PROTECT, are at FULL HP with `WATERABSORB`, and have
+                            // exactly two matching callees, BOTH protect-flagged with
+                            // `heal == None`. Two callee pairs account for all of them --
+                            // (Ice Beam, Toxic) x19 and (Surf, Toxic) x12 -- and Ice Beam is
+                            // not even an absorbed type. So the marker was the Protect-blocked
+                            // branch at every one, and the guard was refusing on the
+                            // defender's HP rather than on anything the producer needed.
+                            //
+                            // FAIL-CLOSED IS PRESERVED, and this is the load-bearing claim:
+                            // #1211's `the_absorb_bypass_producer_is_real` counterexample --
+                            // a protect-BYPASSING absorbed move such as `WATERSPORT`, whose
+                            // converted heal survives `remove_effects_for_protect` -- comes
+                            // back from the scan with `heal == Some(Heal{Opponent, 0.25})`,
+                            // so it still refuses. That is not an argument: the scan reports
+                            // that field set on 101 candidate evaluations in the exemplar
+                            // battle alone, so the conjunct is live rather than vacuous, and
+                            // `the_bypassing_callee_still_refuses` pins it.
+                            clamps && callee_can_convert_an_opponent_heal,
                         )
                     };
                     if !sleeptalk_refusal_is_unsafe_with_protect(
@@ -2469,14 +2619,24 @@ fn render_move_phase(
                             // render the ability axis WOULD have refused before this change;
                             // the bare token is unchanged and still means what era 62 and 63
                             // measured, so no series is redefined under a reader.
+                            //
+                            // THREE TOKENS NOW, for the reason the two-token note above
+                            // gives, applied once more. This change admits a render on a
+                            // FULL-HP absorber, which the old expression would have counted
+                            // as `_absorb_headroom` -- a token whose whole meaning is that
+                            // the defender HAD headroom. That would have been a false label
+                            // on a live series AND would have hidden this reclaim inside
+                            // #1211's, which is the "the class stopped refusing and stopped
+                            // being visible" failure `lossy_subcase_renders` exists to
+                            // prevent. `_absorb_full_hp` is therefore the counter the stop
+                            // condition for THIS change is read from, against the fall in
+                            // `world_failure_reasons[...:heal_zero_marker]`.
                             out.mark_lossy_subcase(
                                 SLEEPTALK_LOSSY_TAG,
-                                if defender_has_absorb_ability {
-                                    "sleeptalk_called_unidentified:\
-                                     protect_marker_rendered_absorb_headroom"
-                                } else {
-                                    "sleeptalk_called_unidentified:protect_marker_rendered"
-                                },
+                                protect_marker_counter_slug(
+                                    defender_has_absorb_ability,
+                                    defender_absorb_heal_clamps_to_zero,
+                                ),
                             );
                         } else if heal_is_a_direct_self_heal(&called_tail, index, side) {
                             // RENDER the direct self-heal. Bare `|-heal|{ident}|{cond}` with no
@@ -2743,10 +2903,19 @@ fn render_move_phase(
     let ghost_curse = choice.move_id == Choices::CURSE && !non_ghost_curse;
     let self_target = choice.target == MoveTarget::User || non_ghost_curse;
     // A status-inflicting move against an already-statused defender cannot
-    // work; the engine merges its no-op "hit" branch with the miss branch,
-    // and the fail outcome carries most of the probability mass — render the
-    // real protocol's fail form (blank target + [still]), never [miss]
-    // (documented ambiguity: a real 15%-miss renders identically here).
+    // work; the engine merges its no-op "hit" branch with the miss branch —
+    // render the real protocol's fail form, never [miss] (documented
+    // ambiguity: a real miss renders identically here).
+    //
+    // ⚠ "the fail outcome carries most of the probability mass" STOOD HERE UNCHECKED, and it
+    // is the same assert-in-a-comment this file's `volatile_fail` arm was written to stop
+    // doing. It happens to be TRUE for every gen3 member of this family -- the lowest
+    // accuracy is 55% (SING, GRASSWHISTLE, POISONGAS), so `no_effect_hit_outweighs_miss`
+    // holds for all twelve, measured from the engine's own table -- but nothing here tests
+    // it. Left as a claim about the move table rather than converted into a code path,
+    // deliberately: routing this arm through the comparison would change behaviour only
+    // below 50% accuracy, where gen3 has no member, so it would be an untestable edit to a
+    // shipped arm. Recorded as a KNOWN ASSERTION rather than silently reworded.
     // Type-based status immunity (Steel/Poison vs psn, Fire vs brn, Ice vs
     // frz): the real protocol shows |-immune| and it wins over the
     // already-statused fail (PS checks immunity first).
@@ -2807,6 +2976,241 @@ fn render_move_phase(
                 1
             };
             side_condition_value(sim.state, target_side, sc.condition) >= cap
+        });
+    // A volatile-only move whose volatile the defender ALREADY CARRIES cannot work, exactly
+    // as `status_fail` above cannot for an already-statused defender. The engine merges its
+    // no-op hit with its miss, so one empty delta carries both — and below, the miss
+    // inference used to label the whole thing `|[miss]|` without asking which half was
+    // bigger.
+    //
+    // MEASURED, from the engine's own `MOVES` table rather than a hand-copied one
+    // (`cargo run -p pokezero-search --example dump_move_table`) crossed with the 1682-set
+    // gen3 randbat pool (`scripts/c157_no_effect_hit_reach.py`): this arm's family is FIVE
+    // moves — SUPERSONIC 55, SWEETKISS 75, DISABLE 80, SWAGGER 85, LEECHSEED 90 — and the
+    // pool carries exactly one of them, LEECHSEED, on 45 of 1682 variants (2.68%). At 90%
+    // the split inside the merged branch is 0.90 hit-no-op against 0.10 miss, so `|[miss]|`
+    // was the MINORITY render at 9:1. The other four carry 0 variants in this pool; the arm
+    // covers them because the mechanism is theirs too, not because they are reachable today.
+    //
+    // The 45 is the OBSERVED-PLAY floor, not the reach. The renderer also runs on searched
+    // worlds, and a search enumerates re-clicking Leech Seed at an already-seeded foe as a
+    // legal action, so every node with a seeded foe generates this branch.
+    //
+    // NOT COSMETIC. `fold.rs`'s `process_line` turns `|-miss|` into `window.miss` and
+    // `|-fail|` into `window.fail`, and `encoder.rs` gives each its own numeric column, so
+    // the wrong label wrote false data into two features the search consumes.
+    //
+    // THE LINE SHAPE IS CORPUS-MEASURED, not inferred:
+    // `tests/fixtures/showdown/capture/lines-battle-gen3randombattle-controlled-20260710004.log`
+    // turn 7 has real Showdown emitting `|move|p1a: Jumpluff|Leech Seed||[still]` followed
+    // by `|-fail|p1a: Jumpluff` — the blank-target form, failing on the USER, which is the
+    // same pair `side_condition_fail` already renders and NOT the `|-fail|<defender>|<code>`
+    // form `status_fail` uses.
+    //
+    // EXISTENCE IS CHECKED, NOT ASSUMED. #1140 shipped and then reverted a blanket
+    // "a volatile is present, so a competitor exists" arm; at Protect counter 0 the
+    // competing mass is ZERO and that arm invented a `|move|` line for a branch that was
+    // 100% something else. So this reads the DEFENDER'S OWN volatile set: no already-present
+    // volatile, no competitor, and the empty tail really is the miss.
+    //
+    // DOMINANCE IS CHECKED TOO, for the same reason. Below 50% accuracy the miss is the
+    // larger half and `|[miss]|` stays correct.
+    //
+    // KNOWN UNPINNED AT THIS CALL SITE, measured rather than assumed: deleting the
+    // `no_effect_hit_outweighs_miss` conjunct SURVIVES the whole crate suite -- 36 binaries,
+    // 524 passed, 0 failures, `cargo test --no-fail-fast`, RE-MEASURED with #1234 merged. It cannot be pinned by a fixture, and the
+    // reason is a property of the move table rather than of the tests — NO move in
+    // `poke_engine::choices::MOVES`, in any generation, is an opponent-target volatile
+    // Status move at or below 50% accuracy, so no `Choice` the renderer can be handed
+    // reaches the false branch. The crossover itself is pinned directly instead, on both
+    // sides and at the tie, by `no_effect_hit_outweighs_miss`'s unit test. Dropping the
+    // conjunct is a mutation toward the SAFER behaviour and it survives; that is declared
+    // here rather than counted as caught.
+    //
+    // EVERY CONJUNCT BELOW IS EITHER PINNED OR DECLARED, and two that were here at first
+    // review are GONE because they were wrong or redundant. An earlier revision of this note
+    // said the arm "excludes the deterministic causes the way the miss inference does"; it
+    // did not, it excluded MORE, and review caught the difference behaviourally.
+    //
+    //   * `absorb.is_none()` -- DELETED, it was a live defect. `absorb` is
+    //     `is_absorb_ability(defender_ability)` and reads the DEFENDER'S ABILITY ONLY: no
+    //     move-type and no damaging check anywhere in it. So it was false for every Volt
+    //     Absorb / Water Absorb / Flash Fire defender whatever the move, and this whole arm
+    //     switched off for them -- measured through the renderer, an already-seeded Water
+    //     Absorb, Volt Absorb or Flash Fire target kept the 9:1 `|[miss]|` mislabel while a
+    //     plain one rendered the fail. The tell was the asymmetry with `status_fail`, which
+    //     has NO absorb conjunct and renders Toxic-into-an-already-poisoned-Water-Absorb
+    //     correctly; "mirrors `status_fail`" was the claim and this arm was strictly
+    //     narrower. It is not needed for soundness either: the absorb render below is gated
+    //     on `is_damaging`, which `category == Status` here already excludes.
+    //   * `!defender_protected` -- DELETED as redundant, and the redundancy is a property of
+    //     the engine, not a reachability argument. `Choice::remove_effects_for_protect`
+    //     (`choices.rs`) sets `volatile_status = None`, so under Protect the closure below
+    //     finds no volatile and the arm cannot fire. NOTE what does NOT hold: that function
+    //     also sets `accuracy = 100.0`, but the gen3 patch RESTORES the original accuracy on
+    //     the next line to keep miss and blocked-hit branches distinct -- so accuracy is the
+    //     wrong reason to call it redundant, and the volatile is the right one. The removal
+    //     depends on `flags.protect` gating that call: measured on the engine's own table,
+    //     all five family members carry the flag and NO opponent-target volatile Status move
+    //     under 100% accuracy lacks it. Pinned by a fixture that keeps Protect's own render.
+    //
+    //   * `ability_immune.is_none()` -- DELETED as provably vacuous HERE, by derivation
+    //     rather than by reachability. Every arm of `ability_immunity` requires either
+    //     `damaging` (Levitate, Wonder Guard) or `inflicts(status)` (Immunity, Insomnia,
+    //     Vital Spirit, Limber, Water Veil, Magma Armor), and this predicate already
+    //     excludes both with `category == Status` and `status.is_none()`. Re-adding it is
+    //     behaviour-neutral, measured.
+    //
+    // EVERY CONJUNCT, MEASURED. `cargo test --no-fail-fast`, 36 binaries, one mutant at a
+    // time, on a harness that treats a mutant it could not APPLY as an instrument failure
+    // rather than a survivor -- the first version of that harness printed "SURVIVED" for
+    // three mutants whose anchor was not unique, which is the tally-that-cannot-express-a-
+    // survivor defect this campaign records, committed inside the check for it.
+    //
+    //   KILLED, i.e. pinned by a fixture:
+    //     `category == Status`      -- a damaging move's miss stays a miss (WRAP fixture).
+    //     `accuracy < 100.0`        -- family D stays deferred (YAWN fixture).
+    //     `effectiveness > 0.0`     -- a type-immune defender keeps its bare `|move|` line
+    //                                  (DISABLE-into-Ghost fixture). ⚠ THIS WAS DECLARED
+    //                                  UNPINNABLE ON A FALSE REASON: the note said every
+    //                                  sub-100% member except LEECHSEED and DISABLE applies
+    //                                  CONFUSION, whose counter makes the tail non-empty --
+    //                                  and then argued as though the named exception did not
+    //                                  exist. DISABLE applies no CONFUSION, so the case is
+    //                                  ~20 lines of fixture. The clause "kept as the
+    //                                  deference to the type-immunity render" was false too:
+    //                                  both `|-immune|` arms below require `is_damaging` or
+    //                                  `status.is_some()`, so a volatile-only Status move
+    //                                  gets NO immune render at all. That missing line is a
+    //                                  real, separate gap, named rather than fixed here.
+    //     re-adding `absorb`        -- the blocker-1 fix itself (absorb-ability fixture).
+    //
+    //   SURVIVED, declared here rather than counted as caught. The first four cannot be
+    //   distinguished by ANY gen3 fixture, and that is a property of the engine's move
+    //   table, measured from it rather than assumed:
+    //     `status.is_none()`        -- NO opponent-target volatile Status move under 100%
+    //                                  accuracy also carries a `status`. Zero candidates.
+    //     `side_condition.is_none()`-- likewise zero.
+    //     `choice.target == Opponent` and the closure's `vs.target == Opponent` -- exactly
+    //                                  TWO moves disagree, BURNINGBULWARK and CURSE, both
+    //                                  `choice.target = Opponent` with a `User` volatile, and
+    //                                  both at 100% accuracy -- so zero UNDER 100% ACCURACY,
+    //                                  which is the population this arm sees. An earlier
+    //                                  revision said "zero, in either direction" without the
+    //                                  qualifier; the conclusion held, the count did not.
+    //     `!non_ghost_curse`        -- CURSE is 100% accuracy, so the pinned accuracy
+    //                                  conjunct already excludes it; a single mutant cannot
+    //                                  reach it.
+    //     the dominance comparison  -- see the note above; swept across all nine generations
+    //                                  by review, zero candidates anywhere.
+    //
+    //   Re-adding either DELETED conjunct above is behaviour-neutral and survives, which is
+    //   the evidence that they were dead rather than a gap in the suite -- the opposite
+    //   reading from a survivor of a conjunct that is still in the code.
+    //
+    // SCOPED TO ACCURACY < 100, which is where the mislabel lives. At 100% accuracy the same
+    // shape is DETERMINISTIC (no miss exists), the miss inference cannot fire, and today's
+    // render is a plain `|move|<attacker>|<move>|<defender>` with no fail line — a MISSING
+    // line rather than a wrong one. That sibling is real and larger: **21 moves, 104 of 1682
+    // variants (6.18%)**, and the pool's carriers are ENCORE (95) and YAWN (14) — measured by
+    // `scripts/c157_no_effect_hit_reach.py`, which is the citation of record for it.
+    //
+    // ⚠ An earlier revision of this note said "23 moves, 121, 7.19%" and named MEANLOOK,
+    // SPIDERWEB, LOCKON and INGRAIN as members. All five figures and all four names were
+    // WRONG, and review caught them against this repo's own committed script. The 121
+    // reproduces exactly under a predicate that tests `has_volatile` instead of the volatile's
+    // TARGET, which admits CURSE (17 carriers — the move this very predicate excludes by
+    // `!non_ghost_curse`); and MEANLOOK, SPIDERWEB and LOCKON carry NO volatile at all in the
+    // engine's table while INGRAIN's targets the USER. Naming members from memory instead of
+    // from the table is the same defect the accuracy figures are derived in-crate to avoid.
+    //
+    // Left for a change that measures its `|move|`-line and `fail`-column movement against the
+    // fidelity corpus rather than riding along here. Bounded and named, not silent.
+    // LEECH SEED INTO A GRASS DEFENDER IS `|-immune|`, and this is a KNOWN-WRONG LINE THAT
+    // ROUND 2 OF THIS CHANGE WOULD OTHERWISE HAVE SHIPPED. Review found it in the core arm.
+    //
+    // Showdown gates Leech Seed on `onTryImmunity(target) { return !target.hasType('Grass') }`,
+    // which is NOT a type-effectiveness zero -- Grass-vs-Grass is 0.5 -- so `effectiveness`
+    // never defers to it and neither did this file. Measured on the engine: with a GRASS
+    // defender the move phase produces a single 100% EMPTY branch whether or not the target
+    // already carries the seed, i.e. the engine models the immunity as a no-op and rolls no
+    // accuracy at all. Before this change that branch rendered `|[miss]|`; with `volatile_fail`
+    // and no this predicate it rendered `|-fail|`; the truth is `|-immune|`. Three different
+    // `fold`/encoder columns, and the first two are both wrong.
+    //
+    // RENDERED RATHER THAN REFUSED, deliberately, and the doctrine picks this way round: fail
+    // closed applies when the value CANNOT BE KNOWN, and this one can -- the defender's types
+    // are in the state and the rule is fixed. A refusal here would abort the whole WORLD via
+    // `reject_attribution_unsafe` for a case that is decidable, which is the trade the
+    // campaign is trying to stop making.
+    //
+    // THE LINE IS CORPUS-MEASURED, in the same committed capture as the fail form:
+    // `tests/fixtures/showdown/capture/lines-battle-gen3randombattle-controlled-20260710004.log`
+    // turn 9 shows `|move|p1a: Jumpluff|Leech Seed|p2a: Cacturne` -- explicit target, no
+    // `[still]` -- followed by `|-immune|p2a: Cacturne`. Cacturne is Grass/Dark.
+    //
+    // NOT SCOPED TO THE ALREADY-SEEDED CASE, on purpose. The unseeded Grass target is the
+    // same state, the same root cause and the same wrong column, and it reached here as a
+    // `|[miss]|` through the miss inference rather than through this arm. Fixing only the half
+    // this PR happens to own is the "the class is closed means the instances we looked at are
+    // closed" defect. Reach for both halves is measured in
+    // `scripts/c157_no_effect_hit_reach.py`.
+    //
+    // Reachability of the already-seeded half specifically is not hypothetical: gen3
+    // `remove_volatile_statuses_on_switch` retains `LEECHSEED => baton_passing`, so Baton Pass
+    // can hand a live seed to a Grass receiver.
+    //
+    // TWO LATENT DIVERGENCES, HELD CLOSED BY THE POOL AND NOT BY THIS CODE. Named here with
+    // their measurement so that a pool change surfaces them instead of silently shipping a
+    // wrong line:
+    //
+    //   * a SEMI-INVULNERABLE Grass target (Fly / Dig / Dive / Bounce in progress) gets
+    //     `|-immune|` here, where Showdown's `hitStepInvulnerabilityEvent` runs BEFORE
+    //     `hitStepTryImmunity` and answers `|-miss|`;
+    //   * a Grass target behind MAGIC COAT gets `|-immune|`, where Showdown bounces the move
+    //     back at the user.
+    //
+    // Both are unreachable in gen3 randbats and only because of the SET POOL: FLY, DIG, DIVE,
+    // BOUNCE and MAGICCOAT have **0 of 1682** carriers, counted over the generated variant
+    // universe and cross-checked against raw `data/random-battles/gen3/sets.json`, where none
+    // of the five names occurs at all. The engine's charge machinery works, so nothing in this
+    // file or the engine holds these closed -- only the pool does, which is exactly the kind
+    // of premise that stops being true when someone edits a pool. Deliberately NOT guarded:
+    // a guard on an unreachable arm cannot be tested, and the reachability claim is the
+    // honest artefact.
+    //
+    // KNOWN UNPINNED, declared: dropping `!has_any_effect` from this predicate SURVIVES the
+    // suite. Measured reason -- the engine models the immunity as a no-op, so a Leech Seed into
+    // a Grass defender NEVER produces a non-empty move tail, and the render site below is
+    // nested inside `if !has_any_effect` regardless. The conjunct is belt-and-braces and the
+    // mutant is unreachable rather than uncaught.
+    let leechseed_grass_immune = !has_any_effect
+        && choice.move_id == Choices::LEECHSEED
+        && {
+            let d = match defender {
+                SideReference::SideOne => &sim.state.side_one,
+                SideReference::SideTwo => &sim.state.side_two,
+            };
+            d.get_active_immutable().has_type(&PokemonType::GRASS)
+        };
+    let volatile_fail = !has_any_effect
+        && !leechseed_grass_immune
+        && choice.category == MoveCategory::Status
+        && choice.status.is_none()
+        && choice.side_condition.is_none()
+        && choice.target == MoveTarget::Opponent
+        && !non_ghost_curse
+        && choice.accuracy < 100.0
+        && effectiveness > 0.0
+        && no_effect_hit_outweighs_miss(choice.accuracy)
+        && choice.volatile_status.as_ref().map_or(false, |vs| {
+            vs.target == MoveTarget::Opponent && {
+                let d = match defender {
+                    SideReference::SideOne => &sim.state.side_one,
+                    SideReference::SideTwo => &sim.state.side_two,
+                };
+                d.volatile_statuses.contains(&vs.volatile_status)
+            }
         });
     // FOUR PREDICATES DELETED HERE, not merely unused: `volatile_empty_tail_ambiguous`,
     // `deterministic_noop`, `move_could_act` and `empty_tail_can_be_accuracy_miss`
@@ -2870,7 +3274,7 @@ fn render_move_phase(
         } else {
             format!("|move|{attacker_ident}|{move_name}||[still]")
         }
-    } else if side_condition_fail && called_tag.is_none() {
+    } else if (side_condition_fail || volatile_fail) && called_tag.is_none() {
         format!("|move|{attacker_ident}|{move_name}||[still]")
     } else {
         format!("|move|{attacker_ident}|{move_name}|{defender_ident}")
@@ -2884,13 +3288,44 @@ fn render_move_phase(
 
     // Miss inference: an opponent-target move with accuracy < 100 whose tail
     // shows no effect on the defender, with deterministic causes (immunity,
-    // protect, absorb) ruled out. NOTE: for a paralyzed/frozen attacker the
-    // engine merges the full-para branch with the miss branch — that case
-    // never reaches here (the prelude renders |cant| first), so the residual
-    // ambiguity is para-vs-miss only, documented in the module docs.
+    // protect, absorb) ruled out.
+    //
+    // THE IMMOBILIZERS NO LONGER COMPETE HERE, and the claim that used to stand in this
+    // comment — "for a paralyzed/frozen attacker the engine merges the full-para branch
+    // with the miss branch, that case never reaches here (the prelude renders |cant|
+    // first)" — outlived the code that made it true, twice over. Both gen3 move-time
+    // immobilizers now carry `Instruction::MoveImmobilized`, so a full-paralysis or
+    // Attract branch returns far above with its own exact `|cant|` line and an empty tail
+    // that DOES reach here is provably not an immobilization. The sleep and freeze gates
+    // still return from `consume_move_prelude`. Nothing about the attacker's status is
+    // read here, deliberately.
+    //
+    // WHAT DOES COMPETE is "it hit and did nothing", which the engine merges into the same
+    // empty delta and which is usually the LARGER half. Three shapes of it are separated
+    // before this point and are excluded below so the two decisions cannot both fire:
+    // `status_fail` (already-statused defender), `volatile_fail` (already-carried
+    // volatile), and a Ghost-target Curse.
+    //
+    // ONE SHAPE IS NOT SEPARATED, and it is disclosed rather than guessed at: an
+    // OPPONENT-side boost that cannot apply — every requested stat already at floor, or
+    // Clear Body / White Smoke / Hyper Cutter / Keen Eye / Substitute blocking it —
+    // produces the same empty delta, and `boost_has_no_effect` above is computed for it but
+    // only consumed for the SELF-target case (`capped_boost_move`). It is left alone on
+    // measured reach, not on belief: the family is KINESIS 80, COTTONSPORE / METALSOUND /
+    // SCREECH / SWAGGER 85, SCARYFACE 90 and STRINGSHOT 95, and
+    // `scripts/c157_no_effect_hit_reach.py` measures **0 of 1682** gen3 randbat variants
+    // carrying any of them. The three accuracy-droppers that ARE common (FLASH,
+    // SANDATTACK, SMOKESCREEN) are all 100% accuracy, so they cannot reach this block at
+    // all. Handling it needs the real protocol's THREE different failure lines
+    // (`|-fail|<user>` at floor, `|-fail|<target>|unboost` + `[from] ability:` for Clear
+    // Body, `|-activate|<target>|move: Substitute` behind a sub), which is a separate
+    // change with its own corpus measurement — and #1140's reverted arm is the standing
+    // reason not to fold three distinguishable outcomes into one guess in passing.
     let mut missed = false;
     if choice.target == MoveTarget::Opponent
         && !status_fail
+        && !volatile_fail
+        && !leechseed_grass_immune
         && !non_ghost_curse
         && ability_immune.is_none()
         && !deals_damage_to_defender
@@ -2933,8 +3368,9 @@ fn render_move_phase(
         out.mark_attribution_unsafe("ghost_curse_engine_model");
     }
 
-    // Real fail lines (fold-ignored; kept for line-stream fidelity with the
-    // measured protocol shapes above).
+    // Real fail lines. NOT fold-ignored, which an earlier version of this comment claimed:
+    // `process_line` sets `window.fail` on `-fail` and the encoder gives it a column, so
+    // these lines carry a feature and not only line-stream fidelity.
     if called_tag.is_none() {
         if status_fail {
             let code = {
@@ -2948,7 +3384,11 @@ fn render_move_phase(
                 Some(code) => out.lines.push(format!("|-fail|{defender_ident}|{code}")),
                 None => out.lines.push(format!("|-fail|{defender_ident}")),
             }
-        } else if side_condition_fail {
+        } else if side_condition_fail || volatile_fail {
+            // Same pair as the side-condition-at-cap fail, and corpus-measured for the
+            // volatile case too: the blank-target `|move|` line above plus `|-fail|<USER>`.
+            // NOT `|-fail|<defender>` — real Showdown fails a fizzled volatile on the
+            // attacker, which the captured turn cited at the predicate reads out directly.
             out.lines.push(format!("|-fail|{attacker_ident}"));
         }
     }
@@ -3023,6 +3463,13 @@ fn render_move_phase(
             }
             return;
         }
+        if leechseed_grass_immune && !defender_protected {
+            // Ahead of the effectiveness and ability arms because neither can see an
+            // `onTryImmunity`, and behind Protect because Showdown's Protect check runs
+            // first -- a protected Grass target shows the Protect activation, not this.
+            out.lines.push(format!("|-immune|{defender_ident}"));
+            return;
+        }
         if defender_protected && choice.flags.protect {
             out.lines
                 .push(format!("|-activate|{defender_ident}|Protect"));
@@ -3055,7 +3502,14 @@ fn render_move_phase(
         }
         // A failed status move (already statused, boost at cap, no last move
         // to encore...): real protocol = blank-target [still] (already
-        // rendered for self-target); the fold ignores |-fail|.
+        // rendered for self-target, and now for the sub-100%-accuracy
+        // already-carried-volatile case via `volatile_fail`).
+        //
+        // "the fold ignores |-fail|" STOOD HERE AND IS FALSE: `process_line` sets
+        // `window.fail` and the encoder gives it a column. So the OPPONENT-target 100%
+        // -accuracy fails that still reach this return are missing both the blank target
+        // and a real feature. Named, bounded and left for its own change — see the
+        // `volatile_fail` predicate's scope note.
         return;
     }
 
@@ -4013,15 +4467,27 @@ fn defender_facts_survive_tail_prefix(
 /// stops costing a world.
 ///
 /// WHAT STILL REFUSES, and why the axis cannot simply be deleted. A FULL-HP absorber that
-/// holds PROTECT is genuinely ambiguous and stays refused. Both producers can reach that
-/// state: producer 1 through any protect-flagged callee, and producer 2 through a callee
-/// that BYPASSES Protect, because `ability_modify_attack_against` runs BEFORE the Protect
-/// gate in `before_move` and deliberately RESTORES `flags.protect` -- so an unflagged move
-/// keeps its converted heal where a flagged one has it stripped by
+/// holds PROTECT is ambiguous WHEN SOME CALLEE COULD HAVE CONVERTED A HEAL, and only then.
+/// Both producers can reach that state: producer 1 through any protect-flagged callee, and
+/// producer 2 through a callee that BYPASSES Protect, because `ability_modify_attack_against`
+/// runs BEFORE the Protect gate in `before_move` and deliberately RESTORES `flags.protect` --
+/// so an unflagged move keeps its converted heal where a flagged one has it stripped by
 /// `remove_effects_for_protect`. That is not hypothetical: WATERSPORT is Water-typed,
 /// `target: Opponent` and carries no protect flag, so Water Absorb converts it and Protect
 /// does not strip it. `the_absorb_bypass_producer_is_real` pins that counterexample against
-/// the engine's own move table, so a future reader cannot retire this axis on prose.
+/// the engine's own move table, and
+/// `protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing` now drives it
+/// through the production render path, so a future reader cannot retire this axis on prose.
+///
+/// NARROWED AGAIN, and the caller is where it happened. This function still refuses whenever
+/// `defender_absorb_zero_heal_possible`, unchanged; what changed is what the production read
+/// puts in that argument. The HP clamp is a NECESSARY condition on producer 2, not a
+/// sufficient one, and the sufficient one -- the callee's own post-modification
+/// `heal == Some(Heal{Opponent, > 0})`, see `choice_can_convert_an_opponent_heal` -- is now
+/// ANDed in at `render_move_phase`'s read site. On the census block that is the difference
+/// between refusing 31 decisions and refusing none of them: all 31 hold PROTECT at full HP
+/// with `WATERABSORB` and have two matching callees, both protect-flagged with `heal == None`,
+/// so producer 2 could not have written the instruction being refused.
 ///
 /// EQUIVALENT-MUTANT NOTE. Hardcoding `defender_protected = true` at the PRODUCTION READ
 /// SITE survives the crate suite -- the unit tests below pin the parameter, not the read --
@@ -4491,11 +4957,106 @@ enum SleepTalkIdent {
     Ambiguous,
 }
 
+/// What the callee scan learned, beyond WHICH callee it was.
+///
+/// The scan regenerates every Sleep Talk candidate through the engine's own modification
+/// pass, so it already holds the one fact the zero-heal guard was approximating with the
+/// defender's HP: whether any callee reaches the absorb no-op's producer at all. Returning
+/// it costs nothing and is strictly more informative than the proxy -- see
+/// `callee_can_convert_an_opponent_heal` for why the proxy was not enough.
+struct SleepTalkProbe {
+    ident: SleepTalkIdent,
+    /// Does ANY candidate's post-modification choice still carry an OPPONENT-targeted
+    /// positive heal -- i.e. the exact and only precondition of the engine's full-HP absorb
+    /// no-op (`gen3/generate_instructions.rs` `get_instructions_from_heal`)?
+    ///
+    /// OVER ALL CANDIDATES, not just the matching ones, and that is deliberate: it is the
+    /// fail-closed direction (more candidates can only make this MORE true, hence refuse
+    /// more), and it does not depend on the match set, which the ambiguity means is not a
+    /// singleton anyway.
+    ///
+    /// EQUIVALENT-MUTANT NOTE, recorded so the next reader does not chase it -- and SCOPED,
+    /// because the first version of this note was stated for the whole function and is only
+    /// true of one arm. Review caught that.
+    ///
+    /// **On the `Ambiguous` arm**, narrowing the scan to MATCHING candidates is equivalent,
+    /// not merely unkilled: if producer 2 fired, the callee that fired is the one that
+    /// generated this tail, so it matches by construction and a matching-only scan cannot
+    /// miss it. A candidate that carries the converted heal and does NOT match did not
+    /// produce THIS tail, so its heal is irrelevant to it.
+    ///
+    /// **On the `NoneMatched` arm that argument is FALSE as stated**, because the matching set
+    /// is empty by definition -- "the callee that fired matches" is exactly what did not
+    /// happen there. The arm does reach this flag: `sleeptalk_refusal_is_unsafe_with_protect`
+    /// answers `NoneMatched(_) => true`, and `mark_attribution_unsafe_subcase` does not
+    /// short-circuit, so the walk runs and calls `protect_blocked_marker_side` with it. What
+    /// bounds the consequence is that the refusal is UNCONDITIONAL on that arm: the flag
+    /// cannot turn a refused `NoneMatched` branch into a searched one. It can only change
+    /// lines on a branch nothing consumes, and fire the render counter there -- which is why
+    /// that counter is documented as counting BRANCH RENDERS and not reclaimed worlds.
+    /// Measured: `…_absorb_full_hp` and `none_matched` decisions do not co-occur in any shard
+    /// of any arm run for this change (9900068 carries 19 `none_matched` decisions and 0
+    /// full-HP renders; every shard with full-HP renders carries 0 `none_matched`). That is
+    /// NOT a discharge -- nothing shows the marker could have fired in 9900068 -- and it is
+    /// recorded as an observation, not a proof.
+    ///
+    /// **`NoCandidates` has no behavioural coverage and cannot have any**, which is why a
+    /// strictly-safer mutant that forces this flag `true` on an empty candidate list also
+    /// survives. Measured against a control rather than argued: with the sleeper's only move
+    /// being Sleep Talk the engine emits ONE branch, the 50% "nothing happened" arm, and no
+    /// branch carrying a callee tail -- so no branch exists on which the flag is consulted.
+    /// The control with two callees emits the second branch and does refuse. An arm with no
+    /// reachable branch cannot be distinguished by any fixture.
+    ///
+    /// The all-candidates form is kept because it is the strictly more conservative of the two
+    /// and does not rest on the `Ambiguous`-only argument. Restoring the old EARLY RETURN on
+    /// the second match is a different mutant and is NOT equivalent -- it skips candidates
+    /// outright, and `the_callee_scan_covers_candidates_after_the_second_match` kills it.
+    callee_can_convert_an_opponent_heal: bool,
+}
+
 /// The CONTRACT tag. `engine_transition_differential.py` matches this exactly
 /// (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) to decide branch usability, so it
 /// must never carry a sub-case suffix. Named once so the two call sites cannot
 /// drift apart.
 const SLEEPTALK_LOSSY_TAG: &str = "sleeptalk_called_unidentified";
+
+/// Every literal the Protect-marker counter can emit, named ONCE so the emit site and the
+/// vocabulary gate cannot drift.
+///
+/// They used to be inline literals at the emit site and hand-copied, one per `assert`, into
+/// `the_live_subcase_slugs_are_all_in_vocabulary`. That gate's own comment says "**BOTH** have
+/// to clear it or the branch that fires less often is the one that panics a release wheel" --
+/// and when a THIRD literal was added for the full-HP reclaim, the gate was not updated and
+/// its stated invariant was silently violated. Review found it; a mutant deregistering the new
+/// token survived the whole suite.
+///
+/// Hand-copying was the defect, so the copy is gone: the gate calls
+/// `protect_marker_counter_slug` over every input and validates whatever comes back.
+const PROTECT_MARKER_RENDERED: &str = "sleeptalk_called_unidentified:protect_marker_rendered";
+const PROTECT_MARKER_RENDERED_ABSORB_HEADROOM: &str =
+    "sleeptalk_called_unidentified:protect_marker_rendered_absorb_headroom";
+const PROTECT_MARKER_RENDERED_ABSORB_FULL_HP: &str =
+    "sleeptalk_called_unidentified:protect_marker_rendered_absorb_full_hp";
+/// WHICH counter literal a rendered Protect marker belongs to.
+///
+/// Extracted from the emit site so the vocabulary gate can DERIVE the set it validates by
+/// calling this over every input, instead of mirroring a hand-written list. The mirror is
+/// what went stale: the gate spelled out two literals under the comment "BOTH have to clear
+/// it", a third was added at the emit site, and the gate was not updated.
+fn protect_marker_counter_slug(
+    defender_has_absorb_ability: bool,
+    defender_absorb_heal_clamps_to_zero: bool,
+) -> &'static str {
+    match (
+        defender_has_absorb_ability,
+        defender_absorb_heal_clamps_to_zero,
+    ) {
+        (true, true) => PROTECT_MARKER_RENDERED_ABSORB_FULL_HP,
+        (true, false) => PROTECT_MARKER_RENDERED_ABSORB_HEADROOM,
+        (false, _) => PROTECT_MARKER_RENDERED,
+    }
+}
 
 /// Measurement label for a failed Sleep Talk identification.
 ///
@@ -4545,7 +5106,16 @@ fn identify_sleep_talk_called(
     outer_choice: &Choice,
     tail: &[Instruction],
     branch_on_damage: bool,
-) -> SleepTalkIdent {
+    origin: NoneMatchedTailOrigin<'_>,
+) -> SleepTalkProbe {
+    // GATED DIAGNOSTIC, off unless `POKEZERO_NONE_MATCHED_DUMP=1`. The `NoneMatched`
+    // arm was measured unreachable from every turn-start state this repo can construct
+    // (0 in 1,341,623 rendered branches over three sweeps) yet fires in the production
+    // tree, so the only route to its cause is to capture it there. Collecting the
+    // per-candidate branch lists unconditionally would allocate on every Sleep Talk
+    // render, so the collection itself is behind the same gate.
+    let dump = none_matched_dump_level();
+    let mut dump_rows: Vec<(Choices, Vec<StateInstructions>)> = Vec::new();
     let candidates = {
         let s = match side {
             SideReference::SideOne => &state.side_one,
@@ -4553,7 +5123,18 @@ fn identify_sleep_talk_called(
         };
         s.get_active_immutable().get_sleep_talk_choices()
     };
+    // Read BEFORE the loop consumes the list. It is what separates `NoCandidates` from
+    // `Empty` now that a no-op branch contributes no shape -- see the seeding below.
+    let candidate_count = candidates.len();
     let mut matched: Option<Choice> = None;
+    // AMBIGUITY IS NOW COUNTED RATHER THAN RETURNED EARLY. The old code returned
+    // `Ambiguous` the instant a second candidate matched, which threw away the remaining
+    // candidates' modified choices -- and `callee_can_convert_an_opponent_heal` must be
+    // computed over ALL of them or it is not the fail-closed direction. The returned VARIANT
+    // is unchanged (`Ambiguous` iff two or more matched), and the extra `shapes` this now
+    // records are unreachable: `shapes` is read only on the `matched == 0` path.
+    let mut match_count = 0usize;
+    let mut can_convert_an_opponent_heal = false;
     // The CLOSEST miss across all candidates. Seeded at the least informative shape so a
     // candidate list that produces nothing still yields a token rather than a default that
     // reads as a diagnosis.
@@ -4608,14 +5189,21 @@ fn identify_sleep_talk_called(
             &mut generated,
             branch_on_damage,
         );
+        // READ THE PRODUCER'S OWN INPUT, from the choice the engine's modification pass just
+        // finished mutating. `choice_can_convert_an_opponent_heal` documents why this field
+        // and not the defender's HP is the discriminator.
+        can_convert_an_opponent_heal |= choice_can_convert_an_opponent_heal(&choice);
+        if dump != NoneMatchedDumpLevel::Off {
+            dump_rows.push((choice.move_id, generated.clone()));
+        }
         if generated
             .iter()
             .any(|branch| branch.instruction_list.as_slice() == tail)
         {
-            if matched.is_some() {
-                return SleepTalkIdent::Ambiguous;
+            match_count += 1;
+            if matched.is_none() {
+                matched = Some(choice);
             }
-            matched = Some(choice);
         } else {
             // NO MATCH for this candidate. Record HOW CLOSE it came, because the match is
             // byte-exact on the whole instruction list and so a single differing numeric field
@@ -4626,23 +5214,415 @@ fn identify_sleep_talk_called(
             // era-60 measurement says in as many words that it "must be classified before it
             // can be fixed". This is that classification, and it is the same move that turned
             // `ambiguous_unrenderable` from one opaque key into a ranked family list.
-            for branch in &generated {
-                shapes.insert(divergence_shape(branch.instruction_list.as_slice(), tail));
+            // `filter_map`, because `divergence_shape` now answers `None` for a NO-OP branch
+            // and a no-op is evidence about no candidate. Skipping it is the whole of the
+            // label fix: without it `shape_empty` appeared on every decision this pool can
+            // produce and the token carried no bits. See `divergence_shape` for the two
+            // measurements behind that, both taken first-hand.
+            for shape in generated
+                .iter()
+                .filter_map(|branch| divergence_shape(branch.instruction_list.as_slice(), tail))
+            {
+                shapes.insert(shape);
             }
         }
     }
-    match matched {
+    let ident = match matched {
+        Some(_) if match_count > 1 => SleepTalkIdent::Ambiguous,
         Some(choice) => SleepTalkIdent::Matched(Box::new(choice)),
-        None => SleepTalkIdent::NoneMatched(if shapes.is_empty() {
-            // No candidate produced ANY branch to classify, which is the empty-candidate-list
-            // case. `NoCandidates` is reachable only from here.
+        // SEEDED FROM THE CANDIDATE COUNT, not from `shapes.is_empty()` alone. Since a no-op
+        // branch no longer contributes a shape, an empty `shapes` has TWO causes and they are
+        // different facts: there were no candidates to look at, or there were candidates and
+        // every branch every one of them generated was a no-op. Keying `NoCandidates` off
+        // emptiness alone would report the first when the second happened -- the exact
+        // conflation `NoCandidates` was split out of `Empty` to remove, re-entered from the
+        // other side.
+        //
+        // ⚠ THIS IS A SECOND LABEL CHANGE AND IT RELABELS AN EXISTING CASE, so it is called
+        // out rather than left to be discovered. Before this, `shapes.is_empty()` alone
+        // seeded `NoCandidates`, so "candidates EXISTED but every one generated zero branches"
+        // reported `shape_no_candidates` -- a token whose own doc says "there was nothing to
+        // look at", which was false for it. It now reports `shape_empty`, whose new meaning
+        // ("no candidate contributed anything classifiable") is exactly that case. So the
+        // change is not only the removal of a vacuous token: one pre-existing case moves
+        // buckets, into the bucket that describes it.
+        //
+        // Not observed in the captured population -- all 36 decisions carried a classifiable
+        // branch -- so this arm is recorded as a correctness fix to the labelling, with no
+        // measurement behind its frequency.
+        None if candidate_count == 0 => {
             let mut only = NoneMatchedShapes::default();
             only.insert(NoneMatchedShape::NoCandidates);
-            only
-        } else {
-            shapes
-        }),
+            SleepTalkIdent::NoneMatched(only)
+        }
+        None if shapes.is_empty() => {
+            let mut only = NoneMatchedShapes::default();
+            only.insert(NoneMatchedShape::Empty);
+            SleepTalkIdent::NoneMatched(only)
+        }
+        None => SleepTalkIdent::NoneMatched(shapes),
+    };
+    // `NoneMatched` only under `=1`; EVERY outcome under `=all`. The boundary of a
+    // persistent latch cannot be read from the failing decisions alone -- what distinguishes
+    // latched from unlatched is visible only in the decisions that DID identify their callee,
+    // and those emit nothing under `=1`.
+    if dump == NoneMatchedDumpLevel::All
+        || (dump == NoneMatchedDumpLevel::NoneMatchedOnly
+            && matches!(ident, SleepTalkIdent::NoneMatched(_)))
+    {
+        let (outcome, shapes) = match &ident {
+            SleepTalkIdent::NoneMatched(shapes) => ("none_matched", *shapes),
+            SleepTalkIdent::Ambiguous => ("ambiguous", NoneMatchedShapes::default()),
+            SleepTalkIdent::Matched(_) => ("matched", NoneMatchedShapes::default()),
+        };
+        emit_none_matched_dump(
+            state,
+            side,
+            defender_choice,
+            outer_choice,
+            tail,
+            branch_on_damage,
+            origin,
+            &dump_rows,
+            shapes,
+            outcome,
+        );
     }
+    SleepTalkProbe {
+        ident,
+        callee_can_convert_an_opponent_heal: can_convert_an_opponent_heal,
+    }
+}
+
+/// Where the `tail` handed to [`identify_sleep_talk_called`] came from.
+///
+/// `tail` is `&segment[cursor..]`, and the two halves it drops -- WHICH segment, and how
+/// much of it the prelude already consumed -- are exactly what a `none_matched` capture
+/// needs and cannot recover from the slice. Carried as one struct rather than two extra
+/// parameters so the identifier's signature stays inside clippy's arity limit.
+#[derive(Clone, Copy)]
+struct NoneMatchedTailOrigin<'a> {
+    segment: &'a [Instruction],
+    cursor: usize,
+}
+
+/// How much of the Sleep Talk identification to dump.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum NoneMatchedDumpLevel {
+    Off,
+    /// `POKEZERO_NONE_MATCHED_DUMP=1` -- only the decisions that failed to identify a callee.
+    NoneMatchedOnly,
+    /// `POKEZERO_NONE_MATCHED_DUMP=all` -- every Sleep Talk identification, including the ones
+    /// that succeeded. Needed to read a BOUNDARY: what separates a refusing decision from a
+    /// non-refusing neighbour is not in the refusing decisions.
+    All,
+}
+
+/// Which level the environment selects.
+///
+/// Read ONCE. A per-call `env::var` inside the renderer would show up as a syscall in the
+/// search hot path even with the dump off.
+fn none_matched_dump_level() -> NoneMatchedDumpLevel {
+    static LEVEL: std::sync::OnceLock<NoneMatchedDumpLevel> = std::sync::OnceLock::new();
+    *LEVEL.get_or_init(|| {
+        none_matched_dump_level_from_env(
+            std::env::var("POKEZERO_NONE_MATCHED_DUMP").ok().as_deref(),
+        )
+    })
+}
+
+/// The variable-to-level mapping, split out so it is testable.
+///
+/// `none_matched_dump_level` latches process-wide on first read, so a test that set the
+/// variable would decide the value for every other test in the binary depending on execution
+/// order. The pure function has no such coupling -- and the DEFAULT is the thing worth
+/// pinning: an `is_ok()` gate would have enabled the dump for `POKEZERO_NONE_MATCHED_DUMP=0`.
+fn none_matched_dump_level_from_env(value: Option<&str>) -> NoneMatchedDumpLevel {
+    match value {
+        Some("1") => NoneMatchedDumpLevel::NoneMatchedOnly,
+        Some("all") => NoneMatchedDumpLevel::All,
+        _ => NoneMatchedDumpLevel::Off,
+    }
+}
+
+/// The content probe for a build carrying the diagnostic.
+///
+/// Every dump line starts with this, so `strings` over the built extension answers "is the
+/// dump compiled in" WITHOUT trusting a hash -- the crate embeds absolute build paths, so
+/// two builds of identical source differ by hash anyway.
+const NONE_MATCHED_DUMP_MARKER: &str = "PZ_NONE_MATCHED_DUMP_V1";
+
+/// JSON-escape a `{:?}` rendering for the dump.
+fn dump_json_string(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 2);
+    out.push('"');
+    for c in raw.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn dump_instruction_list(list: &[Instruction]) -> String {
+    let items: Vec<String> = list
+        .iter()
+        .map(|i| dump_json_string(&format!("{i:?}")))
+        .collect();
+    format!("[{}]", items.join(","))
+}
+
+/// How many leading instructions two lists share. The single most informative number in
+/// the capture: it says WHERE the regeneration and the engine parted company, which a
+/// whole-list equality test cannot.
+fn dump_common_prefix(a: &[Instruction], b: &[Instruction]) -> usize {
+    a.iter().zip(b).take_while(|(x, y)| x == y).count()
+}
+
+fn dump_active_summary(state: &State, side: SideReference) -> String {
+    let s = match side {
+        SideReference::SideOne => &state.side_one,
+        SideReference::SideTwo => &state.side_two,
+    };
+    let p = s.get_active_immutable();
+    let moves: Vec<String> = p
+        .moves
+        .into_iter()
+        .map(|m| dump_json_string(&format!("{:?}", m.id)))
+        .collect();
+    format!(
+        "{{\"species\":{},\"hp\":{},\"maxhp\":{},\"status\":{},\"ability\":{},\"item\":{},\"moves\":[{}],\"volatiles\":{},\"substitute_health\":{},\"sleep_turns\":{},\"rest_turns\":{}}}",
+        dump_json_string(&format!("{}", p.id)),
+        p.hp,
+        p.maxhp,
+        dump_json_string(&format!("{:?}", p.status)),
+        dump_json_string(&format!("{:?}", p.ability)),
+        dump_json_string(&format!("{:?}", p.item)),
+        moves.join(","),
+        dump_json_string(&format!("{:?}", s.volatile_statuses)),
+        s.substitute_health,
+        p.sleep_turns,
+        p.rest_turns,
+    )
+}
+
+fn dump_choice_summary(c: &Choice) -> String {
+    format!(
+        "{{\"move_id\":{},\"first_move\":{},\"sleep_talk_move\":{},\"category\":{},\"base_power\":{},\"accuracy\":{},\"target\":{},\"move_type\":{},\"heal\":{},\"status\":{},\"volatile_status\":{},\"flags_protect\":{}}}",
+        dump_json_string(&format!("{:?}", c.move_id)),
+        c.first_move,
+        c.sleep_talk_move,
+        dump_json_string(&format!("{:?}", c.category)),
+        c.base_power,
+        c.accuracy,
+        dump_json_string(&format!("{:?}", c.target)),
+        dump_json_string(&format!("{:?}", c.move_type)),
+        dump_json_string(&format!("{:?}", c.heal)),
+        dump_json_string(&format!("{:?}", c.status)),
+        dump_json_string(&format!("{:?}", c.volatile_status)),
+        c.flags.protect,
+    )
+}
+
+/// One `none_matched` decision, as a single JSON line on stderr.
+///
+/// stderr and not a file, deliberately: the census driver's own
+/// `engine-search FALLBACK: battle=... round=N seat=pX` line goes to the same descriptor
+/// AFTER the decision resolves, so a capture interleaved there is attributable to a round
+/// and a seat with no extra plumbing. Nothing else in this crate writes to stderr.
+///
+/// SPLIT from the line it builds so the line is testable. The arm this fires on is
+/// unreachable from every fixture state (measured: 0 in 1,341,623 rendered branches), so a
+/// test that had to reach the arm could not exist; a test on the pure formatter can.
+#[allow(clippy::too_many_arguments)]
+fn emit_none_matched_dump(
+    state: &State,
+    side: SideReference,
+    defender_choice: &Choice,
+    outer_choice: &Choice,
+    tail: &[Instruction],
+    branch_on_damage: bool,
+    origin: NoneMatchedTailOrigin<'_>,
+    rows: &[(Choices, Vec<StateInstructions>)],
+    shapes: NoneMatchedShapes,
+    outcome: &str,
+) {
+    eprintln!(
+        "{NONE_MATCHED_DUMP_MARKER} {}",
+        none_matched_dump_line(
+            state,
+            side,
+            defender_choice,
+            outer_choice,
+            tail,
+            branch_on_damage,
+            origin,
+            rows,
+            shapes,
+            outcome,
+        )
+    );
+}
+
+/// The dump payload for one `none_matched` decision, as one line of JSON.
+#[allow(clippy::too_many_arguments)]
+fn none_matched_dump_line(
+    state: &State,
+    side: SideReference,
+    defender_choice: &Choice,
+    outer_choice: &Choice,
+    tail: &[Instruction],
+    branch_on_damage: bool,
+    origin: NoneMatchedTailOrigin<'_>,
+    rows: &[(Choices, Vec<StateInstructions>)],
+    shapes: NoneMatchedShapes,
+    outcome: &str,
+) -> String {
+    let candidates: Vec<String> = rows
+        .iter()
+        .map(|(move_id, generated)| {
+            let branches: Vec<String> = generated
+                .iter()
+                .map(|b| {
+                    format!(
+                        "{{\"percentage\":{},\"len\":{},\"common_prefix_with_tail\":{},\"shape\":{},\"instructions\":{}}}",
+                        b.percentage,
+                        b.instruction_list.len(),
+                        dump_common_prefix(&b.instruction_list, tail),
+                        dump_json_string(
+                            divergence_shape(&b.instruction_list, tail)
+                                .map_or("noop_branch_no_evidence", |s| s.token())
+                        ),
+                        dump_instruction_list(&b.instruction_list),
+                    )
+                })
+                .collect();
+            format!(
+                "{{\"move_id\":{},\"branch_count\":{},\"branches\":[{}]}}",
+                dump_json_string(&format!("{move_id:?}")),
+                generated.len(),
+                branches.join(","),
+            )
+        })
+        .collect();
+    let observed: Vec<String> = NoneMatchedShape::ALL
+        .iter()
+        .filter(|s| shapes.contains(**s))
+        .map(|s| dump_json_string(s.token()))
+        .collect();
+    format!(
+        "{{\"outcome\":{},\"side\":{},\"branch_on_damage\":{},\"outer_first_move\":{},\"outer_choice\":{},\"defender_choice\":{},\"cursor\":{},\"segment_len\":{},\"tail_len\":{},\"segment\":{},\"prelude_consumed\":{},\"tail\":{},\"shapes\":[{}],\"candidate_count\":{},\"candidates\":[{}],\"attacker\":{},\"defender\":{},\"weather\":{},\"attacker_party\":{},\"defender_party\":{}}}",
+        dump_json_string(outcome),
+        dump_json_string(&format!("{side:?}")),
+        branch_on_damage,
+        outer_choice.first_move,
+        dump_choice_summary(outer_choice),
+        dump_choice_summary(defender_choice),
+        origin.cursor,
+        origin.segment.len(),
+        tail.len(),
+        dump_instruction_list(origin.segment),
+        dump_instruction_list(&origin.segment[..origin.cursor]),
+        dump_instruction_list(tail),
+        observed.join(","),
+        rows.len(),
+        candidates.join(","),
+        dump_active_summary(state, side),
+        dump_active_summary(state, other_side(side)),
+        dump_json_string(&format!("{:?}", state.weather)),
+        dump_party_summary(state, side),
+        dump_party_summary(state, other_side(side)),
+    )
+}
+
+/// EVERY party slot's status, not just the active's.
+///
+/// This is the field the first version of the dump did not carry, and it is where the latch
+/// variable lives: a party-wide cure's instruction list depends on which BENCHED slots are
+/// statused, and the active's own record says nothing about them.
+fn dump_party_summary(state: &State, side: SideReference) -> String {
+    let s = match side {
+        SideReference::SideOne => &state.side_one,
+        SideReference::SideTwo => &state.side_two,
+    };
+    let slots: Vec<String> = (&s.pokemon)
+        .into_iter()
+        .enumerate()
+        .map(|(index, p)| {
+            format!(
+                "{{\"slot\":{},\"active\":{},\"species\":{},\"hp\":{},\"status\":{},\"rest_turns\":{},\"sleep_turns\":{}}}",
+                index,
+                index == s.active_index as usize,
+                dump_json_string(&format!("{}", p.id)),
+                p.hp,
+                dump_json_string(&format!("{:?}", p.status)),
+                p.rest_turns,
+                p.sleep_turns,
+            )
+        })
+        .collect();
+    format!("[{}]", slots.join(","))
+}
+
+/// Could THIS callee, as the engine's modification pass left it, reach the full-HP absorb
+/// no-op?
+///
+/// This is the discriminator the zero-heal guard was missing, and it is not a new belief: it
+/// is the producer's own `if` condition, read off the same struct the producer reads.
+///
+/// gen3 emits a zero-amount `Heal` from exactly two sites and both push on the DEFENDER, so
+/// the instruction cannot say which fired. The guard therefore has to decide from state. It
+/// used to decide from the defender's HP alone (`absorb_heal_clamps_to_zero`, #1211), which
+/// answers "could an absorb heal have clamped to zero IF one had been converted" -- a
+/// NECESSARY condition, and the census block shows it is nowhere near sufficient.
+///
+/// The SUFFICIENT one is here. `get_instructions_from_heal` pushes the zero-amount `Heal`
+/// only in its `heal.target == MoveTarget::Opponent && heal.amount > 0.0` else-branch, and
+/// its `heal` is `choice.heal`. So a callee whose modified choice carries no
+/// opponent-targeted positive heal cannot be producer 2, whatever the defender's HP is.
+///
+/// THREE FACTS make that a proof rather than an argument, all read from the engine rather
+/// than assumed, because this is the direction that renders a wrong line if it is wrong:
+///
+///   1. NO MOVE IN THE TABLE carries an opponent-targeted heal natively. Every
+///      `heal: Some(Heal { target: .. })` in `choices.rs` targets `User` (measured: 17 of
+///      17). The only writer of `target: Opponent` is the absorb abilities' conversion in
+///      `gen3/abilities.rs` (`WATERABSORB`, `VOLTABSORB`, `DRYSKIN`) -- exactly
+///      `absorb_ability_can_emit_a_zero_heal`'s set. So this field being set IS "an absorb
+///      ability converted this callee".
+///   2. PROTECT CLEARS IT. `Choice::remove_effects_for_protect` sets `heal = None`, and it
+///      runs in `before_move` AFTER `ability_modify_attack_against`. So a protect-BLOCKED
+///      callee -- which is what produces producer 1's marker -- provably cannot also be
+///      producer 2, and the two producers are mutually exclusive per callee rather than
+///      merely unlikely to coincide.
+///   3. THE CANDIDATE SET IS THE ENGINE'S. Both the engine's Sleep Talk dispatch
+///      (`gen3/generate_instructions.rs`) and the scan above call
+///      `Pokemon::get_sleep_talk_choices`, with the same `sleep_talk_move`, `first_move` and
+///      `branch_on_damage` threading. So the callee that actually fired is in the scanned
+///      set, and scanning all of it cannot miss it.
+///
+/// WHY NOT REIMPLEMENT THE CONDITION FROM THE MOVE TABLE. The obvious cheaper form -- "does
+/// the sleeper know a move of the absorbed type without the protect flag" -- reads the
+/// UNMODIFIED table entry and is a fail-OPEN: gen3's `WEATHERBALL` is `Normal` in the table
+/// and `Water` in rain, so a rain Weather Ball into a full-HP Water Absorb defender would be
+/// judged unable to convert, and the walk would render `|-activate|..|Protect` over an
+/// ability activation. Reading the post-modification field cannot make that mistake because
+/// the modification is what it reads.
+fn choice_can_convert_an_opponent_heal(choice: &Choice) -> bool {
+    matches!(
+        choice.heal,
+        Some(poke_engine::choices::Heal {
+            target: MoveTarget::Opponent,
+            amount
+        }) if amount > 0.0
+    )
 }
 
 /// How a regenerated candidate branch DIFFERS from the observed tail.
@@ -4844,21 +5824,69 @@ fn nearest_divergence<'a>(
     tail: &[Instruction],
 ) -> NoneMatchedShape {
     branches
-        .map(|branch| divergence_shape(branch, tail))
+        .filter_map(|branch| divergence_shape(branch, tail))
         .min()
-        // `Empty`, NOT `NoCandidates`. This fires when a candidate that DOES exist generated
-        // zero branches, which is "the candidate produced nothing" -- exactly what `Empty`
-        // means. Returning `NoCandidates` here reintroduced the very conflation that variant
-        // was split out to remove, so `NoCandidates` is now reachable ONLY from the seed, where
-        // it means the candidate list itself was empty.
+        // `Empty`, NOT `NoCandidates`. This fires when a candidate that DOES exist contributed
+        // no classifiable branch -- it generated zero branches, or every branch it generated
+        // was a NO-OP (see `divergence_shape`). Both are "the candidate produced nothing",
+        // which is exactly what `Empty` means. Returning `NoCandidates` here reintroduced the
+        // very conflation that variant was split out to remove, so `NoCandidates` is now
+        // reachable ONLY from the seed, where it means the candidate list itself was empty.
         .unwrap_or(NoneMatchedShape::Empty)
 }
 
-/// Classify one candidate branch against the observed tail.
-fn divergence_shape(branch: &[Instruction], tail: &[Instruction]) -> NoneMatchedShape {
+/// Classify one candidate branch against the observed tail, or `None` if the branch carries
+/// no evidence about any candidate.
+///
+/// **`None` means A NO-OP BRANCH, and it is not the same as `Empty`.** A branch with an empty
+/// instruction list is the engine's rendering of "the callee ran and changed nothing" --
+/// which every pool has in quantity: an accuracy miss, a type immunity, Rest while already
+/// asleep, and a callee blocked by a Protect that moved second all emit it. It is therefore
+/// evidence about NO candidate: seeing one says only that the callee list contains a move
+/// that can whiff, not that this candidate is nearer to or farther from the tail than any
+/// other.
+///
+/// It used to return `Empty` here, and the consequence was measured, not argued. Two figures,
+/// both derived first-hand from the census plan (`variant_count: 1682`,
+/// `source_hash f9e35e1fddae5064`) and from the live capture:
+///
+///   1. **REST IS IN ALL 70 OF THE POOL'S SLEEP TALK VARIANTS**, 70 of 70, and Rest
+///      regenerated while the user is already asleep produces an EMPTY branch. So every
+///      `none_matched` this pool can produce carries at least one no-op branch by
+///      construction -- there is no subset of the pool on which `shape_empty` discriminates.
+///      (30 distinct non-Sleep-Talk callees span those 70 variants; 210 callee slots.)
+///   2. **In the live capture it was present on 36 of 36 refusals and separated none of
+///      them.** The whole observed set was `{shape_empty, shape_length}` on all 36.
+///
+/// So the set reduces to `{shape_length}` -- one token, and the one that names something.
+///
+/// An earlier revision of this comment cited "12 of 33 callees", which was carried in from a
+/// brief rather than derived here; 33 does not reproduce (the operative count is 30, since
+/// `get_sleep_talk_choices` filters only Sleep Talk and `NONE`) and the numerator was never
+/// measured at all. Replaced with figures this repo can re-derive.
+///
+/// LABEL ONLY. `sleeptalk_refusal_is_unsafe` answers `NoneMatched(_) => true` regardless of
+/// the shape set, so nothing here can turn a refused branch into a searched one, or the
+/// reverse. `Empty` keeps its token (`shape_empty`) and its vocabulary registration; what
+/// changes is that it now means "no candidate contributed anything classifiable" instead of
+/// "at least one branch somewhere was a no-op".
+fn divergence_shape(branch: &[Instruction], tail: &[Instruction]) -> Option<NoneMatchedShape> {
     if branch.is_empty() {
-        return NoneMatchedShape::Empty;
+        return None;
     }
+    Some(divergence_shape_of_nonempty(branch, tail))
+}
+
+/// The classification of a NON-EMPTY candidate branch against the observed tail.
+///
+/// Split from [`divergence_shape`] so the no-op guard is one line and the classification is
+/// total on its input: every path below returns a shape, and none of them has to re-check
+/// emptiness.
+fn divergence_shape_of_nonempty(branch: &[Instruction], tail: &[Instruction]) -> NoneMatchedShape {
+    debug_assert!(
+        !branch.is_empty(),
+        "the no-op guard in `divergence_shape` is the only caller's contract"
+    );
     if branch.len() != tail.len() {
         // SPLIT BY CONTAINMENT before falling back to a bare length mismatch.
         //
@@ -4890,7 +5918,8 @@ fn divergence_shape(branch: &[Instruction], tail: &[Instruction]) -> NoneMatched
         // containment evidence. Empty tails are real here -- `tail` is `&segment[cursor..]`
         // and this file handles the empty case elsewhere -- so the bucket whose doc says
         // "the tail is reproduced and the branch continues" would be contaminated.
-        // The branch-empty mirror is caught by the `is_empty` return above.
+        // The branch-empty mirror never reaches here: `divergence_shape` returns `None` for
+        // it, because a no-op branch is evidence about no candidate at all.
         if tail.is_empty() {
             return NoneMatchedShape::Length;
         }
@@ -7753,22 +8782,34 @@ mod tests {
             let slug = none_matched_slugs(one_shape(shape)).next().unwrap();
             assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, slug);
         }
-        // The Protect counter's literal, through the PRODUCTION gate rather than a
-        // membership check. Strictly stronger: membership passes a re-composed literal that
-        // the gate would reject. Its caller is `mark_lossy_subcase`, which does NOT reach
-        // this gate today -- the `&'static str` bound on its `subcase` keeps that caller set
+        // EVERY Protect-counter literal, through the PRODUCTION gate rather than a membership
+        // check. Strictly stronger: membership passes a re-composed literal that the gate
+        // would reject. Its caller is `mark_lossy_subcase`, which does NOT reach this gate
+        // today -- the `&'static str` bound on its `subcase` keeps that caller set
         // literals-only and greppable, so running them through here is what makes closing
         // that asymmetry safe later.
-        assert_subcase_vocabulary(
-            SLEEPTALK_LOSSY_TAG,
-            "sleeptalk_called_unidentified:protect_marker_rendered",
-        );
-        // #1211's second literal, through the same gate. The emit site picks between the
-        // two, so BOTH have to clear it or the branch that fires less often is the one that
-        // panics a release wheel.
-        assert_subcase_vocabulary(
-            SLEEPTALK_LOSSY_TAG,
-            "sleeptalk_called_unidentified:protect_marker_rendered_absorb_headroom",
+        //
+        // ITERATED, not hand-copied, and that is the fix for a defect review found here. This
+        // block used to spell out two literals with the comment "BOTH have to clear it or the
+        // branch that fires less often is the one that panics a release wheel". A third
+        // literal was then added at the emit site for the full-HP reclaim and this gate was
+        // not updated, so the block's own stated invariant was violated and a mutant
+        // deregistering the new token survived the entire suite. `PROTECT_MARKER_COUNTERS` is
+        // the emit site's own array, so the copy that could go stale no longer exists.
+        let mut seen = std::collections::BTreeSet::new();
+        for has_absorb in [true, false] {
+            for clamps in [true, false] {
+                let slug = protect_marker_counter_slug(has_absorb, clamps);
+                assert_subcase_vocabulary(SLEEPTALK_LOSSY_TAG, slug);
+                seen.insert(slug);
+            }
+        }
+        assert_eq!(
+            seen.len(), 3,
+            "the Protect counter no longer has exactly three distinct literals: {seen:?}. \
+             That is fine, but this gate derives the set from \
+             `protect_marker_counter_slug` and the count is what tells a reader the emit \
+             site's arity changed"
         );
         // The MULTI-shape composition too: `none_matched_slugs` yields one slug per observed
         // shape and a real world can carry several, so each must clear the gate.
@@ -9831,6 +10872,171 @@ mod tests {
     }
 }
 
+/// The gated `none_matched` diagnostic, tested WITHOUT reaching the arm it reports on.
+///
+/// The arm is not reachable from a default state (it needs a party-wide-cure callee and a
+/// benched sleeper -- see `tests/gen3_sleeptalk_party_cure_prelude_boundary.rs`), and the dump
+/// is off by default, so what is testable here is the two things that can silently rot: the
+/// GATE's default, and the LINE's shape. Both have bitten this campaign in the same way --
+/// an instrument that cannot report failure reports success.
+#[cfg(test)]
+mod none_matched_dump_tests {
+    use super::*;
+    use poke_engine::instruction::DamageInstruction;
+
+    fn dmg(amount: i16) -> Instruction {
+        Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideTwo,
+            damage_amount: amount,
+        })
+    }
+
+    /// OFF unless asked. The dump writes to stderr from inside the search hot path; a default
+    /// that leaked would corrupt every harness that reads the same descriptor for the census's
+    /// own `engine-search FALLBACK:` lines.
+    ///
+    /// Asserted on the CLASSIFIER, not on the `OnceLock` reader: `none_matched_dump_level`
+    /// latches its first read process-wide, so a test that set the variable would decide the
+    /// value for every other test in the binary depending on order.
+    #[test]
+    fn the_dump_is_off_unless_the_variable_selects_a_level() {
+        assert_eq!(
+            none_matched_dump_level_from_env(None),
+            NoneMatchedDumpLevel::Off,
+            "no variable must mean no dump"
+        );
+        assert_eq!(
+            none_matched_dump_level_from_env(Some("")),
+            NoneMatchedDumpLevel::Off
+        );
+        assert_eq!(
+            none_matched_dump_level_from_env(Some("0")),
+            NoneMatchedDumpLevel::Off,
+            "a falsy value must not enable it -- `is_ok()` on the variable would"
+        );
+        assert_eq!(
+            none_matched_dump_level_from_env(Some("1")),
+            NoneMatchedDumpLevel::NoneMatchedOnly
+        );
+        assert_eq!(
+            none_matched_dump_level_from_env(Some("all")),
+            NoneMatchedDumpLevel::All,
+            "`all` is what makes a BOUNDARY readable: the decisions that identified their \
+             callee are the ones a latch's edge has to be diffed against"
+        );
+    }
+
+    /// ONE LINE, and it carries the fields the capture is for.
+    ///
+    /// A multi-line record would break the interleaving with the census driver's own
+    /// per-decision line, which is the entire round/seat attribution mechanism -- there is no
+    /// decision id threaded into this crate.
+    #[test]
+    fn the_dump_line_is_one_line_and_carries_the_captured_fields() {
+        let mut state = State::default();
+        state.side_one.get_active().status = PokemonStatus::SLEEP;
+        let segment = [dmg(3), dmg(30)];
+        let outer = Choice {
+            move_id: Choices::SLEEPTALK,
+            first_move: false,
+            ..Default::default()
+        };
+        let defender = Choice {
+            move_id: Choices::SUBSTITUTE,
+            ..Default::default()
+        };
+        let rows = vec![(
+            Choices::HEALBELL,
+            vec![StateInstructions {
+                percentage: 100.0,
+                instruction_list: vec![dmg(30)],
+            }],
+        )];
+        let mut shapes = NoneMatchedShapes::default();
+        shapes.insert(NoneMatchedShape::Length);
+
+        let line = none_matched_dump_line(
+            &state,
+            SideReference::SideOne,
+            &defender,
+            &outer,
+            &segment[1..],
+            true,
+            NoneMatchedTailOrigin {
+                segment: &segment,
+                cursor: 1,
+            },
+            &rows,
+            shapes,
+            "none_matched",
+        );
+
+        assert!(
+            !line.contains('\n'),
+            "the record must be ONE line or the attribution-by-interleaving breaks: {line}"
+        );
+        for field in [
+            "\"outcome\":\"none_matched\"",
+            "\"cursor\":1",
+            "\"segment_len\":2",
+            "\"tail_len\":1",
+            "\"outer_first_move\":false",
+            "\"branch_on_damage\":true",
+            "\"move_id\":\"HEALBELL\"",
+            "\"move_id\":\"SUBSTITUTE\"",
+            "\"shapes\":[\"shape_length\"]",
+            "\"prelude_consumed\":",
+            "\"attacker_party\":",
+            "\"defender_party\":",
+            // THE diagnostic. Whole-list equality cannot say WHERE the two parted company;
+            // this can, and on the captured population it is 0 on every branch.
+            "\"common_prefix_with_tail\":",
+        ] {
+            assert!(
+                line.contains(field),
+                "the dump dropped {field}: a capture missing a field is a capture that has to \
+                 be retaken at production budget. Line: {line}"
+            );
+        }
+    }
+
+    /// A no-op branch is reported as carrying no evidence, in the dump as in the classifier.
+    ///
+    /// Without this the dump would print an empty `shape` for the very branches the label fix
+    /// exists to discount, and a reader would have to know that an empty string meant "no-op".
+    #[test]
+    fn a_noop_branch_is_labelled_as_no_evidence_in_the_dump() {
+        let state = State::default();
+        let rows = vec![(
+            Choices::REST,
+            vec![StateInstructions {
+                percentage: 100.0,
+                instruction_list: Vec::new(),
+            }],
+        )];
+        let line = none_matched_dump_line(
+            &state,
+            SideReference::SideOne,
+            &Choice::default(),
+            &Choice::default(),
+            &[dmg(30)],
+            false,
+            NoneMatchedTailOrigin {
+                segment: &[dmg(30)],
+                cursor: 0,
+            },
+            &rows,
+            NoneMatchedShapes::default(),
+            "none_matched",
+        );
+        assert!(
+            line.contains("\"shape\":\"noop_branch_no_evidence\""),
+            "an empty branch must SAY it is a no-op rather than reporting a shape it does not \
+             have: {line}"
+        );
+    }
+}
+
 #[cfg(test)]
 mod none_matched_shape_tests {
     use super::*;
@@ -9869,12 +11075,12 @@ mod none_matched_shape_tests {
     fn a_numeric_disagreement_is_values_only_and_a_variant_swap_is_structure() {
         assert_eq!(
             divergence_shape(&[dmg(30)], &[dmg(31)]),
-            NoneMatchedShape::ValuesOnly,
+            Some(NoneMatchedShape::ValuesOnly),
             "same variant, different number: a roll disagreement"
         );
         assert_eq!(
             divergence_shape(&[dmg(30)], &[heal(30)]),
-            NoneMatchedShape::Structure,
+            Some(NoneMatchedShape::Structure),
             "different variant at the same position: a different transition"
         );
     }
@@ -9894,7 +11100,7 @@ mod none_matched_shape_tests {
         });
         assert_eq!(
             divergence_shape(std::slice::from_ref(&one), std::slice::from_ref(&two)),
-            NoneMatchedShape::Structure,
+            Some(NoneMatchedShape::Structure),
             "the same variant on the OTHER side is a wrong-target bug, not a roll disagreement"
         );
         // ...and the same side with a different number is still numeric, so the fix did not
@@ -9905,7 +11111,7 @@ mod none_matched_shape_tests {
         });
         assert_eq!(
             divergence_shape(std::slice::from_ref(&one), std::slice::from_ref(&one_bigger)),
-            NoneMatchedShape::ValuesOnly
+            Some(NoneMatchedShape::ValuesOnly)
         );
     }
 
@@ -9934,12 +11140,12 @@ mod none_matched_shape_tests {
         // containment cases, which is exactly why the bare token could not be acted on.
         assert_eq!(
             divergence_shape(&[dmg(30)], &[dmg(30), heal(10)]),
-            NoneMatchedShape::BranchIsPrefix,
+            Some(NoneMatchedShape::BranchIsPrefix),
             "the branch reproduces the head of the tail and the tail continues past it"
         );
         assert_eq!(
             divergence_shape(&[dmg(30), heal(10)], &[dmg(30)]),
-            NoneMatchedShape::TailIsPrefix,
+            Some(NoneMatchedShape::TailIsPrefix),
             "the tail is reproduced and the branch continues past it -- the mirror case, and \
              it must NOT collapse into the branch-shorter bucket"
         );
@@ -9948,7 +11154,7 @@ mod none_matched_shape_tests {
         // not establish -- era 61's 4,786 worlds were all reported under it.
         assert_eq!(
             divergence_shape(&[heal(10)], &[dmg(30), heal(10)]),
-            NoneMatchedShape::Length,
+            Some(NoneMatchedShape::Length),
             "a shorter list that is not a PREFIX of the longer is a real structural miss"
         );
     }
@@ -10034,13 +11240,16 @@ mod none_matched_shape_tests {
              caller uses, and they are all tests: production moved to _with_protect"
         );
 
-        // THE ABSORB NO-OP IS POSSIBLE -> refuse EVEN WITH the volatile. Since #1211 the
-        // flag means "that defender's absorb ability could have emitted THIS zero heal",
-        // i.e. ability present AND its 25% heal clamps to zero. The axis is still right:
-        // `ability_modify_attack_against` runs BEFORE the Protect gate and RESTORES
-        // `flags.protect`, so a protect-bypassing Water move (WATERSPORT, pinned by
-        // `the_absorb_bypass_producer_is_real`) keeps its converted heal while the volatile
-        // is set. Rendering `Protect` over an ability activation corrupts a searched world.
+        // THE ABSORB NO-OP IS POSSIBLE -> refuse EVEN WITH the volatile. The flag now means
+        // "ability present AND its 25% heal clamps to zero AND some callee's modified choice
+        // still carries the converted opponent heal" -- the HP clause is #1211's, the callee
+        // clause is this PR's, and both are computed at the production read site. The axis is
+        // still right: `ability_modify_attack_against` runs BEFORE the Protect gate and
+        // RESTORES `flags.protect`, so a protect-bypassing Water move (WATERSPORT, pinned by
+        // `the_absorb_bypass_producer_is_real` and driven end-to-end by
+        // `protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing`) keeps its
+        // converted heal while the volatile is set. Rendering `Protect` over an ability
+        // activation corrupts a searched world.
         assert_eq!(
             protect_blocked_marker_side(&zero_heal_on_defender, 0, atk, true, true),
             None
@@ -10048,6 +11257,205 @@ mod none_matched_shape_tests {
         assert_eq!(
             unrenderable_family_at_with_protect(&zero_heal_on_defender, 0, atk, true, true),
             Some("heal_zero_marker")
+        );
+    }
+
+    /// The CONJUNCT IS LIVE, not vacuous -- pinned through the ENGINE's own modification pass
+    /// rather than a hand-built `Choice`.
+    ///
+    /// This test exists because `render_move_phase` cited it by name and it did not exist.
+    /// Review found the citation resolving to nothing but its own comment, which is the
+    /// "instrument that cannot report failure" shape wearing a citation's clothes. The claim it
+    /// was cited for is the load-bearing half of the whole guard: that
+    /// `choice_can_convert_an_opponent_heal` can actually be TRUE in production, so the new
+    /// conjunct still refuses the genuinely ambiguous case rather than being a constant
+    /// `false` dressed as a predicate.
+    ///
+    /// Pinned at the SCAN, not at the predicate, and that is the point. The sibling
+    /// `only_an_opponent_targeted_positive_heal_can_reach_the_absorb_no_op` feeds the
+    /// predicate a `Choice` this test file constructed, so it cannot show that anything in the
+    /// engine ever sets the field. Here `identify_sleep_talk_called` regenerates the callees
+    /// through `generate_instructions_from_move`, so the flag is TRUE only if the absorb
+    /// conversion really wrote `heal` and `remove_effects_for_protect` really left it alone.
+    /// The control is the same fixture with protect-flagged callees, where the strip does
+    /// happen and the flag must be FALSE -- without it, a mutant hardcoding the flag `true`
+    /// would pass.
+    #[test]
+    fn the_bypassing_callee_still_refuses() {
+        let mut state = State::default();
+        state.side_two.get_active().ability = Abilities::WATERABSORB;
+        let maxhp = state.side_two.get_active().maxhp;
+        state.side_two.get_active().hp = maxhp;
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::PROTECT);
+        state.side_one.get_active().status = PokemonStatus::SLEEP;
+
+        let mut probe_flag = |callees: [Choices; 2]| {
+            state
+                .side_one
+                .get_active()
+                .replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
+            state
+                .side_one
+                .get_active()
+                .replace_move(PokemonMoveIndex::M1, callees[0]);
+            state
+                .side_one
+                .get_active()
+                .replace_move(PokemonMoveIndex::M2, callees[1]);
+            let mut outer = poke_engine::choices::MOVES
+                .get(&Choices::SLEEPTALK)
+                .unwrap()
+                .clone();
+            outer.move_id = Choices::SLEEPTALK;
+            let tail = [Instruction::Heal(HealInstruction {
+                side_ref: SideReference::SideTwo,
+                heal_amount: 0,
+            })];
+            identify_sleep_talk_called(
+                &mut state,
+                SideReference::SideOne,
+                &Choice::default(),
+                &outer,
+                &tail,
+                false,
+                NoneMatchedTailOrigin {
+                    segment: &tail,
+                    cursor: 0,
+                },
+            )
+            .callee_can_convert_an_opponent_heal
+        };
+
+        assert!(
+            probe_flag([Choices::WATERSPORT, Choices::TACKLE]),
+            "the engine's own modification pass did not leave an opponent-targeted heal on a \
+             protect-BYPASSING absorbed callee, so the conjunct that keeps the genuinely \
+             ambiguous case refused is vacuous and the guard is a fail-open"
+        );
+        assert!(
+            !probe_flag([Choices::SURF, Choices::TACKLE]),
+            "a protect-FLAGGED absorbed callee still carried its converted heal, so \
+             remove_effects_for_protect no longer strips it and the two producers are no \
+             longer mutually exclusive per callee"
+        );
+    }
+
+    /// The bypassing-producer set, DERIVED from the engine's gates instead of from the move
+    /// type alone -- and the correction to a figure this change published wrong.
+    ///
+    /// The PR body first reported the set as "the five Water moves without the protect flag",
+    /// counted 27 / 1682 pool carriers for `raindance`, and then said Rain Dance never reaches
+    /// the producer. Review was right that this is incoherent: a move that cannot reach the
+    /// producer is not in the set, so the count was of something irrelevant. The gate the
+    /// first enumeration missed is `ability_modify_attack_against`'s own first statement --
+    /// `if attacker_choice.target != MoveTarget::Opponent { return; }` -- whose comment names
+    /// Rain Dance as the reason it exists.
+    ///
+    /// So the set is: absorbed move TYPE, `target: Opponent`, and no protect flag. For
+    /// `VOLTABSORB` gen3 adds `category != Status`, which no unflagged Electric move can
+    /// satisfy. Derived here so the PR's pool claim rests on a gate-accurate set.
+    #[test]
+    fn the_bypassing_producer_set_is_derived_from_every_gate() {
+        let bypassing = |want: PokemonType, status_gated: bool| -> Vec<Choices> {
+            poke_engine::choices::MOVES
+                .iter()
+                .filter(|(_, c)| {
+                    c.move_type == want
+                        && c.target == MoveTarget::Opponent
+                        && !c.flags.protect
+                        && !(status_gated && c.category == MoveCategory::Status)
+                })
+                .map(|(id, _)| *id)
+                .collect()
+        };
+        let mut water = bypassing(PokemonType::WATER, false);
+        water.sort_by_key(|c| format!("{c:?}"));
+        assert_eq!(
+            water,
+            vec![Choices::WATERSPORT],
+            "the Water-side bypassing-producer set changed; the PR's pool-reachability claim \
+             is derived from exactly this list and must be recounted"
+        );
+        assert!(
+            bypassing(PokemonType::ELECTRIC, true).is_empty(),
+            "gen3 gates Volt Absorb on `category != Status` and every unflagged Electric move \
+             is a Status move; an Electric bypassing producer now exists: {:?}",
+            bypassing(PokemonType::ELECTRIC, true)
+        );
+        // THE NEAR MISS, kept explicit: Rain Dance is Water-typed and unflagged, and is
+        // excluded by the TARGET gate alone. Dropping that gate is what produced the wrong
+        // published figure.
+        let raindance = poke_engine::choices::MOVES.get(&Choices::RAINDANCE).unwrap();
+        assert_eq!(raindance.move_type, PokemonType::WATER);
+        assert!(!raindance.flags.protect);
+        assert_ne!(raindance.target, MoveTarget::Opponent);
+    }
+
+    /// The DISCRIMINATOR: producer 2's own `if`, read off the callee rather than approximated
+    /// from the defender.
+    ///
+    /// Pinned as a pure predicate, separately from the read site that ANDs it in, for the
+    /// reason `sleeptalk_refusal_is_unsafe` states about itself: the two halves have to be
+    /// able to fail apart, and a wrong bound here is a WRONG RENDERED LINE rather than an
+    /// extra refusal.
+    #[test]
+    fn only_an_opponent_targeted_positive_heal_can_reach_the_absorb_no_op() {
+        let with = |heal| {
+            let mut choice = Choice::default();
+            choice.heal = heal;
+            choice
+        };
+        // No heal at all -- every protect-BLOCKED callee, because
+        // `remove_effects_for_protect` sets `heal = None`. This is the shape all 31 census
+        // refusals present on both of their matching callees.
+        assert!(!choice_can_convert_an_opponent_heal(&with(None)));
+        // A SELF heal: Rest, Recover, Softboiled, Moonlight... i.e. every native `heal` in
+        // the move table. Never producer 2, whose site reads `target == Opponent`.
+        assert!(!choice_can_convert_an_opponent_heal(&with(Some(
+            poke_engine::choices::Heal { target: MoveTarget::User, amount: 0.5 }
+        ))));
+        // THE ABSORB CONVERSION, and the only writer of this shape: Water Absorb, Volt
+        // Absorb and Dry Skin all set exactly this.
+        assert!(choice_can_convert_an_opponent_heal(&with(Some(
+            poke_engine::choices::Heal { target: MoveTarget::Opponent, amount: 0.25 }
+        ))));
+        // `> 0.0` and not `>= 0.0`, mirroring the producer. A zero-fraction heal writes no
+        // instruction at all, so admitting it would refuse worlds for nothing -- and a
+        // NEGATIVE opponent heal is not this producer either.
+        assert!(!choice_can_convert_an_opponent_heal(&with(Some(
+            poke_engine::choices::Heal { target: MoveTarget::Opponent, amount: 0.0 }
+        ))));
+        assert!(!choice_can_convert_an_opponent_heal(&with(Some(
+            poke_engine::choices::Heal { target: MoveTarget::Opponent, amount: -0.5 }
+        ))));
+    }
+
+    /// The claim the discriminator rests on, MACHINE-CHECKED against the engine's own table
+    /// instead of asserted in a comment.
+    ///
+    /// `choice_can_convert_an_opponent_heal` is read as "an absorb ability converted this
+    /// callee", and that reading is only sound while NO move carries an opponent-targeted
+    /// heal natively. A future engine bump that adds one (Pollen Puff is the obvious
+    /// candidate) would make the field ambiguous again and must fail here rather than
+    /// silently widen what the walk renders.
+    ///
+    /// The `amount > 0.0` filter matches the predicate: a nonpositive native opponent heal
+    /// would be harmless because the producer ignores it too.
+    #[test]
+    fn no_move_in_the_table_natively_heals_the_opponent() {
+        let offenders: Vec<Choices> = poke_engine::choices::MOVES
+            .iter()
+            .filter(|(_, choice)| choice_can_convert_an_opponent_heal(choice))
+            .map(|(id, _)| *id)
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "an opponent-targeted positive heal is no longer unique to the absorb \
+             abilities' conversion, so it can no longer discriminate the two zero-heal \
+             producers: {offenders:?}"
         );
     }
 
@@ -10356,31 +11764,69 @@ mod none_matched_shape_tests {
     fn containment_compares_payloads_not_just_variants() {
         assert_eq!(
             divergence_shape(&[dmg(30)], &[dmg(31), heal(10)]),
-            NoneMatchedShape::Length
+            Some(NoneMatchedShape::Length)
         );
         assert_eq!(
             divergence_shape(&[dmg(30)], &[dmg(30), heal(10)]),
-            NoneMatchedShape::BranchIsPrefix
+            Some(NoneMatchedShape::BranchIsPrefix)
         );
     }
 
-    /// An EMPTY branch stays `Empty`, not a containment shape.
+    /// An EMPTY branch is NO EVIDENCE, and it is certainly not a containment shape.
     ///
-    /// The empty slice is a prefix of everything, so ordering matters: the `is_empty` check
-    /// runs first. Collapsing these would fold "the candidate generated nothing" -- the move
-    /// did not execute at all -- into "the candidate reproduced the tail's head", which is a
-    /// different question with a different owner.
+    /// The empty slice is a prefix of everything, so ordering matters: the emptiness check
+    /// runs first. Collapsing these would fold "the candidate did nothing" into "the
+    /// candidate reproduced the tail's head", which is a different question with a different
+    /// owner.
+    ///
+    /// It answers `None` rather than `Empty` because an empty branch is a NO-OP -- a miss, a
+    /// type immunity, Rest while already asleep, a callee blocked by a Protect that moved
+    /// second -- and REST IS IN ALL 70 of the pool's Sleep Talk variants, so every
+    /// `none_matched` the pool can produce carries one by construction. Reporting it made
+    /// `shape_empty` universal and therefore worth zero bits.
     #[test]
     fn an_empty_branch_is_not_reported_as_containment() {
-        assert_eq!(divergence_shape(&[], &[dmg(30)]), NoneMatchedShape::Empty);
+        assert_eq!(divergence_shape(&[], &[dmg(30)]), None);
     }
 
     #[test]
-    fn an_empty_candidate_branch_is_its_own_shape() {
-        // Distinct from `length` deliberately: a candidate that generated NOTHING means the
-        // move did not execute in regeneration at all, which is a different question from one
-        // that executed and produced a different number of instructions.
-        assert_eq!(divergence_shape(&[], &[dmg(30)]), NoneMatchedShape::Empty);
+    fn a_noop_branch_contributes_no_shape_at_all() {
+        // The captured population is the reason. Every one of the 36 `none_matched` decisions
+        // in seed 9900068 has a `REST` candidate that regenerates a single EMPTY branch (Rest
+        // while already asleep), so `shape_empty` was on all 36 and separated none of them
+        // from any other. The bit that names something is the OTHER token.
+        assert_eq!(divergence_shape(&[], &[dmg(30)]), None);
+        assert_eq!(divergence_shape(&[], &[]), None);
+    }
+
+    /// The captured signature: the branch is a proper SUFFIX of the tail.
+    ///
+    /// Read off the live capture, not constructed to pass. In seed 9900068 the Sleep Talk
+    /// callee is Heal Bell and it regenerates `tail[1..]` EXACTLY, 36 of 36 -- the tail's head
+    /// was eaten by `consume_move_prelude`'s Rest/natural-wake arm, which matches
+    /// `ChangeStatus{SLEEP -> NONE}` on `side_ref` alone and so absorbed the party-wide cure
+    /// of a BENCHED party member as "the sleeper woke up".
+    ///
+    /// A suffix is not a prefix in either direction, so the containment split cannot see it
+    /// and the class reports `Length` -- "a genuinely different transition" -- for a
+    /// transition that is exactly right and a phase boundary that is off by one instruction.
+    /// This test pins the observation so the token cannot be re-read as an ownership verdict.
+    #[test]
+    fn a_branch_that_is_a_proper_suffix_of_the_tail_reports_length_not_containment() {
+        let tail = [dmg(7), dmg(30), heal(10)];
+        let branch = [dmg(30), heal(10)];
+        assert_eq!(
+            divergence_shape(&branch, &tail),
+            Some(NoneMatchedShape::Length),
+            "a suffix relation is invisible to the containment split; it is not evidence of a \
+             wrong callee"
+        );
+        assert_eq!(
+            tail.iter().zip(&branch).take_while(|(a, b)| a == b).count(),
+            0,
+            "the capture's `common_prefix_with_tail` was 0 on every branch of every candidate \
+             of all 36 decisions -- that is what makes this shape unreadable"
+        );
     }
 
     /// `min` over candidates must keep the CLOSEST miss, or a structurally-unrelated candidate
@@ -10423,7 +11869,7 @@ mod none_matched_shape_tests {
     fn an_empty_tail_is_not_reported_as_containment() {
         assert_eq!(
             divergence_shape(&[dmg(30)], &[]),
-            NoneMatchedShape::Length,
+            Some(NoneMatchedShape::Length),
             "an empty tail carries no containment evidence"
         );
     }
@@ -10537,4 +11983,386 @@ fn one_shape(shape: NoneMatchedShape) -> NoneMatchedShapes {
     let mut set = NoneMatchedShapes::default();
     set.insert(shape);
     set
+}
+
+/// The dominance test behind `volatile_fail`, pinned on BOTH sides of its crossover.
+///
+/// A fixture cannot pin the below-crossover side: no gen3 move in the family sits at or
+/// below 50% accuracy (measured — `scripts/c157_no_effect_hit_reach.py`), so a
+/// renderer-level test would only ever exercise the true branch and a mutant that
+/// returned `true` unconditionally would survive it. Pinning the predicate directly is
+/// what makes the boundary a boundary rather than a coincidence of the move table.
+#[cfg(test)]
+mod no_effect_hit_dominance {
+    use super::*;
+
+    /// Above the crossover the successful no-op hit is the larger half, below it the miss
+    /// is, and AT it neither is — which is the arm a `>=` mutation would open.
+    ///
+    /// `assert!(!f(50.0))` is the mutate-toward-SAFER control. Suppressing `|[miss]|` at a
+    /// dead tie is the "safer-looking" variant (it refuses to call a coin flip a miss), and
+    /// a boundary that tolerates it is a boundary nothing pins. The three constant mutants
+    /// die here too: `true` on 30.0, `false` on 90.0, and `>=` on 50.0.
+    #[test]
+    fn the_crossover_is_at_fifty_percent_and_the_tie_is_not_dominance() {
+        assert!(no_effect_hit_outweighs_miss(90.0), "0.90 hit vs 0.10 miss");
+        assert!(no_effect_hit_outweighs_miss(55.0), "0.55 hit vs 0.45 miss");
+        assert!(
+            no_effect_hit_outweighs_miss(50.000_01),
+            "just above the crossover must still be dominance"
+        );
+        assert!(
+            !no_effect_hit_outweighs_miss(50.0),
+            "a dead tie is NOT dominance: 0.50 hit vs 0.50 miss renders either way and \
+             this predicate must not claim one of them"
+        );
+        assert!(
+            !no_effect_hit_outweighs_miss(30.0),
+            "0.30 hit vs 0.70 miss: |[miss]| is the CORRECT label there and must survive"
+        );
+        assert!(!no_effect_hit_outweighs_miss(0.0));
+    }
+
+    /// The whole sub-100% opponent-target volatile family, read out of the ENGINE'S OWN
+    /// move table rather than transcribed, is above the crossover — so `volatile_fail`
+    /// suppressing `|[miss]|` is never the minority render in gen3.
+    ///
+    /// A renamed or retuned move is a loud failure (`expect`) rather than a silent skip,
+    /// which is the failure mode a hand-copied accuracy table had. The count is asserted
+    /// so the loop cannot pass over zero moves.
+    #[test]
+    fn every_gen3_volatile_fail_carrier_is_above_the_crossover() {
+        let family = [
+            Choices::SUPERSONIC,
+            Choices::SWEETKISS,
+            Choices::DISABLE,
+            Choices::LEECHSEED,
+            Choices::SWAGGER,
+        ];
+        let mut checked = 0;
+        for move_id in family {
+            let accuracy = poke_engine::choices::MOVES
+                .get(&move_id)
+                .unwrap_or_else(|| panic!("{move_id:?} is absent from the engine move table"))
+                .accuracy;
+            assert!(
+                accuracy < 100.0,
+                "{move_id:?} at {accuracy} is no longer in the sub-100% family; the \
+                 predicate's scope note is stale"
+            );
+            assert!(
+                no_effect_hit_outweighs_miss(accuracy),
+                "{move_id:?} at {accuracy}% would make |[miss]| suppression the MINORITY \
+                 render: hit {} vs miss {}",
+                accuracy / 100.0,
+                1.0 - accuracy / 100.0
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 5, "the family loop must not pass over zero moves");
+    }
+}
+
+/// Both directions of the active-slot predicate on `consume_move_prelude`'s wake and thaw
+/// arms, pinned on the FLAG and the CURSOR rather than on a rendered line.
+///
+/// The end-to-end fixtures live in `tests/gen3_sleeptalk_party_cure_active_slot_guard.rs` and
+/// are the ones that matter to the census. They cannot pin these two facts directly, because
+/// both flags are only observable downstream and one of them is not observable at all in the
+/// benched case:
+///
+///   * `prelude.woke_up` gates `|cant|..|slp` — but every state in which the engine puts a
+///     benched clear in the prelude has ALREADY emitted the sleep gate by then, so the
+///     benched direction has no rendered consequence to assert. It is asserted here on the
+///     returned `MovePrelude` instead.
+///   * `sleep_gate_seen` gates the "asleep with no wake instructions at all" fallback, which
+///     ALSO requires the un-consumed remainder to be immobilization markers only. A benched
+///     clear left in the tail breaks that second condition, so both worlds suppress the
+///     fallback and the flag's value is genuinely unobservable for a benched clear. That is
+///     recorded rather than papered over with a test that would pass either way: the flag is
+///     assigned on the same two lines as `woke_up`, and `woke_up` is pinned below in both
+///     directions.
+///
+/// `cursor` is the OTHER half of the defect and is pinned in both directions here too: it is
+/// fault 1 (the tail cut one instruction too late) measured at its source.
+#[cfg(test)]
+mod prelude_active_slot_tests {
+    use super::*;
+    use poke_engine::state::{PokemonIndex, PokemonMoveIndex};
+
+    fn ctx() -> EventContext {
+        EventContext {
+            species: [
+                vec!["Bench".to_string(), "Sleeper".to_string()],
+                vec!["Opponent".to_string()],
+            ],
+            turn: 1,
+            hp_percent: [false, false],
+        }
+    }
+
+    /// Side one's active at `P1`, with `P0` benched. Both alive, so the prelude's
+    /// attacker/defender liveness short-circuits do not fire.
+    fn state_with_active_at_p1() -> State {
+        let mut state = State::default();
+        state.side_one.active_index = PokemonIndex::P1;
+        for index in [PokemonIndex::P0, PokemonIndex::P1] {
+            let pkmn = &mut state.side_one.pokemon[index];
+            pkmn.maxhp = 300;
+            pkmn.hp = 300;
+        }
+        let active = state.side_one.get_active();
+        active.status = PokemonStatus::SLEEP;
+        active.rest_turns = 1;
+        active.replace_move(PokemonMoveIndex::M0, Choices::TACKLE);
+        let defender = state.side_two.get_active();
+        defender.maxhp = 300;
+        defender.hp = 300;
+        state
+    }
+
+    fn clear(index: PokemonIndex, old: PokemonStatus) -> Instruction {
+        Instruction::ChangeStatus(ChangeStatusInstruction {
+            side_ref: SideReference::SideOne,
+            pokemon_index: index,
+            old_status: old,
+            new_status: PokemonStatus::NONE,
+        })
+    }
+
+    /// Run the prelude over a one-instruction segment and report what it did with it.
+    fn run(segment: &[Instruction]) -> (bool, usize, Vec<String>) {
+        let mut state = state_with_active_at_p1();
+        let mut out = RenderedEvents::default();
+        let mut cursor = 0usize;
+        let mut choice = poke_engine::choices::MOVES
+            .get(&Choices::TACKLE)
+            .unwrap()
+            .clone();
+        choice.move_id = Choices::TACKLE;
+        let prelude = {
+            let mut sim = Sim::new(&mut state, [false, false]);
+            let prelude = consume_move_prelude(
+                &mut sim,
+                SideReference::SideOne,
+                &choice,
+                segment,
+                &mut cursor,
+                &ctx(),
+                &mut out,
+            );
+            sim.finish();
+            prelude
+        };
+        (prelude.woke_up, cursor, out.lines)
+    }
+
+    /// MUST FIRE. The acting mon's own wake is consumed by the prelude and sets `woke_up`,
+    /// which is what keeps the following `DecrementRestTurns` from fabricating
+    /// `|cant|..|slp` on a turn the mon actually moves.
+    #[test]
+    fn the_actives_own_wake_is_consumed_and_sets_woke_up() {
+        let segment = [clear(PokemonIndex::P1, PokemonStatus::SLEEP)];
+        let (woke_up, cursor, lines) = run(&segment);
+        assert!(woke_up, "the active's own wake must set woke_up");
+        assert_eq!(cursor, 1, "and must be consumed by the prelude");
+        assert!(lines.is_empty(), "a wake emits no line of its own: {lines:?}");
+    }
+
+    /// MUST NOT FIRE. A BENCHED party member's clear is not this mon's wake. Leaving the
+    /// cursor at 0 is the whole fix: the instruction stays in the tail, where the callee
+    /// identification can match it, and the state stays un-cured so the candidate
+    /// regeneration reproduces it.
+    #[test]
+    fn a_benched_members_clear_is_neither_consumed_nor_a_wake() {
+        let segment = [clear(PokemonIndex::P0, PokemonStatus::SLEEP)];
+        let (woke_up, cursor, lines) = run(&segment);
+        assert!(
+            !woke_up,
+            "a benched party member being cured is not the acting mon waking up"
+        );
+        assert_eq!(
+            cursor, 0,
+            "the benched clear must stay in the TAIL — consuming it is fault 1"
+        );
+        assert!(lines.is_empty(), "and it must not render a line: {lines:?}");
+    }
+
+    /// MUST FIRE, thaw arm.
+    #[test]
+    fn the_actives_own_thaw_is_consumed() {
+        let segment = [clear(PokemonIndex::P1, PokemonStatus::FREEZE)];
+        let (_, cursor, lines) = run(&segment);
+        assert_eq!(cursor, 1, "the active's own thaw must be consumed");
+        assert!(lines.is_empty(), "a thaw emits no line of its own: {lines:?}");
+    }
+
+    /// MUST NOT FIRE, thaw arm. Guarding only the SLEEP arm leaves this one open, and it is
+    /// the worse of the two: the benched thaw being eaten pulls the active's own clear into
+    /// the wake arm behind it, so the callee line is dropped with no refusal to mark it.
+    #[test]
+    fn a_benched_members_thaw_is_not_consumed() {
+        let segment = [clear(PokemonIndex::P0, PokemonStatus::FREEZE)];
+        let (_, cursor, lines) = run(&segment);
+        assert_eq!(cursor, 0, "the benched thaw must stay in the TAIL");
+        assert!(lines.is_empty(), "and must not render a line: {lines:?}");
+    }
+
+    /// The predicate itself, in both directions and on both sides, so a mutant that pointed
+    /// it at the WRONG side would die here rather than only in a render fixture.
+    #[test]
+    fn changes_the_active_slot_reads_the_changes_own_side() {
+        let mut state = state_with_active_at_p1();
+        state.side_two.active_index = PokemonIndex::P0;
+
+        for (index, want) in [(PokemonIndex::P1, true), (PokemonIndex::P0, false)] {
+            let change = ChangeStatusInstruction {
+                side_ref: SideReference::SideOne,
+                pokemon_index: index,
+                old_status: PokemonStatus::SLEEP,
+                new_status: PokemonStatus::NONE,
+            };
+            assert_eq!(
+                changes_the_active_slot(&state, &change),
+                want,
+                "side one active is P1, asked about {index:?}"
+            );
+        }
+        // Same index, other side, opposite answer: the predicate must read
+        // `change.side_ref`, not a captured side.
+        for (index, want) in [(PokemonIndex::P0, true), (PokemonIndex::P1, false)] {
+            let change = ChangeStatusInstruction {
+                side_ref: SideReference::SideTwo,
+                pokemon_index: index,
+                old_status: PokemonStatus::SLEEP,
+                new_status: PokemonStatus::NONE,
+            };
+            assert_eq!(
+                changes_the_active_slot(&state, &change),
+                want,
+                "side two active is P0, asked about {index:?}"
+            );
+        }
+    }
+}
+
+/// The `divergence_shape` NO-OP LABEL FIX, pinned AT ITS PRODUCTION CALL SITE.
+///
+/// # Why this module exists, and what it replaces
+///
+/// The label fix (#1241) made `divergence_shape` answer `None` for a no-op branch and made
+/// `identify_sleep_talk_called` skip those with `filter_map`, so `shape_empty` stopped appearing
+/// on every `none_matched` the gen3 pool can produce. Its only END-TO-END witness was one
+/// assertion in `tests/gen3_sleeptalk_party_cure_prelude_boundary.rs` that observed the emitted
+/// slug set as exactly `{none_matched:shape_length}` through a live render — and the
+/// active-slot guard beside this module CLOSED the only class that reached it, retiring that
+/// assertion.
+///
+/// Independent review demonstrated that the remaining pins were not a replacement. They hold
+/// the CLASSIFIER (`divergence_shape(&[], &[dmg(30)]) == None`) and not the CALL SITE, and the
+/// difference is measurable: mutate the call site from
+/// `.filter_map(|b| divergence_shape(..))` to
+/// `.map(|b| divergence_shape(..).unwrap_or(NoneMatchedShape::Empty))` and on `main` exactly one
+/// test dies — the retired one — while on the guarded head that mutant SURVIVED the whole
+/// suite. So the guard silently un-pinned the fix it shipped beside. This module is the
+/// replacement.
+///
+/// # And it is a replacement IN KIND, not in degree — stated rather than glossed
+///
+/// The retired assertion watched a LIVE RENDER. This one calls `identify_sleep_talk_called`
+/// directly. That is a genuine reduction: a unit call cannot notice a break in the path from
+/// the renderer to the probe. It is not a free choice — the class is no longer reachable from
+/// any state this repo can construct, which is the whole point of the guard, so no live render
+/// can observe the set any more. Verified rather than assumed: BOTH benched-sleeper layouts
+/// (bench below the active, and bench above it) now render without refusing at all.
+/// What this module does buy is the exact mutant above, which nothing else kills.
+#[cfg(test)]
+mod none_matched_shape_call_site {
+    use super::*;
+    use poke_engine::instruction::{DamageInstruction, HealInstruction};
+    use poke_engine::state::{PokemonMoveIndex, PokemonStatus};
+
+    /// A Rest-asleep Sleep Talk user whose callees are REST — which regenerates a single EMPTY
+    /// branch while already asleep, and is in ALL 70 of the pool's Sleep Talk variants — and
+    /// SWORDSDANCE, which regenerates one NON-EMPTY branch. The tail matches neither and has a
+    /// length no candidate produces, so the scan reaches `NoneMatched` and the shape set is
+    /// decided entirely by whether the no-op is skipped.
+    fn probe_shapes() -> NoneMatchedShapes {
+        let mut state = State::default();
+        state.side_one.get_active().status = PokemonStatus::SLEEP;
+        state.side_one.get_active().rest_turns = 2;
+        for (slot, move_id) in [
+            (PokemonMoveIndex::M0, Choices::SLEEPTALK),
+            (PokemonMoveIndex::M1, Choices::REST),
+            (PokemonMoveIndex::M2, Choices::SWORDSDANCE),
+            (PokemonMoveIndex::M3, Choices::NONE),
+        ] {
+            state.side_one.get_active().replace_move(slot, move_id);
+        }
+
+        let mut outer = poke_engine::choices::MOVES
+            .get(&Choices::SLEEPTALK)
+            .unwrap()
+            .clone();
+        outer.move_id = Choices::SLEEPTALK;
+
+        // Two instructions, so no one-instruction candidate branch can be length-equal to it,
+        // and a Damage/Heal pair neither REST nor SWORDSDANCE can produce a prefix of.
+        let tail = [
+            Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 30,
+            }),
+            Instruction::Heal(HealInstruction {
+                side_ref: SideReference::SideOne,
+                heal_amount: 10,
+            }),
+        ];
+        let probe = identify_sleep_talk_called(
+            &mut state,
+            SideReference::SideOne,
+            &Choice::default(),
+            &outer,
+            &tail,
+            false,
+            NoneMatchedTailOrigin {
+                segment: &tail,
+                cursor: 0,
+            },
+        );
+        match probe.ident {
+            SleepTalkIdent::NoneMatched(shapes) => shapes,
+            SleepTalkIdent::Matched(choice) => panic!(
+                "this fixture must reach the NoneMatched arm or it pins nothing; it matched {:?}",
+                choice.move_id
+            ),
+            SleepTalkIdent::Ambiguous => {
+                panic!("this fixture must reach the NoneMatched arm; it was Ambiguous")
+            }
+        }
+    }
+
+    /// **THE ASSERTION THE GUARD RETIRED, RESTORED AT THE CALL SITE.**
+    ///
+    /// The set must be `{Length}` EXACTLY. `shape_empty` must be ABSENT even though a candidate
+    /// (REST, asleep) contributed nothing but a no-op branch — that absence is the whole of the
+    /// label fix, and asserting the exact set rather than "contains Length" is what makes this a
+    /// test of the fix rather than a description of it.
+    #[test]
+    fn a_no_op_candidate_contributes_no_shape_at_the_production_call_site() {
+        assert_eq!(
+            probe_shapes(),
+            one_shape(NoneMatchedShape::Length),
+            "the emitted set must be {{Length}} alone; a no-op branch must contribute nothing"
+        );
+    }
+
+    /// The same fact stated on the SLUG, because the slug is what the census counts and what a
+    /// world-failure reason is keyed by. A regression that preserved the enum while changing the
+    /// emitted token would pass the assertion above and fail here.
+    #[test]
+    fn the_emitted_slug_set_names_shape_length_alone() {
+        let slugs: Vec<&str> = probe_shapes().iter().map(|s| s.token()).collect();
+        assert_eq!(slugs, vec!["shape_length"], "emitted shape tokens");
+    }
 }

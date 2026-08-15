@@ -4,6 +4,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from pokezero.category_vocab import build_category_vocabulary
+from pokezero.observation import (
+    OBSERVATION_SCHEMA_VERSION,
+    OBSERVATION_SCHEMA_VERSION_V2_2,
+    OBSERVATION_SCHEMA_VERSION_V3,
+)
 from pokezero.online_client import (
     LoginError,
     OnlineBattleAgent,
@@ -144,20 +149,74 @@ class TurnMergedNormalizeThreadingTest(unittest.TestCase):
             "v2.2 agent must call normalize_for_player(include_turn_merged=True)",
         )
 
-    def test_default_schema_agent_requests_turn_merged(self) -> None:
-        # The default spec IS v2.2 since the 2026-07-08 promotion, so an unpinned agent
-        # must request turn-merged normalization.
+    def test_unpinned_agent_follows_its_own_resolved_spec_for_turn_merged(self) -> None:
+        """An agent that pins no spec must normalize for the schema it actually resolved to.
+
+        WAS `test_default_schema_agent_requests_turn_merged`, and it asserted turn-merged
+        UNCONDITIONALLY on the reasoning "the default spec IS v2.2 since the 2026-07-08 promotion".
+        True then, false the moment the default rotates: v4 carries no transition region at all and
+        is deliberately absent from TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS, so an unpinned agent
+        must NOT request turn-merged tokens under a v4 default. The old form failed with
+        "default-schema (v2.2) agent must request turn-merged tokens" -- an assertion message naming
+        a version the default no longer was.
+
+        The subject was never "the default is turn-merged"; it was "an unpinned agent is consistent
+        with whatever it resolved to". Now stated that way, which holds across rotations.
+
+        TWO EARLIER FORMS WERE VACUOUS, and I claimed the second was unavoidable. Both wrong.
+
+        The first computed `expected = agent.spec.schema_version in
+        TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS`, which is the same expression as `OnlineBattleAgent.choose`
+        uses (differing only in the receiver), so it could not fail. A reviewer kill-confirmed it: re-pinning
+        `OnlineBattleAgent.spec`'s field default to v2.1 left this whole file GREEN (13 passed) where
+        the pre-existing form went red -- so the PR was strictly less sensitive than what it replaced,
+        on a path where an agent normalizing for the wrong schema dies mid-battle and forfeits.
+
+        I then argued this test could not be both rotation-safe and sensitive to that field default,
+        because `OnlineBattleAgent.spec` is itself one of the two dataclass defaults still reading the
+        global, so "unpinned" has no fixed version to assert. A second reviewer falsified that in four
+        trees: assert the resolved schema equals `OBSERVATION_SCHEMA_VERSION` -- which is exactly what
+        "unpinned" MEANS, and is the fact a re-pinned field default breaks -- and take the turn-merged
+        expectation from named members instead of importing production's tuple. Unrotated: passes.
+        Rotated to v4: passes. `spec` default re-pinned to v2.1: FAILS. `turn_merged = False` in
+        production: FAILS.
+
+        Cost, measured rather than argued: reading the global adds one `bare-const` census row, so
+        HIGH_WATER_MARK is 59 here rather than 58 -- still only ever lowered, from 65. One
+        instrumentation row for behavioural coverage of the forfeit path is the right trade, and
+        "it cannot be done" was a claim I should have tested before writing it down.
+        """
         captured: dict = {}
 
         def fake_normalize(*args, **kwargs):
             captured.update(kwargs)
             raise ValueError("stop after capture")
 
+        agent = _agent()
         with patch("pokezero.online_client.normalize_for_player", side_effect=fake_normalize):
-            self.assertIsNone(_agent().choose(["|player|p1|PokeZeroBot|1"], "room"))
-        self.assertTrue(
-            captured.get("include_turn_merged"),
-            "default-schema (v2.2) agent must request turn-merged tokens",
+            self.assertIsNone(agent.choose(["|player|p1|PokeZeroBot|1"], "room"))
+
+        # The kwarg must be PRESENT. Post-rotation the expected value is False, and `.get()` returning
+        # None is then indistinguishable from an explicit False, so this becomes load-bearing exactly
+        # when the default stops being turn-merged.
+        self.assertIn("include_turn_merged", captured)
+
+        # UNPINNED MEANS "RESOLVES TO THE PROCESS DEFAULT", so that is what is asserted. This is the
+        # fact a re-pinned field default actually breaks, and it is the same argument that keeps
+        # `cls.config` unpinned in test_engine_env.py: a test about what happens when nobody names a
+        # schema has to read the default to know what nobody-named means.
+        self.assertEqual(agent.spec.schema_version, OBSERVATION_SCHEMA_VERSION)
+
+        # Membership spelled from NAMED constants rather than by importing production's
+        # TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS. That import was the vacuity: it made this line
+        # the same expression `online_client.py` itself uses (bar the receiver), so it could not fail.
+        # keeps the check independent of the table production consults.
+        self.assertEqual(
+            captured["include_turn_merged"],
+            agent.spec.schema_version
+            in (OBSERVATION_SCHEMA_VERSION_V2_2, OBSERVATION_SCHEMA_VERSION_V3),
+            f"unpinned agent resolved to {agent.spec.schema_version} but requested "
+            f"include_turn_merged={captured['include_turn_merged']!r}",
         )
 
     def test_explicit_v2_1_agent_does_not_request_turn_merged(self) -> None:

@@ -2,7 +2,8 @@
 
 ``fallback_addresses`` reads ``{battle_id, round, seat, reason}`` tuples out of the
 shards. That tuple is an *address*, not a replay: ``battle_id`` is
-``f"{prefix}-{seed}"`` (``foulplay_bridge.py:2699``) and carries the seed and
+``f"{prefix}-{seed}"`` (``foulplay_bridge._run_single_game``'s
+``battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"``) and carries the seed and
 nothing else. Depth, sims, batch, worlds, the checkpoint, the opponent and the
 opponent's own seed all live in the shard's config fields, and they differ per
 writer. This module joins the two halves into a :class:`ReplaySpec` -- everything
@@ -42,7 +43,7 @@ every actor is deterministic. The deciding fact is which MCTS ran:
   from Python reaches it.
 * **The pokezero crate's search is explicitly seeded**:
   ``puct_search_multi(..., seed=rng.getrandbits(63))``
-  (``engine_search.py:1202``). Measured: two 40-battle sweeps under
+  (in ``EngineMctsPolicy._search_hp_fraction_crate``). Measured: two 40-battle sweeps under
   ``leaf_eval="hp_fraction_crate"`` are byte-identical.
 
 This is worth stating precisely because the obvious remedy does not work.
@@ -56,7 +57,7 @@ For the external opponent the nondeterminism reaches the move through the visit
 counts, not through the Python RNG stream. ``foul-play`` keeps only choices
 within ``0.75x`` of the top share (``fp/search/main.py:41``) and then draws one
 with ``random.choices`` (``:46``). That module RNG *is* seeded
-(``foulplay_bridge.py:2626-2637`` wraps ``run.py`` in
+(``foulplay_bridge._foulplay_command``'s ``seed_wrapper`` wraps ``run.py`` in
 ``random.seed(POKEZERO_FOULPLAY_RANDOM_SEED)``), and ``random.choices`` consumes
 exactly one ``random()`` call whatever the population or weights -- so the stream
 never desynchronises, and where the filter leaves a single survivor the draw is
@@ -65,11 +66,13 @@ weights*, which the varying visit counts move underneath a fixed draw.
 
 *Decision RNG* -- can the policy's own ``random.Random`` for that one decision be
 rebuilt? Under the bridge, yes and trivially: it is reseeded per decision from
-``f"{seed}:{player_id}:{decision_round_index}"`` (``foulplay_bridge.py:3541``),
-which is exactly the address. Under ``RolloutDriver`` it is a per-battle-per-seat
+``f"{seed}:{player_id}:{decision_round_index}"``
+(``foulplay_bridge._select_policy_decision``), which is exactly the address. Under
+``RolloutDriver`` it is a per-battle-per-seat
 stream created once (``rollout.py:414-426``) and advanced by every preceding
 decision, with a data-dependent number of draws (the world-sampling retry loop,
-``engine_search.py:1050-1098``), so decision *N* is reachable only by replaying
+``EngineMctsPolicy._search``'s ``while len(worlds) < self._config.worlds``), so
+decision *N* is reachable only by replaying
 ``0..N-1``.
 
 The two axes are inverted between the two families. Eras 61-64 -- the entire
@@ -127,8 +130,8 @@ HARNESS_ROLLOUT_K0_GRID = "rollout-k0-grid"
 #: from it, and the search it names is measured byte-identical across runs.
 #:
 #: Narrower than it sounds, and the narrowing is load-bearing for the majority
-#: refusal class. The construction loop (`engine_search.py:1049-1101`) decides a
-#: `no_worlds_constructed` refusal from six settings: `worlds`,
+#: refusal class. The construction loop (`EngineMctsPolicy._search`'s world-sampling
+#: `while` loop) decides a `no_worlds_constructed` refusal from six settings: `worlds`,
 #: `sample_retry_factor`, and `approximate_sleep_turns`,
 #: `approximate_substitute_health`, `approximate_partial_trap_turns`,
 #: `approximate_hidden_duration_volatiles`. Only `worlds` is a
@@ -186,7 +189,8 @@ class BattleIdGrammar:
 # Ordered longest-prefix-first so a future `k0grid-x-` cannot be shadowed by
 # `k0grid-`.
 GRAMMARS: tuple[BattleIdGrammar, ...] = (
-    # foulplay_bridge.py:105 DEFAULT_BATTLE_ID_PREFIX + :2699
+    # foulplay_bridge DEFAULT_BATTLE_ID_PREFIX, joined to the seed by
+    # _run_single_game's `battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"`
     BattleIdGrammar(HARNESS_FOULPLAY_BRIDGE, "battle-gen3randombattle-controlled-"),
     # scripts/mcts_acceptance_h2h.py:439  f"accept-{arm}-{seed}-{seat}"
     BattleIdGrammar(HARNESS_ROLLOUT_ACCEPTANCE, "accept-", seed_field_from_end=2),
@@ -288,7 +292,8 @@ class ReplaySpec:
     engine_c_puct: float | None = None
     #: A real producer setting, not a constant: `scripts/hc_depth_grid.py:107`
     #: exposes it as `--deep-ko-split/--no-deep-ko-split`, writes it at `:288`,
-    #: and `engine_search.py:1203` passes it into `puct_search_multi`. A shard
+    #: and `_search_hp_fraction_crate` passes it into `puct_search_multi` as
+    #: `deep_ko_split=config.deep_ko_split`. A shard
     #: that recorded `false` must not replay under the dataclass default `true`.
     deep_ko_split: bool | None = None
     opponent_priors: bool | None = None
@@ -301,7 +306,8 @@ class ReplaySpec:
     #: The external opponent's per-game RNG seed, taken from the recorded
     #: schedule rather than assumed equal to the battle seed: a run that set
     #: `foulplay_random_seed=F` with `seed_start=S` played battle seed N against
-    #: opponent seed `F + (N - S)` (`foulplay_bridge.py:2375`).
+    #: opponent seed `F + (N - S)`
+    #: (`foulplay_bridge._per_seed_foulplay_random_seed_schedule_for_offsets`).
     opponent_random_seed: int | None = None
     opponent_search_time_ms: int | None = None
 
@@ -310,7 +316,7 @@ class ReplaySpec:
     #: `"per-battle-stream"` (RolloutDriver; only reachable by replaying).
     rng_regime: str = ""
     #: The literal seed argument to `random.Random` for THIS decision, when the
-    #: regime makes one constructible. `foulplay_bridge.py:3541`.
+    #: regime makes one constructible. `foulplay_bridge._select_policy_decision`.
     decision_rng_seed: str | None = None
 
     # --- what is and is not claimable ---
@@ -413,8 +419,10 @@ def _opponent_seed_from_schedule(
 
     Returns ``(seed, problem)``. The schedule is indexed by game offset, and the
     offset is ``battle_seed - seed_start`` because the bridge walks
-    ``seed = config.seed_start + offset`` (``foulplay_bridge.py:1721-1722``) while
-    handing game ``offset`` the schedule's ``offset``-th entry (``:1728``).
+    ``seed = config.seed_start + offset`` (in
+    ``foulplay_bridge._run_controlled_foulplay_games``) while handing game ``offset``
+    the schedule's ``offset``-th entry (``foulplay_random_seed_schedule[offset]``, in
+    that same loop).
     Recomputing it as ``seed`` instead of reading the list is the specific error
     the ``foulplay_random_seed`` field exists to make detectable.
     """
@@ -486,7 +494,7 @@ def _foulplay_fields(
         "checkpoint_sha256": _as_str(document.get("checkpoint_sha256")),
         "format_id": _as_str(document.get("format_id")),
         "policy_mode": _as_str(document.get("policy_mode")),
-        # foulplay_bridge.py:2474-2487 hardcodes the model leaf for engine-mcts.
+        # foulplay_bridge._build_policy hardcodes the model leaf for engine-mcts.
         "leaf_eval": "model" if document.get("policy_mode") == "engine-mcts" else None,
         "engine_depth": _as_int(engine.get("depth")),
         "engine_sims": _as_int(engine.get("sims")),
@@ -499,7 +507,8 @@ def _foulplay_fields(
         "opponent_random_seed": opponent_seed,
         "opponent_search_time_ms": _as_int(root_puct.get("foulplay_search_time_ms")),
         "rng_regime": "per-decision",
-        # foulplay_bridge.py:3541 -- verbatim, including the str seed argument.
+        # foulplay_bridge._select_policy_decision -- verbatim, including the str
+        # seed argument.
         "decision_rng_seed": f"{seed}:{address.seat}:{address.round}",
     }
     # The absent schedule goes to `caveats`, NOT to `missing`, and that is a
@@ -608,12 +617,12 @@ def _hc_grid_fields(
     fields: dict[str, Any] = {
         "checkpoint": _as_str(document.get("checkpoint")),
         "policy_mode": "engine-mcts",
-        # scripts/hc_depth_grid.py:220 -- the handcrafted leaf, so the checkpoint
-        # is the OPPONENT's and no model/tables artifact is involved.
+        # hc_depth_grid's `leaf_eval="hp_fraction_crate"` -- the handcrafted leaf, so
+        # the checkpoint is the OPPONENT's and no model/tables artifact is involved.
         # READ, with the script's compiled-in value as the fallback. Asserting
         # it made the leaf-eval fidelity branch unreachable through
         # `resolve_address` -- a latent wrong answer for the day
-        # `hc_depth_grid` grows a `--leaf-eval` flag. `:220` is today's value.
+        # `hc_depth_grid` grows a `--leaf-eval` flag. That literal is today's value.
         "leaf_eval": _leaf_eval(document, "hp_fraction_crate"),
         "engine_depth": _as_int(document.get("depth")),
         "engine_sims": _as_int(document.get("sims")),
@@ -734,8 +743,8 @@ def _acceptance_fields(
     caveats = [caveat] if caveat else []
     config_id = _as_str(document.get("config_id")) or ""
     parsed: dict[str, int] = {}
-    # The checkpoint tag is stripped FIRST: `config_id_for` renders
-    # `f"{base}@{tag}"` (scripts/foulplay_paired_eval.py:110), so `"w8@k1"` is
+    # The checkpoint tag is stripped FIRST: `scripts/foulplay_paired_eval.py`'s
+    # `config_id_for` ends `return f"{base}@{tag}"`, so `"w8@k1"` is
     # not a digit run and `engine_worlds` would silently read None -- the spec
     # would go `underspecified` and the runner would refuse a perfectly
     # resolvable address.
@@ -762,7 +771,8 @@ def _acceptance_fields(
             parsed[part[0]] = int(part[1:])
     fields: dict[str, Any] = {
         "checkpoint": _as_str(document.get("checkpoint")),
-        "format_id": "gen3randombattle",  # scripts/mcts_acceptance_h2h.py:435
+        # mcts_acceptance_h2h's `RolloutConfig(format_id="gen3randombattle")`
+        "format_id": "gen3randombattle",
         "policy_mode": "engine-mcts",
         "leaf_eval": _leaf_eval(document, "model"),  # :79-107
         "engine_depth": parsed.get("d"),
@@ -853,8 +863,9 @@ _REQUIRED_FOR_REPLAY: tuple[str, ...] = (
 _MEASURED_REPRODUCIBLE_LEAF_EVALS = frozenset({"hp_fraction_crate"})
 
 #: Seeded, but with no byte-identity measurement behind it. `model` passes a
-#: per-world `record["seed"]` (`engine_search.py:1838`) into
-#: `native.search_batched_multi_encoded` (`:1733`) -- NOT the `puct_search_multi`
+#: per-world `record["seed"]` (assembled positionally by `native_search_args`) into
+#: `native.search_batched_multi_encoded` (in `_search_model`'s `run_world`) -- NOT the
+#: `puct_search_multi`
 #: line the crate path uses, which an earlier revision miscited here -- and it
 #: additionally runs a TorchScript forward, which is not bitwise reproducible
 #: across devices or cuDNN algorithm selection. Calling that `exact` would be the
@@ -878,14 +889,16 @@ def _fidelity(
             "even though that kwarg exists and poke_engine/__init__.py:148 says "
             "duration_ms is ignored when it is set",
             "the opponent's move draw is one seeded random() call "
-            "(foulplay_bridge.py:2626-2637 seeds the module RNG; random.choices "
+            "(foulplay_bridge._foulplay_command's seed_wrapper seeds the module "
+            "RNG; random.choices "
             "consumes exactly one draw whatever the weights), so the RNG stream "
             "does not desynchronise -- what moves under it is the 0.75x-filtered "
             "candidate set and its weights (fp/search/main.py:41,46)",
             "one divergent opponent move makes every later round a different "
             "battle, so the recorded round is not addressable by re-running the seed",
             "the decision RNG itself IS exactly reconstructible: "
-            "random.Random(decision_rng_seed) (foulplay_bridge.py:3541)",
+            "random.Random(decision_rng_seed) "
+            "(foulplay_bridge._select_policy_decision)",
         ]
         if fields.get("opponent_random_seed") is None:
             notes.append("the opponent's own seed is not recorded in this shard either")
@@ -920,7 +933,8 @@ def _fidelity(
         return FIDELITY_UNVERIFIED, (
             in_process,
             f"leaf_eval={leaf_eval!r} is seeded per world "
-            "(engine_search.py:1838 -> native.search_batched_multi_encoded, :1733)",
+            "(native_search_args passes record['seed'] positionally into "
+            "native.search_batched_multi_encoded)",
             "but byte identity has NOT been measured for it, and it runs a "
             "TorchScript forward that is not bitwise reproducible across devices "
             "or cuDNN algorithm selection -- treat a match as evidence, not proof",
@@ -937,7 +951,7 @@ def _fidelity(
     notes = [
         in_process,
         f"leaf_eval={leaf_eval!r} searches under an explicit seed "
-        "(engine_search.py:1202 puct_search_multi(seed=rng.getrandbits(63))) and "
+        "(_search_hp_fraction_crate: puct_search_multi(seed=rng.getrandbits(63))) and "
         "is measured byte-identical across runs",
         stream_note,
     ]

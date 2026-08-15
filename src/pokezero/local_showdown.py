@@ -35,7 +35,7 @@ from .observation import (
 from .randbat import load_gen3_randbat_source_cached
 from .randbat_vocab import gen3_category_vocabulary
 from .showdown import (
-    DEFAULT_REPLAY_OBSERVATION_SPEC,
+    V2_2_REPLAY_OBSERVATION_SPEC,
     PlayerRelativeBattleState,
     ShowdownPokemon,
     ShowdownReplayState,
@@ -223,7 +223,16 @@ def env_config_from_checkpoint_provenance(
                 and replace(env_spec, transition_token_count=required_spec.transition_token_count)
                 == required_spec
             )
-            if resolved.observation_spec != DEFAULT_REPLAY_OBSERVATION_SPEC and not region_refinement:
+            # Compared against the FIELD DEFAULT, not the global. This line asks "did the caller
+            # NAME a spec?" and used `!= DEFAULT_REPLAY_OBSERVATION_SPEC` as the proxy. Once the
+            # field default names v2.2, the two stop being the same value the moment the global
+            # rotates -- so an UNTOUCHED env stops looking untouched and the provenance latch
+            # refuses to adopt the checkpoint's spec. Measured under a v4 rotation: 40 failures
+            # before this file changed, 48 with the field default named and this line still
+            # reading the global (14 fixed, 22 introduced, all on the adoption path). Fail-closed
+            # -- a loud refusal, never a silent wrong encode -- and invisible today because the
+            # two values are equal, which is why no test or ledger row could catch it.
+            if resolved.observation_spec != CONFIG_DEFAULT_OBSERVATION_SPEC and not region_refinement:
                 raise ValueError(
                     f"{context}: env observation spec {resolved.observation_spec!r} conflicts "
                     f"with the loaded checkpoint's trained spec {required_spec!r} "
@@ -263,12 +272,34 @@ def belief_set_source_env_enabled() -> bool:
     return os.environ.get("POKEZERO_BELIEF_SET_SOURCE", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
+#: The config's OWN default spec, named once. The field default and the "did the caller name a
+#: spec?" sentinel at the provenance latch must be the SAME value; when they were the field default
+#: and the global respectively, naming the field silently broke the sentinel under a rotation.
+CONFIG_DEFAULT_OBSERVATION_SPEC = V2_2_REPLAY_OBSERVATION_SPEC
+
+
 @dataclass(frozen=True)
 class LocalShowdownConfig:
     showdown_root: Path | str | None = None
     bridge_path: Path | str = BRIDGE_PATH
     node_binary: str = "node"
-    observation_spec: ObservationSpec = DEFAULT_REPLAY_OBSERVATION_SPEC
+    # NAMES v2.2, it does not read the global -- the same fix as TransformerPolicyConfig's stamp
+    # and the two in observation.py. A dataclass default is frozen at class-definition time, so
+    # `= DEFAULT_REPLAY_OBSERVATION_SPEC` meant every env built without naming a spec silently
+    # re-aimed the moment the process default rotated.
+    #
+    # NOT "the last of four". This one is the largest by call sites (~135), not the last by count.
+    # `scripts/schema_default_ledger.py`'s `derive_surfaces()` is the authority and it still names
+    # two dataclass field defaults reading a process-wide global:
+    #
+    #     OnlineBattleAgent      {'spec'}                       online_client.py:99
+    #     LinearPolicyModel      {'observation_schema_version'}  linear_policy.py:110
+    #
+    # so the figure is SIX such defaults, four named and two open. I wrote "the last of the four"
+    # here and in the commit message while the tool three lines away printed the counterexamples --
+    # a recalled figure contradicted by the census, which is the exact class this whole programme
+    # exists to retire. Ask `derive_surfaces()` rather than trusting a count word in a comment.
+    observation_spec: ObservationSpec = CONFIG_DEFAULT_OBSERVATION_SPEC
     # Ablation-arm feature masks (config, not spec): masked-off blocks are zeroed +
     # attention-masked at encode time. Callers pairing the env with a model must keep these
     # consistent with the model config's stats_block_enabled / exact_state_enabled /

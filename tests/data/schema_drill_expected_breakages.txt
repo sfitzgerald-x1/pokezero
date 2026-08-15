@@ -1,0 +1,135 @@
+# Class-(iii) tests: their SUBJECT is the default's identity, so rotating the default MUST
+# break them. This file is the drill's pass condition -- the breakage set must equal it exactly.
+#
+# A test belongs here only if it asserts *which schema is currently default* -- AND NOTHING ELSE.
+# Two entries used to also assert tuples the drill mutates (SUPPORTED, FEATURE_PACK), so they
+# broke on the mutation whether or not their default assertion bound, and the
+# EXPECTED-BUT-DID-NOT-BREAK detector -- the only guard against a pin silently going stale -- could
+# never fire for them. Both were split; a row here must be a single-assertion identity pin. A test that
+# merely uses the default is NOT class (iii); it is an unmigrated site and belongs in the
+# ledger instead. Keeping that line sharp is the whole point: this file is the one place the
+# migration could be silently declared finished by relabelling failures as expected.
+test_observation.py::ObservationSpecTest::test_the_fresh_artifact_default_is_v4
+test_observation_spec_v3.py::SchemaTableTest::test_v4_IS_the_default_not_v3
+test_observation_spec_v4.py::V4SchemaTableTest::test_v4_IS_the_default
+test_turn_merged_encode.py::SchemaTableTest::test_v4_IS_the_default_and_the_default_is_NOT_turn_merged
+test_observation_spec_v2_1.py::SpecTableTest::test_v4_IS_the_fresh_default
+# Fingerprint stamping: the payload HASHES the observation schema, so the fingerprint must move
+# when the default does. A fingerprint that survived a schema rotation would be the bug.
+#
+# This row is INDIRECT and it is the one MIXED row here: the scan reports 1 of its 13 assertions
+# as a default read. It is NOT splittable into a clean identity pin the way the five above were.
+# Its subject is "the fingerprint tracks whatever the schema is", so the default read and the
+# fingerprint assertions are the same claim -- extract the default read and the remaining test
+# still breaks under a rotation, because the fingerprint it recomputes still moved. The dead-pin
+# detector is therefore structurally blind to this row, and splitting cannot fix that; only
+# deleting the row's justification could. Recorded as a KNOWN LIMIT of the rubric rather than
+# silently carried: if this row's default read were removed tomorrow, this file would not notice.
+test_linear_policy.py::LinearPolicyTest::test_linear_feature_fingerprint_payload_tracks_extractor_source_and_schemas
+# The committed token-format dump carries `dual_schema_story.current_default`, whose documented
+# purpose is "derived from pokezero.observation.OBSERVATION_SCHEMA_VERSION at extraction time".
+# An artifact whose job is to RECORD the default necessarily changes when the default changes;
+# a dump that survived a rotation would be stale, which is the defect this test exists to catch.
+# The encode in that extractor is pinned to V2_2_REPLAY_OBSERVATION_SPEC and does not move --
+# only this one documentation line does, which is why it qualifies as class (iii) rather than
+# as an unmigrated site.
+#
+# Also INDIRECT, and invisible to schema_default_assertion_scan.py: this test asserts a
+# byte-for-byte dump comparison, so no assertion of its own names the default -- the default is
+# read inside the regeneration it calls. That is why the scan's 5 PINs cover the five direct rows
+# and not this one, and why the scan is a completeness check on the identity half of this rubric
+# only. The indirect half is held by argument, recorded above each row, not by the tool.
+test_token_format_doc.py::TokenFormatDocSelfValidationTest::test_committed_dump_matches_live_regeneration_byte_for_byte
+
+# D2, closed for the five DIRECT identity rows; the two INDIRECT rows are argued separately
+# below. Each of the five now names a test that reads the process default and NOTHING else, which
+# is what lets "expected but did not break" fire for it -- a pin sharing a test with membership
+# assertions breaks under a rotation for either reason, so deleting the pin leaves the test still
+# breaking and the dead-pin detector blind.
+#
+# The task described two such rows. Measured, not assumed, there were FIVE. Derived by AST over
+# all 254 test files. Re-derive both buckets with:
+#   python scripts/schema_default_assertion_scan.py --texts
+#   python scripts/schema_default_assertion_scan.py --self-test    # proves the matcher binds
+# Denominator: 254 test files, 9 tests whose assertions read the default -- PIN 5, MIXED 4.
+# (Was 253/12/PIN 5/MIXED 7; the consumer fixes in #1255 retired three MIXED tests, and this
+# PR added the 13th assertion to the fingerprint row below.)
+#
+# That 12 corrects an earlier 45 of mine. The first scan matched the global's name as a SUBSTRING,
+# so it also counted `OBSERVATION_SCHEMA_VERSION_V2_2` (a specific version, immutable) and
+# `SUPPORTED_OBSERVATION_SCHEMA_VERSIONS` (a table, not the default) as reads of the mutable
+# default. 45 was the count of tests mentioning a schema-ish name; 12 is the count that reads the
+# default. The scan now matches bare Names on the AST and self-tests both near-misses.
+#
+# The 5 PINs the tool reports are exactly the five rows above -- that agreement is the check that
+# this rubric's identity half is complete, not merely non-empty. Of the 4 MIXED, three are NOT rows
+# here: they read the default to BUILD something rather than to assert its identity, which makes
+# them unmigrated sites owned by the ledger's census, not class (iii). The fourth IS a row here
+# (the fingerprint payload, 1 of 13 assertions), discussed at that row.
+# The five mixed tests, all now split into a clean pin plus a residual that holds no default read:
+#   test_observation_spec_v3.py    test_v3_is_supported_but_not_the_default
+#   test_turn_merged_encode.py     test_v2_2_is_a_supported_schema_entry_and_the_default
+#   test_observation_spec_v2_1.py  test_schema_keyed_censuses          (carried TWO default reads)
+#   test_observation.py            test_schema_version_is_v2_2_with_..._and_v1_legacy
+#   test_observation_spec_v4.py    test_v4_is_supported_..._but_not_the_default
+# I first judged `test_schema_keyed_censuses` to be "a different split with a different risk" and
+# deferred it; it was the same split. Deferring on a guess was the error, not the judgement.
+#
+# THE ROWS NOW NAME v4 AGAIN, AND THAT IS NOT WHERE THIS FILE STARTED. Two rows were originally
+# written as `test_the_fresh_artifact_default_is_v4` and `test_v4_IS_the_default` -- against a
+# v4-default tree that did not yet exist, naming methods that existed NOWHERE under tests/. That
+# also made the file self-contradictory: it asserted both `test_v4_IS_the_default` and
+# `test_v2_2_is_a_supported_schema_entry_and_the_default`. Both were re-derived against the tree the
+# drill actually ran on, where `OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V2_2`.
+#
+# The 2026-08-13 rotation then made v4 the default for real, so the pins were re-aimed and these
+# rows carry v4 names once more. The two states are not the same and the difference is the whole
+# point of this file: the first was a name asserted ahead of the tree, the second is a name derived
+# from it. Anyone reading `git log` on this file will see the id revert and should know which is
+# which -- the check is not what the row says, it is whether the method exists and breaks.
+#
+# Every identity pin is asserted POSITIVELY (default IS v4). The negative form ("v3 is not the
+# default") SURVIVES a rotation -- under the drill's rotation to v5-drill, v3 is still not the
+# default -- so it never breaks, and a non-breaking row in this rubric is a false pin that would
+# make the drill report a missing breakage forever. `test_v4_IS_the_default_not_v3` carries a
+# negative CLAUSE in its name but a positive assertion in its body; it was renamed from
+# `test_v3_is_not_the_default` for exactly this reason, the old name having described the
+# implication rather than the assertion.
+#
+# `test_turn_merged_encode.py`'s pin grew the longest name here because the rotation changed what it
+# means. v4 is deliberately ABSENT from TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS, so as of the
+# rotation THE DEFAULT IS NO LONGER A TURN-MERGED SCHEMA -- every turn-merged path in that file is
+# now reached via an explicitly named schema or a checkpoint latch, never by falling through. The
+# name records that; the pin's BODY still holds one assertion and does not.
+#
+# It was going to be a companion test asserting `OBSERVATION_SCHEMA_VERSION not in TURN_MERGED_...`,
+# phrased against the default so it would track future rotations. Two things killed that, and the
+# second is the interesting one:
+#   - a second assertion inside the pin is the D2 shape the splits above removed, and that half
+#     PASSES under the drill's rotation (the mirror at schema_rotation_drill.sh only adds the
+#     synthetic to a tuple the outgoing default is already in, and v4 is not in this one), so a pin
+#     carrying both would break on one assertion while the other stayed green -- the configuration
+#     that makes a dead pin undetectable; and
+#   - as a SEPARATE test it was a new read of the global, which would have taken the ledger
+#     allowlist UP by one against a HIGH_WATER_MARK that is only ever lowered. The census
+#     refused it and was right to: `test_observation_spec_v4.py::test_v4_is_supported_turn_merged_grouped_and_feature
+#     _packed` already asserts `OBSERVATION_SCHEMA_VERSION_V4 not in TURN_MERGED_...` without
+#     reading the default at all, so the row would have bought no coverage.
+#
+# All five were kill-confirmed under the v2.2 default by rotating src/pokezero/observation.py and
+# running each pin and its residual: every pin exit=1, every residual exit=0. A residual that still
+# went red would mean the split had not actually removed the default read.
+#
+# RE-KILL-CONFIRMED after the re-aim, because a pin re-pointed at the new default could be vacuous in
+# exactly the way the old one was not. Mutated the default to a THIRD value -- V3, neither the
+# outgoing v2.2 nor the incoming v4, so no pin can pass by coincidence -- and ran each:
+#
+#   OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V3   (1 substitution, asserted)
+#   test_the_fresh_artifact_default_is_v4                          exit=1
+#   test_v4_IS_the_default_not_v3                                  exit=1
+#   test_v4_IS_the_default                                         exit=1
+#   test_v4_IS_the_default_and_the_default_is_NOT_turn_merged      exit=1
+#   test_v4_IS_the_fresh_default                                   exit=1
+#
+# 5/5 red under the mutation, 5/5 green with the default at v4. (A sixth line in that run was the
+# companion test described above, since removed; it was red too.)

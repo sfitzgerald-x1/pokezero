@@ -211,6 +211,12 @@ jobs:
             # HP band's pins or drops the plain-poison fixture must still trip the
             # gate. #1215 shipped this file with no entry and no step at all.
             tests/test_public_projection.py
+            # The dropped-`|move|`-line instrument, with a STEP below. Listed for the
+            # same reason as the module above: a PR whose only change weakens the
+            # gap pins -- the two layouts where the party cure's walk reaches the
+            # ACTIVE's own clear first, which the renderer still drops silently --
+            # must trip this gate rather than ride in under `src/pokezero/**`.
+            tests/test_render_dropped_move_line_crate.py
             tests/test_sleep_talk_phaze_drag.py
             tests/test_instruction_event_mapping.py
             # This PR pins `Ran 8 tests` on crit-kill-split, so its own edits must trigger.
@@ -285,6 +291,32 @@ jobs:
             # touches nothing else -- so without this line the gate that would object
             # is not even a trigger.
             tests/test_roll_enumeration_scope.py
+            # The schema-default gate and everything it depends on. 332 of its 390 rows live
+            # outside src/ (288 tests/, 43 scripts/, 1 docs/).
+            #
+            # ⚠ NAMING THESE FILES DOES NOT CLOSE THE HOLE, and an earlier revision of this comment
+            # claimed it did, in the past tense. `mass-gate` runs only when this filter matches, and
+            # matching the filter's 89 patterns against the tree leaves 329 of 390 rows (84%)
+            # untriggered, spread over 100 of the 126 files that hold a row. Both breakdowns, since
+            # mixing the two units made an earlier revision of this comment read as though
+            # 62+37+1 should total 329:
+            #     rows  untriggered: 286 tests/ + 42 scripts/ + 1 docs/ = 329 of 390
+            #     files untriggered:  62 tests/ + 37 scripts/ + 1 docs/ = 100 of 126
+            # So the PR-level claim "a new
+            # default reader fails in the PR that introduces it" holds only for PRs that ALSO touch
+            # src/pokezero/**, this workflow, or the gate artifacts below. The lines below close
+            # the artifact half: a PR that regenerates or deletes the allowlist now trips the job,
+            # which it did not before. The tests/ and scripts/ half is left open deliberately
+            # rather than papered over -- broadening to `tests/**` would run this job on nearly
+            # every PR in the repo, which is a cost decision, not a hygiene one. Worse, the gate's own artifacts
+            # were unlisted, so a PR that regenerated or deleted the allowlist tripped nothing:
+            # the same "a guard nothing runs" shape this file already records twice above, and the
+            # exact failure the header calls forbidden.
+            scripts/schema_default_ledger.py
+            tests/test_schema_default_ledger.py
+            tests/test_schema_with_selector.py
+            tests/data/schema_default_allowlist.json
+            src/pokezero/observation.py
             .github/workflows/engine-fidelity-gates.yml
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -411,8 +443,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_public_projection -v 2>&1 \
             | tee /tmp/pubproj.log
-          if ! grep -qE 'Ran 114 tests' /tmp/pubproj.log; then
-            echo "::error::expected 114 public-projection pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 130 tests' /tmp/pubproj.log; then
+            echo "::error::expected 130 public-projection pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. RenderBandWidthTests is the only thing pinning
@@ -421,6 +453,37 @@ jobs:
           # into an unverified one.
           if ! grep -qE '^OK$' /tmp/pubproj.log; then
             echo "::error::public-projection pins did not report a clean OK"
+            exit 1
+          fi
+
+      # The dropped-`|move|`-line instrument, through the SHIPPED renderer. Its own
+      # step for the reason the step above has one: the workflow names modules one at
+      # a time, so a new test module is invisible here by DEFAULT, and #1215 shipped
+      # direction 2 itself with no entry and no step at all.
+      #
+      # THE NO-SKIP GUARD IS THE POINT OF THIS STEP, not boilerplate. Three of these
+      # six pins call `pokezero_search.branch_events` on a constructed state and are
+      # `skipIf`-guarded on the native module; they are the only thing that ties the
+      # instrument to the actual renderer, and the comparator pins in
+      # `test_public_projection` cannot notice a renderer change. A venv without the
+      # crate would skip exactly those three and still print OK -- an instrument that
+      # cannot report failure reporting success, which is the failure this whole
+      # instrument exists to remove.
+      - name: Dropped protocol line instrument (direction 2)
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_render_dropped_move_line_crate -v 2>&1 \
+            | tee /tmp/droppedline.log
+          if ! grep -qE 'Ran 6 tests' /tmp/droppedline.log; then
+            echo "::error::expected 6 dropped-line pins; the suite shrank or grew"
+            exit 1
+          fi
+          if grep -q 'skipped' /tmp/droppedline.log; then
+            echo "::error::a dropped-line pin SKIPPED -- the crate-backed half did not run"
+            exit 1
+          fi
+          if ! grep -qE '^OK$' /tmp/droppedline.log; then
+            echo "::error::dropped-line pins did not report a clean OK"
             exit 1
           fi
 
@@ -478,6 +541,27 @@ jobs:
           fi
           if grep -q 'skipped' /tmp/armoracle.log; then
             echo "::error::the collapsed-arm mass oracle SKIPPED; it must never skip"
+            exit 1
+          fi
+
+      # The schema-default gate is worthless if it never runs, and it did not: it was authored
+      # with no workflow step, so "fails at authorship" meant "fails for whoever remembers to run
+      # it". A SKIP is treated as a FAILURE here -- the gate skips when the ledger reports an
+      # unparsable file, and on this job that means something else broke, not that the check is
+      # inapplicable.
+      - name: Schema-default conflation gate
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_schema_default_ledger tests.test_schema_with_selector -v \
+            2>&1 | tee /tmp/schemagate.log
+          # Parse the SUMMARY, not the whole -v log: `grep skipped` over verbose output would
+          # trip on any future test name or docstring containing the word.
+          if tail -5 /tmp/schemagate.log | grep -qE 'skipped=[0-9]+|OK \(skipped'; then
+            echo "::error::the schema-default gate SKIPPED -- the ledger could not measure the tree"
+            exit 1
+          fi
+          if ! grep -qE 'Ran 25 tests' /tmp/schemagate.log; then
+            echo "::error::expected 25 tests across the ledger gate and the selector; suite changed"
             exit 1
           fi
 
@@ -1220,8 +1304,8 @@ jobs:
       # gives: no local `unittest` or `pytest` run can see it, so a battery that shrinks
       # is red here rather than quietly green.
       #
-      # READ THIS BEFORE TRUSTING A GREEN. 16 of the 21 tests execute here; 5 SKIP.
-      # The 16 need no engine and no Showdown checkout -- `battle_spec_from_payload` is
+      # READ THIS BEFORE TRUSTING A GREEN. 18 of the 23 tests execute here; 5 SKIP.
+      # The 18 need no engine and no Showdown checkout -- `battle_spec_from_payload` is
       # pure construction over a payload literal -- and those are the behavioural pins.
       # The 5 that skip are `PoolCannotReachTheLockedMoveDivergenceTests`, which scans
       # the real gen3 set pool and `data/moves.ts` to bound at ZERO the one shape where
@@ -1236,15 +1320,22 @@ jobs:
       # The skip count is pinned EXACTLY, not forbidden: `skipped=5` and no more. A sixth
       # skip means a behavioural pin quietly acquired a Showdown dependency, which is how
       # a battery goes vacuous while still reporting OK. Per-METHOD skip decorators keep
-      # the reported count at 21 in both environments; a class-level skip would collapse
-      # to one entry and drop the count to 16, defeating the count guard.
+      # the reported count at 23 in both environments; a class-level skip would collapse
+      # to one entry and drop the count to 18, defeating the count guard.
+      #
+      # 21 -> 23 with `TheSwitchSentinelSeedsTheEnginesOwnVariantTests`, which pins the
+      # UN-encored branch's `switch:0` seeding on both seats. Nothing pinned it: renaming
+      # the `"switch"` literal at that call site sent the sentinel into the resolver,
+      # which cannot match it, so the seeding silently became `""` with nothing red. The
+      # dead no-op `if last_used_move_id == "switch": last_used_move_id = "switch"` that
+      # sat next to the latch and read like a guard is deleted in the same commit.
       - name: Encore public-lastUsedMove world-construction pins
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_world_encore_last_used -v 2>&1 \
             | tee /tmp/encorelastused.log
-          if ! grep -qE 'Ran 21 tests' /tmp/encorelastused.log; then
-            echo "::error::expected 21 tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 23 tests' /tmp/encorelastused.log; then
+            echo "::error::expected 23 tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE 'OK \(skipped=5\)' /tmp/encorelastused.log; then
@@ -1413,8 +1504,16 @@ jobs:
           # invariant plus six debug_assert!s in tree.rs. A mass-gate workflow running
           # the crate in the one profile where its mass assertion does not exist is the
           # defect this job is named after. Found by review of #1083.
+          # --no-fail-fast IS LOAD-BEARING, and its absence was measured rather than
+          # suspected. cargo stops after the first failing TARGET, so with one failing lib
+          # test only 4 of 36 binaries ran: measured on this tree by applying a single
+          # fail-open mutant, 4 binaries with the flag absent versus 36 with it present. Every
+          # renderer pin named in the loop below lives in a target that never executed, so the
+          # step reported one failure and 32 binaries' worth of verdicts were never rendered.
+          # `grep -rn "no-fail-fast"` had no hits anywhere in the tracked tree.
           RUSTFLAGS="-C debug-assertions=yes" \
-            cargo test --release --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            cargo test --release --no-fail-fast \
+              --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
             | tee /tmp/cargo.log
           if grep -qE '^test result: FAILED' /tmp/cargo.log; then
             echo "::error::a crate suite failed"
@@ -1564,8 +1663,20 @@ jobs:
           # NO behavioural pin: all eight stayed green with it deleted, and so did this suite at
           # 459, `--test test_gen3`, the engine lib suite, test_branch_mass_reconstruction and
           # test_collapsed_arm_mass_oracle. The two added tests reach the guard's decline path.
-          if [ "${passed:-0}" -lt 461 ]; then
-            echo "::error::expected >= 461 crate tests, got ${passed:-0}"
+          #
+          # RAISED 461 -> 519. The 461 was the exact head total when it was written and was
+          # then left unraised across subsequent PRs, so by the time this change arrived the
+          # suite passed 517 and the floor would have absorbed the deletion of 56 tests --
+          # including every fixture the Sleep-Talk zero-heal guard depends on. That is the
+          # same blindness the paragraphs above describe, arriving for the fifth time, and it
+          # is why the floor is only meaningful when it EQUALS the current total.
+          #   measured on this tree: 519 summed `test result: ok` passes across 36 binaries,
+          #   `cargo test --release --no-fail-fast`, 0 failures. Identical under
+          #   `--features model` (519, and the executed test-NAME sets are equal in both
+          #   directions), which is why the model step below asserts the same number.
+          # Anyone adding a test raises this line. That is the intended cost.
+          if [ "${passed:-0}" -lt 519 ]; then
+            echo "::error::expected >= 519 crate tests, got ${passed:-0}"
             exit 1
           fi
           # And name the pins: a total can be restored by unrelated tests.
@@ -1646,7 +1757,13 @@ jobs:
                      a_protect_blocked_sleep_talk_callee_renders_the_exact_protect_line \
                      without_the_protect_volatile_no_protect_line_is_invented \
                      a_full_hp_absorb_activation_is_never_dressed_as_protect \
-                     protect_plus_an_absorb_ability_refuses_rather_than_guessing \
+                     protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing \
+                     protect_plus_an_absorb_ability_with_no_convertible_callee_renders \
+                     the_callee_scan_covers_candidates_after_the_second_match \
+                     events::none_matched_shape_tests::the_bypassing_callee_still_refuses \
+                     events::none_matched_shape_tests::the_bypassing_producer_set_is_derived_from_every_gate \
+                     events::none_matched_shape_tests::only_an_opponent_targeted_positive_heal_can_reach_the_absorb_no_op \
+                     events::none_matched_shape_tests::no_move_in_the_table_natively_heals_the_opponent \
                      events::none_matched_shape_tests::the_protect_marker_renders_only_when_the_state_proves_it \
                      events::none_matched_shape_tests::the_protect_marker_is_defender_side_and_zero_amount_only \
                      events::none_matched_shape_tests::the_absorb_guard_covers_exactly_the_zero_heal_producers \
@@ -1698,6 +1815,99 @@ jobs:
               exit 1
             }
           done
+
+      - name: The abort seam under `--features model` -- COMPILE COVERAGE PLUS ONE BEHAVIOURAL RUNG
+        run: |
+          set -o pipefail
+          # WHY THIS STEP EXISTS. `tree.rs:305`'s abort gate is `allow(dead_code)` without the
+          # `model` cargo feature, so every crate step above compiles the channel THIS
+          # PR's class travels on out of the build entirely -- report 4 section 4.1, in the CI
+          # config rather than in a measurement run. `model.rs` is likewise never compiled, and
+          # the named `abort_telemetry::*` pins above are source-text assertions over
+          # `include_str!("model.rs")` precisely because of that.
+          #
+          # WHAT IT BUYS, STATED EXACTLY, because overclaiming here would be the same defect in
+          # the other direction. The FIRST revision of this step bought compile coverage and
+          # nothing else, and review proved it: the executed test-NAME set was IDENTICAL with
+          # and without the feature -- 519 names both ways, `comm` empty in both directions --
+          # so no CI test observed an abort under either setting, and section 4.1 was NOT
+          # discharged by adding the flag.
+          #
+          # `tree::model_abort_seam_tests` is the answer to that, and it is deliberately narrow.
+          # It is `cfg`-gated on the feature, so the two builds are now OBSERVABLY different --
+          # 520 tests here against 519 on the plain step -- and it asserts the gated seam
+          # actually REJECTS and that the error carries the predicate the census keys
+          # `world_failure_reasons` by. Null-worlded: replacing the seam's condition with
+          # `if false` reddens exactly that test.
+          #
+          # ⚠ STILL NOT DISCHARGED, and this comment is where a reader will look. The abort
+          # channel is exercised at the SEAM only. Nothing in CI drives a search over a world
+          # and observes `worlds_searched < worlds_constructed`; that needs the
+          # truth-differential harness and its model artifacts and is not a CI job. Treat
+          # "the abort channel is covered in CI" as FALSE and this as one rung of it.
+          #
+          # THE LIBRARY-PATH TRAP, found by running it. `build.rs` embeds an rpath for the
+          # maturin-built cdylib only, so `cargo test --features model` binaries do not get it
+          # and abort at load with SIGABRT. cargo then prints `error: test failed` and NO
+          # `test result: FAILED` line, so a step grepping only for that line would pass on a
+          # run where nothing executed. `set -o pipefail` is what actually catches it; the
+          # library path is what prevents it.
+          python -m pip install --quiet torch==2.12.1 \
+            --index-url https://download.pytorch.org/whl/cpu
+          LIBTORCH_USE_PYTORCH=1 LIBTORCH_BYPASS_VERSION_CHECK=1 \
+            LD_LIBRARY_PATH="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')" \
+            RUSTFLAGS="-C debug-assertions=yes" \
+            cargo test --release --no-fail-fast --features model \
+              --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            | tee /tmp/cargo-model.log
+          if grep -qE '^test result: FAILED' /tmp/cargo-model.log; then
+            echo "::error::a crate suite failed under --features model"
+            exit 1
+          fi
+          model_tests=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo-model.log \
+            | grep -oE '[0-9]+' | paste -sd+ - | bc)
+          # 520, not 519, and the DIFFERENCE is the point: `tree::model_abort_seam_tests` exists
+          # only on this build. Equal floors would mean the two steps could not tell each other
+          # apart, which is the state review found. Measured: plain 519, model 520.
+          if [ "${model_tests:-0}" -lt 520 ]; then
+            echo "::error::expected >= 520 crate tests under --features model, got ${model_tests:-0}"
+            exit 1
+          fi
+          # And name the gated pin, because a total can be restored by unrelated tests -- the
+          # lesson the plain step's own comment records.
+          gated=tree::model_abort_seam_tests::the_gated_abort_seam_rejects_an_attribution_unsafe_branch_with_its_predicate
+          grep -qxE "test $gated \.\.\. ok" /tmp/cargo-model.log || {
+            echo "::error::the model-gated abort-seam pin did not run"
+            exit 1
+          }
+
+      - name: The production-read pin runs at all -- build the native module and run it
+        run: |
+          set -o pipefail
+          # `events.rs` names `tests/test_crate_protect_marker_state_reads.py` as THE pin for
+          # the three state facts the Sleep Talk zero-heal guard reads, and no CI job ran it.
+          # Adding it to a module list alone would not have been enough: the module is
+          # `skipIf(pokezero_search is None)` and no job builds the native module, so it would
+          # have SKIPPED and reported green -- an instrument that cannot report failure.
+          # So the wheel is built first, and the skip is made loud below.
+          maturin build --release --manifest-path rust/pokezero-search/Cargo.toml --out /tmp/wheels
+          python -m pip install --quiet --force-reinstall --no-deps /tmp/wheels/*.whl
+          python -c "import pokezero_search; print('native module ok')"
+          python -m unittest tests.test_crate_protect_marker_state_reads -v 2>&1 \
+            | tee /tmp/protectread.log
+          # A SKIP HERE IS A FAILURE. The module's whole value is that it exercises the
+          # production READ, which every crate unit test passes in as a literal.
+          if grep -qE 'skipped|OK \(skipped' /tmp/protectread.log; then
+            echo "::error::the production-read pin SKIPPED; the native module was not importable"
+            exit 1
+          fi
+          # EXACT, in the shape #1204's scan pairs -- a `>=` comparison is unpairable and
+          # showed up as a NEW blind spot in `test_the_guard_scan_coverage_triple_is_re_derived`
+          # the moment this step was added. That gate is the reason this line is a literal.
+          if ! grep -qE 'Ran 13 tests' /tmp/protectread.log; then
+            echo "::error::the production-read pin did not run all 13 tests"
+            exit 1
+          fi
 
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check
@@ -1880,8 +2090,8 @@ jobs:
           python -m unittest tests.test_truth_differential -v 2>&1 | tee /tmp/truthdiff.log
           # EXACT, not a floor. A floor was the one fail-open in #1163's mutation
           # battery, and this guard lives in YAML where no local run can see it.
-          if ! grep -qE 'Ran 44 tests' /tmp/truthdiff.log; then
-            echo "::error::expected 44 truth-differential tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 67 tests' /tmp/truthdiff.log; then
+            echo "::error::expected 67 truth-differential tests; the suite shrank or grew"
             exit 1
           fi
           # THE pins, named. `ForcedRefusalTests` is the reason the census number can be
@@ -1920,6 +2130,103 @@ jobs:
             exit 1
           fi
 
+  # ---------------------------------------------------------------------------------------------
+  # Its OWN job, unconditional: no `if:` and no `needs:`, matching the seed-registry and
+  # harness-provenance precedent above. It was first written as step 12 of 43 inside `mass-gate`,
+  # which carries `if: needs.changes.outputs.fidelity == 'true'` -- so review measured it against
+  # the 50 most recent non-merge first-parent commits on main and found 5 that touched .py and
+  # would NOT have run it. Three specific holes, all closed by making it unconditional:
+  #   - `pyproject.toml` was not in FILTERS, so a PR CHANGING the declared floor never ran the
+  #     gate that derives from that declaration;
+  #   - `scripts/check_python_floor_syntax.py` was not in FILTERS either, so a PR gutting the
+  #     gate did not run it;
+  #   - it sat after "Build and install the gen3 engine", so an engine-build failure prevented a
+  #     check needing only `git` and `ruff` from ever running.
+  # A gate that runs only when you touch the thing it guards is the "guard nothing runs" shape
+  # this file already records three times.
+  #
+  # WHY: pyproject declares requires-python >= 3.11, but every other job here pins 3.12, so
+  # nothing compared the code against its own declared floor. One file used a backslash inside an
+  # f-string (legal 3.12+, SyntaxError on 3.11) and the breach was invisible in both directions:
+  # CI could not see it, and locally it failed COLLECTION for three test modules plus one script
+  # -- which read as "four files you work around", while the suite silently measured 116 tests and
+  # 1398 subtests fewer than it appeared to. Two artifacts rotted inside those modules.
+  #
+  # No pure-Python guard is possible: PEP 701 removed the restriction from CPython's parser, so
+  # ast.parse(feature_version=(3,11)) on 3.12 ACCEPTS what 3.11 rejects. Hence ruff.
+  python-floor-syntax:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        # PINNED. The whole gate rests on the literal diagnostic name `invalid-syntax`, and that
+        # name has not always existed: ruff 0.8.0 reports NOTHING for `type A = int` at
+        # --target-version=py311 (verified: rc=0, "All checks passed!"). An unpinned linter is a
+        # gate whose behaviour changes with no commit, and a rename would return this gate to
+        # permanent green. torch is pinned in this same workflow for the same reason.
+        run: python -m pip install --quiet 'ruff==0.16.2'
+
+      - name: The gate reddens on known-bad input
+        # Kill-confirm IN CI, before trusting the green run below. Without it, a ruff rename or an
+        # output-format change makes the gate silently permanent-green: the script exits 0 and still
+        # prints its success line, so the shape grep cannot see it. A pin stops accidental drift;
+        # this stops silent drift.
+        #
+        # Driven by the script's own `--self-test`, which derives the floor from pyproject and picks
+        # a fixture invalid AT THAT FLOOR. The previous version hardcoded `--target-version=py311`
+        # in this step, so raising requires-python to >=3.12 would have left it attesting a
+        # capability the gate no longer exercises -- verified: at floor py312 the py311 fixture
+        # returns "All checks passed!". A hardcoded duplicate of a derived value is the defect class
+        # this whole gate exists to close, and it was sitting in the gate's own kill-confirm.
+        #
+        # An unknown floor exits 2 rather than silently attesting nothing.
+        run: |
+          set -o pipefail
+          set +e
+          python scripts/check_python_floor_syntax.py --self-test 2>&1 | tee /tmp/floorselftest.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::the floor gate failed its own kill-confirm (exit $rc); the run below"
+            echo "::error::cannot be trusted -- it would report green without checking anything."
+            exit 1
+          fi
+          if ! grep -q 'self-test OK: ruff rejects' /tmp/floorselftest.log; then
+            echo "::error::self-test exited 0 without its success line -- output shape changed"
+            exit 1
+          fi
+
+      - name: Python floor syntax gate
+        run: |
+          # `set +e` around the pipeline, deliberately. GitHub's default shell is `bash -e {0}`,
+          # so a nonzero exit aborted the step AT the pipeline and every ::error:: annotation
+          # below was unreachable -- the step still failed red, but by accident of -e rather than
+          # by the written logic, and the documented "exit 2 fails too" described a dead branch.
+          set -o pipefail
+          set +e
+          python scripts/check_python_floor_syntax.py 2>&1 | tee /tmp/floorsyntax.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo "::error::the floor-syntax gate could not run (exit 2) -- not treated as green"
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::tracked file(s) use syntax newer than requires-python declares"
+            exit 1
+          fi
+          if ! grep -q 'every tracked .py file parses on' /tmp/floorsyntax.log; then
+            echo "::error::gate exited 0 without its success line -- output shape changed"
+            exit 1
+          fi
+
+
   # THE REQUIRED CHECK. Runs on every pull request, whatever it touches, so it can
   # always report. It is the only job in this workflow that should ever be marked
   # required in branch protection -- requiring `mass-gate` directly would block any
@@ -1940,7 +2247,7 @@ jobs:
   # the job executes, the guard fires, and nothing depends on the result. Any job
   # added to this workflow must be added here too, or it is advisory.
   gate-status:
-    needs: [changes, mass-gate, seed-registry, harness-provenance]
+    needs: [changes, mass-gate, seed-registry, harness-provenance, python-floor-syntax]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1952,6 +2259,7 @@ jobs:
           FILTER: ${{ needs.changes.result }}
           REGISTRY: ${{ needs.seed-registry.result }}
           HARNESS: ${{ needs.harness-provenance.result }}
+          FLOOR: ${{ needs.python-floor-syntax.result }}
         run: |
           set -euo pipefail
           echo "changes result: ${FILTER}"
@@ -1959,6 +2267,7 @@ jobs:
           echo "mass-gate result: ${RESULT}"
           echo "seed-registry result: ${REGISTRY}"
           echo "harness-provenance result: ${HARNESS}"
+          echo "python-floor-syntax result: ${FLOOR}"
 
           # The seed registry, checked FIRST and with no case analysis, because there
           # is none to do: `seed-registry` carries no `if:`, depends on no other job,
@@ -1981,6 +2290,17 @@ jobs:
           # behind are all red.
           if [ "${HARNESS}" != "success" ]; then
             echo "::error::the harness-digest pins did not pass (${HARNESS}); the Python half of the measuring instrument is unidentified, or an engine fingerprint now spans a different set of source commits than the six historical groups"
+            exit 1
+          fi
+
+          # The declared-floor gate, same shape and same reason: `python-floor-syntax` carries
+          # no `if:`, depends on no other job, and needs no wheel, so `skipped` is not reachable
+          # for it. Listing it in `needs:` alone would NOT have been enough -- this job runs
+          # `if: always()`, so without an explicit check it reports green while the floor gate is
+          # red. Demand the positive, so `failure`, `cancelled` and the empty string a job that
+          # never ran leaves behind are all red.
+          if [ "${FLOOR}" != "success" ]; then
+            echo "::error::the declared-floor syntax gate did not pass (${FLOOR}); a tracked file uses syntax newer than requires-python declares, or the gate could not run -- either way the floor is unverified"
             exit 1
           fi
 

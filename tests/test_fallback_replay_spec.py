@@ -249,9 +249,9 @@ class TestFoulplaySidecar:
         assert spec.opponent_search_time_ms == 1000
 
     def test_decision_rng_seed_is_the_literal_bridge_expression(self):
-        # foulplay_bridge.py:3541 -- reproduced verbatim, because a replay that
-        # builds this string differently gets a different world sample and a
-        # different refusal.
+        # foulplay_bridge._select_policy_decision -- reproduced verbatim, because
+        # a replay that builds this string differently gets a different world
+        # sample and a different refusal.
         spec = resolve_address(_address(), _foulplay_sidecar())
         assert isinstance(spec, ReplaySpec)
         assert spec.decision_rng_seed == "8220001:p1:103"
@@ -261,7 +261,8 @@ class TestFoulplaySidecar:
         # The trivially-wrong implementation is `opponent_seed = seed`. It passes
         # for the default schedule, so the fixture DECOUPLES the two bands: this
         # run set foulplay_random_seed=990000 against seed_start=8220000, which
-        # foulplay_bridge.py:2375 says makes battle 8220001's opponent 990001.
+        # foulplay_bridge._per_seed_foulplay_random_seed_schedule_for_offsets says
+        # makes battle 8220001's opponent 990001.
         document = _foulplay_sidecar(
             opponent_seeds=list(range(990000, 990008)),
         )
@@ -448,7 +449,8 @@ class TestSelfPlayWriters:
 
     def test_hc_grid_reads_deep_ko_split(self):
         # A real producer setting (`hc_depth_grid.py:107` BooleanOptionalAction,
-        # written :288, consumed `engine_search.py:1203`). Dropping it let a
+        # written :288, consumed by `_search_hp_fraction_crate`'s `puct_search_multi`
+        # call). Dropping it let a
         # `false` shard resolve `exact` and replay under the dataclass default
         # `true` -- a different search reported as the recorded one.
         document = _hc_grid_shard()
@@ -461,7 +463,7 @@ class TestSelfPlayWriters:
         assert "deep_ko_split" not in spec.missing
 
     def test_hc_grid_cell_must_match_the_document(self):
-        # The cell selects the depth (`hc_depth_grid.py:196`). An hc-d8 address
+        # The cell selects the depth (`hc_depth_grid._cell_depth`). An hc-d8 address
         # read against an hc-d4 shard previously resolved with depth=4 and
         # fidelity=exact -- the collision `ReplaySpec.source` exists to name.
         document = _hc_grid_shard(cell="hc-d4", seed=600000)

@@ -1,0 +1,371 @@
+[
+  {
+    "file": "docs/token-format/extract_turn16.py",
+    "line": 671,
+    "kind": "bare-const",
+    "owner": "<module>"
+  },
+  {
+    "file": "scripts/encode_foulplay_capture.py",
+    "line": 141,
+    "kind": "default-spec",
+    "owner": "main"
+  },
+  {
+    "file": "scripts/play_online_baseline.py",
+    "line": 56,
+    "kind": "default-spec",
+    "owner": "main"
+  },
+  {
+    "file": "src/pokezero/engine_env.py",
+    "line": 1140,
+    "kind": "default-spec",
+    "owner": "_default_observation_spec"
+  },
+  {
+    "file": "src/pokezero/linear_policy.py",
+    "line": 89,
+    "kind": "bare-const",
+    "owner": "_linear_feature_fingerprint_payload"
+  },
+  {
+    "file": "src/pokezero/linear_policy.py",
+    "line": 119,
+    "kind": "bare-const",
+    "owner": "LinearPolicyModel"
+  },
+  {
+    "file": "src/pokezero/linear_policy.py",
+    "line": 512,
+    "kind": "implicit:LinearPolicyModel",
+    "owner": "train_linear_policy",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 3025,
+    "kind": "bare-const",
+    "owner": "_train"
+  },
+  {
+    "file": "src/pokezero/neural_cli.py",
+    "line": 5593,
+    "kind": "bare-const",
+    "owner": "_iterate"
+  },
+  {
+    "file": "src/pokezero/neural_policy.py",
+    "line": 534,
+    "kind": "default-spec",
+    "owner": "from_dict"
+  },
+  {
+    "file": "src/pokezero/online_client.py",
+    "line": 99,
+    "kind": "default-spec",
+    "owner": "OnlineBattleAgent"
+  },
+  {
+    "file": "src/pokezero/showdown.py",
+    "line": 1169,
+    "kind": "bare-const",
+    "owner": "<module>"
+  },
+  {
+    "file": "src/pokezero/showdown.py",
+    "line": 4323,
+    "kind": "default-spec",
+    "owner": "observation_from_player_state"
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 221,
+    "kind": "bare-const",
+    "owner": "test_linear_checkpoint_round_trip_preserves_predictions"
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 306,
+    "kind": "bare-const",
+    "owner": "test_linear_feature_fingerprint_payload_tracks_extractor_source_and_schemas"
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 519,
+    "kind": "implicit:LinearPolicyModel",
+    "owner": "test_train_linear_policy_can_warm_start_from_initial_model",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_linear_policy.py",
+    "line": 560,
+    "kind": "implicit:LinearPolicyModel",
+    "owner": "test_linear_softmax_policy_respects_legal_mask",
+    "unclosed": [
+      "observation_schema_version"
+    ]
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 3912,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_summary_out_persists_json"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 3912,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_summary_out_persists_json"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 3990,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_wires_raw_and_search_matchups"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 3990,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_wires_raw_and_search_matchups"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4613,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4614,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_wires_time_budget_without_legacy_visit_cap"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4814,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_keeps_raw_priors_and_uses_explicit_value_checkpoint"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 4815,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_keeps_raw_priors_and_uses_explicit_value_checkpoint"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5041,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5042,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_wires_public_belief_worlds"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5178,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_defaults_root_prior_temperature_to_temperature"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5178,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_defaults_root_prior_temperature_to_temperature"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5236,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_average_checkpoint_opponent_action_scenarios"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5236,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_average_checkpoint_opponent_action_scenarios"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5358,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_policy_for_root_opponent_actions"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5358,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_policy_for_root_opponent_actions"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5449,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_opponent_for_leaf_rollouts"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5449,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_use_benchmark_opponent_for_leaf_rollouts"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5527,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_sweep_leaf_depths"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5527,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_can_sweep_leaf_depths"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5609,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_tags_single_sweep_depth"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5609,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_play_benchmark_tags_single_sweep_depth"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5674,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_benchmark_wires_checkpoint_callbacks_and_source_policies"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5675,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_benchmark_wires_checkpoint_callbacks_and_source_policies"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5843,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_counterfactual_wires_continuation_policies"
+  },
+  {
+    "file": "tests/test_neural_policy.py",
+    "line": 5844,
+    "kind": "default-spec",
+    "owner": "test_neural_cli_root_puct_counterfactual_wires_continuation_policies"
+  },
+  {
+    "file": "tests/test_observation.py",
+    "line": 52,
+    "kind": "bare-const",
+    "owner": "test_the_fresh_artifact_default_is_v4"
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 968,
+    "kind": "bare-const",
+    "owner": "test_examples_from_record_accepts_current_schema"
+  },
+  {
+    "file": "tests/test_observation_spec_v2.py",
+    "line": 992,
+    "kind": "default-spec",
+    "owner": "test_missing_observation_schema_version_is_refused_not_assumed_current"
+  },
+  {
+    "file": "tests/test_observation_spec_v2_1.py",
+    "line": 129,
+    "kind": "default-spec",
+    "owner": "test_v4_IS_the_fresh_default"
+  },
+  {
+    "file": "tests/test_observation_spec_v2_1.py",
+    "line": 130,
+    "kind": "bare-const",
+    "owner": "test_v4_IS_the_fresh_default"
+  },
+  {
+    "file": "tests/test_observation_spec_v3.py",
+    "line": 376,
+    "kind": "bare-const",
+    "owner": "test_v4_IS_the_default_not_v3"
+  },
+  {
+    "file": "tests/test_observation_spec_v4.py",
+    "line": 251,
+    "kind": "bare-const",
+    "owner": "test_v4_IS_the_default"
+  },
+  {
+    "file": "tests/test_online_client.py",
+    "line": 39,
+    "kind": "implicit:OnlineBattleAgent",
+    "owner": "_agent",
+    "unclosed": [
+      "spec"
+    ]
+  },
+  {
+    "file": "tests/test_online_client.py",
+    "line": 208,
+    "kind": "bare-const",
+    "owner": "test_unpinned_agent_follows_its_own_resolved_spec_for_turn_merged"
+  },
+  {
+    "file": "tests/test_online_client.py",
+    "line": 263,
+    "kind": "implicit:OnlineBattleAgent",
+    "owner": "test_agent_threads_set_source_and_env_gate_controls_build",
+    "unclosed": [
+      "spec"
+    ]
+  },
+  {
+    "file": "tests/test_replay_branching.py",
+    "line": 56,
+    "kind": "default-spec",
+    "owner": "_observation_with_recent_event_token"
+  },
+  {
+    "file": "tests/test_replay_branching.py",
+    "line": 84,
+    "kind": "default-spec",
+    "owner": "_observation_with_self_hp_fraction"
+  },
+  {
+    "file": "tests/test_replay_branching.py",
+    "line": 144,
+    "kind": "default-spec",
+    "owner": "_observation_with_numeric_feature"
+  },
+  {
+    "file": "tests/test_selfplay.py",
+    "line": 587,
+    "kind": "bare-const",
+    "owner": "test_run_selfplay_iterations_writes_checkpoint_and_manifests"
+  },
+  {
+    "file": "tests/test_showdown.py",
+    "line": 1609,
+    "kind": "default-spec",
+    "owner": "test_curse_move_effect_resolves_by_user_type"
+  },
+  {
+    "file": "tests/test_turn_merged_encode.py",
+    "line": 121,
+    "kind": "bare-const",
+    "owner": "test_v4_IS_the_default_and_the_default_is_NOT_turn_merged"
+  }
+]

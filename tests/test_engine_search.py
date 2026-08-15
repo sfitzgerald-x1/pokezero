@@ -3049,8 +3049,8 @@ class WorldAbortRateTests(unittest.TestCase):
         `worlds_constructed: 0` and `world_search_abort_rate: null` forever --
         a dead metric on the one path anyone runs.
 
-        `foulplay_bridge.py:2475`, `mcts_acceptance_h2h.py:97` and
-        `k0_grid_h2h.py:158` all select "model".
+        `foulplay_bridge._build_policy`, `mcts_acceptance_h2h.build_policies` and
+        `k0_grid_h2h.main` all pass `leaf_eval="model"` to `EngineMctsConfig`.
         """
         import unittest.mock as mock
 
