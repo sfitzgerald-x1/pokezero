@@ -91,8 +91,16 @@ def rollout_seed(base: int, battle_id: str, round_index: int, arm: int, trial: i
     return int(hashlib.sha256(":".join(parts).encode()).hexdigest()[:12], 16)
 
 
+def _json_hi(hi: float):
+    """None for the open-ended bucket, so the payload stays valid JSON."""
+    return None if hi == float("inf") else hi
+
+
 def score_pairs(pairs: Sequence[Mapping[str, Any]], buckets: Sequence[float]) -> dict:
     """Sign-agreement between the head's ordering and ground truth, per true-gap bucket."""
+    # The open-ended top bucket. float("inf") serialises as a bare `Infinity` token, which
+    # is not valid JSON -- jq accepts it, Node's JSON.parse rejects the whole file. Kept as
+    # inf for the comparison and rendered as None on the way out (see below).
     edges = list(buckets) + [float("inf")]
     out: dict[str, Any] = {"buckets": [], "n_pairs": len(pairs)}
     for lo, hi in zip(edges, edges[1:]):
@@ -101,14 +109,14 @@ def score_pairs(pairs: Sequence[Mapping[str, Any]], buckets: Sequence[float]) ->
         # than counted as a failure of the head.
         sel = [p for p in sel if p["true_gap"] != 0.0]
         if not sel:
-            out["buckets"].append({"lo": lo, "hi": hi, "n": 0, "accuracy": None})
+            out["buckets"].append({"lo": lo, "hi": _json_hi(hi), "n": 0, "accuracy": None})
             continue
         agree = sum(1 for p in sel
                     if (p["head_gap"] > 0) == (p["true_gap"] > 0) and p["head_gap"] != 0)
         n = len(sel)
         lo_ci, hi_ci = wilson(agree, n)
         out["buckets"].append({
-            "lo": lo, "hi": hi, "n": n, "agree": agree, "accuracy": agree / n,
+            "lo": lo, "hi": _json_hi(hi), "n": n, "agree": agree, "accuracy": agree / n,
             "ci95": [lo_ci, hi_ci],
             "beats_chance": lo_ci > 0.5,
             "mean_true_gap": statistics.mean(abs(p["true_gap"]) for p in sel),
@@ -362,7 +370,7 @@ def main() -> int:
     for b in scored["buckets"]:
         if not b["n"]:
             continue
-        hi = "inf" if b["hi"] == float("inf") else f"{b['hi']:.2f}"
+        hi = "inf" if b["hi"] is None else f"{b['hi']:.2f}"
         print(f"{b['lo']:.2f}-{hi:>6s}{'':>5s} {b['n']:5d} {b['accuracy']:9.3f} "
               f"[{b['ci95'][0]:.3f},{b['ci95'][1]:.3f}] {str(b['beats_chance']):>8s}")
     o = scored.get("overall")

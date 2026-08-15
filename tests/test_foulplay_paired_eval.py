@@ -1236,5 +1236,45 @@ class HeadToHeadCellIdentityTest(unittest.TestCase):
         self.assertNotEqual(a, b, "different opponents are different experiments")
 
 
+
+
+class OpponentHealthIsLiftedTest(unittest.TestCase):
+    """seat_block must carry the opponent's health into the merged shard.
+
+    The bridge summary can hold a perfect opponent_engine_mcts block and it dies there if
+    seat_block does not lift it -- the merged shard is what the power report reads. Tested
+    THROUGH seat_block rather than by constructing a shard with the key already present,
+    because a fixture that pre-supplies the field cannot see the lift being removed. That
+    exact weakness let a config_id blocker through earlier in this PR, and a first version
+    of this suite's gate test repeated it.
+    """
+
+    def _seat_block(self, summary):
+        import importlib.util as u
+        from pathlib import Path
+        sp = u.spec_from_file_location(
+            "pe", Path(__file__).resolve().parents[1] / "scripts" / "foulplay_paired_eval.py")
+        m = u.module_from_spec(sp); sp.loader.exec_module(m)
+        return m.seat_block(summary, "p1")
+
+    def test_the_opponent_block_reaches_the_merged_shard(self) -> None:
+        block = self._seat_block({
+            "completed_games": 5, "engine_mcts": {"fallback_rate": 0.0},
+            "opponent_engine_mcts": {"fallback_rate": 0.75, "decisions": 100,
+                                     "policy_mode": "engine-mcts"},
+        })
+        self.assertIsNotNone(block.get("opponent_engine_mcts"),
+                             "the opponent's health must survive the merge")
+        self.assertAlmostEqual(block["opponent_engine_mcts"]["fallback_rate"], 0.75)
+        # And the pokezero seat's own figure is untouched beside it.
+        self.assertEqual(block["fallback_rate"], 0.0)
+
+    def test_a_vs_foulplay_summary_lifts_None_not_a_fabricated_zero(self) -> None:
+        """Absence must stay absence. A 0.0 here would assert opponent health that was
+        never measured, and the eligibility gate would read it as clean."""
+        block = self._seat_block({"completed_games": 5, "engine_mcts": {"fallback_rate": 0.0}})
+        self.assertIsNone(block.get("opponent_engine_mcts"))
+
+
 if __name__ == "__main__":
     unittest.main()

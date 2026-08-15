@@ -33,7 +33,8 @@ _SPEC.loader.exec_module(_R)
 FP = "f" * 64
 
 
-def shard(config_id, arm, checkpoint, scores, *, gate=4.0, fingerprint=FP):
+def shard(config_id, arm, checkpoint, scores, *, gate=4.0, fingerprint=FP,
+          opponent_engine_mcts=None):
     """`scores` maps (seed, seat) -> score."""
     return {
         "schema_version": "pokezero.foulplay-paired-shard.v1",
@@ -53,6 +54,7 @@ def shard(config_id, arm, checkpoint, scores, *, gate=4.0, fingerprint=FP):
                 "fallback_rate": 0.008,
                 "depth_reached_mean": 3.1,
                 "world_failure_reasons": {},
+                "opponent_engine_mcts": opponent_engine_mcts,
             }
             for seat in ("p1", "p2")
         },
@@ -678,12 +680,34 @@ class OpponentHealthGateTest(unittest.TestCase):
         self.assertIsNone(h["opponent_fallback_rate"])
 
     def test_a_falling_back_opponent_makes_the_cell_ineligible(self) -> None:
-        m, _ = self._health(fallback_rate=0.0)
-        cell = {"health": {"fallback_rate": 0.0, "opponent_fallback_rate": 0.75}}
-        # Mirrors the eligibility construction: the pokezero seat is spotless at 0.0, so
-        # only the opponent's rate can disqualify this cell.
-        self.assertGreater(cell["health"]["opponent_fallback_rate"], m.FALLBACK_LIMIT)
-        self.assertLessEqual(cell["health"]["fallback_rate"], m.FALLBACK_LIMIT)
+        """Drives the REAL report, not a restatement of the threshold.
+
+        The first version of this test asserted only that 0.75 > FALLBACK_LIMIT, which
+        stays green if the gate is deleted outright. That is the same "does not traverse
+        production" weakness that let a blocker through earlier in this PR: a config_id
+        fragment was tested on the helper while the production caller never passed it.
+        """
+        sick = shard("d3-s2048-b16-w1+vs-engine-mcts-d6-s16384@k0", "search", "k0",
+                     {(0, "p1"): 1.0, (1, "p1"): 0.0},
+                     opponent_engine_mcts={"fallback_rate": 0.75, "decisions": 100,
+                                           "policy_mode": "engine-mcts"})
+        rep = run([sick, shard("raw@k0", "raw", "k0",
+                               {(0, "p1"): 1.0, (1, "p1"): 0.0}, gate=None)])
+        cell = rep["cells"]["d3-s2048-b16-w1+vs-engine-mcts-d6-s16384@k0"]
+        self.assertAlmostEqual(cell["health"]["opponent_fallback_rate"], 0.75)
+        self.assertIn("OPPONENT fallback", json.dumps(cell.get("ineligible_because")),
+                      "an opponent over the limit must disqualify the cell")
+
+    def test_a_healthy_opponent_does_not_disqualify(self) -> None:
+        ok = shard("d3-s2048-b16-w1+vs-engine-mcts-d6-s16384@k0", "search", "k0",
+                   {(0, "p1"): 1.0, (1, "p1"): 0.0},
+                   opponent_engine_mcts={"fallback_rate": 0.005, "decisions": 100,
+                                         "policy_mode": "engine-mcts"})
+        rep = run([ok, shard("raw@k0", "raw", "k0",
+                             {(0, "p1"): 1.0, (1, "p1"): 0.0}, gate=None)])
+        cell = rep["cells"]["d3-s2048-b16-w1+vs-engine-mcts-d6-s16384@k0"]
+        self.assertAlmostEqual(cell["health"]["opponent_fallback_rate"], 0.005)
+        self.assertNotIn("OPPONENT fallback", json.dumps(cell.get("ineligible_because")))
 
 
 if __name__ == "__main__":
