@@ -7770,12 +7770,21 @@ def _print_iterate_summary(result) -> None:
 def _format_live_ppo_diagnostics(final_epoch: Any) -> str:
     ppo_valid_fraction = getattr(final_epoch, "ppo_valid_fraction", None)
     ppo_clip_fraction = getattr(final_epoch, "ppo_clip_fraction", None)
+    ppo_value_clip_fraction = getattr(final_epoch, "ppo_value_clip_fraction", None)
     ppo_entropy = getattr(final_epoch, "ppo_entropy", None)
-    if ppo_valid_fraction is None and ppo_clip_fraction is None and ppo_entropy is None:
+    if (
+        ppo_valid_fraction is None
+        and ppo_clip_fraction is None
+        and ppo_value_clip_fraction is None
+        and ppo_entropy is None
+    ):
         return ""
+    # ppo_vclip is the VALUE trust region's bind rate, shown beside the policy clip rate
+    # because they answer different questions and only the policy one was ever visible.
     return (
         f" ppo_cov={_format_optional_float(ppo_valid_fraction)}"
         f" ppo_clip={_format_optional_float(ppo_clip_fraction)}"
+        f" ppo_vclip={_format_optional_float(ppo_value_clip_fraction)}"
         f" ppo_ent={_format_optional_float(ppo_entropy)}"
     )
 

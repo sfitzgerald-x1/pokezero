@@ -2170,6 +2170,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
             ppo_advantage_std=0.4,
             ppo_ratio_mean=1.1,
             ppo_clip_fraction=0.25,
+            ppo_value_clip_fraction=0.42,
             ppo_entropy=1.7,
         )
 
@@ -2213,6 +2214,11 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(scalars["ppo/valid_fraction"], 0.8)
         self.assertEqual(scalars["ppo/advantage_mean"], 0.2)
         self.assertEqual(scalars["ppo/advantage_std"], 0.4)
+        # The VALUE clip fraction. It was computed by to_epoch_metrics all along and emitted
+        # by nothing, so no run retained it and "does the 0.0184 value trust region bind?"
+        # could only be answered CANNOT RUN. Asserted here so it cannot silently go missing
+        # again -- this line fails against the pre-fix emitter.
+        self.assertEqual(scalars["ppo/value_clip_fraction"], 0.42)
         self.assertEqual(scalars["ppo/ratio_mean"], 1.1)
         self.assertEqual(scalars["ppo/clip_fraction"], 0.25)
         self.assertEqual(scalars["ppo/entropy"], 1.7)
