@@ -526,19 +526,36 @@ class MeasuredErrorRatesTest(unittest.TestCase):
     been retracted in the analysis it cited, which measured only n=150 and n=300.
     """
 
-    def test_rates_fall_as_coupling_strengthens(self):
-        # pvr 1.0 = no coupling (worst), 0.0 = perfect coupling (best).
-        worst = vhsp.measured_error_rates(1.00, 150)[0]
-        mid = vhsp.measured_error_rates(0.59, 150)[0]
-        best = vhsp.measured_error_rates(0.00, 150)[0]
-        self.assertGreater(worst, mid)
-        self.assertGreater(mid, best)
-        self.assertEqual(best, 0.0)
+    def test_every_adjacent_pair_is_monotone_in_coupling(self):
+        """ALL adjacent cells, not three samples.
 
-    def test_rates_fall_as_pairs_increase(self):
-        at150 = vhsp.measured_error_rates(0.59, 150)[0]
-        at300 = vhsp.measured_error_rates(0.59, 300)[0]
-        self.assertGreater(at150, at300)
+        The first published table sampled pvr 1.00/0.59/0.00 at n=150 only, and the one
+        non-monotone cell -- (0.88, 300) at 0.190 against (1.00, 300)'s 0.180 -- sat
+        precisely where nothing looked. The commit message claimed monotonicity anyway.
+        """
+        for n in (150, 300):
+            rows = sorted([r for r in vhsp.MEASURED_ERROR_RATES if r[1] == n],
+                          key=lambda r: -r[0])
+            for (pvr_hi, _, fb_hi, ff_hi), (pvr_lo, _, fb_lo, ff_lo) in zip(rows, rows[1:]):
+                self.assertGreaterEqual(
+                    fb_hi, fb_lo,
+                    f"false-binds rises as coupling improves: pvr {pvr_hi}->{pvr_lo} at n={n}")
+                self.assertGreaterEqual(
+                    ff_hi, ff_lo,
+                    f"false-fine rises as coupling improves: pvr {pvr_hi}->{pvr_lo} at n={n}")
+
+    def test_every_coupling_level_improves_with_more_pairs(self):
+        by_pvr = {}
+        for pvr, n, fb, ff in vhsp.MEASURED_ERROR_RATES:
+            by_pvr.setdefault(pvr, {})[n] = (fb, ff)
+        for pvr, cells in by_pvr.items():
+            self.assertEqual(set(cells), {150, 300}, f"pvr {pvr} is not a complete row")
+            self.assertGreaterEqual(cells[150][0], cells[300][0], f"pvr {pvr} false-binds")
+            self.assertGreaterEqual(cells[150][1], cells[300][1], f"pvr {pvr} false-fine")
+
+    def test_perfect_coupling_is_error_free_and_no_coupling_is_not(self):
+        self.assertEqual(vhsp.measured_error_rates(0.00, 300)[:2], (0.0, 0.0))
+        self.assertGreater(vhsp.measured_error_rates(1.00, 150)[0], 0.20)
 
     def test_reports_which_cell_was_substituted(self):
         fb, ff, tp, tn = vhsp.measured_error_rates(0.61, 280)
@@ -583,6 +600,45 @@ class AtFloorReportingTest(unittest.TestCase):
         self.assertEqual(got["ci95"][1], 0.0)
         # The caller must be able to distinguish "bound is 0" from "no bound available",
         # which is exactly what ci95[1] == 0.0 alongside at_floor signals.
+
+
+class MainUsesTheConversionHelperTest(unittest.TestCase):
+    """The regress has to stop somewhere: assert main() CALLS the helper.
+
+    FinalizePairGapsTest guards the helper's body, and reverting that body fails 3 tests.
+    But reverting main() to three inline assignments still left all 52 green -- the guard
+    had simply moved down one level. Checked over the AST, which terminates the regress:
+    main must contain a call to finalize_pair_gaps, and must not assign head_gap directly.
+    """
+
+    @staticmethod
+    def _main_node():
+        import ast as _ast
+        src = (Path(__file__).resolve().parents[1] / "scripts"
+               / "value_head_sibling_probe.py").read_text()
+        tree = _ast.parse(src)
+        return next(n for n in tree.body
+                    if isinstance(n, _ast.FunctionDef) and n.name == "main"), _ast
+
+    def test_main_calls_finalize_pair_gaps(self):
+        node, _ast = self._main_node()
+        calls = {c.func.id for c in _ast.walk(node)
+                 if isinstance(c, _ast.Call) and isinstance(c.func, _ast.Name)}
+        self.assertIn("finalize_pair_gaps", calls)
+
+    def test_main_never_writes_head_gap_directly(self):
+        node, _ast = self._main_node()
+        for assign in _ast.walk(node):
+            if not isinstance(assign, _ast.Assign):
+                continue
+            for tgt in assign.targets:
+                if (isinstance(tgt, _ast.Subscript)
+                        and isinstance(tgt.slice, _ast.Constant)
+                        and tgt.slice.value in ("head_gap", "head_gap_return_scale",
+                                                "true_gap")):
+                    self.fail(f"main() assigns {tgt.slice.value!r} directly at line "
+                              f"{assign.lineno}; it must go through finalize_pair_gaps so "
+                              f"the units conversion cannot be bypassed")
 
 
 if __name__ == "__main__":

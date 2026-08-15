@@ -98,7 +98,7 @@ def _json_hi(hi: float):
 
 
 # Measured error rates of the sigma_diff verdict, as a function of the coupling the run
-# actually achieves and the number of pairs. 200 repeats per cell, R=64, boundary 0.025
+# actually achieves and the number of pairs. 600 repeats per cell, R=64, boundary 0.025
 # (the midpoint of the 0.015/0.035 verdict band -- see the HOW TO READ note below).
 #
 # Indexed by paired_variance_ratio, i.e. by the quantity the probe MEASURES, not by a
@@ -112,16 +112,22 @@ def _json_hi(hi: float):
 # the shape of the dependence, and the measured ratio as the input to it.
 MEASURED_ERROR_RATES = (
     # (paired_variance_ratio, n_pairs, false "head binds", false "head is fine")
-    (1.00, 150, 0.235, 0.045),
-    (1.00, 300, 0.180, 0.010),
-    (0.88, 150, 0.225, 0.030),
-    (0.88, 300, 0.190, 0.000),
-    (0.75, 150, 0.200, 0.020),
-    (0.75, 300, 0.135, 0.000),
-    (0.59, 150, 0.165, 0.005),
-    (0.59, 300, 0.065, 0.000),
-    (0.37, 150, 0.065, 0.005),
-    (0.37, 300, 0.010, 0.000),
+    # 600 repeats per cell. The first published version used 200 and was NOT monotone --
+    # (0.88, 300) read 0.190 against (1.00, 300)'s 0.180, i.e. the error rate appeared to
+    # RISE as coupling improved. That was Monte Carlo noise in a tail estimate, confirmed by
+    # an independent replication, but the table had been committed with a claim of
+    # monotonicity that no test checked at the failing cell. At 600 repeats both axes are
+    # monotone and the test below verifies every adjacent pair rather than three samples.
+    (1.00, 150, 0.275, 0.052),
+    (1.00, 300, 0.212, 0.012),
+    (0.88, 150, 0.232, 0.033),
+    (0.88, 300, 0.167, 0.007),
+    (0.75, 150, 0.202, 0.015),
+    (0.75, 300, 0.132, 0.002),
+    (0.59, 150, 0.160, 0.000),
+    (0.59, 300, 0.078, 0.000),
+    (0.37, 150, 0.052, 0.000),
+    (0.37, 300, 0.012, 0.000),
     (0.00, 150, 0.000, 0.000),
     (0.00, 300, 0.000, 0.000),
 )
@@ -131,7 +137,7 @@ def measured_error_rates(pvr: float, n: int) -> tuple[float, float, float, int]:
     """Nearest measured cell for this run's coupling and sample size.
 
     Returns (false_binds, false_fine, table_pvr, table_n). Nearest rather than interpolated:
-    the cells are 200-repeat tail estimates, so interpolating between them would imply more
+    the cells are 600-repeat tail estimates, so interpolating between them would imply more
     precision than they carry. The cell used is reported so the reader can see the
     substitution.
 
@@ -989,7 +995,7 @@ def main() -> int:
             print(f"  MEASURED COUPLING: var(w_a-w_b) is {pvr:.2f}x the independent sum, "
                   f"over {sd['paired_variance_ratio_n']} pairs. 1.0 means the paired seeds "
                   f"bought nothing; 0.0 means the arms move together perfectly.")
-            print(f"  ERROR RATES AT THIS COUPLING AND n, measured (200 repeats, nearest "
+            print(f"  ERROR RATES AT THIS COUPLING AND n, measured (600 repeats, nearest "
                   f"cell pvr={tp:.2f} n={tn}): false 'the head binds' {fb:.1%}, "
                   f"false 'the head is fine' {ff:.1%}. These are selected by the measured "
                   f"ratio, not assumed.")
@@ -1011,23 +1017,43 @@ def main() -> int:
               "false-positive rate needs one line; they are therefore the rates for the "
               "most permissive reading, and the band edges are strictly better.")
         pt = sd["sigma_diff"]
-        # Branch on the POINT ESTIMATE, the statistic the rates were measured on. And warn
-        # with THIS run's measured rate rather than a constant: the previous gate fired on
-        # `n < 1200`, a number that had been retracted in the very analysis it cited.
+        # Branch on the POINT ESTIMATE, the statistic the rates were measured on -- but
+        # ONLY when there is a point estimate to branch on. Two traps, both of which this
+        # block fell into:
+        #
+        # 1. `sigma_diff` is 0.0 whenever the estimate CLIPS, so an at-floor run used to
+        #    land in the low arm and print "a low reading is well supported" ten lines
+        #    below "NOT RESOLVABLE ... no upper bound can be quoted". The affirmative line
+        #    is the one a reader acts on, so the run asserted exactly the measured zero
+        #    this file promises never to assert. Reproduced at 1 seed in 3 at n=300.
+        # 2. Partitioning on 0.025 alone labels EVERYTHING outside it "well supported",
+        #    including the whole 0.015-0.035 indeterminate band -- contradicting the HOW TO
+        #    READ line printed just above. 0.025 is where the error RATES were measured; it
+        #    is not a verdict boundary.
+        LO, HI_B = 0.015, 0.035
         if sd["n"] < 150:
             print(f"  *** UNDERPOWERED: {sd['n']} pairs. 150 is the smallest size any "
                   f"error rate has been measured at. ***")
+        elif sd["at_floor"]:
+            print("  NO VERDICT: the estimate is at the clip, so there is no point value to "
+                  "compare against the thresholds. The error rates above do not apply -- "
+                  "they were measured on runs that produced an estimate. Raise the pair "
+                  "count or the rollouts per arm.")
         elif rates is not None:
             fb, ff = rates
-            if pt > 0.025 and fb >= 0.10:
+            if LO < pt < HI_B:
+                print(f"  INDETERMINATE: {pt:.4f} falls between {LO} and {HI_B}. That is a "
+                      f"real answer, not a rounding problem -- this run does not decide "
+                      f"whether the head is the binding constraint, in either direction.")
+            elif pt >= HI_B and fb >= 0.10:
                 print(f"  *** A HIGH READING IS WEAKLY SUPPORTED: at this run's coupling "
                       f"and n={sd['n']}, {fb:.0%} of genuinely-fine heads read above the "
                       f"boundary. Raise the pair count, or improve the coupling, before "
                       f"spending training compute on this. ***")
-            elif pt <= 0.025 and ff >= 0.02:
+            elif pt <= LO and ff >= 0.02:
                 print(f"  NOTE: {ff:.0%} of genuinely-BINDING heads read below the boundary "
                       f"at this coupling and n. A low reading is suggestive, not decisive.")
-            elif pt > 0.025:
+            elif pt >= HI_B:
                 print(f"  A high reading is well supported here: only {fb:.0%} of "
                       f"genuinely-fine heads reach this side at this coupling and n.")
             else:
@@ -1052,7 +1078,9 @@ def main() -> int:
         args.json.write_text(json.dumps(
             {"belief_set_source_hash": getattr(result, "belief_set_source_hash", None),
              "value_calibration_transform": (None if _vct is None else str(_vct)),
-             "value_calibration_scale": _vct_scale,
+             # None, not 1.0, when the method ignores scale -- writing 1.0 there is an
+             # affirmative false reassurance on the axis the thresholds live on.
+             "value_calibration_scale": (_vct_scale if _vct_method == "affine" else None),
              "value_calibration_method": _vct_method,
              "config": {k: (str(v) if isinstance(v, Path) else v)
                         for k, v in vars(args).items()},
