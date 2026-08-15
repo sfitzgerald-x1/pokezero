@@ -134,6 +134,15 @@ def measured_error_rates(pvr: float, n: int) -> tuple[float, float, float, int]:
     the cells are 200-repeat tail estimates, so interpolating between them would imply more
     precision than they carry. The cell used is reported so the reader can see the
     substitution.
+
+    Two deliberate properties, both PESSIMISTIC, so a substitution never flatters the run:
+
+    - n above 300 clamps to the n=300 row, because nothing larger was measured. A run at
+      n=1000 is therefore quoted 18% where its true rate is lower. Conservative, but a
+      reader must not take the quoted figure as measured AT their n.
+    - a pvr between two cells picks the nearer one, and where that is ambiguous the weights
+      favour the worse neighbour: pvr=0.50 maps to the 0.59 row (16.5% at n=150), not the
+      0.37 row (6.5%).
     """
     return min(
         ((fb, ff, tp, tn) for tp, tn, fb, ff in MEASURED_ERROR_RATES),
