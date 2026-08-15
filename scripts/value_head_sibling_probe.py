@@ -35,8 +35,9 @@ coin-flips when it is narrow has a different problem from one that is wrong ever
 and search lives in the narrow bucket.
 
 THE MEASUREMENT TRAP, one level down. Ground truth is itself a noisy estimate. At N
-rollouts the standard error of a win rate near 0.5 is 0.5/sqrt(N): 0.05 at N=100, still
-2.6x the 0.019 gap it must resolve. Paired rollouts (common random numbers across the two
+rollouts the standard error of the GAP between two arms near 0.5 is 0.5*sqrt(2/N) -- 0.0707
+at N=100, still 3.7x the 0.019 gap it must resolve. (Per-ARM it is 0.5/sqrt(N) = 0.05; this
+file previously quoted the per-arm figure against a gap, understating the noise by 41%.) Paired rollouts (common random numbers across the two
 arms) cancel much of the shared variance, which is why `--paired-seeds` is on by default.
 Even so, the honest output is accuracy per bucket with the resolvable floor stated, not a
 single number pretending to resolve 0.019.
@@ -54,7 +55,6 @@ import collections
 import hashlib
 import json
 import math
-import os
 import random
 import statistics
 import sys
@@ -110,7 +110,7 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
     training programme off a figure a flawless head also produces.
 
     The fix is not more rollouts -- resolving 0.0078 by Monte Carlo needs ~33,000 per arm.
-    It is that the noise variance is KNOWN, being R Bernoulli trials, so it can be removed
+    It is that the noise variance is MEASURABLE from the retained per-trial outcomes, so it can be removed
     analytically:
 
         head_gap     = true_gap + differential_head_error     var: s_true^2 + s_diff^2
@@ -119,7 +119,8 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
 
     The true_gap term cancels in the difference, which is what makes this work without ever
     knowing the true gap. s_noise^2 is the plug-in per-pair Bernoulli variance of the
-    difference of two independent arm means.
+    per-trial DIFFERENCES, which absorbs whatever covariance the paired seeds create
+    rather than assuming the two arms are independent -- they are not, by design.
 
     Clipped at zero: a negative estimate means the differential is BELOW the noise floor, so
     the reading is an upper bound and is reported as such, never as a measured zero.
@@ -131,6 +132,39 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
     if len(usable) < 2:
         return {"sigma_diff": None, "n": len(usable),
                 "why": "CANNOT RUN: fewer than 2 pairs with rollouts on both arms"}
+
+    def paired_noise_var(p):
+        """var(w_a - w_b) for arms that share a seed per trial. NOT var_a + var_b.
+
+        The design uses common random numbers: `rollout_seed(..., paired=True)` gives arm A
+        and arm B the same seed on trial i precisely so their outcomes covary, and the
+        module docstring calls that "the difference between resolving a 0.02 gap at a few
+        hundred rollouts and needing several thousand". Summing two independent arm
+        variances therefore subtracts MORE noise than exists, by exactly the amount the
+        design was built to create.
+
+        The consequence was not subtle. Simulated through this function at n=400, R=64, a
+        head at the binding 0.0516 read 0.0000 under perfect CRN -- "below the refutation
+        threshold, thesis refuted, stop the programme" -- for a head that in fact binds.
+        That is the one direction the operating-characteristic table claimed was safe at
+        every sample size.
+
+        var(w_a - w_b) = var(mean of the per-trial differences d_i = o_a,i - o_b,i), which
+        absorbs the covariance whatever it happens to be, so this is right for paired AND
+        unpaired runs rather than assuming which one is configured.
+        """
+        oa, ob = p.get("outcomes_a") or {}, p.get("outcomes_b") or {}
+        shared = sorted(set(oa) & set(ob))
+        if len(shared) >= 2:
+            d = [oa[t] - ob[t] for t in shared]
+            m = sum(d) / len(d)
+            # Sample variance (n-1) throughout, matching point() below. Mixing biased and
+            # unbiased estimators in a difference biases sigma_diff down by ~1/n.
+            return (sum((x - m) ** 2 for x in d) / (len(d) - 1)) / len(d)
+        # No shared trials: fall back to the independent sum, which OVER-subtracts if the
+        # run was paired. Flagged in the payload rather than silently assumed.
+        return (_arm_var(oa, p["true_a"], p["rollouts_a"])
+                + _arm_var(ob, p["true_b"], p["rollouts_b"]))
 
     def _arm_var(outcomes, w, r):
         """Variance of one arm's mean.
@@ -151,13 +185,11 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
 
     def noise_var(p):
         # A precomputed value wins, so a SHARDED run can be merged from JSON without the
-        # per-trial outcome dumps: the outcomes are what the sample variance needs, and
-        # they are deliberately not serialized. Without this, merging would silently fall
-        # back to the Bernoulli form and reintroduce the tie bias across every shard.
+        # per-trial outcome dumps: the outcomes are what the paired variance needs, and
+        # they are deliberately not serialized.
         if p.get("noise_var") is not None:
             return p["noise_var"]
-        return (_arm_var(p.get("outcomes_a"), p["true_a"], p["rollouts_a"])
-                + _arm_var(p.get("outcomes_b"), p["true_b"], p["rollouts_b"]))
+        return paired_noise_var(p)
 
     def point(sample):
         d = [q["head_gap"] - q["true_gap"] for q in sample]
@@ -186,6 +218,10 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
         "subtracted_noise_var": nv,
         # If the noise term is most of the observed variance the estimate is a small
         # difference of two larger numbers, and the CI, not the point, is the result.
+        # None when var_d == 0, and this used to be formatted with {:.0%} -- a TypeError
+        # at the very end of a multi-hour run, AFTER the table printed and BEFORE the JSON
+        # was written, so the artifact was lost. A ratio above 1.0 is not a decoration
+        # either: it IS the at-floor condition, so it is reported as such.
         "noise_share_of_variance": (nv / var_d) if var_d > 0 else None,
     }
 
@@ -254,7 +290,7 @@ def main() -> int:
     ap.add_argument("--seed-start", type=int, default=24000000)
     ap.add_argument("--decisions-per-game", type=int, default=6)
     ap.add_argument("--rollouts", type=int, default=64,
-                    help="rollouts per arm. SE near 0.5 is 0.5/sqrt(N) -- 0.0625 at 64 -- "
+                    help="rollouts per arm. the GAP SE near 0.5 is 0.5*sqrt(2/N) -- 0.0884 at 64 -- "
                          "so read the per-bucket floor, not a single headline number")
     ap.add_argument("--paired-seeds", action="store_true", default=True,
                     help="common random numbers across the two arms (default on)")
@@ -620,7 +656,24 @@ def main() -> int:
             if not rec["pairing_intact"]:
                 skipped["pairing_broken_by_failed_trials"] += 1
                 continue
-            rec["head_gap"] = rec["head_a"] - rec["head_b"]
+            # ONE SCALE. The head is on the +/-1 RETURN scale -- ValueCalibrationTransform
+            # clips to [-1, 1] (neural_policy.py:841-842) and is fitted against returns of
+            # win +1 / draw 0 / loss -1 (dataset.py:2146-2156). The rollout ground truth is
+            # a win RATE in [0, 1]. So head_gap was ~2x true_gap, the true_gap term did NOT
+            # cancel in their difference, and the estimator returned
+            # sqrt(sigma_true^2 + sigma_diff^2) -- a PERFECT head read 0.0225, over the
+            # 0.015 refutation boundary on an artifact of units alone.
+            #
+            # Confirmed on the artifact, not just the source: the smoke run printed
+            # "head -0.0524/-0.0399" beside "true 0.500/0.750" -- the head sits near 0 for
+            # an even position where the rate sits near 0.5.
+            #
+            # Converted to WIN-PROBABILITY units, because that is what the thresholds in
+            # the required-head-error analysis are in (a 0.0078 median Q gap, a 0.0516 ECE
+            # against a 0/1 outcome). Sign-agreement is scale-invariant, which is why this
+            # defect arrived with the sigma_diff readout and was invisible before it.
+            rec["head_gap_return_scale"] = rec["head_a"] - rec["head_b"]
+            rec["head_gap"] = (rec["head_a"] - rec["head_b"]) / 2.0
             rec["true_gap"] = rec["true_a"] - rec["true_b"]
             pairs.append(rec)
             print(f"  prefix {prefix}: head {rec['head_a']:+.4f}/{rec['head_b']:+.4f} "
@@ -745,26 +798,49 @@ def main() -> int:
     if sd.get("sigma_diff") is None:
         print(f"  {sd.get('why')}")
     else:
-        b = "UPPER BOUND (estimate fell below the noise floor)" if sd["at_floor"] else "estimate"
-        print(f"  sigma_diff {b}: {sd['sigma_diff']:.4f}  95% CI [{sd['ci95'][0]:.4f}, "
-              f"{sd['ci95'][1]:.4f}]  from n={sd['n']} pairs")
-        print(f"  var(head_gap - measured_gap) {sd['var_of_difference']:.6f} minus known "
-              f"rollout-noise var {sd['subtracted_noise_var']:.6f} "
-              f"({sd['noise_share_of_variance']:.0%} of it was noise)")
-        print("  THIS IS AN UPPER BOUND, in two independent ways that push the SAME "
-              "direction. (1) The estimate is clipped at zero, which lifts small values. "
-              "(2) All trials of a pair share the post-branch Showdown PRNG tape, so the "
-              "variance measured here is WITHIN-tape and omits tape-to-tape variation -- "
-              "real rollout noise is larger than the term subtracted, so what is left over "
-              "and attributed to the head is too big. Both biases inflate sigma_diff, i.e. "
-              "both push toward 'the head is the problem'. A LOW reading is therefore "
-              "trustworthy; a HIGH one is a ceiling, not a measurement.")
-        print("  READ AGAINST reports/required-head-error-20260815.md: <=0.015 the head is "
-              "NOT the binding constraint; >=0.035 it is and no quantity of sims fixes it.")
+        if sd["at_floor"]:
+            # Printing "UPPER BOUND: 0.0000" was the measured zero the docstring promises
+            # never to print. The actual bound is the top of the interval.
+            print(f"  sigma_diff is BELOW THE NOISE FLOOR of this run. The point estimate "
+                  f"clips to 0, which is not a measurement -- the result is the UPPER "
+                  f"BOUND: sigma_diff <= {sd['ci95'][1]:.4f}  (n={sd['n']} pairs)")
+        else:
+            print(f"  sigma_diff estimate: {sd['sigma_diff']:.4f}  95% CI "
+                  f"[{sd['ci95'][0]:.4f}, {sd['ci95'][1]:.4f}]  from n={sd['n']} pairs")
+        share = sd.get("noise_share_of_variance")
+        share_txt = ("undefined (the observed variance is exactly zero)" if share is None
+                     else f"{share:.0%} of it" + (" -- ABOVE 100%, which IS the at-floor "
+                                                  "condition" if share > 1 else ""))
+        print(f"  var(head_gap - measured_gap) {sd['var_of_difference']:.6f} minus paired "
+              f"rollout-noise var {sd['subtracted_noise_var']:.6f} ({share_txt} was noise)")
+        print("  DIRECTION OF THE REMAINING BIAS. Do not read a confident sign into this "
+              "-- an earlier revision asserted 'both known biases inflate sigma_diff' and "
+              "one of the two could not be reproduced (holding the head perfect and adding "
+              "a shared per-pair tape shift moved the reading DOWN, not up). What IS "
+              "established: the zero-clip lifts small values, so a reading at the floor is "
+              "an upper bound; and trials of a pair share the post-branch PRNG tape, so "
+              "this covers within-tape variation only and the tape-to-tape component is "
+              "unmeasured in BOTH directions.")
+        # Thresholds inlined, not cited by path: the analysis lives in a gitignored private
+        # tree, so a public-repo reader cannot resolve a reference to it.
+        print("  HOW TO READ: sigma_diff <= 0.015 -> the head is NOT the binding "
+              "constraint. >= 0.035 -> it is, and no quantity of sims fixes it (more sims "
+              "reduce variance; this is bias). Between the two -> indeterminate.")
+        hi = sd["ci95"][1]
         if sd["n"] < 150:
-            print(f"  *** UNDERPOWERED: {sd['n']} pairs. Simulation puts the separating "
-                  "sample size at 150; below it the two hypotheses' intervals overlap and "
-                  "this figure cannot decide between them. ***")
+            print(f"  *** UNDERPOWERED: {sd['n']} pairs. 150 is the refutation tier -- "
+                  f"below it neither direction is decidable. ***")
+        elif hi >= 0.035 and sd["n"] < 1200:
+            # Threshold-aware. The flat "150 separates them" message was the claim the
+            # required-head-error analysis explicitly retracted: at n=150 a genuinely fine
+            # head reads above threshold 27% of the time, and a HIGH reading needs n>=1200.
+            print(f"  *** A HIGH READING AT n={sd['n']} IS NOT ACTIONABLE. False "
+                  f"'the head binds' runs 27% at n=150 and 20% at n=300; it takes n>=1200 "
+                  f"to fall to 2%. Scale the run before spending training compute. ***")
+        elif hi < 0.015:
+            print(f"  A low reading is the trustworthy direction: false 'the head is fine' "
+                  f"measured 0% at every sample size tested, so n={sd['n']} suffices to "
+                  f"refute.")
     o = scored.get("overall")
     if o:
         print(f"{'OVERALL':>18s} {o['n']:5d} {o['accuracy']:9.3f} "

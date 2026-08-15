@@ -294,18 +294,34 @@ class SigmaDiffEstimatorTest(unittest.TestCase):
     """
 
     @staticmethod
-    def _pairs(sigma_diff, R, n, seed):
+    def _pairs(sigma_diff, R, n, seed, crn=0.0, scale=1.0):
+        """Synthetic pairs. `crn` is the common-random-number share, `scale` the units ratio.
+
+        Both knobs exist because the first version of this generator hardcoded crn=0 and
+        scale=1, which are precisely the two assumptions the estimator got wrong. A test
+        that bakes in the defect it should catch cannot fail -- it refutes the bug by
+        construction. crn=1.0 is the probe's actual default (--paired-seeds); scale=2.0 was
+        the real head-vs-rollout units ratio.
+        """
         import random as _r
         rng = _r.Random(seed)
         out = []
         for _ in range(n):
             tg = rng.expovariate(1 / 0.0113) * rng.choice([1, -1])
             pa, pb = 0.5 + tg / 2, 0.5 - tg / 2
-            wa = sum(rng.random() < pa for _ in range(R)) / R
-            wb = sum(rng.random() < pb for _ in range(R)) / R
-            head = tg + rng.gauss(0, sigma_diff)
-            out.append({"head_gap": head, "true_gap": wa - wb, "true_a": wa, "true_b": wb,
-                        "rollouts_a": R, "rollouts_b": R})
+            oa, ob = {}, {}
+            for t in range(R):
+                shared = rng.random()          # the common tape both arms see
+                ua = shared if rng.random() < crn else rng.random()
+                ub = shared if rng.random() < crn else rng.random()
+                oa[t] = 1.0 if ua < pa else 0.0
+                ob[t] = 1.0 if ub < pb else 0.0
+            wa = sum(oa.values()) / R
+            wb = sum(ob.values()) / R
+            head = (tg + rng.gauss(0, sigma_diff)) * scale
+            out.append({"head_gap": head / scale, "true_gap": wa - wb,
+                        "true_a": wa, "true_b": wb, "rollouts_a": R, "rollouts_b": R,
+                        "outcomes_a": oa, "outcomes_b": ob})
         return out
 
     def test_recovers_a_large_differential_on_average(self):
@@ -369,6 +385,56 @@ class SigmaDiffEstimatorTest(unittest.TestCase):
                   "rollouts_a": R, "rollouts_b": R} for _ in range(20)]
         got = vhsp.estimate_sigma_diff(pairs, n_boot=10)
         self.assertAlmostEqual(got["subtracted_noise_var"], 2 * 0.25 / (R - 1), places=9)
+
+    def test_common_random_numbers_do_not_drive_a_binding_head_to_zero(self):
+        """The regression that made the estimator report 'thesis refuted' for a binding head.
+
+        Under CRN the two arms covary, so var(w_a - w_b) is much smaller than
+        var_a + var_b. Subtracting the independent sum over-subtracts by exactly the amount
+        the pairing was designed to create, and a head at the binding 0.0516 read 0.0000.
+        Paired seeds are the probe's DEFAULT, so this was not an edge case.
+        """
+        import statistics as _st
+        for crn in (1.0, 0.5):
+            got = [vhsp.estimate_sigma_diff(
+                self._pairs(0.0516, 64, 400, s, crn=crn), n_boot=1)["sigma_diff"]
+                for s in range(8)]
+            self.assertGreater(_st.mean(got), 0.035,
+                               f"a binding head read as refuted under crn={crn}")
+
+    def test_a_units_mismatch_manufactures_a_differential_from_nothing(self):
+        """A PERFECT head must not read as binding because the gaps are in different units.
+
+        DETERMINISTIC, with no RNG anywhere, because the two obvious formulations are both
+        unsound. A fixed threshold pins nothing -- an earlier version asserted `< 0.015`
+        while the unfixed case returned 0.0084. A ratio of mismatched-to-matched is worse:
+        the matched arm sits at the clipped floor, so the ratio ranged 1.16x to 7.50x over
+        six batches of seeds and the test passed only on the seeds it happened to use.
+
+        Construction: every trial of an arm carries that arm's exact rate, so the sample
+        variance is exactly 0 and there is no rollout noise to subtract. The head is exact.
+        Then sigma_diff must be exactly 0 on one scale, and exactly sd(true_gap) when the
+        head is left at 2x -- because d_i = 2g_i - g_i = g_i. Both sides are closed form.
+        """
+        gaps = [0.05, -0.03, 0.12, -0.08, 0.01, 0.20, -0.15, 0.07, -0.02, 0.10]
+        base = []
+        for i, g in enumerate(gaps):
+            wa, wb = 0.5 + g / 2, 0.5 - g / 2
+            base.append({"head_gap": g, "true_gap": g, "true_a": wa, "true_b": wb,
+                         "rollouts_a": 8, "rollouts_b": 8,
+                         "outcomes_a": {t: wa for t in range(8)},
+                         "outcomes_b": {t: wb for t in range(8)}})
+        matched = vhsp.estimate_sigma_diff(base, n_boot=1)
+        self.assertEqual(matched["subtracted_noise_var"], 0.0)
+        self.assertAlmostEqual(matched["sigma_diff"], 0.0, places=12)
+
+        bad = [dict(pr, head_gap=pr["head_gap"] * 2.0) for pr in base]
+        got = vhsp.estimate_sigma_diff(bad, n_boot=1)["sigma_diff"]
+        mean_g = sum(gaps) / len(gaps)
+        expected = (sum((g - mean_g) ** 2 for g in gaps) / len(gaps)) ** 0.5
+        self.assertAlmostEqual(got, expected, places=12)
+        # And it is not a rounding-level artifact: it clears the refutation boundary.
+        self.assertGreater(got, 0.035)
 
     def test_refuses_rather_than_guesses_on_too_few_pairs(self):
         got = vhsp.estimate_sigma_diff([], n_boot=10)
