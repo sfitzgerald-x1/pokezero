@@ -219,6 +219,7 @@ def latency_of(meta_entry: dict) -> dict:
 
 def health_of(meta_entry: dict) -> dict:
     fallback, depth = [], []
+    opponent_fallback: list[float] = []
     reasons: dict[str, int] = {}
     for per_seat in meta_entry["per_seat"]:
         for seat in (per_seat or {}).values():
@@ -228,8 +229,18 @@ def health_of(meta_entry: dict) -> dict:
                 depth.append(float(seat["depth_reached_mean"]))
             for reason, count in (seat.get("world_failure_reasons") or {}).items():
                 reasons[reason] = reasons.get(reason, 0) + int(count)
+            # HEAD-TO-HEAD: the opponent seat searches too, and its health is not in
+            # `fallback_rate`, which describes the pokezero seat alone. A cell whose
+            # OPPONENT was falling back is contaminated in exactly the way the eligibility
+            # gate exists to catch, and without this it clears the gate on the other
+            # seat's clean number.
+            opp = seat.get("opponent_engine_mcts") or {}
+            if opp.get("fallback_rate") is not None:
+                opponent_fallback.append(float(opp["fallback_rate"]))
     return {
         "fallback_rate": (sum(fallback) / len(fallback)) if fallback else None,
+        "opponent_fallback_rate": ((sum(opponent_fallback) / len(opponent_fallback))
+                                   if opponent_fallback else None),
         "depth_reached_mean": (sum(depth) / len(depth)) if depth else None,
         "world_failure_reasons": dict(sorted(reasons.items())),
     }
@@ -459,6 +470,14 @@ def main(argv=None) -> int:
         fb = (cell.get("health") or {}).get("fallback_rate")
         if fb is not None and fb > FALLBACK_LIMIT:
             reasons.append(f"fallback {fb:.1%} over {FALLBACK_LIMIT:.0%}")
+        # The OPPONENT seat is held to the same bar. In a head-to-head the opponent is half
+        # the experiment, so a cell whose opponent was falling back is exactly as
+        # contaminated as one whose pokezero seat was -- and reads as a tie rather than as
+        # a fault, which is worse.
+        ofb = (cell.get("health") or {}).get("opponent_fallback_rate")
+        if ofb is not None and ofb > FALLBACK_LIMIT:
+            reasons.append(
+                f"OPPONENT fallback {ofb:.1%} over {FALLBACK_LIMIT:.0%}")
         if cell.get("min_pairs_shortfall"):
             reasons.append(cell["min_pairs_shortfall"])
         # Depth cells: a d6/d8 cell that did not out-reach its reference is

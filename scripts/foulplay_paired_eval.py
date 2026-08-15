@@ -464,6 +464,13 @@ def seat_block(summary: dict, seat: str) -> dict:
         "wall_per_decision_p95": timing.get("p95_elapsed_seconds"),
         "fallback_rate": engine.get("fallback_rate"),
         "fallback_reasons": engine.get("fallback_reasons"),
+        # THE OPPONENT SEAT'S HEALTH, lifted so it reaches the merged shard the report
+        # reads. Without this the block exists in the bridge summary and dies there: a d6
+        # opponent falling back on 75% of decisions leaves the merged shard reporting only
+        # the pokezero seat's clean 0.0, the cell clears the 2% eligibility gate, and a
+        # budget comparison is adopted as "the two are equivalent" when the expensive side
+        # was not searching. None when there is no neural opponent.
+        "opponent_engine_mcts": summary.get("opponent_engine_mcts"),
         "world_failure_reasons": (engine.get("policy_stats") or {}).get(
             "world_failure_reasons"
         ),

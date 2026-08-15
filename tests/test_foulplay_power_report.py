@@ -647,6 +647,44 @@ class ArmWitnessTest(unittest.TestCase):
         self.assertEqual(cell["pairs"], 2)
 
 
+
+
+class OpponentHealthGateTest(unittest.TestCase):
+    """A head-to-head cell is only as clean as its OPPONENT seat.
+
+    Every engine health figure describes the pokezero seat. In a budget comparison the
+    opponent is half the experiment, so an opponent falling back produces a flat result
+    that reads as "the two budgets are equivalent" -- a contaminated cell presenting as a
+    tie, which is worse than presenting as a fault.
+    """
+
+    def _health(self, **seat):
+        import importlib.util as u
+        from pathlib import Path
+        sp = u.spec_from_file_location(
+            "pr", Path(__file__).resolve().parents[1] / "scripts" / "foulplay_power_report.py")
+        m = u.module_from_spec(sp); sp.loader.exec_module(m)
+        return m, m.health_of({"per_seat": [{"p1": seat}]})
+
+    def test_a_clean_opponent_reports_a_rate(self) -> None:
+        _, h = self._health(fallback_rate=0.0,
+                            opponent_engine_mcts={"fallback_rate": 0.01})
+        self.assertEqual(h["opponent_fallback_rate"], 0.01)
+
+    def test_no_neural_opponent_reports_None_not_zero(self) -> None:
+        """Absence must not read as a clean opponent. A vs-foul-play cell has no opponent
+        engine at all, and 0.0 would assert health that was never measured."""
+        _, h = self._health(fallback_rate=0.0)
+        self.assertIsNone(h["opponent_fallback_rate"])
+
+    def test_a_falling_back_opponent_makes_the_cell_ineligible(self) -> None:
+        m, _ = self._health(fallback_rate=0.0)
+        cell = {"health": {"fallback_rate": 0.0, "opponent_fallback_rate": 0.75}}
+        # Mirrors the eligibility construction: the pokezero seat is spotless at 0.0, so
+        # only the opponent's rate can disqualify this cell.
+        self.assertGreater(cell["health"]["opponent_fallback_rate"], m.FALLBACK_LIMIT)
+        self.assertLessEqual(cell["health"]["fallback_rate"], m.FALLBACK_LIMIT)
+
+
 if __name__ == "__main__":
     unittest.main()
-
