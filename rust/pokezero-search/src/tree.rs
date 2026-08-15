@@ -1143,6 +1143,7 @@ fn depth_occupancy_json(occ: &[u64]) -> String {
     let last = occ.iter().rposition(|&n| n > 0).map_or(0, |i| i + 1);
     let body: Vec<String> = occ[..last].iter().map(|n| n.to_string()).collect();
     format!("[{}]", body.join(","))
+}
 
 /// The abort seam, exercised BEHAVIOURALLY and only on a `model` build.
 ///

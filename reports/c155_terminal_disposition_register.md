@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`5791159ba71cd76e…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`65092feac14da111…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -169,6 +169,7 @@ above.
 | C158 (prelude active-slot guard) | `rust/pokezero-search/src/events.rs`, +359 −7 | `bd9f7d407dc3c9a9…` |
 | C1 Stage 1 (closeout) | `rust/pokezero-search/src/encoder.rs` (131 constant column/offset lookups resolved once at table load) | `b79d83e3e08d838e…` |
 | #1219 completed on #1249 | `rust/pokezero-search/src/encoder.rs` (all 8 per-leaf `format!` md keys → `md_key!`, which derives both spellings from one suffix token) | `ad64440abbfca493…` |
+| (this head, merge of #1257) | `rust/pokezero-search/src/tree.rs` — per-depth OCCUPANCY counter, merged with main's `encoder.rs` md-key change | `65092feac14da111…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -531,7 +532,7 @@ defect did not exist on either of their trees.** A typed `25` would have shipped
 Where CI gates on the merge, **local green and CI green are different measurements**; §6 declares
 that coupling and the assertion carries the fix in its own failure message.
 
-**Every measurement behind T2–T6 predates the head build**, and none is at `5791159ba71cd76e` —
+**Every measurement behind T2–T6 predates the head build**, and none is at `65092feac14da111` —
 nor at `ad64440abbfca493`, nor at `39761759f252a58d` (the two parents of this merge), nor at `083375c215978d4c`, `a1359396e3de3731`, `b79d83e3e08d838e`, `236d1cac8a784898`, `bd9f7d407dc3c9a9`,
 nor at `39ced82cb3b8009e`, `32b0c3e3c09d23d1`, `8926a6bc2beaf9a2`, `e9d4ac708d6efe69`, `0975c5f29bdf8253`, `ec4ff0349eab7fdd`,
 `44dcfca90130ed91`, `2ec5bfd1c7292ed6`, `028a4c52a4ad9fe7` or `9517aab98d56a9ba`, the builds
@@ -756,7 +757,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.head_fingerprint` | 5791159ba71cd76e |
+| `t1.head_fingerprint` | 65092feac14da111 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
@@ -802,13 +803,11 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t6.verdicts_withdrawn` | 1 |
 | `t6.workflow_steps_checking_out_showdown` | 0 |
 
-| (this head, merge of #1257) | `rust/pokezero-search/src/tree.rs` — per-depth OCCUPANCY counter, merged with main's `encoder.rs` md-key change | `5791159ba71cd76e…` |
-
 > **Merge note (#1257).** This head is the MERGE of `scott/head-to-head-raw` into `main`, and
 > its stamp is neither parent's: the branch alone stamped `39761759f252a58d…` and main alone
 > `ad64440abbfca493…`, while the merged tree — carrying the branch's `tree.rs` occupancy counter
 > AND main's `encoder.rs` md-key change, both fingerprint inputs — stamps
-> **`5791159ba71cd76e…`**. Taking either side of the conflict would therefore have recorded a value
+> **`65092feac14da111…`**. Taking either side of the conflict would therefore have recorded a value
 > no build produces, which is exactly the silent class this register exists to catch. The
 > value was DERIVED on the merged tree with `scripts/engine_build_fingerprint.py --print`,
 > and the derivation was validated first by reproducing both parents' documented stamps
