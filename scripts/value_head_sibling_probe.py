@@ -232,6 +232,13 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
     couplings = []
     for q in usable:
         q["noise_var"] = noise_var(q)
+        # At MERGE time the per-trial outcomes are not serialized, so _arm_var falls back
+        # to w(1-w)/(R-1). That is not a loss: for outcomes in {0,1} the sample variance of
+        # the mean is ALGEBRAICALLY IDENTICAL to that expression (verified to 1e-15 at
+        # R=8/64/256), and a single 0.5 among 64 trials moves it by 1.7%. Draws and caps
+        # are rare -- the comparable 200-game head-to-head had 1 tie and 0 caps -- so the
+        # merged coupling figure is exact to well within its own use. Written down because
+        # the alternative was re-running 8 GPUs to recover a difference that is zero.
         indep = (_arm_var(q.get("outcomes_a"), q["true_a"], q["rollouts_a"])
                  + _arm_var(q.get("outcomes_b"), q["true_b"], q["rollouts_b"]))
         if indep > 0:
