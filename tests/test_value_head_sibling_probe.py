@@ -294,14 +294,19 @@ class SigmaDiffEstimatorTest(unittest.TestCase):
     """
 
     @staticmethod
-    def _pairs(sigma_diff, R, n, seed, crn=0.0, scale=1.0):
-        """Synthetic pairs. `crn` is the common-random-number share, `scale` the units ratio.
+    def _pairs(sigma_diff, R, n, seed, crn=0.0):
+        """Synthetic pairs. `crn` is the common-random-number share.
 
-        Both knobs exist because the first version of this generator hardcoded crn=0 and
-        scale=1, which are precisely the two assumptions the estimator got wrong. A test
-        that bakes in the defect it should catch cannot fail -- it refutes the bug by
-        construction. crn=1.0 is the probe's actual default (--paired-seeds); scale=2.0 was
-        the real head-vs-rollout units ratio.
+        crn exists because the first version of this generator hardcoded crn=0 -- one of
+        the two assumptions the estimator got wrong -- and a generator that bakes in the
+        defect refutes it by construction. crn=1.0 is the probe's default (--paired-seeds).
+
+        A `scale` knob was added alongside it and was an exact NO-OP: it multiplied the
+        head by `scale` and the record divided straight back by `scale`. It was removed
+        rather than left in place, because a parameter that appears to vary something and
+        does not is worse than no parameter -- the units regression is pinned instead by
+        test_a_units_mismatch_manufactures_a_differential_from_nothing (on the estimator)
+        and HeadGapConversionTest (on the conversion itself).
         """
         import random as _r
         rng = _r.Random(seed)
@@ -318,8 +323,8 @@ class SigmaDiffEstimatorTest(unittest.TestCase):
                 ob[t] = 1.0 if ub < pb else 0.0
             wa = sum(oa.values()) / R
             wb = sum(ob.values()) / R
-            head = (tg + rng.gauss(0, sigma_diff)) * scale
-            out.append({"head_gap": head / scale, "true_gap": wa - wb,
+            head = tg + rng.gauss(0, sigma_diff)
+            out.append({"head_gap": head, "true_gap": wa - wb,
                         "true_a": wa, "true_b": wb, "rollouts_a": R, "rollouts_b": R,
                         "outcomes_a": oa, "outcomes_b": ob})
         return out
@@ -449,6 +454,33 @@ class SigmaDiffEstimatorTest(unittest.TestCase):
     def test_reports_how_much_of_the_variance_was_noise(self):
         got = vhsp.estimate_sigma_diff(self._pairs(0.009, 64, 200, 7), n_boot=50)
         self.assertGreater(got["noise_share_of_variance"], 0.5)
+
+
+class HeadGapConversionTest(unittest.TestCase):
+    """Pins the units blocker AT ITS FIX SITE.
+
+    Reverting main() to `head_gap = head_a - head_b` left all 39 tests green: the estimator
+    tests exercise scale sensitivity, not this conversion. So the fix for a blocker that
+    made a perfect head read as binding had no regression guard of its own.
+    """
+
+    def test_halves_the_return_scale_difference(self):
+        self.assertAlmostEqual(vhsp.head_gap_win_prob(0.4, 0.2), 0.1)
+        self.assertAlmostEqual(vhsp.head_gap_win_prob(-1.0, 1.0), -1.0)
+        self.assertAlmostEqual(vhsp.head_gap_win_prob(0.5, 0.5), 0.0)
+
+    def test_matches_the_gap_of_the_crate_s_own_map(self):
+        """values01 = 0.5*(v+1) -- the conversion must be the gap of exactly that map."""
+        for a, b in ((0.0753, 0.1035), (-0.0524, -0.0399), (0.9, -0.9), (0.0, 0.0)):
+            pa, pb = 0.5 * (a + 1.0), 0.5 * (b + 1.0)
+            self.assertAlmostEqual(vhsp.head_gap_win_prob(a, b), pa - pb, places=12)
+
+    def test_a_perfectly_calibrated_head_lands_on_the_rollout_scale(self):
+        # A head whose return value is exactly right for a position won with probability p
+        # must produce a win-probability gap equal to the rollout rate gap.
+        for pa, pb in ((0.828, 0.781), (0.5, 0.75), (1.0, 0.0)):
+            va, vb = 2 * pa - 1, 2 * pb - 1          # invert (v+1)/2
+            self.assertAlmostEqual(vhsp.head_gap_win_prob(va, vb), pa - pb, places=12)
 
 
 if __name__ == "__main__":

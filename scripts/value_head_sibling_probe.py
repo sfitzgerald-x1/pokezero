@@ -97,6 +97,21 @@ def _json_hi(hi: float):
     return None if hi == float("inf") else hi
 
 
+def head_gap_win_prob(head_a: float, head_b: float) -> float:
+    """Convert a +/-1 return-scale head DIFFERENCE into a win-probability difference.
+
+    E[return] = P(win) - P(loss), so (E+1)/2 = P(win) + P(draw)/2 -- exactly this probe's
+    outcome coding (win 1.0, draw/cap 0.5, loss 0.0) and exactly the crate's own map
+    (`values01 = 0.5*(v+1.0)`, rust/pokezero-search/src/model.rs:373). The gap of that
+    affine map is the raw gap halved, exact including draws.
+
+    Extracted from main() so it can be tested. Reverting the conversion at the call site
+    left all 39 tests green -- the estimator tests exercise scale sensitivity, not this
+    conversion -- so the fix for the units blocker had no regression guard of its own.
+    """
+    return (head_a - head_b) / 2.0
+
+
 def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
                         n_boot: int = 2000, seed: int = 20260815) -> dict:
     """Estimate the SIBLING-DIFFERENTIAL head error by subtracting the known rollout noise.
@@ -118,9 +133,11 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
         =>  s_diff^2 = var(head_gap - measured_gap) - s_noise^2
 
     The true_gap term cancels in the difference, which is what makes this work without ever
-    knowing the true gap. s_noise^2 is the plug-in per-pair Bernoulli variance of the
-    per-trial DIFFERENCES, which absorbs whatever covariance the paired seeds create
-    rather than assuming the two arms are independent -- they are not, by design.
+    knowing the true gap. s_noise^2 is the plug-in per-pair SAMPLE variance of the
+    per-trial DIFFERENCES -- not Bernoulli: outcomes live in {0, 0.5, 1} and their
+    differences in {-1, -0.5, 0, 0.5, 1}. Taking it over differences absorbs whatever
+    covariance the paired seeds create rather than assuming the arms are independent;
+    they are not, by design.
 
     Clipped at zero: a negative estimate means the differential is BELOW the noise floor, so
     the reading is an upper bound and is reported as such, never as a measured zero.
@@ -158,11 +175,15 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
         if len(shared) >= 2:
             d = [oa[t] - ob[t] for t in shared]
             m = sum(d) / len(d)
-            # Sample variance (n-1) throughout, matching point() below. Mixing biased and
-            # unbiased estimators in a difference biases sigma_diff down by ~1/n.
+            # Sample variance (n-1) here; point() below uses the population form (/n).
+            # An earlier comment claimed both used n-1 and warned against exactly the mix
+            # the code then had. Measured difference at n=400: 0.01517 vs 0.01520 --
+            # negligible, so the comment is corrected rather than the convention changed.
             return (sum((x - m) ** 2 for x in d) / (len(d) - 1)) / len(d)
         # No shared trials: fall back to the independent sum, which OVER-subtracts if the
-        # run was paired. Flagged in the payload rather than silently assumed.
+        # run was paired. Unreachable in practice -- `usable` requires >1 rollout on both
+        # arms and `pairing_intact` equalises the trial sets -- but it is counted, because
+        # an earlier comment claimed it was "flagged in the payload" and no flag existed.
         return (_arm_var(oa, p["true_a"], p["rollouts_a"])
                 + _arm_var(ob, p["true_b"], p["rollouts_b"]))
 
@@ -198,8 +219,23 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
         nv = sum(noise_var(q) for q in sample) / len(sample)
         return var_d - nv, var_d, nv
 
+    # MEASURE THE COUPLING, do not assume it. The estimator's precision depends almost
+    # entirely on how strongly the paired seeds actually correlate the two arms, and that
+    # is a property of the run, not of the design intent. Simulated at R=64, n=150: with no
+    # coupling the false-"the head binds" rate is 22% and false-"fine" is 8%; with full
+    # coupling both are 0% and the spread is 8x tighter. So the operating characteristics
+    # cannot be quoted without knowing which regime the run is in.
+    #
+    # The ratio paired/independent is exactly that: 1.0 means the pairing bought nothing,
+    # and it falls toward 0 as coupling rises. Cheap, and it comes free from data already
+    # retained.
+    couplings = []
     for q in usable:
         q["noise_var"] = noise_var(q)
+        indep = (_arm_var(q.get("outcomes_a"), q["true_a"], q["rollouts_a"])
+                 + _arm_var(q.get("outcomes_b"), q["true_b"], q["rollouts_b"]))
+        if indep > 0:
+            couplings.append(q["noise_var"] / indep)
     raw, var_d, nv = point(usable)
     rng = random.Random(seed)
     boot = []
@@ -223,6 +259,10 @@ def estimate_sigma_diff(pairs: Sequence[Mapping[str, Any]],
         # was written, so the artifact was lost. A ratio above 1.0 is not a decoration
         # either: it IS the at-floor condition, so it is reported as such.
         "noise_share_of_variance": (nv / var_d) if var_d > 0 else None,
+        # median over pairs of var(w_a - w_b) / (var_a + var_b). 1.0 = the paired seeds
+        # bought nothing; lower = stronger common random numbers = a sharper estimator.
+        "paired_variance_ratio": (statistics.median(couplings) if couplings else None),
+        "paired_variance_ratio_n": len(couplings),
     }
 
 
@@ -424,6 +464,20 @@ def main() -> int:
         return TransformerSoftmaxPolicy(
             model=model, result=result, device=args.device,
             deterministic=False, sampling_temperature=1.0)
+
+    # VALUE CALIBRATION. The Python head applies result.value_calibration_transform; the
+    # crate does NOT -- it maps the raw tanh straight through 0.5*(v+1). A transform with
+    # scale != 1 would therefore put head_gap on a different axis from the Q gaps that set
+    # the 0.015/0.035 boundaries, a multiplicative error of the same class as the units
+    # blocker (a bias cancels in a gap; a scale does not). Recorded and checked, not assumed.
+    _vct = getattr(result, "value_calibration_transform", None)
+    _vct_scale = getattr(_vct, "scale", 1.0) if _vct is not None else 1.0
+    print(f"value calibration transform: {'NONE (identity)' if _vct is None else _vct}")
+    if _vct is not None and abs(_vct_scale - 1.0) > 1e-9:
+        print(f"  WARNING: scale={_vct_scale} != 1. The crate applies no calibration, so "
+              f"head_gap is on a {_vct_scale}x axis relative to the Q gaps behind the "
+              f"verdict thresholds. Treat the sigma_diff boundaries as rescaled by that "
+              f"factor, or re-derive them.")
 
     cfg = RolloutConfig(max_decision_rounds=args.max_decision_rounds)
     pairs: list[dict] = []
@@ -657,7 +711,7 @@ def main() -> int:
                 skipped["pairing_broken_by_failed_trials"] += 1
                 continue
             # ONE SCALE. The head is on the +/-1 RETURN scale -- ValueCalibrationTransform
-            # clips to [-1, 1] (neural_policy.py:841-842) and is fitted against returns of
+            # clips to [-1, 1] (neural_policy.py:839-840) and is fitted against returns of
             # win +1 / draw 0 / loss -1 (dataset.py:2146-2156). The rollout ground truth is
             # a win RATE in [0, 1]. So head_gap was ~2x true_gap, the true_gap term did NOT
             # cancel in their difference, and the estimator returned
@@ -673,7 +727,7 @@ def main() -> int:
             # against a 0/1 outcome). Sign-agreement is scale-invariant, which is why this
             # defect arrived with the sigma_diff readout and was invisible before it.
             rec["head_gap_return_scale"] = rec["head_a"] - rec["head_b"]
-            rec["head_gap"] = (rec["head_a"] - rec["head_b"]) / 2.0
+            rec["head_gap"] = head_gap_win_prob(rec["head_a"], rec["head_b"])
             rec["true_gap"] = rec["true_a"] - rec["true_b"]
             pairs.append(rec)
             # Per-arm values printed in WIN-PROBABILITY units, the same units as the gap
@@ -809,9 +863,20 @@ def main() -> int:
         if sd["at_floor"]:
             # Printing "UPPER BOUND: 0.0000" was the measured zero the docstring promises
             # never to print. The actual bound is the top of the interval.
-            print(f"  sigma_diff is BELOW THE NOISE FLOOR of this run. The point estimate "
-                  f"clips to 0, which is not a measurement -- the result is the UPPER "
-                  f"BOUND: sigma_diff <= {sd['ci95'][1]:.4f}  (n={sd['n']} pairs)")
+            # ci95[1] is itself 0.0 whenever >=97.5% of bootstrap resamples clip, so
+            # printing it unguarded still asserts a PROVEN exact zero -- the thing the
+            # docstring forbids, just one step further along. Measured at 3 in 100 runs
+            # for a perfect head at n=400. Report unresolvable rather than zero.
+            if sd["ci95"][1] <= 0.0:
+                print(f"  sigma_diff is NOT RESOLVABLE at n={sd['n']} with these rollouts: "
+                      f"the estimate and the whole bootstrap interval sit at the clip. "
+                      f"That is an absence of resolution, NOT a demonstration of zero "
+                      f"differential error -- no upper bound can be quoted from this run.")
+            else:
+                print(f"  sigma_diff is BELOW THE NOISE FLOOR of this run. The point "
+                      f"estimate clips to 0, which is not a measurement -- the result is "
+                      f"the UPPER BOUND: sigma_diff <= {sd['ci95'][1]:.4f} "
+                      f"(n={sd['n']} pairs)")
         else:
             print(f"  sigma_diff estimate: {sd['sigma_diff']:.4f}  95% CI "
                   f"[{sd['ci95'][0]:.4f}, {sd['ci95'][1]:.4f}]  from n={sd['n']} pairs")
@@ -821,6 +886,16 @@ def main() -> int:
                                                   "condition" if share > 1 else ""))
         print(f"  var(head_gap - measured_gap) {sd['var_of_difference']:.6f} minus paired "
               f"rollout-noise var {sd['subtracted_noise_var']:.6f} ({share_txt} was noise)")
+        pvr = sd.get("paired_variance_ratio")
+        if pvr is not None:
+            regime = ("STRONG (the estimator is sharp; simulated false-verdict rates at "
+                      "n=150 are ~0% both ways)" if pvr <= 0.35 else
+                      "PARTIAL (~12% false 'the head binds' at n=150)" if pvr <= 0.75 else
+                      "WEAK -- the paired seeds bought little (~22% false 'the head binds' "
+                      "and ~8% false 'the head is fine' at n=150)")
+            print(f"  MEASURED COUPLING: var(w_a-w_b) is {pvr:.2f}x the independent sum, "
+                  f"over {sd['paired_variance_ratio_n']} pairs. Regime: {regime}. The "
+                  f"error rates below are selected by THIS number, not assumed.")
         print("  DIRECTION OF THE REMAINING BIAS. Do not read a confident sign into this "
               "-- an earlier revision asserted 'both known biases inflate sigma_diff' and "
               "one of the two could not be reproduced (holding the head perfect and adding "
@@ -835,20 +910,21 @@ def main() -> int:
               "constraint. >= 0.035 -> it is, and no quantity of sims fixes it (more sims "
               "reduce variance; this is bias). Between the two -> indeterminate.")
         hi = sd["ci95"][1]
+        pt = sd["sigma_diff"]
+        # Branch on the POINT ESTIMATE, because that is the statistic the simulated error
+        # rates were measured on. An earlier revision branched on ci95[1] while quoting
+        # rates measured on the point -- the printed rate then described a different
+        # quantity than the condition that printed it.
         if sd["n"] < 150:
-            print(f"  *** UNDERPOWERED: {sd['n']} pairs. 150 is the refutation tier -- "
-                  f"below it neither direction is decidable. ***")
-        elif hi >= 0.035 and sd["n"] < 1200:
-            # Threshold-aware. The flat "150 separates them" message was the claim the
-            # required-head-error analysis explicitly retracted: at n=150 a genuinely fine
-            # head reads above threshold 27% of the time, and a HIGH reading needs n>=1200.
-            print(f"  *** A HIGH READING AT n={sd['n']} IS NOT ACTIONABLE. False "
-                  f"'the head binds' runs 27% at n=150 and 20% at n=300; it takes n>=1200 "
-                  f"to fall to 2%. Scale the run before spending training compute. ***")
-        elif hi < 0.015:
-            print(f"  A low reading is the trustworthy direction: false 'the head is fine' "
-                  f"measured 0% at every sample size tested, so n={sd['n']} suffices to "
-                  f"refute.")
+            print(f"  *** UNDERPOWERED: {sd['n']} pairs. 150 is the smallest size at which "
+                  f"either verdict has been characterised. ***")
+        elif pvr is not None and pvr > 0.75 and pt > 0.025 and sd["n"] < 1200:
+            print(f"  *** A HIGH READING IS WEAKLY SUPPORTED HERE: coupling is weak "
+                  f"({pvr:.2f}) and n={sd['n']}, where ~22% of genuinely-fine heads read "
+                  f"above threshold. Scale n before spending training compute. ***")
+        elif pvr is not None and pvr > 0.75 and pt <= 0.025:
+            print(f"  NOTE: with weak coupling, ~8% of genuinely-BINDING heads read below "
+                  f"threshold at n=150. A low reading here is suggestive, not decisive.")
     o = scored.get("overall")
     if o:
         print(f"{'OVERALL':>18s} {o['n']:5d} {o['accuracy']:9.3f} "
@@ -867,6 +943,8 @@ def main() -> int:
     if args.json:
         args.json.write_text(json.dumps(
             {"belief_set_source_hash": getattr(result, "belief_set_source_hash", None),
+             "value_calibration_transform": (None if _vct is None else str(_vct)),
+             "value_calibration_scale": _vct_scale,
              "config": {k: (str(v) if isinstance(v, Path) else v)
                         for k, v in vars(args).items()},
              "ground_truth_se": se,
