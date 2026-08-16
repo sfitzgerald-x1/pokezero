@@ -339,6 +339,41 @@ class EnvTier2AnnotationSource:
         }
 
 
+def _fence_calibration_seam(checkpoint_path: Any) -> None:
+    """Refuse a model-leaf search whose checkpoint carries a calibration the crate ignores.
+
+    Deliberately tolerant of everything except the one dangerous case: an unreadable or
+    absent checkpoint is left to the loader's own error, and a MISSING key is treated as
+    "no transform" because pre-provenance checkpoints simply lack the field. Only a
+    PRESENT, non-identity transform is refused.
+    """
+    import torch  # noqa: PLC0415 -- heavy optional dependency, only needed on this path
+
+    try:
+        blob = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
+    except Exception:
+        return  # not our error to raise; the model loader reports it properly
+    if not isinstance(blob, dict) or "value_calibration_transform" not in blob:
+        return
+    transform = blob["value_calibration_transform"]
+    if transform is None:
+        return
+    method = getattr(transform, "method", None)
+    scale = getattr(transform, "scale", 1.0)
+    bias = getattr(transform, "bias", 0.0)
+    if method == "affine" and float(scale) == 1.0 and float(bias) == 0.0:
+        return  # an explicit identity affine is not a mismatch
+    raise ValueError(
+        "REFUSING model-leaf search: this checkpoint carries a value calibration transform "
+        f"({transform!r}) and the search crate applies NO calibration -- it maps the raw "
+        "tanh through 0.5*(v+1.0). Running anyway would put crate leaf values on a "
+        "different axis from every Q gap and threshold derived on the Python side, "
+        "silently. Either add calibration support to the crate, or pass "
+        "leaf_eval='hp_fraction_crate', or strip the transform deliberately and record "
+        "that choice in the campaign config."
+    )
+
+
 @dataclass(frozen=True)
 class EngineMctsConfig:
     worlds: int = 4
