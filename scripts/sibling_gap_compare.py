@@ -106,10 +106,34 @@ def main():
     print(f"label var {lab_var:.6f}  measured-gap var {sd_true ** 2:.6f}  "
           f"attenuation factor {atten:.6f} (= R^2 ceiling; SHARED by every cell because "
           f"true_gap and noise_var are the reused ground truth)")
+    if atten <= 0:
+        # The correction divides every beta by this number. Non-positive means the banked
+        # per-pair rollout noise accounts for ALL of the observed variance in true_gap, i.e.
+        # the ground-truth column carries no measurable signal to regress against. Dividing
+        # by it does not degrade gracefully: it SIGN-FLIPS every beta, so the tool would
+        # print a confident "MOVED" off an interval that is the negative of the one it means,
+        # and exit 0. There is no reading of this output that is worth having.
+        raise SystemExit(
+            f"REFUSING: attenuation factor {atten:.6f} is not positive. The mean banked "
+            f"noise_var ({lab_var:.6f}) is at or above the observed variance of true_gap "
+            f"({sd_true ** 2:.6f}), so the reused ground truth has no variance left to "
+            f"explain and every noise-corrected beta below would be a sign-flipped "
+            f"artefact of dividing by a non-positive number. Most likely cause: the "
+            f"noise_var column and the true_gap column do not come from the same bank.")
 
     point = {}
     for n in cells:
-        b_ht, b_th, r2 = ols(xs[n], ys)
+        fit = ols(xs[n], ys)
+        if fit is None:
+            # `ols` signals a degenerate column by returning None, and a COLLAPSED value head
+            # -- constant output, hence constant head_gap -- is a live outcome of the training
+            # this comparator scores. Unpacking None here raised a bare TypeError that named
+            # neither the cell nor the reason.
+            raise SystemExit(
+                f"CANNOT RUN: cell {n!r} has no variance to regress -- its head_gap column is "
+                f"constant over all {len(keys)} aligned pairs (a collapsed value head does "
+                f"this), or the shared true_gap column is. No slope or R^2 is defined.")
+        b_ht, b_th, r2 = fit
         point[n] = {
             "beta_head_on_true_raw": b_ht,
             "beta_head_on_true_noise_corrected": b_ht / atten,
@@ -120,9 +144,17 @@ def main():
             "sd_ratio_vs_ref": st.pstdev(xs[n]) / st.pstdev(xs[args.ref]),
             "corr_head_gap_with_ref": pearson(xs[n], xs[args.ref]),
         }
+    # SECOND PASS, and it has to be one. This quantity reads the REF cell's beta, which is
+    # not in `point` yet while the loop is still walking the cells that were listed before
+    # the ref on the command line. Computing it inside the loop left every such cell with
+    # None -- and the RESCALE TEST below formats it with `:.4f`, so the tool crashed on
+    # argument ORDER alone: fine with the ref first, TypeError with the ref second, and the
+    # mechanism test that separates "learned something" from "rescaled its output" simply
+    # unavailable in the second case.
+    ref_beta = point[args.ref]["beta_head_on_true_noise_corrected"]
+    for n in cells:
         point[n]["implied_beta_corrected_from_pure_rescale"] = (
-            point[args.ref]["beta_head_on_true_noise_corrected"]
-            * point[n]["sd_ratio_vs_ref"]) if args.ref in point else None
+            ref_beta * point[n]["sd_ratio_vs_ref"])
 
     seeds = [int(s) for s in args.boot_seeds.split(",") if s.strip()]
     n = len(keys)
