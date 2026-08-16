@@ -717,8 +717,14 @@ class TransformerTrainingConfig:
             raise ValueError("objective must be 'behavior-cloning', 'reward-weighted', 'ppo', or 'value-only'.")
         if self.ppo_target_mode not in {"returns", "gae"}:
             raise ValueError("ppo_target_mode must be 'returns' or 'gae'.")
-        if self.objective != "ppo" and self.ppo_target_mode != "returns":
-            raise ValueError("ppo_target_mode='gae' requires objective='ppo'.")
+        # 'value-only' joins 'ppo' here because ppo_target_mode is also a property of the
+        # DATA, not only of the loss: it is stamped into the training cache's dataset config
+        # and the reader rejects any mismatch. A value-only fine-tune reads caches collected
+        # by a PPO run, so it has to be able to name the mode those caches were collected
+        # with. It does not consume GAE targets -- the value-only loss is scored against
+        # `returns`, which the collector computes identically in either mode.
+        if self.objective not in ("ppo", "value-only") and self.ppo_target_mode != "returns":
+            raise ValueError("ppo_target_mode='gae' requires objective='ppo' or 'value-only'.")
         if not 0.0 <= self.gae_lambda <= 1.0:
             raise ValueError("gae_lambda must be between 0 and 1.")
         if self.objective == "value-only" and not self.freeze_non_value_parameters:

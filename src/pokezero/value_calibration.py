@@ -299,6 +299,14 @@ def _trajectory_dataset_config_from_training_result(
         # weights above): a shaped head is scored against shaped returns. Terminal-only
         # reads (E1) construct their own unshaped config on purpose.
         potential_shaping=training_config.resolved_shaping_config(),
+        # These two are carried for CACHE IDENTITY, not to change the target. A training
+        # cache stamps its full dataset config and `iter_training_cache_batches` refuses any
+        # field mismatch, so dropping them made every GAE-collected cache unreadable here.
+        # What calibration measures is unchanged: GAE lands in `ppo_value_targets` /
+        # `ppo_advantages`, while `returns` -- the only column read below -- is the outcome
+        # return in either mode.
+        ppo_target_mode=training_config.ppo_target_mode,
+        gae_lambda=training_config.gae_lambda,
     )
 
 
