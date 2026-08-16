@@ -36,15 +36,14 @@ import dataclasses
 import os
 import sys
 import tempfile
-import warnings
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from pokezero.neural_policy import (  # noqa: E402
-    FreshValueHeadWarning,
+    EntityTokenTransformerPolicy,
     TransformerPolicyConfig,
-    load_transformer_checkpoint,
+    load_state_dict_allowing_fresh_value_head,
     require_torch,
 )
 
@@ -172,36 +171,37 @@ def main() -> int:
     # VERIFY THE RESULT RELOADS WITH THE HEAD IT CLAIMS. A conversion that writes a checkpoint
     # nothing can read back is worse than no conversion, and this series has shipped exactly
     # that once already (an export whose own parity check passed on a wrong architecture).
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        model, result = load_transformer_checkpoint(dst)
-    fresh = [w for w in caught if issubclass(w.category, FreshValueHeadWarning)]
+    # Load the converted file through the SAME loader `load_transformer_checkpoint` uses, and
+    # take the reinitialised set from its RETURN VALUE.
+    #
+    # An earlier version parsed tensor names out of the warning message text -- and that message
+    # contains the output PATH, so `--output ".../value_head.2.bias/out.pt"` injected a name into
+    # the set and the tool reported a width sweep as "all 4 head tensors are FRESH" while
+    # `value_head.2.bias` was carried from the stale head. That is the mixed-provenance defect
+    # this block exists to catch, reachable by choosing a directory name. Parsing prose for a
+    # value the callee already returns was the whole mistake.
+    try:
+        payload_back = torch.load(dst, map_location="cpu", weights_only=True)
+        config_back = TransformerPolicyConfig.from_dict(payload_back["model_config"])
+        model = EntityTokenTransformerPolicy(config_back)
+        reinit = set(load_state_dict_allowing_fresh_value_head(
+            model, payload_back["state_dict"]))
+    except BaseException:
+        # The reload is exactly what this block exists to test, so an exception from it must not
+        # leave the artifact behind. Previously only the two SystemExit branches unlinked, and a
+        # raise from the load escaped as a traceback after "wrote {dst}" had printed.
+        dst.unlink(missing_ok=True)
+        raise
     head_type = type(model.value_head).__name__
     expected = "Sequential" if new_width else "Linear"
-    if result.model_config.value_head_hidden != (new_width or None) or head_type != expected:
+    if config_back.value_head_hidden != (new_width or None) or head_type != expected:
         dst.unlink(missing_ok=True)
         raise SystemExit(
             f"CONVERSION VERIFICATION FAILED: reloaded head is {head_type} with width "
-            f"{result.model_config.value_head_hidden!r}, expected {expected} / "
+            f"{config_back.value_head_hidden!r}, expected {expected} / "
             f"{(new_width or None)!r}. {dst} has been removed."
         )
 
-    # EVERY head parameter must be accounted for -- either freshly initialised, or provably the
-    # trained head for the shape this checkpoint now claims. "at least one tensor was fresh" was
-    # not enough, and two review findings show why:
-    #
-    #  * Sequential -> Sequential (a width sweep, 32 -> 64): `value_head.2.bias` is shape (1,) at
-    #    EVERY width, so it is not a shape mismatch and is loaded from the STALE head while the
-    #    tool reported the head UNTRAINED. Mixed provenance announced as fresh -- the exact defect
-    #    class this series exists to eliminate, produced by the tool meant to prevent it.
-    #  * Narrowing back to the incumbent: the stale tensors ARE the original trained head and
-    #    match the target exactly, so nothing is reinitialised, and the old check called a
-    #    perfectly valid checkpoint a failure while leaving it on disk.
-    reinit = set()
-    for warning in fresh:
-        for name in dict(model.value_head.state_dict()):
-            if f"value_head.{name}" in str(warning.message):
-                reinit.add(f"value_head.{name}")
     head_params = {f"value_head.{n}" for n in dict(model.value_head.state_dict())}
     carried = head_params - reinit
     if carried:
@@ -221,17 +221,17 @@ def main() -> int:
             )
         if len(carried) == len(head_params):
             print(f"  verified: reloads as {head_type}, width "
-                  f"{result.model_config.value_head_hidden!r}; the ENTIRE head carried over from "
+                  f"{config_back.value_head_hidden!r}; the ENTIRE head carried over from "
                   "a same-shape source, so nothing is untrained")
         else:
             print(f"  verified: reloads as {head_type}, width "
-                  f"{result.model_config.value_head_hidden!r}; {len(reinit)} of "
+                  f"{config_back.value_head_hidden!r}; {len(reinit)} of "
                   f"{len(head_params)} head tensors are FRESH, and the rest "
                   f"({sorted(carried)}) carried from a same-shape source")
     else:
         print(f"  verified: reloads as {head_type}, width "
-              f"{result.model_config.value_head_hidden!r}; all {len(head_params)} head tensors "
-              f"are FRESH (head reported UNTRAINED, {len(fresh)} warning)")
+              f"{config_back.value_head_hidden!r}; all {len(head_params)} head tensors "
+              "are FRESH")
     if carried:
         print("  the trunk is carried over. NOTE the head is NOT wholly fresh -- see the line "
               "above; a width sweep carries any same-shape tensor, so this is not a clean V1 "
