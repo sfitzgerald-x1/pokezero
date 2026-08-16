@@ -284,7 +284,7 @@ TRAJECTORY_CHARTS = [
         ("Liquid Ooze in on leech seed / game (opp used it, carried)", lambda r: r.get("ooze_switchin_on_leechseed_per_game")),
         ("Grass in on leech seed / game (opp used it, grass on team)", lambda r: r.get("grass_switchin_on_leechseed_rate")),
         ("Fire in on will-o-wisp / game (opp used it, fire on team)", lambda r: r.get("fire_switchin_on_wow_rate")),
-        ("Ghost in on rapid spin (spikes down)", lambda r: r.get("ghost_switchin_on_spin_per_game")),
+        ("Ghost in on rapid spin (opp used it, and carried)", lambda r: r.get("ghost_switchin_on_spin_rate")),
     ]),
     # resource/endgame in SELF-PLAY: both seats are the same policy, so opp-PP ≈ bot-PP and
     # opp-mons-on-loss ≈ mons-on-win (the winner's margin) — the paired plots are essentially

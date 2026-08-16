@@ -825,6 +825,7 @@ def extract(files, lineage=None, milestone=None, measure_seat="bot"):
     # possible and relevant). Every read already implies both, so the numerator is the read count.
     grass_leech_present = 0; grass_leech_reads = 0   # grass in on the opponent's Leech Seed
     fire_wow_present = 0; fire_wow_reads = 0          # fire in on the opponent's Will-O-Wisp
+    ghost_spin_present = 0; ghost_spin_reads = 0      # ghost in on the opponent's Rapid Spin
     pg_rows = []   # (per-seat trait counts for one game, 1 if that seat won) — decided games only
     pp_exhaust_bot = []
     pp_exhaust_opp = []
@@ -960,6 +961,13 @@ def extract(files, lineage=None, milestone=None, measure_seat="bot"):
                 if opp["cat_burn"] and team_species & FIRE_SPECIES:
                     fire_wow_present += 1
                     fire_wow_reads += gp.ev[seat]["fire_switchin_on_wow"]
+                # Ghost-on-Rapid-Spin, gated the same way its peers are. cat_rapidspin_spikesdown
+                # (not cat_rapidspin_total) is the matched opportunity: the read only fires when the
+                # spinner actually had spikes to clear, so the denominator must carry that condition
+                # too, or the rate is diluted by spins that were never worth blocking.
+                if opp["cat_rapidspin_spikesdown"] and team_species & GHOST_SPECIES:
+                    ghost_spin_present += 1
+                    ghost_spin_reads += gp.ev[seat]["ghost_switchin_on_spin"]
             # avg peak Spikes layers achieved, over games where the seat's team carries Spikes (a
             # per-game max, so stalls don't inflate it — no need to restrict to decided games).
             if any(SPIKES in {mid(x) for x in m["moves"]} for m in g.get("movesets", {}).get(seat, [])):
@@ -1135,7 +1143,13 @@ def extract(files, lineage=None, milestone=None, measure_seat="bot"):
         "grass_switchin_on_leechseed_rate": (round(grass_leech_reads / grass_leech_present, 4) if grass_leech_present else None),
         "fire_wow_present_seat_games": fire_wow_present,
         "fire_switchin_on_wow_rate": (round(fire_wow_reads / fire_wow_present, 4) if fire_wow_present else None),
-        # Ghost-on-Rapid-Spin stays per seat-game (its own "spikes down" condition is applied at read time).
+        # Ghost-on-Rapid-Spin. The _rate is the meaningful one: it answers "when the opponent spun
+        # with spikes down AND this seat had a Ghost to send in, how often did it". The older
+        # _per_game divides by every seat-game, so a seat carrying no Ghost at all still lands in the
+        # denominator and drags the number toward zero; it is kept only so points already plotted
+        # stay comparable.
+        "ghost_spin_present_seat_games": ghost_spin_present,
+        "ghost_switchin_on_spin_rate": (round(ghost_spin_reads / ghost_spin_present, 4) if ghost_spin_present else None),
         "ghost_switchin_on_spin_per_game": round(cat_extra["ghost_switchin_on_spin"] / (seat_games or 1), 4),
         # Struggle: total occurrences (should be very rare — everything out of PP).
         "struggle_uses": cat_extra["cat_struggle"],

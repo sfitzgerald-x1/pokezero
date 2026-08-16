@@ -1337,3 +1337,71 @@ if __name__ == "__main__":  # pragma: no cover
     # from direct execution -- found by the repo-wide structural guard in
     # tests/test_public_invariant.py.
     unittest.main()
+
+
+class GhostSpinDenominator(unittest.TestCase):
+    """Ghost-on-Rapid-Spin must be gated like its peers, not divided by every seat-game.
+
+    The read fires only when the opponent spins WITH SPIKES DOWN and this seat has a Ghost to send
+    in. Dividing by all seat-games puts games with no Ghost on the team -- where the read was never
+    possible -- into the denominator, which drags the rate toward zero and makes an arm that has no
+    Ghost in its randbats draws look worse at reading spins than one that does.
+    """
+
+    @staticmethod
+    def _game(seed, *, opp_spins, spikes_down, ghost_on_team):
+        proto = ["|start", "|switch|p1a: Skarmory|Skarmory|100/100",
+                 "|switch|p2a: Forretress|Forretress|100/100", "|turn|1"]
+        if spikes_down:
+            proto += ["|move|p1a: Skarmory|Spikes|p2a: Forretress",
+                      "|-sidestart|p2: bot|Spikes", "|turn|2"]
+        if ghost_on_team:
+            proto += ["|switch|p1a: Gengar|Gengar|100/100"]
+        if opp_spins:
+            proto += ["|move|p2a: Forretress|Rapid Spin|p1a: Gengar"]
+        proto += ["|turn|3", "|win|Bot p1"]
+        p1 = [{"species": "Skarmory", "moves": ["Spikes"], "ability": "Keen Eye"}]
+        if ghost_on_team:
+            p1.append({"species": "Gengar", "moves": ["Shadow Ball"], "ability": "Levitate"})
+        ms = {"p1": p1, "p2": [{"species": "Forretress", "moves": ["Rapid Spin"], "ability": "Sturdy"}]}
+        return {"seed": seed, "opponent": "self", "winner": "p1", "turn_count": 3,
+                "capped": False, "protocol": proto, "movesets": ms, "pp_track": []}
+
+    def _extract(self, games):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "events-0.jsonl.gz")
+            with gzip.open(path, "wt") as f:
+                f.write(json.dumps({"record": "manifest", "opponent": "self"}) + "\n")
+                for g in games:
+                    f.write(json.dumps(g) + "\n")
+            return TE.extract([path])
+
+    def test_games_without_a_ghost_are_not_in_the_denominator(self):
+        m = self._extract([self._game(i, opp_spins=True, spikes_down=True, ghost_on_team=False)
+                           for i in range(4)])
+        self.assertEqual(m["ghost_spin_present_seat_games"], 0,
+                         "no Ghost on the team means the read was never possible")
+        self.assertIsNone(m["ghost_switchin_on_spin_rate"],
+                          "an impossible read must be blank, not 0.0")
+
+    def test_games_without_an_opposing_spin_are_not_in_the_denominator(self):
+        m = self._extract([self._game(i, opp_spins=False, spikes_down=True, ghost_on_team=True)
+                           for i in range(4)])
+        self.assertEqual(m["ghost_spin_present_seat_games"], 0,
+                         "the opponent never spun, so there was nothing to read")
+
+    def test_denominator_counts_only_matched_games(self):
+        games = ([self._game(i, opp_spins=True, spikes_down=True, ghost_on_team=True) for i in range(3)]
+                 + [self._game(90 + i, opp_spins=True, spikes_down=True, ghost_on_team=False) for i in range(5)])
+        m = self._extract(games)
+        # self-play measures both seats; the gate is per (game, seat), so assert the shape not a
+        # hard-coded count: only the ghost-carrying games may contribute.
+        self.assertGreater(m["ghost_spin_present_seat_games"], 0)
+        self.assertLessEqual(m["ghost_spin_present_seat_games"], 3,
+                             "games with no Ghost must not enter the denominator")
+
+    def test_ungated_series_is_retained_for_comparability(self):
+        m = self._extract([self._game(i, opp_spins=True, spikes_down=True, ghost_on_team=True)
+                           for i in range(2)])
+        self.assertIn("ghost_switchin_on_spin_per_game", m,
+                      "the old per-game series is kept so already-plotted points stay comparable")
