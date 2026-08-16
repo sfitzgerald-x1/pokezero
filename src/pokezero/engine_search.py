@@ -370,9 +370,11 @@ def _is_identity_calibration(transform: Any) -> bool:
         unknown = set(transform) - known
         if unknown:
             return False
-        # `to_dict` always writes these five; `points` only for isotonic. A dict missing any
-        # of them is not a shape this code wrote, so identity cannot be established from it.
-        if not {"method", "scale", "bias", "clip_min", "clip_max"} <= set(transform):
+        # A dict missing any key `to_dict` always writes is not a shape this code produced,
+        # so identity cannot be established from it. Derived from an actual identity object
+        # rather than a hardcoded literal, so it tracks the writer automatically (`points` is
+        # excluded by construction: `to_dict` emits it only for isotonic).
+        if not set(ValueCalibrationTransform().to_dict()) <= set(transform):
             return False
         try:
             transform = ValueCalibrationTransform.from_dict(transform)
@@ -411,10 +413,14 @@ def _fence_calibration_seam(payload: Mapping[str, Any], where: str) -> None:
     catches "the checkpoint this trace came from declares a calibration" and does NOT catch a
     trace exported from some *other* checkpoint, nor a calibration baked into the trace
     itself. Pairing ``model_path`` to ``checkpoint_path`` is a separate provenance question
-    and is not settled here. Nor does it cover the benches that build
+    and is not settled here. Nor does it cover the two benches that build
     ``pokezero_search.NativeLeafModel`` directly and never construct an ``EngineMctsPolicy``
-    at all (``scripts/bench_leaf_search.py``, ``scripts/bench_crate_search.py``,
-    ``scripts/depth_tactics_probe.py``): those bypass this fence entirely.
+    at all -- ``scripts/bench_leaf_search.py`` and ``scripts/bench_crate_search.py`` -- which
+    bypass this fence entirely. An earlier revision of this list also named
+    ``scripts/depth_tactics_probe.py``; that was WRONG. It builds an ``EngineMctsPolicy``
+    (``depth_tactics_probe.py:891``) and so is fenced, as is
+    ``truth_differential_census.py``; both merely mention ``NativeLeafModel`` in a docstring.
+    A disclosure that over-states which paths are unguarded is its own kind of wrong.
     """
     from .neural_policy import NEURAL_POLICY_SCHEMA_VERSION  # noqa: PLC0415
 

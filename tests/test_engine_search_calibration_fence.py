@@ -41,6 +41,37 @@ from pokezero.neural_policy import (
 )
 
 
+def _accepted_calibration_methods() -> set[str]:
+    """The methods `ValueCalibrationTransform.__post_init__` ACCEPTS, read from its source.
+
+    Extracted rather than hardcoded so that adding a third method cannot silently widen what
+    the fence tolerates. Mirrors the AST approach already used to pin the fence's call site.
+    """
+    from pokezero import neural_policy
+
+    tree = ast.parse(inspect.getsource(neural_policy.ValueCalibrationTransform))
+    for node in ast.walk(tree):
+        # Matches `if self.method not in {...}: raise ValueError(...)`
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+            continue
+        if not isinstance(node.ops[0], ast.NotIn):
+            continue
+        left = node.left
+        if not (isinstance(left, ast.Attribute) and left.attr == "method"):
+            continue
+        operand = node.comparators[0]
+        if isinstance(operand, (ast.Set, ast.Tuple, ast.List)):
+            return {
+                elt.value for elt in operand.elts
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+            }
+    raise AssertionError(
+        "could not find the `self.method not in {...}` validation in "
+        "ValueCalibrationTransform. If it moved, this extraction must follow it -- a silent "
+        "fallback here would let a new method through unpinned."
+    )
+
+
 def _write_checkpoint(directory: Path, transform: ValueCalibrationTransform | None) -> Path:
     """Write a real checkpoint through the production writer."""
     model_config = TransformerPolicyConfig.compact_category(
@@ -164,6 +195,21 @@ class IdentityDetectionTests(unittest.TestCase):
                     f"a transform differing ONLY in {name!r} was accepted as identity",
                 )
 
+    def test_every_unpinnable_entry_is_the_one_we_proved(self) -> None:
+        """`UNPINNABLE` must not become a way to silence the sweep.
+
+        Review moved `bias` into it, deleted its perturbation and dropped its comparison in
+        the fence -- all 20 tests stayed green, because the field-set assertion unions both
+        sets and the proof test hardcoded `method`. Only `method` has a proof, so only
+        `method` may be exempt.
+        """
+        self.assertEqual(
+            IdentityDetectionTests.UNPINNABLE, {"method"},
+            "a field was exempted from the per-field sweep without a proof that it cannot be "
+            "perturbed alone -- add one (see test_method_cannot_be_perturbed_alone) instead "
+            "of extending UNPINNABLE",
+        )
+
     def test_method_cannot_be_perturbed_alone(self) -> None:
         """Why `method` is exempt from the per-field sweep -- proved, not asserted.
 
@@ -177,8 +223,25 @@ class IdentityDetectionTests(unittest.TestCase):
         must gain a `method` entry.
         """
         identity = ValueCalibrationTransform().to_dict()
-        for value in ("isotonic", "quantile", "unknown", ""):
-            with self.subTest(method=value):
+        # Enumerate the ACCEPTED set from the source, rather than four hardcoded rejects.
+        # Round 2's version asserted only that "isotonic"/"quantile"/"unknown"/"" raise, so
+        # adding a third accepted method left the suite green while the fence passed a
+        # non-default method -- the tripwire this docstring advertises did not fire.
+        accepted = _accepted_calibration_methods()
+        self.assertIn("affine", accepted)
+        for value in sorted(accepted - {identity["method"]}):
+            with self.subTest(accepted_method=value):
+                # An accepted method OTHER than the default must be unreachable with every
+                # other field at its default, or `method` is pinnable and must join the sweep.
+                with self.assertRaises(
+                    ValueError,
+                    msg=f"method={value!r} is accepted AND constructible with all other "
+                        "fields default, so it is a single-field perturbation -- move it out "
+                        "of UNPINNABLE and into PERTURBATIONS",
+                ):
+                    ValueCalibrationTransform.from_dict({**identity, "method": value})
+        for value in ("quantile", "unknown", ""):
+            with self.subTest(rejected_method=value):
                 with self.assertRaises(ValueError):
                     ValueCalibrationTransform.from_dict({**identity, "method": value})
         # And the joint case is caught, via `points`.
@@ -197,7 +260,24 @@ class IdentityDetectionTests(unittest.TestCase):
         self.assertFalse(_is_identity_calibration(iso.to_dict()))
 
     def test_unparseable_is_refused_not_waved_through(self) -> None:
-        self.assertFalse(_is_identity_calibration({"scale": "not-a-number"}))
+        """Fixtures must be FULL-SHAPED, or they never reach the `from_dict` they test.
+
+        Round 2 added the unknown-key and missing-key gates, and in doing so silently killed
+        this test's coverage: `{"scale": "not-a-number"}` now fails the five-key check and
+        `"a bare string"` is not a Mapping, so `from_dict` was called ZERO times and the
+        `except` branch could be flipped to `return True` with the whole suite green -- while
+        the fence accepted an unparseable transform. Every case below carries all five
+        always-written keys so it reaches the parse.
+        """
+        identity = ValueCalibrationTransform().to_dict()
+        for label, bad in (
+            ("non-numeric scale", {"scale": "not-a-number"}),
+            ("list scale", {"scale": [1.0]}),
+            ("non-numeric isotonic points", {"method": "isotonic", "points": [["a", "b"]]}),
+        ):
+            with self.subTest(case=label):
+                self.assertFalse(_is_identity_calibration({**identity, **bad}))
+        # And the non-Mapping route, which short-circuits earlier and is also fine to pin.
         self.assertFalse(_is_identity_calibration("a bare string"))
 
     def test_an_unknown_key_is_refused(self) -> None:
