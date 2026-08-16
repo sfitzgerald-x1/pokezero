@@ -1332,13 +1332,6 @@ class MeasureSeatProvenance(unittest.TestCase):
                                  "seat provenance must be recorded in the metrics")
 
 
-if __name__ == "__main__":  # pragma: no cover
-    # At the END. It sat at line 1265, stranding MeasureSeatProvenance, MissingInputGuard
-    # from direct execution -- found by the repo-wide structural guard in
-    # tests/test_public_invariant.py.
-    unittest.main()
-
-
 class GhostSpinDenominator(unittest.TestCase):
     """Ghost-on-Rapid-Spin must be gated like its peers, not divided by every seat-game.
 
@@ -1405,3 +1398,10 @@ class GhostSpinDenominator(unittest.TestCase):
                            for i in range(2)])
         self.assertIn("ghost_switchin_on_spin_per_game", m,
                       "the old per-game series is kept so already-plotted points stay comparable")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. It sat at line 1265, stranding MeasureSeatProvenance, MissingInputGuard
+    # from direct execution -- found by the repo-wide structural guard in
+    # tests/test_public_invariant.py.
+    unittest.main()
