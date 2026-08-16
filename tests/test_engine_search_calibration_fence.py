@@ -14,8 +14,10 @@ whole point; `test_production_persists_a_dict_not_a_dataclass` pins that premise
 from __future__ import annotations
 
 import ast
+import dataclasses
 import inspect
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from typing import Any
@@ -120,6 +122,74 @@ class IdentityDetectionTests(unittest.TestCase):
         self.assertAlmostEqual(narrowed.apply(0.9), 0.2)
         self.assertFalse(_is_identity_calibration(narrowed.to_dict()))
 
+    # One non-identity value per field. Anything that makes that field differ from the default
+    # will do; the point is that exactly ONE key moves at a time.
+    PERTURBATIONS = {
+        "scale": 1.5,
+        "bias": 0.5,
+        "clip_min": -0.2,
+        "clip_max": 0.2,
+        "points": [[0.0, 0.5]],
+    }
+    #: `method` is deliberately absent, and `test_method_cannot_be_perturbed_alone` proves the
+    #: exemption is real rather than asserting it.
+    UNPINNABLE = {"method"}
+
+    def test_every_field_is_pinned_individually(self) -> None:
+        """Each field must be able to fail the check ON ITS OWN.
+
+        Review found the previous fixtures all perturbed TWO fields at once -- `scale=1.5,
+        bias=-0.2`, `clip_min=-0.2, clip_max=0.2`, `method="isotonic", points=...`. Whichever
+        field `fields()` reached first short-circuited the loop, so `bias`, `clip_max` and
+        `points` were never actually exercised: dropping those three comparisons -- i.e.
+        reverting to exactly the 3-of-6 defect -- left the whole suite green, and the surviving
+        mutant passed a `bias=0.5` transform that maps 0.0 -> 0.5.
+
+        Perturbing one key of the identity dict at a time is what closes that, and it also
+        covers any field added to `ValueCalibrationTransform` later, because the loop is over
+        `fields()` rather than a list written out by hand.
+        """
+        identity = ValueCalibrationTransform().to_dict()
+        names = {spec.name for spec in dataclasses.fields(ValueCalibrationTransform)}
+        self.assertEqual(
+            names, set(self.PERTURBATIONS) | self.UNPINNABLE,
+            "a field was added to ValueCalibrationTransform without a perturbation here, so "
+            "it is unpinned -- add one rather than deleting this assertion",
+        )
+        for name, value in sorted(self.PERTURBATIONS.items()):
+            with self.subTest(field=name):
+                candidate = {**identity, name: value}
+                self.assertFalse(
+                    _is_identity_calibration(candidate),
+                    f"a transform differing ONLY in {name!r} was accepted as identity",
+                )
+
+    def test_method_cannot_be_perturbed_alone(self) -> None:
+        """Why `method` is exempt from the per-field sweep -- proved, not asserted.
+
+        No value of `method` can differ from the default while every other field stays at its
+        default: the type validates `method in {"affine", "isotonic"}`, and `"isotonic"`
+        additionally requires at least one point. So `method` can only ever differ JOINTLY with
+        `points`, which IS pinned -- dropping the `method` comparison is therefore harmless,
+        and this test is what makes that claim checkable instead of a comment.
+
+        If a third method is ever added that needs no points, this test fails and the sweep
+        must gain a `method` entry.
+        """
+        identity = ValueCalibrationTransform().to_dict()
+        for value in ("isotonic", "quantile", "unknown", ""):
+            with self.subTest(method=value):
+                with self.assertRaises(ValueError):
+                    ValueCalibrationTransform.from_dict({**identity, "method": value})
+        # And the joint case is caught, via `points`.
+        self.assertFalse(
+            _is_identity_calibration(
+                ValueCalibrationTransform(
+                    method="isotonic", points=((0.0, 0.5),)
+                ).to_dict()
+            )
+        )
+
     def test_isotonic_is_not_identity(self) -> None:
         iso = ValueCalibrationTransform(
             method="isotonic", points=((-1.0, -0.5), (1.0, 0.5))
@@ -130,14 +200,53 @@ class IdentityDetectionTests(unittest.TestCase):
         self.assertFalse(_is_identity_calibration({"scale": "not-a-number"}))
         self.assertFalse(_is_identity_calibration("a bare string"))
 
+    def test_an_unknown_key_is_refused(self) -> None:
+        """`from_dict` reads 6 keys and silently drops the rest.
+
+        So an identity-looking dict carrying `gamma: 3.0` parsed to the identity and passed.
+        The day the on-disk shape gains a field and `from_dict` is not updated in lockstep,
+        that is the getattr failure over again: a real calibration with a silent path through.
+        """
+        identity = ValueCalibrationTransform().to_dict()
+        for key, value in (("gamma", 3.0), ("offset", 0.5), ("temperature", 2.0)):
+            with self.subTest(unknown=key):
+                self.assertFalse(_is_identity_calibration({**identity, key: value}))
+
+    def test_a_dict_missing_the_always_written_keys_is_refused(self) -> None:
+        """`{}` parsed to a full set of defaults and so read as identity.
+
+        An empty or partial dict is not a shape `to_dict` produces, so identity cannot be
+        established from it. Not provably identity => refuse.
+        """
+        self.assertFalse(_is_identity_calibration({}))
+        self.assertFalse(_is_identity_calibration({"method": "affine"}))
+        self.assertFalse(_is_identity_calibration({"scale": 1.0, "bias": 0.0}))
+
 
 class FenceTests(unittest.TestCase):
     def test_none_transform_passes(self) -> None:
         _fence_calibration_seam({"value_calibration_transform": None}, "x")
 
-    def test_absent_key_passes(self) -> None:
-        """Pre-provenance checkpoints predate the field; absence is not a calibration."""
-        _fence_calibration_seam({"schema_version": 1}, "x")
+    def test_absent_key_passes_on_a_pre_provenance_schema(self) -> None:
+        """Checkpoints older than the field predate it; absence is not a calibration."""
+        _fence_calibration_seam({"schema_version": "pokezero.neural_policy.ancient"}, "x")
+        _fence_calibration_seam({}, "x")
+
+    def test_absent_key_is_REFUSED_on_the_current_schema(self) -> None:
+        """The escape hatch must not fail open on a schema that always writes the field.
+
+        Review found the absent-key branch returning unconditionally, with no artifact
+        justifying it: all 13 checkpoints in `checkpoints/` are on the current schema and every
+        one carries the key. So on the current schema a missing key means the field was renamed
+        or dropped -- which would hand a real calibration a silent path through the fence.
+        """
+        from pokezero.neural_policy import NEURAL_POLICY_SCHEMA_VERSION
+
+        with self.assertRaises(ValueError) as ctx:
+            _fence_calibration_seam(
+                {"schema_version": NEURAL_POLICY_SCHEMA_VERSION}, "checkpoint /tmp/c.pt"
+            )
+        self.assertIn("carries no 'value_calibration_transform'", str(ctx.exception))
 
     def test_identity_passes(self) -> None:
         _fence_calibration_seam(
@@ -212,15 +321,35 @@ class TheFenceIsActuallyWiredTests(unittest.TestCase):
         self.assertIn("REFUSING model-leaf search", str(ctx.exception))
 
     def test_the_call_site_is_inside_the_model_leaf_branch(self) -> None:
-        """Structural, so a refactor that hoists the call out of the guard fails here."""
-        source = inspect.getsource(EngineMctsPolicy.__init__)
-        tree = ast.parse(inspect.cleandoc(source).replace("def __init__", "def __init__", 1))
+        """Structural, so a refactor that hoists the call out of the guard fails here.
+
+        `textwrap.dedent`, not `inspect.cleandoc`: cleandoc happened to dedent this source only
+        because `__init__`'s signature spans lines with `) -> None:` at indent 4. Collapse the
+        signature to one line and cleandoc leaves the body over-indented and `ast.parse` raises
+        IndentationError -- the test would then fail for a reason unrelated to wiring. The
+        `.replace("def __init__", "def __init__", 1)` it also carried was a no-op.
+
+        The comparison operator is constrained to `==`. Matching on the mere presence of
+        "leaf_eval" and "'model'" accepted `!=` and `in ("model", ...)` equally, so an
+        INVERTED guard satisfied this test. The behavioural test above kills that mutant, but a
+        structural test should not claim more than it checks.
+        """
+        source = textwrap.dedent(inspect.getsource(EngineMctsPolicy.__init__))
+        tree = ast.parse(source)
         guarded = []
         for node in ast.walk(tree):
             if not isinstance(node, ast.If):
                 continue
-            test = ast.dump(node.test)
-            if "leaf_eval" not in test or "'model'" not in test.replace('"', "'"):
+            test = node.test
+            if not (
+                isinstance(test, ast.Compare)
+                and len(test.ops) == 1
+                and isinstance(test.ops[0], ast.Eq)
+                and isinstance(test.left, ast.Attribute)
+                and test.left.attr == "leaf_eval"
+                and isinstance(test.comparators[0], ast.Constant)
+                and test.comparators[0].value == "model"
+            ):
                 continue
             for inner in ast.walk(node):
                 if (

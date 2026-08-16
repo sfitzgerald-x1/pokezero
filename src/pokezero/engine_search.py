@@ -354,10 +354,26 @@ def _is_identity_calibration(transform: Any) -> bool:
       (``clip_min=-0.2, clip_max=0.2``) passed the guard while mapping 0.9 -> 0.2.
 
     So: normalise the dict to the dataclass, then compare every field against the default.
+
+    A third finding, from the review of the fixed version: ``from_dict`` reads only the six
+    keys it knows and **silently drops the rest**, so an identity-looking dict carrying an
+    unknown ``gamma: 3.0`` parsed to the identity and passed. The day the on-disk shape gains
+    a field and ``from_dict`` is not updated in lockstep, that is the ``getattr`` failure over
+    again. Unknown keys, and dicts missing keys ``to_dict`` always writes, are refused: the
+    rule is *not provably identity => refuse*, and a shape we do not fully understand is not
+    provably anything.
     """
     from .neural_policy import ValueCalibrationTransform  # noqa: PLC0415
 
+    known = {spec.name for spec in fields(ValueCalibrationTransform)}
     if isinstance(transform, Mapping):
+        unknown = set(transform) - known
+        if unknown:
+            return False
+        # `to_dict` always writes these five; `points` only for isotonic. A dict missing any
+        # of them is not a shape this code wrote, so identity cannot be established from it.
+        if not {"method", "scale", "bias", "clip_min", "clip_max"} <= set(transform):
+            return False
         try:
             transform = ValueCalibrationTransform.from_dict(transform)
         except (TypeError, ValueError, KeyError):
@@ -395,9 +411,27 @@ def _fence_calibration_seam(payload: Mapping[str, Any], where: str) -> None:
     catches "the checkpoint this trace came from declares a calibration" and does NOT catch a
     trace exported from some *other* checkpoint, nor a calibration baked into the trace
     itself. Pairing ``model_path`` to ``checkpoint_path`` is a separate provenance question
-    and is not settled here.
+    and is not settled here. Nor does it cover the benches that build
+    ``pokezero_search.NativeLeafModel`` directly and never construct an ``EngineMctsPolicy``
+    at all (``scripts/bench_leaf_search.py``, ``scripts/bench_crate_search.py``,
+    ``scripts/depth_tactics_probe.py``): those bypass this fence entirely.
     """
+    from .neural_policy import NEURAL_POLICY_SCHEMA_VERSION  # noqa: PLC0415
+
     if "value_calibration_transform" not in payload:
+        # Absence is benign ONLY on a schema that predates the field. On the CURRENT schema
+        # every checkpoint carries it (verified: all 13 in checkpoints/), so a missing key
+        # means the field was renamed or dropped -- which would give a real calibration a
+        # silent path through the fence. Review found this branch failing open with no
+        # artifact justifying it.
+        if payload.get("schema_version") == NEURAL_POLICY_SCHEMA_VERSION:
+            raise ValueError(
+                f"REFUSING model-leaf search: {where} declares the current schema "
+                f"({NEURAL_POLICY_SCHEMA_VERSION!r}) but carries no "
+                "'value_calibration_transform' key. Every checkpoint on this schema writes "
+                "one, so the field has been renamed or dropped and this fence can no longer "
+                "see it. Update the fence alongside the schema."
+            )
         return  # pre-provenance checkpoint: the field did not exist when it was written
     transform = payload["value_calibration_transform"]
     if transform is None or _is_identity_calibration(transform):
