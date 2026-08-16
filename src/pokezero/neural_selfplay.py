@@ -1288,15 +1288,14 @@ def _tensorboard_scalars(
         # |V_new - V_old| > range, but the loss is max(unclipped, clipped), so an example whose
         # value moved AWAY from its target is counted while its gradient is untouched. An
         # earlier revision of this comment said the region "binds on 0.53-0.66 of value
-        # updates"; that is withdrawn. What is measured, on
-        # v4prod-entfull-15m-20260807084357, sampling every 100th iteration by index plus the
-        # final one (43 of 4191, 41 scored): median 0.556 at the final epoch, range
-        # 0.532-0.632.
+        # updates"; that is withdrawn, and so are the measured figures it quoted -- they came
+        # from an unbanked script and a later banked run disagreed with them. The series is
+        # banked as an artifact instead, with its sampling rule and null list, because a
+        # measurement in a source comment cannot be re-derived or corrected.
         #
-        # The final epoch is not what inflates it. V_old is frozen across the run's 5 epochs,
-        # so drift accumulates, but epoch 1 already reads median 0.548 (range 0.523-0.600) and
-        # the paired last-minus-first difference is only +0.0093 -- exceedance is high from the
-        # first epoch, not manufactured by the last.
+        # This reads `epochs[-1]`, the FINAL epoch, and V_old is frozen across the run's
+        # epochs, so drift accumulates within an iteration. That does not inflate the figure
+        # much -- epoch 1 is close behind -- but the reader should know which epoch it is.
         #
         # This scalar exists so the next person sees the series on a graph. It does NOT settle
         # the programme's Phase 0.2 criterion, which asks whether the region binds on most

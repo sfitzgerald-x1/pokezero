@@ -2149,6 +2149,38 @@ class NeuralSelfPlayTest(unittest.TestCase):
             self.assertNotIn(f"{fifth_checkpoint}?sample=true&epsilon=0.01", collected[5]["opponent_policy_specs"])
             self.assertEqual(iteration_manifest["opponent_pool_config"]["historical_opponent_selection"], "spread")
 
+    def test_the_ppo_surfaces_read_the_FINAL_epoch_not_the_first(self) -> None:
+        """`epochs[-1]` is load-bearing and was unpinned at both readers this change touches.
+
+        Review flipped `neural_selfplay.py`'s scalar and `neural_cli.py`'s report column from
+        `epochs[-1]` to `epochs[0]` and the suite stayed fully green, because every fixture had
+        exactly ONE epoch. That matters here specifically: the whole defence of the measured
+        exceedance figure is "it is the final epoch, and epoch 1 is nearly the same", so a
+        one-character change would silently redefine what all three new surfaces report.
+        """
+        from types import SimpleNamespace
+
+        from pokezero.neural_selfplay import _tensorboard_scalars
+
+        def _epoch(index: int, vclip: float) -> TransformerEpochMetrics:
+            return TransformerEpochMetrics(
+                epoch=index, examples=10, loss=0.5, policy_loss=-0.1,
+                policy_accuracy=0.6, value_loss=0.1,
+                ppo_value_clip_eligible_examples=6,
+                ppo_value_clip_fraction=vclip,
+            )
+
+        scalars = _tensorboard_scalars(
+            candidate_policy_id="cand-iter-0002",
+            training=SimpleNamespace(epochs=(_epoch(1, 0.111), _epoch(2, 0.999))),
+            benchmark=None,
+            advancement=SimpleNamespace(advance_collector=True),
+        )
+        self.assertEqual(
+            scalars["ppo/value_clip_fraction"], 0.999,
+            "the scalar must report the FINAL epoch; 0.111 means it read epochs[0]",
+        )
+
     def test_tensorboard_scalars_flattens_training_and_benchmark(self) -> None:
         from types import SimpleNamespace
 
@@ -5465,7 +5497,14 @@ class NeuralSelfPlayTest(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             epoch = manifest["iterations"][0]["training"]["epochs"][0]
             epoch["ppo_value_clip_eligible_examples"] = 6
-            epoch["ppo_value_clip_fraction"] = 0.555
+            epoch["ppo_value_clip_fraction"] = 0.111
+            # TWO epochs, with the value differing, so that reading epochs[0] instead of
+            # epochs[-1] fails. Every fixture in this suite had one epoch, which is why
+            # review could flip the reader with the suite green.
+            final = dict(epoch)
+            final["epoch"] = 2
+            final["ppo_value_clip_fraction"] = 0.555
+            manifest["iterations"][0]["training"]["epochs"].append(final)
             manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:

@@ -7783,7 +7783,9 @@ def _format_live_ppo_diagnostics(final_epoch: Any) -> str:
     # because only the policy one was visible HERE.
     #
     # NOT a bind rate, and an earlier revision of this comment called it one. The counter
-    # (`neural_policy.py` `_value_loss_terms`) increments for every eligible example with
+    # (`neural_policy.py` `_value_loss_terms`, and the duplicate inside
+    # `_distributed_value_loss` -- which is the path a multi-rank production run actually
+    # takes, so verify against that one) increments for every eligible example with
     # |V_new - V_old| > range, but the loss is max(unclipped, clipped): when a value moves AWAY
     # from its target the clipped branch is the SMALLER loss, max selects unclipped, and the
     # clip changes neither loss nor gradient -- while the example is still counted. Verified by
@@ -7795,11 +7797,14 @@ def _format_live_ppo_diagnostics(final_epoch: Any) -> str:
     # manifest.json and checkpoint metadata via TransformerEpochMetrics.to_dict(). What was
     # missing was interactive visibility.
     #
-    # Measured on the live run (v4prod-entfull-15m-20260807084357, every 100th iteration by
-    # index plus the final one = 43 of 4191, 41 scored): median 0.556 at the final epoch,
-    # range 0.532-0.632. Do NOT compare this to the policy clip rate: 0.0184 is ABSOLUTE on a
-    # value in [-1,1] while the policy 0.0829 is RELATIVE on a ratio near 1.0, over a different
-    # denominator, so a tighter region producing higher exceedance is expected, not anomalous.
+    # Do NOT compare this to the policy clip rate: 0.0184 is ABSOLUTE on a value in [-1,1]
+    # while the policy 0.0829 is RELATIVE on a ratio near 1.0, over a different denominator, so
+    # a tighter region producing higher exceedance is expected, not anomalous.
+    #
+    # The measured series is deliberately NOT quoted here. Numbers in prose go stale and cannot
+    # be re-derived; an earlier revision of this comment carried figures from an unbanked
+    # ad-hoc script that a later banked run contradicted in the third decimal. The series is an
+    # artifact, cited from the analysis that uses it.
     return (
         f" ppo_cov={_format_optional_float(ppo_valid_fraction)}"
         f" ppo_clip={_format_optional_float(ppo_clip_fraction)}"
