@@ -251,6 +251,12 @@ class TransformerPolicyConfig:
     numeric_feature_count: int | None = None
     token_count: int | None = None
     embedding_dim: int = 128
+    #: Hidden width of the value head. None = the incumbent single ``nn.Linear(embedding_dim, 1)``.
+    #: Set to widen it to ``Linear(embedding_dim, h) -> GELU -> Linear(h, 1)``. This is the
+    #: Phase 3 V1 arm: the incumbent head is ONE linear functional of a 512-dim embedding
+    #: (513 parameters, 0.01% of a 10.01M model) while the policy side gets the whole
+    #: transformer, so it may simply lack the direction that separates siblings.
+    value_head_hidden: int | None = None
     transformer_layers: int = 2
     attention_heads: int = 4
     feedforward_dim: int = 256
@@ -1124,7 +1130,15 @@ if nn is not None:  # pragma: no cover - optional dependency path.
                 else None
             )
             self.policy_head = nn.Linear(policy_input_dim, 1)
-            self.value_head = nn.Linear(config.embedding_dim, 1)
+            self.value_head = (
+                nn.Linear(config.embedding_dim, 1)
+                if not config.value_head_hidden
+                else nn.Sequential(
+                    nn.Linear(config.embedding_dim, int(config.value_head_hidden)),
+                    nn.GELU(),
+                    nn.Linear(int(config.value_head_hidden), 1),
+                )
+            )
             self.opponent_action_head = nn.Linear(config.embedding_dim, ACTION_COUNT)
             # The observation already stores compact embedding rows (the encoder converts token
             # strings to rows via the matching CategoryVocabulary), so the embedding is indexed
@@ -2751,6 +2765,58 @@ def load_transformer_model_config(path: str | PathLike[str] | Path) -> Transform
     return parse_transformer_model_config(load_transformer_checkpoint_payload(path))
 
 
+def load_state_dict_allowing_fresh_value_head(model: Any, state_dict: Mapping[str, Any]) -> list[str]:
+    """Load a checkpoint, tolerating a value-head SHAPE change and nothing else.
+
+    The Phase 3 V1 arm replaces the incumbent ``nn.Linear(embedding_dim, 1)`` value head with a
+    2-layer MLP, so its parameter names and shapes differ from every existing checkpoint while
+    the trunk is byte-identical. A strict ``load_state_dict`` refuses that outright; a
+    permissive ``strict=False`` would accept it and also silently absorb a real contract break
+    -- a renamed trunk tensor, a changed embedding width -- which is the failure mode this
+    codebase has been bitten by before. So the tolerance is scoped to exactly the value head:
+
+      * value-head keys whose shape differs are dropped and left at fresh initialisation, and
+        the dropped names are RETURNED so a caller can log them rather than discover them from
+        a training curve;
+      * any other missing or unexpected key, or any non-value-head shape mismatch, still
+        raises.
+
+    Returns the list of value-head parameter names that were reinitialised (empty on an
+    ordinary load, so an unchanged head cannot silently become a fresh one).
+    """
+    own = model.state_dict()
+    reinit: list[str] = []
+    filtered = dict(state_dict)
+    for name, tensor in list(state_dict.items()):
+        if name not in own:
+            continue
+        if tuple(own[name].shape) == tuple(getattr(tensor, "shape", ())):
+            continue
+        if not name.startswith("value_head"):
+            raise ValueError(
+                f"REFUSING to load: {name!r} has shape {tuple(getattr(tensor, 'shape', ()))} in "
+                f"the checkpoint and {tuple(own[name].shape)} in the model. Only value-head "
+                "shape changes are tolerated (the Phase 3 V1 arm); a mismatch anywhere else is "
+                "a checkpoint-contract break and must not be silently absorbed."
+            )
+        filtered.pop(name)
+        reinit.append(name)
+    # Value-head keys present in the model but absent from the checkpoint (the MLP's second
+    # layer) are expected when the shape changed; nothing else may be missing.
+    missing = [n for n in own if n not in filtered]
+    unexpected = [n for n in filtered if n not in own]
+    bad_missing = [n for n in missing if not n.startswith("value_head")]
+    bad_unexpected = [n for n in unexpected if not n.startswith("value_head")]
+    if bad_missing or bad_unexpected:
+        raise ValueError(
+            f"REFUSING to load: missing={bad_missing} unexpected={bad_unexpected}. Only "
+            "value-head keys may differ between checkpoint and model."
+        )
+    reinit += [n for n in missing if n.startswith("value_head")]
+    model.load_state_dict(filtered, strict=False)
+    return sorted(set(reinit))
+
+
 def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_location: str | Any | None = None) -> tuple[Any, TransformerTrainingResult]:
     torch_module = require_torch()
     payload = torch_module.load(Path(path), map_location=map_location, weights_only=True)
@@ -2767,7 +2833,7 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
     training_payload = {key: value for key, value in training_payload.items() if key in known_fields}
     training_config = TransformerTrainingConfig(**training_payload)
     model = EntityTokenTransformerPolicy(model_config)
-    model.load_state_dict(payload["state_dict"])
+    load_state_dict_allowing_fresh_value_head(model, payload["state_dict"])
     if map_location is not None:
         model.to(map_location)
     value_calibration_payload = payload.get("value_calibration_transform")
