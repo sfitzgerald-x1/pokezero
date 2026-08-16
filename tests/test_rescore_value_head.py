@@ -70,8 +70,8 @@ def test_parse_heads_rejects_the_reserved_name_and_duplicates():
 def test_parse_heads_names_a_bare_path_by_its_parent_directory():
     """`cells/v1/value-tuned.pt` is named `v1`, not `value-tuned`: the cell is the identity
     and every cell's file has the same basename."""
-    assert rvh.parse_heads(["/shared/cells/v1/value-tuned.pt"]) == {
-        "v1": Path("/shared/cells/v1/value-tuned.pt")}
+    assert rvh.parse_heads(["/tmp/cells/v1/value-tuned.pt"]) == {
+        "v1": Path("/tmp/cells/v1/value-tuned.pt")}
 
 
 def _shard(tmp_path, name, idx, pairs, *, bank="BANKSHA", state="STATESHA",
