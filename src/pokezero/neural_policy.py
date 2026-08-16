@@ -18,7 +18,7 @@ from os import PathLike
 from pathlib import Path
 import random
 from time import perf_counter
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, ClassVar, Iterable, Mapping, Sequence
 
 from .actions import ACTION_COUNT, ACTION_SCHEMA_VERSION, MOVE_ACTION_COUNT
 from .dataset import (
@@ -259,6 +259,12 @@ class TransformerPolicyConfig:
     #: without re-deriving it) -- while the policy side gets the whole transformer, so it may
     #: simply lack the direction that separates siblings.
     value_head_hidden: int | None = None
+    #: Minimum meaningful width. `1` builds `Linear(d,1) -> GELU -> Linear(1,1)`, which is
+    #: `c*GELU(w.x+b)+d` -- a scalar reparameterisation of a SINGLE linear functional, with
+    #: sibling ordering identical to the incumbent's up to GELU's tail. It passes an additivity
+    #: check (the activation is present) while adding no capacity, so it is refused rather than
+    #: silently accepted as an arm.
+    VALUE_HEAD_HIDDEN_MIN: ClassVar[int] = 8
     transformer_layers: int = 2
     attention_heads: int = 4
     feedforward_dim: int = 256
@@ -359,6 +365,16 @@ class TransformerPolicyConfig:
         )
 
     def __post_init__(self) -> None:
+        if self.value_head_hidden is not None and self.value_head_hidden:
+            if int(self.value_head_hidden) < self.VALUE_HEAD_HIDDEN_MIN:
+                raise ValueError(
+                    f"value_head_hidden must be >= {self.VALUE_HEAD_HIDDEN_MIN} when set, got "
+                    f"{self.value_head_hidden!r}. A width of 1 builds "
+                    "Linear(d,1) -> GELU -> Linear(1,1) = c*GELU(w.x+b)+d, a scalar "
+                    "reparameterisation of ONE linear functional -- it passes an activation "
+                    "check while adding no capacity, so it would be a degenerate V1 arm "
+                    "reported as a real one. Use 0 or None for the incumbent head."
+                )
         # Normalize to an immutable tuple of strings so a frozen config stays hashable and
         # to_dict()/from_dict() round-trips regardless of whether a list or tuple was passed.
         object.__setattr__(self, "category_vocab", tuple(str(value) for value in self.category_vocab))

@@ -71,12 +71,16 @@ class ValueHeadShapeTest(unittest.TestCase):
         """
         import torch
 
+        # SEEDED, and the max over a batch of draws. Unseeded this flaked at roughly 0.05%
+        # (min gap 2.9e-05 over 2000 fresh inits against a 1e-4 threshold) and the failure
+        # message would have read as a real capacity regression.
+        torch.manual_seed(20260816)
         head = EntityTokenTransformerPolicy(_cfg(32)).value_head
-        a = torch.randn(1, 16)
-        b = torch.randn(1, 16)
+        a = torch.randn(16, 16)
+        b = torch.randn(16, 16)
         with torch.no_grad():
             lhs = head(a) + head(b)
-            rhs = head(a + b) + head(torch.zeros(1, 16))
+            rhs = head(a + b) + head(torch.zeros(16, 16))
         self.assertGreater(
             float((lhs - rhs).abs().max()), 1e-4,
             "the widened head is ADDITIVE, i.e. an affine map -- the activation is missing or "
@@ -106,7 +110,7 @@ class CheckpointRoundTripTest(unittest.TestCase):
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
 
-    def _write(self, tmp, model, model_config):
+    def _write(self, tmp, model, model_config, name="ckpt.pt"):
         from pokezero.neural_policy import (
             TransformerEpochMetrics, TransformerTrainingConfig, TransformerTrainingResult,
             save_transformer_checkpoint,
@@ -117,7 +121,7 @@ class CheckpointRoundTripTest(unittest.TestCase):
             training_config=TransformerTrainingConfig(objective="ppo", window_size=2),
             epochs=(TransformerEpochMetrics(epoch=1, examples=10, loss=0.5, policy_loss=-0.1,
                                             policy_accuracy=0.4, value_loss=0.25),))
-        path = tmp / "ckpt.pt"
+        path = tmp / name
         save_transformer_checkpoint(path, model, result=result)
         return path
 
@@ -174,6 +178,46 @@ class CheckpointRoundTripTest(unittest.TestCase):
                      "value_head.2.weight", "value_head.2.bias"):
             self.assertIn(name, text)
         self.assertIn("UNTRAINED", text)
+
+    def test_the_warning_fires_for_EVERY_checkpoint_under_default_filters(self):
+        """The dedupe fix is itself a guard, so it needs its own test.
+
+        `warnings.warn` under the default action keys on (text, category, module, lineno), so an
+        identical message warns ONCE and goes silent for every later checkpoint — a scoring
+        sweep would see one warning and assume the rest were fine. The fix is the checkpoint
+        PATH in the message text; deleting it leaves every other test green while reverting the
+        sweep to [1, 0, 0], which is exactly the untested-mitigation shape this suite keeps
+        finding. Default filters here deliberately — `simplefilter("always")` would mask it.
+        """
+        import tempfile
+        import warnings
+        from pathlib import Path
+
+        from pokezero.neural_policy import FreshValueHeadWarning, load_transformer_checkpoint
+
+        # ONE filter context around ALL THREE loads. Calling `simplefilter` per iteration
+        # bumps the filter version and invalidates `__warningregistry__`, which clears the very
+        # dedupe under test -- my first version of this test did that and passed with the fix
+        # REMOVED. The sweep this models is a single process scoring many checkpoints, which
+        # sets its filters once.
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [self._write(Path(tmp), EntityTokenTransformerPolicy(_cfg()), _cfg(32),
+                                 name=f"sweep{i}.pt") for i in range(3)]
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("default")
+                for path in paths:
+                    load_transformer_checkpoint(path)
+            fresh = [w for w in caught if issubclass(w.category, FreshValueHeadWarning)]
+        self.assertEqual(
+            len(fresh), 3,
+            f"got {len(fresh)} warnings for 3 distinct untrained-head checkpoints: the message "
+            "deduped away, so a scoring sweep is told about the first and nothing else")
+
+    def test_a_degenerate_width_is_refused(self):
+        """`value_head_hidden=1` passes an activation check while adding no capacity."""
+        with self.assertRaises(ValueError) as ctx:
+            _cfg(1)
+        self.assertIn("degenerate V1 arm", str(ctx.exception))
 
     def test_the_warning_is_promotable_to_an_error(self):
         """A bare RuntimeWarning could not be promoted without catching unrelated ones."""
