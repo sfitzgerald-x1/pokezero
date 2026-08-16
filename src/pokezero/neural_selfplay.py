@@ -1275,13 +1275,19 @@ def _tensorboard_scalars(
             scalars["ppo/ratio_mean"] = float(last.ppo_ratio_mean)
         if last.ppo_clip_fraction is not None:
             scalars["ppo/clip_fraction"] = float(last.ppo_clip_fraction)
-        # The VALUE clip fraction was computed and then dropped. `to_epoch_metrics`
-        # (neural_policy.py) has populated `ppo_value_clip_fraction` from
-        # ppo_value_clip_count / ppo_value_clip_eligible_examples all along, but no emitter
-        # ever wrote it, so no run retained it -- which is why "does the 0.0184 value trust
-        # region bind?" was unanswerable from any artifact and had to be recorded as
-        # CANNOT RUN. It is the one number that decides whether value_clip_range is
-        # throttling the critic or is irrelevant, and it costs a line.
+        # The VALUE clip fraction, which was missing from TENSORBOARD only. It has always
+        # been persisted -- train-summary.json, manifest.json and checkpoint metadata all
+        # carry it via TransformerEpochMetrics.to_dict() -- so an earlier claim that "no run
+        # retained it" was wrong, and wrong in a specific way worth naming: it generalised a
+        # true observation about `eval-timeline.jsonl` (a win-rate-only file that never held
+        # training metrics) into a claim about every emitter. Scope a negative to the thing
+        # you actually searched.
+        #
+        # Reading the retained artifacts answered the question immediately: the 0.0184 trust
+        # region binds on 0.53-0.66 of value updates in every one of 40 iterations sampled
+        # across a 4,138-iteration run, never below 0.528 -- and more often than the POLICY
+        # clip (median 0.440). This scalar exists so the next person sees that on a graph
+        # instead of having to go looking.
         if last.ppo_value_clip_fraction is not None:
             scalars["ppo/value_clip_fraction"] = float(last.ppo_value_clip_fraction)
         if last.ppo_entropy is not None:

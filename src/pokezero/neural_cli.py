@@ -7779,8 +7779,12 @@ def _format_live_ppo_diagnostics(final_epoch: Any) -> str:
         and ppo_entropy is None
     ):
         return ""
-    # ppo_vclip is the VALUE trust region's bind rate, shown beside the policy clip rate
-    # because they answer different questions and only the policy one was ever visible.
+    # ppo_vclip is the VALUE trust region's bind rate, shown beside the POLICY clip rate
+    # because they answer different questions and only the policy one was visible HERE.
+    # NOT "emitted by nothing": the field has always shipped in train-summary.json,
+    # manifest.json and checkpoint metadata via TransformerEpochMetrics.to_dict(). What was
+    # missing was interactive visibility. Measured on the live run once someone looked:
+    # it binds on 0.53-0.66 of updates every iteration -- MORE often than the policy clip.
     return (
         f" ppo_cov={_format_optional_float(ppo_valid_fraction)}"
         f" ppo_clip={_format_optional_float(ppo_clip_fraction)}"
@@ -7813,7 +7817,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     header = (
         f"{'iter':>4} {'games':>5} {'cap':>4} {'bench_wr':>8} {'gate_wr':>8} {'advance':>7} {'promo':>8} "
         f"{'loss':>10} {'pol_acc':>8} {'value':>10} {'sel_ep':>6} {'val_sign':>8} {'val_ece':>10} {'opp_acc':>8} "
-        f"{'ppo_cov':>8} {'ppo_clip':>8} {'ppo_ent':>8} checkpoint"
+        f"{'ppo_cov':>8} {'ppo_clip':>8} {'ppo_vclip':>9} {'ppo_ent':>8} checkpoint"
     )
     print(header)
     print("-" * len(header))
@@ -7840,6 +7844,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{_format_optional_float(final_epoch.get('opponent_accuracy') if final_epoch else None, digits=4):>8} "
             f"{_format_optional_float(final_epoch.get('ppo_valid_fraction') if final_epoch else None):>8} "
             f"{_format_optional_float(final_epoch.get('ppo_clip_fraction') if final_epoch else None):>8} "
+            f"{_format_optional_float(final_epoch.get('ppo_value_clip_fraction') if final_epoch else None):>9} "
             f"{_format_optional_float(final_epoch.get('ppo_entropy') if final_epoch else None):>8} "
             f"{iteration.get('checkpoint_path')}"
         )
