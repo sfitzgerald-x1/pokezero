@@ -44,25 +44,61 @@ if str(REPO / "src") not in sys.path:
 
 N_BINS_DEFAULT = 10
 
+# TWO DIFFERENT CHECKS, and the help text used to describe them as one. The first runs on
+# every head on every invocation and asks "is the number I recomputed the library's number";
+# the second runs only when the caller passes --expect-ece and asks "is the library's number
+# the one the published cell reported", which pins the DATA and the CHECKPOINT rather than the
+# arithmetic. Naming them here is what lets the help text and the comparisons drift together
+# instead of apart.
+LIBRARY_CROSSCHECK_TOL = 1e-9
+PUBLISHED_ECE_TOL = 1e-6
+EXPECT_ECE_HELP = (
+    f"assert a head's ECE matches a PUBLISHED figure (e.g. the cell's own "
+    f"value-calibration.json) to {PUBLISHED_ECE_TOL:g}, which pins the DATA and the CHECKPOINT "
+    f"to the ones that cell used. This is a SEPARATE check from the recomputed-vs-library "
+    f"cross-check, which is unconditional and runs at {LIBRARY_CROSSCHECK_TOL:g} on every head "
+    f"whether or not this flag is passed.")
+
+
+def bin_index(prediction: float, bins: int) -> int:
+    """The bin a prediction falls in, byte-for-byte as `value_calibration` computes it.
+
+    This is a TRANSCRIPTION, and it has to be exact. The arithmetic here is
+    `int(((p + 1) / 2) * bins)`, matching `_ValueCalibrationTotals._bin_index`
+    (`src/pokezero/value_calibration.py`). The obvious algebraic rearrangement
+    `int((p + 1) / (2 / bins))` -- divide by a precomputed width -- is NOT the same function
+    in binary floating point: `2 / 10` is not representable, so at 3 of the 9 interior bin
+    edges of the default 10-bin grid (p = -0.40, 0.20, 0.40) it puts the point in the bin
+    BELOW. Bins are half-open `[lower, upper)`, so the library is the correct one and an edge
+    value belongs to the bin above. That rearrangement is exactly what this script shipped
+    with, and it made every ECE here a different metric from the one in the artifacts, in a
+    way the `--expect-ece` cross-check could only catch by luck.
+
+    Clipping and the `p == 1.0` special case are the library's too: the top bin is CLOSED at
+    +1, so a saturated head does not index past the end.
+    """
+    clipped = min(1.0, max(-1.0, prediction))
+    if clipped == 1.0:
+        return bins - 1
+    return int(((clipped + 1.0) / 2.0) * bins)
+
 
 def ece_from(preds: list[float], rets: list[float], bins: int) -> dict:
     """ECE over `bins` equal-width bins on [-1, 1], the return scale the head lives on.
 
     Matches `pokezero.value_calibration`: per-bin |mean_prediction - mean_return| weighted by
-    bin occupancy. Recomputed here rather than called, so the bootstrap can run on resampled
-    indices without a forward pass per rep -- and cross-checked against the library's own
-    number by `--expect-ece`, because a reimplemented metric that silently disagrees with the
+    bin occupancy, over the bins `bin_index` above assigns. Recomputed here rather than called,
+    so the bootstrap can run on resampled indices without a forward pass per rep -- and
+    cross-checked UNCONDITIONALLY against the library's own number in `main`, at
+    `LIBRARY_CROSSCHECK_TOL`, because a reimplemented metric that silently disagrees with the
     one in the artifacts would make every delta below incomparable with the published cells.
     """
     n = len(preds)
-    lo, hi = -1.0, 1.0
-    width = (hi - lo) / bins
     sums_p = [0.0] * bins
     sums_r = [0.0] * bins
     counts = [0] * bins
     for p, r in zip(preds, rets):
-        idx = int((p - lo) / width)
-        idx = 0 if idx < 0 else (bins - 1 if idx >= bins else idx)
+        idx = bin_index(p, bins)
         sums_p[idx] += p
         sums_r[idx] += r
         counts[idx] += 1
@@ -85,6 +121,17 @@ def pct(v, q):
     return s[min(len(s) - 1, int(q * len(s)))]
 
 
+def fmt_share(share: float | None, width: int = 11) -> str:
+    """`bias_share_of_ece` for a fixed-width column, INCLUDING when it does not exist.
+
+    `abs(bias)/ece` is None when ECE is exactly 0 -- a head perfectly calibrated on this set,
+    which is the one head nobody would want the tool to crash on. Formatting None with
+    `:.4f` raises TypeError, so both readouts went through a format spec that could not
+    render the value the metric is defined to return.
+    """
+    return f"{'n/a':>{width}s}" if share is None else f"{share:{width}.4f}"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--head", action="append", required=True, metavar="NAME=PATH")
@@ -96,9 +143,7 @@ def main() -> int:
     ap.add_argument("--boot", type=int, default=2000)
     ap.add_argument("--boot-seeds", default="20260816,3,42")
     ap.add_argument("--expect-ece", action="append", default=[], metavar="NAME=VALUE",
-                    help="assert a head's ECE matches a published figure (e.g. the cell's own "
-                         "value-calibration.json) to 1e-6. Use it: an ECE recomputed here "
-                         "that disagrees with the artifacts makes every delta meaningless.")
+                    help=EXPECT_ECE_HELP)
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
 
@@ -135,19 +180,20 @@ def main() -> int:
         lib = evaluate_value_calibration(
             model=model, training_result=result, paths=[Path(p) for p in args.data],
             batch_size=args.batch_size, bins=args.bins, device=args.device)
-        if abs(got["ece"] - lib.expected_calibration_error) > 1e-9:
+        if abs(got["ece"] - lib.expected_calibration_error) > LIBRARY_CROSSCHECK_TOL:
             raise SystemExit(
                 f"REFUSING: recomputed ECE {got['ece']!r} != library "
                 f"{lib.expected_calibration_error!r} for {name}. The bootstrap would then be "
                 f"resampling a metric that is not the one in the artifacts.")
-        if name in expect and abs(got["ece"] - expect[name]) > 1e-6:
+        if name in expect and abs(got["ece"] - expect[name]) > PUBLISHED_ECE_TOL:
             raise SystemExit(
                 f"REFUSING: {name} ECE {got['ece']:.8f} != expected {expect[name]:.8f}. Either "
                 f"the calibration data or the checkpoint is not the one the published cell "
                 f"used, so nothing here is comparable to it.")
         per_head[name] = {"preds": preds, "point": got}
         print(f"{name}: n={got['n']} ECE {got['ece']:.6f}  bias {got['bias']:+.6f}  "
-              f"|bias|/ECE {got['bias_share_of_ece']:.4f}  mae {got['mae']:.4f}"
+              f"|bias|/ECE {fmt_share(got['bias_share_of_ece'], 0).strip()}  "
+              f"mae {got['mae']:.4f}"
               f"{'  [matches published]' if name in expect else ''}", flush=True)
 
     rets = ref_returns
@@ -172,7 +218,7 @@ def main() -> int:
     for k in heads:
         print(f"{k:>10s} {per_head[k]['point']['ece']:9.5f} "
               f"[{pct(draws[k], .025):8.5f},{pct(draws[k], .975):8.5f}] "
-              f"{per_head[k]['point']['bias_share_of_ece']:11.4f}")
+              f"{fmt_share(per_head[k]['point']['bias_share_of_ece'])}")
     print(f"\n=== PAIRED DELTAS vs {args.ref} (lower ECE is better) ===")
     for k in heads:
         if k == args.ref:
