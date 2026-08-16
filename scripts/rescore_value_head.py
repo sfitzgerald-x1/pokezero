@@ -137,7 +137,11 @@ def merge(shards: list[Path], out: Path) -> int:
     - shards must come from the same banked file by SHA, or the reused ground truth is not
       one ground truth;
     - a shard that FAILED its reproduction check is refused, not down-weighted: its states
-      are not the banked states;
+      are not the banked states. That refusal is also why `reproduction_pooled` carries no
+      failure count: any shard with one would have been rejected, so a pooled counter could
+      only ever print zero. A field that reads like evidence and can only hold one value is
+      worse than no field, so what is pooled instead is the loosest tolerance any shard was
+      actually checked at (`tol_max`), which a reader cannot otherwise recover;
     - (seed, prefix) must be unique across shards, which catches overlapping --shard/
       --num-shards arithmetic. Silent duplication would tighten the bootstrap CI on
       resampled copies of the same pair.
@@ -145,7 +149,15 @@ def merge(shards: list[Path], out: Path) -> int:
     pairs: list[dict] = []
     heads, banks, states, names = set(), set(), set(), set()
     seen: dict[tuple, str] = {}
-    repro = {"n": 0, "n_outside_tol": 0, "max_abs_delta": 0.0}
+    repro: dict[str, Any] = {
+        "n": 0, "max_abs_delta": 0.0, "tol_max": None,
+        "note": ("Pairs rebuilt and reproduced across the pooled shards. There is deliberately"
+                 " no pooled failure count: a shard reporting any pair outside its own"
+                 " tolerance is REFUSED below rather than pooled, so such a counter could only"
+                 " ever read zero. `tol_max` is the loosest tolerance any pooled shard was"
+                 " checked at -- shards may be run with different --reproduce-tol, and the"
+                 " pooled column is only as strong as the weakest one."),
+    }
     dropped: collections.Counter = collections.Counter()
     for path in shards:
         doc = json.loads(Path(path).read_text())
@@ -164,8 +176,11 @@ def merge(shards: list[Path], out: Path) -> int:
                 f"reproduction tolerance. Its rebuilt states are not the banked states and "
                 f"pooling it would launder that into a comparable-looking beta.")
         repro["n"] += r.get("n") or 0
-        repro["n_outside_tol"] += r.get("n_outside_tol") or 0
         repro["max_abs_delta"] = max(repro["max_abs_delta"], r.get("max_abs_delta") or 0.0)
+        tol = r.get("tol")
+        if tol is not None:
+            repro["tol_max"] = (float(tol) if repro["tol_max"] is None
+                                else max(repro["tol_max"], float(tol)))
         for k, v in (rs.get("dropped") or {}).items():
             dropped[k] += v
         for pr in doc.get("pairs") or []:
@@ -190,8 +205,10 @@ def merge(shards: list[Path], out: Path) -> int:
         "n_pairs": len(pairs), "pairs": pairs,
     }
     Path(out).write_text(json.dumps(payload, indent=1, sort_keys=True, default=str))
+    tol_max = repro["tol_max"]
     print(f"merged {len(pairs)} pairs from {len(shards)} shards -> {out}  "
-          f"(reproduction: {repro['n']} checked, {repro['n_outside_tol']} outside tol, "
+          f"(reproduction: {repro['n']} checked, every shard within its own tol"
+          f"{'' if tol_max is None else f', loosest {tol_max:g}'}, "
           f"max delta {repro['max_abs_delta']:.3e})")
     return 0
 
@@ -398,6 +415,16 @@ def main() -> int:
                     evaluate_transformer_action_priors, obs_hist)
             except Exception as exc:                                    # noqa: BLE001
                 dropped[f"arm_selection:{type(exc).__name__}"] += 1
+                continue
+            if arm_a is None or arm_b is None:
+                # `_top_two_and_opponent` signals "fewer than two legal actions here" by
+                # returning (None, None, 0). The producer cannot have banked a pair from such
+                # a decision, so this IS a divergence -- but a different one from "the replay
+                # ranked two other moves", and the two have different remedies. Counting both
+                # as `arm_mismatch` made that distinction unrecoverable from the output.
+                dropped["no_sibling_pair_fewer_than_two_legal_actions"] += 1
+                print(f"    prefix {prefix}: replay has fewer than two legal actions, so there "
+                      "is no sibling pair to score -- dropped", flush=True)
                 continue
             if (arm_a, arm_b) != (want["arm_a"], want["arm_b"]):
                 # The replay diverged at or before this decision. Its ground truth describes
