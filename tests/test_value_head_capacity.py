@@ -72,11 +72,53 @@ class LoadPathScopingTest(unittest.TestCase):
         self.incumbent = EntityTokenTransformerPolicy(_cfg())
         self.state = self.incumbent.state_dict()
 
-    def test_widened_head_loads_and_reports_what_it_reinitialised(self):
+    def test_widened_head_loads_and_reports_EXACTLY_what_it_reinitialised(self):
+        """The exact set, not just truthiness.
+
+        Review's uncaught mutation was `return ["value_head.THIS_NAME_IS_A_LIE"]` — the suite
+        passed. Since this list is the only signal that a head is untrained, its contents are
+        the thing that has to be right.
+        """
         reinit = load_state_dict_allowing_fresh_value_head(
             EntityTokenTransformerPolicy(_cfg(32)), self.state)
-        self.assertTrue(reinit, "the widened head must be reported as reinitialised")
-        self.assertTrue(all(n.startswith("value_head") for n in reinit), reinit)
+        self.assertEqual(
+            set(reinit),
+            {"value_head.0.weight", "value_head.0.bias",
+             "value_head.2.weight", "value_head.2.bias"})
+
+    def test_a_MISSING_value_head_still_raises(self):
+        """`main`'s safety net, which prefix-only scoping had removed.
+
+        A checkpoint that simply lacks `value_head.*` — truncated write, partial converter,
+        hand-built payload — must not load with a random head. The exemption is gated on an
+        actually-observed reshape, so with no reshape there is nothing to excuse.
+        """
+        bad = {k: v for k, v in self.state.items() if not k.startswith("value_head.")}
+        with self.assertRaises(ValueError) as ctx:
+            load_state_dict_allowing_fresh_value_head(
+                EntityTokenTransformerPolicy(_cfg()), bad)
+        self.assertIn("carries value-head tensors: False", str(ctx.exception))
+
+    def test_a_junk_key_merely_beginning_with_value_head_is_refused(self):
+        """`startswith("value_head")` swallowed `value_head_backdoor_trunk.weight`."""
+        import torch
+
+        bad = dict(self.state)
+        bad["value_head_backdoor_trunk.weight"] = torch.zeros(3)
+        with self.assertRaises(ValueError):
+            load_state_dict_allowing_fresh_value_head(
+                EntityTokenTransformerPolicy(_cfg()), bad)
+
+    def test_config_round_trip_preserves_the_head_width(self):
+        """The fatal one: without this, a V1 checkpoint reloads as a random incumbent head."""
+        cfg = _cfg(32)
+        self.assertEqual(cfg.to_dict()["value_head_hidden"], 32)
+        self.assertEqual(
+            TransformerPolicyConfig.from_dict(cfg.to_dict()).value_head_hidden, 32)
+        self.assertEqual(TransformerPolicyConfig.from_dict(cfg.to_dict()), cfg)
+        plain = _cfg()
+        self.assertIsNone(
+            TransformerPolicyConfig.from_dict(plain.to_dict()).value_head_hidden)
 
     def test_an_unchanged_head_reinitialises_NOTHING(self):
         """Otherwise a plain continuation could silently reset a trained head."""

@@ -556,6 +556,15 @@ class TransformerPolicyConfig:
             ),
             token_count=_int_field(payload, "token_count", default_spec.token_count),
             embedding_dim=_int_field(payload, "embedding_dim", 128),
+            # WITHOUT THIS LINE a widened-head checkpoint reloads as an incumbent head with
+            # random weights, and the tolerant load path below turns what `main` reports as a
+            # loud "Missing key(s) value_head.weight" into SILENCE. Review caught exactly that:
+            # train V1 for a day, reload to score it, measure an untrained head, conclude
+            # "widening does not help". `to_dict` is asdict so the field was always written;
+            # `from_dict` is field-by-field and dropped it.
+            value_head_hidden=(
+                None if payload.get("value_head_hidden") in (None, 0)
+                else _int_field(payload, "value_head_hidden", 0)),
             transformer_layers=_int_field(payload, "transformer_layers", 2),
             attention_heads=_int_field(payload, "attention_heads", 4),
             feedforward_dim=_int_field(payload, "feedforward_dim", 256),
@@ -2770,10 +2779,13 @@ def load_state_dict_allowing_fresh_value_head(model: Any, state_dict: Mapping[st
 
     The Phase 3 V1 arm replaces the incumbent ``nn.Linear(embedding_dim, 1)`` value head with a
     2-layer MLP, so its parameter names and shapes differ from every existing checkpoint while
-    the trunk is byte-identical. A strict ``load_state_dict`` refuses that outright; a
-    permissive ``strict=False`` would accept it and also silently absorb a real contract break
-    -- a renamed trunk tensor, a changed embedding width -- which is the failure mode this
-    codebase has been bitten by before. So the tolerance is scoped to exactly the value head:
+    the trunk is byte-identical. A strict ``load_state_dict`` refuses that outright.
+    ``strict=False`` does NOT accept it either -- torch collects size mismatches into
+    ``error_msgs`` and raises regardless of ``strict``, which an earlier version of this
+    docstring got wrong when it claimed ``strict=False`` would "silently absorb a changed
+    embedding width". What ``strict=False`` DOES absorb is a RENAMED tensor: missing and
+    unexpected keys are reported and ignored, so a renamed trunk parameter arrives as a
+    slightly worse training curve rather than an error. So the tolerance here is scoped:
 
       * value-head keys whose shape differs are dropped and left at fresh initialisation, and
         the dropped names are RETURNED so a caller can log them rather than discover them from
@@ -2787,12 +2799,15 @@ def load_state_dict_allowing_fresh_value_head(model: Any, state_dict: Mapping[st
     own = model.state_dict()
     reinit: list[str] = []
     filtered = dict(state_dict)
+    # `value_head.` WITH the dot: `startswith("value_head")` also swallowed a junk key merely
+    # beginning with that string, e.g. `value_head_backdoor_trunk.weight`.
+    prefix = "value_head."
     for name, tensor in list(state_dict.items()):
         if name not in own:
             continue
         if tuple(own[name].shape) == tuple(getattr(tensor, "shape", ())):
             continue
-        if not name.startswith("value_head"):
+        if not name.startswith(prefix):
             raise ValueError(
                 f"REFUSING to load: {name!r} has shape {tuple(getattr(tensor, 'shape', ()))} in "
                 f"the checkpoint and {tuple(own[name].shape)} in the model. Only value-head "
@@ -2801,18 +2816,35 @@ def load_state_dict_allowing_fresh_value_head(model: Any, state_dict: Mapping[st
             )
         filtered.pop(name)
         reinit.append(name)
-    # Value-head keys present in the model but absent from the checkpoint (the MLP's second
-    # layer) are expected when the shape changed; nothing else may be missing.
     missing = [n for n in own if n not in filtered]
     unexpected = [n for n in filtered if n not in own]
-    bad_missing = [n for n in missing if not n.startswith("value_head")]
-    bad_unexpected = [n for n in unexpected if not n.startswith("value_head")]
+    # THE EXEMPTION IS GATED ON AN OBSERVED RESHAPE, not on the key prefix. Review found that
+    # prefix-only scoping silently reinitialised a value head that was simply ABSENT -- a
+    # truncated write, a partial converter, a hand-built payload -- where `main` raises
+    # "Missing key(s)". That is a safety net this function must not remove. Renamed or extra
+    # value-head keys are tolerated ONLY when the checkpoint actually carries a value-head
+    # tensor whose shape differs, which is the V1 case and nothing else.
+    # The discriminator is whether the CHECKPOINT CARRIES A VALUE HEAD AT ALL, not whether a
+    # shape mismatch was observed. In the real V1 case the keys are RENAMED, not reshaped --
+    # `nn.Linear` stores `value_head.weight` while `nn.Sequential` stores `value_head.0.weight`
+    # -- so no key appears in both and there is no shape mismatch to see. My first attempt at
+    # this gate keyed on a shape mismatch and refused exactly the case it exists to allow.
+    #
+    # A checkpoint that simply LACKS a value head (truncated write, partial converter,
+    # hand-built payload) has no `value_head.*` keys at all, which is the case `main` catches
+    # with "Missing key(s)" and this function must keep catching.
+    ckpt_carries_head = any(n.startswith(prefix) for n in state_dict)
+    exempt = prefix if ckpt_carries_head else None
+    bad_missing = [n for n in missing if not (exempt and n.startswith(exempt))]
+    bad_unexpected = [n for n in unexpected if not (exempt and n.startswith(exempt))]
     if bad_missing or bad_unexpected:
         raise ValueError(
-            f"REFUSING to load: missing={bad_missing} unexpected={bad_unexpected}. Only "
-            "value-head keys may differ between checkpoint and model."
+            f"REFUSING to load: missing={bad_missing} unexpected={bad_unexpected}. Value-head "
+            "keys may differ only when the checkpoint carries a value-head tensor whose SHAPE "
+            "differs or is renamed (a deliberate head change); the checkpoint here carries "
+            f"value-head tensors: {ckpt_carries_head}."
         )
-    reinit += [n for n in missing if n.startswith("value_head")]
+    reinit += [n for n in missing if exempt and n.startswith(exempt)]
     model.load_state_dict(filtered, strict=False)
     return sorted(set(reinit))
 
@@ -2833,7 +2865,23 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
     training_payload = {key: value for key, value in training_payload.items() if key in known_fields}
     training_config = TransformerTrainingConfig(**training_payload)
     model = EntityTokenTransformerPolicy(model_config)
-    load_state_dict_allowing_fresh_value_head(model, payload["state_dict"])
+    reinitialised = load_state_dict_allowing_fresh_value_head(model, payload["state_dict"])
+    if reinitialised:
+        # LOUD, because this is the only signal that a head is untrained. Review found the
+        # return value discarded here, which meant the documented mitigation ("names returned
+        # so a caller can log them") existed nowhere in the repo, and every consumer -- the
+        # warm-start path, self-play, the bridge, five eval paths and export_model -- inherited
+        # a silently random value head.
+        import warnings  # noqa: PLC0415
+
+        warnings.warn(
+            f"value head reinitialised on load ({len(reinitialised)} tensors: "
+            f"{reinitialised}). The checkpoint's head shape differs from the model's, so these "
+            "parameters are UNTRAINED. Expected only for a deliberate head-capacity change; if "
+            "you are scoring or exporting this checkpoint, the value output is random.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     if map_location is not None:
         model.to(map_location)
     value_calibration_payload = payload.get("value_calibration_transform")
