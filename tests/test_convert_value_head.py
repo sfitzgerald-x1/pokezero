@@ -69,8 +69,7 @@ class ConvertValueHeadTest(unittest.TestCase):
         proc = self._run("--checkpoint", str(self.incumbent), "--output", str(out),
                          "--value-head-hidden", "32")
         self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
-        self.assertIn("verified: reloads as Sequential", proc.stdout)
-        self.assertIn("UNTRAINED", proc.stdout)
+        self.assertIn("all 4 head tensors are FRESH", proc.stdout)
         self.assertTrue(out.exists())
         # And independently, not just from the tool's own say-so.
         from pokezero.neural_policy import load_transformer_checkpoint
@@ -129,9 +128,6 @@ class ConvertValueHeadTest(unittest.TestCase):
                   "--value-head-hidden", "32")
         self.assertEqual(hashlib.sha256(self.incumbent.read_bytes()).hexdigest(), before)
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class VerificationIsPinnedTest(unittest.TestCase):
@@ -250,3 +246,7 @@ class VerificationIsPinnedTest(unittest.TestCase):
         self.assertEqual(self._run("--checkpoint", str(src), "--output", str(out),
                                    "--value-head-hidden", "32").returncode, 0)
         self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o644)
+
+
+if __name__ == "__main__":
+    unittest.main()
