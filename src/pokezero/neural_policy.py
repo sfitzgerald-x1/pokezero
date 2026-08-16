@@ -18,7 +18,7 @@ from os import PathLike
 from pathlib import Path
 import random
 from time import perf_counter
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, ClassVar, Iterable, Mapping, Sequence
 
 from .actions import ACTION_COUNT, ACTION_SCHEMA_VERSION, MOVE_ACTION_COUNT
 from .dataset import (
@@ -251,6 +251,20 @@ class TransformerPolicyConfig:
     numeric_feature_count: int | None = None
     token_count: int | None = None
     embedding_dim: int = 128
+    #: Hidden width of the value head. None = the incumbent single ``nn.Linear(embedding_dim, 1)``.
+    #: Set to widen it to ``Linear(embedding_dim, h) -> GELU -> Linear(h, 1)``. This is the
+    #: Phase 3 V1 arm: the incumbent head is ONE linear functional of a 512-dim embedding --
+    #: 513 parameters, measured at 0.0050% of the 10,182,667 in `checkpoints/pz-v2-2-1m.pt`
+    #: (an earlier revision said "0.01% of a 10.01M model", carried forward from the handoff
+    #: without re-deriving it) -- while the policy side gets the whole transformer, so it may
+    #: simply lack the direction that separates siblings.
+    value_head_hidden: int | None = None
+    #: Minimum meaningful width. `1` builds `Linear(d,1) -> GELU -> Linear(1,1)`, which is
+    #: `c*GELU(w.x+b)+d` -- a scalar reparameterisation of a SINGLE linear functional, with
+    #: sibling ordering identical to the incumbent's up to GELU's tail. It passes an additivity
+    #: check (the activation is present) while adding no capacity, so it is refused rather than
+    #: silently accepted as an arm.
+    VALUE_HEAD_HIDDEN_MIN: ClassVar[int] = 8
     transformer_layers: int = 2
     attention_heads: int = 4
     feedforward_dim: int = 256
@@ -351,6 +365,24 @@ class TransformerPolicyConfig:
         )
 
     def __post_init__(self) -> None:
+        if not self.value_head_hidden:
+            # NORMALISE, do not merely accept. `0` is a documented input meaning "incumbent
+            # head", but storing it as `0` while `from_dict` maps it to `None` makes a config
+            # unequal to its own round trip -- and `_validate_initial_model_config` compares by
+            # dataclass equality, so `--value-head-hidden 0` would save, resume, and die with
+            # "initial_model config must match model_config except for policy_id". That is the
+            # F7 trap reached from a supported value.
+            object.__setattr__(self, "value_head_hidden", None)
+        else:
+            if int(self.value_head_hidden) < self.VALUE_HEAD_HIDDEN_MIN:
+                raise ValueError(
+                    f"value_head_hidden must be >= {self.VALUE_HEAD_HIDDEN_MIN} when set, got "
+                    f"{self.value_head_hidden!r}. A width of 1 builds "
+                    "Linear(d,1) -> GELU -> Linear(1,1) = c*GELU(w.x+b)+d, a scalar "
+                    "reparameterisation of ONE linear functional -- it passes an activation "
+                    "check while adding no capacity, so it would be a degenerate V1 arm "
+                    "reported as a real one. Use 0 or None for the incumbent head."
+                )
         # Normalize to an immutable tuple of strings so a frozen config stays hashable and
         # to_dict()/from_dict() round-trips regardless of whether a list or tuple was passed.
         object.__setattr__(self, "category_vocab", tuple(str(value) for value in self.category_vocab))
@@ -550,6 +582,15 @@ class TransformerPolicyConfig:
             ),
             token_count=_int_field(payload, "token_count", default_spec.token_count),
             embedding_dim=_int_field(payload, "embedding_dim", 128),
+            # WITHOUT THIS LINE a widened-head checkpoint reloads as an incumbent head with
+            # random weights, and the tolerant load path below turns what `main` reports as a
+            # loud "Missing key(s) value_head.weight" into SILENCE. Review caught exactly that:
+            # train V1 for a day, reload to score it, measure an untrained head, conclude
+            # "widening does not help". `to_dict` is asdict so the field was always written;
+            # `from_dict` is field-by-field and dropped it.
+            value_head_hidden=(
+                None if payload.get("value_head_hidden") in (None, 0)
+                else _int_field(payload, "value_head_hidden", 0)),
             transformer_layers=_int_field(payload, "transformer_layers", 2),
             attention_heads=_int_field(payload, "attention_heads", 4),
             feedforward_dim=_int_field(payload, "feedforward_dim", 256),
@@ -1124,7 +1165,15 @@ if nn is not None:  # pragma: no cover - optional dependency path.
                 else None
             )
             self.policy_head = nn.Linear(policy_input_dim, 1)
-            self.value_head = nn.Linear(config.embedding_dim, 1)
+            self.value_head = (
+                nn.Linear(config.embedding_dim, 1)
+                if not config.value_head_hidden
+                else nn.Sequential(
+                    nn.Linear(config.embedding_dim, int(config.value_head_hidden)),
+                    nn.GELU(),
+                    nn.Linear(int(config.value_head_hidden), 1),
+                )
+            )
             self.opponent_action_head = nn.Linear(config.embedding_dim, ACTION_COUNT)
             # The observation already stores compact embedding rows (the encoder converts token
             # strings to rows via the matching CategoryVocabulary), so the embedding is indexed
@@ -2751,6 +2800,91 @@ def load_transformer_model_config(path: str | PathLike[str] | Path) -> Transform
     return parse_transformer_model_config(load_transformer_checkpoint_payload(path))
 
 
+class FreshValueHeadWarning(RuntimeWarning):
+    """A checkpoint's value head could not be loaded and is UNTRAINED.
+
+    Named so a caller can promote it: `warnings.simplefilter("error", FreshValueHeadWarning)`.
+    """
+
+
+def load_state_dict_allowing_fresh_value_head(model: Any, state_dict: Mapping[str, Any]) -> list[str]:
+    """Load a checkpoint, tolerating a value-head change and nothing else.
+
+    The V1 mechanism is a **rename**, not a reshape: ``nn.Linear`` stores ``value_head.weight``
+    while ``nn.Sequential`` stores ``value_head.0.weight``, so no key appears in both and the
+    tolerated difference is missing/unexpected KEYS. An earlier revision of this docstring said
+    "SHAPE change", and an earlier gate keyed on one -- which refused the very case this
+    function exists to allow.
+
+    The Phase 3 V1 arm replaces the incumbent ``nn.Linear(embedding_dim, 1)`` value head with a
+    2-layer MLP, so its parameter names and shapes differ from every existing checkpoint while
+    the trunk is byte-identical. A strict ``load_state_dict`` refuses that outright.
+    ``strict=False`` does NOT accept it either -- torch collects size mismatches into
+    ``error_msgs`` and raises regardless of ``strict``, which an earlier version of this
+    docstring got wrong when it claimed ``strict=False`` would "silently absorb a changed
+    embedding width". What ``strict=False`` DOES absorb is a RENAMED tensor: missing and
+    unexpected keys are reported and ignored, so a renamed trunk parameter arrives as a
+    slightly worse training curve rather than an error. So the tolerance here is scoped:
+
+      * when the checkpoint carries any ``value_head.`` tensor, value-head keys that are
+        missing, unexpected, or reshaped are dropped and left at fresh initialisation, and
+        their names are RETURNED so a caller can log them rather than discover them from a
+        training curve;
+      * when the checkpoint carries NO value-head tensor at all -- a truncated write, a partial
+        converter -- everything raises, preserving the safety net ``main`` has;
+      * any other missing or unexpected key, or any non-value-head shape mismatch, still
+        raises.
+
+    Returns the list of value-head parameter names that were reinitialised (empty on an
+    ordinary load, so an unchanged head cannot silently become a fresh one).
+    """
+    own = model.state_dict()
+    reinit: list[str] = []
+    filtered = dict(state_dict)
+    # `value_head.` WITH the dot: `startswith("value_head")` also swallowed a junk key merely
+    # beginning with that string, e.g. `value_head_backdoor_trunk.weight`.
+    prefix = "value_head."
+    for name, tensor in list(state_dict.items()):
+        if name not in own:
+            continue
+        if tuple(own[name].shape) == tuple(getattr(tensor, "shape", ())):
+            continue
+        if not name.startswith(prefix):
+            raise ValueError(
+                f"REFUSING to load: {name!r} has shape {tuple(getattr(tensor, 'shape', ()))} in "
+                f"the checkpoint and {tuple(own[name].shape)} in the model. Only value-head "
+                "shape changes are tolerated (the Phase 3 V1 arm); a mismatch anywhere else is "
+                "a checkpoint-contract break and must not be silently absorbed."
+            )
+        filtered.pop(name)
+        reinit.append(name)
+    missing = [n for n in own if n not in filtered]
+    unexpected = [n for n in filtered if n not in own]
+    # The discriminator is whether the CHECKPOINT CARRIES A VALUE HEAD AT ALL, not whether a
+    # shape mismatch was observed. In the real V1 case the keys are RENAMED, not reshaped --
+    # `nn.Linear` stores `value_head.weight` while `nn.Sequential` stores `value_head.0.weight`
+    # -- so no key appears in both and there is no shape mismatch to see. My first attempt at
+    # this gate keyed on a shape mismatch and refused exactly the case it exists to allow.
+    #
+    # A checkpoint that simply LACKS a value head (truncated write, partial converter,
+    # hand-built payload) has no `value_head.*` keys at all, which is the case `main` catches
+    # with "Missing key(s)" and this function must keep catching.
+    ckpt_carries_head = any(n.startswith(prefix) for n in state_dict)
+    exempt = prefix if ckpt_carries_head else None
+    bad_missing = [n for n in missing if not (exempt and n.startswith(exempt))]
+    bad_unexpected = [n for n in unexpected if not (exempt and n.startswith(exempt))]
+    if bad_missing or bad_unexpected:
+        raise ValueError(
+            f"REFUSING to load: missing={bad_missing} unexpected={bad_unexpected}. Value-head "
+            "keys may differ only when the checkpoint carries a value-head tensor whose SHAPE "
+            "differs or is renamed (a deliberate head change); the checkpoint here carries "
+            f"value-head tensors: {ckpt_carries_head}."
+        )
+    reinit += [n for n in missing if exempt and n.startswith(exempt)]
+    model.load_state_dict(filtered, strict=False)
+    return sorted(set(reinit))
+
+
 def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_location: str | Any | None = None) -> tuple[Any, TransformerTrainingResult]:
     torch_module = require_torch()
     payload = torch_module.load(Path(path), map_location=map_location, weights_only=True)
@@ -2767,7 +2901,35 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
     training_payload = {key: value for key, value in training_payload.items() if key in known_fields}
     training_config = TransformerTrainingConfig(**training_payload)
     model = EntityTokenTransformerPolicy(model_config)
-    model.load_state_dict(payload["state_dict"])
+    reinitialised = load_state_dict_allowing_fresh_value_head(model, payload["state_dict"])
+    if reinitialised:
+        # LOUD, because this is the only signal that a head is untrained. Review found the
+        # return value discarded here, which meant the documented mitigation ("names returned
+        # so a caller can log them") existed nowhere in the repo, and every consumer -- the
+        # warm-start path, self-play, the bridge, five eval paths and export_model -- inherited
+        # a silently random value head.
+        import warnings  # noqa: PLC0415
+
+        # A NAMED subclass, so a caller can promote it to an error
+        # (`simplefilter("error", FreshValueHeadWarning)`) without dragging in every unrelated
+        # RuntimeWarning -- the pattern EngineSearchFallbackWarning already uses here.
+        #
+        # The dedupe is broken by putting the PATH in the message, not by forcing a filter.
+        # `warnings.warn` under the default action keys on (text, category, module, lineno), so
+        # an identical message warned ONCE across a scoring sweep and went silent for every
+        # later checkpoint -- exactly the scenario this text names. A first attempt at that fix
+        # called `simplefilter("always", ...)` inside this function, which is both rude (a
+        # library mutating global filters) and self-defeating: it OVERRODE a caller's
+        # `simplefilter("error", ...)` and made the warning unpromotable, which its own test
+        # caught.
+        warnings.warn(
+            f"value head reinitialised on load from {path!r} ({len(reinitialised)} tensors: "
+            f"{reinitialised}). These parameters are UNTRAINED. Expected only for a deliberate "
+            "head-capacity change; if you are scoring or exporting this checkpoint, the value "
+            "output is random.",
+            FreshValueHeadWarning,
+            stacklevel=2,
+        )
     if map_location is not None:
         model.to(map_location)
     value_calibration_payload = payload.get("value_calibration_transform")
