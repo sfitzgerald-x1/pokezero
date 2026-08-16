@@ -253,9 +253,11 @@ class TransformerPolicyConfig:
     embedding_dim: int = 128
     #: Hidden width of the value head. None = the incumbent single ``nn.Linear(embedding_dim, 1)``.
     #: Set to widen it to ``Linear(embedding_dim, h) -> GELU -> Linear(h, 1)``. This is the
-    #: Phase 3 V1 arm: the incumbent head is ONE linear functional of a 512-dim embedding
-    #: (513 parameters, 0.01% of a 10.01M model) while the policy side gets the whole
-    #: transformer, so it may simply lack the direction that separates siblings.
+    #: Phase 3 V1 arm: the incumbent head is ONE linear functional of a 512-dim embedding --
+    #: 513 parameters, measured at 0.0050% of the 10,182,667 in `checkpoints/pz-v2-2-1m.pt`
+    #: (an earlier revision said "0.01% of a 10.01M model", carried forward from the handoff
+    #: without re-deriving it) -- while the policy side gets the whole transformer, so it may
+    #: simply lack the direction that separates siblings.
     value_head_hidden: int | None = None
     transformer_layers: int = 2
     attention_heads: int = 4
@@ -2774,8 +2776,21 @@ def load_transformer_model_config(path: str | PathLike[str] | Path) -> Transform
     return parse_transformer_model_config(load_transformer_checkpoint_payload(path))
 
 
+class FreshValueHeadWarning(RuntimeWarning):
+    """A checkpoint's value head could not be loaded and is UNTRAINED.
+
+    Named so a caller can promote it: `warnings.simplefilter("error", FreshValueHeadWarning)`.
+    """
+
+
 def load_state_dict_allowing_fresh_value_head(model: Any, state_dict: Mapping[str, Any]) -> list[str]:
-    """Load a checkpoint, tolerating a value-head SHAPE change and nothing else.
+    """Load a checkpoint, tolerating a value-head change and nothing else.
+
+    The V1 mechanism is a **rename**, not a reshape: ``nn.Linear`` stores ``value_head.weight``
+    while ``nn.Sequential`` stores ``value_head.0.weight``, so no key appears in both and the
+    tolerated difference is missing/unexpected KEYS. An earlier revision of this docstring said
+    "SHAPE change", and an earlier gate keyed on one -- which refused the very case this
+    function exists to allow.
 
     The Phase 3 V1 arm replaces the incumbent ``nn.Linear(embedding_dim, 1)`` value head with a
     2-layer MLP, so its parameter names and shapes differ from every existing checkpoint while
@@ -2787,9 +2802,12 @@ def load_state_dict_allowing_fresh_value_head(model: Any, state_dict: Mapping[st
     unexpected keys are reported and ignored, so a renamed trunk parameter arrives as a
     slightly worse training curve rather than an error. So the tolerance here is scoped:
 
-      * value-head keys whose shape differs are dropped and left at fresh initialisation, and
-        the dropped names are RETURNED so a caller can log them rather than discover them from
-        a training curve;
+      * when the checkpoint carries any ``value_head.`` tensor, value-head keys that are
+        missing, unexpected, or reshaped are dropped and left at fresh initialisation, and
+        their names are RETURNED so a caller can log them rather than discover them from a
+        training curve;
+      * when the checkpoint carries NO value-head tensor at all -- a truncated write, a partial
+        converter -- everything raises, preserving the safety net ``main`` has;
       * any other missing or unexpected key, or any non-value-head shape mismatch, still
         raises.
 
@@ -2818,12 +2836,6 @@ def load_state_dict_allowing_fresh_value_head(model: Any, state_dict: Mapping[st
         reinit.append(name)
     missing = [n for n in own if n not in filtered]
     unexpected = [n for n in filtered if n not in own]
-    # THE EXEMPTION IS GATED ON AN OBSERVED RESHAPE, not on the key prefix. Review found that
-    # prefix-only scoping silently reinitialised a value head that was simply ABSENT -- a
-    # truncated write, a partial converter, a hand-built payload -- where `main` raises
-    # "Missing key(s)". That is a safety net this function must not remove. Renamed or extra
-    # value-head keys are tolerated ONLY when the checkpoint actually carries a value-head
-    # tensor whose shape differs, which is the V1 case and nothing else.
     # The discriminator is whether the CHECKPOINT CARRIES A VALUE HEAD AT ALL, not whether a
     # shape mismatch was observed. In the real V1 case the keys are RENAMED, not reshaped --
     # `nn.Linear` stores `value_head.weight` while `nn.Sequential` stores `value_head.0.weight`
@@ -2874,12 +2886,24 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
         # a silently random value head.
         import warnings  # noqa: PLC0415
 
+        # A NAMED subclass, so a caller can promote it to an error
+        # (`simplefilter("error", FreshValueHeadWarning)`) without dragging in every unrelated
+        # RuntimeWarning -- the pattern EngineSearchFallbackWarning already uses here.
+        #
+        # The dedupe is broken by putting the PATH in the message, not by forcing a filter.
+        # `warnings.warn` under the default action keys on (text, category, module, lineno), so
+        # an identical message warned ONCE across a scoring sweep and went silent for every
+        # later checkpoint -- exactly the scenario this text names. A first attempt at that fix
+        # called `simplefilter("always", ...)` inside this function, which is both rude (a
+        # library mutating global filters) and self-defeating: it OVERRODE a caller's
+        # `simplefilter("error", ...)` and made the warning unpromotable, which its own test
+        # caught.
         warnings.warn(
-            f"value head reinitialised on load ({len(reinitialised)} tensors: "
-            f"{reinitialised}). The checkpoint's head shape differs from the model's, so these "
-            "parameters are UNTRAINED. Expected only for a deliberate head-capacity change; if "
-            "you are scoring or exporting this checkpoint, the value output is random.",
-            RuntimeWarning,
+            f"value head reinitialised on load from {path!r} ({len(reinitialised)} tensors: "
+            f"{reinitialised}). These parameters are UNTRAINED. Expected only for a deliberate "
+            "head-capacity change; if you are scoring or exporting this checkpoint, the value "
+            "output is random.",
+            FreshValueHeadWarning,
             stacklevel=2,
         )
     if map_location is not None:
