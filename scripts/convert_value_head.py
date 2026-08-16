@@ -15,9 +15,11 @@ trunk carries over byte-identically; only the head starts fresh, which is the ar
 
 WHAT THIS REFUSES TO DO, because each was a real failure mode in this series:
 
-  * It will not narrow a head. Going from a widened head back to the incumbent DISCARDS trained
-    parameters (577 of them, measured), and the load path would accept it with a warning. A
-    conversion tool is not the place to make that quiet.
+  * It will not narrow a head without `--force-narrow`. Narrowing discards the widened head's
+    trained parameters -- `514h + 1`, i.e. 4,113 / 8,225 / 16,449 / 32,897 at h = 8/16/32/64 on a
+    512-dim trunk -- and the load path would accept it with only a warning. (An earlier version of
+    this docstring said "577 of them", which is not the size of any head in this repo: the
+    incumbent is 513 at emb=512 and 129 at emb=128.)
   * It will not report success on a checkpoint that does not reload with the head it claims. It
     VERIFIES the result rather than assuming it, because this series has already shipped an
     export whose own parity check passed on a wrong architecture. (Note it does NOT strip the
@@ -57,6 +59,8 @@ def main() -> int:
                     help="new hidden width. Must be >= TransformerPolicyConfig."
                          "VALUE_HEAD_HIDDEN_MIN; a width of 1 is a scalar reparameterisation of "
                          "one linear functional and is refused by the config itself.")
+    ap.add_argument("--force", action="store_true",
+                    help="replace --output if it already exists")
     ap.add_argument("--force-narrow", action="store_true",
                     help="permit a conversion that DISCARDS trained head parameters. Off by "
                          "default: narrowing throws away work the load path would accept with "
@@ -73,9 +77,29 @@ def main() -> int:
             "its own input leaves no way back if the result is wrong."
         )
 
-    payload = torch.load(src, map_location="cpu", weights_only=False)
+    # `weights_only=True`: an earlier version of this script was the ONLY checkpoint reader in the
+    # repo opting out of the safe unpickler, for a job that needs nothing from it -- arbitrary code
+    # execution on a checkpoint from a shared volume. `load_transformer_checkpoint` reads the same
+    # payload safely, and `convert_region_trim.py:100` already set the precedent.
+    if dst.exists() and not args.force:
+        raise SystemExit(
+            f"REFUSING: {dst} already exists. Overwriting a different trained checkpoint is the "
+            "same hazard the input-overwrite refusal names. Pass --force to replace it."
+        )
+    payload = torch.load(src, map_location="cpu", weights_only=True)
     if "model_config" not in payload or "state_dict" not in payload:
         raise SystemExit(f"CANNOT RUN: {src} carries no model_config/state_dict")
+    # Gate the schema BEFORE writing. Previously the output was written first and the
+    # verification then died on a raw traceback, leaving an unverified artifact on disk with a
+    # widened stamp. `convert_region_trim.py:101` refuses first; so does this now.
+    from pokezero.neural_policy import NEURAL_POLICY_SCHEMA_VERSION  # noqa: PLC0415
+
+    if payload.get("schema_version") != NEURAL_POLICY_SCHEMA_VERSION:
+        raise SystemExit(
+            f"REFUSING: {src} declares schema {payload.get('schema_version')!r}, not "
+            f"{NEURAL_POLICY_SCHEMA_VERSION!r}. Converting an unsupported schema would write an "
+            "artifact this tool cannot verify."
+        )
     old_config = TransformerPolicyConfig.from_dict(payload["model_config"])
     old_width = old_config.value_head_hidden
     new_width = args.value_head_hidden
@@ -118,11 +142,10 @@ def main() -> int:
         )
     payload["model_config"] = dataclasses.replace(
         old_config, value_head_hidden=(new_width or None)).to_dict()
-    # `training_result` carries its own copy of the config in these payloads; keep them in step.
-    for holder in ("training_result", "result"):
-        block = payload.get(holder)
-        if isinstance(block, dict) and "model_config" in block:
-            block["model_config"] = payload["model_config"]
+    # NOTE: no `training_result`/`result` sync here, deliberately. An earlier version had one
+    # and both it and the PR body claimed it mattered; `save_transformer_checkpoint` writes
+    # `model_config` at the top level only, and no checkpoint in this repo carries such a key, so
+    # the loop was unreachable and the claim was false.
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile("wb", dir=str(dst.parent), delete=False)
@@ -131,6 +154,10 @@ def main() -> int:
         handle.flush()
         os.fsync(handle.fileno())
         handle.close()
+        # 0644, matching `save_transformer_checkpoint` and `convert_region_trim`.
+        # `NamedTemporaryFile` creates 0600 and `os.replace` preserves it, so a converted
+        # checkpoint read by a different UID in the cluster failed to open.
+        os.chmod(handle.name, 0o644)
         os.replace(handle.name, dst)
     except BaseException:
         handle.close()
@@ -152,21 +179,65 @@ def main() -> int:
     head_type = type(model.value_head).__name__
     expected = "Sequential" if new_width else "Linear"
     if result.model_config.value_head_hidden != (new_width or None) or head_type != expected:
+        dst.unlink(missing_ok=True)
         raise SystemExit(
             f"CONVERSION VERIFICATION FAILED: reloaded head is {head_type} with width "
             f"{result.model_config.value_head_hidden!r}, expected {expected} / "
-            f"{(new_width or None)!r}. {dst} is not usable; delete it."
+            f"{(new_width or None)!r}. {dst} has been removed."
         )
-    if not fresh:
-        raise SystemExit(
-            "CONVERSION VERIFICATION FAILED: the reload did not report a fresh value head, so "
-            "the head was NOT reinitialised and this checkpoint's weights do not match its "
-            "config claim. That is the defect this tool exists to prevent."
-        )
-    print(f"  verified: reloads as {head_type}, width "
-          f"{result.model_config.value_head_hidden!r}, head reported UNTRAINED "
-          f"({len(fresh)} warning)")
-    print("  the trunk is carried over; only the value head starts fresh. That is the V1 arm.")
+
+    # EVERY head parameter must be accounted for -- either freshly initialised, or provably the
+    # trained head for the shape this checkpoint now claims. "at least one tensor was fresh" was
+    # not enough, and two review findings show why:
+    #
+    #  * Sequential -> Sequential (a width sweep, 32 -> 64): `value_head.2.bias` is shape (1,) at
+    #    EVERY width, so it is not a shape mismatch and is loaded from the STALE head while the
+    #    tool reported the head UNTRAINED. Mixed provenance announced as fresh -- the exact defect
+    #    class this series exists to eliminate, produced by the tool meant to prevent it.
+    #  * Narrowing back to the incumbent: the stale tensors ARE the original trained head and
+    #    match the target exactly, so nothing is reinitialised, and the old check called a
+    #    perfectly valid checkpoint a failure while leaving it on disk.
+    reinit = set()
+    for warning in fresh:
+        for name in dict(model.value_head.state_dict()):
+            if f"value_head.{name}" in str(warning.message):
+                reinit.add(f"value_head.{name}")
+    head_params = {f"value_head.{n}" for n in dict(model.value_head.state_dict())}
+    carried = head_params - reinit
+    if carried:
+        # Carried-over tensors are only legitimate if they came from a head of the SAME shape.
+        source_head = {k: v for k, v in payload["state_dict"].items()
+                       if k.startswith(VALUE_HEAD_PREFIX)}
+        live = {f"value_head.{n}": t for n, t in model.value_head.state_dict().items()}
+        mismatched = sorted(
+            n for n in carried
+            if n not in source_head or tuple(source_head[n].shape) != tuple(live[n].shape))
+        if mismatched:
+            dst.unlink(missing_ok=True)
+            raise SystemExit(
+                f"CONVERSION VERIFICATION FAILED: head tensors {mismatched} were neither "
+                "reinitialised nor carried from a same-shape source, so this checkpoint's head "
+                f"has MIXED provenance while claiming width {new_width}. {dst} has been removed."
+            )
+        if len(carried) == len(head_params):
+            print(f"  verified: reloads as {head_type}, width "
+                  f"{result.model_config.value_head_hidden!r}; the ENTIRE head carried over from "
+                  "a same-shape source, so nothing is untrained")
+        else:
+            print(f"  verified: reloads as {head_type}, width "
+                  f"{result.model_config.value_head_hidden!r}; {len(reinit)} of "
+                  f"{len(head_params)} head tensors are FRESH, and the rest "
+                  f"({sorted(carried)}) carried from a same-shape source")
+    else:
+        print(f"  verified: reloads as {head_type}, width "
+              f"{result.model_config.value_head_hidden!r}; all {len(head_params)} head tensors "
+              f"are FRESH (head reported UNTRAINED, {len(fresh)} warning)")
+    if carried:
+        print("  the trunk is carried over. NOTE the head is NOT wholly fresh -- see the line "
+              "above; a width sweep carries any same-shape tensor, so this is not a clean V1 "
+              "arm unless you intended the partial carry-over.")
+    else:
+        print("  the trunk is carried over; only the value head starts fresh. That is the V1 arm.")
     return 0
 
 
