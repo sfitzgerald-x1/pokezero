@@ -752,6 +752,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     train.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps. Defaults to cuda when available, else cpu.")
     train.add_argument("--embedding-dim", type=int, default=128, help="Transformer embedding width.")
+    train.add_argument(
+        "--value-head-hidden", type=int, default=None,
+        help="Hidden width of the value head. Default (unset) keeps the incumbent single "
+             "nn.Linear(embedding_dim, 1) -- 513 parameters, 0.0050%% of a 10.18M model. Set to "
+             "widen it to Linear(d,h) -> GELU -> Linear(h,1): the Phase 3 V1 arm, which tests "
+             "whether that one linear functional is what binds sibling ordering. Minimum 8; a "
+             "width of 1 is a scalar reparameterisation of one functional and is refused. On a "
+             "warm start the trunk carries over and the head starts UNTRAINED, which is "
+             "announced by a FreshValueHeadWarning.")
     train.add_argument("--layers", type=int, default=2, help="Transformer encoder layer count. Use 0 for the CPU-fast pooled encoder.")
     train.add_argument("--attention-heads", type=int, default=4, help="Transformer attention head count.")
     train.add_argument("--feedforward-dim", type=int, default=256, help="Transformer feedforward width.")
@@ -3031,6 +3040,7 @@ def _train(args: argparse.Namespace) -> int:
             policy_id=args.policy_id or "entity-transformer",
             window_size=args.window_size,
             embedding_dim=args.embedding_dim,
+            value_head_hidden=getattr(args, "value_head_hidden", None),
             transformer_layers=args.layers,
             attention_heads=args.attention_heads,
             feedforward_dim=args.feedforward_dim,

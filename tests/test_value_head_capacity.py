@@ -29,12 +29,12 @@ from pokezero.neural_policy import (
 )
 
 
-def _cfg(hidden=None):
+def _cfg(hidden=None, dim=16):
     return TransformerPolicyConfig.compact_category(
         observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
         category_vocab=tuple(range(1, 17)), category_oov_buckets=4,
         policy_id="v1-capacity", window_size=2, token_type_vocab_size=8,
-        categorical_feature_count=1, numeric_feature_count=1, embedding_dim=16,
+        categorical_feature_count=1, numeric_feature_count=1, embedding_dim=dim,
         transformer_layers=1, attention_heads=4, feedforward_dim=32, dropout=0.0,
         value_head_hidden=hidden,
     )
@@ -51,7 +51,7 @@ class ValueHeadShapeTest(unittest.TestCase):
 
         head = EntityTokenTransformerPolicy(_cfg()).value_head
         self.assertIsInstance(head, nn.Linear)
-        self.assertEqual(sum(p.numel() for p in head.parameters()), 16 + 1)
+        self.assertEqual(sum(p.numel() for p in head.parameters()), 16 + 1)  # dim 16 + bias
 
     def test_hidden_width_builds_an_mlp_and_adds_capacity(self):
         import torch.nn as nn
@@ -354,3 +354,56 @@ class LoadPathScopingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WarmStartValidatorTest(unittest.TestCase):
+    """The V1 launch path: `_validate_initial_model_config` raised BEFORE the load path.
+
+    That made a widened checkpoint *resumable but not creatable* — the arm could be continued
+    but never started. The tolerance added here is on the same terms as the load path's: scoped
+    to one field, announced, and every other difference still fatal.
+    """
+
+    def setUp(self):
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        self.incumbent = EntityTokenTransformerPolicy(_cfg())
+
+    def _validate(self, expected):
+        from pokezero.neural_policy import _validate_initial_model_config
+
+        return _validate_initial_model_config(self.incumbent, expected)
+
+    def test_a_head_only_change_passes_and_WARNS(self):
+        import warnings
+
+        from pokezero.neural_policy import FreshValueHeadWarning
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._validate(_cfg(32))
+        fresh = [w for w in caught if issubclass(w.category, FreshValueHeadWarning)]
+        self.assertEqual(len(fresh), 1)
+        self.assertIn("UNTRAINED", str(fresh[0].message))
+
+    def test_identical_configs_pass_SILENTLY(self):
+        import warnings
+
+        from pokezero.neural_policy import FreshValueHeadWarning
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._validate(_cfg())
+        self.assertEqual(
+            [w for w in caught if issubclass(w.category, FreshValueHeadWarning)], [],
+            "an unchanged config must not claim the head is untrained")
+
+    def test_any_OTHER_architectural_difference_still_raises(self):
+        """The tolerance is one field wide. A head change does not license a trunk change."""
+        for label, expected in (
+            ("embedding width only", _cfg(None, dim=32)),
+            ("head AND embedding width", _cfg(32, dim=32)),
+        ):
+            with self.subTest(case=label):
+                with self.assertRaises(ValueError):
+                    self._validate(expected)

@@ -2586,8 +2586,31 @@ def _validate_initial_model_config(model: Any, expected: TransformerPolicyConfig
         policy_id=getattr(initial_config, "policy_id", expected.policy_id),
         reward_shaping=getattr(initial_config, "reward_shaping", expected.reward_shaping),
     )
-    if initial_config != comparable_expected:
-        raise ValueError("initial_model config must match model_config except for policy_id.")
+    if initial_config == comparable_expected:
+        return
+    # The Phase 3 V1 arm deliberately changes ONE architectural field: the value-head width.
+    # Everything else must still match, and the change is announced rather than absorbed --
+    # this validator raising BEFORE the tolerant load path is what made a widened checkpoint
+    # resumable but not creatable, so the tolerance is added here on exactly the same terms:
+    # scoped to one field, loud, and with every other difference still fatal.
+    head_only = replace(comparable_expected, value_head_hidden=initial_config.value_head_hidden)
+    if initial_config == head_only:
+        import warnings  # noqa: PLC0415
+
+        warnings.warn(
+            f"value-head width changes from {initial_config.value_head_hidden!r} to "
+            f"{comparable_expected.value_head_hidden!r} against the initial checkpoint. The "
+            "trunk is carried over and the value head starts UNTRAINED; every other "
+            "architectural field matches. This is the Phase 3 V1 arm -- if you did not intend "
+            "a head-capacity change, you have a config mismatch that is now proceeding.",
+            FreshValueHeadWarning,
+            stacklevel=2,
+        )
+        return
+    raise ValueError(
+        "initial_model config must match model_config except for policy_id (and the value-head "
+        "width, which is the one architectural field a V1 continuation may change)."
+    )
 
 
 def _configure_trainable_parameters(model: Any, *, freeze_non_value_parameters: bool) -> list[Any]:
