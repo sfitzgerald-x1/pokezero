@@ -5424,6 +5424,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
                             policy_accuracy=0.75,
                             ppo_valid_fraction=0.875,
                             ppo_clip_fraction=0.125,
+                            ppo_value_clip_eligible_examples=6,
+                            ppo_value_clip_fraction=0.555,
                             ppo_entropy=1.75,
                         )
                     ),
@@ -5440,6 +5442,45 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("ppo_cov=0.875", output)
         self.assertIn("ppo_clip=0.125", output)
         self.assertIn("ppo_ent=1.750", output)
+        # The VALUE exceedance rate, asserted with a value distinct from ppo_clip_fraction
+        # (0.125) so that printing the POLICY rate under this label fails. Review found the
+        # token could be deleted outright, or made to show ppo_clip_fraction, with the whole
+        # suite green -- the surface the PR exists to add was the least-tested thing in it.
+        self.assertIn("ppo_vclip=0.555", output)
+
+    def test_neural_cli_report_renders_the_value_clip_column_when_present(self) -> None:
+        """The manifest column with a VALUE, not just the `-` path.
+
+        Review found this the least-tested thing in the change that added it: the column could
+        be deleted (header and row together) or made to render `ppo_clip_fraction` under the
+        `ppo_vclip` header, and the whole suite stayed green -- the only test touching it
+        exercised the absent case. The fixture carries no `ppo_value_clip_fraction`, so a
+        value has to be injected here, and it is deliberately distinct from
+        `ppo_clip_fraction` (0.125) so that showing the POLICY rate fails.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_neural_report_manifest(run_dir)
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            epoch = manifest["iterations"][0]["training"]["epochs"][0]
+            epoch["ppo_value_clip_eligible_examples"] = 6
+            epoch["ppo_value_clip_fraction"] = 0.555
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["report", "--run-dir", str(run_dir)])
+
+        self.assertEqual(exit_code, 0)
+        lines = stdout.getvalue().splitlines()
+        header = next(line for line in lines if line.strip().startswith("iter "))
+        data_line = next(line for line in lines if line.split()[:1] == ["1"])
+        # Field counts must agree, or a positional read of this table is meaningless -- a
+        # previous revision shipped a 3-field header beside a 4-field row.
+        self.assertEqual(len(header.split()), len(data_line.split()))
+        columns = dict(zip(header.split(), data_line.split()))
+        self.assertEqual(columns["ppo_vclip"], "0.555")
+        self.assertEqual(columns["ppo_clip"], "0.125")
 
     def test_neural_cli_report_renders_missing_ppo_diagnostics_as_dash(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -5471,6 +5512,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(columns["ppo_cov"], "-")
         self.assertEqual(columns["ppo_clip"], "-")
         self.assertEqual(columns["ppo_ent"], "-")
+        self.assertEqual(columns["ppo_vclip"], "-")
 
     def test_neural_cli_report_can_print_json_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

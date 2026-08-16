@@ -7779,12 +7779,27 @@ def _format_live_ppo_diagnostics(final_epoch: Any) -> str:
         and ppo_entropy is None
     ):
         return ""
-    # ppo_vclip is the VALUE trust region's bind rate, shown beside the POLICY clip rate
-    # because they answer different questions and only the policy one was visible HERE.
-    # NOT "emitted by nothing": the field has always shipped in train-summary.json,
+    # ppo_vclip is the VALUE trust region's EXCEEDANCE rate, shown beside the POLICY clip rate
+    # because only the policy one was visible HERE.
+    #
+    # NOT a bind rate, and an earlier revision of this comment called it one. The counter
+    # (`neural_policy.py` `_value_loss_terms`) increments for every eligible example with
+    # |V_new - V_old| > range, but the loss is max(unclipped, clipped): when a value moves AWAY
+    # from its target the clipped branch is the SMALLER loss, max selects unclipped, and the
+    # clip changes neither loss nor gradient -- while the example is still counted. Verified by
+    # execution: toward-target gives grad 0.0 (throttled), away-from-target gives grad -3.0
+    # (untouched), and both increment the counter. So this is an UPPER BOUND on the share of
+    # updates actually throttled, and the throttled share is not currently measured by anything.
+    #
+    # NOT "emitted by nothing" either: the field has always shipped in train-summary.json,
     # manifest.json and checkpoint metadata via TransformerEpochMetrics.to_dict(). What was
-    # missing was interactive visibility. Measured on the live run once someone looked:
-    # it binds on 0.53-0.66 of updates every iteration -- MORE often than the policy clip.
+    # missing was interactive visibility.
+    #
+    # Measured on the live run (v4prod-entfull-15m-20260807084357, every 100th iteration by
+    # index plus the final one = 43 of 4191, 41 scored): median 0.556 at the final epoch,
+    # range 0.532-0.632. Do NOT compare this to the policy clip rate: 0.0184 is ABSOLUTE on a
+    # value in [-1,1] while the policy 0.0829 is RELATIVE on a ratio near 1.0, over a different
+    # denominator, so a tighter region producing higher exceedance is expected, not anomalous.
     return (
         f" ppo_cov={_format_optional_float(ppo_valid_fraction)}"
         f" ppo_clip={_format_optional_float(ppo_clip_fraction)}"
