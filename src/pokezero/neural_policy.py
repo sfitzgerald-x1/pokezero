@@ -365,7 +365,15 @@ class TransformerPolicyConfig:
         )
 
     def __post_init__(self) -> None:
-        if self.value_head_hidden is not None and self.value_head_hidden:
+        if not self.value_head_hidden:
+            # NORMALISE, do not merely accept. `0` is a documented input meaning "incumbent
+            # head", but storing it as `0` while `from_dict` maps it to `None` makes a config
+            # unequal to its own round trip -- and `_validate_initial_model_config` compares by
+            # dataclass equality, so `--value-head-hidden 0` would save, resume, and die with
+            # "initial_model config must match model_config except for policy_id". That is the
+            # F7 trap reached from a supported value.
+            object.__setattr__(self, "value_head_hidden", None)
+        else:
             if int(self.value_head_hidden) < self.VALUE_HEAD_HIDDEN_MIN:
                 raise ValueError(
                     f"value_head_hidden must be >= {self.VALUE_HEAD_HIDDEN_MIN} when set, got "

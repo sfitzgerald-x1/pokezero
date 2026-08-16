@@ -87,14 +87,24 @@ class ValueHeadShapeTest(unittest.TestCase):
             "is Identity, and this arm cannot test capacity because it has none to add",
         )
 
-    def test_zero_and_none_both_mean_incumbent(self):
-        """`0` must not build a degenerate `Linear(dim, 0)`."""
+    def test_zero_and_none_both_mean_incumbent_AND_round_trip_equal(self):
+        """`0` must build the incumbent head AND normalise, or it breaks resume.
+
+        Storing `0` while `from_dict` maps it to `None` makes a config unequal to its own round
+        trip, and `_validate_initial_model_config` compares by dataclass equality — so a run
+        started with `--value-head-hidden 0` would save, resume, and die with "initial_model
+        config must match model_config except for policy_id". That is the F7 trap reached from
+        a documented input, so `0` is normalised to `None` at construction.
+        """
         import torch.nn as nn
 
         for value in (None, 0):
             with self.subTest(value_head_hidden=value):
+                cfg = _cfg(value)
                 self.assertIsInstance(
-                    EntityTokenTransformerPolicy(_cfg(value)).value_head, nn.Linear)
+                    EntityTokenTransformerPolicy(cfg).value_head, nn.Linear)
+                self.assertIsNone(cfg.value_head_hidden)
+                self.assertEqual(TransformerPolicyConfig.from_dict(cfg.to_dict()), cfg)
 
 
 class CheckpointRoundTripTest(unittest.TestCase):
