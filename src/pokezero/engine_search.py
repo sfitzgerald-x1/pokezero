@@ -40,7 +40,7 @@ import random
 import time
 import warnings
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any, Mapping, Optional, Sequence
 
 from .dex import ShowdownDex, normalize_id
@@ -337,6 +337,79 @@ class EnvTier2AnnotationSource:
             or token.cb_bit
             or token.investment
         }
+
+
+def _is_identity_calibration(transform: Any) -> bool:
+    """True only if ``transform`` is a no-op on EVERY field it carries.
+
+    Two review findings are encoded here, both worth stating because both produced a guard
+    that looked correct and covered nothing:
+
+    * ``save_transformer_checkpoint`` persists ``to_dict()`` -- a plain **dict**. A first
+      version read the fields with ``getattr`` and so saw ``None`` for every key on every
+      real artifact, which made this identity branch unreachable: it would have refused every
+      calibrated checkpoint, including an explicitly identity one, and no test caught it
+      because the tests pickled a live dataclass, a shape production never writes.
+    * That version also compared 3 of the 6 fields, so a clip-narrowed transform
+      (``clip_min=-0.2, clip_max=0.2``) passed the guard while mapping 0.9 -> 0.2.
+
+    So: normalise the dict to the dataclass, then compare every field against the default.
+    """
+    from .neural_policy import ValueCalibrationTransform  # noqa: PLC0415
+
+    if isinstance(transform, Mapping):
+        try:
+            transform = ValueCalibrationTransform.from_dict(transform)
+        except (TypeError, ValueError, KeyError):
+            # Unparseable => not PROVABLY identity => refuse. Never treat a shape we
+            # failed to understand as benign.
+            return False
+    identity = ValueCalibrationTransform()
+    for spec in fields(ValueCalibrationTransform):
+        sentinel = object()
+        if getattr(transform, spec.name, sentinel) != getattr(identity, spec.name):
+            return False
+    return True
+
+
+def _fence_calibration_seam(payload: Mapping[str, Any], where: str) -> None:
+    """Refuse a model-leaf search whose checkpoint carries a calibration the crate ignores.
+
+    The crate applies NO calibration: ``model.rs`` maps the raw tanh through ``0.5*(v+1.0)``
+    and nothing else touches a leaf value. ``scripts/export_model.py`` does not bake the
+    transform into the trace either. So a checkpoint carrying one has a Python value axis and
+    a crate value axis that differ, with nothing reporting the difference.
+
+    SCOPE, corrected after review. Under ``leaf_eval="model"`` every value-axis quantity is
+    crate-produced (``arm_q``, the root Q gap, early-stop on visit counts), so a transform
+    does not by itself desync crate values from Python-side thresholds -- an earlier version
+    of this docstring claimed that, and it was wrong. What it does break is any comparison
+    that puts a crate-valued seat beside a Python-valued one, which the bridge permits
+    directly (``--policy-mode engine-mcts`` vs ``--opponent-policy-mode root-puct``), and any
+    figure read off the head in Python and attributed to search. On the current checkpoint
+    the field is ``None``, so this fence is inert TODAY; it exists so the seam cannot open
+    silently later.
+
+    LIMITATION, stated because the fence's reach is narrower than its name suggests. It reads
+    ``checkpoint_path``; the crate runs ``model_path`` via ``CModule::load_on_device``. So it
+    catches "the checkpoint this trace came from declares a calibration" and does NOT catch a
+    trace exported from some *other* checkpoint, nor a calibration baked into the trace
+    itself. Pairing ``model_path`` to ``checkpoint_path`` is a separate provenance question
+    and is not settled here.
+    """
+    if "value_calibration_transform" not in payload:
+        return  # pre-provenance checkpoint: the field did not exist when it was written
+    transform = payload["value_calibration_transform"]
+    if transform is None or _is_identity_calibration(transform):
+        return
+    raise ValueError(
+        f"REFUSING model-leaf search: {where} carries a value calibration transform "
+        f"({transform!r}) and the search crate applies NONE -- it maps the raw tanh through "
+        "0.5*(v+1.0). Crate leaf values would then sit on a different axis from any "
+        "Python-evaluated seat compared against them, silently. Either add calibration to "
+        "the crate, or run leaf_eval='hp_fraction_crate', or strip the transform "
+        "deliberately and record that choice in the campaign config."
+    )
 
 
 @dataclass(frozen=True)
@@ -2300,7 +2373,10 @@ class EngineMctsPolicy:
         if self._config.leaf_eval == "model":
             from pathlib import Path  # noqa: PLC0415 — model-mode-only dependency
 
-            from .neural_policy import load_transformer_model_config  # noqa: PLC0415
+            from .neural_policy import (  # noqa: PLC0415
+                load_transformer_checkpoint_payload,
+                parse_transformer_model_config,
+            )
 
             model_path = Path(str(self._config.model_path))
             if not model_path.exists():
@@ -2311,7 +2387,17 @@ class EngineMctsPolicy:
             tables_path = Path(str(self._config.tables_path))
             if not tables_path.exists():
                 raise ValueError(f"encoder tables not found: {tables_path}")
-            self._model_config = load_transformer_model_config(checkpoint_path)
+            # ONE load serves both the model config and the calibration fence. This is the
+            # model-leaf branch (`leaf_eval == "model"`) of `EngineMctsPolicy.__init__`, which
+            # is exactly the path the fence governs; putting it here rather than in
+            # `EngineMctsConfig.__post_init__` means no checkpoint is read while merely
+            # constructing a config, and it fires before any search runs. The previous revision
+            # of this fence defined the helper and never called it: dead code that reported a
+            # guarded seam. `weights_only=True` is sufficient because the transform is
+            # persisted as a plain dict of primitives.
+            payload = load_transformer_checkpoint_payload(checkpoint_path)
+            _fence_calibration_seam(payload, f"checkpoint {checkpoint_path}")
+            self._model_config = parse_transformer_model_config(payload)
             self._tables_json = _latch_encoder_tables_to_model_config(
                 tables_path.read_text(encoding="utf-8"), self._model_config
             )

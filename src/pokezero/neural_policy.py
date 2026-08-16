@@ -2721,13 +2721,34 @@ def transformer_model_configs_from_policies(policies: Iterable[Any]) -> tuple[Tr
     return tuple(configs)
 
 
-def load_transformer_model_config(path: str | PathLike[str] | Path) -> TransformerPolicyConfig:
-    """Load ONLY the model config from a checkpoint (cheap provenance/mask inspection)."""
-    torch_module = require_torch()
-    payload = torch_module.load(Path(path), map_location="cpu", weights_only=True)
+def parse_transformer_model_config(payload: Mapping[str, Any]) -> TransformerPolicyConfig:
+    """Validate the schema and extract the model config from an ALREADY-LOADED payload.
+
+    Split out of ``load_transformer_model_config`` so a caller that needs a second field from
+    the same checkpoint (the engine-search calibration fence needs
+    ``value_calibration_transform``) can read one payload instead of calling ``torch.load``
+    twice on a multi-megabyte file. The schema check stays here so it cannot be skipped by
+    the shorter path.
+    """
     if payload.get("schema_version") != NEURAL_POLICY_SCHEMA_VERSION:
         raise ValueError(f"Unsupported neural policy schema: {payload.get('schema_version')!r}.")
     return TransformerPolicyConfig.from_dict(payload["model_config"])
+
+
+def load_transformer_checkpoint_payload(path: str | PathLike[str] | Path) -> Mapping[str, Any]:
+    """The raw weights-only checkpoint payload.
+
+    A named seam so a caller needing more than one field (engine-search reads the model config
+    AND `value_calibration_transform`) loads the file once, and so tests can stub the whole
+    read coherently instead of stubbing one field and leaving another reading real bytes.
+    """
+    torch_module = require_torch()
+    return torch_module.load(Path(path), map_location="cpu", weights_only=True)
+
+
+def load_transformer_model_config(path: str | PathLike[str] | Path) -> TransformerPolicyConfig:
+    """Load ONLY the model config from a checkpoint (cheap provenance/mask inspection)."""
+    return parse_transformer_model_config(load_transformer_checkpoint_payload(path))
 
 
 def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_location: str | Any | None = None) -> tuple[Any, TransformerTrainingResult]:
