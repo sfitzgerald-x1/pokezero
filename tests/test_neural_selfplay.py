@@ -2149,6 +2149,38 @@ class NeuralSelfPlayTest(unittest.TestCase):
             self.assertNotIn(f"{fifth_checkpoint}?sample=true&epsilon=0.01", collected[5]["opponent_policy_specs"])
             self.assertEqual(iteration_manifest["opponent_pool_config"]["historical_opponent_selection"], "spread")
 
+    def test_the_ppo_surfaces_read_the_FINAL_epoch_not_the_first(self) -> None:
+        """`epochs[-1]` is load-bearing and was unpinned at both readers this change touches.
+
+        Review flipped `neural_selfplay.py`'s scalar and `neural_cli.py`'s report column from
+        `epochs[-1]` to `epochs[0]` and the suite stayed fully green, because every fixture had
+        exactly ONE epoch. That matters here specifically: the whole defence of the measured
+        exceedance figure is "it is the final epoch, and epoch 1 is nearly the same", so a
+        one-character change would silently redefine what all three new surfaces report.
+        """
+        from types import SimpleNamespace
+
+        from pokezero.neural_selfplay import _tensorboard_scalars
+
+        def _epoch(index: int, vclip: float) -> TransformerEpochMetrics:
+            return TransformerEpochMetrics(
+                epoch=index, examples=10, loss=0.5, policy_loss=-0.1,
+                policy_accuracy=0.6, value_loss=0.1,
+                ppo_value_clip_eligible_examples=6,
+                ppo_value_clip_fraction=vclip,
+            )
+
+        scalars = _tensorboard_scalars(
+            candidate_policy_id="cand-iter-0002",
+            training=SimpleNamespace(epochs=(_epoch(1, 0.111), _epoch(2, 0.999))),
+            benchmark=None,
+            advancement=SimpleNamespace(advance_collector=True),
+        )
+        self.assertEqual(
+            scalars["ppo/value_clip_fraction"], 0.999,
+            "the scalar must report the FINAL epoch; 0.111 means it read epochs[0]",
+        )
+
     def test_tensorboard_scalars_flattens_training_and_benchmark(self) -> None:
         from types import SimpleNamespace
 
@@ -2170,6 +2202,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
             ppo_advantage_std=0.4,
             ppo_ratio_mean=1.1,
             ppo_clip_fraction=0.25,
+            ppo_value_clip_fraction=0.42,
             ppo_entropy=1.7,
         )
 
@@ -2213,6 +2246,15 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(scalars["ppo/valid_fraction"], 0.8)
         self.assertEqual(scalars["ppo/advantage_mean"], 0.2)
         self.assertEqual(scalars["ppo/advantage_std"], 0.4)
+        # The VALUE clip fraction, as a TENSORBOARD SCALAR -- which is the surface that was
+        # missing, and the only one. The field itself always shipped: to_dict() is asdict(),
+        # so it has been in train-summary.json, manifest.json and checkpoint metadata all
+        # along, with an existing passing round-trip test at test_neural_policy.py:8389. An
+        # earlier version of this comment said it was "emitted by nothing, so no run retained
+        # it"; that was false, and generalised from eval-timeline.jsonl, a win-rate-only file
+        # that never carried training metrics at all. Asserted here so the scalar cannot
+        # silently go missing -- this line fails against the pre-fix emitter.
+        self.assertEqual(scalars["ppo/value_clip_fraction"], 0.42)
         self.assertEqual(scalars["ppo/ratio_mean"], 1.1)
         self.assertEqual(scalars["ppo/clip_fraction"], 0.25)
         self.assertEqual(scalars["ppo/entropy"], 1.7)
@@ -5414,6 +5456,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
                             policy_accuracy=0.75,
                             ppo_valid_fraction=0.875,
                             ppo_clip_fraction=0.125,
+                            ppo_value_clip_eligible_examples=6,
+                            ppo_value_clip_fraction=0.555,
                             ppo_entropy=1.75,
                         )
                     ),
@@ -5430,6 +5474,52 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("ppo_cov=0.875", output)
         self.assertIn("ppo_clip=0.125", output)
         self.assertIn("ppo_ent=1.750", output)
+        # The VALUE exceedance rate, asserted with a value distinct from ppo_clip_fraction
+        # (0.125) so that printing the POLICY rate under this label fails. Review found the
+        # token could be deleted outright, or made to show ppo_clip_fraction, with the whole
+        # suite green -- the surface the PR exists to add was the least-tested thing in it.
+        self.assertIn("ppo_vclip=0.555", output)
+
+    def test_neural_cli_report_renders_the_value_clip_column_when_present(self) -> None:
+        """The manifest column with a VALUE, not just the `-` path.
+
+        Review found this the least-tested thing in the change that added it: the column could
+        be deleted (header and row together) or made to render `ppo_clip_fraction` under the
+        `ppo_vclip` header, and the whole suite stayed green -- the only test touching it
+        exercised the absent case. The fixture carries no `ppo_value_clip_fraction`, so a
+        value has to be injected here, and it is deliberately distinct from
+        `ppo_clip_fraction` (0.125) so that showing the POLICY rate fails.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_neural_report_manifest(run_dir)
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            epoch = manifest["iterations"][0]["training"]["epochs"][0]
+            epoch["ppo_value_clip_eligible_examples"] = 6
+            epoch["ppo_value_clip_fraction"] = 0.111
+            # TWO epochs, with the value differing, so that reading epochs[0] instead of
+            # epochs[-1] fails. Every fixture in this suite had one epoch, which is why
+            # review could flip the reader with the suite green.
+            final = dict(epoch)
+            final["epoch"] = 2
+            final["ppo_value_clip_fraction"] = 0.555
+            manifest["iterations"][0]["training"]["epochs"].append(final)
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["report", "--run-dir", str(run_dir)])
+
+        self.assertEqual(exit_code, 0)
+        lines = stdout.getvalue().splitlines()
+        header = next(line for line in lines if line.strip().startswith("iter "))
+        data_line = next(line for line in lines if line.split()[:1] == ["1"])
+        # Field counts must agree, or a positional read of this table is meaningless -- a
+        # previous revision shipped a 3-field header beside a 4-field row.
+        self.assertEqual(len(header.split()), len(data_line.split()))
+        columns = dict(zip(header.split(), data_line.split()))
+        self.assertEqual(columns["ppo_vclip"], "0.555")
+        self.assertEqual(columns["ppo_clip"], "0.125")
 
     def test_neural_cli_report_renders_missing_ppo_diagnostics_as_dash(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -5461,6 +5551,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(columns["ppo_cov"], "-")
         self.assertEqual(columns["ppo_clip"], "-")
         self.assertEqual(columns["ppo_ent"], "-")
+        self.assertEqual(columns["ppo_vclip"], "-")
 
     def test_neural_cli_report_can_print_json_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

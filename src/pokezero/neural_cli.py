@@ -7770,12 +7770,45 @@ def _print_iterate_summary(result) -> None:
 def _format_live_ppo_diagnostics(final_epoch: Any) -> str:
     ppo_valid_fraction = getattr(final_epoch, "ppo_valid_fraction", None)
     ppo_clip_fraction = getattr(final_epoch, "ppo_clip_fraction", None)
+    ppo_value_clip_fraction = getattr(final_epoch, "ppo_value_clip_fraction", None)
     ppo_entropy = getattr(final_epoch, "ppo_entropy", None)
-    if ppo_valid_fraction is None and ppo_clip_fraction is None and ppo_entropy is None:
+    if (
+        ppo_valid_fraction is None
+        and ppo_clip_fraction is None
+        and ppo_value_clip_fraction is None
+        and ppo_entropy is None
+    ):
         return ""
+    # ppo_vclip is the VALUE trust region's EXCEEDANCE rate, shown beside the POLICY clip rate
+    # because only the policy one was visible HERE.
+    #
+    # NOT a bind rate, and an earlier revision of this comment called it one. The counter
+    # (`neural_policy.py` `_value_loss_terms`, and the duplicate inside
+    # `_distributed_value_loss` -- which is the path a multi-rank production run actually
+    # takes, so verify against that one) increments for every eligible example with
+    # |V_new - V_old| > range, but the loss is max(unclipped, clipped): when a value moves AWAY
+    # from its target the clipped branch is the SMALLER loss, max selects unclipped, and the
+    # clip changes neither loss nor gradient -- while the example is still counted. Verified by
+    # execution: toward-target gives grad 0.0 (throttled), away-from-target gives grad -3.0
+    # (untouched), and both increment the counter. So this is an UPPER BOUND on the share of
+    # updates actually throttled, and the throttled share is not currently measured by anything.
+    #
+    # NOT "emitted by nothing" either: the field has always shipped in train-summary.json,
+    # manifest.json and checkpoint metadata via TransformerEpochMetrics.to_dict(). What was
+    # missing was interactive visibility.
+    #
+    # Do NOT compare this to the policy clip rate: 0.0184 is ABSOLUTE on a value in [-1,1]
+    # while the policy 0.0829 is RELATIVE on a ratio near 1.0, over a different denominator, so
+    # a tighter region producing higher exceedance is expected, not anomalous.
+    #
+    # The measured series is deliberately NOT quoted here. Numbers in prose go stale and cannot
+    # be re-derived; an earlier revision of this comment carried figures from an unbanked
+    # ad-hoc script that a later banked run contradicted in the third decimal. The series is an
+    # artifact, cited from the analysis that uses it.
     return (
         f" ppo_cov={_format_optional_float(ppo_valid_fraction)}"
         f" ppo_clip={_format_optional_float(ppo_clip_fraction)}"
+        f" ppo_vclip={_format_optional_float(ppo_value_clip_fraction)}"
         f" ppo_ent={_format_optional_float(ppo_entropy)}"
     )
 
@@ -7804,7 +7837,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     header = (
         f"{'iter':>4} {'games':>5} {'cap':>4} {'bench_wr':>8} {'gate_wr':>8} {'advance':>7} {'promo':>8} "
         f"{'loss':>10} {'pol_acc':>8} {'value':>10} {'sel_ep':>6} {'val_sign':>8} {'val_ece':>10} {'opp_acc':>8} "
-        f"{'ppo_cov':>8} {'ppo_clip':>8} {'ppo_ent':>8} checkpoint"
+        f"{'ppo_cov':>8} {'ppo_clip':>8} {'ppo_vclip':>9} {'ppo_ent':>8} checkpoint"
     )
     print(header)
     print("-" * len(header))
@@ -7831,6 +7864,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{_format_optional_float(final_epoch.get('opponent_accuracy') if final_epoch else None, digits=4):>8} "
             f"{_format_optional_float(final_epoch.get('ppo_valid_fraction') if final_epoch else None):>8} "
             f"{_format_optional_float(final_epoch.get('ppo_clip_fraction') if final_epoch else None):>8} "
+            f"{_format_optional_float(final_epoch.get('ppo_value_clip_fraction') if final_epoch else None):>9} "
             f"{_format_optional_float(final_epoch.get('ppo_entropy') if final_epoch else None):>8} "
             f"{iteration.get('checkpoint_path')}"
         )
