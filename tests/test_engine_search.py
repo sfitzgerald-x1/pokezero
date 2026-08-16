@@ -615,8 +615,14 @@ class ModelObservationContractTests(unittest.TestCase):
             model_path.touch()
             checkpoint_path.touch()
             tables_path.write_text(json.dumps(self._tables()), encoding="utf-8")
+            # Stub the whole checkpoint read, not one field of it: policy init now reads the
+            # model config AND `value_calibration_transform` from a single payload, so a stub
+            # that supplied only the config left the calibration fence parsing an empty file.
             with patch(
-                "pokezero.neural_policy.load_transformer_model_config",
+                "pokezero.neural_policy.load_transformer_checkpoint_payload",
+                return_value={"value_calibration_transform": None},
+            ), patch(
+                "pokezero.neural_policy.parse_transformer_model_config",
                 return_value=self._model_config(budget=32),
             ):
                 policy = EngineMctsPolicy(
