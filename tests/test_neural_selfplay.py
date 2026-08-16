@@ -2214,10 +2214,14 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(scalars["ppo/valid_fraction"], 0.8)
         self.assertEqual(scalars["ppo/advantage_mean"], 0.2)
         self.assertEqual(scalars["ppo/advantage_std"], 0.4)
-        # The VALUE clip fraction. It was computed by to_epoch_metrics all along and emitted
-        # by nothing, so no run retained it and "does the 0.0184 value trust region bind?"
-        # could only be answered CANNOT RUN. Asserted here so it cannot silently go missing
-        # again -- this line fails against the pre-fix emitter.
+        # The VALUE clip fraction, as a TENSORBOARD SCALAR -- which is the surface that was
+        # missing, and the only one. The field itself always shipped: to_dict() is asdict(),
+        # so it has been in train-summary.json, manifest.json and checkpoint metadata all
+        # along, with an existing passing round-trip test at test_neural_policy.py:8389. An
+        # earlier version of this comment said it was "emitted by nothing, so no run retained
+        # it"; that was false, and generalised from eval-timeline.jsonl, a win-rate-only file
+        # that never carried training metrics at all. Asserted here so the scalar cannot
+        # silently go missing -- this line fails against the pre-fix emitter.
         self.assertEqual(scalars["ppo/value_clip_fraction"], 0.42)
         self.assertEqual(scalars["ppo/ratio_mean"], 1.1)
         self.assertEqual(scalars["ppo/clip_fraction"], 0.25)
