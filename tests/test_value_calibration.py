@@ -777,6 +777,50 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertAlmostEqual(gae_report.mae, 1.0)
         self.assertAlmostEqual(gae_report.bias, -1.0)
 
+    def test_value_only_is_scored_against_returns_not_gae_targets(self) -> None:
+        """The objective gate on `_value_targets`, pinned by the loss it changes.
+
+        Widening the ppo_target_mode guard to admit `value-only` made this configuration
+        constructible for the first time. Without the gate, a value-only run on a GAE cache
+        trains toward `ppo_value_targets` (bootstrap targets anchored to the collecting
+        checkpoint's own estimates) while `evaluate_value_calibration` selects the epoch on
+        `returns`. Training on one target and selecting on another is silent, so it is pinned
+        here on the VALUE OF THE LOSS -- asserting the returned tensor alone would pass against
+        an implementation that ignored the objective for the ranking-loss path.
+        """
+        from pokezero import neural_policy as np_mod
+
+        torch = __import__("torch")
+        tensors = {
+            "returns": torch.tensor([-1.0, -1.0, -1.0]),
+            "ppo_value_targets": torch.tensor([-0.316, -0.620, -1.0]),
+            "ppo_value_target_mask": torch.tensor([True, True, True]),
+        }
+        returns = tensors["returns"]
+
+        value_only = np_mod._value_targets(tensors, "value-only")
+        self.assertTrue(
+            torch.equal(value_only, returns),
+            f"value-only must be scored against outcome returns, got {value_only.tolist()}",
+        )
+        for other in ("behavior-cloning", "reward-weighted"):
+            self.assertTrue(
+                torch.equal(np_mod._value_targets(tensors, other), returns),
+                f"{other} must be scored against outcome returns",
+            )
+
+        ppo = np_mod._value_targets(tensors, "ppo")
+        self.assertTrue(
+            torch.equal(ppo, tensors["ppo_value_targets"]),
+            "ppo must still consume GAE targets -- a gate that starves PPO is not a fix",
+        )
+        # The two must actually DIFFER on this fixture, or the assertions above are vacuous:
+        # a gate could be missing entirely and every equality would still hold.
+        self.assertFalse(
+            torch.equal(ppo, returns),
+            "fixture is inert: GAE targets equal returns here, so the gate is untested",
+        )
+
     def test_value_only_fine_tune_reads_the_gae_cache_it_is_pointed_at(self) -> None:
         """The value-tune shape of the same defect, isolated to the objective guard.
 
