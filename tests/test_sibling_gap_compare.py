@@ -173,29 +173,40 @@ DYADIC_TRUTHS = tuple(0.125 if i % 2 else -0.125 for i in range(24))
 DYADIC_TRUTH_VAR = 0.015625
 DYADIC_NOISE_VAR = 0.00390625
 
+# The label-noise column is deliberately NOT constant. `label_variance` is the MEAN of it, and
+# with every pair carrying the same value the mean and the median are the same number, so
+# aggregating with `st.median` instead of `st.mean` survived the suite. 18 pairs at 1/512 and 6
+# at 5/512 have mean exactly 1/256 -- DYADIC_NOISE_VAR, so the attenuation factor is still the
+# known answer 0.75 -- and median 1/512, which would read 0.875 instead.
+DYADIC_NOISE_COLUMN = tuple([1.0 / 512] * 18 + [5.0 / 512] * 6)
+
 
 def _write_cell(path, head_gaps, truths, noise_var):
+    """`noise_var` may be one value for every pair or a per-pair column."""
+    col = ([noise_var] * len(head_gaps) if isinstance(noise_var, (int, float))
+           else list(noise_var))
     path.write_text(json.dumps({"pairs": [
-        {"seed": i, "prefix": 0, "seat": "p1", "head_gap": h, "true_gap": t,
-         "noise_var": noise_var}
-        for i, (h, t) in enumerate(zip(head_gaps, truths))]}))
+        {"seed": i, "prefix": 0, "seat": "p1", "head_gap": h, "true_gap": t, "noise_var": nv}
+        for i, (h, t, nv) in enumerate(zip(head_gaps, truths, col))]}))
     return path
 
 
-def _run_cli(tmp_path, cells, ref, *, boot=50, json_name="cli-out.json"):
+def _run_cli(tmp_path, cells, ref, *, boot=50, json_name="cli-out.json", boot_seeds=None):
     """Run the comparator with cells in the given COMMAND-LINE ORDER."""
     import subprocess
     import sys
     out = tmp_path / json_name
     cmd = [sys.executable, str(REPO / "scripts" / "sibling_gap_compare.py"),
            "--ref", ref, "--boot", str(boot), "--json", str(out)]
+    if boot_seeds is not None:
+        cmd += ["--boot-seeds", boot_seeds]
     for name, path in cells:
         cmd += ["--cell", f"{name}={path}"]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     return proc, out
 
 
-def _dyadic_pair_of_cells(tmp_path, *, noise_var=DYADIC_NOISE_VAR):
+def _dyadic_pair_of_cells(tmp_path, *, noise_var=DYADIC_NOISE_COLUMN):
     truths = list(DYADIC_TRUTHS)
     ref = [0.5 * t + 0.015625 * ((i % 5) - 2) for i, t in enumerate(truths)]
     other = [0.25 * t + 0.03125 * ((i % 7) - 3) for i, t in enumerate(truths)]
@@ -215,7 +226,10 @@ def test_the_attenuation_factor_is_a_known_answer_not_a_self_consistent_ratio(tm
     proc, out = _run_cli(tmp_path, cells, "ref")
     assert proc.returncode == 0, proc.stderr
     doc = json.loads(out.read_text())
+    # The MEAN of the per-pair noise column, whose median is a different number (1/512), so a
+    # `st.median` aggregation reads 0.875 here instead of 0.75.
     assert doc["label_variance"] == pytest.approx(DYADIC_NOISE_VAR, abs=1e-15)
+    assert doc["label_variance"] != pytest.approx(1.0 / 512, abs=1e-15)
     assert doc["attenuation_factor_shared"] == pytest.approx(0.75, abs=1e-15)
     assert doc["r2_ceiling"] == pytest.approx(0.75, abs=1e-15)
     assert "attenuation factor 0.750000" in proc.stdout
@@ -248,6 +262,71 @@ def test_it_refuses_when_the_banked_label_noise_exceeds_the_observed_gap_varianc
     assert "attenuation factor -10.000000 is not positive" in both
     assert "MOVED" not in both
     assert "PAIRED DELTAS" not in both
+
+
+def test_it_refuses_an_attenuation_factor_of_exactly_zero_rather_than_dividing_by_it(tmp_path):
+    """The BOUNDARY of that refusal, where `<= 0` is load-bearing and `< 0` is not.
+
+    Relaxing the guard to `atten < 0` admits a factor of exactly 0.0, and the very next thing
+    the tool does is divide every beta by it: the run dies with a bare ZeroDivisionError that
+    names neither the cell nor the cause, in place of the refusal that explains what a
+    non-positive factor means. Exact zero is reachable here rather than hypothetical -- the
+    fixture's banked noise_var is set to the truth column's variance, which is what a bank
+    whose ground truth carries no signal at all looks like.
+    """
+    cells = _dyadic_pair_of_cells(tmp_path, noise_var=DYADIC_TRUTH_VAR)
+    proc, _ = _run_cli(tmp_path, cells, "ref", boot=10)
+    both = proc.stdout + proc.stderr
+    assert proc.returncode != 0
+    assert "attenuation factor 0.000000 is not positive" in both
+    assert "REFUSING" in both
+    assert "ZeroDivisionError" not in both
+    assert "MOVED" not in both
+
+
+def test_the_paired_beta_delta_is_noise_corrected_like_every_other_beta(tmp_path):
+    """The delta DRAWS divide by the attenuation factor, and dropping that survived.
+
+    A cell that is the reference's `head_gap` column times 3 has, at every bootstrap rep, a raw
+    beta exactly 3x the reference's -- so its paired delta draw is exactly 2x the reference's
+    CORRECTED beta draw, and the percentiles inherit that relation exactly. Dropping the
+    `/atten` from the delta scales the whole reported interval by 0.75 while leaving every other
+    number in the file correct, which is the one shape a reader has no way to notice: the
+    interval still straddles or clears zero in the same places, just at the wrong width.
+    """
+    truths = list(DYADIC_TRUTHS)
+    ref = [0.5 * t + 0.015625 * ((i % 5) - 2) for i, t in enumerate(truths)]
+    cells = [("ref", _write_cell(tmp_path / "s-ref.json", ref, truths, DYADIC_NOISE_COLUMN)),
+             ("x3", _write_cell(tmp_path / "s-x3.json", [3.0 * h for h in ref], truths,
+                                DYADIC_NOISE_COLUMN))]
+    proc, out = _run_cli(tmp_path, cells, "ref", boot=200, json_name="atten-delta.json")
+    assert proc.returncode == 0, proc.stderr
+    doc = json.loads(out.read_text())
+    atten = doc["attenuation_factor_shared"]
+    assert atten == pytest.approx(0.75, abs=1e-15)
+    assert atten != 1.0, "the correction must not be the identity or this pins nothing"
+    ref_ci = doc["ci"]["ref"]["beta_corrected"]
+    delta_ci = doc["paired_delta_ci_vs_ref"]["x3"]["d_beta_corrected"]
+    assert all(v > 0 for v in ref_ci), "the fixture's beta draws must be one-signed"
+    for got, want in zip(delta_ci, ref_ci):
+        assert got == pytest.approx(2.0 * want, rel=1e-9)
+
+
+def test_every_bootstrap_seed_it_was_given_is_used(tmp_path):
+    """`--boot-seeds` is a LIST, and resampling under only the first seed left the suite green.
+
+    The reps count is what the reported intervals' resolution rests on and the header prints it,
+    so it is asserted as reps-per-seed times seeds rather than "more than zero".
+    """
+    cells = _dyadic_pair_of_cells(tmp_path)
+    proc, out = _run_cli(tmp_path, cells, "ref", boot=25, boot_seeds="7,8,9,10",
+                         json_name="seeds.json")
+    assert proc.returncode == 0, proc.stderr
+    doc = json.loads(out.read_text())
+    assert doc["bootstrap"]["seeds"] == [7, 8, 9, 10]
+    assert doc["bootstrap"]["reps_per_seed"] == 25
+    assert doc["bootstrap"]["reps_total"] == 100
+    assert "100 reps over 4 seeds" in proc.stdout
 
 
 def test_it_refuses_a_cell_whose_head_gap_column_has_no_variance(tmp_path):
