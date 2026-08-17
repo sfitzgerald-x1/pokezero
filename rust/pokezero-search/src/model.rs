@@ -1528,7 +1528,17 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             "{extra},\"rollout_leaf_mode\":\"{}\",\"rollout_encode_skipped\":{},{}",
             seam.mode.name(),
             encode_skipped,
-            rollout_stats.to_json_fields(seam.cfg, batch_size, rounds),
+            // `to_rollout_only_json_fields`, NOT `to_json_fields`. This commit
+            // added that split precisely so the encoded core would stop
+            // emitting a second `"rounds"` key beside the one it has reported
+            // since before this seam existed -- and then called the un-split
+            // helper anyway, so the duplicate shipped. Measured on the report
+            // string: `key "rounds" occurrences=2`. Harmless today only because
+            // the two values coincide and `json.loads` keeps the last, which is
+            // exactly why no assertion could see it. `rollout_report_has_no_duplicate_keys`
+            // is the gate, and it parses the raw string rather than the dict --
+            // a dict cannot represent the defect.
+            rollout_stats.to_rollout_only_json_fields(seam.cfg),
         ),
     };
     Ok(multiply_report_json(

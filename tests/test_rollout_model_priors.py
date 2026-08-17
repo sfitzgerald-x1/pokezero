@@ -140,7 +140,8 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
         model_priors: bool = True,
         use_opponent_priors: bool = True,
         row_inputs: str | None = None,
-    ) -> dict:
+        _raw: bool = False,
+    ):
         """One encoded search. `mode=None` is PRODUCTION: the seam's positionals
         are not appended at all, so the call is byte for byte the pre-seam one.
         """
@@ -175,7 +176,20 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
                 threads,
                 False,  # rollout_branch_on_damage
             ]
-        return json.loads(self._native().search_batched_multi_encoded(*args))
+        raw = self._search_raw_from_args(args)
+        return raw if _raw else json.loads(raw)
+
+    def _search_raw(self, **kwargs) -> str:
+        """The report as the crate emitted it, before `json.loads` normalises it.
+
+        Exists because `json.loads` silently collapses duplicate keys, so a
+        defect in the emitted JSON is invisible to every test that goes through
+        the dict. One did ship.
+        """
+        return self._search(_raw=True, **kwargs)
+
+    def _search_raw_from_args(self, args) -> str:
+        return self._native().search_batched_multi_encoded(*args)
 
     def _differing(self, left: dict, right: dict, *, ignore=frozenset()) -> list[str]:
         """Field names on which two reports disagree, timings excluded.
@@ -325,13 +339,120 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
             reference["model_evals"],
             "the skip must actually remove forwards",
         )
-        # The accounting identity. Every leaf either got a forward or was
-        # counted as skipped, exactly once; the +1 is the single ROOT forward
-        # that prices the root node's priors and is not a leaf.
+        # The accounting identity, with the term that made it FALSE as first
+        # written. Every leaf either got a forward or was counted as skipped,
+        # exactly once. The extra forward is the single ROOT forward that prices
+        # the root node's priors -- and it lives inside `if model_priors`
+        # (`model.rs`), so it is NOT unconditional. Asserted as `+1` flat, this
+        # read `lhs=136 rhs=137` on 30 of 242 swept configs, all of them
+        # `model_priors=False`. A wrong identity, not an untested one, and it
+        # would have failed the moment anyone ran the arm without priors.
+        #
+        # `model_priors` is now required for this arm, so the arm itself always
+        # pays the root forward; the identity is still written conditionally
+        # rather than hard-coding `+1`, because the term's EXISTENCE is what the
+        # reader needs to understand and a bare `+1` hides it.
+        root_forwards = 1 if arm["model_priors"] else 0
         self.assertEqual(
             arm["model_evals"] + arm["rollout_encode_skipped"],
-            arm["leaves_priced"] + 1,
+            arm["leaves_priced"] + root_forwards,
             "forwards + skips must account for every leaf plus the root forward",
+        )
+
+    def test_the_accounting_identity_holds_with_priors_off_too(self) -> None:
+        """The demonstrated failing input for the identity's root-forward term.
+
+        The arm now refuses `model_priors=False`, but the CORE still supports it
+        and the gate fixtures reach it, so the identity has to be right there or
+        it is right by luck. With priors off there is no root forward, so the
+        term is 0 -- and a flat `+1` reads False here, which is precisely how the
+        bug was found.
+        """
+        run = self._search(mode="rollout", model_priors=False,
+                           use_opponent_priors=False)
+        self.assertFalse(run["model_priors"])
+        self.assertEqual(run["model_evals"], 0,
+                         "priors off means no forward is needed at all")
+        self.assertEqual(
+            run["model_evals"] + run["rollout_encode_skipped"],
+            run["leaves_priced"],
+            "with no root forward the identity carries no +1",
+        )
+        # And the flat form really is wrong here -- stated as an assertion so the
+        # regression cannot come back quietly.
+        self.assertNotEqual(
+            run["model_evals"] + run["rollout_encode_skipped"],
+            run["leaves_priced"] + 1,
+        )
+
+    def test_the_report_has_no_duplicate_json_keys(self) -> None:
+        """The seam appended a second `"rounds"` key for one commit.
+
+        `to_rollout_only_json_fields` was added to prevent exactly that and then
+        not called; `to_json_fields` shipped instead, emitting `"rounds"` beside
+        the one the encoded core has reported since before this seam existed.
+        Harmless only because the values coincided and `json.loads` keeps the
+        last -- which is why no assertion over the parsed dict could see it.
+
+        So this parses the RAW STRING. A dict cannot represent the defect, and a
+        gate that cannot represent the defect cannot catch it.
+        """
+        for mode in (None, "model_value", "rollout", "rollout_encode_all"):
+            with self.subTest(mode=mode):
+                duplicates = self._duplicate_keys(self._search_raw(mode=mode))
+                self.assertEqual(duplicates, {}, f"duplicate report keys: {duplicates}")
+
+    @staticmethod
+    def _duplicate_keys(raw: str) -> dict[str, int]:
+        """Keys repeated WITHIN a single JSON object, anywhere in the document.
+
+        Per object, not per document. The first draft of this counted across all
+        nested objects and reported `{'move': 18, 'visits': 18, 'q': 18}` -- the
+        per-arm rows, which legitimately repeat those keys once per arm. That
+        version would have failed on a correct report and, worse, a reader would
+        have "fixed" it by loosening the check until it passed, which is how a
+        gate ends up unable to see the thing it was built for.
+        """
+        import json as _json
+
+        duplicates: dict[str, int] = {}
+
+        def inspect(pairs):
+            counts: dict[str, int] = {}
+            for key, _ in pairs:
+                counts[key] = counts.get(key, 0) + 1
+            for key, n in counts.items():
+                if n > 1:
+                    duplicates[key] = max(duplicates.get(key, 0), n)
+            return dict(pairs)
+
+        _json.loads(raw, object_pairs_hook=inspect)
+        return duplicates
+
+    def test_the_duplicate_key_gate_reads_false_on_a_duplicated_key(self) -> None:
+        """The demonstrated failing input, and it earned it twice over.
+
+        The defect this catches shipped for one commit (`"rounds"` emitted by both
+        the encoded core and the rollout block), and the FIRST version of the
+        detector could not have caught it while failing on a correct report. So
+        the gate needs its own proof both that it fires on a real duplicate and
+        that it does NOT fire on the per-arm rows.
+        """
+        self.assertEqual(
+            self._duplicate_keys('{"rounds":32,"leaf_evals":9,"rounds":32}'),
+            {"rounds": 2},
+        )
+        # Nested, which is where the report's own duplicate lived.
+        self.assertEqual(
+            self._duplicate_keys('{"a":{"rounds":1,"rounds":2}}'), {"rounds": 2}
+        )
+        # And the shape that must NOT read False: the same keys once per arm.
+        self.assertEqual(
+            self._duplicate_keys(
+                '{"side_one":[{"move":"a","visits":1,"q":0.5},'
+                '{"move":"b","visits":2,"q":0.4}]}'
+            ),
+            {},
         )
 
     def test_the_encode_skip_gate_reads_false_on_a_skip_everything_mutant(self) -> None:
@@ -569,6 +690,25 @@ class RolloutModelPriorsConfigTest(unittest.TestCase):
             with self.subTest(leaf_eval=leaf_eval), self.assertRaises(ValueError) as caught:
                 self._config(leaf_eval=leaf_eval)
             self.assertIn("requires leaf_eval='model'", str(caught.exception))
+
+    def test_the_arm_is_refused_at_uniform_priors(self) -> None:
+        # The demonstrated failing input for the refusal that protects this
+        # path's whole reason to exist. `model_priors=False` here would price
+        # rollout leaves at UNIFORM priors -- the sequential seam's estimand --
+        # while carrying this path's name into the report. It would also make the
+        # encode skip cover every leaf, since no leaf needs a prior map, so the
+        # arm would run with no model forward at all.
+        with self.assertRaises(ValueError) as caught:
+            self._config(model_priors=False)
+        message = str(caught.exception)
+        self.assertIn("requires model_priors=True", message)
+        # The refusal must NAME the alternative, or a reader whose cell genuinely
+        # wants uniform priors has nowhere to go and will reach for the flag.
+        self.assertIn("rollout_crate", message)
+
+    def test_uniform_priors_is_fine_when_the_arm_is_off(self) -> None:
+        config = self._config(rollout_leaf_eval=False, model_priors=False)
+        self.assertFalse(config.model_priors)
 
     def test_zero_rollout_count_is_refused(self) -> None:
         with self.assertRaises(ValueError) as caught:
