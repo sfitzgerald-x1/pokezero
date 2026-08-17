@@ -67,6 +67,27 @@ def _job_block(name: str) -> str:
     return "\n".join(lines)
 
 
+def _job_code(name: str) -> str:
+    """`_job_block` with COMMENT LINES REMOVED.
+
+    Every content assertion below must read this and not the raw block. Found by mutation-testing
+    this file: `assertIn("fetch-depth: 2", block)` was satisfied by the step's own COMMENT saying
+    "`fetch-depth: 2` above is what makes demanding the parent safe", so changing the real key to
+    `fetch-depth: 1` -- reintroducing the false red this job already suffered once -- left the test
+    green. A guard whose pattern matches its own prose is checking nothing about its subject.
+    """
+
+    return "\n".join(
+        line for line in _job_block(name).splitlines() if not line.strip().startswith("#")
+    )
+
+
+def _has_key_line(block: str, key: str, value: str) -> bool:
+    """True when some line IS exactly `key: value`, rather than merely mentioning it."""
+
+    return any(line.strip() == f"{key}: {value}" for line in block.splitlines())
+
+
 def _guard_body(block: str, needle: str) -> str:
     """The shell `if ...; then ... fi` region containing `needle`.
 
@@ -128,7 +149,7 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
         self.assertIn("run", keys, "anti-vacuity: the step-body key scan found nothing")
 
     def test_the_job_actually_runs_the_census(self) -> None:
-        block = _job_block(JOB)
+        block = _job_code(JOB)
         self.assertIn(
             "python scripts/schema_container_census.py --check",
             block,
@@ -141,7 +162,7 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
         success-line grep can be satisfied by an `echo`, whereas an exit code cannot.
         """
 
-        block = _job_block(JOB)
+        block = _job_code(JOB)
         self.assertNotIn("tee ", block, "a step now tees its output, inviting a self-grep verdict")
         self.assertIn(
             'rc=$?',
@@ -157,7 +178,7 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
         "the gate could not run" reading the floor gate's `exit 2` arm exists to forbid.
         """
 
-        block = _job_block(JOB)
+        block = _job_code(JOB)
         for needle in ('[ "${rc}" -eq 15 ]', '[ "${rc}" -ne 0 ]'):
             with self.subTest(arm=needle):
                 self.assertIn(
@@ -175,7 +196,7 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
         SOMETHING reddens.
         """
 
-        block = _job_block(JOB)
+        block = _job_code(JOB)
         for case in (
             "unclassified container",
             "REGISTER demoted to PARTIAL",
@@ -201,8 +222,14 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
         did, once, on this job's first CI run.
         """
 
-        block = _job_block(JOB)
-        self.assertIn("fetch-depth: 2", block, "the merge parent would be grafted away")
+        block = _job_code(JOB)
+        # The KEY LINE, not a mention of it. See _job_code: the previous form of this assertion
+        # was satisfied by this step's own comment, so `fetch-depth: 1` slipped through.
+        self.assertTrue(
+            _has_key_line(block, "fetch-depth", "2"),
+            "no literal `fetch-depth: 2` key; the merge parent would be grafted away and the "
+            "HEAD^2 arm would redden every PR, as it did on this job's first CI run",
+        )
         self.assertIn(
             "exit 1",
             _guard_body(block, '[ "${head_commit}" = "${HEAD_SHA}" ]'),
@@ -215,7 +242,7 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
         )
 
     def test_gate_status_needs_the_job_and_consumes_its_result(self) -> None:
-        block = _job_block("gate-status")
+        block = _job_code("gate-status")
         needs = next(line for line in block.splitlines() if line.strip().startswith("needs:"))
         self.assertIn(JOB, needs, "the census is not in the required context's needs")
         self.assertIn(f"needs.{JOB}.result", block, "the result is not read")
