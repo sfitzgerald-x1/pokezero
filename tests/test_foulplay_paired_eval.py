@@ -1360,6 +1360,72 @@ class OpponentHealthIsLiftedTest(unittest.TestCase):
         self.assertIn("no_rate_measured", block["foulplay_think_reading"]["reasons"])
         self.assertIn("zero_measured_decisions", block["foulplay_think_reading"]["reasons"])
 
+    def _comparison(self, first, second):
+        import importlib.util as u
+        from pathlib import Path
+        sp = u.spec_from_file_location(
+            "pe2", Path(__file__).resolve().parents[1] / "scripts" / "foulplay_paired_eval.py")
+        m = u.module_from_spec(sp); sp.loader.exec_module(m)
+        return m.foulplay_think_comparison(first, second)
+
+    def test_the_merged_shard_runs_the_contention_gate(self) -> None:
+        """The gate's cross-side refusals must reach an artifact, not wait for a human.
+
+        Failing input: two seats with a null reading. Before this the merged shard carried no
+        cross-side verdict at all, so nothing in any produced file said the comparison was
+        unusable.
+        """
+
+        empty = {
+            "mean_iterations_per_budget_second": None,
+            "iterations_measured_decisions": 0,
+            "iterations_coverage": 0.0,
+            "by_stratum": {},
+            "miss_decisions": 240,
+        }
+
+        verdict = self._comparison(empty, empty)
+
+        self.assertEqual(verdict["status"], "refused")
+        self.assertIn("p1:no_rate_measured", verdict["refusal_reasons"])
+        self.assertIn("p2:zero_measured_decisions", verdict["refusal_reasons"])
+
+    def test_the_verdict_reaches_the_produced_report(self) -> None:
+        """Running the gate is worthless if its verdict does not land in the artifact.
+
+        Pinned on the driver source because the report dict is assembled inside `main()`
+        behind two subprocess calls. Failing input: deleting either the call or the key
+        reddens this, which the wrapper tests above cannot see -- they exercise the function,
+        not its arrival in the shard.
+        """
+
+        driver = (REPO_ROOT / "scripts" / "foulplay_paired_eval.py").read_text()
+        self.assertIn("think_seat_comparison = foulplay_think_comparison(", driver)
+        self.assertIn('"foulplay_think_seat_comparison": think_seat_comparison,', driver)
+        # Fed from the per-seat bridge summaries, not from the already-lifted seat blocks.
+        self.assertIn('summaries["p1"].get("foulplay_think")', driver)
+        self.assertIn('summaries["p2"].get("foulplay_think")', driver)
+
+    def test_the_gate_accepts_two_comparable_seats(self) -> None:
+        seat = {
+            "mean_iterations_per_budget_second": 450000.0,
+            "iterations_measured_decisions": 100,
+            "iterations_coverage": 1.0,
+            "by_stratum": {
+                "2x1000ms": {
+                    "iterations_measured_decisions": 100,
+                    "mean_iterations_per_budget_second": 450000.0,
+                }
+            },
+            "iterations_observable": True,
+            "record_failures": 0,
+        }
+
+        verdict = self._comparison(seat, seat)
+
+        self.assertEqual(verdict["status"], "ok")
+        self.assertAlmostEqual(verdict["by_stratum"]["2x1000ms"]["ratio"], 1.0)
+
     def test_the_stratified_form_and_coverage_reach_the_merged_shard(self) -> None:
         """The unstratified mean moves 2x on foul-play's own schedule with no contention.
 

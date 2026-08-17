@@ -423,6 +423,14 @@ def per_seed_outcomes(summary: dict, seat: str) -> dict[int, dict]:
     return rows
 
 
+def foulplay_think_comparison(first: dict | None, second: dict | None) -> dict:
+    """Thin wrapper so the merged shard runs the bridge's gate instead of a copy of it."""
+
+    from pokezero.foulplay_bridge import compare_foulplay_think
+
+    return compare_foulplay_think(first, second, first_label="p1", second_label="p2")
+
+
 def seat_block(summary: dict, seat: str) -> dict:
     """Per-seat reporting is mandatory: seat asymmetry is the #937 bug class.
 
@@ -774,6 +782,21 @@ def main(argv=None) -> int:
 
     seats = {seat: seat_block(summaries[seat], seat) for seat in SEATS}
     rows = {seat: per_seed_outcomes(summaries[seat], seat) for seat in SEATS}
+    # THE CONTENTION GATE, RUN rather than merely defined. Its two cross-side refusals
+    # (mismatched strata, unequal coverage) were reachable only by a human who thought to
+    # call it, which is the same defect as documenting a caveat: the module block claims the
+    # comparison "is checked", so something in the shipping path has to check it.
+    #
+    # p1-vs-p2 within this arm, which is the comparison this driver actually owns -- and a
+    # meaningful one, since seat asymmetry is the #937 bug class this file exists to catch: a
+    # contention reading that holds on one seat and not the other is a defect in the reading.
+    # The cross-ARM comparison is the same function applied to two of these shards, which is
+    # the downstream report's job; `foulplay_think` and `foulplay_think_reading` are lifted
+    # per seat so it can run it there.
+    think_seat_comparison = foulplay_think_comparison(
+        summaries["p1"].get("foulplay_think"),
+        summaries["p2"].get("foulplay_think"),
+    )
     expected = set(range(args.seed_start, args.seed_start + args.pairs))
     missing = {
         seat: sorted(expected - set(rows[seat])) for seat in SEATS
@@ -791,6 +814,11 @@ def main(argv=None) -> int:
         "seed_start": args.seed_start,
         "pairs": args.pairs,
         "foulplay_search_time_ms": FOULPLAY_SEARCH_TIME_MS,
+        # Refusal reasons, per-stratum ratios and the compared share -- see the gate's
+        # docstring in pokezero/foulplay_bridge.py. `status: "refused"` here means this
+        # shard's own two seats do not support a contention statement; it does NOT mean the
+        # arms differ.
+        "foulplay_think_seat_comparison": think_seat_comparison,
         "opponent_priors": bool(args.opponent_priors),
         # Recorded as well as encoded in config_id: the id normalises (an
         # explicit c_puct 1.4 leaves no suffix), so the id alone cannot say what

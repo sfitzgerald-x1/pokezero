@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections import Counter
+import contextlib
 import hashlib
 import json
 import math
@@ -23,6 +24,7 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 import random
 import re
+import signal
 import sys
 import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -312,6 +314,16 @@ OPPONENT_JOURNAL_MODES = ("off", "addressed", "full")
 # s4096) on one core, arm wall against the same search with model leaves: 1.8x at R=8
 # and 4.3x at R=32. Single digits, not thousands; the old figure is withdrawn.
 #
+# PROVENANCE, because a bare ratio in tracked source is the exact defect this block was
+# written to fix and it would be absurd to introduce a second one while correcting the
+# first: both figures come from the arbiter arm's own PR (#1268,
+# issuecomment-5315285160), measured there on the staged panel artifacts -- the pinned
+# checkpoint and its CPU TorchScript export -- which are NOT in this checkout, so nothing
+# on this branch can re-derive them and no test here pins them. That same comment is where
+# this instrument was commissioned. Treat the ratio as a cited external measurement with a
+# stated dependency, not as a fact this module establishes; nothing here depends on its
+# magnitude, only on it being neither zero nor self-evidently overwhelming.
+#
 # The old number let a reader dismiss the confound as self-evidently dominant -- "of
 # course the opponent is starved". At 1.8x it is PLAUSIBLE BUT NOT OBVIOUS, which is
 # precisely the regime in which a fence decides nothing and only a measurement does. The
@@ -478,6 +490,14 @@ _FOULPLAY_THINK_SETTLE_POLL_SECONDS = 0.002
 # settle forever -- measured at ~51 ms x 48.7 decisions ~= 2.4 s per game of added wall for
 # a run that measures nothing. One complete parse ends the streak and re-arms the settle.
 _FOULPLAY_THINK_SETTLE_GIVEUP_DECISIONS = 3
+#: While the give-up is armed, pay a settle on every Nth decision anyway. Without this the
+#: give-up is self-fulfilling: a run that is merely one decision behind never settles, so it
+#: never sees two markers in one slice, so its counter never resynchronises and it stays
+#: unmeasured for the rest of the battle even though the opponent is healthy.
+_FOULPLAY_THINK_SETTLE_PROBE_EVERY = 10
+#: Consecutive decisions whose slice held no decision marker at all before their outstanding
+#: announcements are written off. See the write-off in `_foulplay_think_observation`.
+_FOULPLAY_THINK_MARKER_WRITEOFF_DECISIONS = 3
 # The instrument's own cursor buffer, holding only `_FOULPLAY_THINK_LINE_RE` matches so
 # DEBUG noise cannot displace a measurement. At 4-10 kept lines per decision this is ~50
 # decisions of backlog; overflow is still REPORTED (`log_lines_dropped`) rather than
@@ -1672,7 +1692,9 @@ class ControlledFoulPlayGameResult:
             # this row key is `opponent_think` (a LIST) -- one name never carries two JSON
             # shapes in one document, for the reason spelled out on `opponent_moves`.
             payload["opponent_think"] = [dict(row) for row in self.opponent_think]
-            payload["opponent_think_totals"] = _foulplay_think_aggregate(self.opponent_think)
+            payload["opponent_think_totals"] = _foulplay_think_aggregate(
+                self.opponent_think, record_failures=self.opponent_think_failures
+            )
         if self.opponent_think_failures:
             # ON THE ROW, not only in the header: a run total says think rows were lost, it
             # cannot say which battle's contention reading is short.
@@ -1961,7 +1983,8 @@ class ControlledFoulPlayBenchmarkResult:
             "entries_key": "opponent_think",
             "budget_ms_configured": self.config.search_time_ms,
             **_foulplay_think_aggregate(
-                [row for game in self.games for row in game.opponent_think]
+                [row for game in self.games for row in game.opponent_think],
+                record_failures=sum(game.opponent_think_failures for game in self.games),
             ),
             # WHETHER THE MEASUREMENT WAS POSSIBLE, ahead of what it said. A non-`fork`
             # start method means foul-play's pool children cannot reach our stdout and every
@@ -2969,29 +2992,78 @@ async def _foulplay_think_observation(
     # Consumed, so a decision that saw no request forwarded cannot silently inherit the
     # previous round's timestamp and report an overlap window that is not its own.
     state.foulplay_request_forwarded_monotonic = None
-    settle_deadline = (
-        0.0
-        if state.foulplay_think_incomplete_streak >= _FOULPLAY_THINK_SETTLE_GIVEUP_DECISIONS
-        else _FOULPLAY_THINK_SETTLE_SECONDS
-    )
+    state.foulplay_think_decisions_seen += 1
+    # THE GIVE-UP IS PROBATIONARY, not permanent. Armed, it stops paying the settle on a run
+    # whose realized work is not arriving; but a run can be one decision behind and otherwise
+    # healthy, and never settling guarantees it stays that way (the stale slice satisfies the
+    # loop's break condition on the first read). So every Nth armed decision pays a settle
+    # anyway: if lines are merely late, that probe pulls the NEXT decision's marker into the
+    # same slice, which resynchronises the counter below and restores measurement within two
+    # decisions. Amortised cost while armed: ~5 ms a decision.
+    armed = state.foulplay_think_unusable_streak >= _FOULPLAY_THINK_SETTLE_GIVEUP_DECISIONS
+    probation = armed and state.foulplay_think_unusable_streak % _FOULPLAY_THINK_SETTLE_PROBE_EVERY == 0
+    settle_deadline = 0.0 if (armed and not probation) else _FOULPLAY_THINK_SETTLE_SECONDS
     settle_start = time.monotonic()
     while True:
         log_slice = logs.think_lines_since(state.foulplay_log_cursor)
         work = _foulplay_think_work_from_log_lines(log_slice.lines, dropped=log_slice.dropped)
-        if work.complete or time.monotonic() - settle_start >= settle_deadline:
+        markers_seen = state.foulplay_think_markers_seen + work.decision_markers
+        # ATTRIBUTION BY COUNTING, which is what makes a SUSTAINED lag safe. `find_best_move`
+        # logs its marker once per decision from the parent process, so the cumulative number
+        # of markers observed must equal the number of opponent decisions accounted for. A
+        # one-decision quarantine caught a one-off late slice and nothing else: under steady
+        # lag every slice holds exactly one decision's lines, `complete` is True every round,
+        # and each row reports the PREVIOUS decision's work as `ok` forever. Measured on the
+        # real path before this counter existed: round 2 reported round 1's 4,000 visits,
+        # round 4 reported round 3's 8,000, and round 4's own work was never reported at all.
+        # A cumulative count cannot be fooled that way -- it stays one short for as long as
+        # the shift lasts -- and it self-heals on catch-up, because the slice that finally
+        # holds two markers restores the total (while being refused itself as
+        # `decision_marker_repeated`).
+        in_sync = markers_seen == state.foulplay_think_decisions_seen
+        usable = work.complete and in_sync
+        if usable or time.monotonic() - settle_start >= settle_deadline:
             break
         # The choice arrives on the websocket and the log lines arrive on a pipe drained
         # by a different task, so "not there yet" is expected and cheap to wait out.
         await asyncio.sleep(_FOULPLAY_THINK_SETTLE_POLL_SECONDS)
     settle_seconds = time.monotonic() - settle_start
     state.foulplay_log_cursor = log_slice.cursor
-    # Keyed on the PARSE, not on whether any `Iterations` line showed up: a persistent miss
-    # that still produces lines (an overflowing buffer, a declared-count mismatch, a
-    # changed `Sampling` format) would otherwise re-arm the settle every round and pay
-    # ~51 ms a decision forever on a run that measures nothing.
-    state.foulplay_think_incomplete_streak = (
-        0 if work.complete else state.foulplay_think_incomplete_streak + 1
+    state.foulplay_think_markers_seen = markers_seen
+    # A DEBT THAT CAN NEVER BE PAID HAS TO BE WRITTEN OFF, or the counter over-refuses for
+    # the rest of the battle. A decision whose announcement never arrives at all (the process
+    # died mid-search, output lost, a slow start) leaves the count permanently short, and
+    # every later complete record -- including correctly-attributed ones -- would be refused
+    # as belonging to an earlier decision. So after this many CONSECUTIVE markerless
+    # decisions the debt is written off and one decision is quarantined, since writing off is
+    # itself the hole the counter closes. Bounded ambiguity, not unbounded pessimism.
+    state.foulplay_think_markerless_streak = (
+        state.foulplay_think_markerless_streak + 1 if work.decision_markers == 0 else 0
     )
+    if state.foulplay_think_markerless_streak >= _FOULPLAY_THINK_MARKER_WRITEOFF_DECISIONS:
+        state.foulplay_think_markers_seen = state.foulplay_think_decisions_seen
+        state.foulplay_think_markerless_streak = 0
+        state.foulplay_think_slice_may_span_previous = True
+    if log_slice.dropped:
+        # The bound discarded lines, so an unknown number of markers is gone and the count
+        # can never come back into sync on its own. Resynchronise -- otherwise one overflow
+        # refuses every remaining decision of the battle -- and quarantine the next decision,
+        # because resynchronising is exactly the hole the counter exists to close.
+        state.foulplay_think_markers_seen = state.foulplay_think_decisions_seen
+        state.foulplay_think_slice_may_span_previous = True
+    # Keyed on USABLE, not merely on the parse: a complete record for the wrong decision is
+    # not a measurement, and treating it as one is how the settle kept being paid (~51 ms x
+    # 48.7 decisions ~= 2.4 s per game) on a run measuring nothing.
+    #
+    # Two markers in one slice DISARMS the give-up even though the row itself is refused: it
+    # is positive evidence that the opponent is logging and merely late, which is exactly the
+    # condition under which settling is worth paying for again. Without this the probation
+    # resynchronises the counter and the very next zero-deadline read re-establishes the
+    # one-behind pattern, so the run recovers for one decision and then relapses forever.
+    if usable or work.decision_markers >= 2:
+        state.foulplay_think_unusable_streak = 0
+    else:
+        state.foulplay_think_unusable_streak += 1
 
     miss_reasons = list(work.miss_reasons)
     # ATTRIBUTION TO A ROUND, which the parser cannot decide on its own. The slice boundary
@@ -3009,11 +3081,15 @@ async def _foulplay_think_observation(
     # onto the row -- `status: "miss"` beside a number that a consumer reading the column
     # would take at face value. A row that cannot say WHICH decision the work belongs to
     # omits the work.
-    attributable = work.complete
+    attributable = usable
+    if work.complete and not in_sync:
+        # Internally perfect, and it belongs to an earlier decision: see the counter above.
+        miss_reasons.append("slice_belongs_to_earlier_decision")
     if state.foulplay_think_slice_may_span_previous:
         miss_reasons.append("slice_may_span_previous_decision")
         attributable = False
-    state.foulplay_think_slice_may_span_previous = not work.complete
+    # Only the post-drop resync sets this now; the cumulative counter covers ordinary lag.
+    state.foulplay_think_slice_may_span_previous = False
     wait_seconds = clock.wait_seconds
     overlap_seconds: float | None = None
     if wait_seconds is None:
@@ -3059,9 +3135,10 @@ async def _foulplay_think_observation(
     # same discipline as the numbers above, applied to the correction itself.
     #
     # Paid anyway, because a contention reading nobody can audit per decision is what the
-    # fence already was. The lever, measured, if a future run needs it smaller: dropping
-    # `iterations_per_sample` cuts 23% at 2 samples and 40% at the early game's 8, since
-    # `indent=2` puts every element on its own line. It is kept because it is the raw
+    # fence already was. The lever, measured AT THIS NESTING (an earlier revision quoted
+    # 23%/40% from a bare-dict measurement, which is the same mistake as the compact-row
+    # figure one paragraph up): dropping `iterations_per_sample` cuts 20.2% at 2 samples and
+    # 36.6% at the early game's 8, since `indent=2` puts every element on its own line. It is kept because it is the raw
     # evidence behind `iterations` -- a starved single sample is visible in it and in
     # nothing else -- and because the alternative to auditable bytes is an unauditable
     # verdict.
@@ -3070,13 +3147,21 @@ async def _foulplay_think_observation(
         row["wait_seconds"] = round(wait_seconds, 6)
     if overlap_seconds is not None:
         row["overlap_seconds"] = round(overlap_seconds, 6)
-    row["iterations_per_sample"] = list(work.iterations_per_sample)
-    row["sampled_battles"] = len(work.iterations_per_sample)
-    if work.declared_samples is not None and work.declared_samples != len(work.iterations_per_sample):
+    # GATED WITH the total, not published beside it. Left ungated, these three recover the
+    # withheld number by arithmetic -- `sum(iterations_per_sample) / (sampled_battles *
+    # budget_ms_per_sample / 1000)` IS `iterations_per_budget_second` -- so a row that must
+    # not report the work must not report its inputs either. On a miss they are replaced by
+    # the counts below, which describe the EVIDENCE without pricing it.
+    if attributable:
+        row["iterations_per_sample"] = list(work.iterations_per_sample)
+        row["sampled_battles"] = len(work.iterations_per_sample)
+    else:
+        row["iterations_lines_seen"] = len(work.iterations_per_sample)
+    if attributable and work.declared_samples is not None and work.declared_samples != len(work.iterations_per_sample):
         # Only when it DISAGREES: absent means the announcement and the results matched,
         # which is the whole content of `sample_count_mismatch` being absent.
         row["declared_sampled_battles"] = work.declared_samples
-    if work.budget_ms_per_sample is not None:
+    if attributable and work.budget_ms_per_sample is not None:
         row["budget_ms_per_sample"] = work.budget_ms_per_sample
     if attributable and work.total_iterations is not None:
         row["iterations"] = work.total_iterations
@@ -3124,13 +3209,25 @@ def _foulplay_think_stratum(samples: int | None, budget_ms: int | None) -> str |
 FOULPLAY_THINK_MAX_COVERAGE_GAP = 0.1
 #: Minimum measured decisions per arm before a rate means anything at all.
 FOULPLAY_THINK_MIN_MEASURED_DECISIONS = 20
+#: Fraction of an arm's measured decisions that must sit inside the strata actually being
+#: compared. A comparison run on a sliver of each arm is not a comparison of the arms.
+FOULPLAY_THINK_MIN_COMPARED_SHARE = 0.8
+#: Minimum measured decisions per arm WITHIN a stratum before that stratum's ratio is
+#: reported. Without a floor a stratum holding one decision on one arm yields a ratio
+#: presented exactly like one holding hundreds, and the noisiest stratum is the one most
+#: likely to look like contention.
+FOULPLAY_THINK_MIN_STRATUM_DECISIONS = 5
 
 
 def _mean(values: Sequence[float]) -> float | None:
     return (sum(values) / len(values)) if values else None
 
 
-def _foulplay_think_aggregate(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def _foulplay_think_aggregate(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    record_failures: int = 0,
+) -> dict[str, Any]:
     """Totals and means over opponent-think rows, for one game or a whole run.
 
     ONE function for both scopes on purpose: a per-game total and a run total computed by
@@ -3200,7 +3297,17 @@ def _foulplay_think_aggregate(rows: Sequence[Mapping[str, Any]]) -> dict[str, An
         # comparable between arms at matching strata and comparable coverage --
         # `compare_foulplay_think` is the gate that enforces both.
         "mean_iterations_per_budget_second": _mean(rates),
-        "iterations_coverage": (len(iterations) / len(rows)) if rows else None,
+        # OVER DECISIONS ATTEMPTED, not over rows produced. `opponent_think_failures` counts
+        # decisions whose telemetry raised, and those append NO row -- so a coverage taken
+        # over rows reads 1.0 while 900 of 1000 decisions went unrecorded, and the coverage
+        # gate (whose whole purpose is catching treatment-correlated coverage) sees a gap of
+        # 0.0. The denominator is the number of decisions the instrument tried to measure.
+        "decisions_attempted": len(rows) + max(0, int(record_failures)),
+        "iterations_coverage": (
+            (len(iterations) / (len(rows) + max(0, int(record_failures))))
+            if (rows or record_failures)
+            else None
+        ),
         "by_stratum": stratified,
         "miss_decisions": sum(1 for row in rows if row.get("status") != "ok"),
         "miss_reasons": dict(sorted(miss_reasons.items())),
@@ -3230,6 +3337,13 @@ def foulplay_think_reading_status(header: Mapping[str, Any] | None) -> dict[str,
     observable = header.get("iterations_observable")
     if observable is False:
         reasons.append("opponent_start_method_cannot_emit_iterations")
+    failures = header.get("record_failures")
+    if isinstance(failures, (int, float)) and failures > 0:
+        # Not fatal on its own -- the count is what makes it visible -- but it means the
+        # instrument lost decisions entirely, and a lost decision is exactly the kind that
+        # correlates with load. Named so a reading built on a shrunken denominator cannot
+        # pass as complete.
+        reasons.append("telemetry_record_failures")
     return {
         "usable": not reasons,
         "reasons": reasons,
@@ -3280,23 +3394,62 @@ def compare_foulplay_think(
             if coverage_gap > FOULPLAY_THINK_MAX_COVERAGE_GAP:
                 refusals.append("coverage_gap_exceeds_limit")
     shared: dict[str, Any] = {}
+    details: dict[str, Any] = {}
     if first and second:
         a_strata = first.get("by_stratum") or {}
         b_strata = second.get("by_stratum") or {}
+        thin_strata: list[str] = []
         for name in sorted(set(a_strata) & set(b_strata)):
-            a_rate = (a_strata[name] or {}).get("mean_iterations_per_budget_second")
-            b_rate = (b_strata[name] or {}).get("mean_iterations_per_budget_second")
+            a_block = a_strata[name] or {}
+            b_block = b_strata[name] or {}
+            a_rate = a_block.get("mean_iterations_per_budget_second")
+            b_rate = b_block.get("mean_iterations_per_budget_second")
             if not isinstance(a_rate, (int, float)) or not isinstance(b_rate, (int, float)):
                 continue
             if not a_rate:
                 continue
+            a_n = a_block.get("iterations_measured_decisions") or 0
+            b_n = b_block.get("iterations_measured_decisions") or 0
+            if min(int(a_n), int(b_n)) < FOULPLAY_THINK_MIN_STRATUM_DECISIONS:
+                # NOT reported at all, rather than reported with a small n a reader has to
+                # notice: a one-decision stratum is where noise looks most like contention.
+                thin_strata.append(name)
+                continue
             shared[name] = {
                 f"{first_label}_mean_iterations_per_budget_second": a_rate,
                 f"{second_label}_mean_iterations_per_budget_second": b_rate,
+                # THE n TRAVELS WITH THE RATIO. A ratio quoted without its denominator is
+                # how a thin stratum ends up carrying a verdict.
+                f"{first_label}_iterations_measured_decisions": int(a_n),
+                f"{second_label}_iterations_measured_decisions": int(b_n),
                 "ratio": b_rate / a_rate,
             }
+        if thin_strata:
+            details["thin_strata"] = sorted(thin_strata)
         if not shared:
             refusals.append("no_shared_stratum_with_measured_rate")
+        else:
+            # AND THE COMPARED STRATA MUST CARRY THE BULK OF BOTH ARMS. Otherwise two arms
+            # whose decisions sit almost entirely in strata the other never visited compare
+            # cleanly on a sliver and read "no contention" for the whole run: measured on
+            # synthetic-but-real aggregates, 500-vs-1 in each stratum returned
+            # `status: "ok"` with both ratios 1.0 while 99.8% of each arm was never compared
+            # like-for-like, and a real 3.8x starvation read flat the same way.
+            for label, header, other in (
+                (first_label, first, second),
+                (second_label, second, first),
+            ):
+                measured = header.get("iterations_measured_decisions")
+                measured = int(measured) if isinstance(measured, (int, float)) else 0
+                strata = header.get("by_stratum") or {}
+                compared = sum(
+                    int((strata.get(name) or {}).get("iterations_measured_decisions") or 0)
+                    for name in shared
+                )
+                share = (compared / measured) if measured else 0.0
+                details.setdefault("compared_share", {})[label] = share
+                if share < FOULPLAY_THINK_MIN_COMPARED_SHARE:
+                    refusals.append(f"{label}:compared_strata_cover_too_little")
     else:
         refusals.append("missing_arm")
     unstratified: float | None = None
@@ -3311,6 +3464,9 @@ def compare_foulplay_think(
         "reading_status": status,
         "coverage_gap": coverage_gap,
         "by_stratum": shared,
+        # Strata that exist on both arms but are too thin to compare, named so their absence
+        # from `by_stratum` is a stated exclusion rather than a silent one.
+        **details,
         # LAST and clearly labelled: a difference here can be pure decision mix.
         "unstratified_ratio": unstratified,
     }
@@ -3564,13 +3720,22 @@ class _ControlledBattleState:
     #: finished being written to foul-play's socket -- i.e. the earliest instant its
     #: search could have started. Consumed (reset to None) by each decision that reads it.
     foulplay_request_forwarded_monotonic: float | None = None
-    #: Consecutive decisions whose slice did not parse COMPLETELY -- not merely whose
-    #: `Iterations` lines were absent. Drives the settle give-up, so the four persistent
-    #: miss modes that still produce lines stop paying ~51 ms a decision forever.
-    foulplay_think_incomplete_streak: int = 0
-    #: Set when a decision's parse was incomplete, meaning its output may still be in
-    #: flight and may land in the NEXT decision's slice. The next decision then refuses
-    #: rather than reporting a whole, self-consistent record for the wrong round.
+    #: Consecutive decisions that produced no USABLE record -- no complete parse, or a
+    #: complete one that belongs to an earlier decision. Drives the settle give-up, so a run
+    #: whose realized work is not arriving stops paying ~51 ms a decision forever.
+    foulplay_think_unusable_streak: int = 0
+    #: Opponent decisions this battle has accounted for, and the cumulative
+    #: `Searching for a move using MCTS...` markers observed across their slices. The two
+    #: must be equal: the marker is logged once per decision by foul-play's PARENT process,
+    #: so a deficit means the lines in hand were announced by an earlier decision. This is
+    #: what makes a SUSTAINED drain lag safe rather than only a one-off one.
+    foulplay_think_decisions_seen: int = 0
+    foulplay_think_markers_seen: int = 0
+    #: Consecutive decisions whose slice held no marker at all. Bounds how long an
+    #: announcement that will never arrive can keep the counter short.
+    foulplay_think_markerless_streak: int = 0
+    #: Set only after the instrument buffer DROPPED lines, which forces a resync of the
+    #: counter above and so reopens, for exactly one decision, the hole it closes.
     foulplay_think_slice_may_span_previous: bool = False
     # Per-battle truth-world builder for the oracle-belief arm (§4a). Cached
     # because its packed teams are a pure function of this battle's opening
@@ -4761,11 +4926,15 @@ async def _probe_foulplay_start_method(
     `foulplay_think_reading_status` only when it resolves to a non-emitting method.
     """
 
+    # SENTINEL-PREFIXED, not positional. A venv wrapper, a sitecustomize, or a warning on
+    # startup prints before us, and reading `lines[0]` then reports "warning:" as the start
+    # method -- with `iterations_observable` derived from it.
     script = (
         "import multiprocessing, sys; "
-        "print(multiprocessing.get_start_method(allow_none=False)); "
-        "print('%d.%d.%d' % sys.version_info[:3])"
+        "print('POKEZERO_START_METHOD=%s' % multiprocessing.get_start_method(allow_none=False)); "
+        "print('POKEZERO_PYTHON=%d.%d.%d' % sys.version_info[:3])"
     )
+    process: asyncio.subprocess.Process | None = None
     try:
         process = await asyncio.create_subprocess_exec(
             str(config.resolved_foulplay_python),
@@ -4773,13 +4942,51 @@ async def _probe_foulplay_start_method(
             script,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # Its own session, so the timeout path can take out the whole tree. The probe
+            # target is normally `python -c` with no children, but
+            # `resolved_foulplay_python` can be a wrapper script, and killing a wrapper
+            # leaves its child holding our pipe -- which both orphans the child and keeps
+            # the reap from completing.
+            start_new_session=True,
         )
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
     except Exception as error:  # noqa: BLE001 -- a probe must never fail a run
+        reaped: bool | None = None
+        if process is not None and process.returncode is None:
+            # `wait_for` cancels `communicate()` without killing the child, which otherwise
+            # outlives the probe as an orphan (plus an "Event loop is closed" complaint at
+            # interpreter shutdown). A probe that leaks a process is not a free diagnostic.
+            #
+            # BOTH waits are bounded, which the first version of this cleanup got wrong: an
+            # unbounded `await process.wait()` after the kill blocked for the child's whole
+            # natural lifetime -- measured at 30.1 s against a 0.3 s timeout, turning a
+            # leaked process into a stalled run, which is the worse failure. Reaping is
+            # best-effort and its outcome is reported rather than assumed.
+            with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=1.0)
+                reaped = True
+            except Exception:  # noqa: BLE001 -- cleanup must not raise into the run
+                reaped = False
+            if not reaped:
+                # An unreaped child leaves its transport open, and the transport's finaliser
+                # then runs against a closed event loop and prints an "Event loop is closed"
+                # traceback -- attributed, confusingly, to whatever code happened to trigger
+                # the collection. Closing it here keeps a diagnostic from turning into noise
+                # somewhere else. Private attribute on purpose: there is no public handle,
+                # and the alternative is the noise.
+                transport = getattr(process, "_transport", None)
+                if transport is not None:
+                    with contextlib.suppress(Exception):
+                        transport.close()
         return {
             "status": "probe_failed",
             "error": f"{type(error).__name__}: {error}",
             "iterations_observable": None,
+            **({} if reaped is None else {"probe_child_reaped": reaped}),
         }
     if process.returncode != 0:
         return {
@@ -4788,14 +4995,23 @@ async def _probe_foulplay_start_method(
             "returncode": process.returncode,
             "iterations_observable": None,
         }
-    lines = (stdout or b"").decode("utf-8", errors="replace").split()
-    if not lines:
-        return {"status": "probe_failed", "error": "no output", "iterations_observable": None}
-    start_method = lines[0]
+    fields: dict[str, str] = {}
+    for line in (stdout or b"").decode("utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        for key in ("POKEZERO_START_METHOD", "POKEZERO_PYTHON"):
+            if stripped.startswith(key + "="):
+                fields[key] = stripped.split("=", 1)[1]
+    start_method = fields.get("POKEZERO_START_METHOD")
+    if not start_method:
+        return {
+            "status": "probe_failed",
+            "error": "no start-method sentinel in probe output",
+            "iterations_observable": None,
+        }
     return {
         "status": "probed",
         "opponent_start_method": start_method,
-        "opponent_python": lines[1] if len(lines) > 1 else None,
+        "opponent_python": fields.get("POKEZERO_PYTHON"),
         # The whole point of the probe, stated as a boolean a gate can read.
         "iterations_observable": start_method in _FOULPLAY_ITERATIONS_EMITTING_START_METHODS,
     }

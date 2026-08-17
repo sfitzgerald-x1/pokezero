@@ -20,6 +20,7 @@ from pokezero.collection import read_rollout_records
 from pokezero.foulplay_bridge import (
     FOULPLAY_THINK_MAX_COVERAGE_GAP,
     FOULPLAY_THINK_MIN_MEASURED_DECISIONS,
+    FOULPLAY_THINK_MIN_STRATUM_DECISIONS,
     FOULPLAY_THINK_SCHEMA_VERSION,
     _FOULPLAY_THINK_LINE_CAP,
     _FOULPLAY_THINK_SETTLE_GIVEUP_DECISIONS,
@@ -3949,11 +3950,17 @@ class FoulPlayThinkBoundaryTest(_ThinkBoundaryDriver, unittest.TestCase):
                 self.assertIn("iterations_line_absent", row["miss_reasons"])
                 self.assertNotIn("iterations", row)
                 self.assertNotIn("iterations_per_budget_second", row)
-                self.assertEqual(row["iterations_per_sample"], [])
+                # On a miss the row describes the evidence without PRICING it: publishing
+                # `iterations_per_sample` + `sampled_battles` + `budget_ms_per_sample` would
+                # let a consumer recompute the very rate the guard withheld.
+                self.assertNotIn("iterations_per_sample", row)
+                self.assertNotIn("sampled_battles", row)
+                self.assertNotIn("budget_ms_per_sample", row)
+                self.assertEqual(row["iterations_lines_seen"], 0)
                 # The wait itself is still measured: the opponent answered, we just
                 # cannot say what it accomplished.
                 self.assertIn("wait_seconds", row)
-        self.assertEqual(state.foulplay_think_incomplete_streak, rounds)
+        self.assertEqual(state.foulplay_think_unusable_streak, rounds)
         # The settle was given up on: after the streak, no measurable wait was spent on
         # lines that are not coming, so the field is not even emitted.
         self.assertNotIn("settle_seconds", state.opponent_think[-1])
@@ -4099,6 +4106,58 @@ class FoulPlayThinkShardTest(unittest.TestCase):
         self.assertEqual(aggregate["miss_decisions"], 1)
         self.assertEqual(aggregate["miss_reasons"], {"iterations_line_absent": 1})
 
+    def test_coverage_is_computed_from_the_rows_not_asserted(self) -> None:
+        """B4: the coverage the whole gate keys on had no failing input of its own.
+
+        Every `iterations_coverage` in these suites used to be a hand-written literal fed to
+        a header fixture, so replacing the real `len(iterations)/len(rows)` with a constant
+        `1.0` broke nothing.
+        """
+
+        rows = [
+            self._row(round_index=index, wait=2.0, iterations=40000 if index < 181 else None)
+            for index in range(200)
+        ]
+
+        aggregate = _foulplay_think_aggregate(rows)
+
+        self.assertEqual(aggregate["decisions"], 200)
+        self.assertEqual(aggregate["iterations_measured_decisions"], 181)
+        self.assertAlmostEqual(aggregate["iterations_coverage"], 0.905)
+
+    def test_lost_decisions_are_in_the_coverage_denominator(self) -> None:
+        """B6: a decision the telemetry lost appends no row, so rows-only coverage lies.
+
+        900 of 1,000 decisions unrecorded used to read `iterations_coverage: 1.0`, which the
+        cross-arm gate then compared against a healthy arm as a gap of 0.0 -- "flat".
+        """
+
+        rows = [self._row(round_index=index, wait=2.0, iterations=40000) for index in range(100)]
+
+        honest = _foulplay_think_aggregate(rows, record_failures=900)
+        blind = _foulplay_think_aggregate(rows)
+
+        self.assertEqual(honest["decisions_attempted"], 1000)
+        self.assertAlmostEqual(honest["iterations_coverage"], 0.1)
+        # What it read before the denominator was fixed.
+        self.assertAlmostEqual(blind["iterations_coverage"], 1.0)
+
+    def test_the_wait_is_annotated_as_a_lower_bound_wherever_it_travels(self) -> None:
+        """The annotation has to reach the merged shard, where a reader actually opens it.
+
+        Failing input: rename the key away and nothing else notices -- which was true until
+        this test existed. A mean of lower bounds is still a lower bound, and nothing beside
+        `mean_wait_seconds` in the artifact says so.
+        """
+
+        aggregate = _foulplay_think_aggregate(
+            [self._row(round_index=0, wait=2.0, iterations=40000)]
+        )
+
+        self.assertIn("wait_seconds_semantics", aggregate)
+        self.assertIn("LOWER BOUND", aggregate["wait_seconds_semantics"])
+        self.assertIn("overlapped", aggregate["wait_seconds_semantics"])
+
     def test_nothing_measured_reads_none_never_zero(self) -> None:
         aggregate = _foulplay_think_aggregate([])
 
@@ -4217,6 +4276,78 @@ class _DrainLagServer:
         return "move icebeam"
 
 
+def _decision_stdout(per_sample: int) -> tuple[str, ...]:
+    """One decision's stdout, in foul-play's own order, with an identifiable visit count."""
+
+    return (
+        _FOULPLAY_MARKER,
+        "INFO     Sampling 2 battles at 1000ms each",
+        f"INFO     Iterations 0: {per_sample}",
+        f"INFO     Iterations 1: {per_sample}",
+    )
+
+
+class _SustainedLagServer:
+    """EVERY round's stdout arrives after that round was accounted for.
+
+    Not just round 0 (`_DrainLagServer`): a CPU-heavy arm lags the drain continuously, and
+    that is the case where every slice parses perfectly while belonging to the round before.
+    Each round's visits are distinct so a misattributed total is identifiable by value.
+    """
+
+    def __init__(self, logs, *, late_seconds: float, per_round_visits) -> None:
+        self.logs = logs
+        self.late_seconds = late_seconds
+        self.per_round_visits = list(per_round_visits)
+        self.calls = 0
+        self.sent: list[tuple[str, tuple[str, ...]]] = []
+
+    async def send_room_lines(self, battle_id: str, lines) -> None:
+        self.sent.append((battle_id, tuple(lines)))
+
+    async def wait_for_choice(self, *, battle_id: str) -> str:
+        index = self.calls
+        self.calls += 1
+        visits = self.per_round_visits[min(index, len(self.per_round_visits) - 1)]
+        loop = asyncio.get_running_loop()
+
+        def publish() -> None:
+            for line in _decision_stdout(visits):
+                self.logs.append_stdout(line)
+
+        loop.call_later(self.late_seconds, publish)
+        return "move icebeam"
+
+
+class _ScriptedServer:
+    """Publishes exactly what a per-round script says, optionally a little late."""
+
+    def __init__(self, logs, *, publish, late_seconds: float | None = None) -> None:
+        self.logs = logs
+        self.publish = publish
+        self.late_seconds = late_seconds
+        self.calls = 0
+        self.sent: list[tuple[str, tuple[str, ...]]] = []
+
+    async def send_room_lines(self, battle_id: str, lines) -> None:
+        self.sent.append((battle_id, tuple(lines)))
+
+    async def wait_for_choice(self, *, battle_id: str) -> str:
+        index = self.calls
+        self.calls += 1
+        lines = self.publish(index)
+
+        def emit() -> None:
+            for line in lines:
+                self.logs.append_stdout(line)
+
+        if self.late_seconds is None:
+            emit()
+        else:
+            asyncio.get_running_loop().call_later(self.late_seconds, emit)
+        return "move icebeam"
+
+
 class _IncompleteEveryDecisionServer:
     """Every decision publishes lines, and every decision's record is unusable.
 
@@ -4266,31 +4397,149 @@ class FoulPlayThinkAttributionTest(_ThinkBoundaryDriver, unittest.TestCase):
         # The row that used to read `iterations: 81105, status: "ok"` while carrying round
         # 0's work against round 1's wait.
         self.assertEqual(second["status"], "miss")
-        self.assertIn("slice_may_span_previous_decision", second["miss_reasons"])
+        self.assertIn("slice_belongs_to_earlier_decision", second["miss_reasons"])
         self.assertNotIn("iterations", second)
         self.assertNotIn("iterations_per_budget_second", second)
+        # The label too: a stratum read off a slice that belongs to another decision is that
+        # decision's schedule, and a bucket keyed on it appears in the shard having measured
+        # nothing.
+        self.assertNotIn("stratum", second)
+        # And the inputs, or the rate comes back as
+        # `sum(iterations_per_sample) / (sampled_battles * budget_ms_per_sample / 1000)`.
+        self.assertNotIn("iterations_per_sample", second)
+        self.assertNotIn("sampled_battles", second)
+        self.assertNotIn("budget_ms_per_sample", second)
+        self.assertEqual(second["iterations_lines_seen"], 2)
 
-    def test_the_quarantine_lasts_one_decision_and_does_not_cascade(self) -> None:
-        """A miss must not silently disable the instrument for the rest of the battle."""
+    def test_a_sustained_lag_never_reports_an_earlier_decisions_work(self) -> None:
+        """The case a one-round quarantine could not see, and the one lag actually produces.
+
+        Every round's stdout arrives 60 ms after its choice -- past the settle -- so every
+        slice holds exactly one decision's lines and parses perfectly. Before the cumulative
+        marker count, round 2 reported round 1's visits as `ok`, round 4 reported round 3's,
+        and round 4's own work was never reported at all.
+        """
 
         logs = _ProcessLogBuffer()
         state = self._state()
+        rounds = 5
+        truth = [2000 * (index + 1) for index in range(rounds)]
 
         self._run(
             state=state,
             config=self._config(),
-            server=_DrainLagServer(logs, late_seconds=0.06),
+            server=_SustainedLagServer(logs, late_seconds=0.06, per_round_visits=truth),
             logs=logs,
-            rounds=3,
-            forward_request_before_round=(0, 1, 2),
+            rounds=rounds,
+            forward_request_before_round=tuple(range(rounds)),
             our_search_seconds=0.08,
         )
 
-        third = state.opponent_think[2]
-        # Round 2 has no output of its own either, so it is still a miss -- but on its OWN
-        # evidence (nothing arrived), not on the carried quarantine.
-        self.assertNotIn("slice_may_span_previous_decision", third["miss_reasons"])
-        self.assertFalse(state.foulplay_think_slice_may_span_previous is None)
+        rows = state.opponent_think
+        self.assertEqual(len(rows), rounds)
+        for row in rows:
+            with self.subTest(round=row["round"]):
+                self.assertEqual(row["status"], "miss")
+                self.assertNotIn("iterations", row)
+                self.assertNotIn("iterations_per_budget_second", row)
+        # Specifically: no row anywhere carries any other round's realized total.
+        reported = [row.get("iterations") for row in rows]
+        self.assertEqual(reported, [None] * rounds)
+        for row in rows[1:]:
+            with self.subTest(round=row["round"]):
+                self.assertIn("slice_belongs_to_earlier_decision", row["miss_reasons"])
+        self.assertEqual(state.foulplay_think_decisions_seen, rounds)
+        # One short, for as long as the shift lasts.
+        self.assertEqual(state.foulplay_think_markers_seen, rounds - 1)
+        # AND IT STOPS PAYING FOR THE SETTLE. A complete-but-misattributed record is not a
+        # measurement, so keying the give-up on the PARSE would reset the streak every round
+        # here and pay ~51 ms a decision forever on a run that measures nothing -- the cost
+        # half of this hazard, which correctness assertions alone cannot see.
+        self.assertGreaterEqual(
+            state.foulplay_think_unusable_streak, _FOULPLAY_THINK_SETTLE_GIVEUP_DECISIONS
+        )
+        settled = [row for row in rows if "settle_seconds" in row]
+        self.assertLessEqual(
+            len(settled),
+            _FOULPLAY_THINK_SETTLE_GIVEUP_DECISIONS,
+            f"the give-up never armed: {[row.get('settle_seconds') for row in rows]}",
+        )
+
+    def test_the_instrument_self_heals_when_the_opponent_catches_up(self) -> None:
+        """Refusing a shift must not disable the instrument for the rest of the battle."""
+
+        logs = _ProcessLogBuffer()
+        state = self._state()
+
+        def publish(round_index: int) -> tuple[str, ...]:
+            if round_index == 0:
+                return ()                      # round 0's output is late
+            if round_index == 1:
+                return _decision_stdout(2000) + _decision_stdout(4000)   # catch-up: two
+            return _decision_stdout(2000 * (round_index + 1))
+
+        self._run(
+            state=state,
+            config=self._config(),
+            server=_ScriptedServer(logs, publish=publish),
+            logs=logs,
+            rounds=4,
+            forward_request_before_round=tuple(range(4)),
+            our_search_seconds=0.0,
+        )
+
+        rows = state.opponent_think
+        self.assertEqual(rows[0]["status"], "miss")
+        # The catch-up slice holds two decisions and is refused as such...
+        self.assertEqual(rows[1]["status"], "miss")
+        self.assertIn("decision_marker_repeated", rows[1]["miss_reasons"])
+        # ...but it restored the count, so measurement resumes immediately after.
+        self.assertEqual(rows[2]["status"], "ok")
+        self.assertEqual(rows[2]["iterations"], 2 * 2000 * 3)
+        self.assertEqual(rows[3]["status"], "ok")
+        self.assertEqual(state.foulplay_think_markers_seen, state.foulplay_think_decisions_seen)
+
+    def test_the_giveup_does_not_lock_out_a_healthy_but_late_opponent(self) -> None:
+        """The give-up must not manufacture the shift it exists to stop paying for.
+
+        Three silent decisions arm it; then the opponent is healthy with a 5 ms lag -- well
+        inside the settle the give-up just disabled. With no settle, every later slice holds
+        the previous decision's record, and before the probation those rows read `ok` with
+        stale work forever.
+        """
+
+        logs = _ProcessLogBuffer()
+        state = self._state()
+        rounds = 16
+
+        def publish(round_index: int) -> tuple[str, ...]:
+            if round_index < 3:
+                return ()
+            return _decision_stdout(2000 * (round_index + 1))
+
+        self._run(
+            state=state,
+            config=self._config(),
+            server=_ScriptedServer(logs, publish=publish, late_seconds=0.005),
+            logs=logs,
+            rounds=rounds,
+            forward_request_before_round=tuple(range(rounds)),
+            # PACED so each round's output lands before the NEXT round is accounted for:
+            # that is what "healthy, one decision behind" means. With no pacing at all the
+            # output arrives in multi-decision bursts, which is genuinely unattributable and
+            # a different scenario (correctly refused, but not this one).
+            our_search_seconds=0.02,
+        )
+
+        rows = state.opponent_think
+        # Nothing stale is ever priced...
+        for row in rows:
+            with self.subTest(round=row["round"]):
+                if "iterations" in row:
+                    self.assertEqual(row["iterations"], 2 * 2000 * (row["round"] + 1))
+        # ...and the probation gets measurement back rather than leaving the battle blind.
+        recovered = [row for row in rows if row["status"] == "ok"]
+        self.assertTrue(recovered, f"no decision recovered: {[r['status'] for r in rows]}")
 
     def test_the_giveup_arms_on_any_incomplete_parse_not_only_on_absent_lines(self) -> None:
         """B6: the four persistent-miss modes that DO produce lines used to pay forever."""
@@ -4318,7 +4567,7 @@ class FoulPlayThinkAttributionTest(_ThinkBoundaryDriver, unittest.TestCase):
                 self.assertNotIn("iterations", row)
         # The give-up armed: the last rounds spent no measurable settle at all, where before
         # every one of them paid the full 50 ms.
-        self.assertEqual(state.foulplay_think_incomplete_streak, rounds)
+        self.assertEqual(state.foulplay_think_unusable_streak, rounds)
         self.assertNotIn("settle_seconds", rows[-1])
         self.assertIn("settle_seconds", rows[0])
 
@@ -4463,7 +4712,6 @@ class FoulPlayThinkGateTest(unittest.TestCase):
             if strata is not None
             else {
                 "2x1000ms": {
-                    "decisions": measured,
                     "iterations_measured_decisions": measured,
                     "mean_iterations_per_budget_second": rate,
                 }
@@ -4544,11 +4792,195 @@ class FoulPlayThinkGateTest(unittest.TestCase):
         self.assertFalse(status["usable"])
         self.assertIn("opponent_start_method_cannot_emit_iterations", status["reasons"])
 
+    def test_lost_decisions_make_the_reading_unusable(self) -> None:
+        """The same B6 hazard, at the gate: a shrunken denominator must not pass as clean."""
+
+        blind = self._header(rate=450000.0, measured=100, coverage=1.0)
+        blind["record_failures"] = 900
+
+        status = foulplay_think_reading_status(blind)
+
+        self.assertFalse(status["usable"])
+        self.assertIn("telemetry_record_failures", status["reasons"])
+
     def test_an_absent_block_is_refused_by_name(self) -> None:
         status = foulplay_think_reading_status(None)
 
         self.assertFalse(status["usable"])
         self.assertEqual(status["reasons"], ["think_block_absent"])
+
+    def test_a_stratum_too_thin_to_compare_is_excluded_and_named(self) -> None:
+        """A ratio backed by one decision must not read like one backed by hundreds."""
+
+        thick = self._header(rate=450000.0, measured=100, coverage=1.0)
+        thick["by_stratum"]["8x500ms"] = {
+            "iterations_measured_decisions": 60,
+            "mean_iterations_per_budget_second": 120000.0,
+        }
+        thin = self._header(rate=445000.0, measured=98, coverage=0.98)
+        thin["by_stratum"]["8x500ms"] = {
+            # ONE decision, and by chance it looks halved -- exactly the shape that would
+            # otherwise be quoted beside a 60-decision stratum as if equally solid.
+            "iterations_measured_decisions": 1,
+            "mean_iterations_per_budget_second": 60000.0,
+        }
+
+        verdict = compare_foulplay_think(thick, thin, first_label="raw", second_label="search")
+
+        self.assertNotIn("8x500ms", verdict["by_stratum"])
+        self.assertEqual(verdict["thin_strata"], ["8x500ms"])
+        self.assertLess(1, FOULPLAY_THINK_MIN_STRATUM_DECISIONS)
+        # The stratum that IS thick enough still reports, with its n beside the ratio.
+        self.assertEqual(
+            verdict["by_stratum"]["2x1000ms"]["raw_iterations_measured_decisions"], 100
+        )
+        self.assertEqual(
+            verdict["by_stratum"]["2x1000ms"]["search_iterations_measured_decisions"], 98
+        )
+
+    def test_every_reported_ratio_carries_its_denominator(self) -> None:
+        raw = self._header(rate=452500.0, measured=100, coverage=1.0)
+        search = self._header(rate=119000.0, measured=98, coverage=0.98)
+
+        verdict = compare_foulplay_think(raw, search, first_label="raw", second_label="search")
+
+        for stratum, block in verdict["by_stratum"].items():
+            with self.subTest(stratum=stratum):
+                self.assertIn("raw_iterations_measured_decisions", block)
+                self.assertIn("search_iterations_measured_decisions", block)
+
+    def _real_header(self, *, rows, record_failures: int = 0) -> dict:
+        """A header built by the REAL aggregate over rows in the shape the row emitter emits.
+
+        The gate tests otherwise run on hand-written headers, which cannot see the aggregate
+        and the gate disagreeing about a field's meaning.
+        """
+
+        aggregate = _foulplay_think_aggregate(rows, record_failures=record_failures)
+        return {
+            "schema_version": FOULPLAY_THINK_SCHEMA_VERSION,
+            **aggregate,
+            "iterations_observable": True,
+            "record_failures": record_failures,
+        }
+
+    @staticmethod
+    def _stratum_row(round_index: int, *, samples: int, budget_ms: int, per_sample: int) -> dict:
+        total = samples * per_sample
+        return {
+            "round": round_index,
+            "wait_seconds": 2.0,
+            "iterations_per_sample": [per_sample] * samples,
+            "sampled_battles": samples,
+            "budget_ms_per_sample": budget_ms,
+            "iterations": total,
+            "iterations_per_budget_second": total / (samples * budget_ms / 1000.0),
+            "stratum": f"{samples}x{budget_ms}ms",
+            "status": "ok",
+        }
+
+    def test_a_sliver_of_shared_stratum_cannot_certify_the_whole_run(self) -> None:
+        """B5: 500-vs-1 in each stratum used to return `ok` with both ratios 1.0.
+
+        Each arm sits almost entirely in a stratum the other visited once, so the two ratios
+        are computed off n=1 while 99.8% of each arm is never compared like-for-like.
+        """
+
+        raw_rows = [
+            self._stratum_row(i, samples=2, budget_ms=1000, per_sample=225000) for i in range(500)
+        ] + [self._stratum_row(500, samples=8, budget_ms=500, per_sample=60000)]
+        search_rows = [
+            self._stratum_row(i, samples=8, budget_ms=500, per_sample=60000) for i in range(500)
+        ] + [self._stratum_row(500, samples=2, budget_ms=1000, per_sample=225000)]
+
+        verdict = compare_foulplay_think(
+            self._real_header(rows=raw_rows),
+            self._real_header(rows=search_rows),
+            first_label="raw",
+            second_label="search",
+        )
+
+        self.assertEqual(verdict["status"], "refused")
+        # The thin strata are excluded by name, which leaves nothing to compare at all.
+        self.assertEqual(verdict["thin_strata"], ["2x1000ms", "8x500ms"])
+        self.assertIn("no_shared_stratum_with_measured_rate", verdict["refusal_reasons"])
+
+    def test_a_real_starvation_hidden_behind_a_sliver_is_refused(self) -> None:
+        """The same shape with an actual 3.8x drop, which used to read `ratio: 1.0`, ok."""
+
+        raw_rows = [
+            self._stratum_row(i, samples=2, budget_ms=1000, per_sample=225000) for i in range(200)
+        ]
+        search_rows = [
+            self._stratum_row(i, samples=8, budget_ms=500, per_sample=29500) for i in range(199)
+        ] + [self._stratum_row(199, samples=2, budget_ms=1000, per_sample=225000)]
+
+        verdict = compare_foulplay_think(
+            self._real_header(rows=raw_rows),
+            self._real_header(rows=search_rows),
+            first_label="raw",
+            second_label="search",
+        )
+
+        self.assertEqual(verdict["status"], "refused")
+        self.assertTrue(
+            any("compared_strata_cover_too_little" in reason for reason in verdict["refusal_reasons"])
+            or "no_shared_stratum_with_measured_rate" in verdict["refusal_reasons"],
+            verdict["refusal_reasons"],
+        )
+        # The unstratified ratio it would have reported does show the drop -- but it is the
+        # number that also moves 2x on schedule alone, which is why it cannot carry a verdict.
+        self.assertLess(verdict["unstratified_ratio"], 0.3)
+
+    def test_a_thick_shared_stratum_holding_a_sliver_of_each_arm_is_refused(self) -> None:
+        """The share floor, on the case the thin-stratum floor does NOT catch.
+
+        The compared stratum is well-powered on both sides (10 vs 500), so it is not thin --
+        but it holds 2% of the raw arm, whose other 500 decisions sit in a stratum the search
+        arm visited twice. A clean ratio off 2% of an arm is not a statement about the arm.
+        """
+
+        raw_rows = [
+            self._stratum_row(i, samples=2, budget_ms=1000, per_sample=225000) for i in range(500)
+        ] + [
+            self._stratum_row(500 + i, samples=8, budget_ms=500, per_sample=60000)
+            for i in range(10)
+        ]
+        search_rows = [
+            self._stratum_row(i, samples=8, budget_ms=500, per_sample=60000) for i in range(500)
+        ] + [
+            self._stratum_row(500 + i, samples=2, budget_ms=1000, per_sample=225000)
+            for i in range(2)
+        ]
+
+        verdict = compare_foulplay_think(
+            self._real_header(rows=raw_rows),
+            self._real_header(rows=search_rows),
+            first_label="raw",
+            second_label="search",
+        )
+
+        self.assertEqual(verdict["status"], "refused")
+        # The 500-vs-2 stratum is excluded as thin; the 10-vs-500 one IS compared...
+        self.assertEqual(verdict["thin_strata"], ["2x1000ms"])
+        self.assertIn("8x500ms", verdict["by_stratum"])
+        # ...and covers 2% of the raw arm, which is what the share floor refuses.
+        self.assertIn("raw:compared_strata_cover_too_little", verdict["refusal_reasons"])
+        self.assertLess(verdict["compared_share"]["raw"], 0.05)
+        self.assertGreater(verdict["compared_share"]["search"], 0.9)
+
+    def test_the_bulk_share_is_reported_on_every_verdict(self) -> None:
+        rows = [
+            self._stratum_row(i, samples=2, budget_ms=1000, per_sample=225000) for i in range(100)
+        ]
+        verdict = compare_foulplay_think(
+            self._real_header(rows=rows), self._real_header(rows=rows),
+            first_label="raw", second_label="search",
+        )
+
+        self.assertEqual(verdict["status"], "ok")
+        self.assertAlmostEqual(verdict["compared_share"]["raw"], 1.0)
+        self.assertAlmostEqual(verdict["compared_share"]["search"], 1.0)
 
     def test_a_comparable_pair_is_accepted_and_reports_the_drop(self) -> None:
         """The instrument working: same strata, same coverage, opponent visibly slowed."""
@@ -4597,6 +5029,122 @@ class FoulPlayStartMethodProbeTest(unittest.TestCase):
 
         self.assertEqual(probe["status"], "probe_failed")
         self.assertIsNone(probe["iterations_observable"])
+
+    def test_the_probe_ignores_noise_before_its_answer(self) -> None:
+        """A wrapper or a warning printing first used to be read AS the start method."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            noisy = Path(tmp) / "noisy-python"
+            noisy.write_text(
+                "#!/bin/sh\n"
+                "echo 'warning: venv is stale'\n"
+                f"exec {sys.executable} \"$@\"\n"
+            )
+            noisy.chmod(0o755)
+            config = ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                foulplay_python=noisy,
+            )
+
+            probe = asyncio.run(_probe_foulplay_start_method(config))
+
+        self.assertEqual(probe["status"], "probed")
+        self.assertIn(probe["opponent_start_method"], {"fork", "spawn", "forkserver"})
+        self.assertNotEqual(probe["opponent_start_method"], "warning:")
+
+    def test_a_hanging_interpreter_times_out_fast_and_leaks_nothing(self) -> None:
+        """Two failing inputs in one: a leaked child, and a cleanup that stalls the run.
+
+        The first cleanup I wrote killed the child and then awaited it UNBOUNDED, which
+        blocked for the child's natural lifetime -- measured 30.1 s against a 0.3 s timeout.
+        A stalled run is worse than the orphan it was fixing, so both waits are bounded and
+        the whole process group is taken out (a wrapper script's child otherwise survives its
+        parent and keeps holding our pipe).
+        """
+
+        marker = "sleep 31.5"
+        with tempfile.TemporaryDirectory() as tmp:
+            hanging = Path(tmp) / "hanging-python"
+            hanging.write_text(f"#!/bin/sh\n{marker}\n")
+            hanging.chmod(0o755)
+            config = ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                foulplay_python=hanging,
+            )
+
+            started = time.monotonic()
+            probe = asyncio.run(_probe_foulplay_start_method(config, timeout_seconds=0.3))
+            elapsed = time.monotonic() - started
+
+        self.assertEqual(probe["status"], "probe_failed")
+        self.assertIsNone(probe["iterations_observable"])
+        self.assertIn("TimeoutError", probe["error"])
+        # Returns at its timeout, not at the child's convenience.
+        self.assertLess(elapsed, 3.0)
+        self.assertTrue(probe["probe_child_reaped"])
+        # And the wrapper's own child does not outlive it.
+        survivors = subprocess.run(
+            ["pgrep", "-f", marker], capture_output=True, text=True
+        ).stdout.split()
+        self.assertEqual(survivors, [])
+
+    def test_a_child_that_escapes_the_process_group_cannot_stall_the_reap(self) -> None:
+        """The failing input for BOUNDING the reap, as opposed to just killing the group.
+
+        A wrapper that daemonises a helper leaves a grandchild in its own session holding the
+        inherited stdout pipe, which `killpg` on our group cannot reach. Measured on that
+        input: an unbounded `await process.wait()` blocks 31.22 s, the bounded one returns in
+        1.00 s and says plainly that it could not reap.
+        """
+
+        marker = "sleep-escapee-31.5"
+        script = (
+            "#!/bin/sh\n"
+            f"{sys.executable} -c 'import os,time; os.setsid(); time.sleep(31.5)' "
+            f"# {marker}\n"
+            "sleep 31.5\n"
+        )
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                wrapper = Path(tmp) / "wrapper-python"
+                wrapper.write_text(script)
+                wrapper.chmod(0o755)
+                config = ControlledFoulPlayConfig(
+                    checkpoint=Path("checkpoint.pt"),
+                    showdown_root=Path("/showdown"),
+                    foulplay_python=wrapper,
+                )
+
+                started = time.monotonic()
+                probe = asyncio.run(_probe_foulplay_start_method(config, timeout_seconds=0.3))
+                elapsed = time.monotonic() - started
+
+            self.assertEqual(probe["status"], "probe_failed")
+            self.assertLess(elapsed, 5.0)
+            self.assertIn("probe_child_reaped", probe)
+        finally:
+            subprocess.run(["pkill", "-f", "31.5"], capture_output=True)
+
+    def test_the_run_actually_probes(self) -> None:
+        """Deleting the probe call left all tests green, so nothing pinned that it runs."""
+
+        import inspect
+
+        import pokezero.foulplay_bridge as bridge
+
+        # `_run_controlled_foulplay_games` is the function that owns the game loop; both
+        # public entry points funnel into it, so pinning it here covers the audit driver too.
+        source = inspect.getsource(bridge._run_controlled_foulplay_games)
+        self.assertIn("foulplay_start_method = await _probe_foulplay_start_method(config)", source)
+        # Only when there IS a foul-play process to probe.
+        self.assertLess(
+            source.index("if opponent_policy is None:"),
+            source.index("_probe_foulplay_start_method(config)"),
+        )
+        # And it reaches the result the summary is built from.
+        self.assertIn("foulplay_start_method=foulplay_start_method", source)
 
     def test_the_header_carries_the_probe_and_its_verdict(self) -> None:
         result = ControlledFoulPlayBenchmarkResult(
