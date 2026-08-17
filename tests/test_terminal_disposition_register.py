@@ -66,7 +66,7 @@ are pinned against the two census modules' own constants, read by AST rather tha
 update the register in the same change. That is deliberate: the document that goes stale is
 the one nothing forces an author through.
 
-MUTATION BATTERY: 68 applied, 68 caught, plus 1 NEGATIVE CONTROL verified green.
+MUTATION BATTERY: 69 applied, 69 caught, plus 1 NEGATIVE CONTROL verified green.
 Partitioned by WHAT IS MUTATED. Enumerated because
 an unrecorded battery is what `tests/test_wide_seed_negative_census.py` records costing it a
 surviving mutation, and because "the tests pass" is the same kind of claim this module
@@ -140,7 +140,7 @@ BLOCK A -- A1-A37, applied to the REGISTER's own bytes.
        `TheDocumentsClaimsAboutItselfAreReDerivedTests`, which exists because review blocked
        two successive revisions on claims the document made about ITSELF.
 
-BLOCK B -- B38-B68, THIRTY-ONE mutations applied ONLY to the tree and never to the document.
+BLOCK B -- B38-B69, THIRTY-TWO mutations applied ONLY to the tree and never to the document.
 Block A can be passed by a pin that reads the register against a hard-coded copy of itself.
 These are the ones that prove each derivation reads what it claims to: every one MAKES A REAL
 CHANGE TO THE TREE and the document, unedited, must go red. Six are the absences, and an
@@ -292,6 +292,22 @@ has recorded.
        shrinks with it. All four variants die on `test_every_value_re_derives`. A declared
        coupling and a free one: anything that changes this inventory moves the fingerprint
        too, so Appendix A is already being edited in the same change.
+  B69. ⚠ AND B68's FIX HAD A FIFTH FRAME TOO, which is why the register now says to expect
+       one rather than claiming there is none. Appendix A's inventory rows stop a hasher and
+       an enumerator COLLUDING -- but not an author who reseats the inventory rows as well.
+       Measured: hasher and enumerator both skipping `tree.rs`, with `t1.head_fingerprint`,
+       `t1.hashed_input_files` AND `t1.hashed_crate_sources` all updated to the mutant's own
+       values -- i.e. every number the failure messages name -- was a clean
+       `Ran 51 tests, OK`. Nothing in the module OR the document knew that 11 was right.
+       `git ls-files` does, and it is a THIRD anchor outside both. Against it the collusion
+       is red however many rows are reseated, and it is killed by that one assertion alone:
+       `FAILED (failures=1)`.
+       SCOPE, stated because an unscoped anchor is this register's signature defect: git
+       pins the GLOBBED classes exactly -- crate sources and the four build files -- and
+       NOT the patch class, because `third_party/` tracks 77 `.patch` files while the
+       manifest lists 74 and not hashing the other three is CORRECT. What is pinned there
+       instead is that every patch the manifest names is tracked, so it cannot name a
+       phantom.
 
 
 BLOCK C -- NEGATIVE CONTROLS. Mutations that must stay GREEN because they do not change the
@@ -329,6 +345,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -1535,6 +1552,95 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
                 baseline,
                 "the loop did not restore the sandbox, so a later probe measured a tree "
                 "the earlier ones had already changed.",
+            )
+
+    @staticmethod
+    def _tracked(pathspec: str) -> set[Path]:
+        """What GIT says is in the tree. A third anchor, and deliberately not code."""
+
+        done = subprocess.run(
+            ["git", "-C", str(REPO), "ls-files", "-z", "--", pathspec],
+            capture_output=True,
+            check=True,
+        )
+        return {
+            (REPO / name).resolve()
+            for name in done.stdout.decode("utf-8").split("\0")
+            if name
+        }
+
+    def test_the_hashed_crate_inputs_are_the_files_git_tracks(self) -> None:
+        """⚠ THE FIFTH FRAME, closed against an anchor that is neither code nor the document.
+
+        Appendix A's inventory rows (B68) stop a hasher and an enumerator colluding, because
+        the document disagrees with both. But MEASURED: an author who reseats the fingerprint
+        AND both inventory rows -- i.e. one who updates every number the failure messages
+        name -- lands a `crate_sources()` that skips `tree.rs` at a clean `Ran 51 tests, OK`.
+        Nothing in the module or the document knows that 11 was the right number.
+
+        `git ls-files` does. It is a third source, outside both, and it does not move when
+        someone edits the register or the hasher. Against it the collusion is red no matter
+        how many rows are reseated.
+
+        SCOPE, because an unscoped anchor is this register's signature defect: this pins the
+        GLOBBED classes -- crate sources and the four build files -- exactly, because for
+        those "what the tree holds" and "what git tracks" are the same question. It does NOT
+        pin the patch class to git: `third_party/` tracks MORE `.patch` files than the
+        manifest lists (77 tracked, 74 listed), and not hashing the unlisted ones is correct
+        -- the manifest is the definition of that class. What is pinned there instead is that
+        every patch the manifest names is TRACKED, so the manifest cannot name a phantom.
+        """
+
+        hashed = {path.resolve() for path in self._hashed_inputs()}
+        enumerated = {path.resolve() for path in _tree_side_hashed_inputs()}
+        crate_src = (REPO / "rust" / "pokezero-search" / "src").resolve()
+
+        with self.subTest(anchor="crate sources"):
+            tracked = {
+                path for path in self._tracked("rust/pokezero-search/src")
+                if path.suffix == ".rs"
+            }
+            self.assertTrue(tracked, "git tracks no crate sources; the anchor read nothing")
+            for label, produced in (("hasher", hashed), ("enumerator", enumerated)):
+                under = sorted(
+                    str(path.relative_to(REPO))
+                    for path in produced
+                    if path.suffix == ".rs" and path.is_relative_to(crate_src)
+                )
+                self.assertEqual(
+                    under,
+                    sorted(str(path.relative_to(REPO)) for path in tracked),
+                    f"the {label}'s crate-source set is not the set git tracks. A source "
+                    "git knows about and the fingerprint does not is a file the engine is "
+                    "built from without moving its identity -- and this is the one "
+                    "assertion that stays red when the hasher, the enumerator AND every "
+                    "Appendix A row have been reseated together.",
+                )
+
+        with self.subTest(anchor="build files"):
+            for name in ("Cargo.toml", "Cargo.lock", "build.rs", "pyproject.toml"):
+                tracked = self._tracked(f"rust/pokezero-search/{name}")
+                self.assertEqual(
+                    len(tracked), 1, f"git does not track exactly one {name} at the crate root"
+                )
+                self.assertLessEqual(
+                    tracked,
+                    hashed,
+                    f"git tracks {name} at the crate root and the fingerprint does not hash "
+                    "it. `pyproject.toml` carries the maturin feature flags, so this is the "
+                    "shape where an extension is built with different features at the same "
+                    "stamp.",
+                )
+
+        with self.subTest(anchor="the manifest names only tracked patches"):
+            listed = {path.resolve() for path in engine_build_fingerprint.patch_files()}
+            tracked = self._tracked("third_party/*.patch")
+            self.assertTrue(listed, "the patch list resolved to nothing")
+            self.assertEqual(
+                sorted(str(p.relative_to(REPO)) for p in listed - tracked),
+                [],
+                "the patch manifest names files git does not track, so the patch stack this "
+                "identity covers is not reconstructible from the checkout.",
             )
 
     def test_swapping_two_hashed_files_contents_moves_the_head_fingerprint(self) -> None:

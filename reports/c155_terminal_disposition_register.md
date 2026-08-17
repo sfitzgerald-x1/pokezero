@@ -165,7 +165,7 @@ mutation in this battery to survive: blocks A and B target the DOCUMENT and the 
 targets the DERIVATION. `TheFingerprintDerivationReadsTheTreeTests` closes it.
 
 ⚠ **AND IT TOOK THREE ROUNDS, because the first two fixes were the same mistake.** Two independent
-review rounds returned **thirteen** further surviving mutants (a fourteenth I found myself, re-reading the thirteenth's fix), recorded as **B55–B68**, and the
+review rounds returned **thirteen** further surviving mutants (a fourteenth I found myself, re-reading the thirteenth's fix), recorded as **B55–B69**, and the
 pattern is worth more than any one of them: *each fix pinned the seam the last mutant used, and the
 next mutant simply moved one frame outward.* Round 1 pinned `head_fingerprint`; the tautology moved
 to `derive()`. Round 2 pinned `derive()` and the comparison loop and published "the row reaches CI
@@ -190,14 +190,31 @@ derives its probe set from the hasher, so a hasher that reads less is probed les
 frame out, recorded as B68 and found by re-reading the third fix rather than by review.**
 `_tree_side_hashed_inputs` had become both the sandbox's source and the set-equality's expected side,
 so a hasher and an enumerator that shrink **in the same direction agree with each other**: both
-skipping `tree.rs`, reseated, was a clean `Ran 51 tests, OK`. The answer is not a fifth code-side
+skipping `tree.rs`, reseated, was a clean `Ran 51 tests, OK` (the module's count at that revision).
+The answer is not a fifth code-side
 pin. **It is to stop terminating in code at all**: Appendix A now records `t1.hashed_input_files`
 (**91**) and `t1.hashed_crate_sources` (**11**), so a shrunken enumerator disagrees with the
 DOCUMENT even when the hasher shrinks with it, and all four variants die on the appendix comparison.
 A declared coupling, and a free one — anything that changes this inventory moves the fingerprint too,
-so Appendix A is already being edited in the same change. **Twice now the fix has been to move the
-termination out of code: once to primary bytes, once to the document.** That is the shape of this
-defect, and it is the reason to expect a fifth frame rather than assume there is none.
+so Appendix A is already being edited in the same change.
+
+⚠ **AND THERE WAS A FIFTH FRAME, exactly as that paragraph predicted — B69.** The inventory rows stop
+a hasher and an enumerator colluding, but not an author who reseats the inventory rows too. Measured:
+both skipping `tree.rs`, with `t1.head_fingerprint`, `t1.hashed_input_files` **and**
+`t1.hashed_crate_sources` all updated to the mutant's own values — every number the failure messages
+name — was a clean `Ran 51 tests, OK` (the count at that revision). **Neither the module nor this
+document knew that 11 was the
+right number.** `git ls-files` does, and it is a third anchor outside both; against it the collusion
+is red however many rows are reseated, killed by that one assertion alone. Scope, because an unscoped
+anchor is this register's signature defect: git pins the **globbed** classes exactly — the crate
+sources and the four build files — and **not** the patch class, since `third_party/` tracks **77**
+`.patch` files while the manifest lists **74** and not hashing the other three is correct. There, what
+is pinned is that every patch the manifest names is tracked, so it cannot name a phantom.
+
+**Three times now the fix has been to move the termination further out of code: to primary bytes
+(B64), to the document (B68), to the tree's own index (B69).** Each round I believed the previous one
+had closed it. The honest statement is not that there is no sixth frame — it is that the anchors are
+now three, they are independent of each other, and the failure messages say which one fired.
 
 What the class asserts now: the helper-free comparison above; a second comparison routing through
 neither `derive()` nor the loop; `derive()` required to part company with the document on an edited
@@ -673,7 +690,7 @@ the merge. The register documents that class; it now has a first-party instance,
 failure message names the cause and the fix (merge `origin/main`, do not rebase, re-derive) rather
 than leaving the next author to rediscover it.
 
-**The `Ran N tests` guard.** The step carries an exact `Ran 51 tests`, re-derived from the module's
+**The `Ran N tests` guard.** The step carries an exact `Ran 52 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
 rather than inherited from #1205's figure. The workflow holds **34** lines containing the unittest
@@ -686,7 +703,7 @@ predicts exactly this and says to merge `origin/main` and re-derive. `origin/mai
 `tests.test_render_dropped_move_line_crate` invocation while this branch was open. Re-derived on the
 merged tree with `grep -c 'python -m unittest'`, not adjusted by one.) **This step is among the
 resolved ones** — the number is not restated here, because a fourth copy of it is a fourth thing to
-go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 51 from the module's AST
+go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 52 from the module's AST
 and matches the guard. All three numbers are **re-derived by the pin** rather than typed.
 
 ⚠ **#1205 IS CLOSED (C156), AND THE SENTENCE ABOVE IS WHAT ITS CLOSURE LOOKS LIKE.** This register
@@ -733,12 +750,12 @@ does not exist on either tree. Resolved by merging `origin/main` into the branch
 rebase) and re-deriving all four trees; the assertion now carries that diagnosis in its own failure
 message.
 
-**Mutation evidence.** **68 mutations applied, 68 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
-partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B68** edit **only the tree
+**Mutation evidence.** **69 mutations applied, 69 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
+partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B69** edit **only the tree
 and never this document**. That second number is the one that matters, because a pin reading a
 document against a hard-coded copy of itself passes every document-side mutation — and ⚠ **a first
 revision put it at ten and two of those ten edited the register**, which is the property being
-claimed, mis-stated. Thirty-one is the measured figure: a patch line shift, the tie-refusal arm deleted,
+claimed, mis-stated. Thirty-two is the measured figure: a patch line shift, the tie-refusal arm deleted,
 a damage push made to consult the truncation flag (G33c *fixed*), a sub-keyed single-seat counter
 added to a committed sweep, a freeze constant added to the differential, a real Showdown checkout
 added to the workflow, the head fingerprint written into an artifact, an `hp`-ceiling context line
@@ -765,7 +782,7 @@ And the id list is justified by the mutation that actually needs it: **B52**, a 
 marker and adds one to G1, holding the count at **9** while the membership changes — red on the ids,
 green on the count, and the only mutation in the battery a count cannot catch.
 
-**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 51
+**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 52
 tests, OK**. The gated family together: ledger uniformity **19**, never-fired **22**, wide-seed
 **36**, C154 re-adjudication **38**, seed registry **41**, single-seat coverage **3** — all OK.
 (⚠ C154 re-adjudication was stated as **34** and is **38** — re-derived here with
