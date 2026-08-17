@@ -748,7 +748,8 @@ class RunTermDegreesOfFreedomTest(unittest.TestCase):
 
         That is a Gaussian tail computed from a 5-df variance: 1.25 is 3.06 nominal sigma out and
         the normal two-sided tail there is 1 in 449, which the previous text rounded to "on the
-        order of 300". Carried through t at the same df it is nearer 1 in 35 -- an order of
+        order of 300". Carried through t at the same df it is 1 in 35.5 at the asymptote and 1 in
+        36.7 at the calibration's n=24, both two-sided -- an order of
         magnitude worse, in the direction that matters -- and the DATA bound it only at 18.1%,
         the exact one-sided 95% upper bound for 0 refusals in 15 matched pairs. All three numbers
         are computed here, because the point is the spread between them.
@@ -762,7 +763,7 @@ class RunTermDegreesOfFreedomTest(unittest.TestCase):
         with_t = student_t_two_sided_tail(sigmas, satterthwaite_df(10**6, 10**6))
         self.assertAlmostEqual(1.0 / with_t, 35.5, delta=0.5)
         # An order of magnitude, which is what makes the retraction load-bearing rather than
-        # pedantic: 1-in-300 reads as negligible and 1-in-35 does not.
+        # pedantic: 1-in-300 reads as negligible and 1-in-36 does not.
         self.assertGreater(with_t / gaussian, 10.0)
 
         pairs = 15
