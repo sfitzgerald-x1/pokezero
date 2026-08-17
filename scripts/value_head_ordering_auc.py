@@ -33,19 +33,33 @@ over pairs eligible at tau. This is the tie-aware AUC of head-gap against the si
     `--drop-ties` flag in this tool on purpose; `tests/test_value_head_ordering_auc.py`
     computes the drop-ties number to prove the rule is what stops the laundering.
 
+    AND THE MIRROR-IMAGE HOLE THAT HALF CREDIT OPENS IS CLOSED SEPARATELY. Half credit means
+    an arm that goes to an exact tie precisely where it used to be WRONG collects +0.5 a pair
+    for abstaining: measured +0.1357 (p = 5.8e-11, 35 manufactured ties) on the banked pairs
+    by the review that found it, with zero orderings improved. So advancement must ALSO survive
+    scoring every newly manufactured tie as WRONG (`delta_c_new_ties_scored_wrong`), and the
+    verdict is read off the worse of the two. A real ordering improvement creates no new ties
+    and is untouched; an abstention buys nothing. Aiming that attack needs the labels, but "the
+    attacker would need the labels" is not a property of the statistic.
+
     PAIRS WITH true_gap == 0 ARE EXCLUDED, NEVER SCORED (95 of the banked 465). There is no
     ordering to be right about, so counting them as failures would penalise a perfect head
     and counting them as successes would reward a coin flip. `value_head_sibling_probe.py`
     already excludes them; this tool keeps the convention.
 
 THE ADVANCEMENT STATISTIC IS PAIRED. dC = C_arm - C_baseline on the IDENTICAL eligible set,
-tested by an exact McNemar/sign test over the orderings that actually CHANGED. Arms are
-rescores of one banked pair set: same states, same reused ground truth. This programme has a
-documented history of applying unpaired tests to paired designs (`sibling_gap_compare.py`'s
-header is the previous instance -- two overlapping marginal CIs eyeballed as a difference
-test), so the paired test is the default here and the unpaired one is not implemented.
-`grep -rn mcnemar` over this repo returned nothing before this file: the paired tests quoted
-in earlier reports were computed ad hoc and are not reproducible from the tree.
+tested by an EXACT SIGN-FLIP (randomization) test over the orderings that actually CHANGED --
+which IS the exact McNemar test when every changed ordering moves C by the same amount, and is
+the correct generalisation when some of them are tie transitions worth half a swing. The
+discordance-COUNT version is reported as a sensitivity only; using it as the headline is what
+an independent review broke (see `exact_signflip_p` for the input that made it certify PASS off
+a p pointing at the baseline). Arms are rescores of one banked pair set: same states, same
+reused ground truth. This programme has a documented history of applying unpaired tests to
+paired designs (`sibling_gap_compare.py`'s header is the previous instance -- two overlapping
+marginal CIs eyeballed as a difference test), so the paired test is the default here and the
+unpaired one is not implemented. `grep -rn mcnemar` over this repo returned nothing before this
+file: the paired tests quoted in earlier reports were computed ad hoc and are not reproducible
+from the tree.
 
 WHAT THIS INSTRUMENT DOES NOT MEASURE -- printed in its own output, every run, because it
 bounds every number it produces:
@@ -57,15 +71,20 @@ bounds every number it produces:
      conditioning. Only a label marginalised over replies would (the plan's backup-dilution
      item).
   2. ABSOLUTE LEVELS ARE DESCRIPTIVE, NEVER GATED. Eligibility selects on a NOISY measured
-     gap (per-pair gap SE ~0.065 banked mean, 0.088 worst case at R=64 -- both comparable to
+     gap (per-pair gap SE 0.0653 banked mean, 0.0884 worst case at R=64 -- both comparable to
      tau=0.10, NOT far below it). The ceiling programme's spec asks for label SE << tau; at
      the banked R that condition IS NOT MET at any tau this bank can support, and the tool
      says so on every run rather than quietly reporting C as if it were unbiased. What the
-     rule protects is absolute-level claims, and those are reported and never gated. It does
-     not transfer to the paired dC, because selection on a noisy label is a COMMON selection
-     applied to both cells: it ATTENUATES a real difference rather than manufacturing one
-     (`test_noisy_selection_attenuates_and_cannot_manufacture_a_delta` measures the
-     attenuation and pins the cannot-manufacture half exactly).
+     rule protects is absolute-level claims, and those are reported and never gated.
+     What transfers to the paired dC, stated at the strength it was actually measured at and
+     no further: (i) two cells that differ by a strictly monotone reparameterisation score
+     dC = 0 under ANY label, noisy or not -- an invariance, and trivially true, recorded so it
+     is not mistaken for something stronger; (ii) for a genuinely better arm the measured dC is
+     ATTENUATED toward the null, factor 0.78 at tau=0.10 (0.62 at 0.05, 0.88 at 0.15) against
+     the closed form 1-2f at label-flip rate f = 9.0%. That is a bias toward "no advancement",
+     i.e. conservative for a GATE. It is NOT a theorem that noise can never inflate a
+     particular arm's point estimate: a single noisy draw can, and what bounds that is the
+     exact test's alpha, not the attenuation.
   3. PAIRS CLUSTER BY GAME. 465 pairs come from 80 games at ~6 sampled decisions each, so
      the exact test's independence assumption is optimistic. A game-clustered bootstrap runs
      alongside every comparison; if its interval is materially wider than the exact test
@@ -73,7 +92,8 @@ bounds every number it produces:
      read.
 
 THE GATE IS INERT BELOW ITS POWERED n, AND SAYS SO. At the banked 465 pairs -- 129 eligible
-at tau=0.10 -- the achieved MDE is 4-14 pp against arms that produce 1-5 pp. An instrument
+at tau=0.10 -- the achieved MDE across the nine banked arms is 3.1-9.0 pp (up to 15 pp on the
+heavily-discordant demos) against arms that produce 1-5 pp. An instrument
 that returned "no advancement" there would be reporting a power failure in the vocabulary of a
 finding. So no arm can reach PASS unless the achieved MDE clears the preregistered target, the
 required n is printed, and a significant-but-underpowered gain is labelled
@@ -117,6 +137,7 @@ ALPHA = 0.05                       # two-sided, exact
 POWER = 0.80
 ASSUMED_DISCORDANCE_RATE = 0.20    # only for the "required n" projection when none observed
 GAP_SCALE = 2.0                    # head_gap == (head_a - head_b) / GAP_SCALE (win-prob units)
+MUCH_LESS_THAN_RATIO = 0.2         # the reading of "label SE << tau" this instrument commits to
 
 # 0.5 * sqrt(2/R): the gap SE of the R-rollout label near p=0.5, i.e. the worst case. The
 # banked mean is computed per run from noise_var and is smaller.
@@ -161,13 +182,74 @@ def wilson(k: float, n: int, z: float = 1.959963984540054) -> tuple[float, float
     return (max(0.0, centre - half), min(1.0, centre + half))
 
 
+def exact_signflip_p(diffs: Sequence[float]) -> float:
+    """THE primary test: exact paired randomization (sign-flip) test of H0: dC = 0.
+
+    WHY NOT THE COUNT TEST. An independent adversarial review broke the first version of this
+    gate here, and the break is worth recording in full. Counting discordances -- b = orderings
+    the baseline got right and the arm got wrong, c = the reverse -- and testing b vs c under
+    Bin(b+c, 1/2) is exact McNemar, and it tests H0: dC = 0 ONLY when every discordance moves C
+    by the same amount. This statistic has TWO step sizes: a flipped ordering moves C by 1/n, a
+    tie transition by 0.5/n. So the count test tests the wrong null the moment ties are in play
+    -- which is the case the tie rule exists for. The demonstration, on the shipped code:
+
+        n = 6000, 900 pairs where the arm flips a wrong ordering right (+1.0 each) and 1500
+        where it turns a right ordering into a tie (-0.5 each): dC = +0.0250 and the count test
+        returned p = 2.2e-34 IN THE BASELINE'S FAVOUR -- and the gate read PASS off it.
+
+    A p-value pointing the opposite way from the effect it is attached to is not a conservative
+    bug; it certifies whichever direction the counts happen to favour. So the primary test is a
+    sign-flip randomization test on the per-pair differences themselves: under H0 each discordant
+    pair's difference is equally likely to have either sign, and the null distribution of their
+    SUM (which is n * dC) is enumerated exactly. The statistic tested is the statistic reported.
+
+    It is a strict generalisation, not a replacement: when every discordance is a full swing this
+    returns EXACTLY the two-sided exact McNemar p (pinned by
+    `test_the_signflip_test_reduces_exactly_to_mcnemar_when_every_swing_is_full`).
+    """
+    d = [x for x in diffs if x != 0]
+    if not d:
+        return 1.0
+    s_obs = abs(sum(d))
+    # Scores live on the 0 / 0.5 / 1 lattice, so the magnitudes are integer multiples of the
+    # smallest one and the null distribution is an exact convolution. Normalising by the
+    # smallest magnitude rather than by a hardcoded 2 keeps the branch choice SCALE-INVARIANT:
+    # a mutation that halved every difference (a no-op for a scale-invariant test) otherwise
+    # slipped the mixed-swing case into the approximation branch.
+    unit = min(abs(x) for x in d)
+    w = [abs(x) / unit for x in d]
+    if len(d) <= 400 and all(abs(x - round(x)) < 1e-9 for x in w):
+        wi = [round(x) for x in w]
+        total = sum(wi)
+        counts = [0] * (total + 1)
+        counts[0] = 1
+        for weight in wi:
+            nxt = [0] * (total + 1)
+            for j, c in enumerate(counts):
+                if c:
+                    nxt[j] += c
+                    nxt[j + weight] += c
+            counts = nxt
+        # with integer weights u_i, a sign assignment whose positive weights sum to j has
+        # signed total (2j - total) in units of `unit`; the observed one is s_obs / unit.
+        thresh = s_obs / unit - 1e-9
+        hits = sum(c for j, c in enumerate(counts) if abs(2 * j - total) >= thresh)
+        return min(1.0, hits / (1 << len(wi)))
+    # Large m: the exact enumeration is O(m * sum(w)) in big integers. Var(S) = sum(w_i^2/4)
+    # for independent +-w_i/2, and the normal approximation is accurate to well past the
+    # fourth decimal at this m.
+    sd = math.sqrt(sum(x * x for x in d))
+    if sd == 0:
+        return 1.0
+    return min(1.0, math.erfc(s_obs / sd / math.sqrt(2)))
+
+
 def exact_mcnemar_p(b: int, c: int) -> float:
     """Two-sided exact McNemar / sign test: 2 * P(X <= min(b,c)) under Bin(b+c, 1/2).
 
-    b = orderings the baseline got right and the arm got wrong, c = the reverse. Concordant
-    pairs carry no information about the difference and are not counted -- that is the whole
-    point of a paired test, and the reason a 465-pair bank can be informative about an arm
-    that changes 5 orderings while being hopeless about its absolute level.
+    Retained as a SENSITIVITY restricted to full swings, where it is exactly right (and equals
+    `exact_signflip_p` on the same data). It is NOT the headline: see that function for the
+    input on which using it as the headline read PASS off a p pointing the other way.
     """
     n = b + c
     if n == 0:
@@ -415,7 +497,8 @@ def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
     up = [d for _, d in diffs if d > 0]
     down = [d for _, d in diffs if d < 0]
     b_cnt, c_cnt = len(down), len(up)
-    p_exact = exact_mcnemar_p(b_cnt, c_cnt)
+    p_exact = exact_signflip_p([d for _, d in diffs])
+    p_counts = exact_mcnemar_p(b_cnt, c_cnt)
     full = [d for _, d in diffs if abs(d) == 1.0]
     half = [d for _, d in diffs if abs(d) == 0.5]
     p_full_only = exact_mcnemar_p(sum(1 for d in full if d < 0), sum(1 for d in full if d > 0))
@@ -423,9 +506,40 @@ def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
     mde = mde_delta_c(n, len(diffs), mean_swing)
     powered = bool(diffs) and math.isfinite(mde) and mde <= target
 
+    ties_base = sum(1 for k in sel if float(ref_rows[k]["head_gap"]) == 0.0)
+    ties_arm = sum(1 for k in sel if hg_arm(arm_rows[k]) == 0.0)
+    new_ties_keys = {k for k in sel
+                     if hg_arm(arm_rows[k]) == 0.0 and float(ref_rows[k]["head_gap"]) != 0.0}
+    new_ties = len(new_ties_keys)
+
+    # THE ABSTENTION GUARD. Half credit for a head-side tie is what stops a saturating
+    # transform from laundering broken orderings (see the module head), but it also opens the
+    # mirror-image door: an arm that goes to an exact tie precisely where it used to be WRONG
+    # collects +0.5 per abstention with no reordering whatsoever. Measured on the banked pairs
+    # by the review that found it: dC = +0.1357, p = 5.8e-11, 35 manufactured ties, zero
+    # orderings improved. It needs label access to aim, so it is not something training
+    # stumbles into -- but "the attacker would need the labels" is not a property of the
+    # statistic, and this gate is not allowed to rest on one.
+    # So advancement must also survive scoring EVERY NEWLY MANUFACTURED TIE AS WRONG. A real
+    # ordering improvement creates no new ties and is untouched (delta_adv == delta); an
+    # abstention buys exactly nothing.
+    arm_adv = [0.0 if k in new_ties_keys else s for k, s in zip(sel, arm)]
+    delta_adv = concordance(arm_adv) - c_base
+    diffs_adv = [a - b for a, b in zip(arm_adv, base) if a != b]
+    p_adv = exact_signflip_p(diffs_adv)
+    # The p must belong to the statistic the gate READS -- that is the whole lesson of the
+    # count-test defect above, applied to this guard as well. So when the arm manufactured ties
+    # and the guard therefore bites, the p reported alongside is the guarded statistic's p, not
+    # the naive one. (A first version took min(delta) and max(p) independently; a mutation that
+    # reverted the p half survived the suite, because the two were not tied together.)
+    if delta_adv < delta:
+        delta_gate, p_gate = delta_adv, p_adv
+    else:
+        delta_gate, p_gate = delta, p_exact
+
     if not diffs:
         verdict = "NO_ADVANCE_INVARIANT"
-    elif delta >= target and p_exact < ALPHA:
+    elif delta_gate >= target and p_gate < ALPHA:
         verdict = "PASS" if powered else "PASS_PENDING_REMEASURE"
     elif delta <= -target and p_exact < ALPHA:
         verdict = "REGRESSED"
@@ -435,10 +549,6 @@ def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
         verdict = "UNDERPOWERED_NO_VERDICT"
 
     lo, hi = clustered_bootstrap_ci(base, arm, [k[0] for k in sel], reps=bootstrap_reps)
-    ties_base = sum(1 for k in sel if float(ref_rows[k]["head_gap"]) == 0.0)
-    ties_arm = sum(1 for k in sel if hg_arm(arm_rows[k]) == 0.0)
-    new_ties = sum(1 for k in sel
-                   if hg_arm(arm_rows[k]) == 0.0 and float(ref_rows[k]["head_gap"]) != 0.0)
     return {
         "tau": tau,
         "n_eligible": n,
@@ -450,6 +560,11 @@ def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
         "c_baseline_ci95_descriptive_only": list(wilson(sum(base), n)),
         "c_arm_ci95_descriptive_only": list(wilson(sum(arm), n)),
         "delta_c": delta,
+        # the abstention guard's numbers, and the pair the verdict is actually read off
+        "delta_c_new_ties_scored_wrong": delta_adv,
+        "delta_c_gate": delta_gate,
+        "exact_signflip_p_new_ties_scored_wrong": p_adv,
+        "p_gate": p_gate,
         "head_ties_baseline": ties_base,
         "head_ties_arm": ties_arm,
         "head_ties_created_by_arm": new_ties,
@@ -459,7 +574,12 @@ def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
         "discordant_full_swings": len(full),
         "discordant_half_swings_tie_transitions": len(half),
         "mean_swing": mean_swing,
-        "exact_mcnemar_p_two_sided": p_exact,
+        # PRIMARY: the sign-flip randomization test on the per-pair differences, i.e. on the
+        # statistic actually reported. The two below are sensitivities and are NOT the headline:
+        # the discordance-count test is exact only when every swing is full, and using it as the
+        # headline read PASS off a p pointing the other way (see `exact_signflip_p`).
+        "exact_signflip_p_two_sided": p_exact,
+        "mcnemar_count_test_p_sensitivity_only": p_counts,
         "exact_mcnemar_p_full_swings_only": p_full_only,
         "mde_delta_c_at_80pct_power": mde,
         "powered_for_target": powered,
@@ -504,6 +624,19 @@ def _pointwise(g: Callable[[float], float]) -> Callable[[Mapping[str, Any], rand
     return lambda p, _rng: (g(float(p["head_a"])), g(float(p["head_b"])))
 
 
+def _abstain_where_wrong(p: Mapping[str, Any], _rng: random.Random) -> tuple:
+    """LABEL-AIMED ABSTENTION: go to an exact head-side tie exactly where the head is wrong.
+
+    The attack half credit invites, and the reason `delta_c_new_ties_scored_wrong` exists. It
+    reorders nothing; it converts 0s into 0.5s. It needs the label to aim, so no training run
+    finds it by accident -- but the gate must still refuse it, and the demo table shows both the
+    naive number it would collect and the zero the shipped rule pays it.
+    """
+    hg, tg = float(p["head_gap"]), float(p["true_gap"])
+    wrong = tg != 0.0 and hg != 0.0 and (hg > 0) != (tg > 0)
+    return (0.0, 0.0) if wrong else (float(p["head_a"]), float(p["head_b"]))
+
+
 # name -> (construction, what it is, what the gate MUST do with it)
 DEMOS: dict[str, tuple[Callable, str, str]] = {
     "affine_rescale_k3.2764": (
@@ -531,6 +664,12 @@ DEMOS: dict[str, tuple[Callable, str, str]] = {
         "the same saturation applied after a win-prob reparameterisation (harsher: almost "
         "every pair collapses)",
         "dC strongly negative"),
+    "abstention_gaming_label_aimed_ties": (
+        _abstain_where_wrong,
+        "LABEL-AIMED ABSTENTION: ties manufactured exactly where the head is wrong, collecting "
+        "half credit for zero reordering (the mirror-image of the drop-ties hole)",
+        "must NOT pass: dC is large and positive under naive scoring, and the gate reads it off "
+        "delta_c_new_ties_scored_wrong, where it is <= 0"),
     "ordering_corrupted_15pct": (
         _corrupt(0.15),
         "ordering deliberately corrupted: 15% of pairs have their two head values swapped",
@@ -607,10 +746,12 @@ ABSOLUTE_LEVEL_CAVEAT = (
 LABEL_SE_CAVEAT = (
     "The programme's spec asks for label SE << tau. At R={R} the per-pair gap SE is {banked:.4f} "
     "(banked mean) / {worst:.4f} (worst case near p=0.5) against tau={tau}, a ratio of "
-    "{ratio:.2f} -- the << condition IS NOT MET and no tau this bank supports would meet it. "
-    "This is reported, not waived: it is why absolute levels are never gated. It does not "
-    "transfer to dC, because a common selection on a noisy label ATTENUATES a real difference "
-    "rather than manufacturing one (see the attenuation test)."
+    "{ratio:.2f} -- the << condition {met} at the ratio this instrument commits to. This is "
+    "reported, not waived: it is why absolute levels are never gated. What it means for the "
+    "PAIRED dC, at the strength measured and no further: two cells differing by a monotone "
+    "reparameterisation score exactly 0 under any label (an invariance), and a real difference "
+    "is ATTENUATED toward the null (0.78 at tau=0.10), which is conservative for a gate. It is "
+    "not a guarantee that noise cannot inflate one arm's point estimate; alpha bounds that."
 )
 ADVANCEMENT_NOTE = (
     "A PASS here is NECESSARY, NOT SUFFICIENT for arm advancement: the ceiling programme "
@@ -620,18 +761,26 @@ ADVANCEMENT_NOTE = (
 
 
 def label_se_note(rows: Mapping[tuple, dict], keys: Sequence[tuple], tau: float) -> dict:
+    """Compute the spec's label-SE-vs-tau condition from the bank. DERIVED, not asserted: a
+    review found this field hardcoded to False and witnessed only by a test asserting False,
+    which certifies nothing about any bank. `MUCH_LESS_THAN_RATIO` is the reading of "<<" this
+    instrument commits to, and a bank with small enough label noise makes the field read True
+    (`test_the_label_se_condition_reads_true_on_a_bank_that_actually_meets_it`)."""
     var = [float(rows[k]["noise_var"]) for k in keys if rows[k].get("noise_var") is not None]
     banked = math.sqrt(st.mean(var)) if var else float("nan")
+    ratio = banked / tau if tau else float("inf")
+    met = bool(math.isfinite(ratio) and ratio <= MUCH_LESS_THAN_RATIO)
     return {
         "rollouts_R": PINNED_ROLLOUTS,
         "label_gap_se_banked_mean": banked,
         "label_gap_se_worst_case": LABEL_GAP_SE_WORST_CASE,
         "tau": tau,
-        "se_over_tau_banked": banked / tau if tau else float("inf"),
-        "condition_label_se_much_less_than_tau_met": False,
-        "text": LABEL_SE_CAVEAT.format(R=PINNED_ROLLOUTS, banked=banked,
-                                       worst=LABEL_GAP_SE_WORST_CASE, tau=tau,
-                                       ratio=(banked / tau if tau else float("inf"))),
+        "se_over_tau_banked": ratio,
+        "much_less_than_ratio_used": MUCH_LESS_THAN_RATIO,
+        "condition_label_se_much_less_than_tau_met": met,
+        "text": LABEL_SE_CAVEAT.format(
+            R=PINNED_ROLLOUTS, banked=banked, worst=LABEL_GAP_SE_WORST_CASE, tau=tau,
+            ratio=ratio, met=("IS MET" if met else "IS NOT MET")),
     }
 
 
@@ -647,11 +796,13 @@ def provenance(path: Path) -> dict:
 def _fmt(row: dict) -> str:
     mde = row["mde_delta_c_at_80pct_power"]
     half = row["discordant_half_swings_tie_transitions"]
+    adv = ("" if row["delta_c_gate"] == row["delta_c"]
+           else f" (gate reads {row['delta_c_gate']:+.4f} with new ties scored wrong)")
     return (f"  tau={row['tau']:<5.2f} n={row['n_eligible']:<4d} C {row['c_baseline']:.4f} -> "
-            f"{row['c_arm']:.4f}  dC {row['delta_c']:+.4f}  "
+            f"{row['c_arm']:.4f}  dC {row['delta_c']:+.4f}{adv}  "
             f"disc {row['discordant_total']:<3d} (arm+{row['discordant_arm_better']}/"
             f"base+{row['discordant_baseline_better']}, {half} tie-swings)  "
-            f"p={row['exact_mcnemar_p_two_sided']:.4f}  MDE "
+            f"p={row['exact_signflip_p_two_sided']:.4f}  MDE "
             f"{'n/a' if not math.isfinite(mde) else f'{mde:.4f}'}  {row['verdict']}")
 
 

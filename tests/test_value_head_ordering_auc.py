@@ -51,13 +51,19 @@ def make_pairs(n=465, seed=11, beta=0.30, noise=0.03, level_sd=1.0, n_games=80,
     465 pairs over 80 games, a fifth with true_gap == 0, R=64 label noise on the truth column,
     and a head that is an attenuated, noisy view of the latent sibling gap.
 
-    The one non-obvious ingredient is the head's SATURATION COUPLING: the measured compression
-    signature is that the head's sibling gap shrinks where its output level is extreme (a
-    bounded head has no room left), while its idiosyncratic error does not shrink with it. So
-    near-saturated pairs carry less signal at the same noise, i.e. the head is LESS accurate
-    exactly where a saturating recalibration will collapse it into a tie. Without that coupling
-    the drop-ties laundering demo does not reproduce, and the fixture would make the 0.5 credit
-    look like a free choice instead of the thing that stops the laundering.
+    The load-bearing ingredient -- corrected after a review measured it, because the first
+    version of this docstring named the wrong one -- is `level_sd`: the head's OUTPUT LEVEL must
+    reach saturation, since that is what a saturating recalibration collapses into ties. At
+    level_sd=1.0 the drop-ties laundering reproduces (+0.077 with the coupling below, +0.041
+    without it); at level_sd=0.2 it does not reproduce at all (+0.001, 5 ties), which
+    `test_the_laundering_demo_needs_a_saturating_head_and_says_so` pins so the fixture cannot
+    quietly stop containing its own subject.
+
+    `room` adds the measured COMPRESSION signature on top: the head's sibling gap shrinks where
+    its output level is extreme (a bounded head has no room left) while its idiosyncratic error
+    does not, so near-saturated pairs carry less signal at the same noise. That makes the fixture
+    faithful to the banked head and roughly doubles the laundering effect. It is not what makes
+    the demo work.
 
     `structural_tie_frac` reproduces the banked head's 36 exact head-side ties (sibling actions
     whose successor observations are identical), so the baseline cell exercises the tie path too.
@@ -219,6 +225,25 @@ def test_the_saturating_head_would_pass_under_a_drop_ties_rule(cell):
     assert naive["n_arm_kept"] < naive["n_baseline_kept"]
 
 
+def test_the_laundering_demo_needs_a_saturating_head_and_says_so():
+    """A fixture that does not contain its own subject proves nothing. The laundering demo needs
+    head LEVELS that saturate; with levels pinned near zero, tanh(50 v) collapses almost nothing
+    and the drop-ties number is ~0. Pinned so the fixture's realism is a measured property."""
+    flat = {oi.pair_key(p): p for p in make_pairs(level_sd=0.2)}
+    keys = sorted(flat)
+    arm = oi.build_demo_cell(flat, keys, "saturating_tanh50")
+    r = oi.compare(flat, arm, keys, oi.TAU_PRIMARY, bootstrap_reps=20)
+    assert r["head_ties_created_by_arm"] < 10
+    assert abs(oi.drop_ties_delta(flat, arm, keys, oi.TAU_PRIMARY)["delta_c_drop_ties"]) < 0.01
+    # the shipped fixture, by contrast, saturates and launders
+    sat = {oi.pair_key(p): p for p in make_pairs()}
+    k2 = sorted(sat)
+    arm2 = oi.build_demo_cell(sat, k2, "saturating_tanh50")
+    assert oi.compare(sat, arm2, k2, oi.TAU_PRIMARY,
+                      bootstrap_reps=20)["head_ties_created_by_arm"] > 50
+    assert oi.drop_ties_delta(sat, arm2, k2, oi.TAU_PRIMARY)["delta_c_drop_ties"] > 0.03
+
+
 @pytest.mark.parametrize("name", ["ordering_corrupted_15pct", "ordering_corrupted_25pct"])
 def test_a_deliberately_ordering_corrupted_head_reads_clearly_negative(cell, name):
     r = cmp_at(cell, demo(cell, name))
@@ -238,14 +263,16 @@ def test_corruption_severity_orders_the_statistic(cell):
 def test_the_positive_control_is_detected_in_the_right_direction(cell, name):
     r = cmp_at(cell, demo(cell, name))
     assert r["delta_c"] >= 0.02, r["delta_c"]
-    assert r["exact_mcnemar_p_two_sided"] < 0.05
+    assert r["exact_signflip_p_two_sided"] < 0.05
     assert r["verdict"] in ("PASS", "PASS_PENDING_REMEASURE")
 
 
 def test_the_positive_control_beats_every_gaming_and_corruption_input(cell):
-    pos = min(cmp_at(cell, demo(cell, n))["delta_c"] for n in oi.DEMOS
+    """Compared on `delta_c_gate`, which is what the verdict reads: the label-aimed abstention
+    scores large and positive on the NAIVE statistic (that is the attack) and <= 0 on the gate."""
+    pos = min(cmp_at(cell, demo(cell, n))["delta_c_gate"] for n in oi.DEMOS
               if n.startswith("positive_control"))
-    bad = max(cmp_at(cell, demo(cell, n))["delta_c"] for n in oi.DEMOS
+    bad = max(cmp_at(cell, demo(cell, n))["delta_c_gate"] for n in oi.DEMOS
               if not n.startswith("positive_control"))
     assert pos > 0 >= bad
 
@@ -277,8 +304,236 @@ def test_transforming_the_gap_instead_of_the_values_would_make_two_demos_vacuous
 
 
 # ----------------------------------------------------------------------------------------
+# the decision rule itself. An adversarial review mutated `delta >= target` to `delta > 0`,
+# deleted the `p < ALPHA` conjunct, mutated `delta <= -target` to `delta < 0`, and widened
+# `advanced` to any PASS* verdict -- and all four mutants left the suite green. The gate's own
+# rule had no demonstrated failing input, which is precisely what the programme-wide rule
+# forbids. These are that demonstration.
+# ----------------------------------------------------------------------------------------
+def _rigged(n_eligible, n_up, n_down, tie_up=0, target=oi.ADVANCE_DELTA_C):
+    """A synthetic pair of cells with an exactly known dC: `n_up` orderings the arm fixes,
+    `n_down` it breaks, `tie_up` wrong orderings it converts to head-side ties (+0.5 each)."""
+    rows, arm = {}, {}
+    for i in range(n_eligible):
+        k = (i, 0, "p1")
+        if i < n_up:                     ha, hb, aa, ab = -0.2, 0.2, 0.2, -0.2
+        elif i < n_up + n_down:          ha, hb, aa, ab = 0.2, -0.2, -0.2, 0.2
+        elif i < n_up + n_down + tie_up: ha, hb, aa, ab = -0.2, 0.2, 0.1, 0.1
+        else:                            ha, hb, aa, ab = 0.2, -0.2, 0.2, -0.2
+        rows[k] = {"seed": i, "prefix": 0, "seat": "p1", "head_a": ha, "head_b": hb,
+                   "head_gap": oi.head_gap_from_values(ha, hb), "true_gap": 0.3,
+                   "true_a": 0.65, "true_b": 0.35, "noise_var": 0.004,
+                   "rollouts_a": 64, "rollouts_b": 64}
+        arm[k] = dict(rows[k], head_a=aa, head_b=ab,
+                      head_gap=oi.head_gap_from_values(aa, ab))
+    keys = sorted(rows)
+    return oi.compare(rows, arm, keys, oi.TAU_PRIMARY, target=target, bootstrap_reps=20)
+
+
+def test_a_gain_below_the_preregistered_threshold_is_not_a_pass():
+    """Kills `delta >= target` -> `delta > 0`. 30 fixes in 6000 pairs is dC = +0.005: highly
+    significant (nothing broke) and FAR below the 2 pp threshold. Significance is not size."""
+    r = _rigged(6000, n_up=30, n_down=0)
+    assert r["delta_c"] == pytest.approx(0.005)
+    assert r["exact_signflip_p_two_sided"] < 1e-6
+    assert r["powered_for_target"] is True
+    assert r["verdict"] == "NO_ADVANCE" and r["advanced"] is False
+
+
+def test_a_threshold_sized_gain_that_is_not_significant_is_not_a_pass():
+    """Kills the deletion of the `p_exact < ALPHA` conjunct: dC clears 2 pp on a coin-flip
+    split of the discordances, which is exactly what noise looks like."""
+    r = _rigged(400, n_up=70, n_down=62)
+    assert r["delta_c"] >= oi.ADVANCE_DELTA_C
+    assert r["exact_signflip_p_two_sided"] > oi.ALPHA
+    assert not r["verdict"].startswith("PASS") and r["advanced"] is False
+
+
+def test_a_regression_smaller_than_the_threshold_is_not_convicted():
+    """Kills `delta <= -target` -> `delta < 0`: a significant but sub-threshold loss must not
+    be reported as REGRESSED, for the same reason a sub-threshold gain is not a PASS."""
+    r = _rigged(6000, n_up=0, n_down=30)
+    assert r["delta_c"] == pytest.approx(-0.005)
+    assert r["exact_signflip_p_two_sided"] < 1e-6
+    assert r["verdict"] == "NO_ADVANCE"
+
+
+def test_advanced_is_true_for_pass_alone_and_not_for_pass_pending_remeasure():
+    """Kills `advanced = verdict.startswith("PASS")`. PASS_PENDING_REMEASURE exists precisely
+    to NOT advance an arm."""
+    powered = _rigged(6000, n_up=200, n_down=20)
+    assert powered["verdict"] == "PASS" and powered["advanced"] is True
+    small = _rigged(129, n_up=8, n_down=0)
+    assert small["delta_c"] >= oi.ADVANCE_DELTA_C
+    assert small["exact_signflip_p_two_sided"] < oi.ALPHA
+    assert small["powered_for_target"] is False
+    assert small["verdict"] == "PASS_PENDING_REMEASURE"
+    assert small["advanced"] is False
+
+
+def test_the_verdict_is_one_of_the_declared_set():
+    for r in (_rigged(6000, 200, 20), _rigged(400, 70, 62), _rigged(129, 8, 0),
+              _rigged(6000, 0, 400), _rigged(6000, 0, 0)):
+        assert r["verdict"] in oi.VERDICTS
+
+
+# ----------------------------------------------------------------------------------------
+# the abstention hole half credit opens, and the guard that closes it
+# ----------------------------------------------------------------------------------------
+def test_manufacturing_ties_where_the_head_is_wrong_cannot_buy_advancement(cell):
+    """The mirror image of the drop-ties laundering, found by adversarial review: half credit
+    pays +0.5 a pair for ABSTAINING on pairs the head got wrong. Naive dC is large and
+    positive; the gate reads the version that scores every manufactured tie as wrong, where
+    the attack is worth nothing."""
+    r = cmp_at(cell, demo(cell, "abstention_gaming_label_aimed_ties"))
+    assert r["delta_c"] > 0.05, "the attack must really work against naive scoring"
+    assert r["head_ties_created_by_arm"] > 0
+    assert r["discordant_full_swings"] == 0, "it reorders nothing"
+    assert r["delta_c_new_ties_scored_wrong"] <= 0.0
+    assert r["delta_c_gate"] == r["delta_c_new_ties_scored_wrong"]
+    assert not r["verdict"].startswith("PASS") and r["advanced"] is False
+
+
+def test_the_p_reported_with_the_gated_statistic_is_that_statistic_s_p(cell):
+    """The count-test defect in miniature, applied to this guard: if the gate reads the
+    tie-guarded dC it must report the tie-guarded p, not the naive one. A mutation that reverted
+    only the p half survived an earlier suite because the two were computed independently."""
+    r = cmp_at(cell, demo(cell, "abstention_gaming_label_aimed_ties"))
+    assert r["delta_c_gate"] == r["delta_c_new_ties_scored_wrong"] != r["delta_c"]
+    assert r["p_gate"] == r["exact_signflip_p_new_ties_scored_wrong"]
+    assert r["p_gate"] != r["exact_signflip_p_two_sided"]
+    # and the naive p is the one that looked like overwhelming evidence
+    assert r["exact_signflip_p_two_sided"] < 1e-6 < r["p_gate"]
+
+
+def test_the_signflip_test_is_invariant_to_a_common_rescale_of_the_differences():
+    """The statistic is a randomization test on signs, so scaling every difference must not move
+    the p -- including across the exact/approximate branch choice, which normalises by the
+    smallest magnitude for exactly this reason."""
+    diffs = [1.0, 1.0, -0.5, 1.0, -0.5, -0.5, 0.5]
+    base = oi.exact_signflip_p(diffs)
+    for factor in (0.5, 2.0, 100.0, 0.013):
+        assert oi.exact_signflip_p([d * factor for d in diffs]) == pytest.approx(base, rel=1e-12)
+
+
+def test_the_abstention_guard_is_inert_for_an_arm_that_creates_no_ties(cell):
+    """The other branch: a guard that always fires would just be a second threshold. A real
+    ordering improvement creates no new ties, so the gate reads its plain dC untouched."""
+    r = cmp_at(cell, demo(cell, "positive_control_blend_truth_0.15"))
+    assert r["head_ties_created_by_arm"] == 0
+    assert r["delta_c_gate"] == r["delta_c"]
+    assert r["p_gate"] == r["exact_signflip_p_two_sided"]
+
+
+def test_a_powered_abstention_attack_is_refused_rather_than_advanced():
+    """At a bank size where the attack WOULD be powered, the guard -- not the power rule -- is
+    what stops it."""
+    rows, arm = {}, {}
+    for i in range(6000):
+        k = (i, 0, "p1")
+        wrong = i < 1800
+        ha, hb = (-0.2, 0.2) if wrong else (0.2, -0.2)
+        rows[k] = {"seed": i, "prefix": 0, "seat": "p1", "head_a": ha, "head_b": hb,
+                   "head_gap": oi.head_gap_from_values(ha, hb), "true_gap": 0.3,
+                   "true_a": 0.65, "true_b": 0.35, "noise_var": 0.004,
+                   "rollouts_a": 64, "rollouts_b": 64}
+        arm[k] = (dict(rows[k], head_a=0.0, head_b=0.0, head_gap=0.0) if wrong
+                  else dict(rows[k]))
+    keys = sorted(rows)
+    r = oi.compare(rows, arm, keys, oi.TAU_PRIMARY, bootstrap_reps=20)
+    assert r["delta_c"] == pytest.approx(0.15)
+    assert r["powered_for_target"] is True
+    assert r["delta_c_gate"] == 0.0
+    assert r["verdict"] == "NO_ADVANCE" and r["advanced"] is False
+
+
+# ----------------------------------------------------------------------------------------
 # the paired test
 # ----------------------------------------------------------------------------------------
+def test_the_count_test_points_the_wrong_way_when_swings_are_mixed():
+    """THE input that broke the first version of this gate, kept as a regression test.
+
+    900 pairs where the arm fixes an ordering (+1.0 each) and 1500 where it turns a right
+    ordering into a tie (-0.5 each): dC = +0.0250, but the discordance COUNT test sees 1500 vs
+    900 and returns p ~ 1e-34 in the BASELINE's favour. The first version read PASS off that.
+    The sign-flip test is computed on the statistic being reported, so it cannot disagree with
+    it in direction.
+    """
+    r = _rigged_mixed()
+    assert r["delta_c"] == pytest.approx(0.025)
+    assert r["head_ties_created_by_arm"] == 0, "keep the abstention guard out of this test"
+    assert r["mcnemar_count_test_p_sensitivity_only"] < 1e-20   # the broken headline
+    assert r["discordant_baseline_better"] > r["discordant_arm_better"]  # counts say "worse"
+    # The shipped test is computed on the reported statistic, so it agrees with it in direction:
+    # here the +2.5 pp really is significant (z ~ 4.2 on sum-of-differences), and that -- not a
+    # count of discordances pointing the other way -- is what the PASS rests on.
+    assert r["exact_signflip_p_two_sided"] < oi.ALPHA
+    assert r["exact_signflip_p_two_sided"] > 1e-8, (
+        "the count test's 1e-34 was an artefact of the wrong null, not real evidence")
+    assert r["verdict"] == "PASS"
+
+
+def _rigged_mixed():
+    """Mixed swing sizes with NO tie manufacturing, so the abstention guard is inert and the
+    only thing under test is the p-value. 900 pairs the arm fixes outright (+1.0 each) and 1500
+    where the BASELINE was tied and the arm resolves them wrongly (-0.5 each): dC = +0.0250
+    while the discordance counts are 1500 to 900 against the arm."""
+    rows, arm = {}, {}
+    for i in range(6000):
+        k = (i, 0, "p1")
+        if i < 900:
+            ha, hb, aa, ab = -0.2, 0.2, 0.2, -0.2        # base wrong -> arm right (+1.0)
+        elif i < 2400:
+            ha, hb, aa, ab = 0.1, 0.1, -0.2, 0.2         # base TIED -> arm wrong (-0.5)
+        else:
+            ha, hb, aa, ab = 0.2, -0.2, 0.2, -0.2
+        rows[k] = {"seed": i, "prefix": 0, "seat": "p1", "head_a": ha, "head_b": hb,
+                   "head_gap": oi.head_gap_from_values(ha, hb), "true_gap": 0.3,
+                   "true_a": 0.65, "true_b": 0.35, "noise_var": 0.004,
+                   "rollouts_a": 64, "rollouts_b": 64}
+        arm[k] = dict(rows[k], head_a=aa, head_b=ab,
+                      head_gap=oi.head_gap_from_values(aa, ab))
+    return oi.compare(rows, arm, keys=sorted(rows), tau=oi.TAU_PRIMARY, bootstrap_reps=20)
+
+
+def test_the_signflip_test_reduces_exactly_to_mcnemar_when_every_swing_is_full():
+    """It must be a generalisation, not a different test: on full swings the two agree to the
+    last bit, so the doc's 'exact McNemar' requirement is met and only extended."""
+    for b, c in ((0, 5), (1, 9), (3, 7), (5, 5), (12, 8), (20, 0), (0, 0)):
+        diffs = [-1.0] * b + [1.0] * c
+        assert oi.exact_signflip_p(diffs) == pytest.approx(oi.exact_mcnemar_p(b, c), rel=1e-12)
+
+
+def test_the_signflip_null_distribution_is_exact_for_half_swings():
+    """Hand-computable case: two half swings in the same direction. Sum = +1.0; under sign
+    flips the reachable sums are -1, 0, 0, +1, so P(|S| >= 1) = 2/4."""
+    assert oi.exact_signflip_p([0.5, 0.5]) == pytest.approx(0.5)
+    # one full and one half in the same direction: sums +-1.5, +-0.5 -> P(|S|>=1.5) = 2/4
+    assert oi.exact_signflip_p([1.0, 0.5]) == pytest.approx(0.5)
+    # three halves all one way: sums +-1.5, +-0.5 with multiplicities 1,3 -> 2/8
+    assert oi.exact_signflip_p([0.5, 0.5, 0.5]) == pytest.approx(0.25)
+
+
+def test_the_signflip_large_m_fallback_tracks_the_exact_value():
+    """The approximation branch had zero coverage. Compare it to the exact enumeration just
+    below the switchover, on the same data."""
+    diffs = [1.0] * 220 + [-1.0] * 180
+    exact = oi.exact_signflip_p(diffs)                       # m = 400, still exact
+    approx = oi.exact_signflip_p(diffs + [0.0] * 5)          # zeros are dropped: same data
+    assert exact == pytest.approx(approx, rel=1e-12)
+    big = [1.0] * 620 + [-1.0] * 580                          # m = 1200 -> normal branch
+    z = 40 / math.sqrt(1200)
+    assert oi.exact_signflip_p(big) == pytest.approx(math.erfc(z / math.sqrt(2)), rel=1e-9)
+
+
+def test_the_mcnemar_normal_branch_tracks_the_exact_value_at_the_cutoff():
+    b, c = 1100, 900
+    exact = oi.exact_mcnemar_p(b, c)                # n = 2000, exact branch
+    approx = oi.exact_mcnemar_p(b + 1, c)          # n = 2001, normal branch
+    assert exact == pytest.approx(approx, abs=2e-3)
+    assert 0.0 < approx < 1.0
+
+
 def test_exact_mcnemar_matches_hand_computed_binomial_tails():
     assert oi.exact_mcnemar_p(0, 0) == 1.0
     assert oi.exact_mcnemar_p(0, 5) == pytest.approx(2 * (1 / 32))
@@ -299,7 +554,7 @@ def test_the_test_is_paired_which_is_the_whole_point_at_this_n(cell):
                     head_gap=-rows[k]["head_gap"]) if k in flip else rows[k]) for k in keys}
     r = oi.compare(rows, arm, keys, oi.TAU_PRIMARY, bootstrap_reps=200)
     assert r["discordant_total"] == 9 and r["discordant_baseline_better"] == 9
-    assert r["exact_mcnemar_p_two_sided"] == pytest.approx(2 / 512)
+    assert r["exact_signflip_p_two_sided"] == pytest.approx(2 / 512)
     # the unpaired two-proportion z on the same data cannot see it
     n = r["n_eligible"]
     p1, p2 = r["c_baseline"], r["c_arm"]
@@ -322,7 +577,7 @@ def test_the_full_swing_only_p_is_reported_as_a_sensitivity_not_the_headline(cel
     # throws the entire signal away -- which is exactly why it is the sensitivity and not
     # the primary.
     assert r["exact_mcnemar_p_full_swings_only"] == 1.0
-    assert r["exact_mcnemar_p_two_sided"] < 1.0
+    assert r["exact_signflip_p_two_sided"] < 1.0
 
 
 def test_delta_c_equals_the_mean_per_pair_swing(cell):
@@ -509,9 +764,22 @@ def test_the_label_se_note_reports_the_condition_as_unmet_rather_than_waiving_it
     rows, keys = cell
     note = oi.label_se_note(rows, keys, oi.TAU_PRIMARY)
     assert note["condition_label_se_much_less_than_tau_met"] is False
-    assert note["label_se_worst_case"] if False else True
-    assert note["se_over_tau_banked"] > 0.5
+    assert note["label_gap_se_banked_mean"] == pytest.approx(0.065, abs=1e-6)
+    assert note["label_gap_se_worst_case"] == pytest.approx(0.5 * math.sqrt(2 / 64))
+    assert note["se_over_tau_banked"] == pytest.approx(0.65, abs=0.01)
     assert "IS NOT MET" in note["text"]
+
+
+def test_the_label_se_condition_reads_true_on_a_bank_that_actually_meets_it():
+    """The other branch. A review found this field hardcoded to False with a test that asserted
+    False -- a check that cannot read True certifies nothing about any future bank, and the
+    whole point of the field is that a larger-R bank would flip it."""
+    rows = {oi.pair_key(p): dict(p, noise_var=0.005 ** 2) for p in make_pairs(n=60)}
+    keys = sorted(rows)
+    note = oi.label_se_note(rows, keys, oi.TAU_PRIMARY)
+    assert note["se_over_tau_banked"] == pytest.approx(0.05)
+    assert note["condition_label_se_much_less_than_tau_met"] is True
+    assert "IS MET" in note["text"] and "IS NOT MET" not in note["text"]
 
 
 # ----------------------------------------------------------------------------------------
