@@ -25,19 +25,34 @@ import unittest
 
 from pokezero.foulplay_bridge import (
     FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
-    FOULPLAY_THINK_MEASURED_RATE_CV,
+    FOULPLAY_THINK_MEASURED_DECISION_LOG_SD,
+    FOULPLAY_THINK_MEASURED_RUN_LOG_SD,
     FOULPLAY_THINK_MIN_STRATUM_DECISIONS,
     FOULPLAY_THINK_SCHEMA_VERSION,
     cross_arm_foulplay_contention,
+    foulplay_think_detectable_fold_ratio,
     pool_foulplay_think,
 )
 
-# --- the two measured anchors this gate's threshold was derived from --------------------
-# Both from `crossarm-contention-dispersion.py` (kept outside the repo), driving foul-play's
-# own `get_result_from_mcts` over poke_engine under `fork`, foul-play's own `init_logging`,
-# captured off fd 1 and parsed by the SHIPPING parser. 2 passes x 24 positions, 48/48
-# decisions measured, zero miss reasons, all in `2x1000ms`.
-MEASURED_MATCHED_PAIR = (367_062.5, 396_750.0, 24)  # pass 0 mean, pass 1 mean, n per pass
+# --- the measurement this gate's threshold was derived from -----------------------------
+# `crossarm-contention-dispersion.py` (kept outside the repo), driving foul-play's own
+# `get_result_from_mcts` over poke_engine under `fork`, foul-play's own `init_logging`,
+# captured off fd 1 and parsed by the SHIPPING parser. SIX passes x 24 shared positions,
+# 144/144 decisions measured, zero miss reasons, all in `2x1000ms`. These are the six passes'
+# ARITHMETIC per-stratum means -- the gate's own statistic -- in run order. Passes 3 and 4 ran
+# ~10% slower for their whole duration while the box was busier, which is the effect a
+# cross-arm gate must not read as contention.
+MEASURED_PASS_MEANS = (385_187.5, 382_166.7, 387_916.7, 347_291.7, 349_229.2, 382_666.7)
+MEASURED_PASS_N = 24
+#: A campaign's per-stratum n, for the controls that need the gate to actually certify. 24 is
+#: the n the MEASUREMENT had, and the resolution gate correctly says 24 decisions cannot resolve
+#: a 1.25 threshold (the crossover is ~27). The measured quantity being reused at campaign n is
+#: the RATE, which is what was measured; n is a property of the run being judged. Eras 61-64
+#: measured 48.7 foul-play decisions per game, so a few hundred games puts thousands in each
+#: stratum and 1,000 is conservative.
+CAMPAIGN_N = 1_000
+# The largest of the 15 pairwise folds among those six matched "arms".
+MEASURED_MAX_MATCHED_FOLD = 1.1170
 # The starvation the instrument caught behind a thin stratum, per the instrument's own PR.
 MEASURED_STARVATION_FOLD = 3.8
 
@@ -69,7 +84,13 @@ def think(
         "decisions_attempted": attempted,
         "record_failures": record_failures,
         "iterations_measured_decisions": measured,
-        "total_iterations": int(sum(r * 2.0 * n for r, n in strata.values())),
+        # `int()` only when the arithmetic is finite: the non-finite-rate fixtures below are
+        # deliberately impossible shards, and the fixture must be able to BUILD one.
+        "total_iterations": (
+            int(total)
+            if math.isfinite(total := sum(r * 2.0 * n for r, n in strata.values()))
+            else total
+        ),
         "mean_iterations_per_budget_second": (
             sum(r * n for r, n in strata.values()) / measured if measured else None
         ),
@@ -114,65 +135,154 @@ def numbers_in(payload):
 
 
 class MatchedArmsTest(unittest.TestCase):
-    """The negative control, and it is the one that decides the threshold.
+    """The negative control, and it is what decides the threshold.
 
     A gate like this one can MANUFACTURE the defect it detects -- the instrument's own give-up
     heuristic did exactly that once, producing a contention finding out of a healthy opponent.
-    So the first obligation is a measured pair of arms that were NOT contending.
+    So the first obligation is measured pairs of arms that were NOT contending, and there are
+    fifteen of them here rather than one.
     """
 
-    def test_a_measured_matched_pair_of_real_foulplay_passes(self) -> None:
-        a_rate, b_rate, n = MEASURED_MATCHED_PAIR
-        result = verdict([think(a_rate, n)], [think(b_rate, n)])
-        self.assertEqual(result["refusal_reasons"], [])
-        self.assertEqual(result["status"], "ok")
-        worst = result["worst_stratum"]
-        # 396,750 / 367,062.5 = 1.0809. Two passes over the SAME 24 positions with nothing
-        # contending that was not contending in both.
-        self.assertAlmostEqual(worst["fold_ratio"], 1.0809, places=4)
-        self.assertLess(worst["fold_ratio"], FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO)
+    def _pairs(self, n, **kw):
+        """Every one of the 15 pairs of the six measured passes, as two arms."""
+        out = []
+        for i, a in enumerate(MEASURED_PASS_MEANS):
+            for b in MEASURED_PASS_MEANS[i + 1 :]:
+                out.append((a, b, verdict([think(a, n)], [think(b, n)], **kw)))
+        return out
 
-    def test_a_threshold_near_the_measured_noise_would_refuse_that_matched_pair(self) -> None:
-        """Why the threshold is 1.25 and not something that looks more vigilant.
+    def test_every_measured_matched_pair_of_real_foulplay_passes(self) -> None:
+        """All 15 pairs of six uncontended real passes, including the two slow ones.
 
-        This is the failing input for the CHOICE of threshold: at 1.05 the gate refuses a
-        measured pair of uncontended real searches, i.e. it invents the confound. If the
-        constant is ever tightened toward the sampling SE, this test says what breaks.
+        This is the test a single lucky pair could not be: passes 3 and 4 ran ~10% slower for
+        their whole duration, so eight of the fifteen pairs straddle that shift and are the
+        realistic matched-arm case rather than the best case. Run at campaign n, because at the
+        measurement's own n=24 the gate correctly refuses to certify anything at all (below).
         """
-        a_rate, b_rate, n = MEASURED_MATCHED_PAIR
-        strict = verdict([think(a_rate, n)], [think(b_rate, n)], max_fold_ratio=1.05)
-        self.assertEqual(
-            strict["refusal_reasons"], ["cross_arm_rate_ratio_exceeds_threshold"]
-        )
+        folds = []
+        for a, b, result in self._pairs(CAMPAIGN_N):
+            with self.subTest(a=a, b=b):
+                self.assertEqual(result["refusal_reasons"], [])
+                self.assertEqual(result["status"], "ok")
+            folds.append(result["worst_stratum"]["fold_ratio"])
+        self.assertEqual(len(folds), 15)
+        self.assertAlmostEqual(max(folds), MEASURED_MAX_MATCHED_FOLD, places=3)
+        # Bimodal, and both modes matter: seven pairs inside one regime, eight across the shift.
+        self.assertEqual(sum(1 for f in folds if f > 1.05), 8)
 
-    def test_the_threshold_sits_between_the_two_measured_anchors(self) -> None:
-        """The constant itself, pinned against both numbers it was derived from."""
-        matched_fold = MEASURED_MATCHED_PAIR[1] / MEASURED_MATCHED_PAIR[0]
-        self.assertGreater(FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO, matched_fold)
+    def test_the_measurements_own_n_is_too_thin_to_certify_anything(self) -> None:
+        """The gate's honesty about its own evidence, and it is not a formality.
+
+        The threshold was derived from passes of 24 decisions each, and 24 decisions cannot
+        resolve a 1.25 fold: the 3-sigma bound there is 1.2508. So the gate refuses at that n --
+        including on the matched pairs it was derived from -- and refuses for THINNESS, never for
+        contention. A gate that certified at the n of its own calibration would be certifying
+        noise.
+        """
+        for a, b, result in self._pairs(MEASURED_PASS_N):
+            with self.subTest(a=a, b=b):
+                self.assertIn(
+                    "stratum_cannot_resolve_the_threshold", result["refusal_reasons"]
+                )
+                self.assertNotIn(
+                    "cross_arm_rate_ratio_exceeds_threshold", result["refusal_reasons"]
+                )
+                self.assertIn("rates_withheld_because", result)
+
+    def test_the_threshold_cannot_be_tightened_below_the_instruments_resolution(self) -> None:
+        """1.25 is not a choice with margin; it is the instrument's floor, rounded up.
+
+        The whole-run term never shrinks, so no n makes the resolution better than
+        exp(3*sqrt(2)*run_sd) = 1.2448. A threshold below that is a threshold the instrument
+        cannot resolve at ANY denominator, and the gate says so rather than pretending: at 1.24,
+        every one of the 15 matched pairs refuses with `stratum_cannot_resolve_the_threshold`
+        even at 10^6 decisions per arm. 1.25 is the tightest value that certifies at all.
+        """
+        floor = math.exp(3.0 * (2**0.5) * FOULPLAY_THINK_MEASURED_RUN_LOG_SD)
+        self.assertAlmostEqual(floor, 1.24473, places=5)
+        self.assertGreater(FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO, floor)
+        for a, b, result in self._pairs(10**6, max_fold_ratio=1.24):
+            with self.subTest(a=a, b=b):
+                self.assertIn(
+                    "stratum_cannot_resolve_the_threshold", result["refusal_reasons"]
+                )
+        # And at the shipped threshold the same arms certify.
+        for a, b, result in self._pairs(10**6):
+            with self.subTest(a=a, b=b):
+                self.assertEqual(result["refusal_reasons"], [])
+
+    def test_a_threshold_below_the_measured_spread_would_call_matched_arms_contended(self) -> None:
+        """The failing input for the CHOICE of threshold, separated from the floor above.
+
+        Holding the resolution gate out of the way (by asking only whether the CONTENTION
+        refusal fires), a limit at 1.10 calls six of fifteen pairs of uncontended real searches
+        contended and 1.05 calls eight. Those are the numbers a "more vigilant" threshold buys.
+        """
+        for limit, expected in ((1.10, 6), (1.05, 8)):
+            refused = sum(
+                1
+                for a, b, _ in self._pairs(CAMPAIGN_N)
+                if max(a / b, b / a) > limit
+            )
+            with self.subTest(limit=limit):
+                self.assertEqual(refused, expected)
+                # And the gate agrees, once its own floor is not the binding reason.
+                folds = [
+                    result["worst_stratum"]["fold_ratio"]
+                    for _, _, result in self._pairs(CAMPAIGN_N)
+                ]
+                self.assertEqual(sum(1 for f in folds if f > limit), expected)
+
+    def test_the_threshold_clears_the_measured_matched_spread_and_catches_the_real_thing(self) -> None:
+        """The constant, pinned between the two numbers it sits between."""
+        self.assertGreater(
+            FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO, MEASURED_MAX_MATCHED_FOLD
+        )
         self.assertLess(FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO, MEASURED_STARVATION_FOLD)
-        # And 3 sigma at the within-arm gate's own per-stratum floor, the second derivation.
-        # exp(3 * SE(log ratio)), because the gated quantity is a FOLD ratio and its noise is
-        # multiplicative: the linear form gives 1.2183 and this one 1.2441, and only one of
-        # them is the number the docstring quotes.
-        floor = FOULPLAY_THINK_MIN_STRATUM_DECISIONS
-        three_sigma = math.exp(
-            3.0 * FOULPLAY_THINK_MEASURED_RATE_CV * (2.0 / floor) ** 0.5
+        # Margin on the observed matched spread, in EXCESS terms: 0.25 against 0.117.
+        self.assertGreater(
+            (FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO - 1.0)
+            / (MEASURED_MAX_MATCHED_FOLD - 1.0),
+            2.0,
         )
-        self.assertAlmostEqual(three_sigma, 1.2441, places=4)
-        self.assertGreater(FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO, three_sigma)
 
-    def test_the_matched_pair_sits_inside_the_sampling_band_at_its_own_n(self) -> None:
-        """The two derivations must not be in tension, and this is the check.
+    def test_the_threshold_is_about_three_sigma_of_matched_arm_variation_at_every_n(self) -> None:
+        """And that is the claim the fixed threshold rests on.
 
-        If the measured 8.1% matched-pair gap were LARGER than sampling noise at n=24, the CV
-        would be understating the real run-to-run uncertainty and derivation 2 would be
-        unusable rather than corroborating. It sits at 2.34 sigma, so it is not.
+        If the bound moved materially with n, a fixed threshold would be wrong -- tight at small
+        n, loose at large n. The whole-run term dominates, so it does not.
         """
-        a_rate, b_rate, n = MEASURED_MATCHED_PAIR
-        se = FOULPLAY_THINK_MEASURED_RATE_CV * (2.0 / n) ** 0.5
-        sigmas = math.log(b_rate / a_rate) / se
-        self.assertAlmostEqual(sigmas, 2.3407, places=3)
-        self.assertLess(sigmas, 3.0)
+        floor = FOULPLAY_THINK_MIN_STRATUM_DECISIONS
+        self.assertAlmostEqual(foulplay_think_detectable_fold_ratio(floor, floor), 1.2723, places=4)
+        self.assertAlmostEqual(foulplay_think_detectable_fold_ratio(20, 20), 1.2518, places=4)
+        self.assertAlmostEqual(foulplay_think_detectable_fold_ratio(200, 200), 1.2454, places=4)
+        for n in (floor, 20, 24, 200, 2000):
+            with self.subTest(n=n):
+                sd = math.log(foulplay_think_detectable_fold_ratio(n, n)) / 3.0
+                sigmas = math.log(FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO) / sd
+                self.assertGreater(sigmas, 2.7)
+                self.assertLess(sigmas, 3.2)
+
+    def test_the_detectable_bound_includes_the_whole_run_term(self) -> None:
+        """The flattering error a two-pass predecessor of this measurement shipped.
+
+        Sampling alone puts the n=200 floor at 1.035 and reads as "this stratum could have
+        resolved a 3.5% starvation". Measured across six passes the whole-run term alone puts it
+        at 1.246. Dropping the run term from the bound is the mutation this test catches, and it
+        is the one that matters: the field's entire job is to say how strongly a stratum passed.
+        """
+        sampling_only = math.exp(
+            3.0 * FOULPLAY_THINK_MEASURED_DECISION_LOG_SD * (2.0 / 200) ** 0.5
+        )
+        self.assertAlmostEqual(sampling_only, 1.0160, places=4)
+        self.assertGreater(foulplay_think_detectable_fold_ratio(200, 200), 1.2)
+        self.assertGreater(FOULPLAY_THINK_MEASURED_RUN_LOG_SD, 0.0)
+        # And at large n the bound converges on the run term alone, not on 1.0.
+        self.assertAlmostEqual(
+            foulplay_think_detectable_fold_ratio(10**7, 10**7),
+            math.exp(3.0 * (2**0.5) * FOULPLAY_THINK_MEASURED_RUN_LOG_SD),
+            places=4,
+        )
 
     def test_a_pure_decision_mix_difference_is_not_refused(self) -> None:
         """The strata exist because an unstratified comparison INVENTS an effect.
@@ -365,24 +475,35 @@ class EveryRatioCarriesItsDenominatorsTest(unittest.TestCase):
         )
 
     def test_each_stratum_reports_what_it_could_have_resolved(self) -> None:
-        """A stratum that passed at n=5 must not read like one that passed at n=200.
-
-        Reported, not gated: the within-arm floor already holds n at 5 or more, where the
-        3-sigma figure sits just under the threshold, so a gate on it could never read False.
-        Saying so here rather than shipping a check that certifies nothing.
-        """
-        thin = verdict(
-            [think(decisions=200, strata={"a": (380_000.0, 195), "2x1000ms": (380_000.0, 5)})],
-            [think(decisions=200, strata={"a": (380_000.0, 195), "2x1000ms": (380_000.0, 5)})],
-        )
-        thick = verdict([think(380_000.0, 200)], [think(380_000.0, 200)])
+        """A stratum that passed at n=30 must not read like one that passed at n=2000."""
+        thin = verdict([think(380_000.0, 30)], [think(380_000.0, 30)])
+        thick = verdict([think(380_000.0, 2000)], [think(380_000.0, 2000)])
+        self.assertEqual(thin["status"], "ok")
+        self.assertEqual(thick["status"], "ok")
         self.assertGreater(
             thin["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"],
             thick["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"],
         )
         self.assertAlmostEqual(
-            thick["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"], 1.0351, places=4
+            thick["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"], 1.24480, places=5
         )
+
+    def test_a_stratum_that_cannot_resolve_the_threshold_is_refused(self) -> None:
+        """The guard the "reported, not gated" comment used to stand in for.
+
+        The first version said a gate on `detectable_fold_ratio_3sigma` "could never read False,
+        and would certify nothing". Wrong on its own numbers: at the within-arm floor of 5 the
+        bound is 1.2723 -- WIDER than the 1.25 it is compared against -- so such a stratum
+        returned `ok` while being unable to tell a matched pair from a starved one. Crossover is
+        n = 27 on both arms.
+        """
+        for n, expected in ((26, True), (27, False)):
+            result = verdict([think(380_000.0, n)], [think(380_000.0, n)])
+            with self.subTest(n=n):
+                self.assertEqual(
+                    "stratum_cannot_resolve_the_threshold" in result["refusal_reasons"],
+                    expected,
+                )
 
 
 class UnmeasuredIsNotFlatTest(unittest.TestCase):
@@ -596,8 +717,13 @@ class NothingVanishesQuietlyTest(unittest.TestCase):
         self.assertAlmostEqual(search["iterations_coverage"], 1.0)
         self.assertAlmostEqual(raw["iterations_coverage"], 1.0)
         result = verdict([search], [raw])
-        self.assertEqual(result["refusal_reasons"], ["stratum_dropped_without_reason"])
+        self.assertIn("stratum_dropped_without_reason", result["refusal_reasons"])
         self.assertEqual(result["status"], "refused")
+        # And the cross-arm coverage floor catches the same input from the other side: the
+        # compared set now holds 170 of 200 on each arm, which is 0.85 and under 0.95.
+        self.assertIn(
+            "search:cross_arm_compared_strata_cover_too_little", result["refusal_reasons"]
+        )
 
     def test_a_zero_rate_on_the_lean_arm_cannot_be_skipped_when_picking_the_worst(self) -> None:
         """The mirror case, which stays INSIDE the compared set.
@@ -638,6 +764,94 @@ class NothingVanishesQuietlyTest(unittest.TestCase):
         self.assertEqual(result["thin_strata"], ["8x500ms"])
         self.assertNotIn("stratum_dropped_without_reason", result["refusal_reasons"])
         self.assertEqual(result["status"], "ok")
+
+
+class ReviewFoundHolesTest(unittest.TestCase):
+    """The holes an independent adversarial review demonstrated, each with its input.
+
+    Every one of these returned `status: "ok"` before the fix, and every one is a
+    flattering-direction failure: a starved opponent reading as a matched one.
+    """
+
+    def test_a_starvation_hidden_by_a_thin_LEAN_stratum_is_refused(self) -> None:
+        """The first version of `stratum_dropped_without_reason` required n>=5 on BOTH arms.
+
+        A stratum's decision count follows each arm's OWN game lengths, so `n_lean = 3` while
+        `n_hungry = 40` is ordinary rather than adversarial -- and with the hungry rate at 0 the
+        stratum is neither compared nor named thin, so an ARBITRARILY large starvation on a fifth
+        of the hungry arm published `worst_stratum.fold_ratio: 1.0000` and was adopted.
+        """
+        search = think(
+            decisions=200, strata={"8x500ms": (0.0, 40), "2x1000ms": (380_000.0, 160)}
+        )
+        raw = think(
+            decisions=203, strata={"8x500ms": (120_000.0, 3), "2x1000ms": (380_000.0, 200)}
+        )
+        result = verdict([search], [raw])
+        self.assertEqual(result["status"], "refused")
+        self.assertIn("stratum_dropped_without_reason", result["refusal_reasons"])
+        self.assertNotIn("worst_stratum", result)
+        self.assertNotIn(1.0, numbers_in(result["by_stratum"]))
+
+    def test_the_uncompared_fifth_the_within_arm_floor_permits_is_refused(self) -> None:
+        """The composed bound, which was the review's headline.
+
+        `FOULPLAY_THINK_MIN_COMPARED_SHARE` is 0.8, so a fifth of each arm may sit outside the
+        compared strata -- unbounded. Composed with every compared stratum reading just inside
+        1.25, the review measured a TRUE arm-level fold of 1.5581 on a cell this gate called
+        `ok`. Here the hungry arm's uncompared fifth is a stratum the lean arm never visited.
+        """
+        search = think(
+            decisions=200,
+            strata={"8x500ms": (10_000.0, 40), "2x1000ms": (380_000.0 / 1.2499, 160)},
+        )
+        raw = think(decisions=200, strata={"2x1000ms": (380_000.0, 200)})
+        result = verdict([search], [raw])
+        self.assertEqual(result["status"], "refused")
+        self.assertIn(
+            "search:cross_arm_compared_strata_cover_too_little", result["refusal_reasons"]
+        )
+        self.assertNotIn("worst_stratum", result)
+
+    def test_strata_counts_that_exceed_the_arm_are_refused(self) -> None:
+        """A header whose `by_stratum` counts sum above its own measured total.
+
+        Not reachable from the shipping producer, which derives both from the same rows. It
+        produced a compared share of 10.0 -- an impossible number that passed a `>= 0.8` floor
+        and a `>= 0.95` one alike, because nothing checked the other side.
+        """
+        forged = think(380_000.0, 200)
+        forged["iterations_measured_decisions"] = 20
+        result = verdict([forged], [think(380_000.0, 200)])
+        self.assertIn(
+            "search:stratum_counts_exceed_measured_decisions", result["refusal_reasons"]
+        )
+        self.assertEqual(result["status"], "refused")
+
+    def test_a_rate_that_is_not_a_positive_finite_number_is_refused(self) -> None:
+        """`max(r, 1/r)` returns -1.0 for a negative rate and NaN propagates as False.
+
+        Both read `ok`, and the NaN also writes non-strict JSON into the report artifact. Not
+        reachable from the shipping producer, which refuses a non-positive budget -- but this
+        function is the gate for shards it did not produce.
+        """
+        for bad in (-380_000.0, float("nan"), float("inf")):
+            result = verdict([think(bad, 200)], [think(380_000.0, 200)])
+            with self.subTest(rate=bad):
+                self.assertEqual(result["status"], "refused")
+                self.assertNotIn("worst_stratum", result)
+                json.dumps(result, allow_nan=False)
+
+    def test_the_boundary_is_exclusive_exactly_at_the_threshold(self) -> None:
+        """`>` not `>=`, pinned at the exact value rather than at 1.24 and 1.26."""
+        base = 380_000.0
+        exact = verdict(
+            [think(base / FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO, 200)], [think(base, 200)]
+        )
+        self.assertAlmostEqual(
+            exact["worst_stratum"]["fold_ratio"], FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO
+        )
+        self.assertEqual(exact["status"], "ok")
 
 
 class MustBePooledTest(unittest.TestCase):

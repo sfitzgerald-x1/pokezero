@@ -3491,59 +3491,141 @@ def compare_foulplay_think(
 #: `max(r, 1/r) > FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO`, in either direction, because a
 #: paired delta is contaminated whichever arm the opponent was weaker against.
 #:
-#: DERIVED FROM THE INSTRUMENT'S OWN MEASURED PRECISION, twice, independently:
+#: DERIVED FROM THE INSTRUMENT'S OWN MEASURED PRECISION, on real foul-play searches:
+#: `get_result_from_mcts` over poke_engine in a `ProcessPoolExecutor` under `fork`, foul-play's
+#: own `init_logging`, captured off fd 1 and parsed by the SHIPPING
+#: `_foulplay_think_work_from_log_lines`. SIX passes over the SAME 24 positions at `2x1000ms` --
+#: **144/144 decisions measured, zero miss reasons** -- with six independent runs standing in for
+#: six arms that were not contending with each other.
 #:
-#:   1. A MATCHED PAIR, measured. Two passes of 24 real foul-play searches over the SAME 24
-#:      positions -- foul-play's own `get_result_from_mcts` over poke_engine under `fork`,
-#:      parsed by `_foulplay_think_work_from_log_lines`, 48/48 decisions measured, zero miss
-#:      reasons, all in the `2x1000ms` stratum -- returned per-stratum means of 367,062 and
-#:      396,750 visits per budget-second: a fold ratio of **1.081** with nothing contending
-#:      that was not contending in both passes. Same-position paired ratios ran 0.834-1.214.
-#:      So a threshold at 1.10 would REFUSE A MATCHED PAIR, which is the hazard a gate like
-#:      this one walks into: manufacturing the defect it detects. 1.25 sits at 1 + 3.1x the
-#:      observed matched-pair excess.
-#:   2. THE SAMPLING FLOOR, from the same data, as a CROSS-CHECK and not as the basis.
-#:      Per-decision CV of the rate within that stratum was **0.1151** (48 decisions; 0.1198
-#:      and 0.0995 in the two passes). The log-ratio of two stratum means over n_a, n_b
-#:      decisions has SE = cv * sqrt(1/n_a + 1/n_b), so at
-#:      `FOULPLAY_THINK_MIN_STRATUM_DECISIONS` on both sides that is 0.0728 and a 3-sigma
-#:      fold ratio is exp(3 * 0.0728) = **1.244**. The two derivations land on the same number
-#:      from different directions, which is why it is 1.25 and not a round guess.
+#:   1. THE DIRECT ANSWER: the 15 pairwise fold ratios between those six matched "arms", on the
+#:      gate's own statistic (a ratio of arithmetic per-stratum means at n=24 each), ran
+#:      1.0013 to **1.1170**. They are bimodal -- seven pairs at 1.00-1.02 and eight at
+#:      1.09-1.12 -- because two of the six passes ran ~10% slower for the whole pass while the
+#:      box was busier. That is the effect a cross-arm gate must not read as contention. 1.25
+#:      leaves 2.1x margin on the largest matched-arm fold actually observed.
+#:   2. THE VARIANCE DECOMPOSITION, which says why the margin has to be that wide. On log rates,
+#:      with the shared position effect removed (two paired arms play the same battle seeds, so
+#:      position largely cancels between them): per-decision residual SD **0.0529** (df=115) and
+#:      a WHOLE-RUN SD of **0.0516** (df=5). The fold ratio between two runs then has
+#:      SD = sqrt(2*run^2 + decision^2*(1/n_a + 1/n_b)), which is 0.0803 at
+#:      `FOULPLAY_THINK_MIN_STRATUM_DECISIONS` on both sides and 0.0732 at n=200 -- barely
+#:      moving, because the whole-run term dominates. A 3-sigma bound is a fold of **1.272** at
+#:      n=5 and **1.246** at n=200, so 1.25 is a ~3-sigma bound on matched-arm variation at
+#:      EVERY n the gate will see (2.78 sigma at n=5, 2.98 at n=20, 3.05 at n=200).
 #:
-#: WHY THE THRESHOLD IS FIXED RATHER THAN COMPUTED FROM n, which is the obvious alternative
-#: and is wrong. The sampling band shrinks with n -- 1.244 at n=5, 1.115 at n=20, 1.035 at
-#: n=200 -- while the run-to-run part does not: the measured matched pair sat 8.1% apart at
-#: n=24 (2.34 sigma, so consistent with sampling noise at THAT n, which is why the two
-#: derivations do not contradict each other). Two arms play over hours on a shared host, and
-#: an n-dependent bound would refuse a matched pair on any well-powered stratum while the host
-#: drifted by less than the 8.1% already observed. A fixed bound above the observed drift
-#: trades sensitivity at large n for not manufacturing the confound, which is the correct
-#: trade for a gate whose failure mode is a false verdict either way.
+#: A TWO-PASS PREDECESSOR OF THIS MEASUREMENT GOT THE SAME 1.25 FOR THE WRONG REASON, and the
+#: correction is why the constant is documented this way. It read a per-decision CV of 0.1151
+#: (position variance INCLUDED, which cancels between paired arms) and divided by sqrt(n),
+#: producing a bound that shrank with n: 1.244 at n=5 but 1.035 at n=200. That model says the
+#: gate is a ~6-sigma test at n=20 and can resolve a 3.5% effect at n=200. Both are false. With
+#: the whole-run term measured at 5 df instead of inferred from one pair, the bound is nearly
+#: flat in n and the gate is a ~3-sigma test everywhere. The threshold survived; its
+#: justification did not, and `detectable_fold_ratio_3sigma` was reporting the optimistic
+#: number -- an error in the flattering direction, in a field whose whole job is to say how
+#: strongly a stratum passed.
+#:
+#: WHY THE THRESHOLD IS FIXED RATHER THAN COMPUTED FROM n: because the measurement says the
+#: matched-arm spread is nearly flat in n. An n-dependent bound would tighten to 1.035 at
+#: n=200 and refuse matched arms on exactly the well-powered strata where a verdict matters.
 #:
 #: AND IT IS FAR BELOW WHAT THE INSTRUMENT HAS ALREADY CAUGHT: the starvation that a thin
 #: stratum hid was **3.8x** (an excess of 2.8 against this gate's 0.25), and the arbiter arm's
-#: measured CPU appetite over the raw arm is 1.8x at R=8 / 4.3x at R=32. A 25% drop in the
-#: opponent's realized work is the smallest effect this gate claims to see.
+#: measured CPU appetite over the raw arm is 1.8x at R=8 / 4.3x at R=32.
 #:
 #: WHAT IT THEREFORE DOES NOT CLAIM, stated because the gate's value is the bound and not the
-#: pass: at the 20-decision arm floor a 1.25 fold is a ~6-sigma departure, so the gate is
-#: silent on a real 10% starvation. A passing verdict bounds the opponent-throughput confound
-#: at 25% per stratum; it does not show it is zero. `detectable_fold_ratio_3sigma` is reported
-#: per stratum so that bound is readable rather than assumed.
+#: pass. A 25% drop in the opponent's realized work is the smallest effect this gate claims to
+#: see, and between the largest observed matched-arm fold (1.117) and the threshold it is
+#: DELIBERATELY silent -- that band is where a real starvation and normal host drift are not
+#: separable by this instrument. A passing verdict bounds the confound at 25% ON STRATA COVERING
+#: AT LEAST 95% OF EACH ARM -- see `FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE`, and see the
+#: function docstring for why the shorter phrase "bounds the confound at 25%" was false. It does
+#: not show the confound is zero, and it says nothing in WIN-RATE units. At ~3 sigma it also
+#: refuses a genuinely matched pair on the order of once in 300 strata, which is the safe
+#: direction: a false refusal blocks banking.
 #:
 #: SCOPE OF THE MEASUREMENT, since a threshold inherits its evidence's limits: taken at
-#: `2x1000ms` on constructed gen3 positions, on an 18-core macOS box at load average 4.7-6.5,
-#: CPython 3.12.13. A loaded box inflates dispersion and therefore loosens this threshold,
-#: which is the unsafe direction, so both derivations are anchored on the LOOSER of the two
-#: and a real randbat campaign should re-derive rather than inherit. The early-game
-#: `8x500ms` stratum was not measured; per-stratum gating means an unmeasured stratum
-#: borrows this bound, which is the residual assumption here.
+#: `2x1000ms` on constructed gen3 positions, on an 18-core macOS box at load average 6.8-8.8,
+#: CPython 3.12.13. Two limits point OPPOSITE ways and neither is resolved here. A loaded box
+#: inflates dispersion and loosens the threshold (unsafe); but the six passes replayed
+#: IDENTICAL positions, while two real arms diverge after their first differing choice, so real
+#: paired arms carry position variance these passes cancelled (which would want a looser bound
+#: still). The early-game `8x500ms` stratum was not measured at all and borrows this bound. A
+#: real randbat campaign should re-derive rather than inherit.
 FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO = 1.25
-#: Per-decision coefficient of variation of `iterations_per_budget_second` within one
-#: stratum on an uncontended opponent, measured as described above. Used to report each
-#: compared stratum's 3-sigma detectable fold ratio, so a stratum that passed at n=5 is not
-#: read as strongly as one that passed at n=200.
-FOULPLAY_THINK_MEASURED_RATE_CV = 0.1151
+#: Per-DECISION residual SD of `log(iterations_per_budget_second)` within one stratum on an
+#: uncontended opponent, with the shared position effect removed (df=115). The part of the
+#: matched-arm spread that DOES shrink with the decision count.
+FOULPLAY_THINK_MEASURED_DECISION_LOG_SD = 0.0529
+#: WHOLE-RUN SD of the same quantity: what a run's mean moves by for reasons that apply to the
+#: entire run -- host frequency and thermal state, other tenants, page cache (df=5). This is the
+#: term that does NOT shrink with n, and leaving it out is what made a two-pass predecessor of
+#: this measurement report a 3.5% resolution at n=200 where the truth is 24.6%.
+FOULPLAY_THINK_MEASURED_RUN_LOG_SD = 0.0516
+#: Fraction of EACH arm's measured decisions that must sit inside the strata this layer actually
+#: compares. Stricter than the within-arm gate's `FOULPLAY_THINK_MIN_COMPARED_SHARE` (0.8) on
+#: purpose: whatever is outside the compared set is not bounded by the threshold at all, and an
+#: independent review composed a per-stratum reading just inside 1.25 with the 20% that 0.8
+#: permits and measured a TRUE arm-level fold of 1.5581 -- a 35.8% arm-level shortfall -- on a
+#: cell the gate returned `ok` for. At 0.95 the unbounded remainder is at most a twentieth of
+#: each arm. It is still a remainder, not zero, which is why the docstring states the bound as
+#: "25% on strata covering at least 95% of each arm" and not as "25%".
+#:
+#: NOT MEASURED, unlike the threshold: nothing here establishes how often a real campaign's
+#: strata cover 95% of both arms. foul-play's schedule is a function of the turn number and both
+#: arms play both phases, so the expectation is ~1.0 -- but that is an inference, and if a real
+#: run refuses on this floor the refusal is information about the shard, not licence to lower it.
+FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE = 0.95
+
+
+def foulplay_think_detectable_fold_ratio(n_a: int, n_b: int) -> float:
+    """The smallest fold ratio a 3-sigma reading could resolve at these two denominators.
+
+    sqrt(2*run^2 + decision^2*(1/n_a + 1/n_b)), exponentiated: the gated quantity is a FOLD
+    ratio, so its noise is multiplicative and the bound has to be too (the linear form
+    `1 + 3*SE` differs by 2.6 points at the per-stratum floor, which straddles the threshold a
+    reader compares this against).
+
+    BOTH TERMS, which is the whole point. Sampling alone gives 1.035 at n=200 and reads as "this
+    stratum could have resolved a 3.5% starvation" -- flattering, and false: measured across six
+    uncontended passes the whole-run term alone puts the floor at 1.246 there.
+    """
+
+    return math.exp(
+        3.0
+        * math.sqrt(
+            2.0 * FOULPLAY_THINK_MEASURED_RUN_LOG_SD**2
+            + FOULPLAY_THINK_MEASURED_DECISION_LOG_SD**2 * (1.0 / n_a + 1.0 / n_b)
+        )
+    )
+
+
+def _foulplay_think_header_is_finite(header: Mapping[str, Any]) -> bool:
+    """Every number this module reads out of a think header, checked for finiteness."""
+
+    def finite(value: Any) -> bool:
+        return not isinstance(value, float) or math.isfinite(value)
+
+    keys = (
+        "decisions",
+        "decisions_attempted",
+        "record_failures",
+        "iterations_measured_decisions",
+        "total_iterations",
+        "mean_iterations_per_budget_second",
+        "iterations_coverage",
+        "miss_decisions",
+    )
+    if not all(finite(header.get(key)) for key in keys):
+        return False
+    for block in (header.get("by_stratum") or {}).values():
+        if not isinstance(block, Mapping):
+            continue
+        if not finite(block.get("mean_iterations_per_budget_second")):
+            return False
+        if not finite(block.get("iterations_measured_decisions")):
+            return False
+    return True
 
 
 def pool_foulplay_think(
@@ -3596,6 +3678,13 @@ def pool_foulplay_think(
         version = header.get("schema_version")
         if version != FOULPLAY_THINK_SCHEMA_VERSION:
             reasons.append(f"{label}:think_schema_mismatch")
+            continue
+        # NON-FINITE NUMBERS REFUSE THE POOL RATHER THAN RAISING. A NaN or an infinity poisons
+        # every mean it enters and reads as `ok` downstream (NaN fails every comparison), and
+        # `int(nan)` raises from inside a function whose whole job is to refuse malformed shards
+        # -- turning a bad shard into a traceback rather than a verdict.
+        if not _foulplay_think_header_is_finite(header):
+            reasons.append(f"{label}:think_header_not_finite")
             continue
         usable.append(header)
     if absent:
@@ -3707,22 +3796,47 @@ def cross_arm_foulplay_contention(
     second against the hungry arm** -- the flattering direction -- and the direction is named
     rather than left to a sign convention.
 
+    EXACTLY WHAT A PASS BOUNDS, stated as the composed quantity rather than as the per-stratum
+    one, because an independent review showed the per-stratum phrasing was false. Three things
+    have to hold together:
+
+      * every stratum in the compared set is within `max_fold_ratio`;
+      * every stratum in the compared set is thick enough for that threshold to MEAN anything
+        (`foulplay_think_detectable_fold_ratio` at its two denominators must not exceed the
+        threshold, or the stratum certifies nothing and is refused by name). Before this check
+        a stratum at the within-arm floor of 5 decisions read `ok` while its own 3-sigma
+        resolution was 1.272 -- wider than the threshold it was being compared against;
+      * the compared set covers `FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE` of EACH arm's
+        measured decisions. The within-arm gate's own floor is 0.8, which leaves a fifth of
+        each arm outside the comparison and UNBOUNDED: composed with a per-stratum reading just
+        inside 1.25, a review measured a true arm-level fold of 1.5581 -- a 35.8% arm-level
+        shortfall -- on a cell this function called `ok`. The remainder is still not bounded;
+        it is merely small, and the bound is therefore "25% on strata covering at least 95% of
+        each arm", not "25%".
+
     AND IT DOES NOT REPLACE THE WITHIN-ARM GATE; the two catch different shapes and neither
-    subsumes the other. This one pools an arm's seats, so what it bounds is the ARM-LEVEL
-    contamination -- which is the quantity that actually contaminates a paired delta -- and a
-    starvation confined to one seat is diluted by the seat count. Measured on the fixtures:
-    3.8x on one of four seats pools to a 1.2258 fold and PASSES, on one of two seats it pools
-    to 1.5833 and refuses. The pass is correct against a bound stated at arm level -- an 18%
-    arm-level shortfall is inside it -- but that is what a pass means here, and per-seat
+    subsumes the other. This one pools an arm's seats, so what it bounds is ARM-LEVEL
+    contamination -- the quantity that contaminates a paired delta -- and a starvation confined
+    to one seat is diluted by the seat count. Measured on the fixtures: 3.8x on one of four
+    seats pools to a 1.2258 fold and PASSES, on one of two seats to 1.5833 and refuses. Per-seat
     asymmetry is `compare_foulplay_think` on p1-against-p2, in the merged shard.
+
+    AND THE BOUND IS IN THROUGHPUT UNITS, NOT WIN-RATE UNITS, which is the largest thing this
+    function does NOT do. The decision it gates is a paired win-rate delta of a few points; a
+    passing cell may still carry a 25% reduction in the opponent's realized visits per granted
+    second, and NOTHING in this repo calibrates opponent visits to opponent strength (grepped:
+    no visits-to-Elo or doubling-strength relation anywhere). So a pass means "the opponent's
+    realized throughput was equal between the arms to within 25%", NOT "the strength comparison
+    is clean". Converting the bound needs one measurement nobody has run -- raw against raw with
+    the opponent's per-battle budget cut 25% -- and until it exists the honest reading of a pass
+    is that it removes the gross confound and leaves a residual of unknown size in pp.
 
     THE COMPARISON IS STRATIFIED and reuses `by_stratum` rather than recomputing it: 8x500 ms
     at 60,000 visits/sample and 2x1000 ms at 240,000/sample are identical realized work
     reading 120,000/s against 240,000/s, so an unstratified comparison invents an effect out
-    of a decision-mix difference. Admissibility -- coverage parity, the per-stratum floor,
-    `FOULPLAY_THINK_MIN_COMPARED_SHARE` of EACH arm inside the compared strata, and both
-    denominators on every ratio -- is delegated whole to `compare_foulplay_think` so there is
-    one implementation of it.
+    of a decision-mix difference. Coverage parity, the per-stratum floor and both denominators
+    on every ratio are delegated whole to `compare_foulplay_think` so there is one
+    implementation of them; the three conditions above are this function's own.
 
     ON A REFUSAL THE RATES ARE WITHHELD, which is the same rule the per-decision rows follow:
     a row that cannot say which decision its work belongs to omits the inputs from which the
@@ -3752,26 +3866,37 @@ def cross_arm_foulplay_contention(
     # STRATA THAT VANISHED WITHOUT A STATED REASON. `compare_foulplay_think` skips a stratum
     # whose hungry-arm rate is 0 rather than dividing by it, and a skip is not a refusal: a
     # stratum where the opponent realized ZERO visits per granted second -- total starvation,
-    # the strongest possible reading of the confound -- drops out of the comparison, and if it
-    # holds less than a fifth of the arm the compared-share floor does not notice. Anything
-    # well-powered on both arms and absent from both the compared set and the named thin list
-    # is refused here by name.
+    # the strongest possible reading of the confound -- drops out of the comparison. NO
+    # MINIMUM-n CONDITION on this check: the first version required the stratum to be
+    # well-powered on BOTH arms, and a review showed that an arbitrarily large starvation on up
+    # to a fifth of the hungry arm escaped whenever the LEAN arm happened to have fewer than
+    # five decisions there -- which is ordinary, since each arm's stratum mix follows its own
+    # game lengths. Anything present on both arms and absent from both the compared set and the
+    # named thin list is refused, at any n.
     hungry_strata_all = (hungry or {}).get("by_stratum") or {}
     lean_strata_all = (lean or {}).get("by_stratum") or {}
     thin = set(admissibility.get("thin_strata") or ())
     for name in sorted(set(hungry_strata_all) & set(lean_strata_all)):
         if name in (admissibility.get("by_stratum") or {}) or name in thin:
             continue
-        n_hungry = (hungry_strata_all[name] or {}).get("iterations_measured_decisions") or 0
-        n_lean = (lean_strata_all[name] or {}).get("iterations_measured_decisions") or 0
-        if min(int(n_hungry), int(n_lean)) >= FOULPLAY_THINK_MIN_STRATUM_DECISIONS:
-            refusals.append("stratum_dropped_without_reason")
+        refusals.append("stratum_dropped_without_reason")
     admissible = not refusals
     per_stratum: dict[str, Any] = {}
+    cross_arm_share: dict[str, float] = {}
     worst: dict[str, Any] | None = None
     for name, block in (admissibility.get("by_stratum") or {}).items():
         ratio = block["ratio"]
-        fold = max(ratio, 1.0 / ratio) if ratio else None
+        # FINITE AND POSITIVE, or it is not a fold ratio. `max(r, 1/r)` returns -1.0 for a
+        # negative rate and NaN propagates through every later comparison as False, so a
+        # hand-edited or foreign shard carrying either read `ok` with `fold_ratio: -1.0` /
+        # `fold_ratio: NaN` -- and NaN also writes non-strict JSON into the report artifact.
+        # Not reachable from the shipping producer, which refuses a non-positive budget; the
+        # point is that this function is the gate for shards it did not produce.
+        fold = (
+            max(ratio, 1.0 / ratio)
+            if isinstance(ratio, (int, float)) and math.isfinite(ratio) and ratio > 0
+            else None
+        )
         n_hungry = block[f"{hungry_label}_iterations_measured_decisions"]
         n_lean = block[f"{lean_label}_iterations_measured_decisions"]
         entry = {
@@ -3785,24 +3910,23 @@ def cross_arm_foulplay_contention(
             f"{lean_label}_iterations_measured_decisions": n_lean,
             "ratio_lean_over_hungry": ratio,
             "fold_ratio": fold,
-            # HOW STRONGLY THIS STRATUM PASSED, not merely that it did: the smallest fold
-            # ratio a 3-sigma test could resolve at these two denominators, from the measured
-            # per-decision CV. Reported rather than gated on purpose -- the within-arm floor
-            # already keeps n at 5 or more, where this sits just under the threshold, so a
-            # gate on it could never read False and would certify nothing.
-            # exp(3 * SE(log ratio)), NOT 1 + 3 * SE: the gated quantity is a FOLD ratio, so
-            # its noise is multiplicative and the bound has to be too. The two forms differ by
-            # 2.6 points at the per-stratum floor (1.244 against 1.218), which straddles the
-            # threshold this number is compared against by a reader.
-            "detectable_fold_ratio_3sigma": math.exp(
-                3.0
-                * FOULPLAY_THINK_MEASURED_RATE_CV
-                * math.sqrt(1.0 / n_hungry + 1.0 / n_lean)
-            )
-            if n_hungry and n_lean
-            else None,
+            # HOW STRONGLY THIS STRATUM PASSED, and now GATED on rather than merely reported.
+            # The first version said a gate on it "could never read False", which was wrong on
+            # its own numbers: at the within-arm floor of 5 decisions this reads 1.272, wider
+            # than the 1.25 it is compared against, so such a stratum certifies nothing while
+            # returning `ok`. The crossover is n ~= 27 on both arms.
+            "detectable_fold_ratio_3sigma": (
+                foulplay_think_detectable_fold_ratio(n_hungry, n_lean)
+                if n_hungry and n_lean
+                else None
+            ),
         }
         per_stratum[name] = entry
+        resolution = entry["detectable_fold_ratio_3sigma"]
+        if resolution is not None and resolution > max_fold_ratio:
+            # A stratum whose own 3-sigma resolution is wider than the threshold cannot tell a
+            # matched pair from a starved one, so an `ok` computed over it certifies nothing.
+            refusals.append("stratum_cannot_resolve_the_threshold")
         if fold is None:
             # A compared stratum whose ratio is not a ratio -- the lean arm realized zero
             # visits per granted second -- would otherwise be skipped when picking the worst
@@ -3812,6 +3936,28 @@ def cross_arm_foulplay_contention(
             continue
         if worst is None or fold > worst["fold_ratio"]:
             worst = {"stratum": name, **entry}
+    # THE COMPARED SET MUST COVER THE ARM, at this layer's own floor rather than the within-arm
+    # gate's 0.8. Whatever sits outside the compared strata is UNBOUNDED -- a review composed a
+    # per-stratum reading just inside 1.25 with the 20% the 0.8 floor permits and measured a true
+    # arm-level fold of 1.5581 on a cell this function returned `ok` for. Computed from THIS
+    # layer's compared set, which is narrower than the within-arm gate's: strata excluded here
+    # for being unable to resolve the threshold also count as uncovered.
+    for label, header in ((hungry_label, hungry), (lean_label, lean)):
+        measured = (header or {}).get("iterations_measured_decisions")
+        measured = int(measured) if isinstance(measured, (int, float)) else 0
+        strata = (header or {}).get("by_stratum") or {}
+        covered = sum(
+            int((strata.get(name) or {}).get("iterations_measured_decisions") or 0)
+            for name in per_stratum
+        )
+        share = (covered / measured) if measured else 0.0
+        cross_arm_share[label] = share
+        # SUM CANNOT EXCEED THE ARM. A header whose `by_stratum` counts add up to more than its
+        # own `iterations_measured_decisions` produced a share of 10.0 and passed every check.
+        if share > 1.0:
+            refusals.append(f"{label}:stratum_counts_exceed_measured_decisions")
+        elif share < FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE:
+            refusals.append(f"{label}:cross_arm_compared_strata_cover_too_little")
     admissible = admissible and not refusals
     if admissible and worst is not None and worst["fold_ratio"] > max_fold_ratio:
         refusals.append("cross_arm_rate_ratio_exceeds_threshold")
@@ -3824,11 +3970,17 @@ def cross_arm_foulplay_contention(
         "status": "refused" if refusals else "ok",
         "refusal_reasons": sorted(dict.fromkeys(refusals)),
         "max_fold_ratio": max_fold_ratio,
-        "measured_rate_cv": FOULPLAY_THINK_MEASURED_RATE_CV,
+        # BOTH variance terms, because the run term is the one that decides the threshold and a
+        # single "cv" field is what let the sampling-only model look sufficient.
+        "measured_decision_log_sd": FOULPLAY_THINK_MEASURED_DECISION_LOG_SD,
+        "measured_run_log_sd": FOULPLAY_THINK_MEASURED_RUN_LOG_SD,
         "hungry_arm": hungry_label,
         "lean_arm": lean_label,
         "coverage_gap": admissibility.get("coverage_gap"),
         "compared_share": admissibility.get("compared_share"),
+        # THIS layer's share, over its own narrower compared set. Distinct from the within-arm
+        # gate's, which is computed over a wider set against a looser floor.
+        "cross_arm_compared_share": cross_arm_share,
         "thin_strata": admissibility.get("thin_strata"),
         "reading_status": admissibility.get("reading_status"),
         "verdict_note": (

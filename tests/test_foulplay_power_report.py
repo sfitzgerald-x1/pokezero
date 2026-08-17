@@ -801,13 +801,19 @@ class CrossArmContentionGateTest(unittest.TestCase):
 
         Deliberate: if the gate were merely a ranking tiebreak, the suspect cell would still
         be adopted. Eligibility is what has to exclude it.
+
+        The anchor cell `clean@k0` is given the SAME reading as the raw arm, not the module
+        default: one raw arm serves both search cells, so a raw arm moved for the suspect's sake
+        would also make the anchor look starved -- and a contention-refused anchor now blocks
+        adoption outright, which would mask what these tests are trying to see.
         """
         suspect = {(i, "p1"): 1.0 for i in range(30)}
         clean = {(i, "p1"): 1.0 if i % 3 else 0.0 for i in range(30)}
         raw = {(i, "p1"): 0.0 for i in range(30)}
         return run([
             shard("suspect@k0", "search", "/c/k0.pt", suspect, foulplay_think=search_think),
-            shard("clean@k0", "search", "/c/k0.pt", clean),
+            shard("clean@k0", "search", "/c/k0.pt", clean,
+                  **({} if raw_think is None else {"foulplay_think": raw_think})),
             shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None,
                   **({} if raw_think is None else {"foulplay_think": raw_think})),
         ], anchor="clean@k0")
@@ -924,6 +930,89 @@ class CrossArmContentionGateTest(unittest.TestCase):
         )
         self.assertEqual(rep["cells"]["d4-s1024-b64-w4@k1"]["contention"]["status"], "ok")
 
+    def test_a_cell_spanning_two_shards_pools_every_shards_seats(self) -> None:
+        """A campaign shards a cell by seed band, so an arm is several shards' worth of seats.
+
+        The failing input is a cell whose FIRST shard is healthy and whose SECOND is starved:
+        pooling only the first (or only the last) reads `ok` on half the arm's evidence. Both
+        shards carry the same `config_id`, which is what makes them one cell.
+        """
+        first = {(i, "p1"): 1.0 for i in range(10)}
+        second = {(i, "p1"): 1.0 for i in range(10, 20)}
+        raw = {(i, "p1"): 0.0 for i in range(20)}
+        rep = run([
+            shard("cell@k0", "search", "/c/k0.pt", first),
+            # Same decision count as the healthy default, so the pooled mean is a clean
+            # average of the two shards and the arithmetic below is checkable by hand.
+            shard("cell@k0", "search", "/c/k0.pt", second,
+                  foulplay_think=think(380_000.0 / 3.8, 120)),
+            shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None),
+        ])
+        cell = rep["cells"]["cell@k0"]
+        self.assertEqual(cell["pairs"], 20, "both shards' rows must be in the cell")
+        self.assertEqual(cell["contention"]["status"], "refused")
+        self.assertIn(
+            "cross_arm_rate_ratio_exceeds_threshold", cell["contention"]["refusal_reasons"]
+        )
+        # 2 healthy seats at 380,000 and 2 starved at 100,000 pool to 240,000 against the raw
+        # arm's 380,000: a 1.58 fold. Half an arm's evidence is worth exactly half.
+        self.assertAlmostEqual(
+            cell["contention"]["worst_stratum"]["fold_ratio"], 1.5833, places=3
+        )
+
+    def test_the_same_cell_is_eligible_when_both_its_shards_are_healthy(self) -> None:
+        """The control for the test above: only the second shard's rate moved."""
+        first = {(i, "p1"): 1.0 for i in range(10)}
+        second = {(i, "p1"): 1.0 for i in range(10, 20)}
+        raw = {(i, "p1"): 0.0 for i in range(20)}
+        rep = run([
+            shard("cell@k0", "search", "/c/k0.pt", first),
+            shard("cell@k0", "search", "/c/k0.pt", second),
+            shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None),
+        ])
+        cell = rep["cells"]["cell@k0"]
+        self.assertEqual(cell["pairs"], 20)
+        self.assertEqual(cell["contention"]["status"], "ok")
+        self.assertIn("cell@k0", rep["ranking_eligible"])
+
+    def test_a_contention_refused_anchor_blocks_adoption_entirely(self) -> None:
+        """Making the anchor INELIGIBLE is not enough; it is still the comparator.
+
+        The adopted quantity is the paired improvement `candidate_delta - anchor_delta`, so a
+        confounded anchor puts its confounded delta inside the number that gets adopted -- and
+        the adoption string said only "largest eligible delta whose improvement over anchor@k0
+        excludes 0". Found by independent review. Here only the ANCHOR's opponent is starved.
+        """
+        anchor_scores = {(i, "p1"): 1.0 if i % 2 else 0.0 for i in range(30)}
+        chal = {(i, "p1"): 1.0 for i in range(30)}
+        raw = {(i, "p1"): 0.0 for i in range(30)}
+        rep = run([
+            shard("anchor@k0", "search", "/c/k0.pt", anchor_scores,
+                  foulplay_think=think(380_000.0 / 3.8, 200)),
+            shard("chal@k0", "search", "/c/k0.pt", chal),
+            shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None),
+        ], anchor="anchor@k0")
+        self.assertEqual(rep["cells"]["anchor@k0"]["contention"]["status"], "refused")
+        self.assertEqual(rep["cells"]["chal@k0"]["contention"]["status"], "ok")
+        self.assertIsNone(rep["winner"])
+        self.assertIn("NO ADOPTION", rep["adoption_rule"])
+        self.assertIn("CONTENTION-CONFOUNDED", rep["adoption_rule"])
+        # And the improvement over the confounded anchor is not computed at all.
+        self.assertNotIn("improvement_over_anchor", rep["cells"]["chal@k0"])
+
+    def test_a_clean_anchor_still_adopts_on_the_same_path(self) -> None:
+        """The control: only the anchor's opponent reading moved in the test above."""
+        anchor_scores = {(i, "p1"): 1.0 if i % 2 else 0.0 for i in range(30)}
+        chal = {(i, "p1"): 1.0 for i in range(30)}
+        raw = {(i, "p1"): 0.0 for i in range(30)}
+        rep = run([
+            shard("anchor@k0", "search", "/c/k0.pt", anchor_scores),
+            shard("chal@k0", "search", "/c/k0.pt", chal),
+            shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None),
+        ], anchor="anchor@k0")
+        self.assertEqual(rep["winner"], "chal@k0")
+        self.assertIn("improvement_over_anchor", rep["cells"]["chal@k0"])
+
     def test_the_report_records_the_preregistered_threshold(self) -> None:
         """The threshold has to be IN the artifact, and it is not a CLI flag.
 
@@ -932,7 +1021,8 @@ class CrossArmContentionGateTest(unittest.TestCase):
         """
         rep = self._cells(think(224_200.0, 200), think(224_200.0, 200))
         self.assertEqual(rep["contention_gate"]["max_fold_ratio"], 1.25)
-        self.assertEqual(rep["contention_gate"]["measured_rate_cv"], 0.1151)
+        self.assertEqual(rep["contention_gate"]["measured_decision_log_sd"], 0.0529)
+        self.assertEqual(rep["contention_gate"]["measured_run_log_sd"], 0.0516)
         # And no CLI flag can move it: `main` accepts no contention argument at all.
         with self.assertRaises(SystemExit):
             run([shard("x@k0", "search", "/c/k0.pt", {(0, "p1"): 1.0}),

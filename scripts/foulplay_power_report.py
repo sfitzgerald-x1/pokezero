@@ -410,7 +410,8 @@ def main(argv=None) -> int:
     # the number the whole refusal turns on.
     from pokezero.foulplay_bridge import (  # noqa: PLC0415
         FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
-        FOULPLAY_THINK_MEASURED_RATE_CV,
+        FOULPLAY_THINK_MEASURED_DECISION_LOG_SD,
+        FOULPLAY_THINK_MEASURED_RUN_LOG_SD,
     )
 
     shards = load_shards(args.shards)
@@ -591,7 +592,29 @@ def main(argv=None) -> int:
                 f"anchor {args.anchor!r} has no scoreable pairs "
                 f"({cells[args.anchor].get('error')}); the adoption rule is undefined."
             )
-    if ranked and args.anchor:
+    # A CONTENTION-REFUSED ANCHOR CANNOT BE A COMPARATOR, which the ineligibility list alone
+    # does not achieve. The adopted quantity is the paired IMPROVEMENT
+    # (candidate_delta - anchor_delta), so a confounded anchor puts its confounded delta inside
+    # the number that gets adopted -- and the adoption string never mentions it. Making the
+    # anchor ineligible only removes it from `ranked`; it stays the comparator. Found by
+    # independent review, which demonstrated a 3.8x-starved anchor producing
+    # "largest eligible delta whose improvement over anchor@k0 excludes 0: +0.333".
+    anchor_contention_refused = bool(
+        args.anchor is not None
+        and (cells.get(args.anchor, {}).get("contention") or {}).get("status") != "ok"
+    )
+    if anchor_contention_refused:
+        reasons = (cells[args.anchor].get("contention") or {}).get("refusal_reasons") or [
+            "contention unknown"
+        ]
+        winner = None
+        adoption = (
+            f"NO ADOPTION: the anchor {args.anchor} is CONTENTION-CONFOUNDED "
+            f"({', '.join(reasons)}), and the adoption rule subtracts the anchor's delta from "
+            "every candidate's -- so no improvement over it can be trusted. Section 9 Phase 2's "
+            "comparator has to be a clean cell."
+        )
+    if ranked and args.anchor and not anchor_contention_refused:
         # Section 9 Phase 2 is FILTER-then-rank: (iii) is a per-cell condition,
         # not a test applied only to the leader. Testing just ranked[0] and
         # falling back to the anchor adopts the anchor whenever the largest
@@ -652,10 +675,10 @@ def main(argv=None) -> int:
                 f"({'; '.join(cells[args.anchor]['ineligible_because'])}). "
                 "Section 9 Phase 2's fallback assumes a healthy anchor."
             )
-    elif ranked:
+    elif ranked and not anchor_contention_refused:
         winner = ranked[0]
         adoption = "no --anchor given; reporting the largest eligible delta only"
-    else:
+    elif not anchor_contention_refused:
         # No cell survived eligibility. Saying so explicitly matters: a null
         # winner with a null reason reads as "not computed yet" rather than as
         # "every cell was rejected".
@@ -687,20 +710,27 @@ def main(argv=None) -> int:
         # would be loosened in is known in advance.
         "contention_gate": {
             "max_fold_ratio": FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
-            "measured_rate_cv": FOULPLAY_THINK_MEASURED_RATE_CV,
+            "measured_decision_log_sd": FOULPLAY_THINK_MEASURED_DECISION_LOG_SD,
+            "measured_run_log_sd": FOULPLAY_THINK_MEASURED_RUN_LOG_SD,
             "note": (
                 "Refuses when the opponent's realized visits per granted budget-second "
                 "differ between the arms by more than the fold ratio in any compared "
-                "stratum. Threshold derived from the instrument's own measured precision: a "
-                "matched pair of uncontended real foul-play passes read 1.081, and 3 sigma "
-                "at the per-stratum floor is 1.244. A pass BOUNDS the confound at the fold "
-                "ratio; it does not show it is zero."
+                "stratum. Threshold derived from the instrument's own measured precision: "
+                "six uncontended passes of real foul-play searches gave 15 matched-arm fold "
+                "ratios spanning 1.0013-1.1170, and a 3-sigma bound on matched-arm variation "
+                "is 1.272 at the per-stratum floor and 1.246 at n=200 -- nearly flat in n, "
+                "because the whole-run term dominates the per-decision one. A pass BOUNDS the "
+                "confound at the fold ratio; it does not show it is zero, and between 1.117 "
+                "and 1.25 the gate is deliberately silent."
             ),
         },
         "winner_note": (
             "Eligibility requires shared pairs, >= the section 8 minimum, a passing "
             "cap, seat and fallback health, a cross-arm opponent-throughput comparison "
-            "the contention gate accepts, and -- for depth cells, when --campaign "
+            "the contention gate accepts (which bounds the opponent-strength confound in "
+            "THROUGHPUT units, not in win-rate units -- nothing here calibrates opponent "
+            "visits to opponent strength, so a passing cell still carries a residual of "
+            "unknown size in pp), and -- for depth cells, when --campaign "
             "is given -- reached-depth clearing their reference. A cell excluded by "
             "the cap or as budget-starved is NOT a miss for its strength prediction; "
             "it is unscored. Adoption compares the paired IMPROVEMENT over the "
