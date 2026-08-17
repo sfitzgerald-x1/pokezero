@@ -409,6 +409,7 @@ def main(argv=None) -> int:
     # Named at module scope in the bridge so the report and the gate cannot drift apart on
     # the number the whole refusal turns on.
     from pokezero.foulplay_bridge import (  # noqa: PLC0415
+        FOULPLAY_THINK_CROSS_ARM_RESOLVING_STRATUM_DECISIONS,
         FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
         FOULPLAY_THINK_MEASURED_DECISION_LOG_SD,
         FOULPLAY_THINK_MEASURED_RUN_LOG_SD,
@@ -725,9 +726,13 @@ def main(argv=None) -> int:
                 "this size. They do not justify more digits or a false-refusal rate: the run "
                 "term carries 5 degrees of freedom, so its point-estimate floor of 1.2447 (the "
                 "n->inf asymptote; 1.2506 at the calibration's own n=24, and 1.25 is 0.42% above "
-                "the first and 0.05% below the second -- quote the n) has a 95% chi-square upper "
-                "bound near 1.58 and a t-based floor of 1.47-1.49 at the two-sided tail of z=3, "
-                "p=0.0027 (t=5.51 on 5 df; p=0.002 would give 1.537 instead, so quote the p). "
+                "the first and 0.05% below the second -- quote the n) has a ONE-SIDED 95% "
+                "chi-square upper bound of 1.580 (1.711 at the two-sided interval's upper end) "
+                "and a t-based floor of 1.47-1.49 at the two-sided tail of z=3, "
+                "p=0.0027 (t=5.507 on 5 df; p=0.002 would give 1.537 instead, so quote the p). "
+                "Every one of those floors is computed from the run COMPONENT 0.0516, not from "
+                "the raw pass-mean SD 0.052745 = sqrt(0.0516^2 + 0.0529^2/24), on which the same "
+                "quantities read 1.5080, 1.5521 (p=0.002), 1.6692 (p=0.001) and 1.7312. "
                 "The false-refusal probability is bounded BY THE DATA only at <18% (0 of 15 "
                 "matched pairs). A pass BOUNDS the confound; it does not show it is zero, and "
                 "between 1.117 and 1.25 the gate is deliberately silent."
@@ -742,6 +747,31 @@ def main(argv=None) -> int:
                 "rather than 1.117, and leaves 1.25 with 1.88x log-margin instead of 2.02x. A "
                 "scope qualifier, not a threshold change. Also unmeasured: the bound was taken "
                 "at 2x1000ms on an 18-core macOS box; the early-game 8x500ms stratum borrows it."
+            ),
+            "resolving_stratum_decisions": (
+                FOULPLAY_THINK_CROSS_ARM_RESOLVING_STRATUM_DECISIONS
+            ),
+            "resolution_rule": (
+                "A stratum holding fewer than "
+                f"{FOULPLAY_THINK_CROSS_ARM_RESOLVING_STRATUM_DECISIONS} measured decisions on "
+                "either arm cannot resolve the threshold (its own nominal z=3 resolution is "
+                "wider than the fold ratio), so it is EXCLUDED from the compared set rather "
+                "than refusing the comparison: refusing voided perfectly matched arms over a "
+                "rounding-error slice of the run, at 15 of 15 matched calibration pairs on a "
+                "1.0% minor stratum. Excluded strata count as UNCOVERED, are named in the "
+                "verdict's strata_excluded_for_resolution with their denominators and their "
+                "resolution and no rate, sized in cross_arm_share_excluded_for_resolution, and "
+                "the min_cross_arm_compared_share floor decides. A coverage refusal names WHICH "
+                "of the two shortfalls it was -- "
+                "cross_arm_strata_excluded_for_resolution_cover_too_little or "
+                "cross_arm_compared_strata_cover_too_little -- because they have different "
+                "remedies and neither is contention. The floor is 27 and not the calibration's "
+                "24: 27 is what the shipped decomposition computes (1.250197 at n=26, 1.249996 "
+                "at n=27) and a test recomputes it from the two SDs, whereas 24 is a crossover "
+                "only for a run SD in [0.051426, 0.051475]. min_stratum_decisions (5) and "
+                "min_measured_decisions (20) are both below 27 and therefore inert at this "
+                "layer. Under position variance NOT cancelling the same arithmetic gives 124, "
+                "which is a share question and not a refusal."
             ),
             "pass_bounds": (
                 "A passing cell's mix-standardized arm-level opponent-throughput SHORTFALL is "

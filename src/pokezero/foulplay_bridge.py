@@ -3530,18 +3530,22 @@ def compare_foulplay_think(
 #:      fitted to two clusters describes neither, and the tail it implies is an extrapolation
 #:      from a single transition.
 #:
-#:      AND 1.1170 IS AN UNDERESTIMATE OF REAL MATCHED-ARM VARIATION, which is the one direction
-#:      in which this anchor is OPTIMISTIC rather than conservative. The six passes replayed
-#:      IDENTICAL positions, so position variance cancelled between them exactly. Two real paired
-#:      arms share a battle seed but diverge after their first differing choice, and thereafter
-#:      foul-play is thinking about different positions -- so the largest term in the
-#:      decomposition, `FOULPLAY_THINK_MEASURED_POSITION_LOG_SD` = 0.1003, stops cancelling.
-#:      MEASURED MAGNITUDE, because the mechanism alone understates and overstates equally
-#:      easily: SD(log fold) goes from 0.0746 to 0.0800 at n=24 (**+7.3%**) and from 0.0732 to
-#:      0.0738 at n=200 (**+0.9%**). Small, and small for a reason -- the run term dominates at
-#:      every n -- so this is a SCOPE QUALIFIER and not an argument for a different threshold.
-#:      Its effect on the anchor: inflating 1.1170 by the n=24 factor gives ~**1.126**, which
-#:      leaves 1.25 with 1.88x log-margin instead of 2.02x.
+#:      AND 1.1170 UNDERSTATES REAL MATCHED-ARM VARIATION BY A MEASURED AMOUNT. This is the ONE
+#:      caveat on this whole block that makes the anchor OPTIMISTIC rather than conservative, so
+#:      it is quoted with its magnitude and not as a mechanism -- a mechanism note reads as either
+#:      negligible or fatal depending on who is reading it, and the number is what settles that.
+#:      The six passes replayed IDENTICAL positions, so position variance cancelled between them
+#:      exactly. Two real paired arms share a battle seed but diverge after their first differing
+#:      choice, and thereafter foul-play is thinking about different positions -- so
+#:      `FOULPLAY_THINK_MEASURED_POSITION_LOG_SD` = 0.1003 stops cancelling, and that term is the
+#:      LARGEST OF THE THREE (against 0.0529 per-decision and 0.0516 whole-run: 1.90x and 1.94x
+#:      them respectively). MAGNITUDE: SD(log fold) goes from 0.0746 to 0.0800 at n=24
+#:      (**+7.3%**) and from 0.0732 to 0.0738 at n=200 (**+0.9%**), so the anchor understates
+#:      diverging-arm spread by about **7% at n=24** and about **1% at n=200**. Small, and small
+#:      for a reason -- the run term dominates at every n -- so this is a SCOPE QUALIFIER and not
+#:      an argument for a different threshold. Its effect on the anchor: inflating 1.1170 by the
+#:      n=24 factor gives ~**1.126**, which leaves 1.25 with 1.88x log-margin instead of 2.02x.
+#:      Wherever 1.1170 or 2.02x appears without that correction it is the pre-divergence figure.
 #:   2. THE VARIANCE DECOMPOSITION, which says why the margin has to be WIDE AND FLAT rather than
 #:      how wide. On log rates, with the shared position effect removed (two paired arms play the
 #:      same battle seeds, so position largely cancels between them): per-decision residual SD
@@ -3553,14 +3557,22 @@ def compare_foulplay_think(
 #:      an n-dependent bound would be wrong.
 #:
 #:      WHAT IT DOES NOT ESTABLISH IS A QUANTILE. The dominant term carries 5 df, so `z = 3` on
-#:      it is not a 3-sigma statement: matching the same tail through the t distribution needs
-#:      t = 5.23 at n=27 (Satterthwaite df 5.40) rising to t = 5.51 as n grows (df -> 5.00), and
-#:      the run SD's own 95% chi-square upper bound is 0.1078, more than double the point
-#:      estimate. `foulplay_think_detectable_fold_ratio` and the `detectable_fold_ratio_3sigma`
-#:      field are therefore NOMINAL z=3 point estimates -- the gate's operating criterion, which
-#:      has to be some fixed rule -- and they are optimistic, in the flattering direction, by the
-#:      amount those two corrections imply. The one thing they must not be read as is a measured
-#:      floor; see below.
+#:      it is not a 3-sigma statement: matching the same two-sided p=0.0027 tail through the t
+#:      distribution needs t = 5.23 at n=27 (Satterthwaite df 5.40) rising to t = 5.51 as n grows
+#:      (df -> 5.00), and the run SD's own one-sided 95% chi-square upper bound is 0.1078, more
+#:      than double the point estimate. `foulplay_think_nominal_fold_resolution` and the
+#:      `nominal_fold_resolution_point_estimate` field are therefore NOMINAL z=3 point estimates
+#:      -- the gate's operating criterion, which has to be some fixed rule -- and they are
+#:      optimistic, in the flattering direction, by the amount those two corrections imply. The
+#:      one thing they must not be read as is a measured floor; see below.
+#:
+#:      WHICH IS WHY BOTH ARE NAMED THAT WAY. They were `foulplay_think_detectable_fold_ratio` and
+#:      `detectable_fold_ratio_3sigma`, and "detectable at 3 sigma" asserts a confidence level a
+#:      5-df point estimate cannot carry. The field is the one that matters most -- it lands in a
+#:      report artifact, where it outlives the paragraph next to it -- but the function was
+#:      renamed with it, because a field called a point estimate that is computed by a function
+#:      called "detectable" sends the reader straight back to the retracted claim. The name now
+#:      states its own limit, so nothing downstream has to remember to.
 #:
 #:      TWO CONVENTIONS, LABELLED, because a sentence's sign flips with either choice and both
 #:      have been stated ambiguously here before:
@@ -3584,7 +3596,7 @@ def compare_foulplay_think(
 #: gate is a ~6-sigma test at n=20 and can resolve a 3.5% effect at n=200. Both are false. With
 #: the whole-run term measured at 5 df instead of inferred from one pair, the bound is nearly
 #: flat in n. The threshold survived; its justification did not, and
-#: `detectable_fold_ratio_3sigma` was reporting the optimistic number -- an error in the
+#: `nominal_fold_resolution_point_estimate` was reporting the optimistic number -- an error in the
 #: flattering direction, in a field whose whole job is to say how strongly a stratum passed.
 #:
 #: WHY THE THRESHOLD IS FIXED RATHER THAN COMPUTED FROM n: because the measurement says the
@@ -3598,10 +3610,11 @@ def compare_foulplay_think(
 #:     1.25 leaves ~2x log-margin on it;
 #:   * the variance decomposition says the spread is nearly flat in n, so a FIXED bound is the
 #:     right shape;
-#:   * the dominant term carries 5 df. Its point-estimate floor is 1.245, its own 95%
-#:     chi-square upper bound is near **1.58**, and matching a 0.0027 tail through t rather than
-#:     z puts the floor at **1.47-1.49**. Six passes are enough to justify a fixed constant of
-#:     about this size; they are not enough to justify four significant figures;
+#:   * the dominant term carries 5 df. Its point-estimate floor is 1.245, its own ONE-SIDED 95%
+#:     chi-square upper bound is **1.580** (run SD 0.1078; the two-sided 95% interval's upper end
+#:     is 0.1266, which reads **1.711**), and matching a two-sided p=0.0027 tail through t rather
+#:     than z puts the floor at **1.47-1.49**. Six passes are enough to justify a fixed constant
+#:     of about this size; they are not enough to justify four significant figures;
 #:   * the false-refusal rate is bounded BY THE DATA only at **<18%** (0 refusals in 15 matched
 #:     pairs; exact one-sided 95% upper bound `1 - 0.05**(1/15)`).
 #:
@@ -3609,12 +3622,32 @@ def compare_foulplay_think(
 #: 1.25 is the tightest threshold this instrument can support" AND "refuses a genuinely matched
 #: pair on the order of once in 300 strata". Both are RETRACTED. 1.2448 is `exp(3*sqrt(2)*0.0516)`
 #: -- a point estimate of a 5-df quantity presented to five digits as though it were a physical
-#: constant, when the same quantity's 95% interval reaches 1.58. And 1-in-300 is a Gaussian
-#: extrapolation from a 5-df variance of a BIMODAL spread; carried through t at the same df it is
-#: nearer 1-in-35, and the data alone bound it at <18%. Nothing about 1.25 changed -- no
-#: measurement argues for a different number -- only the precision claimed for the numbers around
-#: it. If the false-refusal rate is actually wanted, the measurement that would supply it is
-#: twenty uncontended passes: 19 df on the run term and 190 matched pairs.
+#: constant, when the same quantity's own 95% interval reaches 1.580 one-sided and 1.711
+#: two-sided. A NUMBER WHOSE CONFIDENCE INTERVAL REACHES 1.7 IS NOT A 3-SIGMA FLOOR. And the
+#: margin the claim rested on ran the other way and was thinner than the arithmetic's own
+#: rounding: 1.25 clears the asymptote by 0.42% and does not clear the bound at the calibration's
+#: own n=24 (1.2506) at all. THAT IS HOW A COINCIDENCE GETS WRITTEN UP AS A DERIVATION, and the
+#: flattering direction of the error is that it made the threshold look derived rather than
+#: chosen -- which is the harder error to notice, because it is the one that reads as rigour.
+#: And 1-in-300 is a Gaussian extrapolation from a 5-df variance of a BIMODAL spread; carried
+#: through t at the same df it is nearer 1-in-36 (1 in 35.5 at the asymptote, 1 in 36.7 at the
+#: calibration's n=24, both two-sided), and the data alone bound it at <18%. Nothing
+#: about 1.25 changed -- no measurement argues for a different number -- only the precision
+#: claimed for the numbers around it. If the false-refusal rate is actually wanted, the
+#: measurement that would supply it is twenty uncontended passes: 19 df on the run term and 190
+#: matched pairs.
+#:
+#: EVERY FLOOR IN THIS BLOCK IS QUOTED WITH ITS p AND ITS SD, because a floor without them is
+#: unreadable and two independent re-derivations of this same retraction disagreed for exactly
+#: that reason. On the shipped run component 0.0516 at a two-sided p=0.0027: t(5) = 5.507 and the
+#: asymptotic floor is 1.4946. On the raw pass-mean SD 0.052745 -- which is
+#: `sqrt(run**2 + decision**2/24)` and therefore NOT the run term -- the same p reads 1.5080,
+#: p=0.002 reads 1.5521 and p=0.001 reads 1.6692, and its two-sided variance interval is
+#: [0.00108, 0.01673] with an SD upper end of 0.1294 giving 1.7312. On the run component those
+#: last two are [0.001037, 0.016016] and 1.7107. So 1.5521, 1.6692 and 1.7312 are all
+#: pass-mean-SD numbers, not run-term numbers, and every one of them differs from its run-term
+#: counterpart by more than the digits it is quoted to. None of them is a typo; they are recorded
+#: here so that a reader who meets one elsewhere can place it instead of picking a side.
 #:
 #: AND IT IS FAR BELOW WHAT THE INSTRUMENT HAS ALREADY CAUGHT: the starvation that a thin
 #: stratum hid was **3.8x** (an excess of 2.8 against this gate's 0.25), and the arbiter arm's
@@ -3661,13 +3694,13 @@ FOULPLAY_THINK_MEASURED_RUN_LOG_SD = 0.0516
 #: 144 - 24 - 6 + 1 = 115 for the per-decision residual (144 decisions, 24 position effects,
 #: 6 pass effects). Carried as constants because every downstream quantile depends on them and
 #: the run term's 5 is the reason `z=3` is not the honest multiplier -- see
-#: `foulplay_think_detectable_fold_ratio`.
+#: `foulplay_think_nominal_fold_resolution`.
 FOULPLAY_THINK_MEASURED_RUN_LOG_SD_DF = 5
 FOULPLAY_THINK_MEASURED_DECISION_LOG_SD_DF = 115
 #: Between-POSITION SD of the same log rate: what a decision's rate moves by because of WHICH
 #: position it was taken on. The LARGEST of the three -- 1.90x the per-decision residual and
 #: 1.94x the run term -- and it is excluded from
-#: `foulplay_think_detectable_fold_ratio` on the assumption that it CANCELS -- two paired arms
+#: `foulplay_think_nominal_fold_resolution` on the assumption that it CANCELS -- two paired arms
 #: play the same battle seeds, so the same positions. Real arms diverge after their first
 #: differing choice, so the assumption weakens over a game and the honest reading of it is stated
 #: where the constant is used rather than left implicit.
@@ -3699,7 +3732,7 @@ FOULPLAY_THINK_MEASURED_POSITION_LOG_SD = 0.1003
 #: run refuses on this floor the refusal is information about the shard, not licence to lower it.
 FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE = 0.95
 #: THE OPERATIVE PER-STRATUM FLOOR OF THE CROSS-ARM GATE, and it is DERIVED rather than chosen:
-#: the smallest n at which `foulplay_think_detectable_fold_ratio(n, n)` comes in at or under
+#: the smallest n at which `foulplay_think_nominal_fold_resolution(n, n)` comes in at or under
 #: `FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO`. 1.250197 at n=26, 1.249996 at n=27. A stratum below
 #: it is excluded from the compared set -- it cannot tell a matched pair from a starved one --
 #: and `FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE` then decides whether what is left covers the
@@ -3713,17 +3746,52 @@ FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE = 0.95
 #: whole comparison, so two matched arms differing by one 8-decision schedule came back
 #: `refused`. It is exclusion now, and the span is named so it cannot be re-read as agreement.
 #:
+#: 27 AND NOT 24, RECONCILED, because an independent branch of this fix shipped 24 and the two
+#: numbers have to be one number. IN ONE LINE: 27 is what the shipped decomposition computes
+#: (1.250197 at n=26, 1.249996 at n=27) and a test recomputes it from the two SDs so it cannot
+#: drift, whereas 24 is the calibration's DECISION COUNT and is a crossover only for a run SD in
+#: [0.051426, 0.051475], which is not the 0.0516 this module ships.
+#:
+#: WHERE 24 CAME FROM, since it was not arbitrary either: that branch ran its whole
+#: degrees-of-freedom analysis on **0.052745**, the raw SD of the six pass means
+#: (`sqrt(0.002782)`), rather than on the run COMPONENT this module ships. The two differ by the
+#: sampling term the decomposition removes: `0.0516 = sqrt(0.002782 - 0.0529**2 / 24)`. At that SD
+#: the asymptote is 1.2508, i.e. ABOVE the threshold, so no n at all would certify -- which is
+#: exactly the "no stratum can ever resolve it" reading that made a derived floor look untenable
+#: and a flat count look safer. On the component the module actually uses, the asymptote is 1.2447
+#: and the crossover exists. So the disagreement was about which SD, not about whether to derive.
+#:
+#: AND THE OBJECTION THAT KILLED THE DERIVED FLOOR NO LONGER APPLIES. It was: "a gate whose
+#: behaviour flips on the third decimal place of a 5-df estimate is not a gate", and against a
+#: REFUSAL that was right -- a third decimal place decided whether a matched campaign banked. It
+#: decides nothing of the sort now. Moving this constant moves a stratum between the compared set
+#: and a named exclusion; the verdict is then decided by
+#: `FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE` over what is left. A one-decision change in the
+#: crossover changes a share by one stratum's worth of decisions, which is a continuous and
+#: bounded effect, not a flip. That is the whole reason a derived value is admissible here and
+#: was not there.
+#:
+#: THE OTHER TWO FLOORS ARE INERT AT THIS LAYER, and it is worth being explicit rather than
+#: leaving three numbers to be read as agreeing. `FOULPLAY_THINK_MIN_STRATUM_DECISIONS` (5) and
+#: `FOULPLAY_THINK_MIN_MEASURED_DECISIONS` (20) are both BELOW 27, so neither can ever be what
+#: admits a stratum or an arm to a cross-arm verdict: everything under 27 is excluded here
+#: regardless. 5 still decides whether a too-thin stratum is named in `thin_strata` or in
+#: `strata_excluded_for_resolution`, and 20 still governs callers that read one arm and never
+#: compare a fold ratio -- so they keep their jobs, they just do not have this one.
+#:
 #: A TEST RECOMPUTES IT from the two SDs, so it cannot drift away from the measurement it comes
 #: from; and it is DERIVED UNDER THE POSITION TERM CANCELLING. Under
-#: `FOULPLAY_THINK_MEASURED_POSITION_LOG_SD` NOT cancelling the same arithmetic gives n=124, so
-#: strata of 27..123 are certified able to resolve 1.25 on an assumption about paired arms
-#: playing the same positions that real diverging arms only partly satisfy. That is a share
-#: question, not a refusal, and it is stated here rather than corrected: correcting it would
-#: raise the floor on an assumption that has not been measured either way.
+#: `FOULPLAY_THINK_MEASURED_POSITION_LOG_SD` NOT cancelling the same arithmetic gives n=124 (with
+#: the shipped 0.0516; n=128 on the unrounded 0.05163, which is why the constants and not the
+#: raw measurement are what the test recomputes from), so strata of 27..123 are certified able to
+#: resolve 1.25 on an assumption about paired arms playing the same positions that real diverging
+#: arms only partly satisfy. That is a share question, not a refusal, and it is stated here rather
+#: than corrected: correcting it would raise the floor on an assumption that has not been measured
+#: either way.
 FOULPLAY_THINK_CROSS_ARM_RESOLVING_STRATUM_DECISIONS = 27
 
 
-def foulplay_think_detectable_fold_ratio(n_a: int, n_b: int) -> float:
+def foulplay_think_nominal_fold_resolution(n_a: int, n_b: int) -> float:
     """The NOMINAL z=3 fold ratio a reading could resolve at these two denominators.
 
     sqrt(2*run^2 + decision^2*(1/n_a + 1/n_b)), exponentiated: the gated quantity is a FOLD
@@ -3987,13 +4055,16 @@ def cross_arm_foulplay_contention(
 
       * every stratum in the compared set is within `max_fold_ratio`;
       * every stratum in the compared set is thick enough for that threshold to MEAN anything
-        (`foulplay_think_detectable_fold_ratio` at its two denominators must not exceed the
+        (`foulplay_think_nominal_fold_resolution` at its two denominators must not exceed the
         threshold, or the stratum certifies nothing). Before this check a stratum at the
         within-arm floor of 5 decisions read `ok` while its own resolution was 1.272 -- wider
         than the threshold it was being compared against. A stratum that fails it is EXCLUDED
         from the compared set, not refused: see the check itself for the dead band that refusing
         created, and note that exclusion is not leniency, because what is excluded counts as
-        uncovered in the share below;
+        uncovered in the share below -- and is named in `strata_excluded_for_resolution`, sized
+        in `cross_arm_share_excluded_for_resolution`, and given its OWN refusal reason if it is
+        what takes the share under the floor, so "could not resolve the threshold" is never
+        reported as "coverage was short";
       * the compared set covers `FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE` of EACH arm's
         measured decisions. The within-arm gate's own floor is 0.8, which leaves a fifth of
         each arm outside the comparison and UNBOUNDED: composed with a per-stratum reading just
@@ -4081,6 +4152,7 @@ def cross_arm_foulplay_contention(
     per_stratum: dict[str, Any] = {}
     unresolvable: dict[str, Any] = {}
     cross_arm_share: dict[str, float] = {}
+    cross_arm_excluded_share: dict[str, float] = {}
     worst: dict[str, Any] | None = None
     for name, block in (admissibility.get("by_stratum") or {}).items():
         ratio = block["ratio"]
@@ -4118,15 +4190,15 @@ def cross_arm_foulplay_contention(
             # IT IS A NOMINAL z=3 POINT ESTIMATE, not a physical constant, and two assumptions
             # sit inside it -- the run term carries 5 df so the honest quantile is t, and the
             # position term is assumed to CANCEL between the arms. See
-            # `foulplay_think_detectable_fold_ratio` for both, and for the n=124 crossover the
+            # `foulplay_think_nominal_fold_resolution` for both, and for the n=124 crossover the
             # same arithmetic gives when the position term does not cancel.
-            "detectable_fold_ratio_3sigma": (
-                foulplay_think_detectable_fold_ratio(n_hungry, n_lean)
+            "nominal_fold_resolution_point_estimate": (
+                foulplay_think_nominal_fold_resolution(n_hungry, n_lean)
                 if n_hungry and n_lean
                 else None
             ),
         }
-        resolution = entry["detectable_fold_ratio_3sigma"]
+        resolution = entry["nominal_fold_resolution_point_estimate"]
         if fold is None:
             # A compared stratum whose ratio is not a ratio -- the lean arm realized zero
             # visits per granted second -- would otherwise be skipped when picking the worst
@@ -4155,9 +4227,21 @@ def cross_arm_foulplay_contention(
             # was excluded still counts as UNCOVERED, so
             # `FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE` caps the unbounded remainder at 5%
             # of each arm. An 0.8% unresolvable stratum passes at share 0.992; a 10% one refuses
-            # at 0.900. The exclusion is stated in `strata_excluded_for_resolution` -- with its
-            # denominators and its resolution, and no rate -- so a share refusal can be read
-            # back to its cause instead of looking like a coverage accident.
+            # at 0.900. Both dispositions preserve the guarantee that matters; only this one
+            # avoids voiding a matched campaign, and a refusal is the more expensive error --
+            # `winner=None` and no adoption, over 0.4-1.0% of an arm, with a reason that reads
+            # as an instrument fault (measured: 15 of 15 matched pairs refusing over a 1.0%
+            # minor stratum).
+            #
+            # THE OBJECTION TO A BARE EXCLUSION IS HONOURED RATHER THAN OVERRIDDEN. The refusing
+            # branch of this fix argued that an exclusion "would land in the uncompared remainder
+            # and be reported as a coverage problem, which is a different diagnosis" -- and that
+            # is true of a bare exclusion. It is not true of this one: the strata are named in
+            # `strata_excluded_for_resolution` with their denominators and resolution, their
+            # magnitude is in `cross_arm_share_excluded_for_resolution`, and a coverage refusal
+            # carries a DISTINCT reason saying which of the two caused it (see the share loop
+            # below). So the distinct diagnosis is kept without paying for it in voided
+            # campaigns.
             #
             # `resolution is None` is folded in here rather than passed: it means a denominator
             # was 0, which the within-arm floor of 5 makes unreachable through
@@ -4166,7 +4250,7 @@ def cross_arm_foulplay_contention(
             unresolvable[name] = {
                 f"{hungry_label}_iterations_measured_decisions": n_hungry,
                 f"{lean_label}_iterations_measured_decisions": n_lean,
-                "detectable_fold_ratio_3sigma": resolution,
+                "nominal_fold_resolution_point_estimate": resolution,
             }
             continue
         per_stratum[name] = entry
@@ -4181,22 +4265,51 @@ def cross_arm_foulplay_contention(
     # the compared set, and an unresolvable stratum is not in it. That is the whole mechanism
     # by which the unresolvable case is handled: a share question, decided by a floor with a
     # stated remainder, rather than a refusal on a slice too small to matter.
+    #
+    # AND A SHORTFALL SAYS WHICH OF THE TWO CAUSED IT, which is the objection the refusing
+    # branch of this fix raised against a bare exclusion and it is a fair one: "this stratum
+    # could not resolve the threshold" and "the two arms visited different schedules" are
+    # different diagnoses with different remedies -- run longer against re-derive the
+    # threshold -- and collapsing both into one coverage reason loses that. So the reasons are
+    # split, `strata_excluded_for_resolution` names the strata, and
+    # `cross_arm_share_excluded_for_resolution` gives the magnitude:
+    #
+    #   * `<arm>:cross_arm_strata_excluded_for_resolution_cover_too_little` -- this arm lost
+    #     coverage to strata too thin for the threshold to mean anything on them;
+    #   * `<arm>:cross_arm_compared_strata_cover_too_little` -- coverage is short even COUNTING
+    #     every excluded-for-resolution stratum as covered, so the gap is a real coverage gap.
+    #
+    # Both can fire together, and then both are true. The second is computed from a single
+    # `(covered + excluded) / measured` division rather than by adding two shares, so the
+    # comparison against the floor is exact at the floor rather than off by a rounding step.
     for label, header in ((hungry_label, hungry), (lean_label, lean)):
         measured = (header or {}).get("iterations_measured_decisions")
         measured = int(measured) if isinstance(measured, (int, float)) else 0
         strata = (header or {}).get("by_stratum") or {}
-        covered = sum(
-            int((strata.get(name) or {}).get("iterations_measured_decisions") or 0)
-            for name in per_stratum
-        )
+
+        def _decisions(names: Iterable[str], strata: Mapping[str, Any] = strata) -> int:
+            return sum(
+                int((strata.get(name) or {}).get("iterations_measured_decisions") or 0)
+                for name in names
+            )
+
+        covered = _decisions(per_stratum)
+        excluded = _decisions(unresolvable)
         share = (covered / measured) if measured else 0.0
         cross_arm_share[label] = share
+        cross_arm_excluded_share[label] = (excluded / measured) if measured else 0.0
         # SUM CANNOT EXCEED THE ARM. A header whose `by_stratum` counts add up to more than its
         # own `iterations_measured_decisions` produced a share of 10.0 and passed every check.
         if share > 1.0:
             refusals.append(f"{label}:stratum_counts_exceed_measured_decisions")
         elif share < FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE:
-            refusals.append(f"{label}:cross_arm_compared_strata_cover_too_little")
+            if excluded:
+                refusals.append(
+                    f"{label}:cross_arm_strata_excluded_for_resolution_cover_too_little"
+                )
+            resolvable_share = ((covered + excluded) / measured) if measured else 0.0
+            if resolvable_share < FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE:
+                refusals.append(f"{label}:cross_arm_compared_strata_cover_too_little")
     admissible = admissible and not refusals
     if admissible and worst is not None and worst["fold_ratio"] > max_fold_ratio:
         refusals.append("cross_arm_rate_ratio_exceeds_threshold")
@@ -4227,6 +4340,12 @@ def cross_arm_foulplay_contention(
         # `cross_arm_compared_share` -- so a share refusal is otherwise indistinguishable from
         # two arms that visited different schedules.
         "strata_excluded_for_resolution": unresolvable,
+        # AND THE MAGNITUDE OF THAT EXCLUSION PER ARM, because the names alone do not say how
+        # much of the arm went with them, and the whole reason a refusal was replaced by an
+        # exclusion is that the slice is normally a rounding error. Read with
+        # `cross_arm_compared_share`: the two sum to at most 1.0, and their gap is the coverage
+        # that is short for the OTHER reason -- schedules one arm visited and the other did not.
+        "cross_arm_share_excluded_for_resolution": cross_arm_excluded_share,
         "reading_status": admissibility.get("reading_status"),
         "verdict_note": (
             "A ratio above 1.0 means the opponent realized LESS work per granted "
@@ -4241,7 +4360,13 @@ def cross_arm_foulplay_contention(
             "uncompared remainder does not run FASTER on the lean arm. It does not "
             "show the confound is zero, and it is in THROUGHPUT units: nothing here calibrates "
             "opponent visits to opponent strength, so the residual in win-rate points is "
-            "unknown, not small."
+            "unknown, not small. A coverage refusal NAMES WHICH of the two causes it had, "
+            "because they have different remedies: "
+            "`cross_arm_strata_excluded_for_resolution_cover_too_little` means the arm lost "
+            "coverage to strata too thin for the threshold to resolve anything on them (run "
+            "longer, or re-derive the threshold), while "
+            "`cross_arm_compared_strata_cover_too_little` means coverage is short even counting "
+            "those as covered -- the two arms visited different schedules. Neither is contention."
         ),
     }
     if not admissible:

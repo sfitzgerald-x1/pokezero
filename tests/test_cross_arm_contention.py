@@ -36,7 +36,7 @@ from pokezero.foulplay_bridge import (
     FOULPLAY_THINK_MIN_STRATUM_DECISIONS,
     FOULPLAY_THINK_SCHEMA_VERSION,
     cross_arm_foulplay_contention,
-    foulplay_think_detectable_fold_ratio,
+    foulplay_think_nominal_fold_resolution,
     pool_foulplay_think,
 )
 
@@ -242,7 +242,7 @@ def chi_square_quantile(p, df):
 
 
 def fold_log_sd(n_a, n_b):
-    """The SD `foulplay_think_detectable_fold_ratio` exponentiates three of."""
+    """The SD `foulplay_think_nominal_fold_resolution` exponentiates three of."""
     return math.sqrt(
         2.0 * FOULPLAY_THINK_MEASURED_RUN_LOG_SD**2
         + FOULPLAY_THINK_MEASURED_DECISION_LOG_SD**2 * (1.0 / n_a + 1.0 / n_b)
@@ -309,6 +309,12 @@ class MatchedArmsTest(unittest.TestCase):
         floor is what refuses. Both halves are asserted, because "refused" alone would also be
         satisfied by the version of this gate that voided matched arms over an 8-decision
         stratum.
+
+        AND THE REASON SAYS WHICH SHORTFALL IT WAS. 100% of this arm was excluded for resolution
+        and 0% is a coverage gap, so the reason is the resolution one and the plain coverage one
+        must NOT fire -- otherwise "this stratum cannot resolve the threshold" is reported as
+        "the two arms visited different schedules", which is the objection the refusing branch of
+        this fix raised against a bare exclusion.
         """
         for a, b, result in self._pairs(MEASURED_PASS_N):
             with self.subTest(a=a, b=b):
@@ -321,12 +327,20 @@ class MatchedArmsTest(unittest.TestCase):
                 )
                 self.assertGreater(
                     result["strata_excluded_for_resolution"]["2x1000ms"][
-                        "detectable_fold_ratio_3sigma"
+                        "nominal_fold_resolution_point_estimate"
                     ],
                     FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
                 )
                 self.assertEqual(result["cross_arm_compared_share"], {"search": 0.0, "raw": 0.0})
+                self.assertEqual(
+                    result["cross_arm_share_excluded_for_resolution"],
+                    {"search": 1.0, "raw": 1.0},
+                )
                 self.assertIn(
+                    "search:cross_arm_strata_excluded_for_resolution_cover_too_little",
+                    result["refusal_reasons"],
+                )
+                self.assertNotIn(
                     "search:cross_arm_compared_strata_cover_too_little",
                     result["refusal_reasons"],
                 )
@@ -341,8 +355,8 @@ class MatchedArmsTest(unittest.TestCase):
         The whole-run term never shrinks, so the nominal z=3 resolution never goes below
         exp(3*sqrt(2)*run_sd) = 1.2447 however large n gets. A threshold under that certifies
         nothing at ANY denominator, and the gate behaves accordingly: at 1.24 every one of the 15
-        matched pairs ends up with its only stratum excluded and refuses on coverage, even at
-        10^6 decisions per arm.
+        matched pairs ends up with its only stratum excluded and refuses -- for RESOLUTION, which
+        is the reason that is true, and not for a coverage gap -- even at 10^6 decisions per arm.
 
         WHAT IS NOT CLAIMED, and used to be: that 1.2448 is therefore "the tightest threshold
         this instrument can support". 1.2447 is a point estimate of a quantity with 5 degrees of
@@ -359,6 +373,10 @@ class MatchedArmsTest(unittest.TestCase):
                 self.assertEqual(result["status"], "refused")
                 self.assertIn("2x1000ms", result["strata_excluded_for_resolution"])
                 self.assertIn(
+                    "search:cross_arm_strata_excluded_for_resolution_cover_too_little",
+                    result["refusal_reasons"],
+                )
+                self.assertNotIn(
                     "search:cross_arm_compared_strata_cover_too_little",
                     result["refusal_reasons"],
                 )
@@ -421,12 +439,14 @@ class MatchedArmsTest(unittest.TestCase):
         is a 3-sigma test. `RunTermDegreesOfFreedomTest` is where that distinction is pinned.
         """
         floor = FOULPLAY_THINK_MIN_STRATUM_DECISIONS
-        self.assertAlmostEqual(foulplay_think_detectable_fold_ratio(floor, floor), 1.2723, places=4)
-        self.assertAlmostEqual(foulplay_think_detectable_fold_ratio(20, 20), 1.2518, places=4)
-        self.assertAlmostEqual(foulplay_think_detectable_fold_ratio(200, 200), 1.2454, places=4)
+        self.assertAlmostEqual(
+            foulplay_think_nominal_fold_resolution(floor, floor), 1.2723, places=4
+        )
+        self.assertAlmostEqual(foulplay_think_nominal_fold_resolution(20, 20), 1.2518, places=4)
+        self.assertAlmostEqual(foulplay_think_nominal_fold_resolution(200, 200), 1.2454, places=4)
         for n in (floor, 20, 24, 200, 2000):
             with self.subTest(n=n):
-                sd = math.log(foulplay_think_detectable_fold_ratio(n, n)) / 3.0
+                sd = math.log(foulplay_think_nominal_fold_resolution(n, n)) / 3.0
                 sigmas = math.log(FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO) / sd
                 self.assertGreater(sigmas, 2.7)
                 self.assertLess(sigmas, 3.2)
@@ -443,11 +463,11 @@ class MatchedArmsTest(unittest.TestCase):
             3.0 * FOULPLAY_THINK_MEASURED_DECISION_LOG_SD * (2.0 / 200) ** 0.5
         )
         self.assertAlmostEqual(sampling_only, 1.0160, places=4)
-        self.assertGreater(foulplay_think_detectable_fold_ratio(200, 200), 1.2)
+        self.assertGreater(foulplay_think_nominal_fold_resolution(200, 200), 1.2)
         self.assertGreater(FOULPLAY_THINK_MEASURED_RUN_LOG_SD, 0.0)
         # And at large n the bound converges on the run term alone, not on 1.0.
         self.assertAlmostEqual(
-            foulplay_think_detectable_fold_ratio(10**7, 10**7),
+            foulplay_think_nominal_fold_resolution(10**7, 10**7),
             math.exp(3.0 * (2**0.5) * FOULPLAY_THINK_MEASURED_RUN_LOG_SD),
             places=4,
         )
@@ -492,7 +512,7 @@ class MatchedArmsTest(unittest.TestCase):
         floor allows.
         """
         self.assertGreater(
-            foulplay_think_detectable_fold_ratio(10, 10),
+            foulplay_think_nominal_fold_resolution(10, 10),
             FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
         )
         for a, b, result in self._mixed_pairs(CAMPAIGN_N, 10):
@@ -527,11 +547,11 @@ class MatchedArmsTest(unittest.TestCase):
         ):
             with self.subTest(minor=minor):
                 self.assertGreater(
-                    foulplay_think_detectable_fold_ratio(minor, minor),
+                    foulplay_think_nominal_fold_resolution(minor, minor),
                     FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
                 )
                 self.assertLessEqual(
-                    foulplay_think_detectable_fold_ratio(major, major),
+                    foulplay_think_nominal_fold_resolution(major, major),
                     FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
                 )
                 worst = self._mixed_pairs(major, minor)[-1]
@@ -541,8 +561,20 @@ class MatchedArmsTest(unittest.TestCase):
                     result["cross_arm_compared_share"]["search"], share, places=6
                 )
                 self.assertIn("8x500ms", result["strata_excluded_for_resolution"])
+                self.assertAlmostEqual(
+                    result["cross_arm_share_excluded_for_resolution"]["search"],
+                    minor / (major + minor),
+                    places=6,
+                )
                 if expected == "refused":
+                    # THE RESOLUTION REASON, not the plain coverage one: every decision outside
+                    # the compared set here is inside an excluded stratum, so a bare
+                    # "cover_too_little" would be the wrong diagnosis with the wrong remedy.
                     self.assertIn(
+                        "search:cross_arm_strata_excluded_for_resolution_cover_too_little",
+                        result["refusal_reasons"],
+                    )
+                    self.assertNotIn(
                         "search:cross_arm_compared_strata_cover_too_little",
                         result["refusal_reasons"],
                     )
@@ -576,7 +608,7 @@ class MatchedArmsTest(unittest.TestCase):
         self.assertEqual(
             sorted(result["strata_excluded_for_resolution"]["8x500ms"]),
             [
-                "detectable_fold_ratio_3sigma",
+                "nominal_fold_resolution_point_estimate",
                 "raw_iterations_measured_decisions",
                 "search_iterations_measured_decisions",
             ],
@@ -598,7 +630,8 @@ class MatchedArmsTest(unittest.TestCase):
         )
         self.assertEqual(big["status"], "refused")
         self.assertIn(
-            "search:cross_arm_compared_strata_cover_too_little", big["refusal_reasons"]
+            "search:cross_arm_strata_excluded_for_resolution_cover_too_little",
+            big["refusal_reasons"],
         )
 
     def test_a_pure_decision_mix_difference_is_not_refused(self) -> None:
@@ -795,7 +828,7 @@ class RunTermDegreesOfFreedomTest(unittest.TestCase):
         """N3's constant, and the crossover it implies if it does not cancel.
 
         `FOULPLAY_THINK_MEASURED_POSITION_LOG_SD` is 0.1003 -- 1.90x the per-decision residual
-        and 1.94x the run term, the two that ARE in `foulplay_think_detectable_fold_ratio` -- and
+        and 1.94x the run term, the two that ARE in `foulplay_think_nominal_fold_resolution` -- and
         it is omitted because two paired arms replay the same battle seeds. Real arms diverge
         after their first differing choice, so for fully diverged arms it does not cancel, and
         then the crossover against 1.25 moves from 27 to 124. Strata of 27..123 are certified able
@@ -838,7 +871,7 @@ class RunTermDegreesOfFreedomTest(unittest.TestCase):
         # The shipped floor's own stratum, under the other assumption: 1.2683, not 1.2500.
         n = FOULPLAY_THINK_CROSS_ARM_RESOLVING_STRATUM_DECISIONS
         self.assertAlmostEqual(no_cancellation(n), 1.2683, places=4)
-        self.assertAlmostEqual(foulplay_think_detectable_fold_ratio(n, n), 1.2500, places=4)
+        self.assertAlmostEqual(foulplay_think_nominal_fold_resolution(n, n), 1.2500, places=4)
 
     def test_the_position_terms_magnitude_on_the_sd_and_on_the_empirical_anchor(self) -> None:
         """The mechanism was already conceded; this is the size of it, which is the finding.
@@ -957,6 +990,16 @@ class RunTermDegreesOfFreedomTest(unittest.TestCase):
             at_the_within_arm_floor["cross_arm_compared_share"], {"search": 0.0, "raw": 0.0}
         )
         self.assertIn("2x1000ms", at_the_within_arm_floor["strata_excluded_for_resolution"])
+        # And the reason says resolution, not coverage: a 20-decision arm did not visit a
+        # narrower set of schedules, it visited one that cannot resolve the threshold.
+        self.assertIn(
+            "search:cross_arm_strata_excluded_for_resolution_cover_too_little",
+            at_the_within_arm_floor["refusal_reasons"],
+        )
+        self.assertNotIn(
+            "search:cross_arm_compared_strata_cover_too_little",
+            at_the_within_arm_floor["refusal_reasons"],
+        )
         # And at the crossover the same arms certify, so 27 is the operative floor.
         at_the_crossover = verdict(
             [think(380_000.0, FOULPLAY_THINK_CROSS_ARM_RESOLVING_STRATUM_DECISIONS)],
@@ -1145,11 +1188,13 @@ class EveryRatioCarriesItsDenominatorsTest(unittest.TestCase):
         self.assertEqual(thin["status"], "ok")
         self.assertEqual(thick["status"], "ok")
         self.assertGreater(
-            thin["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"],
-            thick["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"],
+            thin["by_stratum"]["2x1000ms"]["nominal_fold_resolution_point_estimate"],
+            thick["by_stratum"]["2x1000ms"]["nominal_fold_resolution_point_estimate"],
         )
         self.assertAlmostEqual(
-            thick["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"], 1.24480, places=5
+            thick["by_stratum"]["2x1000ms"]["nominal_fold_resolution_point_estimate"],
+            1.24480,
+            places=5,
         )
 
     def test_a_stratum_that_cannot_resolve_the_threshold_is_excluded_from_the_compared_set(
@@ -1157,7 +1202,8 @@ class EveryRatioCarriesItsDenominatorsTest(unittest.TestCase):
     ) -> None:
         """The guard the "reported, not gated" comment used to stand in for.
 
-        The first version said a gate on `detectable_fold_ratio_3sigma` "could never read False,
+        The first version said a gate on `nominal_fold_resolution_point_estimate` "could
+        never read False,
         and would certify nothing". Wrong on its own numbers: at the within-arm floor of 5 the
         bound is 1.2723 -- WIDER than the 1.25 it is compared against -- so such a stratum
         returned `ok` while being unable to tell a matched pair from a starved one.
@@ -1184,19 +1230,19 @@ class EveryRatioCarriesItsDenominatorsTest(unittest.TestCase):
     def test_the_resolving_floor_constant_is_recomputed_from_the_two_sds(self) -> None:
         """A derived constant that is only typed in has already drifted once.
 
-        27 is not chosen: it is the smallest n at which `foulplay_think_detectable_fold_ratio`
+        27 is not chosen: it is the smallest n at which `foulplay_think_nominal_fold_resolution`
         comes in at or under the threshold. Recomputed here from the two measured SDs so that
         moving either one and leaving the constant alone fails.
         """
         crossover = next(
             n
             for n in range(1, 100_000)
-            if foulplay_think_detectable_fold_ratio(n, n)
+            if foulplay_think_nominal_fold_resolution(n, n)
             <= FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO
         )
         self.assertEqual(crossover, FOULPLAY_THINK_CROSS_ARM_RESOLVING_STRATUM_DECISIONS)
-        self.assertAlmostEqual(foulplay_think_detectable_fold_ratio(26, 26), 1.250197, places=6)
-        self.assertAlmostEqual(foulplay_think_detectable_fold_ratio(27, 27), 1.249996, places=6)
+        self.assertAlmostEqual(foulplay_think_nominal_fold_resolution(26, 26), 1.250197, places=6)
+        self.assertAlmostEqual(foulplay_think_nominal_fold_resolution(27, 27), 1.249996, places=6)
 
     def test_the_resolution_comparison_is_strict_at_its_own_boundary(self) -> None:
         """`>` and not `>=`, pinned where the two differ.
@@ -1209,14 +1255,14 @@ class EveryRatioCarriesItsDenominatorsTest(unittest.TestCase):
         input for that mutation and nothing else.
         """
         n = FOULPLAY_THINK_CROSS_ARM_RESOLVING_STRATUM_DECISIONS
-        exact = foulplay_think_detectable_fold_ratio(n, n)
+        exact = foulplay_think_nominal_fold_resolution(n, n)
         result = verdict(
             [think(380_000.0, n)], [think(380_000.0, n)], max_fold_ratio=exact
         )
         self.assertEqual(result["strata_excluded_for_resolution"], {})
         self.assertEqual(result["status"], "ok")
         self.assertAlmostEqual(
-            result["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"], exact
+            result["by_stratum"]["2x1000ms"]["nominal_fold_resolution_point_estimate"], exact
         )
         # And one representable step tighter DOES exclude it, so the assertion above is a
         # boundary and not a region.
@@ -1226,6 +1272,407 @@ class EveryRatioCarriesItsDenominatorsTest(unittest.TestCase):
             max_fold_ratio=math.nextafter(exact, 0.0),
         )
         self.assertIn("2x1000ms", tighter["strata_excluded_for_resolution"])
+
+
+class ExclusionKeepsItsOwnDiagnosisTest(unittest.TestCase):
+    """The objection to a bare exclusion, honoured rather than overridden.
+
+    Two independent fixes of the dead band disagreed about the disposition of a stratum that
+    cannot resolve the threshold. One REFUSED and defended it in terms: "an exclusion would land
+    in the uncompared remainder and be reported as a coverage problem, which is a different
+    diagnosis." That is a real cost of a bare exclusion -- "this stratum could not resolve the
+    threshold" and "the two arms visited different schedules" have different remedies. The other
+    EXCLUDED, which is what ships, because a refusal returns `winner=None` and adopts nothing over
+    a fraction of a percent of an arm.
+
+    So the exclusion carries the distinction the refusal was protecting: named strata, a per-arm
+    magnitude, and a refusal reason that says which shortfall it was. This class is the failing
+    input for collapsing the two reasons back into one.
+    """
+
+    RESOLUTION = "search:cross_arm_strata_excluded_for_resolution_cover_too_little"
+    COVERAGE = "search:cross_arm_compared_strata_cover_too_little"
+
+    def test_a_pure_resolution_shortfall_is_not_reported_as_a_coverage_gap(self) -> None:
+        """One perturbation: a 10% slice too thin to resolve, and NOTHING else uncovered.
+
+        Both arms visit exactly the same two schedules with the same counts, so there is no
+        coverage gap of any kind -- every decision is either compared or excluded for resolution.
+        The share is 0.90 and refuses. Before the reasons were split, the only thing the artifact
+        said was `cross_arm_compared_strata_cover_too_little`, which points a reader at decision
+        mix when the cause is a denominator.
+        """
+        strata = {"2x1000ms": (380_000.0, 234), "8x500ms": (190_000.0, 26)}
+        arms = [think(decisions=260, strata=strata) for _ in range(2)]
+        result = verdict([arms[0]], [arms[1]])
+        self.assertEqual(result["status"], "refused")
+        self.assertIn("8x500ms", result["strata_excluded_for_resolution"])
+        self.assertAlmostEqual(result["cross_arm_compared_share"]["search"], 0.9, places=9)
+        self.assertAlmostEqual(
+            result["cross_arm_share_excluded_for_resolution"]["search"], 0.1, places=9
+        )
+        self.assertIn(self.RESOLUTION, result["refusal_reasons"])
+        self.assertNotIn(self.COVERAGE, result["refusal_reasons"])
+
+    def test_a_pure_coverage_gap_is_not_reported_as_a_resolution_exclusion(self) -> None:
+        """The mirror, one perturbation: a 10% slice the LEAN arm never visited.
+
+        Thick enough to resolve the threshold on its own -- 26 is under the crossover, so this
+        fixture uses 60 -- but present on one arm only, so it is never compared. Nothing is
+        excluded for resolution, and the resolution reason must stay silent or it becomes noise
+        that a reader learns to ignore.
+        """
+        search = think(
+            decisions=600, strata={"2x1000ms": (380_000.0, 540), "8x500ms": (190_000.0, 60)}
+        )
+        raw = think(decisions=600, strata={"2x1000ms": (380_000.0, 600)})
+        result = verdict([search], [raw])
+        self.assertEqual(result["status"], "refused")
+        self.assertEqual(result["strata_excluded_for_resolution"], {})
+        self.assertAlmostEqual(result["cross_arm_compared_share"]["search"], 0.9, places=9)
+        self.assertEqual(result["cross_arm_share_excluded_for_resolution"]["search"], 0.0)
+        self.assertIn(self.COVERAGE, result["refusal_reasons"])
+        self.assertNotIn(self.RESOLUTION, result["refusal_reasons"])
+
+    def test_both_causes_at_once_report_both(self) -> None:
+        """Because the honest answer to "which was it" is sometimes "both".
+
+        20% excluded for resolution and 20% never shared, so coverage is short even counting every
+        excluded stratum as covered: 0.60 compared, 0.80 resolvable, both under 0.95. A rule that
+        reported only the first cause would understate what has to be fixed.
+        """
+        search = think(
+            decisions=100,
+            strata={
+                "2x1000ms": (380_000.0, 60),
+                "8x500ms": (190_000.0, 20),
+                "16x250ms": (95_000.0, 20),
+            },
+        )
+        raw = think(
+            decisions=100,
+            strata={"2x1000ms": (380_000.0, 80), "8x500ms": (190_000.0, 20)},
+        )
+        result = verdict([search], [raw])
+        self.assertEqual(result["status"], "refused")
+        self.assertEqual(sorted(result["strata_excluded_for_resolution"]), ["8x500ms"])
+        self.assertAlmostEqual(result["cross_arm_compared_share"]["search"], 0.6, places=9)
+        self.assertAlmostEqual(
+            result["cross_arm_share_excluded_for_resolution"]["search"], 0.2, places=9
+        )
+        self.assertIn(self.RESOLUTION, result["refusal_reasons"])
+        self.assertIn(self.COVERAGE, result["refusal_reasons"])
+
+    def test_the_share_floor_is_inclusive_exactly_at_the_floor(self) -> None:
+        """`share < floor` and not `<=`, at the one input where the two operators disagree.
+
+        No fixture in this file used to put a compared share EXACTLY on 0.95 -- the shares in play
+        were 0.995, 0.990, 0.900 and 0.0 -- so a mutation from `<` to `<=` survived the whole
+        suite while turning the floor from "at least 95% of the arm" into "more than 95%". Here
+        190 of 200 decisions are compared and the other 10 are excluded for resolution, which is
+        0.95 exactly in binary floating point (190/200 and the literal 0.95 are the same double).
+        Inclusive: the cell certifies.
+        """
+        strata = {"2x1000ms": (380_000.0, 190), "8x500ms": (190_000.0, 10)}
+        arms = [think(decisions=200, strata=strata) for _ in range(2)]
+        result = verdict([arms[0]], [arms[1]])
+        self.assertEqual(
+            result["cross_arm_compared_share"]["search"],
+            FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE,
+        )
+        self.assertEqual(result["refusal_reasons"], [])
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("8x500ms", result["strata_excluded_for_resolution"])
+        # And one decision further out DOES refuse, so the assertion above is a boundary.
+        over = {"2x1000ms": (380_000.0, 189), "8x500ms": (190_000.0, 11)}
+        over_arms = [think(decisions=200, strata=over) for _ in range(2)]
+        refused = verdict([over_arms[0]], [over_arms[1]])
+        self.assertEqual(refused["status"], "refused")
+        self.assertIn(self.RESOLUTION, refused["refusal_reasons"])
+
+    def test_the_resolvable_share_comparison_is_strict_at_the_floor_too(self) -> None:
+        """The SECOND `<`, on `(covered + excluded) / measured`, at its own exact boundary.
+
+        The coverage reason fires only when coverage would be short even if every excluded
+        stratum had been resolvable. Here 180 of 200 are compared (0.90, refused), 10 are excluded
+        for resolution and 10 sit in a schedule the lean arm never visited -- so the resolvable
+        share is 190/200 = 0.95 EXACTLY. At the floor, coverage was sufficient, so the shortfall
+        is attributable to the exclusion and the coverage reason must not fire. `<=` there would
+        report a coverage gap that the arm does not have.
+
+        This is also why the implementation divides `(covered + excluded)` once rather than adding
+        two shares: 180/200 + 10/200 is not guaranteed to be the same double as 190/200.
+        """
+        search = think(
+            decisions=200,
+            strata={
+                "2x1000ms": (380_000.0, 180),
+                "8x500ms": (190_000.0, 10),
+                "16x250ms": (95_000.0, 10),
+            },
+        )
+        raw = think(
+            decisions=200,
+            strata={"2x1000ms": (380_000.0, 190), "8x500ms": (190_000.0, 10)},
+        )
+        result = verdict([search], [raw])
+        self.assertEqual(result["status"], "refused")
+        self.assertAlmostEqual(result["cross_arm_compared_share"]["search"], 0.9, places=9)
+        covered = 180
+        excluded = 10
+        self.assertEqual(
+            (covered + excluded) / 200, FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE
+        )
+        self.assertIn(self.RESOLUTION, result["refusal_reasons"])
+        self.assertNotIn(self.COVERAGE, result["refusal_reasons"])
+
+    def test_the_verdict_note_explains_the_two_reasons_in_words(self) -> None:
+        """A reason key is only legible to someone who has read this file.
+
+        `verdict_note` is what a reader of the artifact sees, so it has to carry the distinction
+        too -- otherwise the split reasons are two opaque strings and the diagnosis is back where
+        it was. Both keys, both remedies, and that neither is contention.
+        """
+        note = verdict([think(380_000.0, 200)], [think(380_000.0, 200)])["verdict_note"]
+        self.assertIn("NAMES WHICH", note)
+        self.assertIn("cross_arm_strata_excluded_for_resolution_cover_too_little", note)
+        self.assertIn("cross_arm_compared_strata_cover_too_little", note)
+        self.assertIn("different remedies", note)
+        self.assertIn("Neither is contention", note)
+
+    def test_the_compared_share_numerator_is_the_actually_compared_set(self) -> None:
+        """The dead band's other half: the share once counted a stratum the gate had refused.
+
+        `per_stratum[name] = entry` ran before the refusal and was never undone, so an
+        unresolvable stratum was simultaneously a hard refusal AND part of the compared-share
+        numerator -- `cross_arm_compared_share` read 1.0 while the refusal said the same stratum
+        could not be compared. The numerator is `per_stratum`, which an excluded stratum is not
+        in, so the share here must be 1000/1010 and not 1.0.
+        """
+        strata = {"2x1000ms": (380_000.0, 1000), "8x500ms": (190_000.0, 10)}
+        result = verdict(
+            [think(decisions=1010, strata=strata)], [think(decisions=1010, strata=strata)]
+        )
+        self.assertEqual(result["status"], "ok")
+        for label in ("search", "raw"):
+            with self.subTest(label=label):
+                self.assertAlmostEqual(
+                    result["cross_arm_compared_share"][label], 1000 / 1010, places=9
+                )
+                self.assertNotEqual(result["cross_arm_compared_share"][label], 1.0)
+                self.assertAlmostEqual(
+                    result["cross_arm_share_excluded_for_resolution"][label],
+                    10 / 1010,
+                    places=9,
+                )
+                # The two account for the whole arm here, because nothing else is uncovered.
+                self.assertAlmostEqual(
+                    result["cross_arm_compared_share"][label]
+                    + result["cross_arm_share_excluded_for_resolution"][label],
+                    1.0,
+                    places=9,
+                )
+
+    def test_the_reported_resolution_field_does_not_assert_a_confidence_level(self) -> None:
+        """The rename, pinned so the old key cannot come back into an artifact.
+
+        `detectable_fold_ratio_3sigma` asserted a confidence level a 5-df point estimate cannot
+        carry, in a field whose whole job is to say how strongly a stratum passed -- and a field
+        name outlives the paragraph next to it. The key is now
+        `nominal_fold_resolution_point_estimate`, in both places it appears.
+        """
+        passing = verdict([think(380_000.0, 200)], [think(380_000.0, 200)])
+        excluded = verdict([think(380_000.0, 10)], [think(380_000.0, 10)])
+        blocks = [
+            passing["by_stratum"]["2x1000ms"],
+            excluded["strata_excluded_for_resolution"]["2x1000ms"],
+        ]
+        for block in blocks:
+            with self.subTest(block=sorted(block)):
+                self.assertIn("nominal_fold_resolution_point_estimate", block)
+                self.assertNotIn("detectable_fold_ratio_3sigma", block)
+        for payload in (passing, excluded):
+            self.assertNotIn("3sigma", json.dumps(payload))
+            self.assertNotIn("detectable", json.dumps(payload))
+
+
+class TheResolvingFloorIsTwentySevenTest(unittest.TestCase):
+    """27 against 24, reconciled to one number with the reason the other one existed.
+
+    Two branches derived two floors from the same six passes. This class is what makes the
+    disagreement checkable rather than a matter of whose commit landed second.
+    """
+
+    def test_twenty_four_is_the_calibrations_n_and_not_a_crossover(self) -> None:
+        """The one-line reason 27 wins: 24 does not clear the threshold on the shipped SDs.
+
+        The nominal bound at the calibration's own n=24 is 1.2506, ABOVE 1.25 -- which is exactly
+        the fact the alternative branch used to argue that a derived floor was untenable, and it
+        argues just as well that 24 is not the floor. 24 is a crossover only for a run SD in
+        [0.051426, 0.051475] (to six decimals), a window 0.0516 sits above.
+        """
+        self.assertEqual(FOULPLAY_THINK_CROSS_ARM_RESOLVING_STRATUM_DECISIONS, 27)
+        self.assertGreater(
+            foulplay_think_nominal_fold_resolution(MEASURED_PASS_N, MEASURED_PASS_N),
+            FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
+        )
+        self.assertAlmostEqual(
+            foulplay_think_nominal_fold_resolution(MEASURED_PASS_N, MEASURED_PASS_N),
+            1.250649,
+            places=6,
+        )
+
+        def crossover(run_sd):
+            for n in range(1, 100_000):
+                sd = math.sqrt(
+                    2.0 * run_sd**2
+                    + FOULPLAY_THINK_MEASURED_DECISION_LOG_SD**2 * (2.0 / n)
+                )
+                if math.exp(3.0 * sd) <= FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO:
+                    return n
+            return None
+
+        self.assertEqual(crossover(FOULPLAY_THINK_MEASURED_RUN_LOG_SD), 27)
+        # The window in which 24 WOULD be the crossover, closed at both quoted endpoints, with
+        # the neighbours on either side to show it is a window and not a region.
+        self.assertEqual(crossover(0.051426), 24)
+        self.assertEqual(crossover(0.051475), 24)
+        self.assertEqual(crossover(0.051425), 23)
+        self.assertEqual(crossover(0.051476), 25)
+        self.assertGreater(FOULPLAY_THINK_MEASURED_RUN_LOG_SD, 0.051475)
+
+    def test_the_two_branches_disagreed_about_which_sd_not_about_deriving(self) -> None:
+        """Where 24 came from: the raw pass-mean SD, not the run component.
+
+        `sqrt(0.002782) = 0.052745` is the SD of the six pass MEANS, which still contains the
+        sampling term. The run component removes it: `sqrt(0.002782 - 0.0529**2/24) = 0.05163`,
+        rounded to the shipped 0.0516. At the pass-mean SD the asymptote is 1.2508 -- ABOVE the
+        threshold -- so no n at any denominator would ever certify, which is what made a derived
+        floor look like a gate that could never open. On the component the module actually uses
+        the asymptote is 1.2447 and the crossover exists.
+
+        Every figure the two branches disagreed on falls out of that one substitution, and each
+        is labelled with its p because two of them differ only by convention.
+        """
+        pass_mean_sd = math.sqrt(0.002782)
+        self.assertAlmostEqual(pass_mean_sd, 0.052745, places=6)
+        component = math.sqrt(
+            0.002782 - FOULPLAY_THINK_MEASURED_DECISION_LOG_SD**2 / MEASURED_PASS_N
+        )
+        self.assertAlmostEqual(component, 0.05163, places=5)
+        self.assertAlmostEqual(component, FOULPLAY_THINK_MEASURED_RUN_LOG_SD, places=4)
+        self.assertGreater(pass_mean_sd, component)
+
+        self.assertAlmostEqual(math.exp(3.0 * (2**0.5) * pass_mean_sd), 1.25079, places=5)
+        self.assertGreater(
+            math.exp(3.0 * (2**0.5) * pass_mean_sd), FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO
+        )
+        self.assertAlmostEqual(
+            math.exp(3.0 * (2**0.5) * FOULPLAY_THINK_MEASURED_RUN_LOG_SD), 1.24473, places=5
+        )
+        self.assertLess(
+            math.exp(3.0 * (2**0.5) * FOULPLAY_THINK_MEASURED_RUN_LOG_SD),
+            FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
+        )
+
+        # THE FLOORS, each with its p and its SD. The pass-mean column is where 1.5521, 1.6692
+        # and 1.7312 come from; none of them is a run-term number.
+        df = FOULPLAY_THINK_MEASURED_RUN_LOG_SD_DF
+        three_sigma = math.erfc(3.0 / (2**0.5))
+        for p, on_component, on_pass_mean in (
+            (three_sigma, 1.4946, 1.5080),
+            (0.002, 1.5374, 1.5521),
+            (0.001, 1.6508, 1.6692),
+        ):
+            t = student_t_two_sided_quantile(p, df)
+            with self.subTest(p=p):
+                self.assertAlmostEqual(
+                    math.exp(t * (2**0.5) * FOULPLAY_THINK_MEASURED_RUN_LOG_SD),
+                    on_component,
+                    places=4,
+                )
+                self.assertAlmostEqual(
+                    math.exp(t * (2**0.5) * pass_mean_sd), on_pass_mean, places=4
+                )
+
+        # And the chi-square interval, one-sided against two-sided, on both SDs.
+        def upper_sd(sd, tail):
+            return sd * math.sqrt(df / chi_square_quantile(tail, df))
+
+        self.assertAlmostEqual(upper_sd(FOULPLAY_THINK_MEASURED_RUN_LOG_SD, 0.05), 0.1078, places=4)
+        self.assertAlmostEqual(
+            math.exp(3.0 * (2**0.5) * upper_sd(FOULPLAY_THINK_MEASURED_RUN_LOG_SD, 0.05)),
+            1.580,
+            places=3,
+        )
+        self.assertAlmostEqual(
+            math.exp(3.0 * (2**0.5) * upper_sd(FOULPLAY_THINK_MEASURED_RUN_LOG_SD, 0.025)),
+            1.711,
+            places=3,
+        )
+        self.assertAlmostEqual(
+            math.exp(3.0 * (2**0.5) * upper_sd(pass_mean_sd, 0.025)), 1.7312, places=4
+        )
+
+    def test_moving_the_constant_moves_a_share_and_not_a_verdict(self) -> None:
+        """Why a DERIVED floor is admissible here and was not admissible as a refusal.
+
+        The objection that retired the derived floor was "a gate whose behaviour flips on the
+        third decimal place of a 5-df estimate is not a gate". Against a refusal that was true: a
+        stratum crossing the floor voided the whole comparison. Against an exclusion it is not:
+        crossing the floor moves that stratum's decisions from the compared share into the
+        excluded share, and the verdict follows the share floor. Swept across the whole plausible
+        range of the floor -- 5 to 200 -- these matched arms certify at every value, because the
+        stratum that moves is 1% of the arm.
+        """
+        strata = {"2x1000ms": (380_000.0, 1000), "8x500ms": (190_000.0, 10)}
+        arms = [think(decisions=1010, strata=strata) for _ in range(2)]
+        for floor_n in (5, 10, 11, 26, 27, 28, 124, 200):
+            # `max_fold_ratio` is the only knob the gate exposes, so the floor is moved the way
+            # the arithmetic moves it: the threshold at which a stratum of `floor_n` resolves.
+            limit = foulplay_think_nominal_fold_resolution(floor_n, floor_n)
+            result = verdict([arms[0]], [arms[1]], max_fold_ratio=limit)
+            with self.subTest(floor_n=floor_n):
+                self.assertEqual(result["status"], "ok")
+                excluded = result["cross_arm_share_excluded_for_resolution"]["search"]
+                self.assertLessEqual(excluded, 10 / 1010)
+                self.assertGreaterEqual(
+                    result["cross_arm_compared_share"]["search"],
+                    FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE,
+                )
+
+    def test_the_other_two_floors_are_inert_at_this_layer(self) -> None:
+        """5 and 20 are both below 27, so neither can admit anything to a cross-arm verdict.
+
+        Stated as a test and not only as a comment, because three floors that do not agree get
+        read as one number. What 5 still does: decide whether a too-thin stratum is named in
+        `thin_strata` or in `strata_excluded_for_resolution`. What 20 still does: govern callers
+        that read one arm and never compare a fold ratio.
+        """
+        for inert in (
+            FOULPLAY_THINK_MIN_STRATUM_DECISIONS,
+            FOULPLAY_THINK_MIN_MEASURED_DECISIONS,
+        ):
+            with self.subTest(inert=inert):
+                self.assertLess(inert, FOULPLAY_THINK_CROSS_ARM_RESOLVING_STRATUM_DECISIONS)
+                self.assertGreater(
+                    foulplay_think_nominal_fold_resolution(inert, inert),
+                    FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
+                )
+        # A stratum at 5 is reportable by the within-arm gate and excluded by this one: the two
+        # exclusions are distinguishable, which is 5's whole remaining job here.
+        def with_minor(n):
+            return think(
+                decisions=200 + n,
+                strata={"2x1000ms": (380_000.0, 200), "8x500ms": (190_000.0, n)},
+            )
+
+        below_five = verdict([with_minor(5)], [with_minor(4)])
+        self.assertIn("8x500ms", below_five["thin_strata"])
+        self.assertNotIn("8x500ms", below_five["strata_excluded_for_resolution"])
+        at_five = verdict([with_minor(5)], [with_minor(5)])
+        self.assertNotIn("8x500ms", at_five["thin_strata"] or [])
+        self.assertIn("8x500ms", at_five["strata_excluded_for_resolution"])
 
 
 class UnmeasuredIsNotFlatTest(unittest.TestCase):

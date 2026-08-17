@@ -1088,6 +1088,42 @@ class CrossArmContentionGateTest(unittest.TestCase):
         # The constant itself did not move.
         self.assertEqual(rep["contention_gate"]["max_fold_ratio"], 1.25)
 
+    def test_the_artifact_states_the_resolution_rule_and_its_two_diagnoses(self) -> None:
+        """The disposition of an unresolvable stratum, in the artifact a reader keeps.
+
+        Two independent fixes of the same dead band chose different dispositions -- refuse, or
+        exclude -- and the reader of a report cannot see which one ran. So the artifact says: the
+        floor, that it EXCLUDES rather than refuses, and that a coverage refusal names which of
+        the two shortfalls it was. Without the last part an exclusion is reported as a coverage
+        problem, which is the objection the refusing branch raised and it was a fair one.
+        """
+        rep = self._cells(think(224_200.0, 200), think(224_200.0, 200))
+        gate = rep["contention_gate"]
+        self.assertEqual(gate["resolving_stratum_decisions"], 27)
+        rule = gate["resolution_rule"]
+        self.assertIn("EXCLUDED", rule)
+        self.assertIn("strata_excluded_for_resolution", rule)
+        self.assertIn("cross_arm_share_excluded_for_resolution", rule)
+        self.assertIn("cross_arm_strata_excluded_for_resolution_cover_too_little", rule)
+        self.assertIn("cross_arm_compared_strata_cover_too_little", rule)
+        self.assertIn("neither is contention", rule)
+        # The 27-against-24 reconciliation, with the reason and not just the number.
+        self.assertIn("27 and not the calibration's", rule)
+        self.assertIn("1.249996", rule)
+        self.assertIn("[0.051426, 0.051475]", rule)
+        # And the two inert floors are named as inert.
+        self.assertIn("inert at this", rule)
+        # The note's floors say which SD they came from, because 1.5521/1.6692/1.7312 do not
+        # come from the run component and a reader who meets them elsewhere needs to place them.
+        note = gate["note"]
+        self.assertIn("run COMPONENT 0.0516", note)
+        self.assertIn("0.052745", note)
+        for pass_mean_figure in ("1.5080", "1.5521", "1.6692", "1.7312"):
+            self.assertIn(pass_mean_figure, note)
+        self.assertIn("ONE-SIDED 95%", note)
+        self.assertIn("1.580", note)
+        self.assertIn("1.711", note)
+
     def test_every_scored_cell_carries_a_contention_verdict(self) -> None:
         """Deleting the call must not leave this file green.
 
