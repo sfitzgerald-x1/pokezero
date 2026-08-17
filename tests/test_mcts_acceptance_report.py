@@ -212,16 +212,40 @@ class ModelPathDepthInstrumentationTest(unittest.TestCase):
                 f"model path does not accumulate {field}; a depth ladder run on "
                 "leaf_eval='model' would carry no reached-depth evidence",
             )
-        # Matches the ACCUMULATION, not the literal increment. The guard's
-        # property is "both paths accumulate the histogram"; pinning `+= 1`
-        # additionally pinned the increment, which the model path no longer uses
-        # -- duplicate belief worlds are searched once and the sample is weighted
-        # by how many worlds it stands for. Still exactly two sites, so the guard
-        # is not weakened in the dimension it exists for.
+        # ONE SITE PER LEAF-EVAL SEARCH PATH, located BY METHOD rather than counted
+        # across the file.
+        #
+        # This assertion read `== 2` ("hp_fraction and model") and the rollout-leaf
+        # seam legitimately added a third path, `_search_rollout_crate`. That is
+        # exactly the shape where the fix a reader reaches for is to bump the number
+        # -- and a bumped count is satisfied by TWO sites on one path and NONE on
+        # another, which is the defect the guard exists to catch. So the requirement
+        # is now per path: every leaf-eval search method carries its own
+        # accumulation, and a NEW leaf-eval path fails here until it is instrumented.
+        pattern = r"depth_reached_histogram\[reached\] \+= "
+        methods = ("_search_hp_fraction_crate", "_search_rollout_crate", "_search_model")
+        bodies = {}
+        for name in methods:
+            start = source.index(f"    def {name}(")
+            # Up to the next method definition at the same indentation.
+            rest = source[start + 1 :]
+            end = rest.find("\n    def ")
+            bodies[name] = rest if end < 0 else rest[:end]
+        for name in methods:
+            with self.subTest(path=name):
+                self.assertEqual(
+                    len(re.findall(pattern, bodies[name])),
+                    1,
+                    f"{name} must accumulate the reached-depth histogram exactly "
+                    "once; a leaf-eval path without it carries no depth evidence, "
+                    "and one with two double-counts every world",
+                )
         self.assertEqual(
-            len(re.findall(r"depth_reached_histogram\[reached\] \+= ", source)),
-            2,
-            "expected exactly two accumulation sites: hp_fraction and model",
+            len(re.findall(pattern, source)),
+            len(methods),
+            "the file must hold exactly one accumulation per leaf-eval search "
+            f"path ({', '.join(methods)}) and no others -- a site outside them is "
+            "unaccounted for",
         )
 
     def test_runner_emits_the_policy_stats_payload(self) -> None:

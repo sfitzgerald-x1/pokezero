@@ -56,8 +56,13 @@ see how much of the "oracle" was actually the handcrafted fallback.
 
 from __future__ import annotations
 
+import copy
 import json
+import random
+import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 try:
     import pokezero_search
@@ -65,6 +70,15 @@ except ModuleNotFoundError:  # pragma: no cover
     pokezero_search = None
 
 from test_model_priors_search import _EncodedSearchFixture, _crate_ready
+
+from pokezero.engine_search import (
+    EngineMctsConfig,
+    EngineMctsPolicy,
+    EngineMctsStats,
+    EngineSearchWitnessError,
+    ROLLOUT_LEAF_WITNESS_FIELDS,
+    require_rollout_leaf_witness,
+)
 
 #: Wall-clock measurements of the same work. Named here, once, so a reader can
 #: see the whole exclusion list and check it contains nothing semantic.
@@ -828,6 +842,628 @@ class RolloutSeamCallAssemblyTest(unittest.TestCase):
         self.assertEqual(
             args[17:],
             ["rollout", 16, 250, "uniform", 99, 1, False],
+        )
+
+
+# ---------------------------------------------------------------------------
+# The witness on the SHIPPING path
+# ---------------------------------------------------------------------------
+#
+# Everything above this line certifies the crate. None of it certified the
+# PYTHON BOUNDARY on the path that actually runs the arm.
+#
+# `_search_rollout_crate` -- the sequential, uniform-priors seam -- read the
+# crate's whole rollout ledger. `_search_model`, the path that runs with priors ON
+# and therefore the path the arbiter uses, read NONE of the sixteen rollout keys
+# the crate emits, and emitted `leaf_eval: "model"` with no rollout column at all.
+# An arm decision banked as an ordinary model decision, indistinguishable from the
+# raw arm's, with `rollout_fallback_fraction` -- the field that says how much of
+# the "oracle" was the handcrafted HP-fraction evaluator -- unavailable exactly
+# where the arm runs. At this file's own fixture config that fraction measures
+# 0.96503.
+#
+# THE METHODOLOGICAL POINT, because a mutation-heavy round walked straight past
+# this: ABSENCE OF CODE IS NOT MUTATION-TESTABLE. A battery finds code that is
+# broken; it can never find code that was never written, so a seam that emitted
+# nothing had nothing to mutate and survived intact. The question that finds the
+# class is asked of each claim separately -- "is there code that would have to
+# exist for this to be true, and does it exist on the path that runs?" -- and the
+# durable answer is a runtime requirement, which is what
+# `require_rollout_leaf_witness` is.
+
+
+class _ShippingPathHarness:
+    """Drive the REAL `_search_model` over a fake native, as the arm's path.
+
+    A mixin rather than a base `TestCase` so unittest does not collect it as an
+    extra empty class, and so the crate-backed subclass below can add its own skip
+    decorator (decorators do not inherit).
+
+    The native is fake and the PLUMBING IS REAL: `native_search_args`,
+    `run_world`'s absorption, the witness builder and the guard are all
+    production's. That is the correct division here, because the defect being
+    fixed was entirely on the Python side of the boundary -- the crate was already
+    emitting every field.
+    """
+
+    #: The crate's rollout columns for a world, as `search_batched_multi_encoded`
+    #: emits them. Overridden by the crate-backed subclass with a REAL report.
+    ROLLOUT_COLUMNS = {
+        "rollout_leaf_mode": "rollout",
+        "rollout_encode_skipped": 66,
+        "leaves_priced": 168,
+        "rollouts_run": 1344,
+        "rollout_plies": 53541,
+        "rollout_terminal_hits": 47,
+        "rollout_cap_hits": 1297,
+        "rollout_dead_ends": 0,
+    }
+
+    class _Native:
+        def __init__(self, responses):
+            self.responses = list(responses)
+            self.calls = []
+
+        def search_batched_multi_encoded(self, *args):
+            self.calls.append(args)
+            response = self.responses.pop(0)
+            return json.dumps(response)
+
+    def _report(self, *, rollout: bool) -> dict:
+        report = {
+            "iterations": 32,
+            "requested_iterations": 32,
+            "remaining_iterations": 0,
+            "early_stopped": False,
+            "model_evals": 103,
+            "lossy_renders": 0,
+            "attribution_unsafe_renders": 0,
+            "prior_fallbacks": 0,
+            "side_one": [
+                {"move": "alpha", "visits": 24, "q": 0.5},
+                {"move": "beta", "visits": 8, "q": 0.4},
+            ],
+        }
+        if rollout:
+            report.update(copy.deepcopy(self.ROLLOUT_COLUMNS))
+        return report
+
+    @staticmethod
+    def _context():
+        observation = SimpleNamespace(
+            legal_action_mask=(True, True, False, False),
+            metadata={
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "alpha"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "beta"},
+                ]
+            },
+        )
+        return SimpleNamespace(
+            observation=observation,
+            public_materialization_state=SimpleNamespace(
+                replay=SimpleNamespace(turn_number=1)
+            ),
+            player_id="p1",
+            battle_id="rollout-witness",
+            decision_round_index=0,
+        )
+
+    @staticmethod
+    def _world(label: str):
+        return (
+            SimpleNamespace(
+                party_species={"p1": ("rattata",), "p2": ("chansey",)},
+                slot_sides={"p1": "side_one"},
+            ),
+            SimpleNamespace(to_string=lambda: label),
+        )
+
+    def _policy(self, *, arm: bool):
+        """`arm=True` is the rollout arm; `arm=False` is the raw arm it is paired
+        against -- the same model search with production's leaf value."""
+        policy = object.__new__(EngineMctsPolicy)
+        policy.policy_id = "rollout-witness"
+        policy._config = EngineMctsConfig(
+            worlds=2,
+            leaf_eval="model",
+            model_path="model.pt",
+            checkpoint_path="checkpoint.pt",
+            tables_path="tables.json",
+            search_sims=32,
+            search_batch=8,
+            model_priors=arm,
+            rollout_leaf_eval=arm,
+            rollout_count=8,
+            rollout_max_plies=40,
+        )
+        policy._tables_json = "{}"
+        policy.stats = EngineMctsStats()
+        policy._world_failures_before = {}
+        return policy
+
+    def _run(self, policy, native, worlds):
+        fake_module = SimpleNamespace(
+            FoldState=SimpleNamespace(from_payload=lambda _payload: object())
+        )
+        live_fold = SimpleNamespace(to_payload=lambda: {})
+        with (
+            patch.dict(sys.modules, {"pokezero_search": fake_module}),
+            patch.object(EngineMctsPolicy, "_native", return_value=native),
+            patch.object(
+                EngineMctsPolicy, "_validate_model_root_observation", return_value=None
+            ),
+            patch.object(EngineMctsPolicy, "_root_inputs_json", return_value="{}"),
+        ):
+            return policy._search_model(
+                self._context(), worlds, live_fold, random.Random(7)
+            )
+
+    def _decide(self, *, arm: bool, worlds: int = 1, rollout: bool | None = None):
+        policy = self._policy(arm=arm)
+        native = self._Native(
+            [self._report(rollout=arm if rollout is None else rollout)] * worlds
+        )
+        decision = self._run(policy, native, [self._world(f"w{i}") for i in range(worlds)])
+        return policy, decision
+
+
+class RolloutLeafWitnessTravelsOnTheModelPathTest(_ShippingPathHarness, unittest.TestCase):
+    """The witness must reach the decision `_search_model` returns.
+
+    No crate needed: the defect and its fix are both on the Python side of the
+    boundary, so these run in any checkout. The crate-backed class below re-runs
+    the central one against the crate's OWN measured ledger.
+    """
+
+    def test_an_arm_decision_carries_the_witness(self) -> None:
+        """THE FIX. Before it, this dict did not exist."""
+        _, decision = self._decide(arm=True)
+        engine = decision.metadata["engine_mcts"]
+        witness = engine["rollout_leaf"]
+        for field in ROLLOUT_LEAF_WITNESS_FIELDS:
+            with self.subTest(field=field):
+                self.assertIn(field, witness)
+        self.assertEqual(witness["rollout_leaf_modes"], {"rollout": 1})
+        self.assertEqual(witness["rollouts_run"], 1344)
+        self.assertEqual(witness["leaves_priced"], 168)
+        self.assertEqual(witness["rollout_terminal_hits"], 47)
+        self.assertEqual(witness["rollout_cap_hits"], 1297)
+        self.assertEqual(witness["rollout_dead_ends"], 0)
+        self.assertAlmostEqual(witness["rollout_fallback_fraction"], 1297 / 1344, places=12)
+
+    def test_the_fallback_fraction_is_available_where_the_arm_runs(self) -> None:
+        """The measurement that made this urgent.
+
+        A 96.5%-handcrafted evaluator must not be able to bank as an oracle. The
+        assertion is on the VALUE, not on the key's presence: a column that exists
+        and reads 0 would be worse than a missing one.
+        """
+        policy, decision = self._decide(arm=True)
+        witness = decision.metadata["engine_mcts"]["rollout_leaf"]
+        self.assertAlmostEqual(witness["rollout_fallback_fraction"], 0.96503, places=5)
+        self.assertAlmostEqual(witness["rollout_terminal_fraction"], 0.03497, places=5)
+        # And on the SHARD, which is where a campaign sorts cells.
+        shard = policy.stats.to_dict()
+        self.assertAlmostEqual(shard["rollout_fallback_fraction"], 0.96503, places=5)
+        self.assertEqual(shard["rollout_leaf_modes"], {"rollout": 1})
+
+    def test_a_missing_witness_refuses_the_run(self) -> None:
+        """THE DEMONSTRATED FAILING INPUT, positive direction.
+
+        The shipped shape: the arm runs and the decision says nothing about it.
+        Reproduced by deleting the builder's output -- i.e. by putting the code
+        back the way it was -- which must now raise rather than bank.
+        """
+        policy = self._policy(arm=True)
+        native = self._Native([self._report(rollout=True)])
+        with patch.object(EngineMctsPolicy, "_rollout_leaf_witness", return_value=None):
+            with self.assertRaises(EngineSearchWitnessError) as caught:
+                self._run(policy, native, [self._world("w0")])
+        self.assertIn("carries NO rollout witness", str(caught.exception))
+
+    def test_a_partial_witness_refuses_the_run(self) -> None:
+        """Deleting ONE field must fail too, or the guard only pins the block's
+        existence and every column inside it is deletable."""
+        for field in ROLLOUT_LEAF_WITNESS_FIELDS:
+            with self.subTest(dropped=field):
+                policy = self._policy(arm=True)
+                native = self._Native([self._report(rollout=True)])
+                real = EngineMctsPolicy._rollout_leaf_witness
+
+                def _short(self_, modes, ledger, _field=field):
+                    witness = real(self_, modes, ledger)
+                    del witness[_field]
+                    return witness
+
+                with patch.object(EngineMctsPolicy, "_rollout_leaf_witness", _short):
+                    with self.assertRaises(EngineSearchWitnessError) as caught:
+                        self._run(policy, native, [self._world("w0")])
+                self.assertIn(field, str(caught.exception))
+
+    def test_a_raw_arm_decision_carries_no_witness(self) -> None:
+        """THE DEMONSTRATED FAILING INPUT, negative direction.
+
+        The raw arm is the DENOMINATOR of every paired delta. `--arm raw
+        --engine-rollout-leaf` writing `"rollout_leaf": true` onto a raw row was a
+        real false witness, so "no witness unless the arm ran" is asserted as
+        loudly as its converse.
+        """
+        _, decision = self._decide(arm=False)
+        self.assertNotIn("rollout_leaf", decision.metadata["engine_mcts"])
+        self.assertEqual(decision.metadata["engine_mcts"]["leaf_eval"], "model")
+
+    def test_a_false_witness_on_a_raw_arm_decision_refuses(self) -> None:
+        """Forged the way the live defect forged it: a bare `"rollout_leaf": true`
+        stamped onto a row whose search never ran a rollout."""
+        metadata = {"engine_mcts": {"leaf_eval": "model", "rollout_leaf": True}}
+        with self.assertRaises(EngineSearchWitnessError) as caught:
+            require_rollout_leaf_witness(metadata, rollout_leaf_eval=False)
+        self.assertIn("FALSE WITNESS", str(caught.exception))
+
+    def test_a_raw_arm_shard_gains_no_rollout_columns_at_all(self) -> None:
+        """Flag-off must be the strong form: not "identical after dropping new
+        fields", but a payload with no new fields in it."""
+        policy, _ = self._decide(arm=False)
+        shard = policy.stats.to_dict()
+        rollout_keys = sorted(k for k in shard if "rollout" in k)
+        self.assertEqual(rollout_keys, [])
+
+    def test_the_arm_refuses_a_report_that_priced_no_rollouts(self) -> None:
+        """The config asked for the arm and the crate did not engage the seam.
+
+        This is the disaster the whole witness exists for: the leaves were priced
+        by the MODEL, so every rollout number read off that search would be a
+        number about a search that ran no rollouts. It must refuse rather than
+        default the missing counters to zero -- a zeroed fallback fraction reads as
+        "pure oracle", which is the most flattering possible misreading.
+        """
+        policy = self._policy(arm=True)
+        native = self._Native([self._report(rollout=False)])
+        with self.assertRaises(EngineSearchWitnessError) as caught:
+            self._run(policy, native, [self._world("w0")])
+        message = str(caught.exception)
+        self.assertIn("no rollout_leaf_mode", message)
+        self.assertIn("priced by the", message)
+
+    def test_a_pricer_the_config_cannot_ask_for_refuses(self) -> None:
+        """`model_value` is the fidelity CONTROL: production's leaf value through
+        the arm's plumbing. A shipped decision priced that way ran the raw arm."""
+        policy = self._policy(arm=True)
+        report = self._report(rollout=True)
+        report["rollout_leaf_mode"] = "model_value"
+        native = self._Native([report])
+        with self.assertRaises(EngineSearchWitnessError) as caught:
+            self._run(policy, native, [self._world("w0")])
+        self.assertIn("model_value", str(caught.exception))
+
+    def test_the_witness_accumulates_over_every_world(self) -> None:
+        """Per INVOCATION, like `model_evals`: two worlds priced twice as many
+        leaves, and the witness must say so rather than reporting one world's."""
+        _, decision = self._decide(arm=True, worlds=2)
+        witness = decision.metadata["engine_mcts"]["rollout_leaf"]
+        self.assertEqual(witness["rollout_leaf_worlds"], 2)
+        self.assertEqual(witness["rollouts_run"], 2 * 1344)
+        self.assertEqual(witness["leaves_priced"], 2 * 168)
+        self.assertEqual(witness["rollout_leaf_modes"], {"rollout": 2})
+        # The fraction is scale-free, so pooling two worlds must not move it.
+        self.assertAlmostEqual(
+            witness["rollout_fallback_fraction"], 1297 / 1344, places=12
+        )
+
+
+class RolloutLeafWitnessGuardTest(unittest.TestCase):
+    """`require_rollout_leaf_witness`'s own failing inputs.
+
+    Each constructs the offending metadata directly, one defect per case: a guard
+    whose cases change two things at once pins neither, because the first check to
+    fire short-circuits the rest.
+    """
+
+    @staticmethod
+    def _witness(**overrides) -> dict:
+        witness = {
+            "rollout_leaf_modes": {"rollout": 1},
+            "rollout_leaf_worlds": 1,
+            "leaves_priced": 168,
+            "rollouts_run": 1344,
+            "rollout_plies": 53541,
+            "rollout_encode_skipped": 66,
+            "rollout_terminal_hits": 47,
+            "rollout_cap_hits": 1297,
+            "rollout_dead_ends": 0,
+            "rollout_terminal_fraction": 47 / 1344,
+            "rollout_fallback_fraction": 1297 / 1344,
+            "rollout_mean_plies": 53541 / 1344,
+        }
+        witness.update(overrides)
+        return witness
+
+    def _refuse(self, witness, *, expect: str) -> None:
+        metadata = {"engine_mcts": {"leaf_eval": "model", "rollout_leaf": witness}}
+        with self.assertRaises(EngineSearchWitnessError) as caught:
+            require_rollout_leaf_witness(metadata, rollout_leaf_eval=True)
+        self.assertIn(expect, str(caught.exception))
+
+    def test_a_complete_witness_is_accepted(self) -> None:
+        """The guard's discriminating power: it must pass the good input, or every
+        refusal below is satisfied by a check that refuses everything."""
+        require_rollout_leaf_witness(
+            {"engine_mcts": {"leaf_eval": "model", "rollout_leaf": self._witness()}},
+            rollout_leaf_eval=True,
+        )
+
+    def test_an_absent_witness_refuses(self) -> None:
+        with self.assertRaises(EngineSearchWitnessError):
+            require_rollout_leaf_witness(
+                {"engine_mcts": {"leaf_eval": "model"}}, rollout_leaf_eval=True
+            )
+
+    def test_an_empty_mode_map_refuses(self) -> None:
+        """A witness that names no pricer cannot say the rollout pricer ran."""
+        self._refuse(self._witness(rollout_leaf_modes={}), expect="names no pricer")
+
+    def test_a_zeroed_ledger_refuses(self) -> None:
+        """The stub shape. Present keys are not a witness: a block of zeros says
+        nothing was priced, which is a refusal rather than a decision."""
+        self._refuse(
+            self._witness(
+                rollouts_run=0,
+                rollout_terminal_hits=0,
+                rollout_cap_hits=0,
+                rollout_dead_ends=0,
+                rollout_fallback_fraction=0.0,
+            ),
+            expect="degenerate",
+        )
+
+    def test_zero_leaves_priced_refuses(self) -> None:
+        self._refuse(self._witness(leaves_priced=0), expect="leaves_priced=0")
+
+    def test_an_unbalanced_partition_refuses(self) -> None:
+        """terminal + cap + dead_ends must be every rollout. Otherwise the
+        fallback share is read off a denominator that is not the population."""
+        self._refuse(self._witness(rollout_terminal_hits=46), expect="every rollout")
+
+    def test_a_fabricated_fallback_fraction_refuses(self) -> None:
+        """The flattering-direction defect, and the one a reader cannot see: a
+        fallback column that does not follow from the counts printed beside it.
+
+        0.0 specifically, because that is the value that reads as "pure oracle".
+        """
+        self._refuse(
+            self._witness(rollout_fallback_fraction=0.0), expect="not the quotient"
+        )
+
+    def test_the_partition_and_the_fraction_are_checked_independently(self) -> None:
+        """ONE PERTURBED FIELD PER CASE, and each must trip only its own check.
+
+        A case that moved the counts AND the fraction together would pin neither:
+        whichever check fires first short-circuits the other, so the second could be
+        deleted and the case would still pass. So each perturbation is checked to
+        trip its own check and, by the message, NOT the other one.
+        """
+        # Counts unbalanced, fraction still consistent with (cap + dead) / run --
+        # so only the partition check can fire.
+        metadata = {
+            "engine_mcts": {"rollout_leaf": self._witness(rollout_terminal_hits=46)}
+        }
+        with self.assertRaises(EngineSearchWitnessError) as caught:
+            require_rollout_leaf_witness(metadata, rollout_leaf_eval=True)
+        self.assertIn("every rollout", str(caught.exception))
+        self.assertNotIn("quotient", str(caught.exception))
+        # Counts balanced, fraction wrong -- so only the quotient check can fire.
+        metadata = {
+            "engine_mcts": {"rollout_leaf": self._witness(rollout_fallback_fraction=0.5)}
+        }
+        with self.assertRaises(EngineSearchWitnessError) as caught:
+            require_rollout_leaf_witness(metadata, rollout_leaf_eval=True)
+        self.assertIn("quotient", str(caught.exception))
+        self.assertNotIn("every rollout", str(caught.exception))
+
+    def test_the_required_field_list_is_pinned_by_literal(self) -> None:
+        """The classification IS the rule.
+
+        A guard that iterated "whatever the builder produced" could not read False
+        when the builder stopped producing something -- the same self-reference
+        that let a dropped `LADDER_PER_DECISION_CLAIMS` entry survive a whole
+        suite. So membership is a literal, and shrinking it fails HERE.
+        """
+        self.assertEqual(
+            ROLLOUT_LEAF_WITNESS_FIELDS,
+            (
+                "rollout_leaf_modes",
+                "leaves_priced",
+                "rollouts_run",
+                "rollout_terminal_hits",
+                "rollout_cap_hits",
+                "rollout_dead_ends",
+                "rollout_fallback_fraction",
+            ),
+            "every name here is a field a decision must carry to be allowed to "
+            "claim the rollout arm; removing one is a decision about the rule",
+        )
+
+    def test_the_raw_arm_direction_accepts_an_absent_witness(self) -> None:
+        require_rollout_leaf_witness(
+            {"engine_mcts": {"leaf_eval": "model"}}, rollout_leaf_eval=False
+        )
+
+    def test_the_raw_arm_direction_refuses_any_witness(self) -> None:
+        for forged in (True, {}, self._witness()):
+            with self.subTest(forged=type(forged).__name__):
+                metadata = {"engine_mcts": {"rollout_leaf": forged}}
+                with self.assertRaises(EngineSearchWitnessError):
+                    require_rollout_leaf_witness(metadata, rollout_leaf_eval=False)
+
+
+class TheRetractedCostRatioStaysRetractedTest(unittest.TestCase):
+    """`engine_search.py` must not both assert and retract the same figure.
+
+    It did. The `rollout_threads` fence retracted "3-4 orders of magnitude" BY
+    MEASUREMENT, and seventy lines later the `rollout_leaf_eval` fence this branch
+    adds re-asserted it as fact -- so the file contradicted itself and a reader
+    landing on either comment had no way to tell which was live. A retraction that
+    a later paste can silently undo is not a retraction.
+
+    SCOPED BY LOCATION, not by phrasing. Asserting "the string appears once" would
+    be satisfied by the guard's own literal and would say nothing about the fence
+    that carried the claim, so the fence's own source is extracted and checked. The
+    surviving mention is REQUIRED to be inside the retraction, which is what keeps
+    this from being deletable by simply removing both.
+    """
+
+    @staticmethod
+    def _source() -> str:
+        import inspect
+
+        from pokezero import engine_search
+
+        return inspect.getsource(engine_search)
+
+    RETRACTED = "orders of magnitude"
+
+    def test_the_arm_fence_does_not_re_assert_the_retracted_figure(self) -> None:
+        """The fence that carried the claim, read on its own."""
+        source = self._source()
+        marker = "rollout_threads_cpu_budget_ack=True. The paired-eval opponent is"
+        # The arm's ack fence is the SECOND occurrence of the shared message; the
+        # first belongs to the sequential `leaf_eval="rollout_crate"` path.
+        first = source.index(marker)
+        second = source.index(marker, first + 1)
+        # Everything from the previous blank-comment boundary up to the raise.
+        block = source[source.rindex("if self.rollout_threads > 1", 0, second) : second]
+        self.assertNotIn(
+            self.RETRACTED,
+            block,
+            "the rollout-arm CPU fence must not restate a figure the sibling fence "
+            "retracts by measurement; the file would then assert and deny the same "
+            "number in two places",
+        )
+
+    def test_the_only_surviving_mention_is_the_retraction_itself(self) -> None:
+        source = self._source()
+        occurrences = source.count(self.RETRACTED)
+        self.assertEqual(
+            occurrences,
+            1,
+            f"{self.RETRACTED!r} appears {occurrences} times; exactly one mention is "
+            "allowed and it is the one that retracts the figure",
+        )
+        index = source.index(self.RETRACTED)
+        window = source[max(0, index - 400) : index + 400]
+        self.assertIn(
+            "asserted",
+            window,
+            "the surviving mention must be the RETRACTION -- a bare restatement "
+            "passes a mere occurrence count",
+        )
+        self.assertIn("not what the arm costs", window)
+
+    def test_no_unverifiable_point_ratio_is_asserted_as_the_arms_cost(self) -> None:
+        """SCOPED BY VALUE, not by phrasing.
+
+        The failure mode is a number a reader cannot check, so the check is on the
+        numbers: neither contested measurement of the arm/raw wall ratio may appear
+        as a bare claim. Both need the pinned panel checkpoint and its CPU export,
+        which are not in the repository, so whichever one is written down is the one
+        a later reader believes. The retraction's load-bearing content is "single
+        digits, not thousands", which is true of both.
+        """
+        source = self._source()
+        window_start = source.index("HOW MUCH MORE CPU, MEASURED")
+        window = source[window_start : window_start + 1400]
+        self.assertIn("SINGLE DIGITS", window)
+        for figure in ("1.8x at R=8", "1.25-3.98x"):
+            with self.subTest(figure=figure):
+                # Present is allowed ONLY inside the paragraph that says why no
+                # point ratio is quoted; a bare assertion is not.
+                if figure in window:
+                    self.assertIn("NO POINT RATIO", window)
+                    self.assertIn("not in the repo", window)
+
+
+@unittest.skipUnless(_crate_ready, "crate not built with the model feature")
+class RolloutLeafWitnessCarriesTheCratesOwnLedgerTest(
+    _EncodedSearchFixture, _ShippingPathHarness, unittest.TestCase
+):
+    """The witness, end to end, over the CRATE'S OWN measured rollout ledger.
+
+    The class above proves the plumbing moves numbers. This one proves the numbers
+    it moves are the crate's: the rollout columns come from a real
+    `search_batched_multi_encoded` at this file's fixture config, and are then
+    absorbed by production's `_search_model`. Only the visit rows are the
+    harness's, because the fixture root's move names are not this harness's
+    candidate list -- and the visit rows are not what the witness reports.
+
+    This is where 0.96503 is a MEASUREMENT rather than a constant: the number is
+    read off the crate here and asserted to survive the boundary unchanged.
+    """
+
+    SIMS = 32
+    SEED = 5
+    DEPTH = 2
+    ROLLOUTS = 8
+    MAX_PLIES = 40
+
+    def _native(self):
+        return pokezero_search.NativeLeafModel(
+            str(self.artifact),
+            device="cpu",
+            window=1,
+            tokens=int(self.layout["token_count"]),
+            categorical_features=int(self.layout["categorical_feature_count"]),
+            numeric_features=int(self.layout["numeric_feature_count"]),
+        )
+
+    _search = RolloutModelPriorsTest._search
+    _search_raw_from_args = RolloutModelPriorsTest._search_raw_from_args
+
+    def test_the_witness_reproduces_the_crates_own_fallback_fraction(self) -> None:
+        crate = self._search(mode="rollout")
+        self.ROLLOUT_COLUMNS = {
+            key: crate[key]
+            for key in (
+                "rollout_leaf_mode",
+                "rollout_encode_skipped",
+                "leaves_priced",
+                "rollouts_run",
+                "rollout_plies",
+                "rollout_terminal_hits",
+                "rollout_cap_hits",
+                "rollout_dead_ends",
+            )
+        }
+        _, decision = self._decide(arm=True)
+        witness = decision.metadata["engine_mcts"]["rollout_leaf"]
+        for key in (
+            "leaves_priced",
+            "rollouts_run",
+            "rollout_plies",
+            "rollout_terminal_hits",
+            "rollout_cap_hits",
+            "rollout_dead_ends",
+            "rollout_encode_skipped",
+        ):
+            with self.subTest(key=key):
+                self.assertEqual(witness[key], crate[key])
+        self.assertEqual(witness["rollout_leaf_modes"], {crate["rollout_leaf_mode"]: 1})
+        # The crate rounds its own emission to 6 places; the witness does not, so
+        # they are compared at the crate's precision.
+        self.assertAlmostEqual(
+            witness["rollout_fallback_fraction"],
+            crate["rollout_fallback_fraction"],
+            places=6,
+        )
+        # AND THE VALUE IS THE ONE THAT MAKES THIS URGENT. Asserted as a number,
+        # not just as "equal to the crate", so a crate change that silently made
+        # this arm look like an oracle would fail here rather than agree with
+        # itself.
+        self.assertGreater(
+            witness["rollout_fallback_fraction"],
+            0.9,
+            "at this fixture config the arm is a 96.5%-handcrafted blend; if this "
+            "ever reads low, re-derive it rather than assuming the arm improved",
         )
 
 
