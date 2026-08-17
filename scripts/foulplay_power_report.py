@@ -28,7 +28,15 @@ plausible number:
 * a depth cell that does not out-reach its reference is BUDGET-STARVED and
   excluded, rather than being read as a null (the confound the depth axis
   exists to avoid). Requires `--campaign` to know each cell's reference; the
-  report records whether the rule was applied.
+  report records whether the rule was applied;
+* a cell whose OPPONENT was not equally strong against both arms is
+  CONTENTION-CONFOUNDED and ineligible. The reference opponent is time-budgeted
+  and thinks concurrently with our search on the same host, so whichever arm
+  spends more CPU per decision faces a weaker opponent and is flattered by it.
+  `contention_of` compares the opponent's realized work per granted
+  budget-second BETWEEN the arms, stratified by foul-play's own per-decision
+  schedule, and refuses -- including when it was never measured, because an
+  unmeasured confound reads as a clean delta rather than as a fault.
 
 Usage::
 
@@ -246,6 +254,51 @@ def health_of(meta_entry: dict) -> dict:
     }
 
 
+def think_headers_of(meta_entry: dict) -> list[dict | None]:
+    """Every seat's opponent-think header for one cell, absences INCLUDED as None.
+
+    One per (shard, seat), and a seat whose block is missing contributes a None rather than
+    being skipped: `pool_foulplay_think` counts those and refuses, because coverage computed
+    over the shards that DID carry a block reads clean while a quarter of the arm was never
+    measured. Skipping them here would launder that into a pass.
+    """
+    headers: list[dict | None] = []
+    for per_seat in meta_entry["per_seat"]:
+        for seat in (per_seat or {}).values():
+            headers.append(seat.get("foulplay_think"))
+    return headers
+
+
+def contention_of(search_meta: dict, raw_meta: dict) -> dict:
+    """THE CROSS-ARM CONTENTION GATE, run where the two arms actually meet.
+
+    The reference opponent is TIME-budgeted and its search overlaps ours on the same host, so
+    CPU taken from it shows up as a weaker opponent and reads as a strength gain for whichever
+    arm spends more CPU per decision -- a confound in the flattering direction, on exactly the
+    arm whose job is to arbitrate a disputed effect. The instrument that measures it
+    (`foulplay_think`, see OPPONENT-THINK CONTENTION INSTRUMENT in `pokezero/foulplay_bridge.py`)
+    lands per shard, and the merged shard runs it p1-against-p2 WITHIN one arm. Within-arm
+    symmetry cannot see a between-arm difference: both seats of the hungry arm are equally
+    starved. This report is the first place the search arm's shards and its raw arm's shards
+    are both in hand, so this is where the between-arm comparison belongs.
+
+    Imported rather than reimplemented, per this file's own rule about `search_config_id`: a
+    second copy of the admissibility rules is how two files end up disagreeing about whether a
+    contention number may be used.
+    """
+    from pokezero.foulplay_bridge import (  # noqa: PLC0415
+        cross_arm_foulplay_contention,
+        pool_foulplay_think,
+    )
+
+    return cross_arm_foulplay_contention(
+        pool_foulplay_think(think_headers_of(search_meta), label="search"),
+        pool_foulplay_think(think_headers_of(raw_meta), label="raw"),
+        hungry_label="search",
+        lean_label="raw",
+    )
+
+
 def paired_improvement(candidate: dict, cand_raw: dict, anchor: dict, anchor_raw: dict):
     """CI on (candidate_delta - anchor_delta), per pair.
 
@@ -353,6 +406,15 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=None)
     args = ap.parse_args(argv)
 
+    # Named at module scope in the bridge so the report and the gate cannot drift apart on
+    # the number the whole refusal turns on.
+    from pokezero.foulplay_bridge import (  # noqa: PLC0415
+        FOULPLAY_THINK_CROSS_ARM_RESOLVING_STRATUM_DECISIONS,
+        FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
+        FOULPLAY_THINK_MEASURED_DECISION_LOG_SD,
+        FOULPLAY_THINK_MEASURED_RUN_LOG_SD,
+    )
+
     shards = load_shards(args.shards)
     fingerprint = assert_single_build(shards, args.expect_fingerprint)
     rows, meta = collect_rows(shards)
@@ -432,6 +494,8 @@ def main(argv=None) -> int:
         scored["raw_arm"] = candidates[0]
         scored["latency"] = latency_of(meta[cid])
         scored["health"] = health_of(meta[cid])
+        # BETWEEN the arms, not within one. See contention_of.
+        scored["contention"] = contention_of(meta[cid], meta[candidates[0]])
         scored["opponent_priors"] = meta[cid]["opponent_priors"]
         # Arm identity witnessed from the shards, not from the cell id alone --
         # and for the telemetry the cell id says nothing at all.
@@ -480,6 +544,18 @@ def main(argv=None) -> int:
                 f"OPPONENT fallback {ofb:.1%} over {FALLBACK_LIMIT:.0%}")
         if cell.get("min_pairs_shortfall"):
             reasons.append(cell["min_pairs_shortfall"])
+        # THE CROSS-ARM CONTENTION GATE, held to the same bar as the cap: a comparison the
+        # gate cannot defend is UNSCORED, not a null. Anything but `ok` makes the cell
+        # ineligible, including "not measured" -- a cell whose opponent-throughput parity is
+        # unknown is exactly as unbankable as one whose opponent was starved, and it reads as
+        # a clean delta rather than as a fault, which is worse. Same precedent as
+        # `cap: UNEVALUABLE`.
+        contention = cell.get("contention") or {}
+        if contention.get("status") != "ok":
+            reasons.append(
+                "CONTENTION-CONFOUNDED - cross-arm opponent throughput not comparable: "
+                + ", ".join(contention.get("refusal_reasons") or ["contention unknown"])
+            )
         # Depth cells: a d6/d8 cell that did not out-reach its reference is
         # BUDGET-STARVED, and its flat strength is void rather than a null.
         # This is the confound section 5 exists to prevent, and it is why the
@@ -517,7 +593,29 @@ def main(argv=None) -> int:
                 f"anchor {args.anchor!r} has no scoreable pairs "
                 f"({cells[args.anchor].get('error')}); the adoption rule is undefined."
             )
-    if ranked and args.anchor:
+    # A CONTENTION-REFUSED ANCHOR CANNOT BE A COMPARATOR, which the ineligibility list alone
+    # does not achieve. The adopted quantity is the paired IMPROVEMENT
+    # (candidate_delta - anchor_delta), so a confounded anchor puts its confounded delta inside
+    # the number that gets adopted -- and the adoption string never mentions it. Making the
+    # anchor ineligible only removes it from `ranked`; it stays the comparator. Found by
+    # independent review, which demonstrated a 3.8x-starved anchor producing
+    # "largest eligible delta whose improvement over anchor@k0 excludes 0: +0.333".
+    anchor_contention_refused = bool(
+        args.anchor is not None
+        and (cells.get(args.anchor, {}).get("contention") or {}).get("status") != "ok"
+    )
+    if anchor_contention_refused:
+        reasons = (cells[args.anchor].get("contention") or {}).get("refusal_reasons") or [
+            "contention unknown"
+        ]
+        winner = None
+        adoption = (
+            f"NO ADOPTION: the anchor {args.anchor} is CONTENTION-CONFOUNDED "
+            f"({', '.join(reasons)}), and the adoption rule subtracts the anchor's delta from "
+            "every candidate's -- so no improvement over it can be trusted. Section 9 Phase 2's "
+            "comparator has to be a clean cell."
+        )
+    if ranked and args.anchor and not anchor_contention_refused:
         # Section 9 Phase 2 is FILTER-then-rank: (iii) is a per-cell condition,
         # not a test applied only to the leader. Testing just ranked[0] and
         # falling back to the anchor adopts the anchor whenever the largest
@@ -578,10 +676,10 @@ def main(argv=None) -> int:
                 f"({'; '.join(cells[args.anchor]['ineligible_because'])}). "
                 "Section 9 Phase 2's fallback assumes a healthy anchor."
             )
-    elif ranked:
+    elif ranked and not anchor_contention_refused:
         winner = ranked[0]
         adoption = "no --anchor given; reporting the largest eligible delta only"
-    else:
+    elif not anchor_contention_refused:
         # No cell survived eligibility. Saying so explicitly matters: a null
         # winner with a null reason reads as "not computed yet" rather than as
         # "every cell was rejected".
@@ -608,10 +706,98 @@ def main(argv=None) -> int:
             c for c in depth_reference if c not in cells
         ),
         "min_pairs": args.min_pairs,
+        # THE PREREGISTRATION, in the artifact. Deliberately not a CLI flag: a threshold
+        # that can be loosened at report time is not preregistered, and the direction it
+        # would be loosened in is known in advance.
+        "contention_gate": {
+            "max_fold_ratio": FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
+            "measured_decision_log_sd": FOULPLAY_THINK_MEASURED_DECISION_LOG_SD,
+            "measured_run_log_sd": FOULPLAY_THINK_MEASURED_RUN_LOG_SD,
+            "note": (
+                "Refuses when the opponent's realized visits per granted budget-second "
+                "differ between the arms by more than the fold ratio in any compared "
+                "stratum. Threshold derived from the instrument's own measured precision: "
+                "six uncontended passes of real foul-play searches gave 15 matched-arm fold "
+                "ratios spanning 1.0013-1.1170, so 1.25 leaves ~2x log-margin on the largest "
+                "matched-arm fold observed; and the variance decomposition says that spread is "
+                "nearly flat in n (a nominal z=3 bound is 1.272 at the per-stratum floor and "
+                "1.246 at n=200, because the whole-run term dominates the per-decision one), so "
+                "a FIXED bound is the right shape. Six passes justify a fixed constant of about "
+                "this size. They do not justify more digits or a false-refusal rate: the run "
+                "term carries 5 degrees of freedom, so its point-estimate floor of 1.2447 (the "
+                "n->inf asymptote; 1.2506 at the calibration's own n=24, and 1.25 is 0.42% above "
+                "the first and 0.05% below the second -- quote the n) has a ONE-SIDED 95% "
+                "chi-square upper bound of 1.580 (1.711 at the two-sided interval's upper end) "
+                "and a t-based floor of 1.47-1.49 at the two-sided tail of z=3, "
+                "p=0.0027 (t=5.507 on 5 df; p=0.002 would give 1.537 instead, so quote the p). "
+                "Every one of those floors is computed from the run COMPONENT 0.0516, not from "
+                "the raw pass-mean SD 0.052745 = sqrt(0.0516^2 + 0.0529^2/24), on which the same "
+                "quantities read 1.5080, 1.5521 (p=0.002), 1.6692 (p=0.001) and 1.7312. "
+                "The false-refusal probability is bounded BY THE DATA only at <18% (0 of 15 "
+                "matched pairs). A pass BOUNDS the confound; it does not show it is zero, and "
+                "between 1.117 and 1.25 the gate is deliberately silent."
+            ),
+            "scope": (
+                "The 1.1170 anchor was measured with position variance CANCELLED: the six "
+                "calibration passes replayed identical positions. Real paired arms share a "
+                "battle seed but diverge after their first differing choice, and position SD "
+                "(0.1003) is the largest of the three terms, so 1.1170 UNDERSTATES real "
+                "matched-arm variation. Measured magnitude: SD(log fold) rises 7.3% at n=24 and "
+                "0.9% at n=200, because the run term dominates -- which makes the anchor ~1.126 "
+                "rather than 1.117, and leaves 1.25 with 1.88x log-margin instead of 2.02x. A "
+                "scope qualifier, not a threshold change. Also unmeasured: the bound was taken "
+                "at 2x1000ms on an 18-core macOS box; the early-game 8x500ms stratum borrows it."
+            ),
+            "resolving_stratum_decisions": (
+                FOULPLAY_THINK_CROSS_ARM_RESOLVING_STRATUM_DECISIONS
+            ),
+            "resolution_rule": (
+                "A stratum holding fewer than "
+                f"{FOULPLAY_THINK_CROSS_ARM_RESOLVING_STRATUM_DECISIONS} measured decisions on "
+                "either arm cannot resolve the threshold (its own nominal z=3 resolution is "
+                "wider than the fold ratio), so it is EXCLUDED from the compared set rather "
+                "than refusing the comparison: refusing voided perfectly matched arms over a "
+                "rounding-error slice of the run, at 15 of 15 matched calibration pairs on a "
+                "1.0% minor stratum. Excluded strata count as UNCOVERED, are named in the "
+                "verdict's strata_excluded_for_resolution with their denominators and their "
+                "resolution and no rate, sized in cross_arm_share_excluded_for_resolution, and "
+                "the min_cross_arm_compared_share floor decides. A coverage refusal names WHICH "
+                "of the two shortfalls it was -- "
+                "cross_arm_strata_excluded_for_resolution_cover_too_little or "
+                "cross_arm_compared_strata_cover_too_little -- because they have different "
+                "remedies and neither is contention. The floor is 27 and not the calibration's "
+                "24: 27 is what the shipped decomposition computes (1.250197 at n=26, 1.249996 "
+                "at n=27) and a test recomputes it from the two SDs, whereas 24 is a crossover "
+                "only for a run SD in [0.051426, 0.051475]. min_stratum_decisions (5) and "
+                "min_measured_decisions (20) are both below 27 and therefore inert at this "
+                "layer. Under position variance NOT cancelling the same arithmetic gives 124, "
+                "which is a share question and not a refusal."
+            ),
+            "pass_bounds": (
+                "A passing cell's mix-standardized arm-level opponent-throughput SHORTFALL is "
+                "at most 24.0% (a composed fold of 1.3158 = max_fold_ratio / "
+                "min_cross_arm_compared_share). Stated as a shortfall because readers subtract: "
+                "the fold would be misread as 31.6% and the per-stratum threshold as 25%."
+            ),
+        },
+        # THE SCOPE LIMIT STAYS PROSE, HERE AND IN `contention_gate`. A keyed
+        # `tracked_follow_ups` entry was tried and withdrawn: an artifact field asserting a
+        # project's own bookkeeping tests the bookkeeping rather than the behaviour, and it rots
+        # the moment the item is closed somewhere else. What has to survive is the claim a reader
+        # of `winner` sees, so that is what is written and what the note tests pin.
         "winner_note": (
             "Eligibility requires shared pairs, >= the section 8 minimum, a passing "
-            "cap, seat and fallback health, and -- for depth cells, when --campaign "
-            "is given -- reached-depth clearing their reference. A cell excluded by "
+            "cap, seat and fallback health, a cross-arm opponent-throughput comparison "
+            "the contention gate accepts (which bounds the opponent-strength confound in "
+            "THROUGHPUT units, not in win-rate units -- a passing cell's mix-standardized "
+            "arm-level opponent-throughput shortfall is at most 24.0%, but nothing here "
+            "calibrates opponent visits to opponent strength, so the residual in pp is "
+            "unknown, not small. `contention: ok` is therefore NOT clearance of the strength "
+            "comparison; the measurement that would convert one to the other is raw against "
+            "raw with the opponent's per-battle budget cut 24%, and it has not been run), "
+            "and -- for depth "
+            "cells, when --campaign is given -- reached-depth clearing their reference. "
+            "A cell excluded by "
             "the cap or as budget-starved is NOT a miss for its strength prediction; "
             "it is unscored. Adoption compares the paired IMPROVEMENT over the "
             "anchor, not two independent deltas."

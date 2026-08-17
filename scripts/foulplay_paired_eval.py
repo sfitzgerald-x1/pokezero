@@ -423,6 +423,14 @@ def per_seed_outcomes(summary: dict, seat: str) -> dict[int, dict]:
     return rows
 
 
+def foulplay_think_comparison(first: dict | None, second: dict | None) -> dict:
+    """Thin wrapper so the merged shard runs the bridge's gate instead of a copy of it."""
+
+    from pokezero.foulplay_bridge import compare_foulplay_think
+
+    return compare_foulplay_think(first, second, first_label="p1", second_label="p2")
+
+
 def seat_block(summary: dict, seat: str) -> dict:
     """Per-seat reporting is mandatory: seat asymmetry is the #937 bug class.
 
@@ -443,6 +451,13 @@ def seat_block(summary: dict, seat: str) -> dict:
     harness ever needs the merged shard to stand alone, lift the journals here rather
     than dropping the siblings.
     """
+    # Imported HERE rather than at module scope, and imported rather than reimplemented:
+    # this driver otherwise mirrors bridge constants instead of importing the package, but a
+    # SECOND implementation of the usability gate is how two files end up disagreeing about
+    # whether a contention number may be used. Function-level keeps the driver's pure-CLI
+    # tests independent of the package being on the path.
+    from pokezero.foulplay_bridge import foulplay_think_reading_status
+
     engine = summary.get("engine_mcts") or {}
     timing = summary.get("policy_timing") or {}
     return {
@@ -483,6 +498,30 @@ def seat_block(summary: dict, seat: str) -> dict:
         # budget comparison is adopted as "the two are equivalent" when the expensive side
         # was not searching. None when there is no neural opponent.
         "opponent_engine_mcts": summary.get("opponent_engine_mcts"),
+        # THE CPU-CONTENTION CONTROL, lifted for exactly the reason the block above is.
+        # foul-play is TIME-budgeted and thinks concurrently with our search on the same
+        # host, so a CPU-heavy arm can win by starving the opponent rather than by playing
+        # better -- and `foulplay_search_time_ms` records only the budget it was GIVEN,
+        # which is constant by construction. `foulplay_think.mean_iterations_per_budget_second`
+        # is the budget it actually SPENT: realized opponent MCTS visits per CPU-second
+        # granted. This merged shard is where the two arms meet, so the comparison has to be
+        # runnable here.
+        #
+        # THE WHOLE BLOCK, not the headline mean, and that is load-bearing. The unstratified
+        # mean moves by 2x on foul-play's own schedule change (8x500ms early, 2x1000ms
+        # later) with zero contention, so a cross-arm difference in it can be pure decision
+        # mix; `by_stratum` is what makes the comparison valid, and it only exists here if
+        # the block travels whole. `iterations_coverage` comes with it because coverage is
+        # treatment-dependent, and `reading` because `null` on both arms is NOT the
+        # documented "flat between arms" no-contention reading -- it is nobody measuring.
+        # `pokezero.foulplay_bridge.compare_foulplay_think` is the gate that refuses on all
+        # three; see OPPONENT-THINK CONTENTION INSTRUMENT in that module.
+        "foulplay_think": summary.get("foulplay_think"),
+        # Hoisted out of the block so a reader cannot miss it: whether this seat's
+        # contention number may be used at all, and if not, why not. Present even when the
+        # block is absent (`think_block_absent`), so a producer too old to measure is
+        # distinguishable from an opponent that was not slowed down.
+        "foulplay_think_reading": foulplay_think_reading_status(summary.get("foulplay_think")),
         "world_failure_reasons": (engine.get("policy_stats") or {}).get(
             "world_failure_reasons"
         ),
@@ -743,6 +782,21 @@ def main(argv=None) -> int:
 
     seats = {seat: seat_block(summaries[seat], seat) for seat in SEATS}
     rows = {seat: per_seed_outcomes(summaries[seat], seat) for seat in SEATS}
+    # THE CONTENTION GATE, RUN rather than merely defined. Its two cross-side refusals
+    # (mismatched strata, unequal coverage) were reachable only by a human who thought to
+    # call it, which is the same defect as documenting a caveat: the module block claims the
+    # comparison "is checked", so something in the shipping path has to check it.
+    #
+    # p1-vs-p2 within this arm, which is the comparison this driver actually owns -- and a
+    # meaningful one, since seat asymmetry is the #937 bug class this file exists to catch: a
+    # contention reading that holds on one seat and not the other is a defect in the reading.
+    # The cross-ARM comparison is the same function applied to two of these shards, which is
+    # the downstream report's job; `foulplay_think` and `foulplay_think_reading` are lifted
+    # per seat so it can run it there.
+    think_seat_comparison = foulplay_think_comparison(
+        summaries["p1"].get("foulplay_think"),
+        summaries["p2"].get("foulplay_think"),
+    )
     expected = set(range(args.seed_start, args.seed_start + args.pairs))
     missing = {
         seat: sorted(expected - set(rows[seat])) for seat in SEATS
@@ -760,6 +814,11 @@ def main(argv=None) -> int:
         "seed_start": args.seed_start,
         "pairs": args.pairs,
         "foulplay_search_time_ms": FOULPLAY_SEARCH_TIME_MS,
+        # Refusal reasons, per-stratum ratios and the compared share -- see the gate's
+        # docstring in pokezero/foulplay_bridge.py. `status: "refused"` here means this
+        # shard's own two seats do not support a contention statement; it does NOT mean the
+        # arms differ.
+        "foulplay_think_seat_comparison": think_seat_comparison,
         "opponent_priors": bool(args.opponent_priors),
         # Recorded as well as encoded in config_id: the id normalises (an
         # explicit c_puct 1.4 leaves no suffix), so the id alone cannot say what
