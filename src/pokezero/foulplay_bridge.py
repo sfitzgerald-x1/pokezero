@@ -3040,10 +3040,13 @@ async def _foulplay_think_observation(
     # opponent_think) with and without the block, at the real corpus shape (eras 61-64:
     # 48.7 rounds/game, 3,383 B mean per-game row):
     #
-    #   438.3 B per row as WRITTEN (1.8x the 243 B compact figure)
+    #   438.0 B per row as WRITTEN (1.8x the 243 B compact figure)
     #   21.0 KB per game -> a per-game row grows 7.3x, not ~4x
-    #   674 MB of cumulative `--summary-out` rewrites over 250 games (the whole summary is
+    #   673 MB of cumulative `--summary-out` rewrites over 250 games (the whole summary is
     #     re-serialized after every game, so bytes go as N(N+1)/2), on a 106 MB base
+    #
+    # Measured against `_foulplay_think_aggregate`'s REAL output rather than a hand-written
+    # stand-in for it, so the totals block's own bytes are counted as shipped.
     #
     # The earlier comparison to `--opponent-journal full` was also wrong in KIND: it put
     # this DELTA against the journal block's TOTAL. Same-units: the journal's `full` delta
@@ -3153,22 +3156,25 @@ def _foulplay_think_aggregate(rows: Sequence[Mapping[str, Any]]) -> dict[str, An
     for row in rows:
         for reason in row.get("miss_reasons") or ():
             miss_reasons[str(reason)] += 1
+    # Bucketed on the row's own `stratum`, which is emitted only when the decision's work is
+    # ATTRIBUTABLE -- so a bucket holds exactly the decisions whose rate is defined. There is
+    # deliberately no per-stratum `decisions` count beside
+    # `iterations_measured_decisions`: the two would be equal by construction, and a field
+    # that can only ever equal its neighbour reads as coverage information while carrying
+    # none. Coverage is a run-level quantity here (`iterations_coverage`), taken over ALL
+    # decisions including the ones that never got a stratum.
     by_stratum: dict[str, dict[str, Any]] = {}
     for row in rows:
         stratum = row.get("stratum")
         if not stratum:
             continue
-        bucket = by_stratum.setdefault(
-            str(stratum), {"decisions": 0, "rates": [], "iterations": []}
-        )
-        bucket["decisions"] += 1
+        bucket = by_stratum.setdefault(str(stratum), {"rates": [], "iterations": []})
         if "iterations_per_budget_second" in row:
             bucket["rates"].append(float(row["iterations_per_budget_second"]))
         if "iterations" in row:
             bucket["iterations"].append(int(row["iterations"]))
     stratified = {
         name: {
-            "decisions": bucket["decisions"],
             "iterations_measured_decisions": len(bucket["rates"]),
             "mean_iterations_per_budget_second": _mean(bucket["rates"]),
             "mean_iterations": _mean(bucket["iterations"]),
