@@ -359,6 +359,178 @@ def test_a_regression_smaller_than_the_threshold_is_not_convicted():
     assert r["verdict"] == "NO_ADVANCE"
 
 
+# ----------------------------------------------------------------------------------------
+# THE ROUND-3 BLOCKING DEFECT: the abstention guard was wired into the PASS branch only.
+#
+# Abstention credit RAISES the naive dC and DILUTES the naive sign-flip p, so an
+# ordering-corrupted head could buy its way OUT of REGRESSED with the very transform the guard
+# exists to neutralise -- while `delta_c_gate` sat unchanged and convicting. The REGRESSED branch
+# is a conjunction, so it has TWO escape routes, and the two tests below break exactly ONE
+# conjunct each: a fixture that broke both would pin neither, because the first failing conjunct
+# short-circuits the second.
+#
+# The construction, both times, is the shipped attack composed with the shipped corruption:
+# abstain on pairs BOTH cells got wrong. Those pairs are the fixed point of the withdrawal rule --
+# the arm's 0.0 becomes 0.5 in the naive statistic and is withdrawn straight back to 0.0 in the
+# gated one -- so `delta_c_gate` and `p_gate` come out BIT-IDENTICAL to the corrupted head's own,
+# which is what makes this an escape rather than a trade.
+# ----------------------------------------------------------------------------------------
+def _corrupted_head_with_abstentions(cell, n_abstain, tau=oi.TAU_PRIMARY):
+    """`ordering_corrupted_15pct` (the registry's own fixture, through `build_demo_cell`) plus
+    `n_abstain` head-side ties placed on eligible pairs that BOTH cells got wrong."""
+    rows, keys = cell
+    arm = demo(cell, "ordering_corrupted_15pct")
+    sel = oi.eligible_keys(rows, keys, tau)
+    both_wrong = [k for k, b, a in zip(sel, oi.score_cell(rows, sel), oi.score_cell(arm, sel))
+                  if b == 0.0 and a == 0.0]
+    assert len(both_wrong) >= n_abstain, (len(both_wrong), n_abstain)
+    out = dict(arm)
+    for k in both_wrong[:n_abstain]:
+        out[k] = dict(arm[k], head_a=0.0, head_b=0.0, head_gap=0.0)
+    return out
+
+
+def test_an_abstaining_corrupted_head_cannot_dilute_its_way_out_of_regressed(cell):
+    """ESCAPE ROUTE 1: the p conjunct. Breaks ONLY the p.
+
+    12 abstentions -- 7.3% of this bank's 164 eligible pairs -- take the naive sign-flip p from
+    0.0015 to 0.0822, above alpha, while the naive dC is still -0.0549, comfortably past -target.
+    So the naive pair stops convicting on the p alone. The gated pair is untouched at -0.0915 and
+    p = 0.0015, because every one of those ties sits on a pair the baseline got wrong and is
+    withdrawn exactly. The verdict must be REGRESSED.
+
+    Against the shipped code this is a plain regression test; against the revision that read
+    (delta, p_exact) here it returns UNDERPOWERED_NO_VERDICT -- an ordering-corrupted head with no
+    verdict against it, which the plan doc's section 4 requires to fail. The same construction on
+    the banked 465 pairs is cheaper still, because its corrupted p starts at 0.0414: the review
+    demonstrated it at 10 abstentions (7.8% of the 129 eligible), and re-deriving it there shows
+    the escape opening at TWO (1.6%, p 0.0414 -> 0.0599).
+    """
+    plain = cmp_at(cell, demo(cell, "ordering_corrupted_15pct"))
+    r = cmp_at(cell, _corrupted_head_with_abstentions(cell, 12))
+    assert r["n_eligible"] == 164 and r["head_ties_created_by_arm"] == 12
+    # the naive pair: still past the threshold, no longer significant -- ONE broken conjunct
+    assert r["delta_c"] <= -oi.ADVANCE_DELTA_C
+    assert r["delta_c"] == pytest.approx(-0.0549, abs=5e-5)
+    assert r["exact_signflip_p_two_sided"] > oi.ALPHA
+    assert r["exact_signflip_p_two_sided"] == pytest.approx(0.0822, abs=5e-4)
+    # the gated pair: bit-identical to the corrupted head with no abstentions at all
+    assert (r["delta_c_gate"], r["p_gate"]) == (plain["delta_c"], plain["exact_signflip_p_two_sided"])
+    assert r["delta_c_gate"] == pytest.approx(-0.0915, abs=5e-5)
+    assert r["p_gate"] < oi.ALPHA
+    # and the verdict -- the surface the defect lived on
+    assert r["verdict"] == "REGRESSED", (
+        "an ordering-corrupted head bought out of its conviction with abstentions")
+    assert plain["verdict"] == "REGRESSED"
+
+
+def test_an_abstaining_corrupted_head_cannot_lift_naive_delta_out_of_regressed():
+    """ESCAPE ROUTE 2: the dC conjunct. Breaks ONLY the dC.
+
+    On a bank powered hard enough that dilution cannot reach alpha, the abstention credit is spent
+    on the SIZE instead: 400 broken orderings in 6000 pairs is -0.0667, and 700 abstentions on
+    pairs both cells got wrong add +0.0583 of credit, leaving a naive dC of -0.0083 -- inside the
+    threshold -- while the naive p is 0.0389 and still significant. So here the naive pair stops
+    convicting on the THRESHOLD alone, the mirror of the test above.
+
+    The gated pair reads -0.0667 at p = 8e-121. Against the revision that read (delta, p_exact)
+    this returns NO_ADVANCE: a powered bank, 400 orderings verifiably broken, and the instrument
+    reporting no advancement rather than a regression.
+    """
+    r = _rigged_abstaining_regression()
+    assert r["head_ties_created_by_arm"] == 700
+    assert r["head_ties_created_on_pairs_baseline_got_wrong"] == 700
+    # the naive pair: still significant, no longer past the threshold -- ONE broken conjunct
+    assert r["delta_c"] == pytest.approx(-1 / 120)          # (-400 + 350) / 6000
+    assert r["delta_c"] > -oi.ADVANCE_DELTA_C
+    assert r["exact_signflip_p_two_sided"] < oi.ALPHA
+    assert r["exact_signflip_p_two_sided"] == pytest.approx(0.0389, abs=5e-4)
+    # the gated pair: the 400 broken orderings, undiluted
+    assert r["delta_c_gate"] == pytest.approx(-1 / 15)      # -400 / 6000
+    assert r["p_gate"] < 1e-100
+    # powered, so the pre-fix fallthrough was NO_ADVANCE rather than a refusal to read
+    assert r["powered_for_target"] is True
+    assert r["verdict"] == "REGRESSED", (
+        "abstention credit lifted a 400-ordering regression inside the threshold")
+
+
+def _rigged_abstaining_regression():
+    """400 orderings the arm breaks outright, plus 700 pairs BOTH cells get wrong where the arm
+    goes to a head-side tie. No pair does two things at once."""
+    rows, arm = {}, {}
+    for i in range(6000):
+        k = (i, 0, "p1")
+        if i < 400:
+            ha, hb, aa, ab = 0.2, -0.2, -0.2, 0.2        # base right -> arm wrong (-1.0)
+        elif i < 1100:
+            ha, hb, aa, ab = -0.2, 0.2, 0.0, 0.0         # both wrong -> arm abstains (+0.5 naive)
+        else:
+            ha, hb, aa, ab = 0.2, -0.2, 0.2, -0.2        # untouched
+        rows[k] = {"seed": i, "prefix": 0, "seat": "p1", "head_a": ha, "head_b": hb,
+                   "head_gap": oi.head_gap_from_values(ha, hb), "true_gap": 0.3,
+                   "true_a": 0.65, "true_b": 0.35, "noise_var": 0.004,
+                   "rollouts_a": 64, "rollouts_b": 64}
+        arm[k] = dict(rows[k], head_a=aa, head_b=ab,
+                      head_gap=oi.head_gap_from_values(aa, ab))
+    return oi.compare(rows, arm, sorted(rows), oi.TAU_PRIMARY, bootstrap_reps=20)
+
+
+def test_the_verdict_expression_reads_the_gated_delta_at_every_branch(cell):
+    """The MIXED variant `delta >= target and p_gate < ALPHA` -- naive dC, gated p -- survived the
+    previous suite, and the reviewer diagnosed why: the coupling tests below assert on the REPORTED
+    FIELDS, which that mutation leaves untouched. It changes only the verdict EXPRESSION, so the
+    verdict is the only surface that can see it. Same shape as the round-1 defect: a test checking
+    the wrong surface.
+
+    The 16-bucket grid at tau=0.05 is the separating cell. Its naive dC is +0.0491, past the
+    advancement threshold; its gated dC is -0.0618 with p_gate = 0.0004. Reading the naive dC with
+    the gated p certifies it PASS_PENDING_REMEASURE; the shipped expression convicts it.
+    """
+    r = cmp_at(cell, demo(cell, "bucketed_head_16_gain_is_all_abstention"), tau=0.05)
+    assert r["delta_c"] >= oi.ADVANCE_DELTA_C, "the naive dC must clear the bar it must not be read on"
+    assert r["delta_c"] == pytest.approx(0.0491, abs=5e-5)
+    assert r["delta_c_gate"] <= -oi.ADVANCE_DELTA_C
+    assert r["delta_c_gate"] == pytest.approx(-0.0618, abs=5e-5)
+    assert r["p_gate"] < oi.ALPHA
+    assert r["verdict"] == "REGRESSED"
+    assert r["advanced"] is False
+
+
+def test_the_verdict_expression_reads_the_gated_p_at_every_branch():
+    """The other MIXED variant, `delta_gate >= target and p_exact < ALPHA` -- gated dC, naive p --
+    which also survived the previous suite, and for the same reason.
+
+    5 real fixes in 200 pairs plus 40 abstentions on pairs both cells got wrong: the gated dC is
+    +0.0250, past the threshold, but it rests on 5 discordances and its own p is 0.0625, above
+    alpha. The naive p is 5.7e-14, because 45 changed pairs all moved one way. So the naive p is
+    the only thing that could certify this cell, and the verdict must refuse it.
+    """
+    rows, arm = {}, {}
+    for i in range(200):
+        k = (i, 0, "p1")
+        if i < 5:
+            ha, hb, aa, ab = -0.2, 0.2, 0.2, -0.2        # base wrong -> arm right (+1.0)
+        elif i < 45:
+            ha, hb, aa, ab = -0.2, 0.2, 0.0, 0.0         # both wrong -> arm abstains (+0.5 naive)
+        else:
+            ha, hb, aa, ab = 0.2, -0.2, 0.2, -0.2
+        rows[k] = {"seed": i, "prefix": 0, "seat": "p1", "head_a": ha, "head_b": hb,
+                   "head_gap": oi.head_gap_from_values(ha, hb), "true_gap": 0.3,
+                   "true_a": 0.65, "true_b": 0.35, "noise_var": 0.004,
+                   "rollouts_a": 64, "rollouts_b": 64}
+        arm[k] = dict(rows[k], head_a=aa, head_b=ab,
+                      head_gap=oi.head_gap_from_values(aa, ab))
+    r = oi.compare(rows, arm, sorted(rows), oi.TAU_PRIMARY, bootstrap_reps=20)
+    assert r["delta_c_gate"] == pytest.approx(0.025)
+    assert r["delta_c_gate"] >= oi.ADVANCE_DELTA_C, "the gated dC must clear the threshold"
+    assert r["p_gate"] == pytest.approx(0.0625), "and must NOT be significant on its own p"
+    assert r["p_gate"] > oi.ALPHA
+    assert r["exact_signflip_p_two_sided"] < 1e-12, "while the naive p looks overwhelming"
+    assert not r["verdict"].startswith("PASS"), "certified off a p belonging to another statistic"
+    assert r["verdict"] == "UNDERPOWERED_NO_VERDICT"
+    assert r["advanced"] is False
+
+
 def test_advanced_is_true_for_pass_alone_and_not_for_pass_pending_remeasure():
     """Kills `advanced = verdict.startswith("PASS")`. PASS_PENDING_REMEASURE exists precisely
     to NOT advance an arm."""
@@ -408,11 +580,17 @@ def test_the_p_reported_with_the_gated_statistic_is_that_statistic_s_p(cell):
     assert r["exact_signflip_p_two_sided"] < 1e-6 < r["p_gate"]
 
 
-def test_the_gated_delta_and_the_gated_p_move_together(cell):
-    """Both halves of the coupling, witnessed. A review found two mixed variants surviving the
-    suite -- naive delta with guarded p, and guarded delta with naive p -- because only the
-    conjunction was tested, never each half separately. Neither reopens the attack, but the
-    coupling is the thing the code was written for, so it gets pinned."""
+def test_the_gated_delta_and_the_gated_p_are_reported_as_a_pair(cell):
+    """The REPORTED FIELDS half of the coupling, and that is all it is -- named honestly, because
+    the previous revision of this test claimed to catch the two mixed variants and did not.
+
+    A round-3 review re-ran them and both still survived: the mutations change the VERDICT
+    EXPRESSION, and a mutation of the verdict expression leaves every field this test reads
+    untouched. Asserting on the wrong surface is the round-1 defect's shape, so the verdict tests
+    live above (`test_the_verdict_expression_reads_the_gated_delta_at_every_branch` and
+    `..._the_gated_p_...`) and this one keeps only the claim it can support: what the artifact
+    reports is the pair, not either mixture.
+    """
     r = cmp_at(cell, demo(cell, "abstention_gaming_label_aimed_ties"))
     assert r["delta_c_gate"] != r["delta_c"], "the guard must bite on this cell"
     assert r["exact_signflip_p_abstention_gain_withdrawn"] != r["exact_signflip_p_two_sided"]
@@ -530,6 +708,65 @@ def test_no_manufactured_tie_can_ever_raise_the_gated_statistic(cell):
     assert seen_ties > 100, f"the sweep must actually contain manufactured ties, saw {seen_ties}"
 
 
+def test_no_tie_set_of_any_size_or_selectivity_can_raise_the_gated_statistic(cell):
+    """The guard's property stated as the IDENTITY it actually is, which is much stronger than the
+    claim it was first defended with ("the aimed attack pays 0.0000 on the cases we tried").
+
+    For a cell that manufactures a tie set S and changes no ordering,
+
+        delta_c_gate = -0.5 * |S intersect {pairs the baseline got RIGHT}| / n_eligible
+
+    EXACTLY -- so it is <= 0 for every S, of any size and any selectivity, aimed with the labels or
+    drawn at random, and it is 0 exactly when S touches no pair the baseline got right. The aimed
+    attack is the equality case rather than a case that happened to be checked, and there is no
+    tie-set shape left for a future attack to find. Asserted here as an exact equality on 150
+    random tie sets spanning sizes 1..464 and selectivities 0.00..1.00, plus the two extreme
+    constructions by hand.
+    """
+    rows, keys = cell
+    sel = oi.eligible_keys(rows, keys, oi.TAU_PRIMARY)
+    base = dict(zip(sel, oi.score_cell(rows, sel)))
+    right = [k for k in sel if base[k] == 1.0]
+    wrong = [k for k in sel if base[k] == 0.0]
+    assert right and wrong, "the bank must contain both, or the identity is untested"
+
+    def tie_only(tie_set):
+        """An arm that changes NOTHING except going to an exact head tie on `tie_set`."""
+        ties = set(tie_set)
+        return {k: (dict(rows[k], head_a=0.0, head_b=0.0, head_gap=0.0) if k in ties else rows[k])
+                for k in keys}
+
+    def check(tie_set):
+        r = oi.compare(rows, tie_only(tie_set), keys, oi.TAU_PRIMARY, bootstrap_reps=1)
+        predicted = -0.5 * sum(1 for k in tie_set if base.get(k) == 1.0) / len(sel)
+        assert r["delta_c_gate"] == pytest.approx(predicted, abs=1e-12), (len(tie_set), predicted)
+        assert r["delta_c_gate"] <= 0.0
+        return r
+
+    rng = random.Random(20260817)
+    seen_sizes, seen_sel, worst = set(), set(), -1.0
+    for _ in range(150):
+        size = rng.randrange(1, len(keys))
+        r = check(rng.sample(keys, size))
+        seen_sizes.add(size)
+        worst = max(worst, r["delta_c_gate"])
+        if r["new_tie_selectivity"] is not None:
+            seen_sel.add(round(r["new_tie_selectivity"], 2))
+    assert worst == 0.0, f"some tie set raised the gated statistic to {worst:+.6f}"
+    assert max(seen_sizes) > 400 and min(seen_sizes) < 50, "the sweep must span tie-set sizes"
+    assert min(seen_sel) < 0.1 and max(seen_sel) == 1.0, "and must span selectivity"
+
+    # the two ends, by hand rather than by sampling
+    aimed = check(wrong)                       # every pair the baseline got wrong: the attack
+    assert aimed["delta_c_gate"] == 0.0
+    assert aimed["new_tie_selectivity"] == 1.0
+    worst_case = check(right)                  # every pair the baseline got right
+    assert worst_case["delta_c_gate"] == pytest.approx(-0.5 * len(right) / len(sel))
+    assert worst_case["new_tie_selectivity"] == 0.0
+    # ... and the whole eligible set at once, which is the largest S there is
+    assert check(sel)["delta_c_gate"] == pytest.approx(-0.5 * len(right) / len(sel))
+
+
 def test_a_coarse_bucketed_head_whose_gain_is_all_abstention_is_convicted_on_purpose(cell):
     """The other side of the same fixture family, and the case that decides the design question
     on principle rather than taste. At 16 levels the arm's naive gain is +0.0579 while 26 of its
@@ -543,6 +780,9 @@ def test_a_coarse_bucketed_head_whose_gain_is_all_abstention_is_convicted_on_pur
     assert abstention_credit > r["delta_c"], "its whole naive gain is abstention"
     assert r["delta_c_gate"] < 0
     assert not r["verdict"].startswith("PASS")
+    # At tau=0.10 the gated shortfall is real but not significant (p_gate 0.44), so the honest
+    # verdict is a refusal to read rather than a conviction -- the power rule, not the guard.
+    assert r["p_gate"] > oi.ALPHA and r["verdict"] == "UNDERPOWERED_NO_VERDICT"
     assert r["delta_c"] == pytest.approx(0.0579, abs=5e-5)
     assert abstention_credit == pytest.approx(0.0793, abs=5e-5)
     assert r["delta_c_gate"] == pytest.approx(-0.0213, abs=5e-5)
@@ -551,16 +791,39 @@ def test_a_coarse_bucketed_head_whose_gain_is_all_abstention_is_convicted_on_pur
             r["head_ties_created_on_pairs_baseline_got_wrong"]) == (51, 26)
 
 
-def test_new_tie_selectivity_separates_an_aimed_attack_from_an_innocent_grid(cell):
-    """The diagnostic that makes the two cases distinguishable by eye rather than by argument:
-    a label-aimed abstention ties on wrong pairs 100% of the time, a bucketed head lands between
-    that and the baseline's own error rate."""
+def test_new_tie_selectivity_alone_does_not_separate_an_attack_from_a_legitimate_arm(cell):
+    """`new_tie_selectivity` is reported, and it is NOT a detector. The previous revision of this
+    file claimed it made the aimed attack and an innocent grid "distinguishable by eye"; a review
+    disproved that and this test is the disproof, kept so the claim cannot come back.
+
+    The 32-bucket POSITIVE CONTROL -- the legitimate arm whose reordering is real -- reads
+    selectivity 1.00 at tau=0.15, identical to the label-aimed attack, because a coarse grid ties
+    wherever the head was near-indifferent and that is where it was also wrong. (Banked, it reads
+    1.00 at tau=0.10 as well; on this synthetic bank tau=0.15 is where that happens.) So the
+    ordering of selectivities is not the ordering of legitimacy either: at tau=0.10 the legitimate
+    32-bucket arm reads 0.84 while the CONVICTED 16-bucket grid reads 0.51.
+
+    What separates them is the PAIR (selectivity, delta_c_gate), which is what the gate reads: the
+    attack's gate is exactly 0.0000, the 32-bucket arm's is still a gain.
+    """
     attack = cmp_at(cell, demo(cell, "abstention_gaming_label_aimed_ties"))
+    legit = cmp_at(cell, demo(cell, "positive_control_bucketed_head_32"), tau=0.15)
     grid = cmp_at(cell, demo(cell, "bucketed_head_16_gain_is_all_abstention"))
-    assert attack["new_tie_selectivity"] == 1.0
     base_err = attack["baseline_error_rate_on_eligible"]
     assert 0.0 < base_err < 0.5
-    assert base_err < grid["new_tie_selectivity"] < attack["new_tie_selectivity"]
+    # selectivity alone: the attack and the LEGITIMATE arm are indistinguishable
+    assert attack["new_tie_selectivity"] == 1.0
+    assert legit["new_tie_selectivity"] == 1.0
+    # and it does not even order them: the convicted grid reads LOWER than the spared arm
+    assert grid["new_tie_selectivity"] == pytest.approx(0.51, abs=0.01)
+    assert cmp_at(cell, demo(cell, "positive_control_bucketed_head_32"))[
+        "new_tie_selectivity"] == pytest.approx(0.84, abs=0.01)
+    # the pair is what separates them, and it is the half the gate actually reads
+    assert attack["delta_c_gate"] == 0.0
+    assert legit["delta_c_gate"] > oi.ADVANCE_DELTA_C
+    assert not attack["verdict"].startswith("PASS")
+    assert legit["verdict"].startswith("PASS")
+    # an arm that manufactures no ties has no selectivity to report at all
     assert cmp_at(cell, demo(cell, "positive_control_blend_truth_0.15"))[
         "new_tie_selectivity"] is None
 
@@ -585,6 +848,14 @@ def test_a_powered_abstention_attack_is_refused_rather_than_advanced():
     assert r["powered_for_target"] is True
     assert r["delta_c_gate"] == 0.0
     assert r["verdict"] == "NO_ADVANCE" and r["advanced"] is False
+    # `powered_for_observed_effect` is a read of the effect, so it reads the GATED one: the effect
+    # this instrument saw here is 0.0000, which is not above any MDE. The naive +0.15 clears the
+    # MDE comfortably and is reported under its own name -- the mutation sweep found this field
+    # still on the naive dC after the verdict branches were fixed, which is the same
+    # one-site-not-its-sibling slip one level down.
+    assert r["mde_delta_c_at_80pct_power"] < 0.15
+    assert r["powered_for_observed_effect"] is False
+    assert r["powered_for_observed_naive_effect"] is True
 
 
 # ----------------------------------------------------------------------------------------
@@ -1393,10 +1664,25 @@ def test_the_cli_demo_mode_reports_that_no_gaming_input_passed(tmp_path, monkeyp
         "--demos", "--bootstrap-reps", "10", "--json", str(out)])
     assert oi.main() == 0
     doc = json.loads(out.read_text())
-    assert doc["demo_summary"]["gaming_or_corruption_inputs_that_PASSED"] == []
+    summary = doc["demo_summary"]
+    assert summary["gaming_or_corruption_inputs_that_PASSED"] == []
     assert all(v > 0 for v in
-               doc["demo_summary"]["positive_controls_delta_c_at_tau_primary"].values())
+               summary["positive_controls_delta_c_at_tau_primary"].values())
+    # the naive dC above is not what any verdict read, so the summary must also show that no gaming
+    # input's GATED dC is positive and that every positive control cleared the bar on the gate
+    assert summary["gaming_or_corruption_inputs_whose_gate_reads_positive"] == []
+    assert all(v > 0 for v in
+               summary["positive_controls_delta_c_gate_at_tau_primary"].values())
+    assert set(summary["positive_controls_delta_c_gate_at_tau_primary"]) == {
+        n for n in oi.DEMOS if n.startswith("positive_control")}
     assert set(doc["demos"]) == set(oi.DEMOS)
+    # every figure a `must` string quotes names the bank it was measured on, so a synthetic-bank
+    # number cannot travel inside a real-bank report unlabelled (the drift a review found between
+    # this code's DEMOS text and the committed demos report)
+    for name in ("positive_control_bucketed_head_32",
+                 "bucketed_head_16_gain_is_all_abstention"):
+        must = doc["demos"][name]["must"]
+        assert "make_pairs" in must and "by_tau" in must, name
 
 
 def test_the_cli_refuses_a_malformed_cell_spec(tmp_path, monkeypatch):
@@ -1461,10 +1747,36 @@ def test_the_tau_checks_carry_no_independent_p_claim(tmp_path, monkeypatch):
     assert sc["all_nonzero_signs_agree"] is True
 
 
+def _sc(*gated, naive=None):
+    taus = ("0.1", "0.05", "0.15")
+    naive = naive if naive is not None else gated
+    return oi.sign_consistency({t: {"delta_c_gate": g, "delta_c": n}
+                                for t, g, n in zip(taus, gated, naive)})
+
+
 def test_sign_consistency_flags_a_direction_that_flips_with_tau():
-    disagree = oi.sign_consistency({"0.1": {"delta_c": 0.03}, "0.05": {"delta_c": -0.01},
-                                    "0.15": {"delta_c": 0.02}})
-    assert disagree["all_nonzero_signs_agree"] is False
-    agree = oi.sign_consistency({"0.1": {"delta_c": 0.03}, "0.05": {"delta_c": 0.0},
-                                 "0.15": {"delta_c": 0.02}})
-    assert agree["all_nonzero_signs_agree"] is True     # an exact zero is not a disagreement
+    assert _sc(0.03, -0.01, 0.02)["all_nonzero_signs_agree"] is False
+    # an exact zero is not a disagreement
+    assert _sc(0.03, 0.0, 0.02)["all_nonzero_signs_agree"] is True
+
+
+def test_sign_consistency_takes_its_signs_from_the_gated_statistic(cell):
+    """The same one-site-not-its-sibling slip as the REGRESSED branch, in the block a reader uses
+    to decide whether a direction is robust. An arm whose gain is all abstention credit reads +1 at
+    every tau on the naive dC while the gate reads it NEGATIVE, so a naive sign-consistency block
+    would report a consistent advancement in the direction the instrument rejected."""
+    sc = _sc(-0.02, -0.03, -0.01, naive=(0.04, 0.05, 0.09))
+    assert sc["signs_by_tau"] == {"0.1": -1, "0.05": -1, "0.15": -1}
+    assert sc["signs_by_tau_naive_delta_c_not_gated"] == {"0.1": 1, "0.05": 1, "0.15": 1}
+    assert sc["primary_sign"] == -1
+    assert sc["all_nonzero_signs_agree"] is True
+    assert sc["gated_and_naive_signs_agree_at_every_tau"] is False
+    assert "delta_c_gate" in sc["note"]
+    # and that arm is a real fixture, not a hypothetical: the 16-bucket grid is exactly this shape
+    rows, keys = cell
+    arm = demo(cell, "bucketed_head_16_gain_is_all_abstention")
+    live = oi.sign_consistency({str(t): oi.compare(rows, arm, keys, t, bootstrap_reps=10)
+                                for t in (oi.TAU_PRIMARY, *oi.TAU_CHECKS)})
+    assert live["signs_by_tau_naive_delta_c_not_gated"] == {"0.1": 1, "0.05": 1, "0.15": 1}
+    assert live["primary_sign"] == -1
+    assert live["gated_and_naive_signs_agree_at_every_tau"] is False

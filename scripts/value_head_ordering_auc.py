@@ -26,9 +26,13 @@ over pairs eligible at tau. This is the tie-aware AUC of head-gap against the si
 
     HEAD-SIDE TIES SCORE 0.5 AND ARE NEVER DROPPED. That rule is load-bearing, not tidiness.
     A SATURATING recalibration -- tanh(50 v) -- is monotone-but-collapsing: it maps 197 of
-    the bank's 465 pairs to an exact head-side tie. Under the shipped rule it scores
-    dC = -0.0349 at tau=0.10. Under a drop-ties rule it scores +0.0554 and PASSES, having
-    "improved" by DELETING the pairs it broke. The gate would then be gameable by a
+    the bank's 465 pairs to an exact head-side tie. Under the shipped rule its naive dC is
+    -0.0349 at tau=0.10 on those banked pairs, and the statistic the verdict reads -- with the
+    half credit withdrawn from the ties it manufactured on pairs the baseline got wrong -- is
+    -0.0969 at p < 1e-4, i.e. REGRESSED. (Reading the naive pair in that branch left this demo,
+    the flagship laundering input, at UNDERPOWERED_NO_VERDICT on its naive p of 0.21: one more
+    consequence of the round-3 defect below.) Under a drop-ties rule it scores +0.0554 and
+    PASSES, having "improved" by DELETING the pairs it broke. The gate would then be gameable by a
     one-line output transform -- the same class of defect it was built to close. There is no
     `--drop-ties` flag in this tool on purpose; `tests/test_value_head_ordering_auc.py`
     computes the drop-ties number to prove the rule is what stops the laundering.
@@ -38,18 +42,29 @@ over pairs eligible at tau. This is the tie-aware AUC of head-gap against the si
     for abstaining: measured +0.1357 (p = 5.8e-11, 35 manufactured ties) on the banked pairs
     by the review that found it, with zero orderings improved. So advancement must ALSO survive
     WITHDRAWING THE HALF CREDIT FROM TIES THE ARM MANUFACTURED ON PAIRS THE BASELINE ALREADY GOT
-    WRONG (`delta_c_abstention_gain_withdrawn`), and the PASS branch reads the worse of the two.
-    That withdraws the abstention gain and nothing else: the attack is paid exactly 0.0000, while
-    a tie on a pair the baseline got RIGHT keeps its honest half-loss instead of being charged a
-    full wrong. What makes that safe is an invariant rather than a tolerance: a manufactured tie
-    contributes 0 where the baseline was wrong and -0.5 where it was right, so no set of new ties
-    can ever RAISE the gated statistic. The first version charged every new tie, and a review
-    measured the collateral; reproduced here with the shipped `*bucketed_head_*` fixtures, a
-    32-bucket arm whose reordering is real is CONVICTED by the blunt rule at tau=0.05 (+0.0164,
-    below the 0.02 threshold) and passes under this one (+0.0382). The harsher number is still
-    reported as `delta_c_all_new_ties_scored_wrong`, so the judgement stays visible with its
-    numbers. Aiming the attack needs the labels, but "the attacker would need the labels" is not
-    a property of the statistic.
+    WRONG (`delta_c_abstention_gain_withdrawn`), and EVERY VERDICT BRANCH -- not just PASS --
+    reads the worse of the two. Wiring it into PASS alone was a round-3 blocking defect and the
+    reason that is spelled out here: abstention credit RAISES the naive dC, so an
+    ordering-corrupted head could buy its way OUT of a conviction with the same transform the
+    guard exists to neutralise (see the `compare` verdict block for the measured escape).
+    Withdrawal takes the abstention gain and nothing else: the attack is paid exactly 0.0000,
+    while a tie on a pair the baseline got RIGHT keeps its honest half-loss instead of being
+    charged a full wrong. What makes that safe is a PROVED IDENTITY rather than a tolerance -- for
+    a cell that manufactures a tie set S and changes no ordering,
+
+        delta_c_gate = -0.5 * |S intersect {pairs the baseline got RIGHT}| / n_eligible  <= 0
+
+    with equality to 0 exactly when S touches no pair the baseline got right. So no tie set of
+    any SIZE or SELECTIVITY can raise the gated statistic, with or without label knowledge; the
+    label-aimed attack is the equality case, not a case that happened to be checked. The first
+    version charged every new tie, and a review measured the collateral; reproduced here with the
+    shipped `*bucketed_head_*` fixtures, a 32-bucket arm whose reordering is real is CONVICTED by
+    the blunt rule at tau=0.05 (+0.0164, below the 0.02 threshold) and passes under this one
+    (+0.0382) -- both figures on the SYNTHETIC `make_pairs` bank the test suite pins them
+    against, not on the 465-pair bank. The harsher number is still reported as
+    `delta_c_all_new_ties_scored_wrong`, so the judgement stays visible with its numbers. Aiming
+    the attack needs the labels, but "the attacker would need the labels" is not a property of
+    the statistic.
 
     PAIRS WITH true_gap == 0 ARE EXCLUDED, NEVER SCORED (95 of the banked 465). There is no
     ordering to be right about, so counting them as failures would penalise a perfect head
@@ -174,15 +189,23 @@ VERDICTS = (
                                  # winner's-curse inflated. NOT an advancement -- the
                                  # programme's own rule is that a result moving in the
                                  # hoped-for direction triggers re-measurement, not reporting.
-    "REGRESSED",                 # dC <= -ADVANCE_DELTA_C and exact p < ALPHA
+    "REGRESSED",                 # dC_gate <= -ADVANCE_DELTA_C and the GATED p < ALPHA. The
+                                 # gated pair, not the naive one: abstention credit raises naive
+                                 # dC, so reading the naive pair here let a corrupted head buy
+                                 # out of its conviction (round-3 blocking defect).
     "NO_ADVANCE",                # powered for the target and no significant gain
     "NO_ADVANCE_INVARIANT",      # zero orderings changed: dC is exactly 0 by construction
     "UNDERPOWERED_NO_VERDICT",   # achieved MDE > target: the gate refuses to read
 )
-# The power rule is DELIBERATELY ASYMMETRIC, and the asymmetry is the conservative direction:
+# The POWER rule is DELIBERATELY ASYMMETRIC, and the asymmetry is the conservative direction:
 # certifying an advancement requires power for the preregistered target, while a significant
 # REGRESSION is allowed to stand because it advances nothing. An underpowered rejection risks
 # an inflated magnitude, not a wrong sign beyond alpha.
+# The STATISTIC, by contrast, is NOT asymmetric: PASS and REGRESSED both read (delta_c_gate,
+# p_gate). An earlier revision made the statistic asymmetric too -- REGRESSED on the naive pair,
+# reasoning that convicting on the harsher statistic is a bias in the wrong direction -- and that
+# was backwards, because the guard does not only lower dC: it REMOVES A GAIN THE ARM DID NOT
+# EARN, and that gain is available in the escape direction as well.
 
 
 # ----------------------------------------------------------------------------------------
@@ -609,19 +632,34 @@ def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
     # abstention and its REORDERING is -0.0213. OI-1 measures ordering, so it reads negative.
     # That is the instrument working, not collateral damage.
     #
-    # What makes the narrowing safe is not the size of any of those numbers but an invariant:
-    # under this rule a manufactured tie can never RAISE the gated statistic. On a pair the
-    # baseline got wrong it is neutralised to the baseline's own 0.0 (contributing 0), and on a
-    # pair the baseline got right it keeps its honest -0.5. So no set of new ties buys
-    # advancement, which is the whole job -- pinned by
+    # What makes the narrowing safe is not the size of any of those numbers but an IDENTITY, and
+    # it is stronger than the narrow claim the guard was first defended with. Take any cell that
+    # manufactures a tie set S and changes no ordering. Each k in S contributes 0 to the gated
+    # statistic where the baseline was WRONG (withdrawal neutralises it to the baseline's own 0.0)
+    # and -0.5 where the baseline was RIGHT (it keeps its honest half-loss), so
+    #
+    #     delta_c_gate = -0.5 * |S intersect {baseline RIGHT}| / n_eligible   <= 0
+    #
+    # exactly, for EVERY S -- any size, any selectivity, aimed with the labels or drawn at random.
+    # The label-aimed attack is the equality case (S sits entirely on baseline-wrong pairs, so the
+    # gate reads exactly 0.0000), not a case that happened to be tried. This is a proof about the
+    # rule, not an empirical result about the demos: it is pinned as an exact equality over random
+    # tie sets by `test_no_tie_set_of_any_size_or_selectivity_can_raise_the_gated_statistic`, and
+    # per pair across every demo at three taus by
     # `test_no_manufactured_tie_can_ever_raise_the_gated_statistic`.
     #
     # The honest caveat on the other side: IF the crate's sibling tie-break is uniformly random
     # (an OPEN ITEM in the caveats block), then knowing-when-you-do-not-know has real DECISION
     # value -- 0.5 beats 0 -- it is simply not ordering, and it belongs to a different instrument
-    # than this one. `new_tie_selectivity` is reported so the two cases are distinguishable by
-    # eye: the label-aimed attack ties on wrong pairs 100% of the time against a base error rate
-    # of ~27%, while a bucketed head lands in between.
+    # than this one. `new_tie_selectivity` is reported for that discussion, but it is NOT a
+    # detector and the earlier claim that it makes the two cases "distinguishable by eye" was
+    # withdrawn as false: a legitimate 32-bucket head reads selectivity 1.00 -- identical to the
+    # label-aimed attack -- on the banked 465 pairs at tau=0.10 and on the synthetic bank at
+    # tau=0.15, because a coarse grid ties wherever the head was near-indifferent and that is
+    # where it was also wrong. Only the PAIR (selectivity, delta_c_gate) separates them: both read
+    # 1.00, and the attack's gate is 0.0000 while the 32-bucket arm's is still +0.0775 banked.
+    # The gate never reads selectivity; it reads delta_c_gate, which is what the identity above
+    # bounds.
     wrong_tie_keys = {k for k, s in zip(sel, base) if k in new_ties_keys and s == 0.0}
     arm_adv = [0.0 if k in wrong_tie_keys else s for k, s in zip(sel, arm)]
     delta_adv = concordance(arm_adv) - c_base
@@ -640,11 +678,43 @@ def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
     else:
         delta_gate, p_gate = delta, p_exact
 
+    # EVERY BRANCH BELOW READS (delta_gate, p_gate). The previous revision wired the guard into
+    # the PASS branch only and left REGRESSED reading (delta, p_exact), which an independent
+    # review broke: abstention credit RAISES the naive dC and DILUTES the naive sign-flip p, so an
+    # ordering-corrupted head escapes its conviction using the exact transform the guard exists to
+    # neutralise. Measured on the shipped path, `ordering_corrupted_15pct` plus abstentions on
+    # pairs BOTH cells got wrong (which leave delta_c_gate bit-identical, since the withdrawal
+    # cancels them exactly):
+    #
+    #   banked 465 pairs, 129 eligible at tau=0.10: naive dC -0.0775 at p 0.0414 -> REGRESSED.
+    #     The review demonstrated the escape at 10 abstentions (7.8% of the eligible set: naive dC
+    #     -0.0388 at p 0.3454). Re-derived here on the same bank, the escape actually opens at TWO
+    #     (1.6%, p 0.0414 -> 0.0599), and 20 (15.5%) take the naive dC to exactly +0.0000 -- at
+    #     every one of those steps delta_c_gate is unmoved at -0.0775 and p_gate at 0.0414, so the
+    #     pre-fix verdict was UNDERPOWERED_NO_VERDICT and the shipped one is REGRESSED throughout.
+    #   synthetic `make_pairs` bank, 164 eligible: naive dC -0.0915 at p 0.0015. 12 abstentions
+    #     (7.3%) take the naive p to 0.0822 -- above alpha -- and 24 take the naive dC to -0.0183,
+    #     above -target. Both conjuncts are escapable; delta_c_gate stays -0.0915 at p 0.0015
+    #     throughout, so the gated pair convicts at every step.
+    #
+    # Two tests pin the two escape routes SEPARATELY (one broken conjunct each, so neither
+    # short-circuits the other):
+    # `test_an_abstaining_corrupted_head_cannot_dilute_its_way_out_of_regressed` (the p conjunct,
+    # through the shipped `ordering_corrupted_15pct` fixture) and
+    # `test_an_abstaining_corrupted_head_cannot_lift_naive_delta_out_of_regressed` (the dC
+    # conjunct, on a bank powered hard enough that the naive p stays significant).
+    #
+    # `powered` and `mde` are deliberately still computed from the NAIVE discordance set. Checked
+    # for direction rather than assumed: withdrawal turns wrong-pair ties from discordances into
+    # concordances, so the gated set is a SUBSET and its MDE is never larger -- naive `powered` is
+    # therefore False at least as often, which makes PASS harder and pushes the fallthrough to
+    # UNDERPOWERED_NO_VERDICT rather than NO_ADVANCE. Both are the conservative direction at both
+    # use sites, so this branch keeps the naive power reading.
     if not diffs:
         verdict = "NO_ADVANCE_INVARIANT"
     elif delta_gate >= target and p_gate < ALPHA:
         verdict = "PASS" if powered else "PASS_PENDING_REMEASURE"
-    elif delta <= -target and p_exact < ALPHA:
+    elif delta_gate <= -target and p_gate < ALPHA:
         verdict = "REGRESSED"
     elif powered:
         verdict = "NO_ADVANCE"
@@ -663,19 +733,24 @@ def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
         "c_baseline_ci95_descriptive_only": list(wilson(sum(base), n)),
         "c_arm_ci95_descriptive_only": list(wilson(sum(arm), n)),
         "delta_c": delta,
-        # The abstention guard. `delta_c_gate`/`p_gate` are the pair the PASS branch reads (the
-        # REGRESSED branch reads the naive dC on purpose -- convicting on the harsher statistic
-        # would be a bias in the wrong direction).
+        # The abstention guard. `delta_c_gate`/`p_gate` are the pair EVERY verdict branch reads,
+        # in both directions. `delta_c` and `exact_signflip_p_two_sided` are reported for
+        # comparison and are read by NO branch: an arm that manufactures ties has a naive dC
+        # inflated by exactly the abstention credit, which is a gain in the PASS direction and an
+        # escape in the REGRESSED direction.
         "delta_c_abstention_gain_withdrawn": delta_adv,
         "delta_c_all_new_ties_scored_wrong": delta_blunt,
         "delta_c_gate": delta_gate,
         "exact_signflip_p_abstention_gain_withdrawn": p_adv,
         "p_gate": p_gate,
         "head_ties_created_on_pairs_baseline_got_wrong": len(wrong_tie_keys),
-        # Diagnostic, not gated: how selectively the arm's new ties landed on pairs the baseline
-        # got wrong, against the baseline's own error rate. A label-aimed abstention reads 1.0
-        # against a base error rate near 0.27; a bucketed head lands in between; an arm that ties
-        # for reasons unrelated to correctness reads about the base error rate.
+        # Diagnostic, NOT gated, and NOT a detector: how selectively the arm's new ties landed on
+        # pairs the baseline got wrong, against the baseline's own error rate. It does not separate
+        # an aimed attack from a legitimate arm -- the label-aimed abstention reads 1.00 and so
+        # does the 32-bucket positive control (banked, tau=0.10), because a coarse grid ties where
+        # the head was near-indifferent and that is where it was also wrong. Read it only WITH
+        # `delta_c_gate`, which is the pair that does separate them: 1.00 at gate 0.0000 is the
+        # attack, 1.00 at gate +0.0775 is an arm whose reordering survived the withdrawal.
         "new_tie_selectivity": (len(wrong_tie_keys) / new_ties) if new_ties else None,
         "baseline_error_rate_on_eligible": sum(1 for s in base if s == 0.0) / n,
         "head_ties_baseline": ties_base,
@@ -697,8 +772,15 @@ def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
         "mde_delta_c_at_80pct_power": mde,
         "powered_for_target": powered,
         # Whether the bank was big enough for the effect it actually saw, which is a different
-        # question from whether it was big enough for the preregistered target.
-        "powered_for_observed_effect": bool(diffs) and math.isfinite(mde) and abs(delta) >= mde,
+        # question from whether it was big enough for the preregistered target. Taken on the GATED
+        # effect, because that is the effect this instrument reads: on the naive dC the banked
+        # abstention attack reported True off +0.1357 while the effect the gate saw was 0.0000,
+        # which is not above any MDE. Same one-site-not-its-sibling slip as the REGRESSED branch,
+        # found by the sweep over every read of `delta` rather than reported separately.
+        "powered_for_observed_effect": (
+            bool(diffs) and math.isfinite(mde) and abs(delta_gate) >= mde),
+        "powered_for_observed_naive_effect": (
+            bool(diffs) and math.isfinite(mde) and abs(delta) >= mde),
         "target_delta_c": target,
         "required_n_eligible_for_target": (
             required_n_eligible(target, len(diffs) / n, mean_swing) if diffs else None),
@@ -812,7 +894,9 @@ DEMOS: dict[str, tuple[Callable, str, str]] = {
     "ordering_corrupted_15pct": (
         _corrupt(0.15),
         "ordering deliberately corrupted: 15% of pairs have their two head values swapped",
-        "dC clearly negative"),
+        "delta_c_gate clearly negative, and REGRESSED once the bank can see it -- and it must STAY "
+        "REGRESSED when abstentions are bolted on, which is the escape the round-3 review found "
+        "when only the PASS branch read the gated pair"),
     "ordering_corrupted_25pct": (
         _corrupt(0.25),
         "ordering deliberately corrupted at 25%",
@@ -831,17 +915,25 @@ DEMOS: dict[str, tuple[Callable, str, str]] = {
         "POSITIVE CONTROL, BUCKETED: the same real gain emitted on a 32-level grid, so it "
         "manufactures head-side ties without abstaining -- the legitimate arm the abstention "
         "guard must not convict",
-        "dC positive AND delta_c_gate still clearly positive (+0.1402 -> +0.0915 at tau=0.10): "
-        "its reordering is real, so withdrawing the abstention credit leaves a gain. The blunt "
-        "rule reads +0.0823 here and +0.0164 at tau=0.05, i.e. it convicts this arm"),
+        "dC positive AND delta_c_gate still clearly positive: its reordering is real, so "
+        "withdrawing the abstention credit leaves a gain, and the blunt rule convicts it. EVERY "
+        "FIGURE HERE IS LABELLED WITH ITS BANK, because this text is emitted into whichever "
+        "report is generated: on the SYNTHETIC make_pairs bank the test suite pins it against, "
+        "+0.1402 -> +0.0915 at tau=0.10 (blunt +0.0823; blunt +0.0164 vs gate +0.0382 at "
+        "tau=0.05, i.e. the blunt rule convicts an arm whose reordering is real). The bank "
+        "actually scored in this report is in `by_tau` below -- read it there, not here"),
     "bucketed_head_16_gain_is_all_abstention": (
         _bucketed_blend(0.15, 16),
         "BUCKETED at 16 levels, and NOT a positive control at the gate: coarse enough that its "
         "whole naive gain is abstention credit rather than reordering",
-        "dC positive (+0.0579) but delta_c_gate NEGATIVE (-0.0213) at tau=0.10, and that is "
-        "correct: 26 of its 51 new ties sit on pairs the baseline got wrong, worth +0.0793 of "
-        "abstention credit against a +0.0579 naive gain, so its whole gain is abstention and its "
-        "reordering is negative. The blunt rule reads -0.0976, over four times the true shortfall"),
+        "dC positive but delta_c_gate NEGATIVE, and that is correct: its whole naive gain is "
+        "abstention credit, so its reordering is negative and OI-1 measures ordering. Since the "
+        "gated pair is what every verdict branch reads, a coarse grid this far past the line is "
+        "convicted (REGRESSED) rather than left unread. FIGURES LABELLED WITH THEIR BANK: on the "
+        "SYNTHETIC make_pairs bank, +0.0579 naive vs -0.0213 gated at tau=0.10, with 26 of 51 new "
+        "ties on pairs the baseline got wrong (worth +0.0793 of credit against a +0.0579 gain); "
+        "the blunt rule reads -0.0976, over four times the true shortfall. The bank scored in "
+        "this report is in `by_tau` below"),
 }
 
 
@@ -951,9 +1043,13 @@ def provenance(path: Path) -> dict:
 def _fmt(row: dict) -> str:
     mde = row["mde_delta_c_at_80pct_power"]
     half = row["discordant_half_swings_tie_transitions"]
+    # When the guard bites, the verdict is read off (delta_c_gate, p_gate) in BOTH directions, so
+    # the line prints that p too -- printing only the naive p next to a gated verdict is how a
+    # reader concludes the gate agreed with a number it never looked at.
     adv = ("" if row["delta_c_gate"] == row["delta_c"]
-           else f" (gate reads {row['delta_c_gate']:+.4f} with the abstention credit withdrawn "
-                f"from {row['head_ties_created_on_pairs_baseline_got_wrong']} tie(s) the arm "
+           else f" (gate reads {row['delta_c_gate']:+.4f} at p={row['p_gate']:.4f} with the "
+                f"abstention credit withdrawn from "
+                f"{row['head_ties_created_on_pairs_baseline_got_wrong']} tie(s) the arm "
                 f"made on pairs the baseline got wrong)")
     return (f"  tau={row['tau']:<5.2f} n={row['n_eligible']:<4d} C {row['c_baseline']:.4f} -> "
             f"{row['c_arm']:.4f}  dC {row['delta_c']:+.4f}{adv}  "
@@ -966,15 +1062,28 @@ def _fmt(row: dict) -> str:
 def sign_consistency(by_tau: Mapping[str, Mapping[str, Any]]) -> dict:
     """tau=0.05 and 0.15 are SIGN-CONSISTENCY CHECKS with no independent p claimed. Three
     thresholds tested as three hypotheses would be three bites at the same 465 pairs; what
-    they are for is whether the direction survives moving the threshold."""
-    signs = {t: (0 if r["delta_c"] == 0 else (1 if r["delta_c"] > 0 else -1))
-             for t, r in by_tau.items()}
+    they are for is whether the direction survives moving the threshold.
+
+    The signs are taken on `delta_c_gate`, the quantity the verdict reads, and the naive signs are
+    reported alongside rather than instead. Reading only the naive dC here was the same
+    one-site-not-its-sibling slip as the REGRESSED branch: an arm whose gain is abstention credit
+    reads +1 at every tau on the naive statistic while the gate reads it negative, so the
+    consistency block would have agreed with a direction the instrument rejected.
+    """
+    def sign(x: float) -> int:
+        return 0 if x == 0 else (1 if x > 0 else -1)
+
+    signs = {t: sign(r["delta_c_gate"]) for t, r in by_tau.items()}
+    naive = {t: sign(r["delta_c"]) for t, r in by_tau.items()}
     nonzero = [s for s in signs.values() if s != 0]
     return {
         "signs_by_tau": signs,
+        "signs_by_tau_naive_delta_c_not_gated": naive,
         "primary_sign": signs[str(TAU_PRIMARY)],
         "all_nonzero_signs_agree": len(set(nonzero)) <= 1,
-        "note": "tau checks carry NO independent p; only tau=%.2f is the test." % TAU_PRIMARY,
+        "gated_and_naive_signs_agree_at_every_tau": signs == naive,
+        "note": ("tau checks carry NO independent p; only tau=%.2f is the test. Signs are on "
+                 "delta_c_gate, the quantity every verdict branch reads." % TAU_PRIMARY),
     }
 
 
@@ -1127,6 +1236,15 @@ def main() -> int:
             "positive_controls_delta_c_at_tau_primary": {
                 n: demo_out[n]["by_tau"][str(TAU_PRIMARY)]["delta_c"]
                 for n in demo_out if n.startswith("positive_control")},
+            # The naive dC above is not what the verdict read, so the gated pair is summarised
+            # too: a positive control that only cleared the bar on the naive statistic would be a
+            # finding about this instrument, not a working control.
+            "positive_controls_delta_c_gate_at_tau_primary": {
+                n: demo_out[n]["by_tau"][str(TAU_PRIMARY)]["delta_c_gate"]
+                for n in demo_out if n.startswith("positive_control")},
+            "gaming_or_corruption_inputs_whose_gate_reads_positive": [
+                n for n in gaming
+                if demo_out[n]["by_tau"][str(TAU_PRIMARY)]["delta_c_gate"] > 0],
         }
         print(f"\ngaming/corruption inputs that PASSED: "
               f"{result['demo_summary']['gaming_or_corruption_inputs_that_PASSED'] or 'none'}")
