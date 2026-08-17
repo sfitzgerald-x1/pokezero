@@ -4385,7 +4385,12 @@ def cross_arm_foulplay_contention(
             "coverage to strata too thin for the threshold to resolve anything on them (run "
             "longer, or re-derive the threshold), while "
             "`cross_arm_compared_strata_cover_too_little` means coverage is short even counting "
-            "those as covered -- the two arms visited different schedules. Neither is contention."
+            "those as covered -- the two arms visited different schedules. Neither is contention. "
+            "BOTH CAN FIRE, and then neither reason is a ranking: the first is raised whenever "
+            "anything at all was excluded, so read "
+            "`cross_arm_share_excluded_for_resolution` against "
+            "`cross_arm_compared_share` to see which cause is the material one -- an exclusion "
+            "share far below the shortfall means the coverage gap is what has to be fixed."
         ),
     }
     if not admissible:

@@ -1530,6 +1530,54 @@ class ExclusionKeepsItsOwnDiagnosisTest(unittest.TestCase):
         self.assertIn("cross_arm_compared_strata_cover_too_little", note)
         self.assertIn("different remedies", note)
         self.assertIn("Neither is contention", note)
+        # AND THE BOTH-FIRE CASE, where two remedies with no ranking is the misleading reading.
+        # The docstring was corrected to say the resolution reason is not a causal claim; this is
+        # the copy that TRAVELS, so it has to say it too, and it has to name the field that does
+        # rank them. Without this the artifact is less careful than the module it came from.
+        self.assertIn("BOTH CAN FIRE", note)
+        self.assertIn("neither reason is a ranking", note)
+        self.assertIn("cross_arm_share_excluded_for_resolution", note)
+
+    def test_the_both_fire_case_is_readable_from_the_payload_alone(self) -> None:
+        """The ranking the reasons deliberately do not give, recoverable from the numbers.
+
+        A 0.5%-of-arm exclusion alongside a 19.5% coverage gap fires BOTH reasons, and the reasons
+        alone would have a reader weigh a 5-decision stratum equally against a 195-decision one.
+        The two share fields rank them, which is why `verdict_note` points at them.
+
+        The minor stratum is 5 and not 1 on purpose: below
+        `FOULPLAY_THINK_MIN_STRATUM_DECISIONS` the within-arm gate diverts it to `thin_strata` and
+        it never reaches this layer's exclusion at all, so a 1-decision fixture would pin the
+        wrong path. That is N2 in the review, and this is where the two exclusions are visibly
+        different mechanisms.
+        """
+        search = think(
+            decisions=1000,
+            strata={
+                "2x1000ms": (380_000.0, 800),
+                "8x500ms": (190_000.0, 5),
+                "16x250ms": (95_000.0, 195),
+            },
+        )
+        raw = think(
+            decisions=1000,
+            strata={"2x1000ms": (380_000.0, 995), "8x500ms": (190_000.0, 5)},
+        )
+        result = verdict([search], [raw])
+        self.assertEqual(result["status"], "refused")
+        self.assertIn(self.RESOLUTION, result["refusal_reasons"])
+        self.assertIn(self.COVERAGE, result["refusal_reasons"])
+        self.assertEqual(sorted(result["strata_excluded_for_resolution"]), ["8x500ms"])
+        excluded = result["cross_arm_share_excluded_for_resolution"]["search"]
+        compared = result["cross_arm_compared_share"]["search"]
+        self.assertAlmostEqual(excluded, 0.005, places=9)
+        self.assertAlmostEqual(compared, 0.8, places=9)
+        # The material cause is the coverage gap, and the payload says so by arithmetic: the
+        # exclusion accounts for ~3% of the shortfall, so the 195 decisions the lean arm never
+        # visited are what has to be fixed. Neither reason says that; these two numbers do.
+        shortfall = FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE - compared
+        self.assertAlmostEqual(shortfall, 0.15, places=9)
+        self.assertLess(excluded / shortfall, 0.05)
 
     def test_the_compared_share_numerator_is_the_actually_compared_set(self) -> None:
         """The dead band's other half: the share once counted a stratum the gate had refused.
