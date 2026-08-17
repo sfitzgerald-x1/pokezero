@@ -4296,18 +4296,25 @@ def cross_arm_foulplay_contention(
         covered = _decisions(per_stratum)
         excluded = _decisions(unresolvable)
         share = (covered / measured) if measured else 0.0
+        resolvable_share = ((covered + excluded) / measured) if measured else 0.0
         cross_arm_share[label] = share
         cross_arm_excluded_share[label] = (excluded / measured) if measured else 0.0
         # SUM CANNOT EXCEED THE ARM. A header whose `by_stratum` counts add up to more than its
         # own `iterations_measured_decisions` produced a share of 10.0 and passed every check.
-        if share > 1.0:
+        #
+        # CHECKED ON BOTH SUMS, and the second one is why: an impossible header whose EXCESS sits
+        # inside a stratum this layer excluded leaves `covered / measured` under 1.0 while
+        # `(covered + excluded) / measured` is over it. That still refused -- for resolution --
+        # so nothing was certified; but it refused with the wrong diagnosis, which is the defect
+        # this whole split exists to avoid. The defect is in the shard's own arithmetic, so it is
+        # named as that and takes precedence over both share reasons.
+        if share > 1.0 or resolvable_share > 1.0:
             refusals.append(f"{label}:stratum_counts_exceed_measured_decisions")
         elif share < FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE:
             if excluded:
                 refusals.append(
                     f"{label}:cross_arm_strata_excluded_for_resolution_cover_too_little"
                 )
-            resolvable_share = ((covered + excluded) / measured) if measured else 0.0
             if resolvable_share < FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE:
                 refusals.append(f"{label}:cross_arm_compared_strata_cover_too_little")
     admissible = admissible and not refusals

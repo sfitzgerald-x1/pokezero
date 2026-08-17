@@ -1427,6 +1427,45 @@ class ExclusionKeepsItsOwnDiagnosisTest(unittest.TestCase):
         self.assertIn(self.RESOLUTION, result["refusal_reasons"])
         self.assertNotIn(self.COVERAGE, result["refusal_reasons"])
 
+    def test_an_impossible_header_is_not_laundered_into_a_resolution_exclusion(self) -> None:
+        """The forged-header check has to see the EXCLUDED strata too.
+
+        `stratum_counts_exceed_measured_decisions` was computed from `covered / measured` alone.
+        Put the impossible excess inside a stratum this layer excludes and that ratio comes back
+        under 1.0: 90 compared and 10 excluded against a claimed 95 measured reads share 0.947 and
+        resolvable share 1.053. It still refused -- for resolution -- so nothing was certified,
+        but the reported cause was a thin denominator when the real cause is a shard whose own
+        arithmetic does not close. That is the same laundering the malformed-ratio check is
+        ordered first to prevent, one level up.
+        """
+        forged = think(
+            decisions=100,
+            strata={"2x1000ms": (380_000.0, 90), "8x500ms": (190_000.0, 10)},
+        )
+        forged["iterations_measured_decisions"] = 95
+        honest = think(
+            decisions=100,
+            strata={"2x1000ms": (380_000.0, 90), "8x500ms": (190_000.0, 10)},
+        )
+        result = verdict([forged], [honest])
+        self.assertEqual(result["status"], "refused")
+        self.assertIn(
+            "search:stratum_counts_exceed_measured_decisions", result["refusal_reasons"]
+        )
+        # And NOT the resolution reason, which is what it used to say: the excluded stratum is
+        # real, but it is not why this shard is inadmissible.
+        self.assertNotIn(self.RESOLUTION, result["refusal_reasons"])
+        self.assertNotIn(self.COVERAGE, result["refusal_reasons"])
+        # The two shares that straddle 1.0, so the fixture is pinned where the two sums differ.
+        self.assertLess(result["cross_arm_compared_share"]["search"], 1.0)
+        self.assertGreater(
+            result["cross_arm_compared_share"]["search"]
+            + result["cross_arm_share_excluded_for_resolution"]["search"],
+            1.0,
+        )
+        # The honest arm is unaffected and reports the truth about itself.
+        self.assertAlmostEqual(result["cross_arm_compared_share"]["raw"], 0.9, places=9)
+
     def test_the_verdict_note_explains_the_two_reasons_in_words(self) -> None:
         """A reason key is only legible to someone who has read this file.
 
