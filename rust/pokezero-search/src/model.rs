@@ -630,7 +630,7 @@ fn multiply_batched_core<E: BatchLeafEval>(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{}",
         batch_size, rounds, model_evals
     );
-    Ok(multiply_report_json(
+    crate::tree::validated_report(multiply_report_json(
         &outcome,
         iterations,
         &cfg,
@@ -1307,7 +1307,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         collisions.traversals,
         collisions.leaf_repeats,
     );
-    Ok(multiply_report_json(
+    crate::tree::validated_report(multiply_report_json(
         &outcome,
         completed,
         &cfg,

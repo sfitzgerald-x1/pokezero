@@ -5883,6 +5883,23 @@ fn divergence_shape(branch: &[Instruction], tail: &[Instruction]) -> Option<None
 /// total on its input: every path below returns a shape, and none of them has to re-check
 /// emptiness.
 fn divergence_shape_of_nonempty(branch: &[Instruction], tail: &[Instruction]) -> NoneMatchedShape {
+    // CLASSIFIED AND LEFT AS A DEBUG ASSERT by the release-guard audit (the rule this crate
+    // states at `:403-409`: a `debug_assert!` does not exist in the shipped wheel, so anything
+    // load-bearing has to be a real check). This one is not load-bearing, on three grounds that
+    // are each checkable rather than argued:
+    //
+    // 1. One caller (`grep -n divergence_shape_of_nonempty` -> the definition and
+    //    `divergence_shape:5877`), and that caller's `branch.is_empty()` guard is the line
+    //    immediately above the call. The contract is enforced by control flow, not by hope.
+    // 2. The release consequence of a violation is bounded and non-numeric: on an empty branch
+    //    the first arm below decides on `0 != tail.len()`, so the worst case is a candidate
+    //    labelled `shape_length`/`shape_empty` instead of the other. It cannot produce a
+    //    non-finite value, cannot reach an artifact number, and cannot change an accept/reject
+    //    decision -- `sleeptalk_refusal_is_unsafe` answers `NoneMatched(_) => true` for every
+    //    shape (see `divergence_shape`'s LABEL ONLY note).
+    // 3. The load-bearing checks in this file are already plain `assert!`s for exactly the
+    //    reason above (`:410`, `assert_subcase_vocabulary`), so the distinction here is
+    //    deliberate rather than an oversight.
     debug_assert!(
         !branch.is_empty(),
         "the no-op guard in `divergence_shape` is the only caller's contract"

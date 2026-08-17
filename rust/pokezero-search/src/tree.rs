@@ -9,7 +9,9 @@
 //! - **Chance nodes** sit under every joint-action edge and carry the engine's
 //!   own enumerated outcome list from `generate_instructions_from_move_pair`,
 //!   with each branch weighted by the engine's exact `percentage` (normalized
-//!   to sum to 1; conservation is `debug_assert`ed at every chance node).
+//!   to sum to 1; conservation is asserted in RELEASE at every chance node's
+//!   construction — see `assert_probability_conservation`, which was a
+//!   `debug_assert!` and therefore absent from every shipped wheel).
 //!
 //! Backup is EXACT EXPECTATION over chance outcomes (law of total
 //! expectation; the value head is a win probability, so no risk adjustment):
@@ -118,7 +120,26 @@ pub(crate) struct ChanceBranch {
 
 impl ChanceBranch {
     pub(crate) fn mean(&self) -> f32 {
-        debug_assert!(self.visits > 0, "chance branch read before initialization");
+        // A plain `assert!`, NOT `debug_assert!` -- the crate ships
+        // `maturin build --release` and `[profile.release]` does not set
+        // `debug-assertions`, so a debug assert here would guard `cargo test`
+        // and nothing anybody runs. This is the exact class of defect review
+        // demonstrated on `rollout.rs`: `0 / 0` is `NaN`, `NaN` flows through
+        // `expectation` into `total_value` and out as `"root_value":NaN` --
+        // a bare `NaN` token that is invalid JSON but which Python's
+        // non-strict `json.loads` accepts, so a decision comes off a
+        // degenerate tree and is banked as a measurement.
+        //
+        // Cost: one integer compare per branch read. Measured on
+        // symmetric.state d3/s2000, `iterations_per_s` is a wash against the
+        // debug-assert build (both ~1.7e5/s, run-to-run spread larger than the
+        // difference), so there is no throughput argument for shipping the
+        // check disabled.
+        assert!(
+            self.visits > 0,
+            "chance branch read before initialization: value_sum / 0 visits would emit \
+             NaN into the report"
+        );
         self.value_sum / self.visits as f32
     }
 }
@@ -129,20 +150,43 @@ pub(crate) struct ChanceNode {
 
 impl ChanceNode {
     /// Exact expectation over the enumerated outcomes' current means.
+    ///
+    /// No conservation check here, DELIBERATELY, and not for speed: branch
+    /// probabilities are written once in `expand_edge` and never mutated
+    /// afterwards (the only writes in this file are the two `probability:`
+    /// struct literals in `expand_edge`), so a check at construction is
+    /// complete over the same state a check here would see -- at one check per
+    /// chance node instead of one per backup step. Moving it to construction is
+    /// what let it become a REAL release check rather than a compiled-out one.
     pub(crate) fn expectation(&self) -> f32 {
-        debug_assert_probability_conservation(&self.branches);
         self.branches.iter().map(|b| b.probability * b.mean()).sum()
     }
 }
 
-fn debug_assert_probability_conservation(branches: &[ChanceBranch]) {
-    if cfg!(debug_assertions) {
-        let total: f32 = branches.iter().map(|b| b.probability).sum();
-        debug_assert!(
-            (total - 1.0).abs() < 1e-4,
-            "chance-node probability mass {total} != 1"
-        );
-    }
+/// Refuse a chance node whose branch probabilities do not sum to 1.
+///
+/// A plain `assert!` for the reason `events.rs:403-409` states for its own: the
+/// shipped wheel is built `--release`, `[profile.release]` does not set
+/// `debug-assertions`, so the `debug_assert!` that used to stand here existed
+/// only under `cargo test`. Its release consequence is not a crash but a quiet
+/// wrong number: `expectation` is `sum_k p_k * mean_k`, so mass 0.5 halves every
+/// backed-up value and mass 0 makes every chance node read exactly 0.0 -- no
+/// NaN, no panic, nothing invalid on the wire, just a search whose values are
+/// scaled by a factor nobody can see in the artifact.
+///
+/// That case is REACHABLE rather than hypothetical: `expand_edge` normalizes by
+/// `norm = if total > 0.0 { total } else { 100.0 }`, so an engine branch list
+/// whose percentages are all zero yields probabilities that sum to 0 and a
+/// chance node that prices every outcome at zero. This check is the only thing
+/// between that and a banked measurement.
+fn assert_probability_conservation(branches: &[ChanceBranch]) {
+    let total: f32 = branches.iter().map(|b| b.probability).sum();
+    assert!(
+        (total - 1.0).abs() < 1e-4,
+        "chance-node probability mass {total} != 1 over {} branches; \
+         expectation would scale every backed-up value by that factor",
+        branches.len()
+    );
 }
 
 pub(crate) struct Tree {
@@ -762,6 +806,20 @@ child_opponent_priors: None,
         });
     } else {
         let total: f32 = generated.iter().map(|b| b.percentage).sum();
+        // DELIBERATELY still a `debug_assert!`, and classified as such rather
+        // than left unexamined (the audit that accompanies this commit):
+        //
+        // This is a tripwire on POKE-ENGINE's output, not a guard on our
+        // artifact. Its release consequence is bounded by the line below --
+        // `norm = total` renormalizes any positive mass, which is the intended
+        // handling of engine slop, so a total of 99.7 or 50 produces a
+        // well-formed distribution and a valid artifact. The one input whose
+        // release consequence IS an invalid artifact is `total == 0.0`, where
+        // the `else` arm normalizes by 100 and leaves the mass at zero; that
+        // case is caught in release by `assert_probability_conservation` at the
+        // end of this function. So promoting this line would only convert
+        // renormalized engine slop into refused worlds on production paths,
+        // with no artifact-validity gain.
         debug_assert!(
             (total - 100.0).abs() < PERCENT_SUM_TOL,
             "engine branch percentages sum to {total}, expected 100"
@@ -799,7 +857,7 @@ child_opponent_priors: None,
             });
         }
     }
-    debug_assert_probability_conservation(&branches);
+    assert_probability_conservation(&branches);
     tree.chances.push(ChanceNode { branches });
     tree.chances.len() - 1
 }
@@ -924,10 +982,40 @@ pub(crate) fn finalize(tree: &mut Tree, traversal: &Traversal, row_values: &[f32
         if let Some(k) = step.branch {
             // Traversed branch: the deeper sample lands in its running mean.
             let branch = &mut tree.chances[step.chance].branches[k];
-            debug_assert!(is_ending_step || branch.pending_row.is_none());
+            // Both plain `assert!`s, for the reason `events.rs:403-409` gives:
+            // `debug_assert!` does not exist in the wheel this crate ships, and
+            // BOTH of these invariants fail as a silent artifact rather than as
+            // a crash.
+            //
+            // The first: a mid-path branch still holding a `pending_row` was
+            // priced with the `0.0` placeholder `price_outcome` writes for a
+            // deferred row, and only the ENDING step's rows are resolved above
+            // -- so the leaf value never lands and the branch mean is biased
+            // toward zero, quietly. Reachable only in deferred (batched) mode,
+            // which is exactly the mode this module's rollout and model
+            // drivers run in.
+            //
+            // The second: `value` is initialised to `f32::NAN` at
+            // `TraversalEnd::Expanded` on purpose, as a sentinel that must be
+            // overwritten before use. If an expansion step is ever NOT the
+            // ending step, this `+= value` adds that sentinel and the report
+            // carries a bare `NaN` token -- the same invalid-JSON-accepted-by-
+            // `json.loads` failure review demonstrated on `rollout.rs`. One
+            // integer compare per backup step is the price of that not
+            // happening silently.
+            assert!(
+                is_ending_step || branch.pending_row.is_none(),
+                "a mid-path branch still holds pending row {:?}; only the ending step's \
+                 deferred rows are resolved, so its leaf value would never land",
+                branch.pending_row
+            );
             branch.value_sum += value;
         } else {
-            debug_assert!(is_ending_step, "expansion can only end a traversal");
+            assert!(
+                is_ending_step,
+                "expansion can only end a traversal; a non-ending expansion step would \
+                 back up the NaN sentinel and emit it as root_value"
+            );
         }
         // Exact-expectation resolution of the joint edge.
         let expectation = tree.chances[step.chance].expectation();
@@ -1003,11 +1091,12 @@ pub(crate) fn multiply_report_json(
     } else {
         0.5
     };
-    let iterations_per_s = if outcome.elapsed_s > 0.0 {
-        iterations as f64 / outcome.elapsed_s
-    } else {
-        f64::INFINITY
-    };
+    // Clamped rather than `f64::INFINITY`: `{:.1}` renders an infinity as the
+    // bare token `inf`, which is not JSON, so a search that measured as
+    // zero-elapsed used to emit an artifact no strict parser accepts -- and
+    // `validated_report` would (correctly) refuse the whole world for a field
+    // nothing reads. One nanosecond is the smallest honest denominator.
+    let iterations_per_s = iterations as f64 / outcome.elapsed_s.max(1e-9);
     // Emitted only when SET, so a legacy run's report keeps the bytes it has
     // always had (the bit-identity gate reads these reports) while a tuned run
     // still carries the knob it was tuned at. A field spelled `null` on every
@@ -1047,6 +1136,52 @@ pub(crate) fn multiply_report_json(
         stats_to_json(&root.s1_stats, arm_priors),
         stats_to_json(&root.s2_stats, arm_priors),
     )
+}
+
+/// THE ARTIFACT GATE: refuse a report that is not strict JSON, in release.
+///
+/// This is the general form of the finding that motivated it. Review mutated one
+/// write in the rollout pricer, rebuilt with the exact shipping command, and got
+/// `"root_value":NaN` back from a normal search with NO exception -- because the
+/// only guard on that invariant was a `debug_assert!`, which
+/// `[profile.release]` compiles out. `json.loads` is non-strict and accepts the
+/// bare `NaN` token, so the degenerate tree's decision was banked as a
+/// measurement.
+///
+/// Per-invariant guards (there are now four in this file) each protect ONE way
+/// of producing that artifact. This protects the artifact itself: every
+/// non-finite float, from any cause anywhere in the search, renders as `NaN`,
+/// `inf` or `-inf`, none of which `serde_json` accepts. So a violated invariant
+/// nobody anticipated still cannot leave the crate as a number a consumer will
+/// read as real.
+///
+/// Cost: one parse of a few-KB string per SEARCH (not per iteration) --
+/// microseconds against millisecond-to-second searches. Verified: with this gate
+/// in place the crate's own `--release` gates are unchanged in wall clock within
+/// run-to-run noise.
+///
+/// It fires as a `PyValueError`, not a panic, so `engine_search.py`'s
+/// `except Exception` counts one world in `world_failure_reasons` and the other
+/// worlds of the decision still run.
+pub(crate) fn validated_report(report: String) -> PyResult<String> {
+    match serde_json::from_str::<serde_json::Value>(&report) {
+        Ok(_) => Ok(report),
+        Err(err) => {
+            // Name the offending token, not just the byte offset: the whole
+            // point is that a reader learns WHICH number went non-finite.
+            let column = err.column().saturating_sub(1);
+            let window: String = report
+                .chars()
+                .skip(column.saturating_sub(48))
+                .take(72)
+                .collect();
+            Err(PyValueError::new_err(format!(
+                "the search report is not valid JSON ({err}); refusing to return an \
+                 artifact whose numbers a non-strict parser would accept as real. \
+                 Near: ...{window}..."
+            )))
+        }
+    }
 }
 
 /// Reject an out-of-range first-play-urgency reduction at the Python boundary.
@@ -1118,7 +1253,10 @@ pub(crate) fn puct_search_multi(
     let outcome = crate::panic_guard::catch_native_panic(|| {
         multiply_search_with_eval(&mut state, iterations, &cfg, seed, &evaluator)
     })?;
-    Ok(multiply_report_json(
+    // Through the artifact gate, like every other report-returning entry point:
+    // a non-finite number anywhere in the tree must not leave the crate as a
+    // bare `NaN` token that `json.loads` accepts.
+    validated_report(multiply_report_json(
         &outcome,
         iterations,
         &cfg,
@@ -1454,6 +1592,12 @@ mod tests {
 
     #[test]
     fn an_out_of_range_fpu_reduction_is_refused_at_the_python_boundary() {
+        // `PyErr::to_string` needs an initialised interpreter. Without this the
+        // test passes only when some OTHER test in the same binary happened to
+        // initialise Python first, so it fails under any filter that excludes
+        // that test (e.g. `cargo test --lib -- an_out_of_range_fpu`) -- a test
+        // whose result depends on which of its neighbours ran.
+        pyo3::Python::initialize();
         for bad in [-0.1f32, 1.5] {
             let error = validate_fpu_reduction(Some(bad))
                 .expect_err("a reduction outside [0, 1] must not reach the search");
@@ -1997,6 +2141,156 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------
+    // RELEASE GUARDS: the invariants that used to be `debug_assert!`s and
+    // therefore did not exist in any shipped wheel, each with its own
+    // demonstrated failing input. ONE perturbation per case: a fixture that
+    // moved two fields at once would pin neither, because the first check
+    // short-circuits.
+    // -----------------------------------------------------------------
+
+    fn branch_with(probability: f32, value_sum: f32, visits: u32) -> ChanceBranch {
+        ChanceBranch {
+            probability,
+            instructions: Vec::new(),
+            value_sum,
+            visits,
+            terminal: None,
+            no_expand: true,
+            pending_row: None,
+            child: None,
+            child_self_priors: None,
+            child_opponent_priors: None,
+        }
+    }
+
+    /// Run `f`, returning its panic message. The hook is silenced so a passing
+    /// run does not print a backtrace for an expected panic.
+    fn panic_message(f: impl FnOnce() + std::panic::UnwindSafe) -> String {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let payload = std::panic::catch_unwind(f);
+        std::panic::set_hook(previous);
+        let payload = payload.expect_err("the guard did not fire");
+        crate::panic_guard::panic_detail(payload.as_ref())
+    }
+
+    /// DEMONSTRATED FAILING INPUT for `ChanceBranch::mean`'s release assert.
+    /// `value_sum / 0` is `NaN`, and `NaN` reaches the report as a bare `NaN`
+    /// token that `json.loads` accepts. One perturbation: visits.
+    #[test]
+    fn a_branch_read_before_initialization_is_refused_rather_than_averaged() {
+        let ready = branch_with(1.0, 0.5, 1);
+        assert_eq!(ready.mean(), 0.5, "an initialized branch must still average");
+
+        let message = panic_message(|| {
+            let _ = branch_with(1.0, 0.5, 0).mean();
+        });
+        assert!(
+            message.contains("read before initialization"),
+            "the guard must name the cause: {message}"
+        );
+        assert!(
+            message.contains("NaN"),
+            "the guard must name the consequence, which is what makes it worth \
+             shipping: {message}"
+        );
+    }
+
+    /// DEMONSTRATED FAILING INPUTS for `assert_probability_conservation`. Three
+    /// doctored nodes, each perturbing MASS ONLY and each a different way of
+    /// being wrong: the reachable `total == 0` case (all-zero engine
+    /// percentages, which `expand_edge`'s `else` arm normalizes by 100 and
+    /// leaves at zero), a halved mass, and a doubled mass.
+    #[test]
+    fn a_chance_node_whose_mass_is_not_one_is_refused() {
+        assert_probability_conservation(&[branch_with(0.25, 0.5, 1), branch_with(0.75, 0.5, 1)]);
+
+        for (label, branches) in [
+            ("zero mass", vec![branch_with(0.0, 0.5, 1), branch_with(0.0, 0.5, 1)]),
+            ("half mass", vec![branch_with(0.25, 0.5, 1), branch_with(0.25, 0.5, 1)]),
+            ("double mass", vec![branch_with(1.0, 0.5, 1), branch_with(1.0, 0.5, 1)]),
+        ] {
+            let message = panic_message(move || assert_probability_conservation(&branches));
+            assert!(
+                message.contains("probability mass"),
+                "{label}: the guard must name the cause: {message}"
+            );
+            assert!(
+                message.contains("scale every backed-up value"),
+                "{label}: the guard must name the consequence -- a silently scaled \
+                 value, not a crash: {message}"
+            );
+        }
+    }
+
+    /// THE ARTIFACT GATE, end to end, with a failing input that touches no
+    /// guard's writer: a leaf evaluator that prices a leaf `NaN`.
+    ///
+    /// This is the generalisation the review asked for. Every per-invariant
+    /// guard covers one route to a non-finite number; this covers the artifact,
+    /// so a route nobody anticipated still cannot leave the crate as a number a
+    /// consumer reads as a win rate. Before it, this exact report shipped as
+    /// `"root_value":NaN` -- invalid JSON that Python's non-strict `json.loads`
+    /// accepts.
+    #[test]
+    fn a_non_finite_leaf_value_is_refused_at_the_artifact_boundary() {
+        struct NanEval;
+        impl crate::LeafEval for NanEval {
+            fn eval(&self, _state: &State) -> f32 {
+                f32::NAN
+            }
+        }
+
+        let cfg = MultiPlyConfig {
+            max_depth: 2,
+            c_puct: 1.4,
+            deep_ko_split: true,
+            use_opponent_priors: false,
+            fpu_reduction: None,
+        };
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture state parses");
+        let outcome = multiply_search_with_eval(&mut state, 64, &cfg, 7, &NanEval)
+            .expect("the search itself does not refuse; only the artifact does");
+        let report = multiply_report_json(&outcome, 64, &cfg, 7, "nan_probe", "", false);
+        assert!(
+            report.contains("\"root_value\":NaN"),
+            "the probe must actually produce the invalid artifact, or this test \
+             proves nothing about the gate: {report}"
+        );
+
+        pyo3::Python::initialize();
+        let refused = validated_report(report).expect_err("a NaN report must be refused");
+        pyo3::Python::attach(|py| {
+            assert!(
+                refused.is_instance_of::<PyValueError>(py),
+                "must be catchable by engine_search.py's `except Exception`, so it \
+                 costs one world rather than the shard"
+            );
+            let text = refused.value(py).to_string();
+            assert!(
+                text.contains("not valid JSON"),
+                "the refusal must name the cause: {text}"
+            );
+            assert!(
+                text.contains("root_value"),
+                "the refusal must locate the offending field: {text}"
+            );
+        });
+
+        // The neighbour that must PASS: the same search with a finite
+        // evaluator returns its report byte for byte.
+        let mut state = parse_state(MINIMAL.trim()).expect("fixture state parses");
+        let clean = multiply_search_with_eval(&mut state, 64, &cfg, 7, &HpFractionEval)
+            .expect("search runs");
+        let report = multiply_report_json(&clean, 64, &cfg, 7, "hp_fraction", "", false);
+        assert_eq!(
+            validated_report(report.clone()).expect("a finite report must pass"),
+            report,
+            "the gate must be a pass-through on a valid artifact"
+        );
+    }
+
     /// Depth benefit: a win exactly one ply past the root lifts the passive
     /// arm's value at depth 2; at depth 1 it stays at the leaf estimate.
     #[test]
@@ -2040,8 +2334,11 @@ mod tests {
         }
     }
 
-    /// (d) Probability conservation at every chance node (also enforced by
-    /// `debug_assert`s during every expansion/backup in this debug build).
+    /// (d) Probability conservation at every chance node. Also enforced at
+    /// construction by `assert_probability_conservation`, which is a plain
+    /// `assert!` and therefore present in the shipped release wheel; this test
+    /// re-derives it from the finished tree so the property is checked by
+    /// something other than the guard that enforces it.
     #[test]
     fn probability_conservation_across_tree() {
         let outcome = run(STRADDLE, 3_000, 3, 0, true);

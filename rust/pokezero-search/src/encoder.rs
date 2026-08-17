@@ -4326,7 +4326,14 @@ fn write_opponent_mon_history(
     // `.rev()` on the zip below pairs cell i with key i ONLY while the lengths match. They do by
     // construction (`.map()` over the same Vec), but a later `filter_map` here would silently
     // misalign the pairing under `.rev()` and write wrong values without panicking.
-    debug_assert!(
+    //
+    // A plain `assert!` (was a `debug_assert!` until the release-guard audit): the failure mode
+    // this line names -- "write wrong values without panicking" -- is an artifact-validity failure,
+    // and `[profile.release]` does not set `debug-assertions`, so the check did not exist in any
+    // wheel. The wrong values here are model INPUTS, which no downstream check would flag as
+    // non-finite: the golden corpus catches a misalignment only on the layouts it covers, and it
+    // does not run in the campaign wheel at all. One length compare per encode.
+    assert!(
         !matchup_write || matchup_keys.len() == products.tendency_stats.opponent_mon_matchups.len(),
         "matchup_keys must stay 1:1 with opponent_mon_matchups for the zip+rev lookup"
     );
