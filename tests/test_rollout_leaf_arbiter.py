@@ -237,11 +237,21 @@ class RolloutSeamFidelityTests(unittest.TestCase):
             places=5,
         )
 
-    def test_a_one_ply_cap_is_reported_as_a_blend_not_an_oracle(self) -> None:
-        """DEMONSTRATED FAILING INPUT for the fallback-fraction column: a
-        1-ply cap makes essentially every rollout a handcrafted evaluation, and
-        the column must say so. A column that read ~0 here would let a blend be
-        reported as an oracle."""
+    def test_a_binding_cap_is_reported_as_a_blend_not_an_oracle(self) -> None:
+        """DEMONSTRATED FAILING INPUT for the fallback-fraction column: when the
+        ply cap BINDS, a material share of the "oracle" is the handcrafted
+        evaluator and the column must say so. A column that read ~0 here would let
+        a blend be reported as an oracle. The cap is the only perturbation.
+
+        THRESHOLD PROVENANCE. This assertion used to be `> 0.9` at
+        `rollout_max_plies=1`, and it held only because a rollout that ENDED THE
+        BATTLE on its one permitted ply was miscounted as a cap hit -- the crate
+        checked `battle_is_over()` at the top of its loop and never after the last
+        applied ply. With that fixed, this state reads 53 of 80 rollouts as the
+        terminals they reached and the column is 0.3375; the old bar would now
+        fail, and it passed only while the bug was there. Re-measured at these
+        exact arguments: cap 1 -> 0.3375, cap 2 -> 0.0789, cap 400 -> 0.0000.
+        """
 
         capped = json.loads(
             pokezero_search.puct_search_multi_rollout(
@@ -255,8 +265,14 @@ class RolloutSeamFidelityTests(unittest.TestCase):
                 rollout_max_plies=400, leaf_mode="rollout",
             )
         )
-        self.assertGreater(capped["rollout_fallback_fraction"], 0.9)
-        self.assertLess(deep["rollout_fallback_fraction"], 0.1)
+        self.assertGreater(capped["rollout_fallback_fraction"], 0.2)
+        # A cap that never binds must read EXACTLY zero: every rollout reached a
+        # terminal, so any non-zero value would mean the column is counting
+        # something other than fallbacks.
+        self.assertEqual(deep["rollout_fallback_fraction"], 0.0)
+        # And the terminal reading is what the fix restored, so assert it
+        # directly rather than only through its complement.
+        self.assertGreater(capped["rollout_terminal_hits"], 0)
 
 
 @unittest.skipUnless(HAS_ROLLOUT, "pokezero_search crate with the rollout seam not built")
@@ -393,12 +409,18 @@ class RolloutConfigGuardTests(unittest.TestCase):
             self.assertIn("leaf_batch_fidelity_loss_ack=True", message)
             # The refusal must carry the MAGNITUDE, so a reader deciding whether
             # to set the ack sees what it costs rather than only that it is
-            # uncertified. Asserted as the RANGE the sweep measured, not as a
-            # single triple: an earlier revision pinned "8.2 pp" from one
-            # unrecorded run and independent review could not reproduce it in
-            # 9792 crate runs. A literal nobody can re-derive is worse than no
-            # number, because it looks like evidence.
-            self.assertIn("2.8-11.7 pp", message)
+            # uncertified -- and it must carry the PROVENANCE, which is the part
+            # two previous revisions got wrong. The first pinned "8.2 pp" from an
+            # unrecorded run that review could not reproduce in 9792 crate runs;
+            # the second pinned a range from a review sweep whose grid was never
+            # committed, so it was equally unre-derivable. What is asserted here
+            # is the script that regenerates the number, the grid size, and the
+            # measured range -- and the assertion on the script name is the one
+            # that matters, because it is what keeps the digits checkable.
+            self.assertIn("scripts/sweep_leaf_batch_fidelity_gap.py", message)
+            self.assertIn("540 config triples", message)
+            self.assertIn("0.03-6.31 pp", message)
+            self.assertIn("0.56-42.91 pp", message)
 
     def test_the_batch_ack_admits_the_regime_rather_than_banning_it(self) -> None:
         # A fence that cannot be opened would make the batching seam untestable;
@@ -424,6 +446,233 @@ class RolloutConfigGuardTests(unittest.TestCase):
                     leaf_batch_fidelity_loss_ack=False,
                 )
                 self.assertEqual(production.leaf_batch, 64)
+
+
+class _FakeObservation:
+    def __init__(self, mask, candidates):
+        self.legal_action_mask = mask
+        self.metadata = {"action_candidates": candidates}
+
+
+class _FakeContext:
+    def __init__(self, observation, public_state=object(), player_id="p1"):
+        self.observation = observation
+        self.public_materialization_state = public_state
+        self.player_id = player_id
+
+
+class _FakeState:
+    def to_string(self) -> str:
+        return "state"
+
+
+class _FakeWorld:
+    def __init__(self, side: str = "side_one") -> None:
+        self.slot_sides = {"p1": side, "p2": "side_two" if side == "side_one" else "side_one"}
+
+
+class _FakeRolloutCrate:
+    """Stand-in for the native module: records each call, returns a report.
+
+    Deliberately returns the FULL key set `_search_rollout_crate` reads, so a
+    report-schema change surfaces here as a `KeyError` in a test rather than as an
+    uncaught exception in a shard.
+    """
+
+    def __init__(self, *, worlds: int = 2, error: Exception | None = None) -> None:
+        self.calls: list[dict] = []
+        self._error = error
+        self._worlds = worlds
+
+    def puct_search_multi_rollout(self, state_str, iterations, **kwargs):
+        self.calls.append({"state_str": state_str, "iterations": iterations, **kwargs})
+        if self._error is not None:
+            raise self._error
+        import json as _json
+
+        return _json.dumps(
+            {
+                "iterations": iterations,
+                "max_depth_reached": 2,
+                "side_one": [
+                    {"move": "earthquake", "visits": 48, "q": 0.6},
+                    {"move": "hiddenpower", "visits": 16, "q": 0.4},
+                ],
+                "side_two": [{"move": "earthquake", "visits": 64, "q": 0.5}],
+                "root_value": 0.55,
+                "leaves_priced": 8,
+                "rollouts_run": 64,
+                "rollout_plies": 128,
+                "rollout_terminal_hits": 60,
+                "rollout_cap_hits": 3,
+                "rollout_dead_ends": 1,
+            }
+        )
+
+
+def _candidates():
+    return [
+        {"action_index": 0, "kind": "move", "legal": True, "move_id": "earthquake"},
+        {"action_index": 1, "kind": "move", "legal": True, "move_id": "hiddenpower"},
+    ]
+
+
+class ArmWorldLoopTests(unittest.TestCase):
+    """`_search_rollout_crate` EXECUTED, which nothing did before.
+
+    Review's finding: 168 new lines plus a dispatch entry, and the only Python
+    coverage was `EngineMctsConfig` validation -- so the ten report keys the loop
+    reads, the seed draws, the ledger arithmetic and the failure accounting were
+    all unexercised. The reads sit outside the `try`, so a report-schema change
+    surfaces as an uncaught exception rather than a counted world failure; these
+    tests are what make that a test failure instead.
+    """
+
+    def _policy(self, **overrides):
+        import random
+        import sys
+
+        from pokezero.engine_search import EngineMctsConfig, EngineMctsPolicy
+
+        kwargs = dict(
+            leaf_eval="rollout_crate", worlds=2, search_sims=64, search_depth=2,
+            rollout_count=8, rollout_max_plies=50,
+        )
+        kwargs.update(overrides)
+        policy = EngineMctsPolicy(
+            dex=None, set_source=None, module=object(), config=EngineMctsConfig(**kwargs)
+        )
+        mask = (True, True, False, False, True, False, False, False, False)
+        context = _FakeContext(_FakeObservation(mask, _candidates()))
+        return policy, context, random.Random(7), sys
+
+    def _run(self, crate, *, worlds=2, **overrides):
+        from unittest.mock import patch
+
+        policy, context, rng, sys_module = self._policy(**overrides)
+        world_list = [(_FakeWorld(), _FakeState()) for _ in range(worlds)]
+        with patch.dict(sys_module.modules, {"pokezero_search": crate}):
+            return policy, policy._search_rollout_crate(context, world_list, rng)
+
+    def test_the_world_loop_searches_every_world_and_carries_the_ledger(self) -> None:
+        crate = _FakeRolloutCrate()
+        policy, decision = self._run(crate)
+        meta = decision.metadata["engine_mcts"]
+        self.assertEqual(meta["leaf_eval"], "rollout_crate")
+        self.assertEqual(meta["worlds_searched"], 2)
+        self.assertEqual(meta["worlds_constructed"], 2)
+        # Summed across both worlds, from the report the crate returned.
+        self.assertEqual(meta["rollouts_run"], 128)
+        self.assertEqual(meta["leaves_priced"], 16)
+        self.assertEqual(meta["rollout_plies"], 256)
+        self.assertEqual(meta["rollout_cap_hits"], 6)
+        self.assertEqual(meta["rollout_dead_ends"], 2)
+        # The honesty columns are (cap + dead) / run and terminal / run.
+        self.assertAlmostEqual(meta["rollout_fallback_fraction"], 8 / 128, places=6)
+        self.assertAlmostEqual(meta["rollout_terminal_fraction"], 120 / 128, places=6)
+        self.assertAlmostEqual(
+            meta["rollout_terminal_fraction"] + meta["rollout_fallback_fraction"],
+            1.0,
+            places=6,
+        )
+        # And the knobs reached the crate rather than defaulting inside it.
+        self.assertEqual(len(crate.calls), 2)
+        for call in crate.calls:
+            self.assertEqual(call["iterations"], 64)
+            self.assertEqual(call["rollouts"], 8)
+            self.assertEqual(call["rollout_max_plies"], 50)
+            self.assertEqual(call["leaf_batch"], 1)
+            self.assertEqual(call["leaf_mode"], "rollout")
+
+    def test_the_drawn_seeds_are_recorded_so_a_shard_can_be_replayed(self) -> None:
+        """A rollout label is a pure function of (leaf state, rollout_seed,
+        arrival ordinal, trial), and the arrival ordinals are fixed by the SEARCH
+        seed -- so an artifact without both seeds cannot reproduce its own labels,
+        which is what the module claimed it could. The recorded values must be the
+        values passed to the crate, per world, in world order."""
+
+        crate = _FakeRolloutCrate()
+        _policy, decision = self._run(crate)
+        meta = decision.metadata["engine_mcts"]
+        self.assertEqual(
+            list(meta["search_seeds"]), [call["seed"] for call in crate.calls]
+        )
+        self.assertEqual(
+            list(meta["rollout_seeds"]), [call["rollout_seed"] for call in crate.calls]
+        )
+        # Two worlds, two DISTINCT draws per stream, and the two streams do not
+        # alias each other -- if the same number appeared in both, one draw was
+        # being reused and "the streams cannot alias" would be false.
+        self.assertEqual(len(set(meta["search_seeds"])), 2)
+        self.assertEqual(len(set(meta["rollout_seeds"])), 2)
+        self.assertFalse(set(meta["search_seeds"]) & set(meta["rollout_seeds"]))
+
+    def test_a_refusing_world_costs_one_world_not_the_decision(self) -> None:
+        """The crate's refusals (the NaN-slot guard among them) must be counted
+        and survivable. One perturbation from the case above: the crate raises."""
+
+        crate = _FakeRolloutCrate(
+            error=ValueError(
+                "rollout trial 0 of 64 was never priced (row 0, trial 0); refusing to "
+                "average a non-finite slot into a leaf value"
+            )
+        )
+        policy, decision = self._run(crate)
+        # Every world refused, so the decision falls back LOUDLY rather than
+        # returning a search result built from nothing.
+        self.assertEqual(
+            decision.metadata["engine_mcts"].get("fallback"), "crate_search_failed"
+        )
+        reasons = policy.stats.world_failure_reasons
+        self.assertEqual(sum(reasons.values()), 2)
+        reason = next(iter(reasons))
+        self.assertTrue(reason.startswith("crate_search_rollout: "), reason)
+        self.assertIn("was never priced", reason)
+
+    def test_the_report_keys_the_loop_reads_are_all_asserted_present(self) -> None:
+        """A missing report key must fail HERE, not in a shard. The reads sit
+        outside the `try`, so this is the only place that can catch a schema
+        drift before it becomes an uncaught exception mid-run.
+
+        One perturbation per subcase: exactly one key removed from an otherwise
+        complete report.
+        """
+
+        import json as _json
+        from unittest.mock import patch
+
+        complete = _json.loads(_FakeRolloutCrate().puct_search_multi_rollout("s", 64))
+        read_keys = (
+            "side_one",
+            "max_depth_reached",
+            "iterations",
+            "rollouts_run",
+            "rollout_plies",
+            "rollout_terminal_hits",
+            "rollout_cap_hits",
+            "rollout_dead_ends",
+            "leaves_priced",
+        )
+
+        class _MissingKeyCrate:
+            def __init__(self, drop):
+                self._drop = drop
+
+            def puct_search_multi_rollout(self, state_str, iterations, **kwargs):
+                payload = dict(complete, iterations=iterations)
+                # Dropped AFTER the rebuild, so dropping "iterations" is a real
+                # perturbation rather than one this fake quietly restores.
+                del payload[self._drop]
+                return _json.dumps(payload)
+
+        for key in read_keys:
+            with self.subTest(missing=key):
+                policy, context, rng, sys_module = self._policy()
+                with patch.dict(sys_module.modules, {"pokezero_search": _MissingKeyCrate(key)}):
+                    with self.assertRaises(KeyError):
+                        policy._search_rollout_crate(
+                            context, [(_FakeWorld(), _FakeState())], rng
+                        )
 
 
 class EveryTestInThisModuleHasABodyTest(unittest.TestCase):

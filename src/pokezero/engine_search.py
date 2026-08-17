@@ -526,14 +526,31 @@ class EngineMctsConfig:
     # Rollout RNG root. Disjoint from the search RNG by construction: rollouts
     # never draw from the stream `traverse` uses to sample chance branches.
     #
-    # What that does and does not buy, stated exactly because the looser version
-    # of this sentence was measurably false. It buys: at a FIXED leaf-value
-    # vector the selection sequence is bit-identical to production's. It does
-    # NOT buy invariance of the tree to this knob -- moving it reprices the
-    # leaves, repriced leaves change selection, and changed selection samples
-    # different chance branches. Measured, search seed held, this knob 1 -> 2:
-    # chance_nodes 344 -> 348, decision_nodes 139 -> 149. That is the
-    # instrument working; it is not a leak between the streams.
+    # WHAT DISJOINTNESS BUYS, as a conditional, because the unconditional version
+    # of this sentence was measurably false and the first correction of it was
+    # still loose. It buys exactly three things:
+    #   1. no rollout draw ever advances the search RNG, so the search's draw
+    #      sequence depends only on the search seed and on the values handed back;
+    #   2. therefore AT A FIXED LEAF-VALUE VECTOR the selection sequence is
+    #      bit-identical to production's -- verified over 600 comparisons on 18
+    #      report keys, 0 mismatches (grid in `rollout.rs`'s module docs);
+    #   3. therefore a label is a pure function of (leaf state, this seed, the
+    #      leaf's ARRIVAL ORDINAL, trial index) -- independent of thread count and
+    #      of scheduling, which is what makes `rollout_threads` a throughput knob.
+    #
+    # It does NOT buy invariance of the tree to this knob, to `rollout_count`, or
+    # to `leaf_batch`: each reprices the leaves, repriced leaves change selection,
+    # and changed selection samples different chance branches. Because the label
+    # is keyed on arrival ordinal rather than on leaf content, anything that
+    # shifts arrival order re-draws labels too.
+    #
+    # Measured, with the provenance needed to re-derive it: `symmetric.state`
+    # (crate fixture), 600 iterations, max_depth=3, c_puct=1.4, search seed=99,
+    # R=8, rollout_max_plies=200, rollout_threads=1, leaf_batch=1, moving ONLY
+    # this knob 1 -> 2: chance_nodes 344 -> 348, decision_nodes 139 -> 149,
+    # terminal_branches 368 -> 373, depth_occupancy [600,596,512] ->
+    # [600,596,509], root_value 0.487721 -> 0.512324. That is the instrument
+    # working; it is not a leak between the streams.
     rollout_seed: int = 0
     # Throughput only -- priced values are thread-count invariant (crate test
     # `thread_count_does_not_change_values`).
@@ -587,21 +604,37 @@ class EngineMctsConfig:
     # while this one, the only uncertified regime the arm has, was accepted
     # silently with no warning at any value.
     #
-    # MAGNITUDE, and the provenance it now carries. An earlier revision of this
-    # comment quoted a single triple (root_value 0.518034 / 0.505411 / 0.435800,
-    # "8.2 pp") from a run whose config was never recorded, and independent
-    # review could not reproduce it in 9792 crate runs across two grids -- at the
-    # config the text implied, it measured 0.489321 / 0.483258 / 0.423144. A
-    # literal nobody can re-derive is worse than no number, because it reads as
-    # evidence.
+    # MAGNITUDE, re-derived here rather than carried forward, twice over. The
+    # first revision of this comment quoted one triple (root_value 0.518034 /
+    # 0.505411 / 0.435800, "8.2 pp") from a run whose config was never recorded,
+    # and independent review could not reproduce it in 9792 crate runs. The
+    # second quoted "min 2.77, median 7.54, max 11.72 pp over 864 config triples"
+    # from that review's sweep -- a grid whose script was never committed either,
+    # so nobody could re-run it, and it came with the claim that even the MINIMUM
+    # exceeds the contrast this instrument must resolve. That claim is FALSE, and
+    # the sweep that regenerates it is now in the repo.
     #
-    # What IS reproducible is the distribution, swept over 864 config triples
-    # (5 fixtures x seeds x rollout_seed x depth): the leaf_batch 1 -> 64 gap in
-    # root_value runs min 2.77, median 7.54, max 11.72 pp. Even the MINIMUM
-    # exceeds the ~0.6 pp arm of the ~0.6-vs-~13 pp contrast this instrument
-    # exists to discriminate, so an unacknowledged batch can swamp the arbiter's
-    # own signal. The fence rests on that range, and it is a range rather than a
-    # point because the measurement is.
+    # Measured by `scripts/sweep_leaf_batch_fidelity_gap.py` (run it; it prints
+    # this table): 540 config triples, 1620 crate runs -- 5 crate fixtures x
+    # search seed 0..11 x rollout_seed 0..2 x max_depth {2,3,4}, iterations=400,
+    # R=8, rollout_max_plies=200, one thread. |root_value(batch 1) -
+    # root_value(batch b)| in percentage points:
+    #
+    #   b=8 :  min 0.03  median 4.38  max  6.31
+    #   b=64:  min 0.56  median 25.37 max 42.91
+    #
+    # Cross-checked on a disjoint seed band (12..23, another 540 triples): b=8
+    # min 0.01 / median 4.38 / max 6.53, b=64 min 0.59 / median 25.37 / max 42.87.
+    #
+    # Read it correctly, because the previous wording did not. The penalty is
+    # FIXTURE-DEPENDENT, not a floor: minimal.state moves 0.17 pp at b=8 while
+    # straddle.state moves ~41 pp at b=64, and the minimum of the distribution
+    # (0.03 pp) sits BELOW the ~0.6 pp arm of the ~0.6-vs-~13 pp contrast this
+    # instrument exists to discriminate. So the argument for the fence is not
+    # "batching always swamps the signal" -- it is that batching moves the
+    # measured quantity by an amount that is uncontrolled and frequently much
+    # larger than the effect: 75% of the grid moves at least 0.6 pp and 30% moves
+    # at least 5 pp at b=8 alone.
     leaf_batch: int = 1
     #: Acknowledge that `leaf_batch > 1` trades selection fidelity for pricer
     #: amortisation on the sequential path, and that the fidelity gate does not
@@ -764,17 +797,26 @@ class EngineMctsConfig:
                     f"(got {self.leaf_batch})."
                 )
             if self.leaf_batch > 1 and not self.leaf_batch_fidelity_loss_ack:
+                # The magnitude is quoted with its GRID and its SCRIPT, because a
+                # six-figure literal nobody can regenerate reads as evidence
+                # while certifying nothing -- this refusal has already shipped
+                # two such numbers (see the field comment). Regenerate with
+                # `python scripts/sweep_leaf_batch_fidelity_gap.py`.
                 raise ValueError(
                     f"leaf_batch={self.leaf_batch} > 1 requires "
                     "leaf_batch_fidelity_loss_ack=True. leaf_batch=1 is the only value "
                     "the fidelity gate certifies on the sequential path, and batching is "
-                    "a measured fidelity LOSS rather than an approximation: swept over "
-                    "864 config triples (5 fixtures x seeds x rollout_seed x depth), the "
-                    "leaf_batch 1 -> 64 gap in root_value runs 2.8-11.7 pp (median 7.5). "
-                    "Even the minimum exceeds the ~0.6 pp arm of the contrast this "
-                    "instrument exists to discriminate, so an unacknowledged batch can "
-                    "swamp the arbiter's own signal. Set the ack only if the pricer "
-                    "amortisation is worth an uncertified selection regime."
+                    "a measured fidelity LOSS rather than an approximation. Measured by "
+                    "scripts/sweep_leaf_batch_fidelity_gap.py over 540 config triples "
+                    "(5 crate fixtures x seed 0..11 x rollout_seed 0..2 x depth {2,3,4}, "
+                    "400 iterations, R=8): the root_value gap against leaf_batch=1 runs "
+                    "0.03-6.31 pp (median 4.38) at leaf_batch=8 and 0.56-42.91 pp "
+                    "(median 25.37) at leaf_batch=64. It is fixture-dependent rather "
+                    "than a floor -- the smallest gap sits below the ~0.6 pp arm of the "
+                    "contrast this instrument exists to discriminate, while 75% of the "
+                    "grid moves at least 0.6 pp and 30% at least 5 pp at leaf_batch=8 "
+                    "alone. Set the ack only if the pricer amortisation is worth an "
+                    "uncertified selection regime."
                 )
             if self.rollout_policy != "uniform":
                 raise ValueError(
@@ -2992,13 +3034,33 @@ class EngineMctsPolicy:
         cap_hits = 0
         dead_ends = 0
         leaves_priced = 0
+        # THE SEEDS THIS DECISION ACTUALLY DREW, per world, in world order.
+        # Without them a shard's labels cannot be replayed from the artifact: a
+        # rollout label is a pure function of (leaf state, rollout_seed, arrival
+        # ordinal, trial), and the arrival ordinals are fixed by the SEARCH seed,
+        # so reproducing a decision needs both numbers. Neither was recorded
+        # (`_search_hp_fraction_crate` omits its search seed too, so this was a
+        # convention rather than an oversight) while the module claimed
+        # reproducibility.
+        search_seeds: list[int] = []
+        rollout_seeds: list[int] = []
         search_started = time.perf_counter()
-        for world_index, (world, state) in enumerate(worlds):
+        # No `enumerate`: the index was unused and deleted two lines later, which
+        # is also a gratuitous divergence from the `_search_hp_fraction_crate`
+        # twin this method is deliberately a near-copy of.
+        for world, state in worlds:
             side_key = (
                 "side_one"
                 if world.slot_sides[context.player_id] == "side_one"
                 else "side_two"
             )
+            # Drawn BEFORE the call, and outside the `try`, so a refusing world
+            # still records the seeds it was given -- otherwise the one world a
+            # reader most wants to replay is the one world whose seeds are gone.
+            world_search_seed = rng.getrandbits(63)
+            world_rollout_seed = rng.getrandbits(63)
+            search_seeds.append(world_search_seed)
+            rollout_seeds.append(world_rollout_seed)
             try:
                 report = json.loads(
                     pokezero_search.puct_search_multi_rollout(
@@ -3006,7 +3068,7 @@ class EngineMctsPolicy:
                         config.search_sims,
                         max_depth=config.search_depth,
                         c_puct=config.c_puct,
-                        seed=rng.getrandbits(63),
+                        seed=world_search_seed,
                         deep_ko_split=config.deep_ko_split,
                         rollouts=config.rollout_count,
                         rollout_max_plies=config.rollout_max_plies,
@@ -3015,7 +3077,7 @@ class EngineMctsPolicy:
                         # RNG as the search seed so a replayed decision replays
                         # its rollouts too -- but a SEPARATE draw, so the two
                         # streams cannot alias.
-                        rollout_seed=rng.getrandbits(63),
+                        rollout_seed=world_rollout_seed,
                         rollout_threads=config.rollout_threads,
                         leaf_batch=config.leaf_batch,
                         leaf_mode="rollout",
@@ -3034,7 +3096,6 @@ class EngineMctsPolicy:
                 )
                 self.stats.world_failure_reasons[f"crate_search_rollout: {detail}"] += 1
                 continue
-            del world_index
             entries = report[side_key]
             total = max(sum(entry["visits"] for entry in entries), 1)
             for entry in entries:
@@ -3087,6 +3148,13 @@ class EngineMctsPolicy:
                     "rollout_policy": config.rollout_policy,
                     "leaf_batch": config.leaf_batch,
                     "rollout_threads": config.rollout_threads,
+                    # Both seeds, per world, in world order: a label is a pure
+                    # function of (leaf state, rollout_seed, arrival ordinal,
+                    # trial) and the ordinals are fixed by the search seed, so
+                    # these two lists are what make a decision's labels
+                    # replayable from the shard.
+                    "search_seeds": tuple(search_seeds),
+                    "rollout_seeds": tuple(rollout_seeds),
                     "leaves_priced": leaves_priced,
                     "rollouts_run": rollouts_run,
                     "rollout_plies": rollout_plies,
