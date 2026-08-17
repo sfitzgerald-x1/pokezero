@@ -8,6 +8,15 @@ and sat green for months. So each test below constructs the offending input and 
 refusal, by code AND by the words the message must contain; a test that merely asserts "it
 raised" would pass against a tool that refuses everything.
 
+The suite grew a second layer after an independent review found **four inputs that produced a
+written artifact which should have been refused**, two of which banked a directory that failed
+its own `shasum -a 256 -c SHA256SUMS`. Every one of those is now a test in
+`ReviewFoundTheseWroteAnArtifactTests`, constructed from the review's own reproduction, so the
+regression is pinned by the input that caused it rather than by a description of it. The lesson
+those four shared is worth stating: each came from **trusting a fact measured earlier about a
+directory other processes can write to**, which is why the staged bytes are now re-hashed before
+the rename instead of the source being assumed to hold still.
+
 Four properties get their own tests because they are the ones that failed in the field:
 
 * **absent != null != empty != zero.** `rollouts` missing, `rollouts: null`, `rollouts: 0` and
@@ -33,6 +42,8 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -360,7 +371,7 @@ class RequiredFieldGuardTests(_FixtureCase):
             "seed_band", "seeds",
         ))
         self.assertEqual(
-            tuple(spec.name for spec in kind.shard_required),
+            tuple(spec.name for spec in kind.file_required),
             ("file", "sha256", "exit_status", "pod", "node"),
         )
 
@@ -428,7 +439,8 @@ class ShardGuardTests(_FixtureCase):
 
     def test_two_records_for_one_file_are_refused(self) -> None:
         self.fixture.stamp["shards"].append(dict(self.fixture.stamp["shards"][0]))
-        self.assertRefusedWith(bank.DUPLICATE_SHARD_FILE, contains="already declared")
+        self.assertRefusedWith(
+            bank.DUPLICATE_SHARD_FILE, contains="the same declared name as shards[0]")
 
     def test_a_shard_path_escaping_the_source_directory_is_refused(self) -> None:
         for relative in ("../outside.json", "/absolute/shard.json", "results/../../up.json"):
@@ -702,7 +714,7 @@ class CommandLineTests(_FixtureCase):
             "--out-dir", str(self.fixture.out_dir),
         )
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("banked: 2 shards", done.stdout)
+        self.assertIn("banked: 2 files", done.stdout)
         self.assertTrue((self.fixture.out_dir / bank.PROVENANCE_FILENAME).is_file())
 
     def test_the_cli_exits_nonzero_and_names_the_missing_input(self) -> None:
@@ -771,7 +783,8 @@ class CommandLineTests(_FixtureCase):
             capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}, check=False,
         )
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(done.stdout.strip(), f"{bank.PROVENANCE_SCHEMA} 2")
+        self.assertEqual(
+            done.stdout.strip(), f"{bank.PROVENANCE_SCHEMA} {len(bank.ARTIFACT_KINDS)}")
 
 
 class PublicRepoHygieneTests(unittest.TestCase):
@@ -782,30 +795,68 @@ class PublicRepoHygieneTests(unittest.TestCase):
     a guard whose sole hit is its own pattern list covers nothing.
     """
 
-    FORBIDDEN = (
-        "/sha" + "red",
-        "cru" + "soe",
-        "eu-ice" + "land1",
-        "compute." + "internal",
-        "kube" + "ctl",
-        "shared-" + "nfs",
-        "--name" + "space",
-        "np-" + "856c0ba6",
+    # Structural PATTERNS, not a denylist of real values. The first version of this guard listed
+    # the vendor, the region, the PVC name and a real node-pool id, split across `+` -- which
+    # both narrowed the guard to the instances someone remembered AND put those instances in the
+    # public repo in reconstructable form. A pattern catches the class without naming any
+    # instance, so nothing about a deployment is committed even by the check.
+    #
+    # A few patterns are written with a one-character class (`/sh[a]red`) purely so the file does
+    # not contain the literal it searches for. Same regex, no self-match.
+    FORBIDDEN_PATTERNS = (
+        (r"(?<![\w./])/sh[a]red(?:/|\b)", "the shared filesystem mount root"),
+        (r"\.compute\.intern[a]l\b", "internal node DNS suffix"),
+        (r"\bnp-[0-9a-f]{8}\b", "node-pool identifier"),
+        (r"\b[a-z]{2}-[a-z]{3,}[0-9]-[a-z]\b", "cloud region/zone string"),
+        (r"\bkubect[l]\b|\bkubeconfi[g]\b", "kube CLI or its config"),
+        (r"--namespac[e]\b|--contex[t]\b", "cluster-selecting flags"),
+        (r"\b(?:registry|ccr)\.[a-z0-9.-]+\.(?:com|io|net)\b", "registry hostname"),
+        (r"\b[a-z][a-z0-9-]*-nf[s]\b", "NFS volume / PVC name"),
+        (r"\b(?:10|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "RFC1918 / loopback address"),
+        (r"\b192\.168\.\d{1,3}\.\d{1,3}\b", "RFC1918 address"),
+        (r"\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b", "RFC1918 address"),
+    )
+
+    #: Synthetic strings that match the patterns above and name nothing real. Assembled from
+    #: fragments for the same reason the patterns are: so the file never contains them literally.
+    SYNTHETIC_HITS = (
+        "a harvest under " + "/sh" + "ared/some-campaign",
+        "worker-3" + ".compute." + "internal",
+        "node pool " + "np-" + "0123abcd" + "-7",
+        "zone " + "xx-" + "example1" + "-a",
+        "run " + "kube" + "ctl get pods",
+        "pass " + "--name" + "space to select",
+        "image at " + "registry." + "example.com/x",
+        "volume " + "scratch-" + "nfs",
+        "endpoint " + "10." + "0.0.1",
+        "endpoint " + "192." + "168.1.1",
+        "endpoint " + "172." + "16.0.1",
     )
 
     def test_neither_the_tool_nor_this_suite_names_a_deployment(self) -> None:
         for path in (_SCRIPT, Path(__file__).resolve()):
             text = path.read_text(encoding="utf-8")
-            for needle in self.FORBIDDEN:
-                with self.subTest(path=path.name, needle=needle):
-                    self.assertNotIn(needle, text)
+            for pattern, what in self.FORBIDDEN_PATTERNS:
+                with self.subTest(path=path.name, what=what):
+                    found = re.search(pattern, text)
+                    self.assertIsNone(
+                        found, f"{path.name} contains {what}: {found.group(0) if found else ''}"
+                    )
 
-    def test_the_needles_can_actually_be_found(self) -> None:
-        """The demonstrated failing input for the hygiene guard itself."""
-        planted = "a harvest under " + self.FORBIDDEN[0] + "/some-campaign"
-        for needle in self.FORBIDDEN:
-            self.assertNotIn(needle, "a clean line of code")
-        self.assertIn(self.FORBIDDEN[0], planted)
+    def test_every_pattern_matches_a_synthetic_example_of_what_it_claims_to_catch(self) -> None:
+        """The demonstrated failing input for the hygiene guard itself.
+
+        Without this, a typo in any pattern leaves it permanently green -- the shape this repo
+        has already found three times. Each pattern must match at least one synthetic hit, and
+        no pattern may match ordinary prose.
+        """
+        for pattern, what in self.FORBIDDEN_PATTERNS:
+            with self.subTest(what=what):
+                self.assertTrue(
+                    any(re.search(pattern, sample) for sample in self.SYNTHETIC_HITS),
+                    f"the pattern for {what} matches none of the synthetic examples",
+                )
+                self.assertIsNone(re.search(pattern, "a clean line of ordinary code"))
 
     def test_the_tool_hardcodes_no_absolute_paths(self) -> None:
         """Paths arrive as arguments. A default would become somebody's production path."""
@@ -815,6 +866,622 @@ class PublicRepoHygieneTests(unittest.TestCase):
             if ('"/' in line or "'/" in line) and not line.lstrip().startswith("#")
         ]
         self.assertEqual(offenders, [])
+
+
+# ----------------------------------------------------------------------------------------------
+# The six inputs an independent review turned into a WRITTEN artifact
+# ----------------------------------------------------------------------------------------------
+class ReviewFoundTheseWroteAnArtifactTests(_FixtureCase):
+    """Regressions pinned by the exact input that produced the wrong artifact.
+
+    An adversarial review of the first version found four inputs that banked something which
+    should have been refused, and two more that raised a bare exception instead of a refusal.
+    Each test below is that review's reproduction, kept as the demonstrated failing input.
+    """
+
+    def _shasum(self) -> subprocess.CompletedProcess[str]:
+        tool = shutil.which("sha256sum") or shutil.which("shasum")
+        if tool is None:  # pragma: no cover - environment dependent
+            self.skipTest("no sha256sum/shasum on PATH")
+        argv = ([tool, "-a", "256", "-c"] if tool.endswith("shasum") else [tool, "-c"])
+        return subprocess.run(
+            argv + [bank.SHA256SUMS_FILENAME],
+            cwd=self.fixture.out_dir, capture_output=True, text=True, check=False,
+        )
+
+    def _add_shard(self, name: str, payload: bytes) -> None:
+        path = self.fixture.source_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        self.fixture.stamp["shards"].append({
+            "file": name,
+            "sha256": _sha256_bytes(payload),
+            "exit_status": 0,
+            "pod": "bank-test-pod-x",
+            "node": "node-x.example.invalid",
+        })
+
+    # BLOCKING 1
+    def test_a_shard_named_like_the_stamp_is_refused_not_overwritten(self) -> None:
+        """It used to be copied in, then overwritten by the stamp written on top of it.
+
+        The banked directory then claimed a sha256 for `PROVENANCE.json` whose bytes it had
+        destroyed, and failed its own `shasum -c` with `PROVENANCE.json: FAILED`. Highly
+        reachable: Phase 0 item 1 means pointing --source-dir at directories that already
+        contain both of these names.
+        """
+        for reserved in (bank.PROVENANCE_FILENAME, bank.SHA256SUMS_FILENAME):
+            with self.subTest(reserved=reserved):
+                fixture = _Fixture(Path(tempfile.mkdtemp()))
+                payload = b'{"i am": "a shard, not a stamp"}'
+                (fixture.source_dir / reserved).write_bytes(payload)
+                fixture.stamp["shards"].append({
+                    "file": reserved, "sha256": _sha256_bytes(payload), "exit_status": 0,
+                    "pod": "bank-test-pod-x", "node": "node-x.example.invalid",
+                })
+                with self.assertRaises(bank.BankRefusal) as caught:
+                    fixture.bank()
+                self.assertIn(bank.RESERVED_SHARD_NAME, caught.exception.codes)
+                self.assertFalse(fixture.out_dir.exists())
+
+    def test_a_reserved_name_is_caught_case_insensitively(self) -> None:
+        """A case-insensitive filesystem collides on `provenance.json` too."""
+        payload = b"{}"
+        (self.fixture.source_dir / "provenance.json").write_bytes(payload)
+        self.fixture.stamp["shards"].append({
+            "file": "provenance.json", "sha256": _sha256_bytes(payload), "exit_status": 0,
+            "pod": "bank-test-pod-x", "node": "node-x.example.invalid",
+        })
+        self.assertRefusedWith(bank.RESERVED_SHARD_NAME, contains="collides with a name")
+
+    # BLOCKING 2
+    def test_one_file_declared_under_two_spellings_is_refused(self) -> None:
+        """`results/./shard0.json` evaded a raw-string duplicate check.
+
+        The artifact then claimed 2 shards with 1 file banked, and `shasum -c` PASSED both
+        lines because both paths resolve to the same bytes -- so nothing downstream could catch
+        a pooled analysis counting the shard twice and shrinking the apparent SE.
+        """
+        for spelling, expected in (
+            ("results/./shard0.json", bank.NON_CANONICAL_SHARD_PATH),
+            ("results//shard0.json", bank.NON_CANONICAL_SHARD_PATH),
+            ("./results/shard0.json", bank.NON_CANONICAL_SHARD_PATH),
+        ):
+            with self.subTest(spelling=spelling):
+                fixture = _Fixture(Path(tempfile.mkdtemp()))
+                fixture.stamp["shards"].append(
+                    dict(fixture.stamp["shards"][0], file=spelling)
+                )
+                with self.assertRaises(bank.BankRefusal) as caught:
+                    fixture.bank()
+                self.assertIn(expected, caught.exception.codes)
+                self.assertFalse(fixture.out_dir.exists())
+
+    def test_one_file_declared_under_two_cases_is_refused_on_this_filesystem(self) -> None:
+        """On a case-insensitive filesystem `Results/shard0.json` is the same file."""
+        probe = self.fixture.source_dir / "results" / "SHARD0.json"
+        case_insensitive = probe.is_file()
+        self.fixture.stamp["shards"].append(
+            dict(self.fixture.stamp["shards"][0], file="results/SHARD0.json")
+        )
+        refusal = self.refuse()
+        if case_insensitive:
+            self.assertIn(bank.DUPLICATE_SHARD_FILE, refusal.codes)
+        else:  # pragma: no cover - depends on the filesystem the suite runs on
+            self.assertIn(bank.SHARD_FILE_ABSENT, refusal.codes)
+
+    def test_one_file_hardlinked_under_two_names_is_refused(self) -> None:
+        """The case no path comparison can catch, so it needs the inode.
+
+        A hardlink gives one file two unrelated names: `Path.resolve()` cannot connect them,
+        the copy duplicates the content into two banked files, and both SHA256SUMS lines
+        verify -- so the declared shard count exceeds the distinct evidence with nothing
+        downstream able to notice. This test is why the duplicate key is (device, inode) and
+        not a resolved path; the resolved-path version passed a mutation that deleted it.
+        """
+        original = self.fixture.source_dir / self.fixture.stamp["shards"][0]["file"]
+        link = self.fixture.source_dir / "results" / "shard0-copy.json"
+        os.link(original, link)
+        self.assertNotEqual(str(original.resolve()), str(link.resolve()))  # paths cannot tell
+        self.fixture.stamp["shards"].append(
+            dict(self.fixture.stamp["shards"][0], file="results/shard0-copy.json")
+        )
+        message = self.assertRefusedWith(bank.DUPLICATE_SHARD_FILE, contains="hardlink")
+        self.assertIn("shards[0]", message)
+
+    def test_the_duplicate_refusal_names_the_record_it_collides_with(self) -> None:
+        self.fixture.stamp["shards"].append(dict(self.fixture.stamp["shards"][0]))
+        message = self.assertRefusedWith(bank.DUPLICATE_SHARD_FILE)
+        self.assertIn("shards[0]", message)
+        # The old message claimed "SHA256SUMS would carry only one of them", which the review
+        # falsified: it carried both. The message now says what actually goes wrong.
+        self.assertNotIn("would carry only one of them", message)
+        self.assertIn("shrinking the apparent standard error", message)
+
+    # BLOCKING 3
+    def test_an_interrupt_in_the_overwrite_window_keeps_the_campaign_directory(self) -> None:
+        """The rollback used to live in `except OSError`, so Ctrl-C skipped it.
+
+        The store was then left holding only `<campaign-id>.replaced-<ts>` and nothing at the
+        campaign id -- the scratch-directory loss with a timestamp suffix. Ctrl-C is the
+        likeliest interruption of a long copy, so it is the case that must roll back.
+        """
+        for injected in (KeyboardInterrupt, SystemExit):
+            with self.subTest(injected=injected.__name__):
+                fixture = _Fixture(Path(tempfile.mkdtemp()))
+                fixture.bank()
+                fixture.stamp["sims"] = 4096
+                real_rename = bank.os.rename
+
+                def interrupt_in_the_window(src, dst, _exc=injected):
+                    real_rename(src, dst)
+                    if str(src).endswith(CAMPAIGN_ID):  # the displacement just happened
+                        raise _exc("interrupted between displace and install")
+
+                with patch.object(bank.os, "rename", interrupt_in_the_window):
+                    with self.assertRaises(injected):
+                        fixture.bank(overwrite=True)
+
+                self.assertTrue(
+                    fixture.out_dir.is_dir(),
+                    "the store lost the directory its campaign id addresses",
+                )
+                provenance = json.loads(
+                    (fixture.out_dir / bank.PROVENANCE_FILENAME).read_text(encoding="utf-8")
+                )
+                self.assertEqual(provenance["sims"], 2048, "the original artifact was not restored")
+                self.assertEqual(
+                    sorted(p.name for p in fixture.store_dir.iterdir()), [CAMPAIGN_ID],
+                    "a displaced copy or staging directory was left behind",
+                )
+
+    # BLOCKING 4
+    def test_a_file_sitting_at_the_destination_is_a_refusal_not_a_traceback(self) -> None:
+        """`iterdir()` on a file raised NotADirectoryError and the CLI exited 1."""
+        self.fixture.out_dir.parent.mkdir(parents=True, exist_ok=True)
+        self.fixture.out_dir.write_text("a leftover file at the campaign id's path")
+        refusal = self.refuse()
+        self.assertIn(bank.DESTINATION_NOT_A_DIRECTORY, refusal.codes)
+        self.assertEqual(
+            self.fixture.out_dir.read_text(), "a leftover file at the campaign id's path"
+        )
+
+    def test_the_cli_exits_three_when_the_destination_is_a_file(self) -> None:
+        self.fixture.out_dir.parent.mkdir(parents=True, exist_ok=True)
+        self.fixture.out_dir.write_text("leftover")
+        stamp = self.fixture.root / "stamp.json"
+        stamp.write_text(json.dumps(self.fixture.stamp), encoding="utf-8")
+        done = subprocess.run(
+            [sys.executable, str(_SCRIPT), "--stamp", str(stamp),
+             "--source-dir", str(self.fixture.source_dir),
+             "--out-dir", str(self.fixture.out_dir)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(done.returncode, bank.REFUSAL_EXIT)
+        self.assertIn(bank.DESTINATION_NOT_A_DIRECTORY, done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+
+    # BLOCKING 5
+    def test_a_non_finite_number_anywhere_in_the_stamp_is_refused(self) -> None:
+        """A NaN used to be written verbatim, making PROVENANCE.json invalid JSON.
+
+        `JSON.parse` then rejects the whole file and `jq` yields `null` at exit 0 -- a number
+        silently becoming the "this does not apply" absence this tool exists to distinguish.
+        """
+        for label, value in (
+            ("nan", float("nan")), ("inf", float("inf")), ("-inf", float("-inf")),
+        ):
+            with self.subTest(value=label):
+                fixture = _Fixture(Path(tempfile.mkdtemp()))
+                fixture.stamp["harvest_mean_gap"] = value
+                with self.assertRaises(bank.BankRefusal) as caught:
+                    fixture.bank()
+                self.assertIn(bank.UNSERIALIZABLE_PROVENANCE, caught.exception.codes)
+                self.assertIn(
+                    "harvest_mean_gap",
+                    caught.exception.fields_for(bank.UNSERIALIZABLE_PROVENANCE),
+                )
+                self.assertFalse(fixture.out_dir.exists())
+
+    def test_a_non_finite_number_nested_deep_in_the_stamp_is_named_by_path(self) -> None:
+        self.fixture.stamp["analysis"] = {"buckets": [{"mean": 0.1}, {"mean": float("nan")}]}
+        refusal = self.refuse()
+        self.assertEqual(
+            refusal.fields_for(bank.UNSERIALIZABLE_PROVENANCE),
+            ("analysis.buckets[1].mean",),
+        )
+
+    def test_a_non_finite_rollout_fallback_fraction_is_refused_twice_over(self) -> None:
+        """The declared-field check must not accept a NaN just because NaN comparisons are False."""
+        self.fixture.stamp["rollout_fallback_fraction"] = float("nan")
+        refusal = self.refuse()
+        self.assertIn(bank.INVALID_FIELD_VALUE, refusal.codes)
+        self.assertIn(bank.UNSERIALIZABLE_PROVENANCE, refusal.codes)
+
+    def test_every_written_provenance_survives_a_strict_json_reader(self) -> None:
+        """The structural half of the same guard: allow_nan=False on the writer."""
+        text = self.fixture.bank().provenance_path.read_text(encoding="utf-8")
+
+        def reject(constant: str) -> Any:
+            raise ValueError(f"non-JSON constant {constant}")
+
+        json.loads(text, parse_constant=reject)  # would raise on NaN/Infinity/-Infinity
+
+    def test_the_writer_itself_refuses_a_non_finite_number(self) -> None:
+        """`allow_nan=False` needs its own failing input, or it is untested belt-and-braces.
+
+        The validation scan above refuses first, so no end-to-end input can reach this line --
+        and a mutation reverting it to `allow_nan=True` left the whole suite green. Exercised
+        directly, it reddens.
+        """
+        with self.assertRaises(ValueError):
+            bank._provenance_json({"schema": "x", "mean": float("nan")})
+        with self.assertRaises(ValueError):
+            bank._provenance_json({"schema": "x", "rate": float("inf")})
+        # And it still writes ordinary numbers.
+        self.assertIn('"mean": 0.5', bank._provenance_json({"mean": 0.5}))
+
+    # BLOCKING 6
+    def test_a_source_mutated_between_hashing_and_copying_is_refused(self) -> None:
+        """Hash-then-copy banked a directory that failed its own SHA256SUMS.
+
+        The realistic trigger is banking while a straggler shard is still flushing. The fix
+        re-hashes the STAGED bytes before the rename, so self-consistency is an invariant of
+        the write rather than an assumption that the source held still.
+        """
+        real_copy = bank._copy_file
+
+        def mutate_then_copy(source: Path, destination: Path) -> None:
+            if source.name == "shard1.json":
+                source.write_bytes(source.read_bytes() + b"    APPENDED BY A CONCURRENT WRITER")
+            real_copy(source, destination)
+
+        with patch.object(bank, "_copy_file", mutate_then_copy):
+            refusal = self.refuse()
+        self.assertIn(bank.STAGED_COPY_MISMATCH, refusal.codes)
+        self.assertIn("would have failed its own SHA256SUMS",
+                      refusal.messages_for(bank.STAGED_COPY_MISMATCH)[0])
+        self.assertFalse(self.fixture.out_dir.exists())
+        self.assertEqual(sorted(p.name for p in self.fixture.store_dir.iterdir()), [])
+
+    def test_a_truncation_between_hashing_and_copying_is_refused_too(self) -> None:
+        """Not only growth: a shard that shrinks must not bank either."""
+        real_copy = bank._copy_file
+
+        def truncate_then_copy(source: Path, destination: Path) -> None:
+            if source.name == "shard0.json":
+                source.write_bytes(b"")
+            real_copy(source, destination)
+
+        with patch.object(bank, "_copy_file", truncate_then_copy):
+            refusal = self.refuse()
+        self.assertIn(bank.STAGED_COPY_MISMATCH, refusal.codes)
+        self.assertFalse(self.fixture.out_dir.exists())
+
+    def test_the_banked_directory_verifies_against_its_own_sha256sums(self) -> None:
+        """The invariant all of the above exist to protect, asserted with the external tool."""
+        self.fixture.bank()
+        done = self._shasum()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("FAILED", done.stdout)
+
+
+# ----------------------------------------------------------------------------------------------
+# The smaller findings from the same review, each with its own failing input
+# ----------------------------------------------------------------------------------------------
+class ReviewNitTests(_FixtureCase):
+    def test_a_zero_width_only_value_does_not_pass_as_a_required_string(self) -> None:
+        """U+200B, U+FEFF and U+00AD all survive str.strip(), so strip() is not an empty test."""
+        for label, blank in (
+            ("U+200B zero-width space", "​"),
+            ("U+FEFF BOM", "﻿"),
+            ("U+00AD soft hyphen", "­"),
+            ("mixed blanks", " ​\t­ "),
+        ):
+            with self.subTest(blank=label):
+                fixture = _Fixture(Path(tempfile.mkdtemp()))
+                fixture.stamp["cell"] = blank
+                with self.assertRaises(bank.BankRefusal) as caught:
+                    fixture.bank()
+                self.assertIn(bank.INVALID_FIELD_VALUE, caught.exception.codes)
+                self.assertIn(
+                    "zero-width or non-printing",
+                    caught.exception.messages_for(bank.INVALID_FIELD_VALUE)[0],
+                )
+
+    def test_a_zero_width_only_value_is_refused_in_every_required_string_field(self) -> None:
+        for name in ("checkpoint", "arms", "image", "launcher", "seed_band"):
+            with self.subTest(field=name):
+                fixture = _Fixture(Path(tempfile.mkdtemp()))
+                fixture.stamp[name] = "​"
+                with self.assertRaises(bank.BankRefusal) as caught:
+                    fixture.bank()
+                self.assertIn(bank.INVALID_FIELD_VALUE, caught.exception.codes)
+
+    def test_a_derived_key_is_refused_however_it_is_spelled(self) -> None:
+        """`Estimand` and `"estimand "` used to bank a forged caveat beside the real one."""
+        for spelling in ("Estimand", "ESTIMAND", "estimand ", " estimand", "PER_FILE"):
+            with self.subTest(spelling=spelling):
+                fixture = _Fixture(Path(tempfile.mkdtemp()))
+                fixture.stamp[spelling] = {"prices": "whatever the author preferred"}
+                with self.assertRaises(bank.BankRefusal) as caught:
+                    fixture.bank()
+                self.assertIn(bank.DERIVED_FIELD_SUPPLIED, caught.exception.codes)
+
+    def test_a_derived_key_forged_inside_a_shard_record_is_refused(self) -> None:
+        """The guard used to be a top-level set intersection, so this banked."""
+        self.fixture.stamp["shards"][0]["estimand"] = {"prices": "a forgery in the evidence"}
+        message = self.assertRefusedWith(bank.DERIVED_FIELD_SUPPLIED, contains="shards[0]")
+        self.assertIn("two answers to what the numbers mean", message)
+
+    def test_a_symlinked_shard_is_refused(self) -> None:
+        """`path.is_file()` and `shutil.copy2` both follow links, so this banked outside bytes."""
+        outside = self.fixture.root / "outside.json"
+        outside.write_bytes(b"CONTENT FROM OUTSIDE THE HARVEST")
+        link = self.fixture.source_dir / "results" / "linked.json"
+        link.symlink_to(outside)
+        self.fixture.stamp["shards"].append({
+            "file": "results/linked.json",
+            "sha256": _sha256_bytes(b"CONTENT FROM OUTSIDE THE HARVEST"),
+            "exit_status": 0, "pod": "bank-test-pod-x", "node": "node-x.example.invalid",
+        })
+        self.assertRefusedWith(bank.SYMLINKED_SHARD, contains="symlink")
+
+    def test_a_shard_reached_through_a_symlinked_directory_is_refused(self) -> None:
+        outside_dir = self.fixture.root / "elsewhere"
+        outside_dir.mkdir()
+        (outside_dir / "shard.json").write_bytes(b"OUTSIDE")
+        (self.fixture.source_dir / "linkdir").symlink_to(outside_dir)
+        self.fixture.stamp["shards"].append({
+            "file": "linkdir/shard.json", "sha256": _sha256_bytes(b"OUTSIDE"),
+            "exit_status": 0, "pod": "bank-test-pod-x", "node": "node-x.example.invalid",
+        })
+        self.assertRefusedWith(bank.SYMLINKED_SHARD)
+
+    def test_a_zero_byte_shard_is_refused_unless_the_emptiness_is_the_finding(self) -> None:
+        """Every other guard reads True: the hash of nothing is honestly recorded."""
+        (self.fixture.source_dir / "results" / "empty.json").write_bytes(b"")
+        self.fixture.stamp["shards"].append({
+            "file": "results/empty.json", "sha256": _sha256_bytes(b""),
+            "exit_status": 0, "pod": "bank-test-pod-x", "node": "node-x.example.invalid",
+        })
+        self.assertRefusedWith(bank.EMPTY_SHARD_FILE, contains="ZERO bytes")
+
+    def test_an_acknowledged_zero_byte_shard_banks(self) -> None:
+        (self.fixture.source_dir / "results" / "empty.json").write_bytes(b"")
+        self.fixture.stamp["shards"].append({
+            "file": "results/empty.json", "sha256": _sha256_bytes(b""),
+            "exit_status": 0, "pod": "bank-test-pod-x", "node": "node-x.example.invalid",
+        })
+        result = self.fixture.bank(allow_empty_shard=True)
+        provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
+        self.assertIn(0, [entry["bytes"] for entry in provenance["per_file"]])
+
+    def test_a_signal_killed_shard_can_be_banked_with_acknowledgement(self) -> None:
+        """Python reports SIGKILL as -9. The OOM case is where banking-with-ack matters most."""
+        self.fixture.stamp["shards"][1]["exit_status"] = -9
+        refusal = self.refuse()
+        self.assertIn(bank.UNACKNOWLEDGED_SHARD_FAILURE, refusal.codes)
+        self.assertIn("exited -9", refusal.messages_for(bank.UNACKNOWLEDGED_SHARD_FAILURE)[0])
+
+        result = self.fixture.bank(allow_nonzero_shard_exit=True)
+        provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
+        self.assertEqual(provenance["nonzero_exit_shards_acknowledged"], ["results/shard1.json"])
+        self.assertEqual(provenance["shards"][1]["exit_status"], -9)
+
+    def test_a_declared_byte_count_is_verified_rather_than_trusted(self) -> None:
+        self.fixture.stamp["shards"][0]["bytes"] = 999999
+        self.assertRefusedWith(bank.SHARD_BYTES_MISMATCH, contains="999999")
+
+    def test_a_correct_declared_byte_count_is_accepted(self) -> None:
+        path = self.fixture.source_dir / self.fixture.stamp["shards"][0]["file"]
+        self.fixture.stamp["shards"][0]["bytes"] = path.stat().st_size
+        self.assertEqual(self.fixture.bank().status, "banked")
+
+    def test_a_duplicate_key_in_the_stamp_json_is_refused(self) -> None:
+        """`{"rollouts": 0, "rollouts": 64}` parses to 64 and the discarded answer is invisible."""
+        raw = json.dumps(self.fixture.stamp)
+        doctored = raw.replace('"rollouts": 64', '"rollouts": 0, "rollouts": 64', 1)
+        self.assertEqual(json.loads(doctored)["rollouts"], 64)  # what the default parser does
+        with self.assertRaises(bank.BankRefusal) as caught:
+            bank._load_stamp_json(doctored)
+        self.assertIn(bank.DUPLICATE_STAMP_KEY, caught.exception.codes)
+        self.assertEqual(caught.exception.fields_for(bank.DUPLICATE_STAMP_KEY), ("rollouts",))
+
+    def test_the_cli_refuses_a_duplicate_key_without_a_traceback(self) -> None:
+        raw = json.dumps(self.fixture.stamp).replace(
+            '"sims": 2048', '"sims": 1, "sims": 2048', 1)
+        path = self.fixture.root / "stamp.json"
+        path.write_text(raw, encoding="utf-8")
+        done = subprocess.run(
+            [sys.executable, str(_SCRIPT), "--stamp", str(path),
+             "--source-dir", str(self.fixture.source_dir),
+             "--out-dir", str(self.fixture.out_dir)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(done.returncode, bank.REFUSAL_EXIT)
+        self.assertIn(bank.DUPLICATE_STAMP_KEY, done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+
+    def test_an_undeclared_file_beside_a_banked_artifact_is_not_blessed_as_unchanged(self) -> None:
+        """`unchanged` used to mean "everything declared is here", not "nothing else is"."""
+        self.fixture.bank()
+        (self.fixture.out_dir / "NOTES.md").write_text("dumped beside the bank", encoding="utf-8")
+        refusal = self.refuse()
+        self.assertIn(bank.DESTINATION_HOLDS_DIFFERENT_ARTIFACT, refusal.codes)
+        self.assertTrue((self.fixture.out_dir / "NOTES.md").is_file())
+
+    def test_an_undeclared_shard_beside_a_banked_artifact_is_not_blessed_either(self) -> None:
+        self.fixture.bank()
+        (self.fixture.out_dir / "results" / "shard-NOT-IN-STAMP.json").write_text("{}")
+        self.assertIn(
+            bank.DESTINATION_HOLDS_DIFFERENT_ARTIFACT, self.refuse().codes
+        )
+
+    def test_a_refusal_names_the_field_machine_readably(self) -> None:
+        """A launcher branching on which input was wrong must not have to parse prose."""
+        self.fixture.stamp.pop("checkpoint_sha256")
+        self.fixture.stamp["shards"][0].pop("pod")
+        refusal = self.refuse()
+        self.assertEqual(
+            sorted(refusal.fields_for(bank.MISSING_REQUIRED_FIELD)),
+            ["checkpoint_sha256", "shards[0].pod"],
+        )
+
+    def test_a_stale_staging_directory_is_reported_rather_than_silently_left(self) -> None:
+        """SIGKILL cannot be caught, so debris is possible; invisible debris is not acceptable."""
+        self.fixture.store_dir.mkdir(parents=True, exist_ok=True)
+        stale = self.fixture.store_dir / f"{bank.STAGING_PREFIX}{CAMPAIGN_ID}-killed"
+        stale.mkdir()
+        result = self.fixture.bank()
+        self.assertEqual(result.stale_staging, (stale,))
+        self.assertTrue(stale.is_dir(), "the tool deleted evidence instead of reporting it")
+
+    def test_the_help_text_states_the_exit_code_contract(self) -> None:
+        done = subprocess.run(
+            [sys.executable, str(_SCRIPT), "--help"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(done.returncode, 0)
+        self.assertIn(f"{bank.REFUSAL_EXIT} = REFUSED", done.stdout)
+        self.assertIn("2 = bad invocation", done.stdout)
+
+
+# ----------------------------------------------------------------------------------------------
+# The staging (INPUTS) kind, and the one-schema-string-one-shape property
+# ----------------------------------------------------------------------------------------------
+STAGING_KIND = "staging.v1"
+STAGING_CAMPAIGN_ID = "bank-test-staging-20260817"
+
+
+class StagingKindTests(unittest.TestCase):
+    """An INPUTS cell: staged bytes, no games, no seeds, no results.
+
+    The kind exists because the store already holds a hand-written staging stamp whose shape is
+    disjoint from the results shape -- no shards, no seeds, no search budget -- and one schema
+    string naming two disjoint layouts is precisely what stops a reader telling them apart.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.source_dir = self.root / "staged"
+        (self.source_dir / "artifacts").mkdir(parents=True)
+        self.out_dir = self.root / "campaign-store" / STAGING_CAMPAIGN_ID
+        files = []
+        for name, payload in (
+            ("artifacts/encoder_tables.json", b'{"schema_version": "placeholder"}'),
+            ("staged-models/model_ts_cpu.pt", b"placeholder torchscript bytes"),
+        ):
+            path = self.source_dir / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+            files.append({"file": name, "sha256": _sha256_bytes(payload)})
+        self.stamp: dict[str, Any] = {
+            "artifact_kind": STAGING_KIND,
+            "campaign_id": STAGING_CAMPAIGN_ID,
+            "cell": "instrument-2 artifact staging (placeholder)",
+            "checkpoint": PLACEHOLDER_CHECKPOINT,
+            "checkpoint_sha256": _sha256_bytes(b"placeholder-weights"),
+            "staged_at_utc": "2026-08-17T10:30:00Z",
+            "staged_from": "/lineages/lineage-a/iteration-0001",
+            "staging_pod": "bank-test-staging-pod",
+            "staging_node": "node-s.example.invalid",
+            "image_id": PLACEHOLDER_IMAGE,
+            "no_results_banked_here": (
+                "INPUTS only: no games, no win rate, no X, no Y. A strength number from this "
+                "arm belongs in its own results cell with its own provenance."
+            ),
+            "staged_files": files,
+        }
+
+    def bank(self, **kwargs: Any) -> Any:
+        return bank.bank_artifact(self.stamp, self.source_dir, self.out_dir, **kwargs)
+
+    def test_an_inputs_cell_banks_and_carries_the_staging_schema_string(self) -> None:
+        result = self.bank()
+        provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
+        self.assertEqual(provenance["schema"], bank.STAGING_SCHEMA)
+        self.assertNotEqual(provenance["schema"], bank.PROVENANCE_SCHEMA)
+        self.assertEqual(provenance["artifact_kind"], STAGING_KIND)
+        self.assertEqual(provenance["staged_file_count"], 2)
+        self.assertEqual(len(provenance["per_file"]), 2)
+        # No results vocabulary leaks into an inputs cell.
+        for absent in ("shards", "shard_count", "estimand", "nonzero_exit_shards_acknowledged"):
+            self.assertNotIn(absent, provenance)
+
+    def test_the_two_shapes_never_share_one_schema_string(self) -> None:
+        """The property the review asked for: tell them apart from `schema` alone."""
+        results_schemas = {
+            kind.schema for kind in bank.ARTIFACT_KINDS.values() if kind.files_field == "shards"
+        }
+        staging_schemas = {
+            kind.schema for kind in bank.ARTIFACT_KINDS.values()
+            if kind.files_field == "staged_files"
+        }
+        self.assertEqual(results_schemas, {bank.PROVENANCE_SCHEMA})
+        self.assertEqual(staging_schemas, {bank.STAGING_SCHEMA})
+        self.assertEqual(results_schemas & staging_schemas, set())
+
+    def test_a_stamp_declaring_the_matching_schema_is_accepted_and_rewritten_once(self) -> None:
+        """Agreeing with the tool is not forgery; the key is not duplicated in the output."""
+        self.stamp["schema"] = bank.STAGING_SCHEMA
+        text = self.bank().provenance_path.read_text(encoding="utf-8")
+        self.assertEqual(text.count('"schema"'), 1)
+        self.assertEqual(json.loads(text)["schema"], bank.STAGING_SCHEMA)
+
+    def test_a_stamp_declaring_the_wrong_schema_is_refused(self) -> None:
+        """This is the exact defect the review found in the store: one string, two shapes."""
+        self.stamp["schema"] = bank.PROVENANCE_SCHEMA
+        with self.assertRaises(bank.BankRefusal) as caught:
+            self.bank()
+        self.assertIn(bank.SCHEMA_MISMATCH, caught.exception.codes)
+        self.assertIn(
+            "two shapes behind one schema string",
+            caught.exception.messages_for(bank.SCHEMA_MISMATCH)[0],
+        )
+        self.assertFalse(self.out_dir.exists())
+
+    def test_an_inputs_cell_cannot_be_banked_without_its_own_required_fields(self) -> None:
+        for spec in bank.ARTIFACT_KINDS[STAGING_KIND].required:
+            if spec.name == "staged_files":
+                continue
+            with self.subTest(field=spec.name):
+                stamp = {k: v for k, v in self.stamp.items() if k != spec.name}
+                with self.assertRaises(bank.BankRefusal) as caught:
+                    bank.bank_artifact(stamp, self.source_dir, self.out_dir)
+                self.assertIn(bank.MISSING_REQUIRED_FIELD, caught.exception.codes)
+                self.assertIn(spec.name, caught.exception.fields_for(bank.MISSING_REQUIRED_FIELD))
+
+    def test_an_empty_staged_file_list_is_refused_and_names_that_field(self) -> None:
+        self.stamp["staged_files"] = []
+        with self.assertRaises(bank.BankRefusal) as caught:
+            self.bank()
+        self.assertIn(bank.EMPTY_SHARD_LIST, caught.exception.codes)
+        self.assertIn("'staged_files' is an EMPTY list",
+                      caught.exception.messages_for(bank.EMPTY_SHARD_LIST)[0])
+
+    def test_the_staging_kind_does_not_require_results_fields(self) -> None:
+        """Otherwise it would be the results kind wearing a different name."""
+        declared = set(bank.ARTIFACT_KINDS[STAGING_KIND].field_names())
+        for results_only in ("rollouts", "sims", "depth", "arms", "seeds", "seed_band", "shards"):
+            self.assertNotIn(results_only, declared)
+
+    def test_the_staging_kind_still_verifies_every_staged_sha256(self) -> None:
+        target = self.source_dir / "artifacts" / "encoder_tables.json"
+        target.write_bytes(b'{"schema_version": "edited after hashing"}')
+        with self.assertRaises(bank.BankRefusal) as caught:
+            self.bank()
+        self.assertIn(bank.SHARD_SHA256_MISMATCH, caught.exception.codes)
+
+    def test_a_staged_file_needs_no_exit_status(self) -> None:
+        """Staging is one operation; a per-file exit status would be invented provenance."""
+        self.assertNotIn(
+            "exit_status",
+            [spec.name for spec in bank.ARTIFACT_KINDS[STAGING_KIND].file_required],
+        )
+        self.assertEqual(self.bank().status, "banked")
 
 
 if __name__ == "__main__":
