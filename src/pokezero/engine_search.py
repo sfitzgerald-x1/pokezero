@@ -585,11 +585,23 @@ class EngineMctsConfig:
     # THE GATE WAS ON THE WRONG KNOB. `rollout_threads` -- proven value-invariant
     # by `thread_count_does_not_change_values` -- required an acknowledgement,
     # while this one, the only uncertified regime the arm has, was accepted
-    # silently with no warning. Measured magnitude on `symmetric.state`:
-    # root_value 0.518034 at 1, 0.505411 at 8, 0.435800 at 64 -- 8.2 pp on the
-    # reported quantity, which is LARGER than the ~0.6 pp vs ~13 pp contrast this
-    # arm exists to resolve. So an unacknowledged batch could swamp the arbiter's
-    # own signal.
+    # silently with no warning at any value.
+    #
+    # MAGNITUDE, and the provenance it now carries. An earlier revision of this
+    # comment quoted a single triple (root_value 0.518034 / 0.505411 / 0.435800,
+    # "8.2 pp") from a run whose config was never recorded, and independent
+    # review could not reproduce it in 9792 crate runs across two grids -- at the
+    # config the text implied, it measured 0.489321 / 0.483258 / 0.423144. A
+    # literal nobody can re-derive is worse than no number, because it reads as
+    # evidence.
+    #
+    # What IS reproducible is the distribution, swept over 864 config triples
+    # (5 fixtures x seeds x rollout_seed x depth): the leaf_batch 1 -> 64 gap in
+    # root_value runs min 2.77, median 7.54, max 11.72 pp. Even the MINIMUM
+    # exceeds the ~0.6 pp arm of the ~0.6-vs-~13 pp contrast this instrument
+    # exists to discriminate, so an unacknowledged batch can swamp the arbiter's
+    # own signal. The fence rests on that range, and it is a range rather than a
+    # point because the measurement is.
     leaf_batch: int = 1
     #: Acknowledge that `leaf_batch > 1` trades selection fidelity for pricer
     #: amortisation on the sequential path, and that the fidelity gate does not
@@ -756,10 +768,12 @@ class EngineMctsConfig:
                     f"leaf_batch={self.leaf_batch} > 1 requires "
                     "leaf_batch_fidelity_loss_ack=True. leaf_batch=1 is the only value "
                     "the fidelity gate certifies on the sequential path, and batching is "
-                    "a measured fidelity LOSS rather than an approximation: root_value "
-                    "moved 0.518034 -> 0.505411 -> 0.435800 at leaf_batch 1 -> 8 -> 64 on "
-                    "one fixture, i.e. 8.2 pp on the reported quantity -- larger than the "
-                    "effect contrast this arm exists to resolve. Set the ack only if the "
+                    "a measured fidelity LOSS rather than an approximation: swept over "
+                    "864 config triples (5 fixtures x seeds x rollout_seed x depth), the "
+                    "leaf_batch 1 -> 64 gap in root_value runs 2.8-11.7 pp (median 7.5). "
+                    "Even the minimum exceeds the ~0.6 pp arm of the contrast this "
+                    "instrument exists to discriminate, so an unacknowledged batch can "
+                    "swamp the arbiter's own signal. Set the ack only if the pricer "
                     "amortisation is worth an uncertified selection regime."
                 )
             if self.rollout_policy != "uniform":

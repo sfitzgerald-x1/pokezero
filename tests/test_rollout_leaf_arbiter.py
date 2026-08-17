@@ -367,33 +367,6 @@ class RolloutConfigGuardTests(unittest.TestCase):
         `leaf_eval` accepts the arm's fields and ignores them, so a stray value
         cannot change what a production cell does."""
 
-    def test_a_batched_arm_requires_the_fidelity_loss_ack(self) -> None:
-        # The demonstrated failing input for the guard that was previously on the
-        # wrong knob: `leaf_batch > 1` is the arm's ONLY uncertified selection
-        # regime and used to be accepted silently, while `rollout_threads` --
-        # proven value-invariant -- required an acknowledgement.
-        for leaf_batch in (2, 8, 64, 4096):
-            with self.subTest(leaf_batch=leaf_batch), self.assertRaises(ValueError) as caught:
-                self._config(leaf_batch=leaf_batch)
-            message = str(caught.exception)
-            self.assertIn("leaf_batch_fidelity_loss_ack=True", message)
-            # The refusal must carry the MAGNITUDE, so a reader deciding whether
-            # to set the ack sees what it costs rather than only that it is
-            # uncertified.
-            self.assertIn("8.2 pp", message)
-
-    def test_the_batch_ack_admits_the_regime_rather_than_banning_it(self) -> None:
-        # A fence that cannot be opened would make the batching seam untestable;
-        # the requirement is an explicit choice, not a prohibition.
-        config = self._config(leaf_batch=8, leaf_batch_fidelity_loss_ack=True)
-        self.assertEqual(config.leaf_batch, 8)
-
-    def test_the_batch_ack_is_inert_on_other_leaf_evals(self) -> None:
-        from pokezero.engine_search import EngineMctsConfig
-
-        EngineMctsConfig(leaf_eval="hp_fraction", leaf_batch=64)
-
-
         from pokezero.engine_search import EngineMctsConfig
 
         production = EngineMctsConfig(
@@ -407,6 +380,172 @@ class RolloutConfigGuardTests(unittest.TestCase):
             rollout_threads_cpu_budget_ack=False,
         )
         self.assertEqual(production.leaf_eval, "hp_fraction_crate")
+
+    def test_a_batched_arm_requires_the_fidelity_loss_ack(self) -> None:
+        # The demonstrated failing input for the guard that was previously on the
+        # wrong knob: `leaf_batch > 1` is the arm's ONLY uncertified selection
+        # regime and used to be accepted silently, while `rollout_threads` --
+        # proven value-invariant -- required an acknowledgement.
+        for leaf_batch in (2, 3, 8, 64, 1000, 4096):
+            with self.subTest(leaf_batch=leaf_batch), self.assertRaises(ValueError) as caught:
+                self._config(leaf_batch=leaf_batch)
+            message = str(caught.exception)
+            self.assertIn("leaf_batch_fidelity_loss_ack=True", message)
+            # The refusal must carry the MAGNITUDE, so a reader deciding whether
+            # to set the ack sees what it costs rather than only that it is
+            # uncertified. Asserted as the RANGE the sweep measured, not as a
+            # single triple: an earlier revision pinned "8.2 pp" from one
+            # unrecorded run and independent review could not reproduce it in
+            # 9792 crate runs. A literal nobody can re-derive is worse than no
+            # number, because it looks like evidence.
+            self.assertIn("2.8-11.7 pp", message)
+
+    def test_the_batch_ack_admits_the_regime_rather_than_banning_it(self) -> None:
+        # A fence that cannot be opened would make the batching seam untestable;
+        # the requirement is an explicit choice, not a prohibition.
+        config = self._config(leaf_batch=8, leaf_batch_fidelity_loss_ack=True)
+        self.assertEqual(config.leaf_batch, 8)
+
+    def test_the_batch_ack_is_inert_on_other_leaf_evals(self) -> None:
+        """A production `leaf_eval` ignores `leaf_batch` entirely, so a stray
+        value cannot change what a production cell does."""
+
+        from pokezero.engine_search import EngineMctsConfig
+
+        for leaf_eval in ("hp_fraction", "hp_fraction_crate"):
+            with self.subTest(leaf_eval=leaf_eval):
+                production = EngineMctsConfig(
+                    leaf_eval=leaf_eval,
+                    worlds=1,
+                    search_sims=64,
+                    search_depth=2,
+                    # Refused on the arm at any value above 1, accepted here.
+                    leaf_batch=64,
+                    leaf_batch_fidelity_loss_ack=False,
+                )
+                self.assertEqual(production.leaf_batch, 64)
+
+
+class EveryTestInThisModuleHasABodyTest(unittest.TestCase):
+    """A meta-gate, added because this module shipped a test that could not fail.
+
+    Inserting three methods between
+    `test_the_ack_is_inert_on_other_leaf_evals`'s docstring and its body left the
+    named test as `RESUME; RETURN_CONST None` -- a test that passes
+    unconditionally -- while the suite stayed green, because the orphaned
+    assertions ran inside whichever method absorbed them. Independent review
+    caught it by disassembling the bytecode.
+
+    That is the same defect class this program has now found four times: a check
+    that cannot read False. The lesson is not "insert methods more carefully",
+    it is that a docstring-only test body is mechanically detectable, so it
+    should be detected mechanically.
+
+    Scope, stated so this is not mistaken for a general style rule: it applies to
+    THIS module only. A deliberately empty test elsewhere is somebody else's
+    decision.
+    """
+
+    def _empty_test_methods(self, module) -> list[str]:
+        """Names of `test_*` methods whose body is only a docstring (or `pass`).
+
+        Detected from the CODE OBJECT rather than the source text, because the
+        failure was invisible in a diff -- the source read as two well-formed
+        methods -- and only the bytecode showed the body was gone.
+        """
+        import dis
+        import inspect
+
+        def is_stub(func) -> bool:
+            code = getattr(func, "__code__", None)
+            if code is None:
+                return False
+            # Read the INSTRUCTIONS, not `co_consts`. A docstring-only body keeps
+            # its docstring in `co_consts`, so a "no constants" test never fires
+            # on the very shape this gate exists to catch -- the first draft of
+            # this detector made exactly that mistake and its own demonstrated
+            # failing input caught it, which is the argument for shipping one.
+            #
+            # What both stub spellings reduce to is: no operation except
+            # returning a constant. `RESUME`/`NOP`/`CACHE` are bookkeeping.
+            for instruction in dis.get_instructions(code):
+                name = instruction.opname
+                if name in ("RESUME", "NOP", "CACHE", "RETURN_CONST"):
+                    continue
+                if name == "LOAD_CONST":
+                    continue
+                if name == "RETURN_VALUE":
+                    continue
+                return False
+            return True
+
+        empty = []
+        for _, cls in inspect.getmembers(module, inspect.isclass):
+            if not issubclass(cls, unittest.TestCase) or cls is unittest.TestCase:
+                continue
+            if cls.__module__ != module.__name__:
+                continue
+            for name, func in vars(cls).items():
+                if not name.startswith("test_") or not callable(func):
+                    continue
+                if is_stub(func):
+                    empty.append(f"{cls.__name__}.{name}")
+        return empty
+
+    def test_no_test_in_this_module_is_a_docstring_only_stub(self) -> None:
+        import sys
+
+        module = sys.modules[type(self).__module__]
+        self.assertEqual(
+            self._empty_test_methods(module),
+            [],
+            "a test whose body is only a docstring passes unconditionally and "
+            "certifies nothing; its assertions were probably absorbed by the "
+            "method below it",
+        )
+
+    def test_the_meta_gate_reads_false_on_a_severed_test(self) -> None:
+        """The demonstrated failing input, which is the whole point.
+
+        Reconstructs the exact shape the review found -- a `test_*` method
+        holding only a docstring -- and asserts the detector names it. Without
+        this, the meta-gate above would be one more check nobody had shown
+        capable of failing.
+        """
+
+        import types
+
+        module = types.ModuleType("severed_fixture")
+
+        class Severed(unittest.TestCase):
+            def test_looks_fine_but_has_no_body(self) -> None:
+                """Docstring only -- exactly what the review disassembled."""
+
+            def test_really_asserts_something(self) -> None:
+                self.assertEqual(1, 1)
+
+        Severed.__module__ = "severed_fixture"
+        module.Severed = Severed
+
+        found = self._empty_test_methods(module)
+        self.assertIn("Severed.test_looks_fine_but_has_no_body", found)
+        self.assertNotIn("Severed.test_really_asserts_something", found)
+
+    def test_the_meta_gate_does_not_flag_a_pass_only_test_as_clean(self) -> None:
+        """`pass` is the other spelling of the same stub, so it must also read
+        False -- otherwise the fix for a flagged test is to write `pass`."""
+
+        import types
+
+        module = types.ModuleType("pass_fixture")
+
+        class PassOnly(unittest.TestCase):
+            def test_pass_only(self) -> None:
+                pass
+
+        PassOnly.__module__ = "pass_fixture"
+        module.PassOnly = PassOnly
+        self.assertIn("PassOnly.test_pass_only", self._empty_test_methods(module))
 
 
 if __name__ == "__main__":  # pragma: no cover
