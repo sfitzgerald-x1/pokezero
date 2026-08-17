@@ -425,6 +425,19 @@ def test_the_abstention_guard_is_inert_for_an_arm_that_creates_no_ties(cell):
     assert r["p_gate"] == r["exact_signflip_p_two_sided"]
 
 
+def test_the_abstention_guard_charges_exactly_half_a_credit_per_new_tie(cell):
+    """The guard's PRICE, as an identity rather than a hand-wave, because it is charged to
+    legitimate arms too: delta - delta_adv = 0.5 * (new ties) / n_eligible. An arm that ties on
+    genuinely ambiguous siblings pays that; an arm that creates no ties pays nothing. The gate is
+    a deliberate conservative bias against buying advancement with abstentions, not a claim that
+    every tie is an abstention -- and the size of the bias should be checkable, not asserted."""
+    for name in ("saturating_tanh50", "abstention_gaming_label_aimed_ties",
+                 "positive_control_blend_truth_0.10"):
+        r = cmp_at(cell, demo(cell, name))
+        charge = 0.5 * r["head_ties_created_by_arm"] / r["n_eligible"]
+        assert r["delta_c"] - r["delta_c_new_ties_scored_wrong"] == pytest.approx(charge), name
+
+
 def test_a_powered_abstention_attack_is_refused_rather_than_advanced():
     """At a bank size where the attack WOULD be powered, the guard -- not the power rule -- is
     what stops it."""

@@ -520,9 +520,13 @@ def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
     # orderings improved. It needs label access to aim, so it is not something training
     # stumbles into -- but "the attacker would need the labels" is not a property of the
     # statistic, and this gate is not allowed to rest on one.
-    # So advancement must also survive scoring EVERY NEWLY MANUFACTURED TIE AS WRONG. A real
-    # ordering improvement creates no new ties and is untouched (delta_adv == delta); an
-    # abstention buys exactly nothing.
+    # So advancement must also survive scoring EVERY NEWLY MANUFACTURED TIE AS WRONG. The price
+    # is exact and worth stating rather than glossing: delta - delta_adv = 0.5 * (new ties) / n,
+    # because each new tie loses its half credit. An arm that creates no new ties pays nothing
+    # (delta_adv == delta, and the guard is inert -- true of all nine banked arms at every tau).
+    # An arm that ties on genuinely ambiguous siblings DOES pay, at that rate: the guard is a
+    # deliberate conservative bias against buying advancement with abstentions, not a claim that
+    # every tie is an abstention.
     arm_adv = [0.0 if k in new_ties_keys else s for k, s in zip(sel, arm)]
     delta_adv = concordance(arm_adv) - c_base
     diffs_adv = [a - b for a, b in zip(arm_adv, base) if a != b]
