@@ -66,7 +66,7 @@ are pinned against the two census modules' own constants, read by AST rather tha
 update the register in the same change. That is deliberate: the document that goes stale is
 the one nothing forces an author through.
 
-MUTATION BATTERY: 67 applied, 67 caught, plus 1 NEGATIVE CONTROL verified green.
+MUTATION BATTERY: 68 applied, 68 caught, plus 1 NEGATIVE CONTROL verified green.
 Partitioned by WHAT IS MUTATED. Enumerated because
 an unrecorded battery is what `tests/test_wide_seed_negative_census.py` records costing it a
 surviving mutation, and because "the tests pass" is the same kind of claim this module
@@ -140,7 +140,7 @@ BLOCK A -- A1-A37, applied to the REGISTER's own bytes.
        `TheDocumentsClaimsAboutItselfAreReDerivedTests`, which exists because review blocked
        two successive revisions on claims the document made about ITSELF.
 
-BLOCK B -- B38-B67, THIRTY mutations applied ONLY to the tree and never to the document.
+BLOCK B -- B38-B68, THIRTY-ONE mutations applied ONLY to the tree and never to the document.
 Block A can be passed by a pin that reads the register against a hard-coded copy of itself.
 These are the ones that prove each derivation reads what it claims to: every one MAKES A REAL
 CHANGE TO THE TREE and the document, unedited, must go red. Six are the absences, and an
@@ -277,6 +277,21 @@ has recorded.
        the equality in place. A control populated by the thing it controls is not a control.
        `_tree_side_hashed_inputs` now enumerates from the real repo and populates the
        sandbox, so the copy is a copy of the TREE rather than of the hasher's opinion of it.
+  B68. ⚠ AND B67's FIX MADE THE ENUMERATOR A SINGLE POINT OF FAILURE -- the same defect a
+       FOURTH frame out, found by the author while re-reading B67 rather than by review, and
+       recorded because the sequence is the lesson. `_tree_side_hashed_inputs` had become
+       both the sandbox's source AND the equality's expected side, so a hasher and an
+       enumerator that shrink IN THE SAME DIRECTION agree with each other:
+       `crate_sources()` and the enumerator both skipping `tree.rs`, reseated, was a clean
+       `Ran 51 tests, OK`. Four variants measured -- collude on a crate source, subset the
+       enumerator alone, point the enumerator AT `build_inputs()` so it has no independence
+       left, and collude on the patch manifest.
+       THE FIX IS TO STOP TERMINATING IN CODE. Appendix A now records
+       `t1.hashed_input_files` (91) and `t1.hashed_crate_sources` (11), derived from the
+       enumerator, so a shrunken enumerator disagrees with the DOCUMENT even when the hasher
+       shrinks with it. All four variants die on `test_every_value_re_derives`. A declared
+       coupling and a free one: anything that changes this inventory moves the fingerprint
+       too, so Appendix A is already being edited in the same change.
 
 
 BLOCK C -- NEGATIVE CONTROLS. Mutations that must stay GREEN because they do not change the
@@ -755,6 +770,28 @@ def derive() -> dict[str, str]:
         sum(1 for name in committed_json() if head[:16] in _text(name))
     )
     facts["t1.freeze_declaration_constants"] = str(freeze_declaration_constants())
+    # THE DOCUMENT IS WHERE THIS CHAIN TERMINATES, and these two rows are why.
+    # `TheFingerprintDerivationReadsTheTreeTests` asserts the HASHER's input set equals the
+    # TREE's, re-derived by `_tree_side_hashed_inputs`. That leaves the enumerator itself as
+    # a single point of failure: MEASURED, a hasher and an enumerator that both skip
+    # `tree.rs` agree with each other and the equality passes at a clean OK once Appendix A
+    # is reseated -- the same defect one frame further out for the third time. Recording the
+    # inventory HERE breaks it, because the document is not code: a shrunken enumerator
+    # disagrees with these rows even when the hasher shrinks with it. Declared coupling, and
+    # a free one -- anything that changes this inventory moves the fingerprint too, so the
+    # author is already editing Appendix A in the same change.
+    hashed = _tree_side_hashed_inputs()
+    # Under `src/`, not "parent is named src": `crate_sources()` globs RECURSIVELY, so a
+    # source added at `src/foo/bar.rs` would be counted by the hasher and missed here, and
+    # the row would go stale in the one direction nothing else notices.
+    crate_src = REPO / "rust" / "pokezero-search" / "src"
+    facts["t1.hashed_crate_sources"] = str(
+        len([
+            path for path in hashed
+            if path.suffix == ".rs" and path.is_relative_to(crate_src)
+        ])
+    )
+    facts["t1.hashed_input_files"] = str(len(hashed))
 
     # -- T2, G8's second remainder ---------------------------------------
     sites = residual_disjoint_band_sites()
@@ -2109,7 +2146,7 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
             21: "TWENTY-ONE", 22: "TWENTY-TWO", 23: "TWENTY-THREE",
             24: "TWENTY-FOUR", 25: "TWENTY-FIVE", 26: "TWENTY-SIX",
             27: "TWENTY-SEVEN", 28: "TWENTY-EIGHT", 29: "TWENTY-NINE",
-            30: "THIRTY",
+            30: "THIRTY", 31: "THIRTY-ONE", 32: "THIRTY-TWO",
         }
         self.assertIn(size, words, f"block B has {size} entries; extend `words`")
         word = words[size]

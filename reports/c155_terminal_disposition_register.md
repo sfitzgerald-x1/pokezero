@@ -165,7 +165,7 @@ mutation in this battery to survive: blocks A and B target the DOCUMENT and the 
 targets the DERIVATION. `TheFingerprintDerivationReadsTheTreeTests` closes it.
 
 ⚠ **AND IT TOOK THREE ROUNDS, because the first two fixes were the same mistake.** Two independent
-review rounds returned **thirteen** further surviving mutants, recorded as **B55–B67**, and the
+review rounds returned **thirteen** further surviving mutants (a fourteenth I found myself, re-reading the thirteenth's fix), recorded as **B55–B68**, and the
 pattern is worth more than any one of them: *each fix pinned the seam the last mutant used, and the
 next mutant simply moved one frame outward.* Round 1 pinned `head_fingerprint`; the tautology moved
 to `derive()`. Round 2 pinned `derive()` and the comparison loop and published "the row reaches CI
@@ -185,6 +185,19 @@ against 74 and `> 70` total against 91 — about twenty files of slack, a margin
 — so a hasher that skipped `tree.rs`, or took `crate_sources()[:6]`, or `patch_files()[:60]`, or
 dropped `Cargo.lock`, stayed green. The exhaustive loop **cannot** catch those by construction: it
 derives its probe set from the hasher, so a hasher that reads less is probed less.
+
+⚠ **AND THE THIRD FIX MADE THE ENUMERATOR A SINGLE POINT OF FAILURE — the same defect a FOURTH
+frame out, recorded as B68 and found by re-reading the third fix rather than by review.**
+`_tree_side_hashed_inputs` had become both the sandbox's source and the set-equality's expected side,
+so a hasher and an enumerator that shrink **in the same direction agree with each other**: both
+skipping `tree.rs`, reseated, was a clean `Ran 51 tests, OK`. The answer is not a fifth code-side
+pin. **It is to stop terminating in code at all**: Appendix A now records `t1.hashed_input_files`
+(**91**) and `t1.hashed_crate_sources` (**11**), so a shrunken enumerator disagrees with the
+DOCUMENT even when the hasher shrinks with it, and all four variants die on the appendix comparison.
+A declared coupling, and a free one — anything that changes this inventory moves the fingerprint too,
+so Appendix A is already being edited in the same change. **Twice now the fix has been to move the
+termination out of code: once to primary bytes, once to the document.** That is the shape of this
+defect, and it is the reason to expect a fifth frame rather than assume there is none.
 
 What the class asserts now: the helper-free comparison above; a second comparison routing through
 neither `derive()` nor the loop; `derive()` required to part company with the document on an edited
@@ -720,12 +733,12 @@ does not exist on either tree. Resolved by merging `origin/main` into the branch
 rebase) and re-deriving all four trees; the assertion now carries that diagnosis in its own failure
 message.
 
-**Mutation evidence.** **67 mutations applied, 67 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
-partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B67** edit **only the tree
+**Mutation evidence.** **68 mutations applied, 68 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
+partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B68** edit **only the tree
 and never this document**. That second number is the one that matters, because a pin reading a
 document against a hard-coded copy of itself passes every document-side mutation — and ⚠ **a first
 revision put it at ten and two of those ten edited the register**, which is the property being
-claimed, mis-stated. Thirty is the measured figure: a patch line shift, the tie-refusal arm deleted,
+claimed, mis-stated. Thirty-one is the measured figure: a patch line shift, the tie-refusal arm deleted,
 a damage push made to consult the truncation flag (G33c *fixed*), a sub-keyed single-seat counter
 added to a committed sweep, a freeze constant added to the differential, a real Showdown checkout
 added to the workflow, the head fingerprint written into an artifact, an `hp`-ceiling context line
@@ -816,6 +829,8 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
+| `t1.hashed_crate_sources` | 11 |
+| `t1.hashed_input_files` | 91 |
 | `t1.head_fingerprint` | 65092feac14da111 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
