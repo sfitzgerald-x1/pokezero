@@ -2227,6 +2227,137 @@ jobs:
           fi
 
 
+  # A CORRECT GATE THAT NOTHING RAN. `scripts/schema_container_census.py` enumerates every literal
+  # container of schema NAMES in src/ and scripts/ and aborts on any that is unclassified. It was
+  # not "a check that cannot fail" -- it failed exactly as designed, and no workflow, no test and no
+  # human ever invoked it: its only caller was `scripts/schema_rotation_drill.sh:667`, and that
+  # script's only caller is a person with 17-70 minutes to spend.
+  #
+  # Measured consequence, re-derived here by `git archive` extract per commit rather than taken from
+  # a report: the census went RED at e496e9b8 (the v4 default rotation moved a container's line, so
+  # one row went stale and one container went unclassified while the COUNT stayed 19/19), and stayed
+  # red across EIGHT consecutive first-parent commits on main -- through SEVEN subsequent PR merges
+  # -- until #1276 re-keyed the row. Nothing reported it once. That is worse than a gate that cannot
+  # fail, because the file reads as though the property is guarded.
+  #
+  # UNCONDITIONAL, with no `if:` and no entry in the `changes` filter above. The census's scan roots
+  # are src/ AND scripts/, so any filter would have to cover both, and a filter that is wrong in the
+  # narrow direction restores exactly the hole this job closes. The census is stdlib-only (`ast`,
+  # `pathlib`, `argparse`) -- no wheel, no `pip install`, no torch -- and runs in well under a
+  # second, so running it on every PR is cheaper than the reasoning needed to trust a filter.
+  schema-container-census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: The tree censused is the MERGE result, not the branch tip
+        # The prior finding in this repo that whole-file counts must derive from the MERGE ref
+        # rather than the branch. This job has no path filter and computes no diff, so the only
+        # count that could be taken from the wrong tree is the census's own container count -- and
+        # that comes from whatever `actions/checkout` left in the working directory. On
+        # `pull_request`, actions/checkout@v4 checks out `refs/pull/N/merge` by default, so the
+        # count already derives from the merge result. That default is load-bearing and INVISIBLE:
+        # a future `ref: ${{ github.event.pull_request.head.sha }}` line, which looks like a
+        # tightening, would silently census a tree that is not the one that would land. Asserted,
+        # not assumed -- the same reason the filter job above fails closed.
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          n_parents=$(( $(git rev-list --parents -n 1 HEAD | wc -w) - 1 ))
+          echo "censusing $(git rev-parse HEAD) with ${n_parents} parent(s)"
+          if [ "${n_parents}" -ne 2 ]; then
+            echo "::error::checkout left a ${n_parents}-parent commit, not the two-parent"
+            echo "::error::refs/pull/N/merge -- the census would count the branch tip, not the"
+            echo "::error::merge result. Do not add a \`ref:\` to this job's checkout."
+            exit 1
+          fi
+          second_parent=$(git rev-parse 'HEAD^2')
+          if [ "${second_parent}" != "${HEAD_SHA}" ]; then
+            echo "::error::HEAD^2 is ${second_parent}, not the PR head ${HEAD_SHA}; this is not"
+            echo "::error::the merge ref for this pull request."
+            exit 1
+          fi
+          echo "confirmed: HEAD is the merge of the base with PR head ${HEAD_SHA}"
+
+      - name: The census reddens on known-bad input
+        # Kill-confirm IN CI, before trusting the green run below -- the convention the floor gate
+        # above already sets, and the point of this whole job. Wiring in a gate without proving it
+        # can still fail reproduces the original defect one level down: the step would report green
+        # whether or not the census is capable of aborting.
+        #
+        # Run against a COPY, so the perturbation cannot reach the real run. The census resolves its
+        # repo root from `__file__`, so a copy censuses the copy; and it excludes only the RUNNING
+        # script by resolved path, so the copied census is skipped as itself rather than scanned.
+        #
+        # ONE perturbation: a single file holding one container the committed spec cannot classify.
+        # That trips the count-equality abort (20 containers, 19 rows) which returns 15, the same
+        # code every other abort returns. The claim being confirmed is "the census still exits 15 on
+        # a tree it should reject", which is what this step's own verdict depends on.
+        run: |
+          set -euo pipefail
+          scratch="${RUNNER_TEMP}/census-kill-confirm"
+          rm -rf "${scratch}"
+          mkdir -p "${scratch}/tests/data"
+          cp -R src scripts "${scratch}/"
+          cp tests/data/schema_drill_schema_containers.txt "${scratch}/tests/data/"
+          printf 'KILL_CONFIRM_TABLE = {"v3", "v4"}\n' \
+            > "${scratch}/src/pokezero/zz_census_kill_confirm.py"
+          set +e
+          python "${scratch}/scripts/schema_container_census.py" --check
+          rc=$?
+          set -e
+          echo "kill-confirm exit code: ${rc}"
+          if [ "${rc}" -ne 15 ]; then
+            echo "::error::the census did not abort with 15 on a deliberately unclassified"
+            echo "::error::container (got ${rc}). The run below cannot be trusted -- it would"
+            echo "::error::report green without having checked anything."
+            exit 1
+          fi
+
+      - name: Schema-container census
+        # THE VERDICT IS THIS STEP'S EXIT CODE. Deliberately no `tee` and no grep of output this
+        # step itself wrote. Counted on this file rather than quoted: 34 of `mass-gate`'s 44 steps
+        # assert on a log their own step produced (39 of the workflow's 65 steps in total, 0 of
+        # this job's 5), a shape held together only by `set -o pipefail` under `bash -e`. There is
+        # nothing for a success-line grep to add here anyway: `--check` returns 15 from every abort
+        # it can reach and 0 only after its final print, so the code already IS the verdict.
+        #
+        # ANY non-zero is red, not only 15. `classification()` raises `SystemExit(str)` -- exit 1 --
+        # for a spec row that is malformed, duplicated or self-contradictory, and an interpreter
+        # error is exit 1 too. "The gate could not run" must never read as green; that is the lesson
+        # the floor gate's `exit 2` arm records, and the reason this arm is written out rather than
+        # left to `-e`.
+        run: |
+          set -o pipefail
+          set +e
+          python scripts/schema_container_census.py --check
+          rc=$?
+          set -e
+          echo "census exit code: ${rc}"
+          if [ "${rc}" -eq 15 ]; then
+            echo "::error::the schema-container census aborted. A container of schema names in"
+            echo "::error::src/ or scripts/ is unclassified, a classification row matches no"
+            echo "::error::container, two containers collapsed onto one spec row, or the per-class"
+            echo "::error::counts drifted from the pin. Read the abort above and fix"
+            echo "::error::tests/data/schema_drill_schema_containers.txt -- an unregistered"
+            echo "::error::container makes its consumers fail on the drill's own omission, which"
+            echo "::error::has been reported as surviving codebase defects nine times."
+            exit 1
+          fi
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::the schema-container census could not run (exit ${rc}) -- not treated"
+            echo "::error::as green. A malformed, duplicated or conflicting classification row"
+            echo "::error::exits 1 here, as does a crash."
+            exit 1
+          fi
+
+
   # THE REQUIRED CHECK. Runs on every pull request, whatever it touches, so it can
   # always report. It is the only job in this workflow that should ever be marked
   # required in branch protection -- requiring `mass-gate` directly would block any
@@ -2247,7 +2378,7 @@ jobs:
   # the job executes, the guard fires, and nothing depends on the result. Any job
   # added to this workflow must be added here too, or it is advisory.
   gate-status:
-    needs: [changes, mass-gate, seed-registry, harness-provenance, python-floor-syntax]
+    needs: [changes, mass-gate, seed-registry, harness-provenance, python-floor-syntax, schema-container-census]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2260,6 +2391,7 @@ jobs:
           REGISTRY: ${{ needs.seed-registry.result }}
           HARNESS: ${{ needs.harness-provenance.result }}
           FLOOR: ${{ needs.python-floor-syntax.result }}
+          CENSUS: ${{ needs.schema-container-census.result }}
         run: |
           set -euo pipefail
           echo "changes result: ${FILTER}"
@@ -2268,6 +2400,7 @@ jobs:
           echo "seed-registry result: ${REGISTRY}"
           echo "harness-provenance result: ${HARNESS}"
           echo "python-floor-syntax result: ${FLOOR}"
+          echo "schema-container-census result: ${CENSUS}"
 
           # The seed registry, checked FIRST and with no case analysis, because there
           # is none to do: `seed-registry` carries no `if:`, depends on no other job,
@@ -2301,6 +2434,21 @@ jobs:
           # never ran leaves behind are all red.
           if [ "${FLOOR}" != "success" ]; then
             echo "::error::the declared-floor syntax gate did not pass (${FLOOR}); a tracked file uses syntax newer than requires-python declares, or the gate could not run -- either way the floor is unverified"
+            exit 1
+          fi
+
+          # The schema-container census, same shape and same reason: `schema-container-census`
+          # carries no `if:`, depends on no other job and needs no wheel, so `skipped` is not
+          # reachable for it. Listing it in `needs:` alone would NOT be enough -- this job runs
+          # `if: always()`, so without an explicit check it reports green while the census is red,
+          # and the census would be advisory: running, aborting, and changing nothing. That is
+          # precisely the observed `seed-registry pass 8s` / `gate-status pass 3s` shape recorded
+          # above, and it is the SECOND-order form of the very defect the census job exists to fix
+          # -- a correct check whose result nothing consumes is not meaningfully different from a
+          # correct check nothing runs. Demand the positive, so `failure`, `cancelled` and the
+          # empty string a job that never ran leaves behind are all red.
+          if [ "${CENSUS}" != "success" ]; then
+            echo "::error::the schema-container census did not pass (${CENSUS}); a container of schema names in src/ or scripts/ is unclassified, a classification row is stale, duplicated or self-contradictory, or the per-class counts drifted from their pin -- either way the rotation drill cannot know where to register a synthetic schema"
             exit 1
           fi
 

@@ -14,11 +14,17 @@ clean run only ever proved that the tables I had thought of were registered.
 
 So the containers are ENUMERATED from the AST and matched against a committed classification
 (`tests/data/schema_drill_schema_containers.txt`). An unclassified container is a hard abort, before
-any verdict. Two classifications, and the distinction is the point:
+any verdict. THREE classifications, and the distinction is the point:
 
   REGISTER  the container means "every supported schema", so the synthetic schema belongs in it.
   PARTIAL   a deliberately chosen subset. `vocab_shift_probe` compares one named PAIR of schemas;
             adding a third does not widen that comparison, it changes what the script does.
+  MIRRORED  the drill reaches it through observation.py's property tuples rather than by editing
+            the container, so the injection leaves it alone and the mirror carries it.
+
+An earlier form of this docstring said "Two classifications" and listed the first two, while
+`classification()` had accepted MIRRORED for eight of the nineteen rows -- a third of the file
+described by the enumerator as impossible.
 
 WHAT THIS DOES NOT CLAIM. It finds containers whose members are string LITERALS. A container built
 from the version CONSTANTS (`(OBSERVATION_SCHEMA_VERSION_V3, ...)`) is a different shape and is
@@ -38,6 +44,40 @@ SPEC = REPO / "tests" / "data" / "schema_drill_schema_containers.txt"
 
 SHORT = {"v2", "v2.1", "v2.2", "v3", "v4"}
 FULL = {f"pokezero.observation.{s}" for s in SHORT}
+
+# THE CLASS IS THE FIELD `--check` COULD NOT SEE. Matching is on (file, members, variable name);
+# the CLASS was read out of the spec and never checked against anything, so flipping a row from
+# REGISTER to PARTIAL was exit 0 -- measured, for one row and for all ten -- while the drill's
+# registration list silently shrank, because the drill appends only `REGISTER` rows to
+# `_reg_targets` and its only guard is `if not _reg_targets` (all ten flipped, not nine). The spec
+# is simultaneously this gate's input and its escape hatch: editing a row is how one silences this
+# very abort, so it is the likeliest careless change.
+#
+# NO ORACLE INDEPENDENT OF THE SPEC EXISTS IN THE TREE. Two candidates were built and both are
+# REFUTED by the artifact, which is why this is a count pin and not a derivation:
+#
+#   A. "REGISTER means every supported schema, so its members == SUPPORTED_OBSERVATION_SCHEMA_
+#      VERSIONS." False for NINE of the ten REGISTER rows. REGISTER means "a NEW schema belongs
+#      here", not "all five are here now": `_EXPORTABLE_TABLE_SCHEMAS` is {v2.2,v3,v4} of five
+#      because v2/v2.1 have no exporter tables, and it is still REGISTER.
+#   B. "spec MIRRORED == the drill's own `_MIRRORED` tuple." The sets disagree in BOTH directions:
+#      5 in the drill, 8 in the spec, with FEATURE_PACK_* and V3_PROJECTION_* in the drill only
+#      and SUPPORTED_*, REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA and showdown.py's three maps in
+#      the spec only -- they are mirrored by different mechanisms, not by that tuple.
+#
+# The class encodes an INTENT ("should a schema added tomorrow extend this container?") and no
+# artifact in the tree encodes that intent independently. The only true oracle is the runtime
+# consequence -- the full drill, 17-70 minutes, which is what found the original nine the
+# expensive way. So this pin does not verify the class is RIGHT. It makes a class change LOUD:
+# silencing an abort by editing the spec now requires editing this file too, in a differently
+# shaped place, with an explicit number a reviewer can question.
+#
+# KNOWN RESIDUAL, stated because a count is exactly as strong as its arithmetic: a PAIRED swap
+# (one REGISTER->PARTIAL and one PARTIAL->REGISTER) leaves all three counts unchanged and is
+# still exit 0. A legitimate reclassification must update these numbers, which is the same
+# deliberate trade the spec header records for line-qualified rows -- a loud reclassify beats a
+# silent free pass.
+EXPECTED_CLASS_COUNTS = {"REGISTER": 10, "PARTIAL": 1, "MIRRORED": 8}
 
 
 def _assigned_names(tree: ast.AST) -> dict[int, str]:
@@ -59,14 +99,20 @@ def _assigned_names(tree: ast.AST) -> dict[int, str]:
     free-rider case this key exists to separate.
 
     KNOWN GAP, since this docstring is the place a reader looks for the key's guarantees: distinctness
-    is per (file, lineno, members, name), so two unnamed containers on the SAME physical line still
-    collapse into one entry and one spec row covers both -- measured, exit 0 while printing "20
-    containers / 20 rows" on a tree holding 21.
+    is still per (file, lineno, members, name), so two unnamed containers on the SAME physical line
+    with the SAME members KEY IDENTICALLY and one spec row covers both. That much is unchanged.
 
-    A stable per-(file, members) ordinal -- `<inline#1>`, `<inline#2>` -- is the candidate fix, and it
-    is a PREDICTION, not a measured result: nobody has built it. What IS measured is the negative that
-    motivates it -- simply dropping the line qualification is exit 0 for a newly added unregistered
-    container, so line-insensitivity alone is not the answer.
+    WHAT CHANGED is the consequence, and this paragraph used to overstate the damage in the reader's
+    favour: it said the collapse was "exit 0 while printing 20 containers / 20 rows on a tree holding
+    21". That was measured and true when written, and it is now FALSE -- `main()` compares the number
+    of matched AST nodes against the number of distinct entries and aborts 15 on the difference. The
+    census can no longer report a denominator it knows is short. It still cannot tell the two
+    containers APART, so the abort says "put them on separate lines" rather than classifying both.
+
+    A stable per-(file, members) ordinal -- `<inline#1>`, `<inline#2>` -- remains the candidate fix
+    for telling them apart, and it remains a PREDICTION, not a measured result: nobody has built it.
+    What IS measured is the negative that motivates it -- simply dropping the line qualification is
+    exit 0 for a newly added unregistered container, so line-insensitivity alone is not the answer.
     """
     out: dict[int, str] = {}
     for node in ast.walk(tree):
@@ -89,9 +135,20 @@ def _assigned_names(tree: ast.AST) -> dict[int, str]:
     return out
 
 
-def containers() -> list[tuple[str, int, tuple[str, ...], str]]:
-    """(file, line, sorted members, variable name) for every literal container of schema names."""
+def containers() -> tuple[list[tuple[str, int, tuple[str, ...], str]], int]:
+    """(file, line, sorted members, variable name) for every literal container of schema names.
+
+    Returns the deduped entries AND the number of AST nodes that produced them. The two differ
+    only in the collapse case documented on `_assigned_names` -- two unnamed containers on the
+    SAME physical line with the SAME members key identically -- and the caller aborts on the
+    difference. Detecting the collapse is NOT the per-(file, members) ordinal that docstring
+    predicts; it does not tell the two apart, it refuses to report a denominator it knows is
+    short. That is the whole of the fix: the measured symptom was exit 0 while printing "20
+    containers / 20 rows" on a tree holding 21, and a count the tool cannot stand behind must
+    abort rather than be printed.
+    """
     found: set[tuple[str, int, tuple[str, ...], str]] = set()
+    matched_nodes = 0
     roots = [REPO / "src", REPO / "scripts"]
     # This file is the INSTRUMENT, not the subject: its SHORT/FULL sets are the vocabulary it scans
     # WITH, and scanning them would report the measuring device as a table needing registration.
@@ -149,9 +206,11 @@ def containers() -> list[tuple[str, int, tuple[str, ...], str]]:
                 var = names.get(id(node)) or f"<inline:{node.lineno}>"
                 if len(vals) >= 2 and (vals <= SHORT or vals <= FULL):
                     found.add((rel, node.lineno, tuple(sorted(vals)), var))
+                    matched_nodes += 1
                 elif len(consts) >= 2 and not vals:
                     found.add((rel, node.lineno, tuple(sorted(consts)), var))
-    return sorted(found)
+                    matched_nodes += 1
+    return sorted(found), matched_nodes
 
 
 def classification() -> dict[tuple[str, tuple[str, ...], str], str]:
@@ -179,7 +238,26 @@ def classification() -> dict[tuple[str, tuple[str, ...], str], str]:
         var = parts[3] if len(parts) > 3 else "<inline>"
         if kind not in ("REGISTER", "PARTIAL", "MIRRORED"):
             raise SystemExit(f"census: unknown classification {kind!r} in {raw!r}")
-        out[(path, tuple(sorted(members.split(","))), var)] = kind
+        key = (path, tuple(sorted(members.split(","))), var)
+        # A SECOND row for a key already seen used to overwrite the first silently, and the
+        # damage was not merely a lost row: `len(spec)` counts dict ENTRIES, so a duplicate made
+        # the denominator SMALLER, which is the one direction the count check below cannot see.
+        # Measured at 9549cc80: 20 rows of which 2 conflicted -> 19 entries against 19
+        # containers -> "every schema-name container is classified", exit 0, with the class
+        # decided by whichever row happened to come last in the file. Rows are the record of a
+        # human judgement; two contradictory records of one judgement are not a tie for file
+        # order to break.
+        if key in out:
+            if out[key] == kind:
+                raise SystemExit(
+                    f"census: duplicate row for {path} {var} {list(key[1])} (both {kind}). "
+                    "Remove one; a repeated row shrinks the denominator the count check reads."
+                )
+            raise SystemExit(
+                f"census: CONFLICTING rows for {path} {var} {list(key[1])}: "
+                f"{out[key]} and {kind}. One container cannot be both; pick one deliberately."
+            )
+        out[key] = kind
     return out
 
 
@@ -188,15 +266,29 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="print every container and its class")
     ap.add_argument(
         "--check", action="store_true",
-        help="exit 15 if any container is unclassified, or any classification is now unused",
+        help="exit 15 if any container is unclassified, any classification is now unused, or the "
+             "per-class counts have drifted from the pin",
     )
     args = ap.parse_args()
 
-    found = containers()
+    found, matched_nodes = containers()
     spec = classification()
     print(f"schema-name literal containers in src/ and scripts/: {len(found)}")
     print(f"classified in {SPEC.relative_to(REPO)}:                {len(spec)}")
     print()
+
+    # The denominator must be one the tool can stand behind. `matched_nodes` counts the AST nodes
+    # that matched; `found` is those nodes deduped by (file, line, members, name). A difference is
+    # the collapse case: two unnamed containers on the SAME physical line with the SAME members.
+    # Measured before this check existed: a file adding two such containers made the census print
+    # "20 containers / 20 rows" and exit 0 on a tree holding 21, one spec row covering both -- the
+    # free-rider shape the key was made finer to prevent, surviving at same-line granularity.
+    if matched_nodes != len(found):
+        print(f"ABORT: {matched_nodes} container node(s) collapsed into {len(found)} distinct "
+              "entr(ies). Two unnamed containers on the SAME line with the SAME members key "
+              "identically, so one spec row would cover both and the printed count is short. "
+              "Put them on separate lines, or give at least one an assignment target.")
+        return 15
 
     unclassified = []
     for path, line, members, var in found:
@@ -241,7 +333,24 @@ def main() -> int:
         print(f"ABORT: {len(unused)} classification row(s) match no container in the tree. Remove "
               "them; a stale row is a claim about the code that is no longer true.")
         return 15
-    print("  every schema-name container is classified.")
+
+    # The class pin. See EXPECTED_CLASS_COUNTS: every check above verifies that a row EXISTS for
+    # each container, and none of them looks at what the row SAYS.
+    actual = {k: 0 for k in EXPECTED_CLASS_COUNTS}
+    for kind in spec.values():
+        actual[kind] = actual.get(kind, 0) + 1
+    if actual != EXPECTED_CLASS_COUNTS:
+        print()
+        print(f"ABORT: classification counts {actual} do not match the pin "
+              f"{EXPECTED_CLASS_COUNTS} in {pathlib.Path(__file__).name}.")
+        print("The drill registers its synthetic schema in REGISTER rows only, so a REGISTER that "
+              "became PARTIAL shrinks the registration list with no other symptom until a "
+              "17-70 minute drill run charges the omission to the codebase. If the "
+              "reclassification is deliberate, change the pin in the same commit and say why.")
+        return 15
+
+    print(f"  every schema-name container is classified, and the class counts match the pin "
+          f"({', '.join(f'{k} {actual[k]}' for k in sorted(actual))}).")
     return 0
 
 

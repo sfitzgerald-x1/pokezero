@@ -17,6 +17,54 @@
 #     ad-hoc set inline in a function body -- which is exactly what the exporter and the lattice have.
 # Extending it from 3 node types and 1 member shape to 4 and 2 took the count from 8 to 19.
 #
+# THIS FILE IS NOW CHECKED BY CI, which it was not for the first eight commits of its life. The
+# census's only caller was scripts/schema_rotation_drill.sh:667 and that script's only caller is a
+# person, so nothing ran it: it went red at e496e9b8, when the v4 rotation moved a container's line,
+# and stayed red across EIGHT consecutive commits on main -- through SEVEN subsequent PR merges --
+# until #1276 re-keyed the row. No check reported it once. `schema-container-census` in
+# .github/workflows/engine-fidelity-gates.yml now runs `--check` unconditionally on every PR, with a
+# kill-confirm ahead of it, and `gate-status` demands its success.
+#
+# KNOWN GAPS, enumerated because the alternative is that they are enumerated by nothing:
+#
+#  1. THE CLASS IS NOT VERIFIED, only pinned. Every check the census makes asks whether a row EXISTS
+#     for a container; none asks whether the row is RIGHT. Flipping REGISTER to PARTIAL was exit 0
+#     for one row and for all ten, while the drill's `_reg_targets` silently shrank -- its only guard
+#     is `if not _reg_targets`, so nine of ten flipped is still silent. BOTH UNITS, because they
+#     differ here and mixing them is how "nine" and "ten" both get quoted for the same thing: there
+#     are 10 REGISTER ROWS, which the drill dedupes on (file, members) down to 9 INJECTION TARGETS,
+#     since neural_cli.py's two argparse tuples (<inline:467>, <inline:1952>) share a member set and
+#     a file-wide substitution would otherwise insert twice. The pin below counts ROWS. No oracle
+#     independent of this
+#     file exists in the tree: "REGISTER means all five supported schemas" is refuted by NINE of the
+#     ten REGISTER rows (REGISTER means a schema added tomorrow belongs here, not that all five are
+#     here today), and "MIRRORED equals the drill's `_MIRRORED` tuple" is refuted in both directions
+#     (5 there, 8 here). The class is an INTENT, and the only true oracle is the runtime consequence
+#     -- the full 17-70 minute drill, which is how the original nine were found. So the census pins
+#     the per-class COUNTS in scripts/schema_container_census.py instead. BLAST RADIUS: silencing an
+#     abort by editing a row here now also requires editing a number in that script, so the change is
+#     loud rather than free; but a PAIRED swap (one REGISTER->PARTIAL and one PARTIAL->REGISTER)
+#     leaves the counts equal and is still exit 0, and a wrong class agreed to in both files is not
+#     detected at all. A deliberate reclassification must update the pin in the same commit.
+#
+#  2. SCAN ROOTS ARE src/ AND scripts/ ONLY. Measured by re-running the enumerator with the roots
+#     swapped: 12 real containers live under tests/ (in test_engine_env.py, test_observation.py,
+#     test_observation_spec_v3.py x2, test_observation_spec_v4.py, test_online_client.py,
+#     test_schema_property_membership.py x2, test_spread_gate_provenance.py x3,
+#     test_validate_rust_encoder.py) and 1 under docs/ (docs/token-format/extract_turn16.py:572).
+#     None is classified here and none is enumerated by anything else. SCOPED OUT deliberately, not
+#     overlooked: widening the roots means making 13 REGISTER/PARTIAL judgements, each of which
+#     changes what the drill injects, and that is a decision about the drill rather than about CI
+#     wiring. BLAST RADIUS: a schema-keyed table added to tests/ or docs/ is invisible to this gate,
+#     so the drill will not register its synthetic schema there and the resulting failure is charged
+#     to the codebase -- the exact loop this file exists to end, still open for two of four roots.
+#
+#  3. TWO UNNAMED CONTAINERS ON ONE PHYSICAL LINE cannot be told apart; the key is (file, line,
+#     members, name). This no longer produces a short count silently -- the census compares matched
+#     AST nodes against distinct entries and aborts -- but the remedy it offers is "separate the
+#     lines", not "classify both". The per-(file, members) ordinal that would tell them apart is a
+#     PREDICTION; nobody has built it.
+#
 # Format:  REGISTER|PARTIAL|MIRRORED  <file>  <members>  <variable name or <inline:LINE>>
 # Keyed on file + members + VARIABLE NAME. Every container needs its OWN row: `--check` aborts if the
 # counts differ, because a shared row means one container is classified by another's decision, which
