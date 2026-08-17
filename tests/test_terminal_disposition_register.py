@@ -66,7 +66,7 @@ are pinned against the two census modules' own constants, read by AST rather tha
 update the register in the same change. That is deliberate: the document that goes stale is
 the one nothing forces an author through.
 
-MUTATION BATTERY: 77 applied, 77 caught, plus 1 NEGATIVE CONTROL verified green
+MUTATION BATTERY: 79 applied, 79 caught, plus 1 NEGATIVE CONTROL verified green
 and 1 DISCLOSED SURVIVOR, enumerated below and NOT counted as caught.
 Partitioned by WHAT IS MUTATED. Enumerated because
 an unrecorded battery is what `tests/test_wide_seed_negative_census.py` records costing it a
@@ -141,7 +141,7 @@ BLOCK A -- A1-A37, applied to the REGISTER's own bytes.
        `TheDocumentsClaimsAboutItselfAreReDerivedTests`, which exists because review blocked
        two successive revisions on claims the document made about ITSELF.
 
-BLOCK B -- B38-B77, FORTY mutations applied ONLY to the tree and never to the document.
+BLOCK B -- B38-B79, FORTY-TWO mutations applied ONLY to the tree and never to the document.
 Block A can be passed by a pin that reads the register against a hard-coded copy of itself.
 These are the ones that prove each derivation reads what it claims to: every one MAKES A REAL
 CHANGE TO THE TREE and the document, unedited, must go red. Six are the absences, and an
@@ -294,8 +294,11 @@ has recorded.
        `test_every_value_re_derives`" was WRONG TWICE: the killer is now
        `test_the_hashed_crate_inputs_are_the_files_git_tracks` (the git anchor postdates this
        entry), and the FOURTH variant -- aliasing the git test's enumerator arm to the
-       hasher's set -- SURVIVES. It is listed under DISCLOSED SURVIVORS below rather than
-       counted here. Three of four: 1, 2, 1 failures respectively. A declared
+       hasher's set -- is NOT one of these four at all; it is a FIFTH mutation, listed under
+       DISCLOSED SURVIVORS below. ⚠ RE-MEASURED A THIRD TIME after review round 7: all FOUR of
+       the variants named here die, at 1, 2, 1 and 1 failures. The earlier "three of four" was
+       my own miscount -- I measured three variants and the survivor and reported the survivor
+       as the fourth. A declared
        coupling and a free one: anything that changes this inventory moves the fingerprint
        too, so Appendix A is already being edited in the same change.
   B69. ⚠ AND B68's FIX HAD A FIFTH FRAME TOO, which is why the register now says to expect
@@ -409,6 +412,30 @@ has recorded.
        invisible"; B76 was "all probes touch one REGION"; B77 is "all probes disturb both
        PARITIES". Three rounds, one shape -- a probe family sharing a blind spot -- and each
        time the family looked exhaustive from inside.
+  B78. ⚠ THE FOURTH ROUND OF ONE SHAPE, and this time the axis is SCOPE -- review round 7.
+       B73 closed "a size passed for a hash" with a length-preserving probe, B76 gave it three
+       regions, B77 both parities -- and ALL OF IT LANDED ON ONE FILE, because the probe picks
+       `max(sources, key=st_size)`. The other NINETY inputs were reached only by `_perturb`,
+       which changed LENGTH in every branch. Demonstrated three ways, each byte-identical
+       before and after with Appendix A reseated: patch bodies digested as name+length (hides
+       `order 5.3 -> 6.3` in a tracked patch); `BASE_SOURCE` digested by length (hides a change
+       to the pinned upstream sdist `sha256` -- a FIXED 64-hex field, so every real change to
+       it preserves length); and bytes read only above 256 KiB (hides
+       `DAMAGE_BRANCH_DEPTH: u8 = 2 -> 3` in `tree.rs`, round 6's own example, same file, same
+       constant). Closed by the CROSS-PRODUCT: `_perturb_shapes` yields a shape FAMILY per
+       input and the loop subTests over (input, shape), so "ways of reading an input" is no
+       longer a list maintained by hand. Verified: name+length 74, BASE_SOURCE-length 1,
+       over-256-KiB 14, all-native-length 21.
+  B79. AND THE SHAPE FAMILY NEEDED A THIRD MEMBER. A PER-FILE bag of bytes
+       (`Counter(blob)`, path still hashed) survives both length-changing and
+       length-preserving shapes, because both change the multiset -- and the transposition
+       probe does not see it either, since that swaps contents BETWEEN files and so only
+       catches a GLOBAL bag. Its docstring claimed the general case and is now scoped.
+       What a per-file bag cannot see is a PERMUTATION WITHIN one file, which is a real
+       hazard: reordering statements changes behaviour and preserves every byte count. Third
+       shape: a 64-byte window REVERSED in place -- same length, same multiset, different
+       order. Verified: `Counter` 15, `sorted(blob)` 15, `set(blob)` 31.
+
 
 BLOCK C -- NEGATIVE CONTROLS. Mutations that must stay GREEN because they do not change the
 fact being derived. Recorded with the RED mutation that proves the same assertion is live,
@@ -1570,32 +1597,83 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
         return list(seen)
 
     @staticmethod
-    def _perturb(blob: bytes, path: Path) -> bytes:
-        """One byte-level change that keeps the file PARSEABLE.
+    def _perturb_shapes(blob: bytes, path: Path) -> list[tuple[str, bytes]]:
+        """TWO shapes per input: one that changes LENGTH and one that cannot.
 
-        `poke-engine-base-source.json` is `json.loads`-ed by `compute_fingerprint` for its
-        payload, so appending a byte would raise instead of moving the digest and the probe
-        would pass for the wrong reason. Re-indenting changes the bytes and keeps the JSON.
+        ⚠ REVIEW ROUND 7, AND THE FOURTH ROUND OF ONE SHAPE -- this time the axis is SCOPE.
+        B73 closed "a size passed for a hash" with a length-preserving probe; B76 gave it three
+        regions; B77 gave it both parities. All of that landed on ONE FILE, because the probe
+        picks `max(sources, key=st_size)`. Every other hashed input was reached only by
+        `_perturb`, which changed LENGTH in all three of its branches. So B73 was closed for
+        one file and LIVE FOR THE OTHER NINETY, and round 7 demonstrated it three ways, each
+        byte-identical before and after:
+
+          * patch bodies digested as name+length -- hides `order 5.3 -> 6.3` in a tracked patch;
+          * `BASE_SOURCE` digested by length -- hides a change to the pinned upstream sdist
+            `sha256`, and since that field is a FIXED 64 hex characters, EVERY upstream pin
+            change is length-preserving;
+          * bytes read only for files over 256 KiB -- hides `DAMAGE_BRANCH_DEPTH: u8 = 2 -> 3`
+            in `tree.rs`, which is round 6's own example, same file, same constant.
+
+        The fix is the cross-product rather than another probe: every input gets BOTH shapes,
+        so "ways of reading an input" is no longer a list this class maintains by hand. The
+        deep parity/region sweep stays on the largest file, where breadth is cheap; this gives
+        breadth across all 91 inputs at depth 1.
         """
 
+        shapes: list[tuple[str, bytes]] = []
         if path.suffix == ".json":
-            return json.dumps(json.loads(blob.decode()), indent=4).encode()
-        # ⚠ SPLICED INTO THE MIDDLE, not appended. Review round 5: every content probe in
-        # this class perturbed a file's HEAD or its TAIL, so a one-line proxy --
-        # `sha256(blob[:512] + str(st_size))` -- survived all eleven of them reseated and hid
-        # an `f32` -> `f64` edit in the middle of `tree.rs`. That is B73's own sentence one
-        # frame out: a probe family that all perturb the same REGION is blind in the same
-        # place, exactly as a probe family that all change LENGTH was blind to a size proxy.
+            # PARSED by `compute_fingerprint`, so both shapes must stay valid JSON.
+            text = blob.decode()
+            shapes.append(("length-changing", json.dumps(json.loads(text), indent=4).encode()))
+            # Length-preserving: bump one character of a long hex run -- that is the sdist
+            # digest field, fixed-width by construction, which is precisely why every real
+            # change to it preserves length.
+            match = re.search(rb"[0-9a-f]{16,}", blob)
+            if match is not None:
+                index = match.start()
+                flipped = bytearray(blob)
+                flipped[index] = ord("b") if flipped[index] == ord("a") else ord("a")
+                shapes.append(("length-preserving", bytes(flipped)))
+            return shapes
+
         middle = len(blob) // 2
         if path.name == PATCH_MANIFEST_NAME:
-            # The manifest is PARSED FOR FILENAMES, so a byte spliced mid-line renames a
-            # patch and `compute_fingerprint` raises instead of moving -- the probe would then
-            # error rather than measure. Insert a whole COMMENT LINE at the newline nearest
-            # the middle: middle bytes change, every filename survives intact. Found by
-            # running it; the first mid-file version raised `patch listed but missing`.
+            # PARSED FOR FILENAMES. A byte changed mid-line renames a patch and the hasher
+            # raises rather than moving, so the probe would error instead of measuring. Both
+            # shapes therefore work on COMMENT lines only: insert one, and alter one.
             boundary = blob.rfind(b"\n", 0, middle) + 1
-            return blob[:boundary] + b"# sensitivity probe\n" + blob[boundary:]
-        return blob[:middle] + b"\n" + blob[middle:]
+            shapes.append(
+                ("length-changing", blob[:boundary] + b"# sensitivity probe\n" + blob[boundary:])
+            )
+            comment = blob.find(b"#")
+            if comment != -1 and comment + 1 < len(blob) and blob[comment + 1 : comment + 2] != b"\n":
+                flipped = bytearray(blob)
+                flipped[comment + 1] = ord("X") if flipped[comment + 1] != ord("X") else ord("Y")
+                shapes.append(("length-preserving", bytes(flipped)))
+            return shapes
+
+        # Opaque bytes: patches, crate sources, Cargo manifests, build.rs, pyproject.toml.
+        shapes.append(("length-changing", blob[:middle] + b"\n" + blob[middle:]))
+        if blob:
+            flipped = bytearray(blob)
+            flipped[middle] ^= 0xFF
+            shapes.append(("length-preserving", bytes(flipped)))
+        # ⚠ AND A THIRD SHAPE, because review round 7 showed the other two do not cover it: a
+        # PER-FILE bag of bytes (`Counter(blob)`, path still hashed) survives both, since both
+        # change the multiset. The transposition probe does not see it either -- that probe
+        # swaps contents BETWEEN files and so only catches a GLOBAL bag; its docstring's claim
+        # was scoped too widely and is corrected there. What a per-file bag cannot see is a
+        # PERMUTATION WITHIN one file, which is a real hazard: reordering statements changes
+        # behaviour and preserves every byte count. Reversing a window does exactly that --
+        # same length, same multiset, different order.
+        if len(blob) > middle + 64:
+            window = blob[middle : middle + 64]
+            if window != window[::-1]:
+                shapes.append(
+                    ("multiset-preserving", blob[:middle] + window[::-1] + blob[middle + 64:])
+                )
+        return shapes
 
     def test_the_sandbox_reproduces_the_head_fingerprint_exactly(self) -> None:
         # The negative control, and it is load-bearing twice over: it proves the copy
@@ -1668,22 +1746,49 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
             baseline = head_fingerprint()
             inputs = self._hashed_inputs()
             self.assertGreater(len(inputs), 70, "the hashed input set collapsed")
+            # THE CROSS-PRODUCT: every input x every shape. Review round 7 found that the
+            # length-preserving guarantee had been bought for ONE file (the largest crate
+            # source) while the other ninety were reached only by a length-CHANGING edit, so a
+            # digest reading name+length, or bytes only above a size threshold, was invisible
+            # on 90 of 91 inputs -- including the pinned upstream sdist digest, whose field is
+            # fixed-width so every real change to it preserves length. Iterating shapes here
+            # rather than adding a probe per shape per file is what stops the round-per-shape
+            # pattern this class has repeated four times.
             for path in inputs:
-                with self.subTest(input=str(path.relative_to(root))):
-                    original = path.read_bytes()
-                    try:
-                        path.write_bytes(self._perturb(original, path))
-                        self.assertNotEqual(
-                            head_fingerprint(),
-                            baseline,
-                            f"editing {path.relative_to(root)} did not move the head "
-                            "fingerprint, so the hasher reads it in name only. An engine "
-                            "built from a different version of this file is invisible to "
-                            "Appendix A's row and to the build stamp that shares its "
-                            "derivation.",
-                        )
-                    finally:
-                        path.write_bytes(original)
+                original = path.read_bytes()
+                shapes = self._perturb_shapes(original, path)
+                self.assertGreaterEqual(
+                    len(shapes),
+                    3 if path.suffix in {".rs", ".patch", ".toml", ".lock"} else 2,
+                    f"only {len(shapes)} perturbation shape(s) for {path.name}; a single shape "
+                    "buys sensitivity to one WAY OF READING the file and nothing more.",
+                )
+                for label, mutated in shapes:
+                    with self.subTest(input=str(path.relative_to(root)), shape=label):
+                        try:
+                            self.assertNotEqual(
+                                mutated, original, f"the {label} shape changed nothing"
+                            )
+                            if label in ("length-preserving", "multiset-preserving"):
+                                self.assertEqual(
+                                    len(mutated),
+                                    len(original),
+                                    "the length-preserving shape changed the length, so it no "
+                                    "longer isolates content from size.",
+                                )
+                            path.write_bytes(mutated)
+                            self.assertNotEqual(
+                                head_fingerprint(),
+                                baseline,
+                                f"a {label} edit to {path.relative_to(root)} did not move the "
+                                "head fingerprint, so the hasher reads that file in name only "
+                                f"-- or reads it in a way that is blind to a {label} change. An "
+                                "engine built from a different version of this file is "
+                                "invisible to Appendix A's row and to the build stamp that "
+                                "shares its derivation.",
+                            )
+                        finally:
+                            path.write_bytes(original)
             self.assertEqual(
                 head_fingerprint(),
                 baseline,
@@ -1892,7 +1997,14 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
         loop moves the hash either way, because it CHANGES bytes rather than moving them.
         Swapping two files' contents holds the byte multiset fixed and changes only the
         association, so it is red exactly when the identity is a set of (path, bytes) pairs
-        and green when it has decayed to a bag of bytes. A crate whose `events.rs` and
+        and green when it has decayed to a GLOBAL bag of bytes.
+
+        ⚠ SCOPE, corrected by review round 7: this catches a GLOBAL bag, not a PER-FILE one. A
+        digest of `Counter(blob)` keyed by path SURVIVES this probe, because swapping two files'
+        contents changes both files' multisets. The per-file case is covered by the
+        `multiset-preserving` shape in `_perturb_shapes` -- a window reversed WITHIN one file --
+        and the earlier unscoped wording is retracted rather than reworded, because an unscoped
+        negative is the defect this whole register prosecutes. A crate whose `events.rs` and
         `tree.rs` had been transposed builds differently and would otherwise stamp the same.
         """
 
@@ -2633,7 +2745,8 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
             30: "THIRTY", 31: "THIRTY-ONE", 32: "THIRTY-TWO",
             33: "THIRTY-THREE", 34: "THIRTY-FOUR", 35: "THIRTY-FIVE",
             36: "THIRTY-SIX", 37: "THIRTY-SEVEN", 38: "THIRTY-EIGHT",
-            39: "THIRTY-NINE", 40: "FORTY", 41: "FORTY-ONE",
+            39: "THIRTY-NINE", 40: "FORTY", 41: "FORTY-ONE", 42: "FORTY-TWO",
+            43: "FORTY-THREE", 44: "FORTY-FOUR",
         }
         self.assertIn(size, words, f"block B has {size} entries; extend `words`")
         word = words[size]
