@@ -483,6 +483,18 @@ def seat_block(summary: dict, seat: str) -> dict:
         # budget comparison is adopted as "the two are equivalent" when the expensive side
         # was not searching. None when there is no neural opponent.
         "opponent_engine_mcts": summary.get("opponent_engine_mcts"),
+        # THE CPU-CONTENTION CONTROL, lifted for exactly the reason the block above is.
+        # foul-play is TIME-budgeted and thinks concurrently with our search on the same
+        # host, so a CPU-heavy arm can win by starving the opponent rather than by playing
+        # better -- and `foulplay_search_time_ms` records only the budget it was GIVEN,
+        # which is constant by construction. `foulplay_think.mean_iterations_per_budget_second`
+        # is the budget it actually SPENT: realized opponent MCTS visits per CPU-second
+        # granted. This merged shard is where the two arms meet, so the comparison has to be
+        # runnable here: flat between arms = no contention; a drop on the CPU-heavy arm =
+        # its strength delta is confounded in the flattering direction. `miss_reasons` and
+        # `record_failures` say when the reading is short, so a null cannot pass as a pass.
+        # See OPPONENT-THINK CONTENTION INSTRUMENT in pokezero/foulplay_bridge.py.
+        "foulplay_think": summary.get("foulplay_think"),
         "world_failure_reasons": (engine.get("policy_stats") or {}).get(
             "world_failure_reasons"
         ),

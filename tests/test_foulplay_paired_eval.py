@@ -1296,6 +1296,39 @@ class OpponentHealthIsLiftedTest(unittest.TestCase):
         block = self._seat_block({"completed_games": 5, "engine_mcts": {"fallback_rate": 0.0}})
         self.assertIsNone(block.get("opponent_engine_mcts"))
 
+    def test_the_contention_reading_reaches_the_merged_shard(self) -> None:
+        """The CPU-contention control is compared BETWEEN arms, so it must be merged.
+
+        foul-play is time-budgeted and searches concurrently with us; if the arm that
+        spends more CPU per decision starves it, its win comes from a weaker opponent.
+        `mean_iterations_per_budget_second` is the realized-work reading that makes that
+        falsifiable, and it is useless if it stops at the per-seat bridge summary.
+        """
+
+        block = self._seat_block({
+            "completed_games": 5,
+            "engine_mcts": {"fallback_rate": 0.0},
+            "foulplay_think": {
+                "mean_iterations_per_budget_second": 30000.0,
+                "mean_wait_seconds": 2.1,
+                "miss_decisions": 0,
+                "record_failures": 0,
+            },
+        })
+        self.assertIsNotNone(
+            block.get("foulplay_think"),
+            "the opponent's realized work must survive the merge",
+        )
+        self.assertAlmostEqual(
+            block["foulplay_think"]["mean_iterations_per_budget_second"], 30000.0
+        )
+
+    def test_a_summary_with_no_contention_reading_lifts_None(self) -> None:
+        """A producer too old to measure it must not read as "no contention"."""
+
+        block = self._seat_block({"completed_games": 5, "engine_mcts": {"fallback_rate": 0.0}})
+        self.assertIsNone(block.get("foulplay_think"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,7 @@ import os
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 import random
+import re
 import sys
 import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -292,6 +293,97 @@ OPPONENT_JOURNAL_SCHEMA_VERSION = "pokezero.opponent-journal.v1"
 # `--opponent-journal full` whenever the question is "which decisions of this class
 # can I replay" rather than "can I replay the addresses I have".
 OPPONENT_JOURNAL_MODES = ("off", "addressed", "full")
+
+# The OPPONENT-THINK CONTENTION INSTRUMENT.
+#
+# The reference opponent is TIME-budgeted: foul-play searches each sampled battle for a
+# wall-clock budget (`monte_carlo_tree_search(state, search_time_ms, ...)`,
+# `fp/search/main.py:56`), and the bridge hands it this round's `|request|` from
+# `_handle_stream_event` -- BEFORE `_handle_decision_boundary` dispatches our own search
+# into a worker thread. Its clock is therefore already ticking while we think, on the
+# same host. CPU taken from it shows up as a WEAKER OPPONENT, and reads as a strength
+# gain for whichever arm spends more CPU per decision: a confound in the flattering
+# direction, on exactly the arm whose job is to arbitrate a disputed effect (the
+# oracle-leaf rollout arbiter spends 3-4 orders of magnitude more CPU per decision than
+# the raw arm it is paired against). `EngineMctsConfig.rollout_threads` FENCES that
+# hazard behind an explicit ack; this block MEASURES it, which is what turns "our extra
+# CPU did not weaken the opponent" from an assertion into a falsifiable reading.
+#
+# WHAT IS RECORDED PER OPPONENT DECISION, and what each quantity does NOT mean:
+#
+#   `wait_seconds`     monotonic seconds measured INSIDE
+#                      `_wait_for_foulplay_choice_or_exit`: from the moment the bridge
+#                      began awaiting the choice to the moment it arrived. That wait
+#                      starts AFTER our own search has already run to completion in its
+#                      worker thread, so it is a LOWER BOUND on foul-play's think, not
+#                      the think itself. Absent (with a miss reason) rather than 0.0
+#                      when the clock was not stamped.
+#   `overlap_seconds`  from the instant the request chunk for this round finished being
+#                      written to foul-play's socket
+#                      (`state.foulplay_request_forwarded_monotonic`) to the instant the
+#                      wait began -- i.e. the window in which OUR decision work ran
+#                      while foul-play already held the request. Bridge-side accounting:
+#                      it bounds the concurrency window; it does not prove foul-play was
+#                      computing throughout it. Omitted when the forward timestamp is
+#                      missing or does not precede the wait.
+#   `iterations`       what foul-play ACCOMPLISHED: the summed `MctsResult.total_visits`
+#                      it prints per sampled battle at `fp/search/main.py:57`. Nothing
+#                      else in this schema records realized opponent work --
+#                      `foulplay_search_time_ms` records the budget it was GIVEN, which
+#                      is constant by construction and so can never show contention.
+#
+# THE FALSIFIER is `iterations_per_budget_second`: summed visits over granted
+# CPU-seconds (`sampled_battles * budget_ms_per_sample / 1000`; foul-play grants each
+# sampled battle its own wall-clock budget and searches them one at a time at the
+# `--search-parallelism` default of 1, which `_foulplay_command` never overrides). That
+# ratio is the opponent's realized search throughput per second of budget it was handed,
+# and the comparison it enables is direct: take its per-arm mean across a paired eval --
+# FLAT across arms is the no-contention
+# reading, a DROP on the CPU-heavy arm is contention, measured rather than argued. A
+# wait alone cannot make that call, because a time-budgeted opponent returns at its
+# budget whether it managed 40,000 visits or 400.
+#
+# NEVER A SILENT ZERO. The line is `Iterations {index}: {total_visits}`: the
+# SAMPLED-BATTLE INDEX comes first and the realized visit count only AFTER the colon,
+# so a parser keyed on the first integer records 0 or 1 -- a plausible-looking number
+# that measures nothing. Every refusal path here OMITS `iterations` and names a miss
+# reason instead of writing a 0, and the miss reasons travel per game and per run.
+#
+# AND THE LINE MAY LEGITIMATELY NOT BE THERE, which is why the miss reasons are
+# load-bearing rather than defensive:
+#
+#   * it is written by a `ProcessPoolExecutor` child (`fp/search/main.py:131-142`), which
+#     inherits the root logger's stdout handler only under the `fork` start method.
+#     Under `spawn` (macOS; also Linux where the default is forkserver) the child's root
+#     logger has no handler and the line is never emitted at all;
+#   * the websocket choice and the stdout pipe are drained by different asyncio tasks, so
+#     the choice can arrive before the lines do. Hence the bounded settle in
+#     `_foulplay_think_observation`, and hence `iterations_line_absent`, which reads as
+#     "not measured", never as "no work done".
+FOULPLAY_THINK_SCHEMA_VERSION = "pokezero.foulplay-think.v1"
+
+# `Iterations {index}: {total_visits}` (`fp/search/main.py:57`) as it reaches stdout
+# through foul-play's `CustomFormatter`, which prefixes `levelname.ljust(8) + " "` --
+# so the pattern is anchored on the RIGHT and tolerant on the left, and the visit count
+# is capture group 2, never group 1.
+_FOULPLAY_ITERATIONS_RE = re.compile(r"(?:^|\s)Iterations\s+(\d+):\s+(\d+)\s*$")
+# `Sampling {num_battles} battles at {search_time_per_battle}ms each`
+# (`fp/search/main.py:130-132`). The ONLY place the per-decision sample count and the
+# per-sample budget are observable: foul-play recomputes both per decision
+# (`search_time_num_battles_randombattles` quadruples the samples and HALVES the budget
+# in the early game), so `config.search_time_ms` is not a substitute for either.
+_FOULPLAY_SAMPLING_RE = re.compile(r"(?:^|\s)Sampling\s+(\d+)\s+battles\s+at\s+(\d+)ms\s+each\s*$")
+# Bounded settle for the drain race above. Spent AFTER our own choice is already
+# selected, costs no CPU, and is recorded per decision as `settle_seconds` so its effect
+# on the arm's wall clock is a number in the shard rather than an unexplained slowdown.
+_FOULPLAY_THINK_SETTLE_SECONDS = 0.05
+_FOULPLAY_THINK_SETTLE_POLL_SECONDS = 0.002
+# An opponent that logs nothing at all (the `spawn` case) must not be waited on at every
+# one of up to `max_decision_rounds` decisions. After this many consecutive decisions
+# with no `Iterations` line, stop settling for lines that are not coming; one line ends
+# the streak and re-arms it. The miss reason is unchanged either way, so giving up costs
+# reporting nothing.
+_FOULPLAY_THINK_SETTLE_GIVEUP_DECISIONS = 3
 
 # The REFUSAL RECORDER, wired on by default.
 #
@@ -1376,6 +1468,15 @@ class ControlledFoulPlayGameResult:
     opponent_journal: tuple[OpponentJournalEntry, ...] = ()
     opponent_journal_recorded: int = 0
     opponent_journal_failures: int = 0
+    # One row per foul-play decision from the OPPONENT-THINK CONTENTION INSTRUMENT: the
+    # wait, the overlap window, and the MCTS visits foul-play realized inside the time
+    # budget it was granted. `opponent_think_failures` counts the decisions whose
+    # telemetry raised, for the same reason `opponent_journal_failures` exists -- a short
+    # record must be a number, not a gap. Rows carry their own per-row `status` and
+    # `miss_reasons`, so a decision whose realized work could not be parsed is
+    # distinguishable from one where the opponent did no work.
+    opponent_think: tuple[Mapping[str, Any], ...] = ()
+    opponent_think_failures: int = 0
     # Every refusal the #1180 recorder captured in THIS battle, with the
     # per-decision state that produced it. Filed on the game row rather than only in
     # a run-level list so a record travels with the battle it belongs to; the run
@@ -1464,6 +1565,19 @@ class ControlledFoulPlayGameResult:
             # every later round of THAT battle unreplayable while leaving the others
             # sound. Without this a driver has to treat the whole shard as suspect.
             payload["opponent_moves_record_failures"] = self.opponent_journal_failures
+        if self.opponent_think:
+            # Same prefix contract as `opponent_moves`: the row keys this feature writes
+            # are `opponent_think` and `opponent_think_<suffix>`, and the run header names
+            # the prefix so a consumer scans for it instead of being told each key. Note
+            # the header block at the summary root is `foulplay_think` (a MAPPING) while
+            # this row key is `opponent_think` (a LIST) -- one name never carries two JSON
+            # shapes in one document, for the reason spelled out on `opponent_moves`.
+            payload["opponent_think"] = [dict(row) for row in self.opponent_think]
+            payload["opponent_think_totals"] = _foulplay_think_aggregate(self.opponent_think)
+        if self.opponent_think_failures:
+            # ON THE ROW, not only in the header: a run total says think rows were lost, it
+            # cannot say which battle's contention reading is short.
+            payload["opponent_think_record_failures"] = self.opponent_think_failures
         if self.refusal_records:
             # `refusals`, and NOT a name the address reader dispatches on. Every key
             # inside a serialized `RefusalRecord` is likewise distinct from the
@@ -1905,6 +2019,29 @@ class ControlledFoulPlayBenchmarkResult:
                 # the journal is INCOMPLETE for those rounds and a replay of any
                 # later round in that battle cannot be trusted.
                 "record_failures": sum(game.opponent_journal_failures for game in self.games),
+            },
+            # The contention instrument's own header, present in EVERY summary for the
+            # same reason the journal's is: absent, empty and switched-off are three
+            # different states, and a reader that cannot tell them apart will read all
+            # three as "the opponent was not slowed down" -- which is precisely the
+            # flattering conclusion this instrument exists to make falsifiable.
+            #
+            # `mean_iterations_per_budget_second` is the field the comparison runs on:
+            # realized opponent MCTS visits per CPU-second of budget foul-play granted
+            # itself. Compare it BETWEEN ARMS of a paired eval. Flat means our extra CPU
+            # did not weaken the opponent; a drop on the CPU-heavy arm means it did, and
+            # the arm's strength delta is confounded in the flattering direction. It is
+            # None, never 0.0, when nothing was measured -- see `miss_reasons`, which says
+            # why, and `record_failures`, which counts telemetry that raised outright.
+            "foulplay_think": {
+                "schema_version": FOULPLAY_THINK_SCHEMA_VERSION,
+                "entries_key": "opponent_think",
+                "budget_ms_configured": self.config.search_time_ms,
+                **_foulplay_think_aggregate(
+                    [row for game in self.games for row in game.opponent_think]
+                ),
+                "games_with_think_rows": sum(1 for game in self.games if game.opponent_think),
+                "record_failures": sum(game.opponent_think_failures for game in self.games),
             },
             # The recorder's own header, present in EVERY summary for the same
             # reason the journal's is: an absent block and an empty one are three
@@ -2442,15 +2579,54 @@ class FoulPlayProcessExitError(RuntimeError):
         self.log_tail = log_tail
 
 
+@dataclass(frozen=True)
+class _ProcessLogSlice:
+    """Stdout lines appended since a cursor, plus the ones that were lost.
+
+    `dropped` is the point of this type. The buffer below is a 200-line RING, sized for
+    a crash tail; a reader that only asked for "lines since my cursor" would be handed a
+    short list with no way to tell it apart from a quiet period. Any consumer that sums
+    over the slice (the contention instrument does) must refuse rather than report a
+    total it cannot know is complete, so the loss is returned as a count, not swallowed.
+    """
+
+    lines: tuple[str, ...]
+    dropped: int
+    cursor: int
+
+
 @dataclass
 class _ProcessLogBuffer:
     stdout: list[str] = field(default_factory=list)
     stderr: list[str] = field(default_factory=list)
+    #: Total stdout lines EVER appended, not the buffered count. Cursors index this, so
+    #: they stay meaningful across the ring's trimming.
+    stdout_appended: int = 0
 
     def append_stdout(self, line: str) -> None:
         self.stdout.append(line)
+        self.stdout_appended += 1
         if len(self.stdout) > 200:
             del self.stdout[: len(self.stdout) - 200]
+
+    def stdout_since(self, cursor: int) -> _ProcessLogSlice:
+        """Lines appended after `cursor`, with the count the ring already discarded.
+
+        A cursor beyond `stdout_appended` (a caller from a previous process, or a reset
+        buffer) yields no lines and no drops rather than raising: this runs on the live
+        decision path and its job is to report, not to fail a battle.
+        """
+
+        available = len(self.stdout)
+        oldest_retained = self.stdout_appended - available
+        start = max(cursor, oldest_retained)
+        dropped = max(0, oldest_retained - cursor)
+        offset = max(0, start - oldest_retained)
+        return _ProcessLogSlice(
+            lines=tuple(self.stdout[offset:]),
+            dropped=dropped,
+            cursor=self.stdout_appended,
+        )
 
     def append_stderr(self, line: str) -> None:
         self.stderr.append(line)
@@ -2464,6 +2640,274 @@ class _ProcessLogBuffer:
         if self.stdout:
             parts.append("stdout:\n" + "\n".join(self.stdout[-40:]))
         return "\n\n".join(parts) or "(no foul-play output captured)"
+
+
+@dataclass
+class _FoulPlayThinkClock:
+    """Wall-clock stamps taken by `_wait_for_foulplay_choice_or_exit` itself.
+
+    A MUTABLE SINK rather than a richer return value, deliberately: the wait returns the
+    choice string, two test modules patch it with a stub that returns exactly that, and a
+    telemetry field is not worth rewriting a seam those tests pin. An unstamped clock is
+    therefore an ordinary and honest state -- a stubbed or replaced wait, or a process
+    that had already exited -- and it is recorded as `wait_unmeasured` rather than as a
+    fabricated 0.0.
+    """
+
+    started_at: float | None = None
+    finished_at: float | None = None
+
+    @property
+    def wait_seconds(self) -> float | None:
+        if self.started_at is None or self.finished_at is None:
+            return None
+        return max(0.0, self.finished_at - self.started_at)
+
+
+@dataclass(frozen=True)
+class _FoulPlayThinkWork:
+    """Realized opponent work parsed out of one decision's worth of foul-play stdout.
+
+    `miss_reasons` is the contract: it is non-empty for EVERY input this parser cannot
+    fully account for, and `total_iterations` is None whenever it is non-empty. There is
+    no path on which a partial or unrecognised log slice produces a number, because a 0
+    that means "not parsed" is indistinguishable from an opponent that did no work --
+    the exact confusion this instrument exists to remove.
+    """
+
+    iterations_per_sample: tuple[int, ...] = ()
+    declared_samples: int | None = None
+    budget_ms_per_sample: int | None = None
+    miss_reasons: tuple[str, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return not self.miss_reasons
+
+    @property
+    def total_iterations(self) -> int | None:
+        if not self.complete:
+            return None
+        return sum(self.iterations_per_sample)
+
+    @property
+    def budget_seconds_granted(self) -> float | None:
+        """CPU-seconds of search budget foul-play handed itself for this decision.
+
+        `sampled_battles * budget_ms_per_sample`: each sampled battle gets its own
+        wall-clock budget and, at foul-play's `--search-parallelism` default of 1 (which
+        `_foulplay_command` never overrides), they are searched one after another in a
+        single pool worker -- so this is one core's seconds, and the denominator of the
+        throughput below is CPU-seconds either way.
+        """
+
+        if self.declared_samples is None or self.budget_ms_per_sample is None:
+            return None
+        if self.declared_samples <= 0 or self.budget_ms_per_sample <= 0:
+            return None
+        return self.declared_samples * self.budget_ms_per_sample / 1000.0
+
+    @property
+    def iterations_per_budget_second(self) -> float | None:
+        """Realized visits per granted CPU-second: THE cross-arm contention comparison.
+
+        Flat per-arm means say our extra CPU did not slow the opponent down; a drop on
+        the CPU-heavy arm says it did. Only defined on a complete parse.
+        """
+
+        total = self.total_iterations
+        budget = self.budget_seconds_granted
+        if total is None or budget is None:
+            return None
+        return total / budget
+
+
+def _foulplay_think_work_from_log_lines(
+    lines: Sequence[str],
+    *,
+    dropped: int = 0,
+) -> _FoulPlayThinkWork:
+    """Parse `Sampling ...` / `Iterations ...` out of newly-arrived stdout lines.
+
+    Refuses on anything it does not fully recognise. `Iterations 3:` with the count
+    missing, a visit count that is not an integer, more or fewer `Iterations` lines than
+    the `Sampling` line declared, and a ring buffer that already discarded lines all
+    produce a miss reason and a None total -- never a zero.
+    """
+
+    iterations: list[int] = []
+    declared_samples: int | None = None
+    budget_ms: int | None = None
+    reasons: list[str] = []
+    if dropped:
+        reasons.append("log_lines_dropped")
+    for line in lines:
+        match = _FOULPLAY_ITERATIONS_RE.search(line)
+        if match is not None:
+            # Group 2, never group 1: group 1 is the SAMPLED-BATTLE INDEX (0, 1, ...).
+            iterations.append(int(match.group(2)))
+            continue
+        if "Iterations" in line:
+            reasons.append("iterations_line_malformed")
+            continue
+        sampling = _FOULPLAY_SAMPLING_RE.search(line)
+        if sampling is not None:
+            if declared_samples is not None:
+                # Two sampling announcements in one decision's slice means the slice
+                # spans more than one decision, so neither total is attributable.
+                reasons.append("sampling_line_repeated")
+            declared_samples = int(sampling.group(1))
+            budget_ms = int(sampling.group(2))
+            continue
+        if "Sampling" in line and "battles" in line:
+            reasons.append("sampling_line_malformed")
+    if not iterations:
+        reasons.append("iterations_line_absent")
+    if declared_samples is None:
+        reasons.append("sampling_line_absent")
+    elif declared_samples != len(iterations):
+        reasons.append("sample_count_mismatch")
+    if budget_ms is not None and budget_ms <= 0:
+        reasons.append("budget_not_positive")
+    return _FoulPlayThinkWork(
+        iterations_per_sample=tuple(iterations),
+        declared_samples=declared_samples,
+        budget_ms_per_sample=budget_ms,
+        miss_reasons=tuple(dict.fromkeys(reasons)),
+    )
+
+
+async def _foulplay_think_observation(
+    *,
+    clock: _FoulPlayThinkClock,
+    logs: _ProcessLogBuffer,
+    state: "_ControlledBattleState",
+    decision_round: int,
+) -> dict[str, Any]:
+    """One opponent decision's timing + realized work, as a shard row.
+
+    Runs AFTER our own choice is selected and BEFORE it is submitted, on the same
+    boundary as the opponent journal, and it is called from that same isolated
+    try/except: a raise here is counted, never fatal to the battle.
+    """
+
+    forwarded_at = state.foulplay_request_forwarded_monotonic
+    # Consumed, so a decision that saw no request forwarded cannot silently inherit the
+    # previous round's timestamp and report an overlap window that is not its own.
+    state.foulplay_request_forwarded_monotonic = None
+    settle_deadline = (
+        0.0
+        if state.foulplay_think_absent_streak >= _FOULPLAY_THINK_SETTLE_GIVEUP_DECISIONS
+        else _FOULPLAY_THINK_SETTLE_SECONDS
+    )
+    settle_start = time.monotonic()
+    while True:
+        log_slice = logs.stdout_since(state.foulplay_log_cursor)
+        work = _foulplay_think_work_from_log_lines(log_slice.lines, dropped=log_slice.dropped)
+        if work.complete or time.monotonic() - settle_start >= settle_deadline:
+            break
+        # The choice arrives on the websocket and the log lines arrive on a pipe drained
+        # by a different task, so "not there yet" is expected and cheap to wait out.
+        await asyncio.sleep(_FOULPLAY_THINK_SETTLE_POLL_SECONDS)
+    settle_seconds = time.monotonic() - settle_start
+    state.foulplay_log_cursor = log_slice.cursor
+    state.foulplay_think_absent_streak = (
+        0 if work.iterations_per_sample else state.foulplay_think_absent_streak + 1
+    )
+
+    miss_reasons = list(work.miss_reasons)
+    wait_seconds = clock.wait_seconds
+    overlap_seconds: float | None = None
+    if wait_seconds is None:
+        miss_reasons.append("wait_unmeasured")
+    elif forwarded_at is None:
+        miss_reasons.append("request_forward_unmeasured")
+    elif clock.started_at is not None and forwarded_at <= clock.started_at:
+        overlap_seconds = clock.started_at - forwarded_at
+    else:
+        # The request was forwarded AFTER we began waiting for the answer to it, so the
+        # two stamps do not describe the same round. Refuse the window.
+        miss_reasons.append("request_forward_out_of_order")
+
+    # ONE ROW PER OPPONENT DECISION, and rows are the bulk of what this feature costs a
+    # shard, so every field that a consumer can recompute is left out and the diagnostic
+    # ones appear only when they have something to say. Measured on the real corpus shape
+    # (eras 61-64: 48.7 decision rounds per game, 3,383 B mean per-game row): 224 B per
+    # row, ~10.9 KB per game, so a per-game row grows about 4x. `_write_json` rewrites the
+    # whole summary after every game when `--summary-out` is set, which makes that
+    # superlinear: ~340 MB of cumulative writes over a 250-game run, in the same band as
+    # `--opponent-journal full` (300 MB). That is affordable against runs measured in
+    # hours of search wall, and it is the price of the arbiter arm being auditable at all
+    # -- but it is a real number, so a future run that needs it smaller should emit rows
+    # only for the arm under audit rather than discover the cost by surprise.
+    row: dict[str, Any] = {"round": decision_round}
+    if wait_seconds is not None:
+        row["wait_seconds"] = round(wait_seconds, 6)
+    if overlap_seconds is not None:
+        row["overlap_seconds"] = round(overlap_seconds, 6)
+    row["iterations_per_sample"] = list(work.iterations_per_sample)
+    row["sampled_battles"] = len(work.iterations_per_sample)
+    if work.declared_samples is not None and work.declared_samples != len(work.iterations_per_sample):
+        # Only when it DISAGREES: absent means the announcement and the results matched,
+        # which is the whole content of `sample_count_mismatch` being absent.
+        row["declared_sampled_battles"] = work.declared_samples
+    if work.budget_ms_per_sample is not None:
+        row["budget_ms_per_sample"] = work.budget_ms_per_sample
+    if work.total_iterations is not None:
+        row["iterations"] = work.total_iterations
+    if work.iterations_per_budget_second is not None:
+        # Derived, and kept on the row anyway: the cross-arm comparison this instrument
+        # exists for should not require a consumer to reassemble it from three columns.
+        # `budget_seconds_granted` is the one that IS left out, being its denominator.
+        row["iterations_per_budget_second"] = round(work.iterations_per_budget_second, 3)
+    row["status"] = "miss" if miss_reasons else "ok"
+    if miss_reasons:
+        row["miss_reasons"] = list(dict.fromkeys(miss_reasons))
+        # Diagnostics for the miss only: how much stdout this decision even had to work
+        # with, and whether the ring had already thrown some of it away.
+        row["log_lines_scanned"] = len(log_slice.lines)
+        if log_slice.dropped:
+            row["log_lines_dropped"] = log_slice.dropped
+    if settle_seconds >= _FOULPLAY_THINK_SETTLE_POLL_SECONDS:
+        # Only when the drain race actually bit. Its absence is the common case and means
+        # the log lines were already buffered when the choice arrived.
+        row["settle_seconds"] = round(settle_seconds, 6)
+    return row
+
+
+def _foulplay_think_aggregate(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Totals and means over opponent-think rows, for one game or a whole run.
+
+    ONE function for both scopes on purpose: a per-game total and a run total computed by
+    two different snippets is how the same quantity ends up with two values in one shard.
+    Every mean is None rather than 0.0 when nothing was measured, so "no reading" cannot
+    be read as "zero".
+    """
+
+    waits = [float(row["wait_seconds"]) for row in rows if "wait_seconds" in row]
+    iterations = [int(row["iterations"]) for row in rows if "iterations" in row]
+    rates = [
+        float(row["iterations_per_budget_second"])
+        for row in rows
+        if "iterations_per_budget_second" in row
+    ]
+    miss_reasons: Counter[str] = Counter()
+    for row in rows:
+        for reason in row.get("miss_reasons") or ():
+            miss_reasons[str(reason)] += 1
+    return {
+        "decisions": len(rows),
+        "wait_measured_decisions": len(waits),
+        "total_wait_seconds": sum(waits),
+        "mean_wait_seconds": (sum(waits) / len(waits)) if waits else None,
+        "iterations_measured_decisions": len(iterations),
+        "total_iterations": sum(iterations),
+        "mean_iterations": (sum(iterations) / len(iterations)) if iterations else None,
+        # THE contention field. See the OPPONENT-THINK CONTENTION INSTRUMENT block.
+        "mean_iterations_per_budget_second": (sum(rates) / len(rates)) if rates else None,
+        "miss_decisions": sum(1 for row in rows if row.get("status") != "ok"),
+        "miss_reasons": dict(sorted(miss_reasons.items())),
+    }
 
 
 class _FoulPlayWebsocketServer:
@@ -2698,6 +3142,25 @@ class _ControlledBattleState:
     opponent_journal: list[OpponentJournalEntry] = field(default_factory=list)
     # Opponent decisions the recorder raised on. See the recording site.
     opponent_journal_failures: int = 0
+    # THE OPPONENT-THINK CONTENTION INSTRUMENT (see the module block of that name). One
+    # row per foul-play decision: how long we waited, how much of that window overlapped
+    # our own search, and how many MCTS visits foul-play actually realized inside the
+    # time budget it was given. Append-only; empty when the opponent seat is a pokezero
+    # policy, because there is no external process to contend with.
+    opponent_think: list[Mapping[str, Any]] = field(default_factory=list)
+    # Opponent decisions whose think telemetry raised. Same discipline as
+    # `opponent_journal_failures`: a short record is a NUMBER, not a gap to infer.
+    opponent_think_failures: int = 0
+    #: Cursor into `_ProcessLogBuffer.stdout_appended`; everything past it is stdout that
+    #: arrived since the previous decision was accounted for.
+    foulplay_log_cursor: int = 0
+    #: `time.monotonic()` at the instant the chunk carrying this round's `|request|`
+    #: finished being written to foul-play's socket -- i.e. the earliest instant its
+    #: search could have started. Consumed (reset to None) by each decision that reads it.
+    foulplay_request_forwarded_monotonic: float | None = None
+    #: Consecutive decisions whose log slice held no `Iterations` line. Drives the settle
+    #: give-up so an opponent that logs nothing is not waited on every round.
+    foulplay_think_absent_streak: int = 0
     # Per-battle truth-world builder for the oracle-belief arm (§4a). Cached
     # because its packed teams are a pure function of this battle's opening
     # requests, and rebuilding them per decision would repack 12 sets a turn for
@@ -4372,6 +4835,8 @@ async def _run_single_game(
         ),
         opponent_journal_recorded=len(state.opponent_journal),
         opponent_journal_failures=state.opponent_journal_failures,
+        opponent_think=tuple(state.opponent_think),
+        opponent_think_failures=state.opponent_think_failures,
         # Filtered on the REAL battle_id, so a run-scoped recorder still files each
         # refusal against the battle it happened in.
         refusal_records=(
@@ -4578,6 +5043,17 @@ async def _handle_stream_event(
             forwarded = [_line_for_foulplay(state, line) for line in lines]
             for chunk in _line_chunks_safe_for_foulplay(forwarded):
                 await server.send_room_lines(state.battle_id, chunk)
+                if any(line.startswith("|request|") for line in chunk):
+                    # THE START OF THE OPPONENT'S CLOCK, as precisely as the bridge can
+                    # know it: the request that this round's choice answers has now been
+                    # written to foul-play's socket, and this happens BEFORE
+                    # `_handle_decision_boundary` dispatches our own search. The gap
+                    # between this stamp and the start of our wait is the window in which
+                    # the two searches overlap -- see the OPPONENT-THINK CONTENTION
+                    # INSTRUMENT block. `_line_chunks_safe_for_foulplay` puts every
+                    # request line alone in its own chunk, so this is the request's own
+                    # send completing, not a batch it happened to ride in.
+                    state.foulplay_request_forwarded_monotonic = time.monotonic()
             if any(_is_terminal_protocol_line(line) for line in forwarded):
                 state.foulplay_terminal_sent = True
 
@@ -4873,20 +5349,45 @@ async def _handle_decision_boundary(
             },
         )
     elif foulplay_player in requested_players:
+        think_clock = _FoulPlayThinkClock()
         choice = await _wait_for_foulplay_choice_or_exit(
             server=server,
             battle_id=state.battle_id,
             process=foulplay_process,
             logs=foulplay_logs,
+            clock=think_clock,
         )
         foulplay_action = action_index_from_choice_string(player_states[foulplay_player], choice)
         if foulplay_action is None:
             raise RuntimeError(f"unable to decode foul-play choice {choice!r}.")
         choices[foulplay_player] = choice
+        # THE CONTENTION INSTRUMENT (module block: OPPONENT-THINK CONTENTION INSTRUMENT).
+        # ISOLATED for the same reason the journal below is: this is telemetry on the live
+        # decision path, ON BY DEFAULT, and the failure mode it guards against is losing a
+        # scored battle to a bug in a field nobody scores. It reads a clock the wait just
+        # stamped and stdout lines the drain task already buffered; it takes no lock,
+        # draws no RNG, and touches neither the choice above nor the submission below. The
+        # count is reported per game and summed into the run header, so a shard that is
+        # short of think rows says so as a NUMBER.
+        think_row: Mapping[str, Any] | None = None
+        try:
+            think_row = await _foulplay_think_observation(
+                clock=think_clock,
+                logs=foulplay_logs,
+                state=state,
+                decision_round=decision_round,
+            )
+            state.opponent_think.append(think_row)
+        except Exception:  # noqa: BLE001 -- count, never fail the battle
+            think_row = None
+            state.opponent_think_failures += 1
         decisions[foulplay_player] = PolicyDecision(
             action_index=foulplay_action,
             policy_id="foul-play",
-            metadata={"raw_choice": choice},
+            metadata={
+                "raw_choice": choice,
+                **({"foulplay_think": dict(think_row)} if think_row is not None else {}),
+            },
         )
         # Journal AFTER the decode and BEFORE the submit, reading only values that
         # already exist. Nothing here is passed to a policy, to the searcher, or to
@@ -4960,7 +5461,22 @@ async def _wait_for_foulplay_choice_or_exit(
     battle_id: str,
     process: asyncio.subprocess.Process,
     logs: _ProcessLogBuffer,
+    clock: _FoulPlayThinkClock | None = None,
 ) -> str:
+    """Await foul-play's choice, timing the wait when handed a clock.
+
+    `time.monotonic`, NOT `time.perf_counter`: this is a telemetry clock and the arm's
+    policy-timing instrument owns the `perf_counter` stream (its tests pin an exact
+    sequence of readings to assert a decision's wall time). Keeping the two clocks
+    separate means adding telemetry cannot shift the number the arm is judged on.
+
+    The stamp taken here is the tightest wait the bridge can measure, and it is still
+    only a LOWER BOUND on foul-play's think: the request went out earlier, and our own
+    search has already finished by the time this is called.
+    """
+
+    if clock is not None:
+        clock.started_at = time.monotonic()
     if process.returncode is not None:
         raise FoulPlayProcessExitError(stage="choosing", returncode=process.returncode, log_tail=logs.tail())
     choice_task = asyncio.create_task(server.wait_for_choice(battle_id=battle_id))
@@ -4971,7 +5487,12 @@ async def _wait_for_foulplay_choice_or_exit(
             return_when=asyncio.FIRST_COMPLETED,
         )
         if choice_task in done:
-            return choice_task.result()
+            choice = choice_task.result()
+            if clock is not None:
+                # AFTER `.result()`, so a wait that ends in an exception leaves the clock
+                # unstamped and reports `wait_unmeasured` instead of a bogus duration.
+                clock.finished_at = time.monotonic()
+            return choice
         raise FoulPlayProcessExitError(
             stage="choosing",
             returncode=process.returncode,
