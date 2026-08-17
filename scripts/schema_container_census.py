@@ -60,8 +60,13 @@ def _assigned_names(tree: ast.AST) -> dict[int, str]:
 
     KNOWN GAP, since this docstring is the place a reader looks for the key's guarantees: distinctness
     is per (file, lineno, members, name), so two unnamed containers on the SAME physical line still
-    collapse into one entry and one spec row covers both. A stable per-(file, members) ordinal would
-    close that and drop the line sensitivity at the same time; it is not what this function does today.
+    collapse into one entry and one spec row covers both -- measured, exit 0 while printing "20
+    containers / 20 rows" on a tree holding 21.
+
+    A stable per-(file, members) ordinal -- `<inline#1>`, `<inline#2>` -- is the candidate fix, and it
+    is a PREDICTION, not a measured result: nobody has built it. What IS measured is the negative that
+    motivates it -- simply dropping the line qualification is exit 0 for a newly added unregistered
+    container, so line-insensitivity alone is not the answer.
     """
     out: dict[int, str] = {}
     for node in ast.walk(tree):
