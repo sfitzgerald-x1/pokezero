@@ -805,6 +805,24 @@ class EngineMctsConfig:
                     f"{self.leaf_eval!r}. For the uniform-priors sequential arm use "
                     "leaf_eval='rollout_crate' instead."
                 )
+            if not self.model_priors:
+                # The WHOLE REASON this composition exists. The sequential
+                # `leaf_eval="rollout_crate"` seam already prices rollout leaves
+                # at UNIFORM priors; this path was built because the campaign's
+                # surviving config is priors ON (plan section 7), and an arm that
+                # arbitrates the priors-on panel has to run priors. Accepting
+                # `model_priors=False` here silently produces the sequential
+                # path's estimand while carrying this path's name into the
+                # report -- and it would also make the encode skip cover every
+                # leaf, since no leaf needs a prior map, so the arm would run
+                # with no model forward at all.
+                raise ValueError(
+                    "rollout_leaf_eval=True requires model_priors=True: this path exists "
+                    "because the campaign's surviving search config is priors ON, and an "
+                    "arm that arbitrates the priors-on panel must run the panel's priors. "
+                    "For the uniform-priors estimand use leaf_eval='rollout_crate', which "
+                    "is that arm and says so."
+                )
             if self.rollout_count <= 0:
                 raise ValueError(
                     "rollout_count must be > 0 for rollout_leaf_eval=True "
