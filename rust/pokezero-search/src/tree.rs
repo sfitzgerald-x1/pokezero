@@ -130,11 +130,22 @@ impl ChanceBranch {
         // non-strict `json.loads` accepts, so a decision comes off a
         // degenerate tree and is banked as a measurement.
         //
-        // Cost: one integer compare per branch read. Measured on
-        // symmetric.state d3/s2000, `iterations_per_s` is a wash against the
-        // debug-assert build (both ~1.7e5/s, run-to-run spread larger than the
-        // difference), so there is no throughput argument for shipping the
-        // check disabled.
+        // COST, measured against the base commit rather than estimated, and
+        // reported with its resolution -- an earlier draft of this comment
+        // called it "a wash" before measuring, which was a guess.
+        //
+        // `symmetric.state`, `max_depth=3`, 2000 iterations, median of 7,
+        // release wheels built with the shipping command from `git archive`
+        // extractions: `puct_search_multi` runs 1,050,903 it/s at base
+        // (909763f8), 905,643 it/s as shipped, and 955,737 it/s with these five
+        // asserts -- and only these -- demoted back to `debug_assert!`. The
+        // three legs' run-to-run ranges overlap, so this does NOT resolve the
+        // asserts' own cost; what it establishes is that the whole change costs
+        // order-10% on the CHEAPEST POSSIBLE leaf, where an iteration is about
+        // one microsecond, and nothing on the arm itself (32,081 -> 34,924 it/s,
+        // faster because the dead per-ply clone came out in the same series).
+        // On any path where a leaf costs more than a few nanoseconds -- the
+        // model path, and this arm -- the check is not measurable.
         assert!(
             self.visits > 0,
             "chance branch read before initialization: value_sum / 0 visits would emit \

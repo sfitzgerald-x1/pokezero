@@ -4333,6 +4333,22 @@ fn write_opponent_mon_history(
     // wheel. The wrong values here are model INPUTS, which no downstream check would flag as
     // non-finite: the golden corpus catches a misalignment only on the layouts it covers, and it
     // does not run in the campaign wheel at all. One length compare per encode.
+    //
+    // DEMONSTRATED FAILING INPUT, and where it is NOT visible. Adding `.skip(1)` to the
+    // `matchup_keys` builder above and rebuilding with the shipping command
+    // (`maturin build --release --features model`) makes
+    // `tests/test_rust_encoder_v4.py::V4LeafMatchupPairTracksTheFoldTest` fail on this assert.
+    // `cargo test --release --lib encoder::` does NOT catch it: the matchup write is only
+    // reached through `LeafEncoder::encode_leaf` from Python, so the crate's own unit tests
+    // never run this line with `matchup_write` true -- which is exactly why the compiled-out
+    // version of it certified nothing.
+    //
+    // Residual, stated rather than left for a reader to find: `encode_leaf` is NOT behind
+    // `crate::panic_guard`, so unlike the search entry points this surfaces as
+    // `pyo3_runtime.PanicException` (a `BaseException`) and costs the caller rather than one
+    // world. That is a smaller hole than writing silently wrong model inputs, and closing it
+    // means giving `encode_leaf` an error channel -- out of scope for the arm, and noted here
+    // so the trade is on the record.
     assert!(
         !matchup_write || matchup_keys.len() == products.tendency_stats.opponent_mon_matchups.len(),
         "matchup_keys must stay 1:1 with opponent_mon_matchups for the zip+rev lookup"
