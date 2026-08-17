@@ -66,7 +66,7 @@ are pinned against the two census modules' own constants, read by AST rather tha
 update the register in the same change. That is deliberate: the document that goes stale is
 the one nothing forces an author through.
 
-MUTATION BATTERY: 62 applied, 62 caught, plus 1 NEGATIVE CONTROL verified green.
+MUTATION BATTERY: 67 applied, 67 caught, plus 1 NEGATIVE CONTROL verified green.
 Partitioned by WHAT IS MUTATED. Enumerated because
 an unrecorded battery is what `tests/test_wide_seed_negative_census.py` records costing it a
 surviving mutation, and because "the tests pass" is the same kind of claim this module
@@ -140,7 +140,7 @@ BLOCK A -- A1-A37, applied to the REGISTER's own bytes.
        `TheDocumentsClaimsAboutItselfAreReDerivedTests`, which exists because review blocked
        two successive revisions on claims the document made about ITSELF.
 
-BLOCK B -- B38-B62, TWENTY-FIVE mutations applied ONLY to the tree and never to the document.
+BLOCK B -- B38-B67, THIRTY mutations applied ONLY to the tree and never to the document.
 Block A can be passed by a pin that reads the register against a hard-coded copy of itself.
 These are the ones that prove each derivation reads what it claims to: every one MAKES A REAL
 CHANGE TO THE TREE and the document, unedited, must go red. Six are the absences, and an
@@ -230,6 +230,53 @@ has recorded.
        compound and every one after the first measures an already-changed tree, which would
        make the whole loop pass on a single real sensitivity. Caught by a post-loop identity
        check against the baseline.
+  B63. ⚠ SURVIVED THE SECOND REVISION, and it is the THIRD ROUND OF ONE DEFECT.
+       `register_facts()` seeded with `{"t1.head_fingerprint": head_fingerprint()[:16]}`.
+       Round 1 pinned `head_fingerprint` and the tautology moved to `derive()`; round 2
+       pinned `derive()` and the comparison loop and it moved HERE, to the reader every
+       document-side assertion funnels through -- including both of round 2's
+       "independent" ones. The published claim "the row reaches CI through THREE seams"
+       was false, and a fourth seam-specific pin would have been the same mistake again.
+  B64. ⚠ THE SAME DEFECT ONE FRAME FURTHER OUT: `_text()` rewriting the row on the way
+       past. This is the mutation that ends the chain, because it is killed by EXACTLY ONE
+       test -- the one that reads the document with `Path.read_bytes` and a regex in its
+       own body and the tree with `compute_fingerprint`, sharing no helper with the module.
+       Verified: `FAILED (failures=1)`, and that one is
+       `test_the_row_holds_when_read_through_none_of_this_modules_helpers`. Every other T1
+       pin is green under this mutant. A guard chain has to terminate somewhere that reads
+       primary bytes; until it does, each round moves the tautology outward.
+  B65. FOUR SUBSET HASHERS, all of which SURVIVED the second revision's FLOORS:
+       `crate_sources()` skipping `tree.rs`, `crate_sources()[:6]`, `patch_files()[:60]`,
+       and `_checked_tree_inputs({"Cargo.toml"})` dropping `Cargo.lock`. The floors were
+       `> 5` `.rs` against 11 actual, `> 50` `.patch` against 74 and `> 70` total against
+       91 -- roughly twenty files of slack, i.e. a margin wider than the defect. The
+       exhaustive loop cannot catch these on its own BY CONSTRUCTION: it derives its probe
+       set from the hasher, so a hasher that reads less is probed less. Replaced by exact
+       SET EQUALITY against a re-derivation that shares no code with the hasher.
+  B66. TWO MUTATIONS THAT DECAY THE IDENTITY TO A BAG OF BYTES, and they need DIFFERENT
+       probes, which is why both exist. Neither changes any file's bytes, so every per-file
+       sensitivity probe is unaffected; both must be measured RESEATED, i.e. with Appendix A
+       updated to the mutant's own value, because that is what the failure message tells an
+       author to do.
+       (a) The digest made order-insensitive (XOR of the per-file hashes). Caught by
+           TRANSPOSING two crate sources' contents: the byte multiset is held fixed and only
+           the association changes.
+       (b) `digest.update(str(path.relative_to(REPO_ROOT)).encode())` deleted. ⚠ The
+           transposition probe CANNOT see this one -- the native-input loop iterates in
+           sorted-path order, so with the path gone the ORDER of content hashes still
+           encodes which file held what, and a transposition moves the hash either way.
+           Caught by a pure RENAME that PRESERVES the sort position (the last crate source
+           renamed to a name that still sorts last): same bytes, same sequence, different
+           path set. Recorded because a first fix here claimed the transposition covered
+           both and measurement said otherwise.
+  B67. ⚠ THE META-DEFECT, and it defeated the first fix for B65. The sandbox populated from
+       `crate_sources()` / `cargo_inputs()` / `build_metadata_inputs()` -- the hasher's OWN
+       accounting. A hasher skipping `tree.rs` then produced a sandbox missing `tree.rs`,
+       the independent glob of that sandbox found the same short list, and the EXACT SET
+       EQUALITY agreed with itself: B65a and B65b both survived reseated at a clean OK with
+       the equality in place. A control populated by the thing it controls is not a control.
+       `_tree_side_hashed_inputs` now enumerates from the real repo and populates the
+       sandbox, so the copy is a copy of the TREE rather than of the hasher's opinion of it.
 
 
 BLOCK C -- NEGATIVE CONTROLS. Mutations that must stay GREEN because they do not change the
@@ -1205,6 +1252,42 @@ class TheFingerprintGateIsOpenTests(unittest.TestCase):
         self.assertEqual(freeze_declaration_constants(), 0)
 
 
+def _tree_side_hashed_inputs(root: Path | None = None) -> list[Path]:
+    """Every file the fingerprint SHOULD read, enumerated without asking the hasher.
+
+    ⚠ THIS FUNCTION EXISTS BECAUSE ITS ABSENCE DEFEATED THE PREVIOUS REVISION. The sandbox
+    used to be populated from `crate_sources()` / `cargo_inputs()` /
+    `build_metadata_inputs()` -- the hasher's OWN accounting -- so a hasher that skipped
+    `tree.rs`, or took `crate_sources()[:6]`, produced a sandbox missing exactly the files
+    it had stopped reading. The independent re-derivation then globbed that sandbox, found
+    the same short list, and the "exact set equality" agreed with itself. Both mutants
+    SURVIVED at a clean OK after Appendix A was reseated. A control populated by the thing
+    it controls is not a control.
+
+    So the enumeration starts from the REAL repo and shares no code with
+    `engine_build_fingerprint`: the manifest parsed for its own non-comment lines, the
+    crate's `src/**/*.rs` globbed directly, and the four build files globbed by name.
+    """
+
+    base = REPO if root is None else root
+    manifest = base / "third_party" / "poke-engine-gen3-patches.txt"
+    found = {manifest, base / "third_party" / "poke-engine-base-source.json"}
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        name = line.strip()
+        if name and not name.startswith("#"):
+            found.add(base / "third_party" / name)
+    crate = base / "rust" / "pokezero-search"
+    found |= set((crate / "src").rglob("*.rs"))
+    found |= {
+        path
+        for path in crate.rglob("*")
+        if path.is_file()
+        and path.name in {"Cargo.toml", "Cargo.lock", "build.rs", "pyproject.toml"}
+        and not {".git", "target"}.intersection(path.relative_to(crate).parts)
+    }
+    return sorted(found)
+
+
 @contextlib.contextmanager
 def _fingerprint_sandbox():
     """A byte-copy of every hashed input, with the hasher pointed at it.
@@ -1217,19 +1300,7 @@ def _fingerprint_sandbox():
 
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
-        for relative in (
-            "third_party/poke-engine-gen3-patches.txt",
-            "third_party/poke-engine-base-source.json",
-        ):
-            (root / relative).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(REPO / relative, root / relative)
-        for path in engine_build_fingerprint.patch_files():
-            shutil.copy2(path, root / "third_party" / path.name)
-        for path in (
-            engine_build_fingerprint.crate_sources()
-            + engine_build_fingerprint.cargo_inputs()
-            + engine_build_fingerprint.build_metadata_inputs()
-        ):
+        for path in _tree_side_hashed_inputs():
             target = root / path.relative_to(REPO)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
@@ -1349,28 +1420,51 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
                 "`build_inputs` gained a class this copy does not mirror.",
             )
 
-    def test_the_hashed_input_set_still_covers_every_class_by_name(self) -> None:
-        # THE ANTI-VACUITY FLOOR for the exhaustive loop below, and it is not decoration:
-        # that loop derives its probe set from `build_inputs()`, so deleting a class from
-        # `build_inputs()` deletes the probes for it too and the loop stays green over a
-        # smaller world. Review measured exactly that -- `cargo_inputs()` and
-        # `build_metadata_inputs()` were unprobed and each was one line from being dropped.
-        # Named literals, because a floor derived from the thing it floors is not a floor.
-        with _fingerprint_sandbox():
-            names = {path.name for path in self._hashed_inputs()}
-            missing = sorted(self.REQUIRED_INPUT_NAMES - names)
+    def test_the_hashed_input_set_is_exactly_what_the_tree_holds(self) -> None:
+        """MEMBERSHIP EQUALITY against a re-derivation that shares no code with the hasher.
+
+        ⚠ THE FIRST TWO REVISIONS OF THIS GUARD WERE FLOORS WITH ~20 FILES OF SLACK, and
+        review walked straight through them: `> 5` `.rs` against 11 actual, `> 50` `.patch`
+        against 74, `> 70` total against 91. So `crate_sources()` skipping `tree.rs`,
+        `crate_sources()[:6]` and `patch_files()[:60]` all SURVIVED green -- the exhaustive
+        loop below derives its probe set from the hasher, so a hasher that reads less is
+        probed less and reports success over a smaller world. A floor whose margin exceeds
+        the defect it is meant to catch is decoration.
+
+        ⚠ AND THE FIRST FIX FOR THAT STILL LET TWO OF THEM THROUGH, which is the sharper
+        lesson: the equality was exact, but the SANDBOX was populated from the hasher's own
+        accounting, so a hasher that skipped `tree.rs` produced a sandbox missing `tree.rs`
+        and the independent glob agreed with the short list. Both survived at a clean OK
+        after Appendix A was reseated. `_tree_side_hashed_inputs` now enumerates from the
+        REAL repo and shares no code with `engine_build_fingerprint`, and it populates the
+        sandbox too -- so the copy is a copy of the TREE rather than of the hasher's opinion
+        of it. It costs nothing to maintain: adding a crate source changes both sides
+        together, and the fingerprint moves anyway, so no new churn is introduced.
+        """
+
+        with _fingerprint_sandbox() as root:
+            expected = {path.resolve() for path in _tree_side_hashed_inputs(root)}
+            got = {path.resolve() for path in self._hashed_inputs()}
             self.assertEqual(
-                missing,
-                [],
-                f"the hashed input set no longer reaches {missing}. Either an input class "
-                "was dropped from `build_inputs`/`compute_fingerprint` -- in which case an "
-                "edit to those files is now invisible to the fingerprint -- or the file "
-                "moved and the hasher stopped finding it. Both are silent.",
+                sorted(str(p.relative_to(root.resolve())) for p in got),
+                sorted(str(p.relative_to(root.resolve())) for p in expected),
+                "the set of files the hasher reads is not the set the tree holds. A file "
+                "MISSING from the hasher is an input an engine can be built from without "
+                "moving the fingerprint; a file EXTRA is a fingerprint that churns on "
+                "something that cannot change the build.",
             )
-            suffixes = [path for path in self._hashed_inputs() if path.suffix == ".rs"]
-            patches = [path for path in self._hashed_inputs() if path.suffix == ".patch"]
-            self.assertGreater(len(suffixes), 5, "the crate-source class collapsed")
-            self.assertGreater(len(patches), 50, "the patch-stack class collapsed")
+            # Non-vacuity on the expected side itself, because a re-derivation that
+            # collapsed to nothing would make the equality above trivially true.
+            self.assertEqual(len(self.REQUIRED_INPUT_NAMES), 6)
+            names = {path.name for path in expected}
+            self.assertEqual(sorted(self.REQUIRED_INPUT_NAMES - names), [])
+            self.assertEqual(
+                len([p for p in expected if p.suffix == ".patch"]),
+                int(register_facts()["base.patch_stack"]),
+                "the patch stack the hasher reads is not the length Appendix A records. "
+                "`base.patch_stack` is re-derived from the manifest by `derive()`, so this "
+                "ties the hashed set to a figure the document is already policed on.",
+            )
 
     def test_every_hashed_input_moves_the_head_fingerprint(self) -> None:
         # EXHAUSTIVE, not enumerated. The first revision probed a crate source and a patch
@@ -1405,6 +1499,129 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
                 "the loop did not restore the sandbox, so a later probe measured a tree "
                 "the earlier ones had already changed.",
             )
+
+    def test_swapping_two_hashed_files_contents_moves_the_head_fingerprint(self) -> None:
+        """WHICH file held WHICH bytes has to matter, not just the multiset of bytes.
+
+        Review's NIT, promoted because it is cheap and it closes two mutants at once:
+        dropping the repo-relative path from the native-input digest, and making that digest
+        order-insensitive, both survive every other probe here -- the per-file sensitivity
+        loop moves the hash either way, because it CHANGES bytes rather than moving them.
+        Swapping two files' contents holds the byte multiset fixed and changes only the
+        association, so it is red exactly when the identity is a set of (path, bytes) pairs
+        and green when it has decayed to a bag of bytes. A crate whose `events.rs` and
+        `tree.rs` had been transposed builds differently and would otherwise stamp the same.
+        """
+
+        with _fingerprint_sandbox() as root:
+            baseline = head_fingerprint()
+            sources = sorted((root / "rust" / "pokezero-search" / "src").rglob("*.rs"))
+            self.assertGreater(len(sources), 1, "need two crate sources to swap")
+            first, second = sources[0], sources[1]
+            one, two = first.read_bytes(), second.read_bytes()
+            self.assertNotEqual(one, two, "the two probe files are byte-identical; pick others")
+            first.write_bytes(two)
+            second.write_bytes(one)
+            self.assertNotEqual(
+                head_fingerprint(),
+                baseline,
+                f"transposing the contents of {first.name} and {second.name} left the head "
+                "fingerprint unchanged, so the identity no longer records WHICH input held "
+                "which bytes -- only that the bytes were present somewhere.",
+            )
+
+    def test_renaming_a_hashed_file_moves_the_head_fingerprint(self) -> None:
+        """The digest must bind content to a NAME, not merely to a position in a sequence.
+
+        This isolates the one mutant the transposition probe cannot see: dropping
+        `digest.update(str(path.relative_to(REPO_ROOT)).encode())` from the native-input
+        loop. That loop iterates in sorted-path order, so with the path gone the ORDER of
+        the content hashes still encodes which file held what -- which is why a transposition
+        moves the hash either way, and why B66a survived reseated with everything else here
+        green. A pure RENAME is the discriminating case, and only if it PRESERVES the sort
+        position: rename the last crate source to a name that still sorts last, and the
+        sequence of content hashes is byte-identical while the path set is not.
+
+        Without this, `compute_fingerprint` could be refactored into a bag-of-bytes identity
+        that cannot tell `leaf.rs` from a copy of it saved under another name -- and the
+        vendored tree is reconstructed BY NAME from the patch list, so names are load
+        bearing here rather than incidental.
+        """
+
+        with _fingerprint_sandbox() as root:
+            baseline = head_fingerprint()
+            sources = sorted((root / "rust" / "pokezero-search" / "src").rglob("*.rs"))
+            self.assertTrue(sources, "no crate sources in the sandbox to rename")
+            last = sources[-1]
+            renamed = last.with_name(f"{last.stem}zzzz{last.suffix}")
+            last.rename(renamed)
+            self.assertEqual(
+                sorted((root / "rust" / "pokezero-search" / "src").rglob("*.rs"))[-1],
+                renamed,
+                "the rename did not preserve the sort position, so this probe is no longer "
+                "isolating the path component -- it would also move the content order and "
+                "pass for the wrong reason.",
+            )
+            self.assertNotEqual(
+                head_fingerprint(),
+                baseline,
+                f"renaming {last.name} to {renamed.name} -- same bytes, same sort position, "
+                "different path -- left the head fingerprint unchanged. The identity no "
+                "longer binds content to a name, so it cannot distinguish two crate "
+                "sources whose contents were saved under each other's names.",
+            )
+
+    def test_the_row_holds_when_read_through_none_of_this_modules_helpers(self) -> None:
+        """⚠ THE THIRD ROUND OF ONE DEFECT, and the assertion that ends the class of it.
+
+        Round 1 pinned `head_fingerprint` and the tautology moved to `derive()`. Round 2
+        pinned `derive()` and the comparison loop, and review found the tautology had moved
+        again -- to `register_facts()`, which EVERY document-side reader funnels through,
+        and to `_text()` one frame further out. One added line there made all three of the
+        previous round's "independent" assertions vacuous: document `65092feac14da111`,
+        tree `15c2381f81e8f886`, module exit 0 at a clean `Ran 48 tests, OK` (the count at THAT
+        revision; this module is larger now). The claim
+        "the row reaches CI through THREE seams" was simply false, and incrementing it to
+        four would have been the same mistake a fourth time.
+
+        So this does not add a seam-specific pin. It reads the document with
+        `Path.read_bytes` and a regex RIGHT HERE, and the tree with `compute_fingerprint`
+        directly, sharing NO helper with the rest of the module -- not `_text`, not
+        `register_facts`, not `_register_table`, not `derive`, not `head_fingerprint`, not
+        the appendix loop. A mutation to any of them cannot reach this assertion, so the
+        chain has an end rather than one more link.
+
+        The path is a LITERAL, checked against `REGISTER` so the two cannot drift: reading
+        the constant would reintroduce exactly the indirection this test exists to avoid.
+        """
+
+        relative = "reports/c155_terminal_disposition_register.md"
+        self.assertEqual(
+            relative,
+            REGISTER,
+            "this test's literal path and the module's REGISTER constant have drifted; one "
+            "of them is reading a document nothing else in this module reads.",
+        )
+        text = (REPO / relative).read_bytes().decode("utf-8")
+        rows = re.findall(
+            r"(?m)^\|\s*`t1\.head_fingerprint`\s*\|\s*([0-9a-f]{16})\s*\|\s*$", text
+        )
+        self.assertEqual(
+            len(rows),
+            1,
+            "Appendix A does not hold exactly one well-formed `t1.head_fingerprint` row. "
+            f"Found {rows!r}. A duplicated row lets a reader that keeps the last one "
+            "disagree with a reader that keeps the first; none at all means the pin is "
+            "gone rather than failing.",
+        )
+        self.assertEqual(
+            rows[0],
+            compute_fingerprint()["fingerprint"][:16],
+            "the document's fingerprint row and the tree's fingerprint disagree, read "
+            "through NONE of this module's helpers. If the rest of the module is green "
+            "while this is red, a reader between the document and the assertion has been "
+            "re-pointed and every other T1 pin is currently a tautology.",
+        )
 
     def test_the_appendix_row_is_compared_without_going_through_derive(self) -> None:
         # BLOCKING FINDING 1 of review, half one. The row reaches CI through THREE seams --
@@ -1891,6 +2108,8 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
             17: "SEVENTEEN", 18: "EIGHTEEN", 19: "NINETEEN", 20: "TWENTY",
             21: "TWENTY-ONE", 22: "TWENTY-TWO", 23: "TWENTY-THREE",
             24: "TWENTY-FOUR", 25: "TWENTY-FIVE", 26: "TWENTY-SIX",
+            27: "TWENTY-SEVEN", 28: "TWENTY-EIGHT", 29: "TWENTY-NINE",
+            30: "THIRTY",
         }
         self.assertIn(size, words, f"block B has {size} entries; extend `words`")
         word = words[size]

@@ -1052,10 +1052,10 @@ jobs:
       # its Appendix A is re-derived from tracked bytes, committed artifacts and anchors
       # resolved with uniqueness required, imported from C153's census rather than copied.
       #
-      # Battery: 62 mutations applied, 62 caught, plus
+      # Battery: 67 mutations applied, 67 caught, plus
       # one NEGATIVE CONTROL verified green, listed in the module docstring -- a
       # MUTATION count, not the test count, which a first revision of this comment conflated
-      # by writing the module's 34 tests here. TWENTY-FIVE of the 62 are applied only to the tree
+      # by writing the module's 34 tests here. THIRTY of the 67 are applied only to the tree
       # and never to the document, because a pin that reads a document against a hard-coded
       # copy of itself passes every document-side mutation; the first revision claimed ten
       # and two of those ten edited the register. Exact count, not a floor, per #1163.
@@ -1064,7 +1064,7 @@ jobs:
       # assume it will catch a drift in this one. MEASURED, and the denominator is
       # EXECUTABLE sites -- one line in this file carrying the invocation is a comment and
       # is not a guard. Merged tree: 26 executable, 22 resolved, 4 unresolved; this step IS
-      # one of the 22, deriving 48 from the module's AST. #1205's own "24 of 20" was exact
+      # one of the 22, deriving 51 from the module's AST. #1205's own "24 of 20" was exact
       # at 6ef682bf and its COUNTS are now stale -- main gained #1203's guarded Taunt step,
       # so main reads 25/21 -- while its FINDING, the same four unresolved steps, is not.
       # The register re-derives all three numbers rather than stating them, and pins the
@@ -1084,8 +1084,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_terminal_disposition_register -v 2>&1 \
             | tee /tmp/c155register.log
-          if ! grep -qE 'Ran 48 tests' /tmp/c155register.log; then
-            echo "::error::expected 48 register pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 51 tests' /tmp/c155register.log; then
+            echo "::error::expected 51 register pins; the suite shrank or grew"
             exit 1
           fi
           # A clean OK with no skips. TheDerivationsReadSomethingTests is the only reason

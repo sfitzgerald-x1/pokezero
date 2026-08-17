@@ -164,22 +164,35 @@ the method count never moved. Measured, not hypothesised, and recorded as **B54*
 mutation in this battery to survive: blocks A and B target the DOCUMENT and the TREE, and neither
 targets the DERIVATION. `TheFingerprintDerivationReadsTheTreeTests` closes it.
 
-⚠ **AND THE FIRST REVISION OF THAT CLASS DID NOT CLOSE IT** — independent review returned **eight
-surviving mutants**, recorded as **B55–B62**, and the two defects are both this fix's own claim
-landing on itself. **(1)** The row reaches CI through **three** seams — `head_fingerprint`,
-`derive()`, and the appendix comparison loop — and pinning only the first moved the tautology one
-frame up: `derive()`'s line re-pointed at `register_facts()`, or the loop taught to `continue` on
-this one key, each left the module at a clean OK on an edited crate source. **(2)** It claimed
-"sensitivity to each hashed input class" while probing **two of the five**; the manifest bytes, the
-sdist digest pin, `cargo_inputs()` and `build_metadata_inputs()` were all unprobed, so `cargo = []`,
-`build_metadata = []`, and deleting either `BASE_SOURCE`'s or `PATCH_LIST`'s digest line were each
-one line and green. An unscoped negative, in the guard against unscoped negatives.
+⚠ **AND IT TOOK THREE ROUNDS, because the first two fixes were the same mistake.** Two independent
+review rounds returned **thirteen** further surviving mutants, recorded as **B55–B67**, and the
+pattern is worth more than any one of them: *each fix pinned the seam the last mutant used, and the
+next mutant simply moved one frame outward.* Round 1 pinned `head_fingerprint`; the tautology moved
+to `derive()`. Round 2 pinned `derive()` and the comparison loop and published "the row reaches CI
+through **three** seams"; the tautology moved to `register_facts()`, which every document-side
+assertion funnels through — **including both of round 2's "independent" ones** — and then to
+`_text()` one frame past that. Incrementing "three" to "four" would have been the fourth instance.
+A guard chain has to **terminate at primary bytes**, and one assertion now does: it reads the
+document with `Path.read_bytes` and a regex in its own body and the tree with `compute_fingerprint`,
+sharing no helper with this module. The `_text()` mutant is killed by that assertion **and by
+nothing else** — `FAILED (failures=1)` — which is the clearest evidence in this file that the
+termination is what was missing rather than more coverage.
 
-What the class asserts now: a **second, independent** comparison routing through neither `derive()`
-nor the loop; `derive()` required to part company with the document on an edited crate source;
-**EXHAUSTIVE** sensitivity — every file the hasher reads, derived from `build_inputs()` plus the
-manifest, so a class added later is covered the day it lands — **floored by name** so that deleting
-a class cannot shrink the probe set instead of satisfying it; specificity against unhashed
+The second defect was an **unscoped negative inside the guard against unscoped negatives**. Round 1
+claimed "sensitivity to each hashed input class" while probing **two of five**. Round 2 made the
+sensitivity exhaustive but floored the input set at `> 5` `.rs` against 11 actual, `> 50` `.patch`
+against 74 and `> 70` total against 91 — about twenty files of slack, a margin wider than the defect
+— so a hasher that skipped `tree.rs`, or took `crate_sources()[:6]`, or `patch_files()[:60]`, or
+dropped `Cargo.lock`, stayed green. The exhaustive loop **cannot** catch those by construction: it
+derives its probe set from the hasher, so a hasher that reads less is probed less.
+
+What the class asserts now: the helper-free comparison above; a second comparison routing through
+neither `derive()` nor the loop; `derive()` required to part company with the document on an edited
+crate source; **EXHAUSTIVE** sensitivity — every file the hasher reads, derived from `build_inputs()`
+plus the manifest, so a class added later is covered the day it lands — over an input set pinned by
+**exact set equality** against a re-derivation that shares no code with the hasher; a transposition
+probe, so the identity cannot decay from a set of (path, bytes) pairs into a bag of bytes; and
+specificity against unhashed
 neighbours, per shape (an over-capturing hasher would redden this row on every Python-only PR, and a
 gate that reddens on everything gets bypassed); and a negative control that the probe sandbox
 reproduces the real fingerprint exactly, without which the sensitivity would be unearned. This row
@@ -647,7 +660,7 @@ the merge. The register documents that class; it now has a first-party instance,
 failure message names the cause and the fix (merge `origin/main`, do not rebase, re-derive) rather
 than leaving the next author to rediscover it.
 
-**The `Ran N tests` guard.** The step carries an exact `Ran 48 tests`, re-derived from the module's
+**The `Ran N tests` guard.** The step carries an exact `Ran 51 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
 rather than inherited from #1205's figure. The workflow holds **34** lines containing the unittest
@@ -660,7 +673,7 @@ predicts exactly this and says to merge `origin/main` and re-derive. `origin/mai
 `tests.test_render_dropped_move_line_crate` invocation while this branch was open. Re-derived on the
 merged tree with `grep -c 'python -m unittest'`, not adjusted by one.) **This step is among the
 resolved ones** — the number is not restated here, because a fourth copy of it is a fourth thing to
-go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 48 from the module's AST
+go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 51 from the module's AST
 and matches the guard. All three numbers are **re-derived by the pin** rather than typed.
 
 ⚠ **#1205 IS CLOSED (C156), AND THE SENTENCE ABOVE IS WHAT ITS CLOSURE LOOKS LIKE.** This register
@@ -707,12 +720,12 @@ does not exist on either tree. Resolved by merging `origin/main` into the branch
 rebase) and re-deriving all four trees; the assertion now carries that diagnosis in its own failure
 message.
 
-**Mutation evidence.** **62 mutations applied, 62 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
-partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B62** edit **only the tree
+**Mutation evidence.** **67 mutations applied, 67 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
+partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B67** edit **only the tree
 and never this document**. That second number is the one that matters, because a pin reading a
 document against a hard-coded copy of itself passes every document-side mutation — and ⚠ **a first
 revision put it at ten and two of those ten edited the register**, which is the property being
-claimed, mis-stated. Twenty-five is the measured figure: a patch line shift, the tie-refusal arm deleted,
+claimed, mis-stated. Thirty is the measured figure: a patch line shift, the tie-refusal arm deleted,
 a damage push made to consult the truncation flag (G33c *fixed*), a sub-keyed single-seat counter
 added to a committed sweep, a freeze constant added to the differential, a real Showdown checkout
 added to the workflow, the head fingerprint written into an artifact, an `hp`-ceiling context line
@@ -739,14 +752,16 @@ And the id list is justified by the mutation that actually needs it: **B52**, a 
 marker and adds one to G1, holding the count at **9** while the membership changes — red on the ids,
 green on the count, and the only mutation in the battery a count cannot catch.
 
-**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 48
+**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 51
 tests, OK**. The gated family together: ledger uniformity **19**, never-fired **22**, wide-seed
 **36**, C154 re-adjudication **38**, seed registry **41**, single-seat coverage **3** — all OK.
 (⚠ C154 re-adjudication was stated as **34** and is **38** — re-derived here with
 `python -m unittest tests.test_unreachable_readjudication`, which is also what the workflow's own
 `Ran 38 tests` guard demands, so the document was the only copy that had gone stale. Found by
-independent review, not by a pin: none of these six figures is machine-checked, which is why the
-sentence now says where each came from.)
+independent review, not by a pin — and **none of these six figures is machine-checked**, which is the
+finding rather than the one wrong digit. All six were re-derived with the same command shape and the
+other five agreed; only the one that was wrong is quoted with its command, because claiming the
+sentence now sources all six would overstate what was done. Pinning them is the standing follow-up.)
 `tests/test_final_holdout_guard.py` and `tests/test_boundary_verdict_partition.py` cannot import
 without a built engine in this environment and are unchanged by this branch. Full suite, with the
 flag that is required rather than stylistic:
