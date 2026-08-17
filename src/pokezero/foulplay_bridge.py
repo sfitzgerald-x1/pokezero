@@ -3571,6 +3571,16 @@ FOULPLAY_THINK_MEASURED_RUN_LOG_SD = 0.0516
 #: each arm. It is still a remainder, not zero, which is why the docstring states the bound as
 #: "25% on strata covering at least 95% of each arm" and not as "25%".
 #:
+#: THE COMPOSED WORST CASE, since the review asked for a finite one. If the compared share is s
+#: and every compared stratum is within f, the hungry arm's own mean is at least s times its
+#: compared rate (worst case: its uncompared decisions realized ZERO work), so the arm-level fold
+#: is at most f/s -- **1.3158** at f=1.25, s=0.95, against **1.5625** at the within-arm gate's
+#: s=0.8. The review's independent composition measured 1.5581 at s=0.8, which is that formula to
+#: within the granularity of its fixture, so the bound is cross-checked rather than asserted. It
+#: carries ONE assumption that is not enforced anywhere: that the lean arm's uncompared decisions
+#: do not realize a HIGHER rate than its compared ones. Nothing bounds that from above, so f/s is
+#: the bound on the direction that flatters the hungry arm and not a two-sided one.
+#:
 #: NOT MEASURED, unlike the threshold: nothing here establishes how often a real campaign's
 #: strata cover 95% of both arms. foul-play's schedule is a function of the turn number and both
 #: arms play both phases, so the expectation is ~1.0 -- but that is an inference, and if a real
@@ -3987,8 +3997,13 @@ def cross_arm_foulplay_contention(
             "A ratio above 1.0 means the opponent realized LESS work per granted "
             f"budget-second against the {hungry_label} arm: the flattering direction, and "
             "the paired delta is confounded. Refusal means the arbiter verdict must not be "
-            "banked. A pass bounds the confound at the fold ratio, it does not show it is "
-            "zero."
+            "banked. A PASS bounds the confound at the fold ratio on strata covering at least "
+            f"{FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE:.0%} of each arm -- so at most "
+            f"{max_fold_ratio / FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE:.4f} at arm level, "
+            "assuming the uncompared remainder does not run FASTER on the lean arm. It does not "
+            "show the confound is zero, and it is in THROUGHPUT units: nothing here calibrates "
+            "opponent visits to opponent strength, so the residual in win-rate points is "
+            "unknown, not small."
         ),
     }
     if not admissible:

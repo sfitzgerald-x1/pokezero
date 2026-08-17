@@ -25,6 +25,7 @@ import unittest
 
 from pokezero.foulplay_bridge import (
     FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
+    FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE,
     FOULPLAY_THINK_MEASURED_DECISION_LOG_SD,
     FOULPLAY_THINK_MEASURED_RUN_LOG_SD,
     FOULPLAY_THINK_MIN_STRATUM_DECISIONS,
@@ -812,6 +813,37 @@ class ReviewFoundHolesTest(unittest.TestCase):
             "search:cross_arm_compared_strata_cover_too_little", result["refusal_reasons"]
         )
         self.assertNotIn("worst_stratum", result)
+
+    def test_the_composed_worst_case_is_the_number_the_docstring_states(self) -> None:
+        """f/s, and it has to be checked rather than asserted.
+
+        With compared share s and every compared stratum within f, the hungry arm's own mean is at
+        least s times its compared rate -- worst case, its uncompared decisions realized zero
+        work -- so the arm-level fold is at most f/s. At the within-arm gate's s=0.8 that is
+        1.5625, and an independent review's composition measured 1.5581 on a fixture: the formula
+        reproduces the measurement, so 1.3158 at s=0.95 is a checked bound and not arithmetic
+        nobody tried.
+        """
+        f = FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO
+        self.assertAlmostEqual(f / 0.8, 1.5625, places=4)
+        self.assertAlmostEqual(
+            f / FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE, 1.3158, places=4
+        )
+        # The measured composition at s=0.8, reproduced through the gate: 40 of 200 hungry-arm
+        # decisions in a stratum the lean arm never visited, the rest at exactly f.
+        search = think(
+            decisions=200,
+            strata={"8x500ms": (1.0, 40), "2x1000ms": (380_000.0 / f, 160)},
+        )
+        raw = think(decisions=200, strata={"2x1000ms": (380_000.0, 200)})
+        arm_fold = (
+            raw["mean_iterations_per_budget_second"]
+            / search["mean_iterations_per_budget_second"]
+        )
+        self.assertGreater(arm_fold, 1.55)
+        self.assertLess(arm_fold, f / 0.8)
+        # And it is refused now, which is the point of the 0.95 floor.
+        self.assertEqual(verdict([search], [raw])["status"], "refused")
 
     def test_strata_counts_that_exceed_the_arm_are_refused(self) -> None:
         """A header whose `by_stratum` counts sum above its own measured total.
