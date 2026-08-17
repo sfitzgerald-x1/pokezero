@@ -1328,6 +1328,67 @@ class OpponentHealthIsLiftedTest(unittest.TestCase):
 
         block = self._seat_block({"completed_games": 5, "engine_mcts": {"fallback_rate": 0.0}})
         self.assertIsNone(block.get("foulplay_think"))
+        # And the ABSENCE is named rather than left as a missing key, because a consumer
+        # that finds no reading and no refusal has nothing to distinguish "too old to
+        # measure" from "measured, no contention".
+        self.assertFalse(block["foulplay_think_reading"]["usable"])
+        self.assertEqual(block["foulplay_think_reading"]["reasons"], ["think_block_absent"])
+
+    def test_a_present_but_empty_reading_is_refused_not_read_as_flat(self) -> None:
+        """The case the absent-block test does NOT cover, and the dangerous one.
+
+        A block that is present with `mean_iterations_per_budget_second: null` on both arms
+        IS "flat between arms" -- the documented no-contention reading -- to any consumer
+        that does not hand-check the misses. The merged shard has to carry the refusal.
+        """
+
+        block = self._seat_block({
+            "completed_games": 5,
+            "engine_mcts": {"fallback_rate": 0.0},
+            "foulplay_think": {
+                "mean_iterations_per_budget_second": None,
+                "iterations_measured_decisions": 0,
+                "iterations_coverage": 0.0,
+                "miss_decisions": 240,
+                "miss_reasons": {"iterations_line_absent": 240},
+                "record_failures": 0,
+            },
+        })
+
+        self.assertIsNotNone(block.get("foulplay_think"))
+        self.assertFalse(block["foulplay_think_reading"]["usable"])
+        self.assertIn("no_rate_measured", block["foulplay_think_reading"]["reasons"])
+        self.assertIn("zero_measured_decisions", block["foulplay_think_reading"]["reasons"])
+
+    def test_the_stratified_form_and_coverage_reach_the_merged_shard(self) -> None:
+        """The unstratified mean moves 2x on foul-play's own schedule with no contention.
+
+        So `by_stratum` and `iterations_coverage` have to arrive here too -- this is the one
+        place the comparison is run, and it is the place it could not be stratified.
+        """
+
+        block = self._seat_block({
+            "completed_games": 5,
+            "engine_mcts": {"fallback_rate": 0.0},
+            "foulplay_think": {
+                "mean_iterations_per_budget_second": 180000.0,
+                "iterations_measured_decisions": 100,
+                "iterations_coverage": 0.98,
+                "by_stratum": {
+                    "8x500ms": {"mean_iterations_per_budget_second": 120000.0},
+                    "2x1000ms": {"mean_iterations_per_budget_second": 240000.0},
+                },
+                "miss_decisions": 2,
+                "record_failures": 0,
+            },
+        })
+
+        lifted = block["foulplay_think"]
+        self.assertEqual(
+            lifted["by_stratum"]["8x500ms"]["mean_iterations_per_budget_second"], 120000.0
+        )
+        self.assertEqual(lifted["iterations_coverage"], 0.98)
+        self.assertTrue(block["foulplay_think_reading"]["usable"])
 
 
 if __name__ == "__main__":

@@ -443,6 +443,13 @@ def seat_block(summary: dict, seat: str) -> dict:
     harness ever needs the merged shard to stand alone, lift the journals here rather
     than dropping the siblings.
     """
+    # Imported HERE rather than at module scope, and imported rather than reimplemented:
+    # this driver otherwise mirrors bridge constants instead of importing the package, but a
+    # SECOND implementation of the usability gate is how two files end up disagreeing about
+    # whether a contention number may be used. Function-level keeps the driver's pure-CLI
+    # tests independent of the package being on the path.
+    from pokezero.foulplay_bridge import foulplay_think_reading_status
+
     engine = summary.get("engine_mcts") or {}
     timing = summary.get("policy_timing") or {}
     return {
@@ -490,11 +497,23 @@ def seat_block(summary: dict, seat: str) -> dict:
         # which is constant by construction. `foulplay_think.mean_iterations_per_budget_second`
         # is the budget it actually SPENT: realized opponent MCTS visits per CPU-second
         # granted. This merged shard is where the two arms meet, so the comparison has to be
-        # runnable here: flat between arms = no contention; a drop on the CPU-heavy arm =
-        # its strength delta is confounded in the flattering direction. `miss_reasons` and
-        # `record_failures` say when the reading is short, so a null cannot pass as a pass.
-        # See OPPONENT-THINK CONTENTION INSTRUMENT in pokezero/foulplay_bridge.py.
+        # runnable here.
+        #
+        # THE WHOLE BLOCK, not the headline mean, and that is load-bearing. The unstratified
+        # mean moves by 2x on foul-play's own schedule change (8x500ms early, 2x1000ms
+        # later) with zero contention, so a cross-arm difference in it can be pure decision
+        # mix; `by_stratum` is what makes the comparison valid, and it only exists here if
+        # the block travels whole. `iterations_coverage` comes with it because coverage is
+        # treatment-dependent, and `reading` because `null` on both arms is NOT the
+        # documented "flat between arms" no-contention reading -- it is nobody measuring.
+        # `pokezero.foulplay_bridge.compare_foulplay_think` is the gate that refuses on all
+        # three; see OPPONENT-THINK CONTENTION INSTRUMENT in that module.
         "foulplay_think": summary.get("foulplay_think"),
+        # Hoisted out of the block so a reader cannot miss it: whether this seat's
+        # contention number may be used at all, and if not, why not. Present even when the
+        # block is absent (`think_block_absent`), so a producer too old to measure is
+        # distinguishable from an opponent that was not slowed down.
+        "foulplay_think_reading": foulplay_think_reading_status(summary.get("foulplay_think")),
         "world_failure_reasons": (engine.get("policy_stats") or {}).get(
             "world_failure_reasons"
         ),
