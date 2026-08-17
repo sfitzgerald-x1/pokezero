@@ -497,7 +497,66 @@ class EngineMctsConfig:
     # decision/chance node shape, identical depth and c_puct semantics — and
     # swaps only the leaf value function, which is what separates "the defect is
     # in the tree" from "the defect is in the learned value".
+    # "rollout_crate": the SAME crate tree as "hp_fraction_crate" with leaf
+    # values replaced by R terminal rollouts (search-ceiling program Phase 1
+    # instrument 2 -- the arbiter). It exists to separate "the sensor is the
+    # bottleneck" from "the mechanism is broken", so it must differ from the
+    # production crate search in leaf valuation and NOTHING else; the crate's
+    # `rollout_batch1_matches_sequential_report` gate is what discharges that,
+    # and `fidelity_gate_reads_false_on_batch_and_on_pricer` is its
+    # demonstrated failing input.
+    #
+    # ESTIMAND WARNING, to be quoted wherever a number from this path is:
+    # rollout_policy="uniform" prices P(side one wins | both seats play
+    # uniformly at random from here). That is NOT the vhprobe shards' `true_*`
+    # (terminal win probability under POLICY continuation). A null on this arm
+    # is confounded with rollout-policy bias and does not by itself convict the
+    # search mechanism.
     leaf_eval: str = "hp_fraction"
+    # --- rollout_crate knobs (inert on every other leaf_eval) ---
+    # R per leaf. Per-leaf label SE near 0.5 is 0.5/sqrt(R); a root arm's Q
+    # pools over its distinct-leaf count, so the quantity that must sit under
+    # the sibling gaps is 0.5/sqrt(R * distinct_leaves_per_arm), not 0.5/sqrt(R).
+    rollout_count: int = 32
+    # Ply cap per rollout. A capped rollout is NOT a terminal observation: it
+    # falls back to the handcrafted leaf, and the per-decision metadata carries
+    # `rollout_fallback_fraction` so a blend can never be reported as an oracle.
+    rollout_max_plies: int = 200
+    rollout_policy: str = "uniform"
+    # Rollout RNG root. Disjoint from the search RNG by construction, so
+    # changing it cannot move which chance branches the tree sampled.
+    rollout_seed: int = 0
+    # Throughput only -- priced values are thread-count invariant (crate test
+    # `thread_count_does_not_change_values`).
+    #
+    # THE TIMING HAZARD, and why this defaults to 1 behind an acknowledgement
+    # flag rather than to the core count. In the paired-eval harness the
+    # reference opponent is TIME-budgeted (`FoulPlayConfig.search_time_ms`,
+    # default 1000 ms, two sampled battles per decision) and its search
+    # OVERLAPS ours on the same pod: the bridge forwards foul-play's request
+    # before running our search in a worker thread, so foul-play's clock is
+    # already ticking while we think. Nothing in the shard schema records the
+    # work foul-play actually accomplished -- only the budget it was given --
+    # so CPU stolen from it shows up as a weaker opponent and reads as a
+    # strength gain for whichever arm spends more CPU. That is a confound in
+    # the flattering direction, on an arm whose whole purpose is to arbitrate
+    # a disputed effect.
+    #
+    # This arm spends 3-4 orders of magnitude more CPU per decision than the
+    # raw arm it is paired against. The control is to keep the arm's CORE
+    # footprint identical to the raw arm's (one core) and pay the cost in
+    # wall-clock instead, where it cannot reach the opponent. Raising this
+    # number is a legitimate throughput choice ONLY when the arm has cores that
+    # no opponent process is contending for, which is a property of the
+    # deployment, not of this config -- so it must be asserted explicitly.
+    rollout_threads: int = 1
+    #: Acknowledge that `rollout_threads > 1` has been checked against the
+    #: shard concurrency of the run it is used in. Required, so the hazard
+    #: above cannot be walked into by editing one number.
+    rollout_threads_cpu_budget_ack: bool = False
+    # Rows priced per round. 1 is the sequential selection regime and the only
+    # value the fidelity gate certifies; >1 is a measured fidelity LOSS.
+    leaf_batch: int = 1
     # TorchScript artifact (scripts/export_model.py; per-device trace — a CPU
     # artifact must run on cpu) and the encoder tables JSON
     # (scripts/export_encoder_tables.py), plus the source checkpoint whose
@@ -595,16 +654,63 @@ class EngineMctsConfig:
     def __post_init__(self) -> None:
         if self.worlds <= 0 or self.search_time_ms <= 0 or self.threads <= 0:
             raise ValueError("worlds, search_time_ms, and threads must be positive.")
-        if self.leaf_eval not in ("hp_fraction", "hp_fraction_crate", "model"):
+        if self.leaf_eval not in (
+            "hp_fraction",
+            "hp_fraction_crate",
+            "rollout_crate",
+            "model",
+        ):
             raise ValueError(
-                "leaf_eval must be 'hp_fraction', 'hp_fraction_crate' or 'model', "
-                f"got {self.leaf_eval!r}."
+                "leaf_eval must be 'hp_fraction', 'hp_fraction_crate', "
+                f"'rollout_crate' or 'model', got {self.leaf_eval!r}."
             )
-        if self.leaf_eval == "hp_fraction_crate":
+        if self.leaf_eval in ("hp_fraction_crate", "rollout_crate"):
             if self.search_sims <= 0 or self.search_depth <= 0:
                 raise ValueError(
                     "search_sims and search_depth must be positive for "
-                    "leaf_eval='hp_fraction_crate'."
+                    f"leaf_eval={self.leaf_eval!r}."
+                )
+        if self.leaf_eval == "rollout_crate":
+            if self.rollout_count <= 0:
+                # A zero-rollout "Monte-Carlo" leaf is the handcrafted fallback
+                # wearing the oracle's name in the report.
+                raise ValueError(
+                    "rollout_count must be > 0 for leaf_eval='rollout_crate' "
+                    f"(got {self.rollout_count})."
+                )
+            if self.rollout_max_plies <= 0:
+                raise ValueError(
+                    "rollout_max_plies must be > 0 for leaf_eval='rollout_crate' "
+                    f"(got {self.rollout_max_plies})."
+                )
+            if self.rollout_threads <= 0:
+                raise ValueError(
+                    "rollout_threads must be > 0 for leaf_eval='rollout_crate' "
+                    f"(got {self.rollout_threads})."
+                )
+            if self.rollout_threads > 1 and not self.rollout_threads_cpu_budget_ack:
+                # See the field comment: the reference opponent is time-budgeted
+                # and its search overlaps ours on the same pod, so extra cores
+                # here weaken the opponent specifically -- in the direction that
+                # flatters this arm -- and nothing in the shard schema would
+                # record it.
+                raise ValueError(
+                    f"rollout_threads={self.rollout_threads} > 1 requires "
+                    "rollout_threads_cpu_budget_ack=True. The paired-eval opponent is "
+                    "TIME-budgeted and thinks concurrently with this search on the same "
+                    "host, and its realized work is not recorded anywhere, so cores taken "
+                    "here weaken the opponent in the direction that flatters this arm. Set "
+                    "the ack only after checking cores against the run's shard concurrency."
+                )
+            if self.leaf_batch <= 0:
+                raise ValueError(
+                    "leaf_batch must be > 0 for leaf_eval='rollout_crate' "
+                    f"(got {self.leaf_batch})."
+                )
+            if self.rollout_policy != "uniform":
+                raise ValueError(
+                    "rollout_policy must be 'uniform' (the only in-crate policy "
+                    f"implemented), got {self.rollout_policy!r}."
                 )
         if self.leaf_eval == "model":
             if not self.model_path or not self.checkpoint_path or not self.tables_path:
@@ -2615,6 +2721,8 @@ class EngineMctsPolicy:
             return self._search_ladder(context, worlds, live_fold, rng)
         if self._config.leaf_eval == "hp_fraction_crate":
             return self._search_hp_fraction_crate(context, worlds, rng)
+        if self._config.leaf_eval == "rollout_crate":
+            return self._search_rollout_crate(context, worlds, rng)
 
         aggregated: Counter = Counter()
         search_started = time.perf_counter()
@@ -2763,6 +2871,168 @@ class EngineMctsPolicy:
                     "aggregated_choices": {
                         choice: round(weight, 4) for choice, weight in aggregated.most_common()
                     },
+                }
+            },
+        )
+
+    def _search_rollout_crate(
+        self,
+        context: PolicyContext,
+        worlds: list[tuple[EngineWorld, Any]],
+        rng: random.Random,
+    ) -> PolicyDecision:
+        """Crate PUCT tree, R-rollout Monte-Carlo leaves (the arbiter arm).
+
+        Deliberately a NEAR-COPY of ``_search_hp_fraction_crate`` rather than a
+        shared generic loop. The requirement on this arm is that it cannot
+        affect production paths, and a copy discharges that by construction
+        while a refactor would put new code inside the depth study's
+        instrument. The two bodies differ only in the crate entry point called
+        and the extra rollout accounting carried out; if they ever need to
+        diverge in the world loop itself, that is a finding, not a merge.
+
+        What "same search" means here, and what proves it: the crate call
+        threads the identical ``max_depth``/``c_puct``/``deep_ko_split``/
+        ``fpu_reduction`` into the identical ``MultiPlyConfig``, reaching the
+        identical ``traverse``/``finalize``. The crate gate
+        ``rollout_batch1_matches_sequential_report`` asserts that at
+        ``leaf_batch=1`` this driver reproduces ``puct_search_multi``'s report
+        field for field once leaf VALUES are held at HP-fraction, and
+        ``fidelity_gate_reads_false_on_batch_and_on_pricer`` shows that gate
+        reading False on two mutations. So the arm's only degree of freedom
+        versus production is the leaf value.
+
+        ESTIMAND, restated because it governs how a result may be read: with
+        ``rollout_policy="uniform"`` a leaf is priced at
+        ``P(side one wins | uniform-random play from here)``. That is not the
+        vhprobe shards' policy-continuation ``true_*``. The per-decision
+        metadata carries ``rollout_fallback_fraction`` (share of rollouts that
+        hit the ply cap and were priced by the handcrafted evaluator instead of
+        reaching a terminal) precisely so a blend is never read as an oracle.
+        """
+
+        import pokezero_search  # noqa: PLC0415 — optional native dependency
+
+        config = self._config
+        aggregated: Counter[str] = Counter()
+        depths_reached: list[int] = []
+        worlds_searched_here = 0
+        rollouts_run = 0
+        rollout_plies = 0
+        terminal_hits = 0
+        cap_hits = 0
+        dead_ends = 0
+        leaves_priced = 0
+        search_started = time.perf_counter()
+        for world_index, (world, state) in enumerate(worlds):
+            side_key = (
+                "side_one"
+                if world.slot_sides[context.player_id] == "side_one"
+                else "side_two"
+            )
+            try:
+                report = json.loads(
+                    pokezero_search.puct_search_multi_rollout(
+                        state.to_string(),
+                        config.search_sims,
+                        max_depth=config.search_depth,
+                        c_puct=config.c_puct,
+                        seed=rng.getrandbits(63),
+                        deep_ko_split=config.deep_ko_split,
+                        rollouts=config.rollout_count,
+                        rollout_max_plies=config.rollout_max_plies,
+                        rollout_policy=config.rollout_policy,
+                        # Per-world rollout stream, drawn from the same decision
+                        # RNG as the search seed so a replayed decision replays
+                        # its rollouts too -- but a SEPARATE draw, so the two
+                        # streams cannot alias.
+                        rollout_seed=rng.getrandbits(63),
+                        rollout_threads=config.rollout_threads,
+                        leaf_batch=config.leaf_batch,
+                        leaf_mode="rollout",
+                        **(
+                            {"fpu_reduction": config.fpu_reduction}
+                            if config.fpu_reduction is not None
+                            else {}
+                        ),
+                    )
+                )
+            except Exception as error:  # noqa: BLE001 — count, keep the other worlds
+                detail = (
+                    _bounded_reason_detail(str(error).splitlines()[0])
+                    if str(error)
+                    else type(error).__name__
+                )
+                self.stats.world_failure_reasons[f"crate_search_rollout: {detail}"] += 1
+                continue
+            del world_index
+            entries = report[side_key]
+            total = max(sum(entry["visits"] for entry in entries), 1)
+            for entry in entries:
+                aggregated[entry["move"]] += entry["visits"] / total
+            reached = int(report["max_depth_reached"])
+            depths_reached.append(reached)
+            self.stats.depth_reached_samples += 1
+            self.stats.depth_reached_sum += reached
+            self.stats.depth_reached_max = max(self.stats.depth_reached_max, reached)
+            self.stats.depth_reached_histogram[reached] += 1
+            self.stats.total_iterations += int(report["iterations"])
+            self.stats.worlds_searched += 1
+            worlds_searched_here += 1
+            rollouts_run += int(report["rollouts_run"])
+            rollout_plies += int(report["rollout_plies"])
+            terminal_hits += int(report["rollout_terminal_hits"])
+            cap_hits += int(report["rollout_cap_hits"])
+            dead_ends += int(report["rollout_dead_ends"])
+            leaves_priced += int(report["leaves_priced"])
+        elapsed = time.perf_counter() - search_started
+        self.stats.search_wall_seconds += elapsed
+
+        if not worlds_searched_here:
+            return self._fallback(context, rng, "crate_search_failed")
+
+        action_index = self._map_choices(context, aggregated)
+        if action_index is None:
+            return self._fallback(context, rng, "choices_unmapped")
+
+        self.stats.searched_decisions += 1
+        denom = max(rollouts_run, 1)
+        return PolicyDecision(
+            action_index=action_index,
+            policy_id=self.policy_id,
+            metadata={
+                "engine_mcts": {
+                    "leaf_eval": "rollout_crate",
+                    "worlds_searched": worlds_searched_here,
+                    "worlds_constructed": len(worlds),
+                    "max_depth_reached": max(depths_reached),
+                    "depths_reached": tuple(depths_reached),
+                    "aggregated_choices": {
+                        choice: round(weight, 4) for choice, weight in aggregated.most_common()
+                    },
+                    # The cost ledger, per decision, so every estimate quoted
+                    # downstream is (measured rate) x (count) with both factors
+                    # present in the artifact rather than reconstructed.
+                    "rollout_count": config.rollout_count,
+                    "rollout_max_plies": config.rollout_max_plies,
+                    "rollout_policy": config.rollout_policy,
+                    "leaf_batch": config.leaf_batch,
+                    "rollout_threads": config.rollout_threads,
+                    "leaves_priced": leaves_priced,
+                    "rollouts_run": rollouts_run,
+                    "rollout_plies": rollout_plies,
+                    "decision_wall_seconds": round(elapsed, 6),
+                    "rollouts_per_second": round(rollouts_run / elapsed, 2)
+                    if elapsed > 0
+                    else None,
+                    "seconds_per_rollout": round(elapsed / denom, 8),
+                    # The honesty columns. A high fallback fraction means the
+                    # "oracle" was mostly the handcrafted evaluator.
+                    "rollout_terminal_fraction": round(terminal_hits / denom, 6),
+                    "rollout_fallback_fraction": round((cap_hits + dead_ends) / denom, 6),
+                    "rollout_cap_hits": cap_hits,
+                    "rollout_dead_ends": dead_ends,
+                    "rollout_mean_plies": round(rollout_plies / denom, 3),
                 }
             },
         )
