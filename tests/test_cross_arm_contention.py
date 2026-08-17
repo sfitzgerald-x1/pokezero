@@ -1401,8 +1401,12 @@ class ExclusionKeepsItsOwnDiagnosisTest(unittest.TestCase):
         is attributable to the exclusion and the coverage reason must not fire. `<=` there would
         report a coverage gap that the arm does not have.
 
-        This is also why the implementation divides `(covered + excluded)` once rather than adding
-        two shares: 180/200 + 10/200 is not guaranteed to be the same double as 190/200.
+        The implementation divides `(covered + excluded)` once rather than adding two shares. The
+        two forms are different doubles here -- `180/200 + 10/200` is 0.9500000000000001 -- but
+        that is a form preference and not a behaviour claim: an independent review searched 215,325
+        near-boundary integer configurations for one where the two compare differently against this
+        floor or against 1.0 and found none, so the sum form would pass this fixture too. One
+        division is one place to be wrong instead of two.
         """
         search = think(
             decisions=200,
@@ -1426,6 +1430,53 @@ class ExclusionKeepsItsOwnDiagnosisTest(unittest.TestCase):
         )
         self.assertIn(self.RESOLUTION, result["refusal_reasons"])
         self.assertNotIn(self.COVERAGE, result["refusal_reasons"])
+
+    def test_a_malformed_ratio_is_refused_even_when_the_stratum_is_also_unresolvable(self) -> None:
+        """THE ORDERING, which the site comment calls load-bearing and nothing pinned.
+
+        `if fold is None:` is checked BEFORE the resolution exclusion, and the comment says why:
+        "the defect is in the shard, not in the denominator, and a small enough malformed stratum
+        would otherwise be excluded and then cleared by the share floor." True, and until this
+        test the claim had no failing input -- every malformed-ratio fixture used a stratum thick
+        enough to resolve the threshold, so the two branches never competed for the same stratum.
+
+        Reordering the two checks reads `ok` on the input below: ten decisions of `8x500ms` out of
+        1,010 -- 1.0% of each arm -- on which the opponent realized ZERO visits per granted second
+        against the lean arm. That is the strongest possible reading of the confound, and it would
+        be laundered into `strata_excluded_for_resolution` and then cleared at share 0.990. Which
+        is the same defect as
+        `test_an_impossible_header_is_not_laundered_into_a_resolution_exclusion`, one level up.
+        """
+        search = think(
+            decisions=1010,
+            strata={"2x1000ms": (380_000.0, 1000), "8x500ms": (380_000.0, 10)},
+        )
+        raw = think(
+            decisions=1010,
+            strata={"2x1000ms": (380_000.0, 1000), "8x500ms": (0.0, 10)},
+        )
+        # The stratum is BOTH malformed and too thin to resolve, which is what makes it the input
+        # on which the two branches disagree.
+        self.assertGreater(
+            foulplay_think_nominal_fold_resolution(10, 10),
+            FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
+        )
+        result = verdict([search], [raw])
+        self.assertEqual(result["status"], "refused")
+        self.assertEqual(result["refusal_reasons"], ["stratum_rate_not_a_ratio"])
+        # The shard defect wins outright: the stratum is NOT reported as an ordinary exclusion,
+        # because "this denominator is too small" is not what is wrong with it.
+        self.assertEqual(result["strata_excluded_for_resolution"], {})
+        self.assertNotIn(self.RESOLUTION, result["refusal_reasons"])
+        # And the share floor would have cleared it, which is why the order and not the presence
+        # of the check is what this test is about.
+        self.assertGreater(
+            result["cross_arm_compared_share"]["search"],
+            FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE,
+        )
+        # Rates withheld, so the reassuring 1.0 of the healthy stratum is not published either.
+        self.assertNotIn("worst_stratum", result)
+        self.assertNotIn(1.0, numbers_in(result["by_stratum"]))
 
     def test_an_impossible_header_is_not_laundered_into_a_resolution_exclusion(self) -> None:
         """The forged-header check has to see the EXCLUDED strata too.

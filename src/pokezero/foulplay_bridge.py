@@ -3685,8 +3685,9 @@ FOULPLAY_THINK_MEASURED_DECISION_LOG_SD = 0.0529
 #: this measurement report a 3.5% resolution at n=200 where the truth is 24.6%.
 #:
 #: FIVE DEGREES OF FREEDOM (six passes), which is small enough that it constrains the numbers
-#: derived from it much more loosely than four decimal places suggest. Its own 95% chi-square
-#: upper bound is 0.1078 -- more than double the point estimate -- which is why the threshold
+#: derived from it much more loosely than four decimal places suggest. Its own ONE-SIDED 95%
+#: chi-square upper bound is 0.1078, and the two-sided interval's upper end is 0.1266 -- both more
+#: than double the point estimate -- which is why the threshold
 #: block quotes a range for the floor rather than a value, and why nothing downstream should
 #: quote a false-refusal rate computed from it as if it were known.
 FOULPLAY_THINK_MEASURED_RUN_LOG_SD = 0.0516
@@ -3811,8 +3812,9 @@ def foulplay_think_nominal_fold_resolution(n_a: int, n_b: int) -> float:
     * `3` IS A z, ON A VARIANCE WITH 5 DEGREES OF FREEDOM. The dominant term is the whole-run
       SD, measured from six passes, so matching the same 0.0027 two-sided tail needs t: 5.23 at
       n=27 (Satterthwaite df 5.40) up to 5.51 as n grows (df -> 5.00). At the asymptote that
-      moves this from 1.245 to ~1.49. The run SD's own 95% chi-square upper bound is 0.1078,
-      which moves it to ~1.58. So "no n resolves better than 1.2448" is a point estimate quoted
+      moves this from 1.245 to ~1.49. The run SD's own ONE-SIDED 95% chi-square upper bound is
+      0.1078, which moves it to ~1.58 (the two-sided interval's upper end is 0.1266, which reads
+      1.711 -- the sidedness has to be said, because the two differ by more than the digits). So "no n resolves better than 1.2448" is a point estimate quoted
       to five digits, NOT a floor -- see `FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO`.
     * THE POSITION TERM IS ASSUMED TO CANCEL. `FOULPLAY_THINK_MEASURED_POSITION_LOG_SD` is
       0.1003 -- 1.90x the per-decision residual and 1.94x the run term, the two that ARE in the
@@ -4062,9 +4064,14 @@ def cross_arm_foulplay_contention(
         from the compared set, not refused: see the check itself for the dead band that refusing
         created, and note that exclusion is not leniency, because what is excluded counts as
         uncovered in the share below -- and is named in `strata_excluded_for_resolution`, sized
-        in `cross_arm_share_excluded_for_resolution`, and given its OWN refusal reason if it is
-        what takes the share under the floor, so "could not resolve the threshold" is never
-        reported as "coverage was short";
+        in `cross_arm_share_excluded_for_resolution`, and given its OWN refusal reason whenever
+        the share is under the floor and anything was excluded -- so "could not resolve the
+        threshold" is never reported as "coverage was short". That reason is NOT a causal claim:
+        it fires on an immaterial exclusion too, and it is
+        `cross_arm_share_excluded_for_resolution` and not the reason that says whether removing
+        the exclusion would have lifted the share. Deliberately, because the alternative is a
+        reason that goes silent on a real exclusion whenever a coverage gap happens to dominate
+        it, and the exclusion is the half a reader cannot otherwise see;
       * the compared set covers `FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE` of EACH arm's
         measured decisions. The within-arm gate's own floor is 0.8, which leaves a fifth of
         each arm outside the comparison and UNBOUNDED: composed with a per-stratum reading just
@@ -4280,8 +4287,13 @@ def cross_arm_foulplay_contention(
     #     every excluded-for-resolution stratum as covered, so the gap is a real coverage gap.
     #
     # Both can fire together, and then both are true. The second is computed from a single
-    # `(covered + excluded) / measured` division rather than by adding two shares, so the
-    # comparison against the floor is exact at the floor rather than off by a rounding step.
+    # `(covered + excluded) / measured` division rather than by adding two shares, which is a
+    # choice of FORM and not a behaviour claim -- and it was written up as a behaviour claim once,
+    # so: the two forms do differ as doubles (`180/200 + 10/200` is 0.9500000000000001 where
+    # `190/200` is 0.95), but an independent review searched 215,325 near-boundary integer
+    # configurations for one where they compare differently against this floor or against 1.0 and
+    # found NONE. So the single division is preferred because it is one place the arithmetic can
+    # be wrong instead of two, not because a straddle is known to exist at these magnitudes.
     for label, header in ((hungry_label, hungry), (lean_label, lean)):
         measured = (header or {}).get("iterations_measured_decisions")
         measured = int(measured) if isinstance(measured, (int, float)) else 0
