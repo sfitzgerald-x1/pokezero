@@ -533,8 +533,10 @@ defect did not exist on either of their trees.** A typed `25` would have shipped
 Where CI gates on the merge, **local green and CI green are different measurements**; §6 declares
 that coupling and the assertion carries the fix in its own failure message.
 
-**Every measurement behind T2–T6 predates the head build**, and none is at `65092feac14da111` —
-nor at `ad64440abbfca493`, nor at `39761759f252a58d` (the two parents of this merge), nor at `083375c215978d4c`, `a1359396e3de3731`, `b79d83e3e08d838e`, `236d1cac8a784898`, `bd9f7d407dc3c9a9`,
+**Every measurement behind T2–T6 predates the head build**, and none is at `bddc3ce2644ae228` —
+nor at `65092feac14da111` (the head this branch was cut from), nor at `76b3b3a7ff29aba5`, `5ab0010b7da31708`
+or `40e8f330ce1046ee` (this branch's own earlier heads, moved by `rollout.rs` and `model.rs`),
+nor at `ad64440abbfca493`, nor at `39761759f252a58d` (the two parents of the #1257 merge), nor at `083375c215978d4c`, `a1359396e3de3731`, `b79d83e3e08d838e`, `236d1cac8a784898`, `bd9f7d407dc3c9a9`,
 nor at `39ced82cb3b8009e`, `32b0c3e3c09d23d1`, `8926a6bc2beaf9a2`, `e9d4ac708d6efe69`, `0975c5f29bdf8253`, `ec4ff0349eab7fdd`,
 `44dcfca90130ed91`, `2ec5bfd1c7292ed6`, `028a4c52a4ad9fe7` or `9517aab98d56a9ba`, the builds
 this document was reconciled against at the four preceding merges plus this branch's own earlier heads. Read the
