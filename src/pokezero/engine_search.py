@@ -551,13 +551,28 @@ class EngineMctsConfig:
     # the flattering direction, on an arm whose whole purpose is to arbitrate
     # a disputed effect.
     #
-    # This arm spends 3-4 orders of magnitude more CPU per decision than the
-    # raw arm it is paired against. The control is to keep the arm's CORE
-    # footprint identical to the raw arm's (one core) and pay the cost in
-    # wall-clock instead, where it cannot reach the opponent. Raising this
-    # number is a legitimate throughput choice ONLY when the arm has cores that
-    # no opponent process is contending for, which is a property of the
-    # deployment, not of this config -- so it must be asserted explicitly.
+    # HOW MUCH MORE CPU, MEASURED -- because an earlier revision of this comment
+    # asserted "3-4 orders of magnitude" and that is not what the arm costs. At
+    # the priors-on panel's own per-world budget (d4, b64, s4096) on one core,
+    # arm wall against the same search with model leaves: 1.8x at R=8 and 4.3x
+    # at R=32. Single digits, not thousands.
+    #
+    # The correction cuts both ways and neither way is comfortable. It makes the
+    # arm far cheaper than advertised -- but it also means the contention
+    # confound cannot be dismissed as "swamped by our own cost", and the ratio is
+    # DEPLOYMENT-DEPENDENT: this baseline runs the model's forwards on the same
+    # CPU, so on a pod where the raw arm's forwards go to a GPU the raw arm gets
+    # faster and the ratio grows. The number is not a property of this config.
+    #
+    # The control is therefore unchanged: keep the arm's CORE footprint identical
+    # to the raw arm's (one core) and pay the cost in wall-clock instead, where
+    # it cannot reach the opponent. Raising this number is a legitimate
+    # throughput choice ONLY when the arm has cores that no opponent process is
+    # contending for, which is a property of the deployment, not of this config
+    # -- so it must be asserted explicitly. And the standing instruction is to
+    # MEASURE the contention rather than fence it: time the opponent's think and
+    # parse its realized iteration count, so "our CPU did not weaken it" is a
+    # reading rather than an argument.
     rollout_threads: int = 1
     #: Acknowledge that `rollout_threads > 1` has been checked against the
     #: shard concurrency of the run it is used in. Required, so the hazard
