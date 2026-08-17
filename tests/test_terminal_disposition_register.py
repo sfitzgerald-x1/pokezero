@@ -66,7 +66,7 @@ are pinned against the two census modules' own constants, read by AST rather tha
 update the register in the same change. That is deliberate: the document that goes stale is
 the one nothing forces an author through.
 
-MUTATION BATTERY: 53 applied, 53 caught, plus 1 NEGATIVE CONTROL verified green.
+MUTATION BATTERY: 54 applied, 54 caught, plus 1 NEGATIVE CONTROL verified green.
 Partitioned by WHAT IS MUTATED. Enumerated because
 an unrecorded battery is what `tests/test_wide_seed_negative_census.py` records costing it a
 surviving mutation, and because "the tests pass" is the same kind of claim this module
@@ -140,7 +140,7 @@ BLOCK A -- A1-A37, applied to the REGISTER's own bytes.
        `TheDocumentsClaimsAboutItselfAreReDerivedTests`, which exists because review blocked
        two successive revisions on claims the document made about ITSELF.
 
-BLOCK B -- B38-B53, SIXTEEN mutations applied ONLY to the tree and never to the document.
+BLOCK B -- B38-B54, SEVENTEEN mutations applied ONLY to the tree and never to the document.
 Block A can be passed by a pin that reads the register against a hard-coded copy of itself.
 These are the ones that prove each derivation reads what it claims to: every one MAKES A REAL
 CHANGE TO THE TREE and the document, unedited, must go red. Six are the absences, and an
@@ -186,6 +186,17 @@ has recorded.
        by one. This is the load-bearing half of the guard-scan pin: the counts churn with
        any step, the unresolved SET is what #1205 is about, and it is pinned by module name
        so a line shift cannot move it and a new blind spot cannot join quietly.
+  B54. ⚠ THE ONE THAT SURVIVED, and the reason `TheFingerprintDerivationReadsTheTreeTests`
+       exists. `head_fingerprint` re-pointed at Appendix A's own cell
+       (`return register_facts()["t1.head_fingerprint"] + "0" * 48`), i.e. the pin made
+       SELF-SATISFYING. All 42 tests then reported a clean OK **on a tree whose
+       `rust/pokezero-search/src/tree.rs` had been edited** -- exactly the event T1's row
+       exists to redden -- and the CI step's `Ran N tests` and `^OK$` guards passed too,
+       because the method count never moved. Blocks A and B between them target the
+       DOCUMENT and the TREE; neither targets the DERIVATION, so this whole battery was
+       blind to the one edit that turns the row into a tautology. Now caught, sensitivity
+       and specificity both, and the new class carries the negative control that keeps its
+       sandbox honest.
 
 
 BLOCK C -- NEGATIVE CONTROLS. Mutations that must stay GREEN because they do not change the
@@ -218,10 +229,13 @@ is C154 §6's "control that could not fail", one surface over.
 from __future__ import annotations
 
 import ast
+import contextlib
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -229,6 +243,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 sys.path.insert(0, str(REPO / "tests"))
 
+import engine_build_fingerprint  # noqa: E402
 from c153_wide_negative_census import _anchor  # noqa: E402
 from engine_build_fingerprint import compute_fingerprint  # noqa: E402
 from test_ledger_table_uniformity import (  # noqa: E402
@@ -1121,7 +1136,13 @@ class TheAppendixIsReDerivedTests(unittest.TestCase):
                     derived[key],
                     f"Appendix A states {key} = {stated.get(key)!r}; the tree gives "
                     f"{derived[key]!r}. Re-derive it; never edit the document to match a "
-                    "figure carried from a message.",
+                    "figure carried from a message. AND RE-DERIVE ON THE MERGE TREE: CI "
+                    "gates refs/pull/<n>/merge, so `git merge origin/main` (never rebase) "
+                    "FIRST, then re-run -- a value derived on the branch alone is stale "
+                    "the moment main moves, which has cost this row three repair commits. "
+                    "For t1.head_fingerprint the derivation is "
+                    "`python scripts/engine_build_fingerprint.py --print`, and T1's table "
+                    "wants a row naming the input that moved it.",
                 )
 
     def test_the_appendix_is_sorted_so_a_diff_is_readable(self) -> None:
@@ -1149,6 +1170,139 @@ class TheFingerprintGateIsOpenTests(unittest.TestCase):
 
     def test_nothing_in_the_tree_can_declare_the_fingerprint_frozen(self) -> None:
         self.assertEqual(freeze_declaration_constants(), 0)
+
+
+@contextlib.contextmanager
+def _fingerprint_sandbox():
+    """A byte-copy of every hashed input, with the hasher pointed at it.
+
+    Repo-relative layout is PRESERVED, because `compute_fingerprint` feeds
+    `path.relative_to(REPO_ROOT)` into the digest for the native inputs -- a flat copy
+    would compute a different hash for identical bytes and the negative control below
+    would fail for the wrong reason.
+    """
+
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        for relative in (
+            "third_party/poke-engine-gen3-patches.txt",
+            "third_party/poke-engine-base-source.json",
+        ):
+            (root / relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO / relative, root / relative)
+        for path in engine_build_fingerprint.patch_files():
+            shutil.copy2(path, root / "third_party" / path.name)
+        for path in (
+            engine_build_fingerprint.crate_sources()
+            + engine_build_fingerprint.cargo_inputs()
+            + engine_build_fingerprint.build_metadata_inputs()
+        ):
+            target = root / path.relative_to(REPO)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+        module = engine_build_fingerprint
+        saved = {
+            name: getattr(module, name)
+            for name in ("REPO_ROOT", "PATCH_LIST", "BASE_SOURCE", "CRATE_SRC", "CRATE_ROOT")
+        }
+        module.REPO_ROOT = root
+        module.PATCH_LIST = root / "third_party" / "poke-engine-gen3-patches.txt"
+        module.BASE_SOURCE = root / "third_party" / "poke-engine-base-source.json"
+        module.CRATE_SRC = root / "rust" / "pokezero-search" / "src"
+        module.CRATE_ROOT = root / "rust" / "pokezero-search"
+        try:
+            yield root
+        finally:
+            for name, value in saved.items():
+                setattr(module, name, value)
+
+
+class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
+    """`head_fingerprint` must READ THE TREE, and nothing above asserts that it does.
+
+    Appendix A's `t1.head_fingerprint` is the one row that moves on every crate-touching
+    commit, so it is the row an author reaches for when the pin is inconvenient -- and the
+    module's 53-mutation battery cannot see the reach. Every one of those 53 targets the
+    DOCUMENT or the TREE; none targets the DERIVATION. MEASURED, not argued: replacing the
+    body of `head_fingerprint` with `return register_facts()["t1.head_fingerprint"] +
+    "0" * 48` leaves all four T1 tests, and the whole module, at a clean `OK` **on a tree
+    with a mutated `rust/pokezero-search/src/tree.rs`** -- the exact condition the pin
+    exists to redden. The CI step's `Ran N tests` and `^OK$` guards both pass too, because
+    the count is unchanged and the count is what they read.
+
+    So the pin was one line from being permanently satisfied. These four close that:
+    SENSITIVITY to each hashed input class, SPECIFICITY against unhashed neighbours, and a
+    NEGATIVE CONTROL that the sandbox is a faithful copy -- without which a sandbox missing
+    an input class would report sensitivity it had not earned. All four drive
+    `head_fingerprint()` itself rather than `compute_fingerprint`, because the seam the
+    mutant cuts is between them.
+    """
+
+    def test_the_sandbox_reproduces_the_head_fingerprint_exactly(self) -> None:
+        # The negative control, and it is load-bearing twice over: it proves the copy
+        # captures every input class (a missed one changes the digest), and it proves the
+        # sandbox is what the two sensitivity tests below are perturbing.
+        real = head_fingerprint()
+        with _fingerprint_sandbox():
+            self.assertEqual(
+                head_fingerprint(),
+                real,
+                "the sandbox is not a byte-faithful copy of the hashed input set, so the "
+                "probes below perturb something other than what ships. Most likely "
+                "`build_inputs` gained a class this copy does not mirror.",
+            )
+
+    def test_a_hashed_crate_source_moves_the_head_fingerprint(self) -> None:
+        with _fingerprint_sandbox() as root:
+            before = head_fingerprint()
+            source = sorted((root / "rust" / "pokezero-search" / "src").rglob("*.rs"))
+            self.assertTrue(source, "no crate sources in the sandbox to perturb")
+            with source[0].open("ab") as handle:
+                handle.write(b"\n// sensitivity probe\n")
+            self.assertNotEqual(
+                head_fingerprint(),
+                before,
+                f"appending a byte to {source[0].name} did not move the head fingerprint. "
+                "`head_fingerprint` is not reading the crate sources; a pin that cannot "
+                "notice an edited crate is not a pin.",
+            )
+
+    def test_a_hashed_patch_file_moves_the_head_fingerprint(self) -> None:
+        with _fingerprint_sandbox() as root:
+            before = head_fingerprint()
+            patch = root / "third_party" / engine_build_fingerprint.patch_files()[0].name
+            with patch.open("ab") as handle:
+                handle.write(b"\n")
+            self.assertNotEqual(
+                head_fingerprint(),
+                before,
+                f"appending a byte to the patch {patch.name} did not move the head "
+                "fingerprint. The patch stack is half of what this identity is FOR.",
+            )
+
+    def test_an_unhashed_neighbour_leaves_the_head_fingerprint_alone(self) -> None:
+        # Specificity. Without this the sensitivity tests above are satisfied by a
+        # "fingerprint" that hashes the whole worktree, which would redden this gate on
+        # every Python-only PR -- and a gate that reddens on everything is triaged as noise
+        # and then bypassed, which is how a guard stops firing without anyone editing it.
+        with _fingerprint_sandbox() as root:
+            before = head_fingerprint()
+            crate = root / "rust" / "pokezero-search"
+            for relative, body in (
+                ("src/notes.md", b"prose, not a build input\n"),
+                ("tests/probe.py", b"# not compiled into the crate\n"),
+                ("../../third_party/unlisted.patch", b"--- not in the patch list\n"),
+            ):
+                target = (crate / relative).resolve()
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(body)
+            self.assertEqual(
+                head_fingerprint(),
+                before,
+                "an UNHASHED file moved the head fingerprint. Appendix A would then have "
+                "to be re-derived by every PR in the repo, which is how this row gets "
+                "softened rather than maintained.",
+            )
 
 
 class TheSourceLevelClaimsAreReadFromSourceTests(unittest.TestCase):

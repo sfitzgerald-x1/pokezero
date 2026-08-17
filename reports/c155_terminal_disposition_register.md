@@ -154,6 +154,22 @@ The column is NOT pinned by
 filed as the follow-up rather than done here because it would also newly pin the two rows
 above.
 
+⚠ **AND THE PIN ON `t1.head_fingerprint` WAS ONE LINE FROM BEING A TAUTOLOGY.** Appendix A's row is
+compared against `head_fingerprint()`, and until now nothing asserted that
+`head_fingerprint()` *reads the tree*. Re-pointing it at Appendix A's own cell —
+`return register_facts()["t1.head_fingerprint"] + "0" * 48`, one line — left the whole module at a
+clean `OK` **on a tree with an edited `rust/pokezero-search/src/tree.rs`**, which is precisely the
+event this row exists to redden; the CI step's `Ran N tests` and `^OK$` guards passed too, because
+the method count never moved. Measured, not hypothesised, and recorded as **B54**, the first
+mutation in this battery to survive: blocks A and B target the DOCUMENT and the TREE, and neither
+targets the DERIVATION. `TheFingerprintDerivationReadsTheTreeTests` closes it — sensitivity to an
+edited crate source and to an edited patch file, specificity against unhashed neighbours (an
+over-capturing hasher would redden this row on every Python-only PR, and a gate that reddens on
+everything gets bypassed), and a negative control that the probe sandbox reproduces the real
+fingerprint exactly, without which the sensitivity would be unearned. This row is a churn pin by
+design — every crate-touching commit moves it — so it is exactly the row an author is tempted to
+soften, which is why the derivation is now pinned rather than trusted.
+
 | commit | input | fingerprint after |
 |---|---|---|
 | `21f484d4` (#1197) | `rust/pokezero-search/src/leaf.rs`, +31 lines | `9517aab98d56a9ba…` |
@@ -615,7 +631,7 @@ the merge. The register documents that class; it now has a first-party instance,
 failure message names the cause and the fix (merge `origin/main`, do not rebase, re-derive) rather
 than leaving the next author to rediscover it.
 
-**The `Ran N tests` guard.** The step carries an exact `Ran 42 tests`, re-derived from the module's
+**The `Ran N tests` guard.** The step carries an exact `Ran 46 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
 rather than inherited from #1205's figure. The workflow holds **34** lines containing the unittest
@@ -628,7 +644,7 @@ predicts exactly this and says to merge `origin/main` and re-derive. `origin/mai
 `tests.test_render_dropped_move_line_crate` invocation while this branch was open. Re-derived on the
 merged tree with `grep -c 'python -m unittest'`, not adjusted by one.) **This step is among the
 resolved ones** — the number is not restated here, because a fourth copy of it is a fourth thing to
-go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 42 from the module's AST
+go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 46 from the module's AST
 and matches the guard. All three numbers are **re-derived by the pin** rather than typed.
 
 ⚠ **#1205 IS CLOSED (C156), AND THE SENTENCE ABOVE IS WHAT ITS CLOSURE LOOKS LIKE.** This register
@@ -675,12 +691,12 @@ does not exist on either tree. Resolved by merging `origin/main` into the branch
 rebase) and re-deriving all four trees; the assertion now carries that diagnosis in its own failure
 message.
 
-**Mutation evidence.** **53 mutations applied, 53 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
-partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B53** edit **only the tree
+**Mutation evidence.** **54 mutations applied, 54 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
+partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B54** edit **only the tree
 and never this document**. That second number is the one that matters, because a pin reading a
 document against a hard-coded copy of itself passes every document-side mutation — and ⚠ **a first
 revision put it at ten and two of those ten edited the register**, which is the property being
-claimed, mis-stated. Sixteen is the measured figure: a patch line shift, the tie-refusal arm deleted,
+claimed, mis-stated. Seventeen is the measured figure: a patch line shift, the tie-refusal arm deleted,
 a damage push made to consult the truncation flag (G33c *fixed*), a sub-keyed single-seat counter
 added to a committed sweep, a freeze constant added to the differential, a real Showdown checkout
 added to the workflow, the head fingerprint written into an artifact, an `hp`-ceiling context line
@@ -707,7 +723,7 @@ And the id list is justified by the mutation that actually needs it: **B52**, a 
 marker and adds one to G1, holding the count at **9** while the membership changes — red on the ids,
 green on the count, and the only mutation in the battery a count cannot catch.
 
-**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 42
+**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 46
 tests, OK**. The gated family together: ledger uniformity **19**, never-fired **22**, wide-seed
 **36**, C154 re-adjudication **34**, seed registry **41**, single-seat coverage **3** — all OK.
 `tests/test_final_holdout_guard.py` and `tests/test_boundary_verdict_partition.py` cannot import
