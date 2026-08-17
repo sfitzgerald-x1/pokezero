@@ -165,7 +165,11 @@ mutation in this battery to survive: blocks A and B target the DOCUMENT and the 
 targets the DERIVATION. `TheFingerprintDerivationReadsTheTreeTests` closes it.
 
 ⚠ **AND IT TOOK THREE ROUNDS, because the first two fixes were the same mistake.** Two independent
-review rounds returned **thirteen** further surviving mutants (a fourteenth I found myself, re-reading the thirteenth's fix), recorded as **B55–B69**, and the
+review rounds returned **fifteen** further surviving mutants (`B55`–`B67` and `B70`–`B71`) and I found **two** more
+myself by testing my own fixes (`B68`, `B69`) — **seventeen** in all. ⚠ A first
+revision of this sentence said "thirteen … a fourteenth", which does not add up to the range beside
+it; the arithmetic is stated because getting it wrong here is the same defect as everywhere else in
+this document. The
 pattern is worth more than any one of them: *each fix pinned the seam the last mutant used, and the
 next mutant simply moved one frame outward.* Round 1 pinned `head_fingerprint`; the tautology moved
 to `derive()`. Round 2 pinned `derive()` and the comparison loop and published "the row reaches CI
@@ -211,10 +215,27 @@ sources and the four build files — and **not** the patch class, since `third_p
 `.patch` files while the manifest lists **74** and not hashing the other three is correct. There, what
 is pinned is that every patch the manifest names is tracked, so it cannot name a phantom.
 
-**Three times now the fix has been to move the termination further out of code: to primary bytes
-(B64), to the document (B68), to the tree's own index (B69).** Each round I believed the previous one
-had closed it. The honest statement is not that there is no sixth frame — it is that the anchors are
-now three, they are independent of each other, and the failure messages say which one fired.
+⚠ **AND THERE WAS A SIXTH FRAME — B70, THE PATH — found by review immediately after I claimed the
+chain terminated.** The helper-free assertion's own claim to share "no helper" was false: it shares
+`REPO`, `REGISTER`, the module-level `re` and `compute_fingerprint`. Re-point `REGISTER` **and** the
+literal beside it at a doctored copy and it reads the doctored file while the published register stays
+stale — and the drift check *approved* that, because requiring two literals to agree forces them to
+move together and pins neither to the file CI publishes. "Primary bytes" and "the document" were one
+anchor, not two. Closed by anchoring the path outside this module: to the workflow's `changes` paths
+filter — the thing that decides whether `mass-gate` runs on this document at all — and to git's index,
+so a doctored copy must be committed to exist in a CI checkout, at which point the filter names the
+wrong one. And **B71**: `_tracked` filtered through `crate_sources()` in three lines, which is B67's
+sentence landing on the anchor added one round earlier; closed by naming six core crate sources as
+literals.
+
+**Four times now the fix has been to move the termination further out of code: to primary bytes
+(B64), to the document (B68), to the tree's own index (B69), and to the path's own external anchors
+(B70).** Every round I believed the previous one had closed it and said so, and every round was
+wrong. The claim made here is therefore deliberately weak: there are now four mutually independent
+anchors, the failure messages name which one fired, and **the next frame should be assumed to exist
+rather than argued away.** What this row records is not a closed hole; it is a defect whose shape is
+"the guard's own reader can be re-pointed", and the only durable answer found for it is to terminate
+outside the artefact being checked.
 
 What the class asserts now: the helper-free comparison above; a second comparison routing through
 neither `derive()` nor the loop; `derive()` required to part company with the document on an edited
@@ -750,12 +771,12 @@ does not exist on either tree. Resolved by merging `origin/main` into the branch
 rebase) and re-deriving all four trees; the assertion now carries that diagnosis in its own failure
 message.
 
-**Mutation evidence.** **69 mutations applied, 69 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
-partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B69** edit **only the tree
+**Mutation evidence.** **71 mutations applied, 71 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
+partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B71** edit **only the tree
 and never this document**. That second number is the one that matters, because a pin reading a
 document against a hard-coded copy of itself passes every document-side mutation — and ⚠ **a first
 revision put it at ten and two of those ten edited the register**, which is the property being
-claimed, mis-stated. Thirty-two is the measured figure: a patch line shift, the tie-refusal arm deleted,
+claimed, mis-stated. Thirty-four is the measured figure: a patch line shift, the tie-refusal arm deleted,
 a damage push made to consult the truncation flag (G33c *fixed*), a sub-keyed single-seat counter
 added to a committed sweep, a freeze constant added to the differential, a real Showdown checkout
 added to the workflow, the head fingerprint written into an artifact, an `hp`-ceiling context line
@@ -796,15 +817,19 @@ sentence now sources all six would overstate what was done. Pinning them is the 
 without a built engine in this environment and are unchanged by this branch. Full suite, with the
 flag that is required rather than stylistic:
 `pytest tests/ -q -p no:randomly --continue-on-collection-errors` — **165 failed at base, 165 failed
-at head**, 4,420 → 4,462 passed, 33 errors both sides, and the
-`FAILED` id lists are **identical in both directions**. ⚠ **DE-NUMBERED, not re-pointed**: the
-parenthetical used to read "(**+42**, exactly this module)", which was true when this module
-carried 42 tests and became false the moment it carried more — a SEVENTH copy of the module's
-test count, and the only one no pin polices, so it went stale green while the other six were
-updated. The pass delta is by construction the module's own method count at whatever commit the
-suite was last run on; the load-bearing claim is the one that does not churn, namely that the
-FAILED set is identical at base and at head. Do not re-point this pair without re-running the
-suite; the absolute figures belong to the commit and the machine that produced them. Re-measured against the merge-base after
+at head**, and the `FAILED` id lists are **identical in both directions**. That is the whole claim:
+this branch adds no failures.
+
+⚠ **THE ABSOLUTE PASS/ERROR FIGURES ARE DE-NUMBERED HERE, not re-pointed, and the first attempt at
+this repair was half done.** They read "4,420 → 4,462 passed (**+42**, exactly this module), 33
+errors both sides". The parenthetical was a SEVENTH copy of this module's test count — the only one
+no pin polices, so it went stale green while the other six were updated — and removing it left the
+PAIR, which is equally stale: the head figure is by construction base plus this module's method
+count, and the module has grown since. Review round 3 caught the half-repair. **The pair has NOT
+been re-measured** (the suite needs a built engine, and 165 of its failures are pre-existing), so it
+is removed rather than replaced by a figure nobody ran. What survives is the invariant that does not
+churn — identical `FAILED` sets at base and at head — and the rule: do not write an absolute suite
+figure here without re-running the suite and naming the commit and machine that produced it. Re-measured against the merge-base after
 each of the two `origin/main` merges rather than carried: at `6ef682bf` the pair read 164 / 4,416,
 and #1203 brought one more engine-dependent module. The absolute figure is a property of the machine; the
 delta is that this branch adds zero failures.

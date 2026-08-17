@@ -66,7 +66,7 @@ are pinned against the two census modules' own constants, read by AST rather tha
 update the register in the same change. That is deliberate: the document that goes stale is
 the one nothing forces an author through.
 
-MUTATION BATTERY: 69 applied, 69 caught, plus 1 NEGATIVE CONTROL verified green.
+MUTATION BATTERY: 71 applied, 71 caught, plus 1 NEGATIVE CONTROL verified green.
 Partitioned by WHAT IS MUTATED. Enumerated because
 an unrecorded battery is what `tests/test_wide_seed_negative_census.py` records costing it a
 surviving mutation, and because "the tests pass" is the same kind of claim this module
@@ -140,7 +140,7 @@ BLOCK A -- A1-A37, applied to the REGISTER's own bytes.
        `TheDocumentsClaimsAboutItselfAreReDerivedTests`, which exists because review blocked
        two successive revisions on claims the document made about ITSELF.
 
-BLOCK B -- B38-B69, THIRTY-TWO mutations applied ONLY to the tree and never to the document.
+BLOCK B -- B38-B71, THIRTY-FOUR mutations applied ONLY to the tree and never to the document.
 Block A can be passed by a pin that reads the register against a hard-coded copy of itself.
 These are the ones that prove each derivation reads what it claims to: every one MAKES A REAL
 CHANGE TO THE TREE and the document, unedited, must go red. Six are the absences, and an
@@ -308,6 +308,30 @@ has recorded.
        manifest lists 74 and not hashing the other three is CORRECT. What is pinned there
        instead is that every patch the manifest names is tracked, so it cannot name a
        phantom.
+  B70. ⚠ THE SIXTH FRAME, and it is the PATH -- review round 3, after I had claimed the
+       chain terminated. `REGISTER` AND the literal beside it both re-pointed at a doctored
+       copy of the register: the helper-free assertion then reads the doctored file, the
+       published one stays stale, and the old drift check APPROVED it, because requiring the
+       two literals to agree forces them to move together and pins neither to the file CI
+       publishes. "Primary bytes" and "the document" were one anchor, not two. Closed by
+       anchoring the path OUTSIDE this module -- to the workflow's `changes` paths filter,
+       which is what decides whether `mass-gate` runs on this document at all, and to git's
+       index, so a doctored copy has to be committed to exist in a CI checkout, at which
+       point the filter names the wrong one.
+  B71. ⚠ `_tracked` FILTERED THROUGH `crate_sources()` in three lines, with hasher and
+       enumerator colluding and all three Appendix A rows reseated. B67's own sentence -- a
+       control populated by the thing it controls is not a control -- landing on the git
+       anchor added to close B69, one round later. Closed by NAMED LITERALS: the anchor must
+       see `tree.rs`, `leaf.rs`, `model.rs`, `events.rs`, `encoder.rs` and `lib.rs`, so
+       narrowing it is red however the narrowing is spelled. `tree.rs` is named explicitly
+       because it is the file every collusion mutant in this battery drops.
+       ALSO RECORDED, NOT CLOSED HERE: a module-level `load_tests` can drop the terminating
+       assertion while holding the printed count at its pinned value.
+       `tests/test_unreachable_readjudication.py` REFUSES a `load_tests` in any module a
+       `Ran N` guard names -- measured, `FAILED (1)` with that exact message -- and
+       `mass-gate` runs that module too, so the CI-level guard exists; it is simply not in
+       this file, and the class docstring says so rather than implying this module is
+       self-sufficient.
 
 
 BLOCK C -- NEGATIVE CONTROLS. Mutations that must stay GREEN because they do not change the
@@ -1601,6 +1625,21 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
                 if path.suffix == ".rs"
             }
             self.assertTrue(tracked, "git tracks no crate sources; the anchor read nothing")
+            # ⚠ NAMED LITERALS, because review round 3 filtered `_tracked` THROUGH
+            # `crate_sources()` in three lines and this anchor then agreed with the hasher it
+            # exists to check -- B67's own sentence ("a control populated by the thing it
+            # controls is not a control") landing on the anchor added to close B69. A
+            # non-vacuity floor derived from git alone cannot see that; these can. They are
+            # the crate's long-lived modules, so they do not churn, and `tree.rs` is here
+            # explicitly because it is the file every collusion mutant in this battery drops.
+            for name in ("tree.rs", "leaf.rs", "model.rs", "events.rs", "encoder.rs", "lib.rs"):
+                self.assertIn(
+                    name,
+                    {path.name for path in tracked},
+                    f"git tracks the crate but this anchor cannot see {name}. The anchor "
+                    "itself has been narrowed -- most likely filtered through the hasher, "
+                    "which makes it agree with the thing it is supposed to check.",
+                )
             for label, produced in (("hasher", hashed), ("enumerator", enumerated)):
                 under = sorted(
                     str(path.relative_to(REPO))
@@ -1729,13 +1768,33 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
 
         So this does not add a seam-specific pin. It reads the document with
         `Path.read_bytes` and a regex RIGHT HERE, and the tree with `compute_fingerprint`
-        directly, sharing NO helper with the rest of the module -- not `_text`, not
-        `register_facts`, not `_register_table`, not `derive`, not `head_fingerprint`, not
-        the appendix loop. A mutation to any of them cannot reach this assertion, so the
-        chain has an end rather than one more link.
+        directly, bypassing every document-side reader in this module -- `_text`,
+        `register_facts`, `_register_table`, `derive`, `head_fingerprint`, the appendix loop.
+        Mutating any of those cannot reach this assertion.
 
-        The path is a LITERAL, checked against `REGISTER` so the two cannot drift: reading
-        the constant would reintroduce exactly the indirection this test exists to avoid.
+        ⚠ AND THE CLAIM "SHARING NO HELPER" WAS FALSE AND IS RETRACTED. Review round 3
+        showed it shares four things -- `REPO`, `REGISTER`, the module-level `re`, and
+        `compute_fingerprint` -- and turned the first into a SIXTH frame: re-point `REGISTER`
+        AND the literal below at a doctored copy of the register, and this assertion reads
+        the doctored file while the published one stays stale. The old drift check APPROVED
+        that, because requiring the two literals to agree forces them to move TOGETHER and
+        pins neither to the file CI publishes. State the sharing rather than deny it:
+
+          * `re` and `compute_fingerprint` are shared and that is the point -- the second IS
+            the tree-side authority being checked, and shadowing the first is a mutation of
+            the assertion itself, not a way around it.
+          * `REPO` and `REGISTER` are now anchored OUTSIDE this module, below, to the
+            workflow's `changes` paths filter and to git's index. That filter is what decides
+            whether `mass-gate` runs on this document at all, so a mutant that re-points the
+            path has to move the thing that makes the gate fire -- and the register must be
+            a file git actually tracks, so a doctored copy has to be committed to exist in a
+            CI checkout, where the filter then names the wrong one.
+
+        A separate bypass worth recording because it is NOT closed here: a module-level
+        `load_tests` can drop this assertion while holding the printed count at its pinned
+        value. `tests/test_unreachable_readjudication.py` refuses a `load_tests` in any module
+        a `Ran N` guard names, and `mass-gate` runs that module too, so the CI-level guard
+        exists -- it is just not in this file. Measured, not assumed.
         """
 
         relative = "reports/c155_terminal_disposition_register.md"
@@ -1744,6 +1803,41 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
             REGISTER,
             "this test's literal path and the module's REGISTER constant have drifted; one "
             "of them is reading a document nothing else in this module reads.",
+        )
+        # ANCHOR THE PATH OUTSIDE THIS MODULE. Agreement between the two literals above is
+        # necessary and was, on its own, worthless: moving both together satisfied it while
+        # pointing at a doctored copy. The workflow's `changes` paths filter is what decides
+        # whether `mass-gate` runs on this document, so it is the one place where naming the
+        # wrong file has a consequence that cannot be hidden inside this module.
+        workflow = (REPO / ".github" / "workflows" / "engine-fidelity-gates.yml").read_text(
+            encoding="utf-8"
+        )
+        filtered = [
+            line.strip()
+            for line in workflow.splitlines()
+            if line.strip().startswith("reports/c155") and not line.strip().startswith("#")
+        ]
+        self.assertEqual(
+            filtered,
+            [relative],
+            "the workflow's paths filter does not name exactly this register. Either the "
+            "path here was re-pointed at another document, or the filter was, and in the "
+            "second case a PR whose only change is editing the register skips `mass-gate` "
+            "entirely and goes green.",
+        )
+        # ...and it must be a file git actually tracks, so a doctored copy cannot be an
+        # untracked local file: to exist in a CI checkout it has to be committed, at which
+        # point the filter above names the wrong one.
+        tracked = subprocess.run(
+            ["git", "-C", str(REPO), "ls-files", "-z", "--", relative],
+            capture_output=True,
+            check=True,
+        ).stdout.decode("utf-8").split("\0")
+        self.assertEqual(
+            [name for name in tracked if name],
+            [relative],
+            "git does not track the register at this exact path, so what this assertion "
+            "reads is not what a CI checkout publishes.",
         )
         text = (REPO / relative).read_bytes().decode("utf-8")
         rows = re.findall(
@@ -2253,6 +2347,7 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
             24: "TWENTY-FOUR", 25: "TWENTY-FIVE", 26: "TWENTY-SIX",
             27: "TWENTY-SEVEN", 28: "TWENTY-EIGHT", 29: "TWENTY-NINE",
             30: "THIRTY", 31: "THIRTY-ONE", 32: "THIRTY-TWO",
+            33: "THIRTY-THREE", 34: "THIRTY-FOUR", 35: "THIRTY-FIVE",
         }
         self.assertIn(size, words, f"block B has {size} entries; extend `words`")
         word = words[size]
