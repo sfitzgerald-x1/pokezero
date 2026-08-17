@@ -66,7 +66,8 @@ are pinned against the two census modules' own constants, read by AST rather tha
 update the register in the same change. That is deliberate: the document that goes stale is
 the one nothing forces an author through.
 
-MUTATION BATTERY: 76 applied, 76 caught, plus 1 NEGATIVE CONTROL verified green.
+MUTATION BATTERY: 77 applied, 77 caught, plus 1 NEGATIVE CONTROL verified green
+and 1 DISCLOSED SURVIVOR, enumerated below and NOT counted as caught.
 Partitioned by WHAT IS MUTATED. Enumerated because
 an unrecorded battery is what `tests/test_wide_seed_negative_census.py` records costing it a
 surviving mutation, and because "the tests pass" is the same kind of claim this module
@@ -140,7 +141,7 @@ BLOCK A -- A1-A37, applied to the REGISTER's own bytes.
        `TheDocumentsClaimsAboutItselfAreReDerivedTests`, which exists because review blocked
        two successive revisions on claims the document made about ITSELF.
 
-BLOCK B -- B38-B76, THIRTY-NINE mutations applied ONLY to the tree and never to the document.
+BLOCK B -- B38-B77, FORTY mutations applied ONLY to the tree and never to the document.
 Block A can be passed by a pin that reads the register against a hard-coded copy of itself.
 These are the ones that prove each derivation reads what it claims to: every one MAKES A REAL
 CHANGE TO THE TREE and the document, unedited, must go red. Six are the absences, and an
@@ -289,7 +290,12 @@ has recorded.
        THE FIX IS TO STOP TERMINATING IN CODE. Appendix A now records
        `t1.hashed_input_files` (91) and `t1.hashed_crate_sources` (11), derived from the
        enumerator, so a shrunken enumerator disagrees with the DOCUMENT even when the hasher
-       shrinks with it. All four variants die on `test_every_value_re_derives`. A declared
+       shrinks with it. ⚠ RE-MEASURED AT HEAD, and the earlier claim "all four variants die on
+       `test_every_value_re_derives`" was WRONG TWICE: the killer is now
+       `test_the_hashed_crate_inputs_are_the_files_git_tracks` (the git anchor postdates this
+       entry), and the FOURTH variant -- aliasing the git test's enumerator arm to the
+       hasher's set -- SURVIVES. It is listed under DISCLOSED SURVIVORS below rather than
+       counted here. Three of four: 1, 2, 1 failures respectively. A declared
        coupling and a free one: anything that changes this inventory moves the fingerprint
        too, so Appendix A is already being edited in the same change.
   B69. ⚠ AND B68's FIX HAD A FIFTH FRAME TOO, which is why the register now says to expect
@@ -388,6 +394,21 @@ has recorded.
        than moving, so the probe would error instead of measure. It inserts a whole comment
        line at the newline nearest the middle instead. Found by running it.
 
+  B77. ⚠ THE NINTH FRAME, and B76's own sentence one frame out for the THIRD time -- review
+       round 6. B76's fix swapped two ADJACENT bytes, and an adjacent swap disturbs BOTH byte
+       parities at once, so it cannot isolate a digest that reads only one of them; every
+       other probe here changes length or path, so a residue-class digest moved under those
+       too. `path.read_bytes()` -> `path.read_bytes()[::2]`, one line, survived all 53 tests
+       reseated and hid a REAL SEMANTIC EDIT -- `DAMAGE_BRANCH_DEPTH: u8 = 2 -> 3` in
+       `tree.rs` -- with the fingerprint byte-identical. The mirror `[1::2]` did the same.
+       Closed by flipping a SINGLE byte (`^= 0xFF`) at BOTH PARITIES in each of three regions,
+       so a digest skipping any residue class fails on the offsets it skips and the subTest
+       names the region and the parity. Verified: `[::2]`, `[1::2]` and `[::3]` all RED, each
+       by the length-preserving probe alone.
+       THE SEQUENCE IS THE POINT: B73 was "all probes change LENGTH, so a size proxy is
+       invisible"; B76 was "all probes touch one REGION"; B77 is "all probes disturb both
+       PARITIES". Three rounds, one shape -- a probe family sharing a blind spot -- and each
+       time the family looked exhaustive from inside.
 
 BLOCK C -- NEGATIVE CONTROLS. Mutations that must stay GREEN because they do not change the
 fact being derived. Recorded with the RED mutation that proves the same assertion is live,
@@ -414,6 +435,21 @@ is C154 §6's "control that could not fail", one surface over.
        B52 (the swap) are both RED, so C1's green is the predicate being right rather than
        the assertion being absent.
 
+
+DISCLOSED SURVIVORS. Mutations that are GREEN and arguably should not be. Enumerated because
+the alternative is a battery that reads 77-of-77 while a reviewer can find a survivor in one
+line, which is the exact credibility failure this document exists to prevent. NOT counted in
+the totals above.
+
+  S1.  The git anchor's ENUMERATOR arm aliased to the hasher's set
+       (`enumerated = hashed`). Green. It is a REDUNDANCY rather than a hole -- the enumerator
+       is pinned to the hasher by `test_the_hashed_input_set_is_exactly_what_the_tree_holds`,
+       to the document by `t1.hashed_input_files` / `t1.hashed_crate_sources`, and the hasher
+       is pinned to git -- so the property survives transitively while that one assertion
+       stops carrying it. ⚠ RECORDED TWICE OVER because the bookkeeping went wrong here: I
+       disclosed it, a review round told me it was killed, I EDITED THE CLAIM WITHOUT
+       RE-RUNNING IT, and the next round caught that. Re-measured: it survives.
+       Never edit a measured claim because someone says it is wrong -- re-measure it.
 """
 
 from __future__ import annotations
@@ -1900,45 +1936,44 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
             target = max(sources, key=lambda path: path.stat().st_size)
             original = target.read_bytes()
             self.assertGreater(len(original), 2048, "probe file too small to place offsets")
-            # THREE REGIONS, because a probe family that only ever touches one is blind in one
-            # place: round 5 defeated the single mid-free version with a
-            # `sha256(blob[:512] + st_size)` proxy. Head / middle / tail, each its own subTest
-            # so the report names WHICH region a proxy is ignoring.
-            for label, start in (
+            # ⚠ ONE BYTE, XORed -- NOT a swap, and review round 6 is why. An adjacent swap
+            # disturbs BOTH byte parities at once, so it cannot isolate a digest that reads
+            # only one of them; every other probe here changes length or path, so a stride-2
+            # digest moved under those too. Result: `path.read_bytes()[::2]` -- one line --
+            # survived all 53 tests reseated and hid a real semantic edit
+            # (`DAMAGE_BRANCH_DEPTH: u8 = 2 -> 3` in `tree.rs`) with the fingerprint
+            # byte-identical. That is B73/B76's sentence one frame out again, with "residue
+            # class" substituted for "region" and "length".
+            #
+            # So: a single byte, flipped, at BOTH PARITIES in each of three regions. A digest
+            # that skips any residue class of offsets now fails on the offsets it skips, and
+            # the subTest names the region and the parity so the report says which.
+            for label, base in (
                 ("head", 0),
                 ("middle", len(original) // 2),
                 ("tail", len(original) - 512),
             ):
-                with self.subTest(region=label):
-                    blob = bytearray(original)
-                    index = next(
-                        (
-                            i
-                            for i in range(start, len(blob) - 1)
-                            if blob[i] != blob[i + 1]
-                        ),
-                        None,
-                    )
-                    self.assertIsNotNone(
-                        index, f"{target.name} has no adjacent differing pair at/after {start}"
-                    )
-                    blob[index], blob[index + 1] = blob[index + 1], blob[index]
-                    target.write_bytes(bytes(blob))
-                    self.assertEqual(
-                        target.stat().st_size,
-                        len(original),
-                        "the probe changed the file's LENGTH, so it no longer isolates "
-                        "content from size and a size-based digest would still pass it.",
-                    )
-                    self.assertNotEqual(
-                        head_fingerprint(),
-                        baseline,
-                        f"swapping two adjacent bytes in the {label} of {target.name} -- same "
-                        "length, different content -- left the head fingerprint unchanged. "
-                        "The digest is reading a PROXY for the bytes rather than the bytes, "
-                        f"and the proxy ignores the {label} of a file. Any edit there is "
-                        "invisible to this identity and to the build stamp that shares it.",
-                    )
+                for parity in (0, 1):
+                    offset = base + parity
+                    with self.subTest(region=label, parity=("even" if offset % 2 == 0 else "odd")):
+                        blob = bytearray(original)
+                        blob[offset] ^= 0xFF
+                        target.write_bytes(bytes(blob))
+                        self.assertEqual(
+                            target.stat().st_size,
+                            len(original),
+                            "the probe changed the file's LENGTH, so it no longer isolates "
+                            "content from size and a size-based digest would still pass it.",
+                        )
+                        self.assertNotEqual(
+                            head_fingerprint(),
+                            baseline,
+                            f"flipping the single byte at offset {offset} (the {label} of "
+                            f"{target.name}) left the head fingerprint unchanged. The digest "
+                            "is reading a PROXY for the bytes -- it skips this offset -- so "
+                            "any edit landing there is invisible to this identity and to the "
+                            "build stamp that shares its derivation.",
+                        )
             target.write_bytes(original)
 
     def test_renaming_a_hashed_file_moves_the_head_fingerprint(self) -> None:

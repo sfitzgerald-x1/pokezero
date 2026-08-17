@@ -1052,10 +1052,10 @@ jobs:
       # its Appendix A is re-derived from tracked bytes, committed artifacts and anchors
       # resolved with uniqueness required, imported from C153's census rather than copied.
       #
-      # Battery: 76 mutations applied, 76 caught, plus
+      # Battery: 77 mutations applied, 77 caught, plus
       # one NEGATIVE CONTROL verified green, listed in the module docstring -- a
       # MUTATION count, not the test count, which a first revision of this comment conflated
-      # by writing the module's 34 tests here. THIRTY-NINE of the 76 are applied only to the tree
+      # by writing the module's 34 tests here. FORTY of the 77 are applied only to the tree
       # and never to the document, because a pin that reads a document against a hard-coded
       # copy of itself passes every document-side mutation; the first revision claimed ten
       # and two of those ten edited the register. Exact count, not a floor, per #1163.

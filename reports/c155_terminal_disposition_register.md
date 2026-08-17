@@ -257,7 +257,22 @@ class perturbed a file's **head or its tail**, never its middle, so `sha256(blob
 survived all eleven tests reseated and hid an `f32`→`f64` at byte 3010 of `tree.rs` — `B73`'s own
 sentence one frame out, with "region" substituted for "length".
 
-**Five rounds, twenty-two surviving mutants, and the two lessons that generalise past this row:**
+⚠ **AND ROUND 6 FOUND A NINTH FRAME — `B77` — which is `B76`'s own sentence one frame out for the
+THIRD consecutive round.** `B76`'s fix swapped two *adjacent* bytes, and an adjacent swap disturbs
+**both byte parities at once**, so it cannot isolate a digest that reads only one of them; every other
+probe changes length or path, so a residue-class digest moved under those too. One line —
+`path.read_bytes()[::2]` — survived all 53 tests reseated and hid a **real semantic edit**
+(`DAMAGE_BRANCH_DEPTH: u8 = 2 → 3` in `tree.rs`) with the fingerprint byte-identical. Closed by
+flipping a **single byte** at **both parities** in each of three regions. `[::2]`, `[1::2]` and `[::3]`
+are now all red, each by that probe alone.
+
+**Read the three together, because the shape is the finding:** `B73` was *"every probe changes
+LENGTH, so a size proxy is invisible"*; `B76` was *"every probe touches one REGION"*; `B77` is
+*"every probe disturbs both PARITIES"*. Three rounds, one defect — **a probe family that shares a
+blind spot** — and every time the family looked exhaustive from the inside. An exhaustive loop over
+*inputs* is not an exhaustive loop over *ways of reading an input*.
+
+**Six rounds, twenty-three surviving mutants, and the two lessons that generalise past this row:**
 
 1. **Terminate outside the artefact being checked.** Four times the fix was to move the termination
    further out of code — primary bytes (`B64`), the document (`B68`), the tree's own index (`B69`),
@@ -272,6 +287,13 @@ messages name which one fired, and **a ninth frame should be assumed to exist ra
 away.** What this row records is not a closed hole — it is a defect whose shape is *"the guard's own
 reader can be re-pointed, its own lists can be short, and its own probes can all be blind in the same
 place"*.
+
+⚠ **AND ONE MUTATION IS GREEN AND PUBLISHED AS SUCH.** The battery carries a **DISCLOSED SURVIVORS**
+section (`S1`) rather than reading 77-of-77 while a reviewer finds a survivor in one line — that
+credibility failure is the thing this document exists to prevent. `S1` is a redundancy, not a hole,
+and the bookkeeping around it went wrong in an instructive way: I disclosed it, a review round told me
+it was killed, **I edited the claim without re-running it**, and the next round caught that. The rule
+it earns: *never edit a measured claim because someone says it is wrong — re-measure it.*
 
 What the class asserts now: the helper-free comparison above; a second comparison routing through
 neither `derive()` nor the loop; `derive()` required to part company with the document on an edited
@@ -807,12 +829,12 @@ does not exist on either tree. Resolved by merging `origin/main` into the branch
 rebase) and re-deriving all four trees; the assertion now carries that diagnosis in its own failure
 message.
 
-**Mutation evidence.** **76 mutations applied, 76 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
-partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B76** edit **only the tree
+**Mutation evidence.** **77 mutations applied, 77 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
+partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B77** edit **only the tree
 and never this document**. That second number is the one that matters, because a pin reading a
 document against a hard-coded copy of itself passes every document-side mutation — and ⚠ **a first
 revision put it at ten and two of those ten edited the register**, which is the property being
-claimed, mis-stated. Thirty-nine is the measured figure: a patch line shift, the tie-refusal arm deleted,
+claimed, mis-stated. Forty is the measured figure: a patch line shift, the tie-refusal arm deleted,
 a damage push made to consult the truncation flag (G33c *fixed*), a sub-keyed single-seat counter
 added to a committed sweep, a freeze constant added to the differential, a real Showdown checkout
 added to the workflow, the head fingerprint written into an artifact, an `hp`-ceiling context line
