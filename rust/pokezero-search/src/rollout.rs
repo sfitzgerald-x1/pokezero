@@ -167,6 +167,18 @@ pub(crate) struct RolloutStats {
     /// (empty option vector or empty instruction list) without the battle
     /// reading as over. Also priced by the fallback, counted separately
     /// because it means something different from a cap hit.
+    ///
+    /// **ZERO BY CONSTRUCTION, and a defect signal rather than an estimand
+    /// term.** gen3's `State::get_all_options` backfills every exit, so it cannot
+    /// hand back an empty option vector;
+    /// `get_all_options_never_yields_an_empty_option_vector` pins that over five
+    /// state shapes and fails if the pokezero fidelity patch that closed the last
+    /// two exits is lost. So a non-zero reading means a vendored dependency
+    /// regressed, not that the leaf blended -- which is why the Python layer
+    /// REFUSES it instead of summing it into `rollout_fallback_fraction`. This
+    /// layer still adds it to its own fraction, where
+    /// `terminal + cap + dead == run` is a true partition; see the note at that
+    /// formula for why the two definitions agree on every reachable input.
     pub dead_ends: u64,
 }
 

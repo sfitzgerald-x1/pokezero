@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`25abc1c9380ab96d…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`4651509ba82eb97e…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -172,6 +172,7 @@ above.
 | (this head, merge of #1257) | `rust/pokezero-search/src/tree.rs` — per-depth OCCUPANCY counter, merged with main's `encoder.rs` md-key change | `65092feac14da111…` |
 | #1271 | `rust/pokezero-search/src/rollout.rs` **+1052 −0** (new file — the oracle-leaf batching seam), `src/model.rs` **+339 −23**, `src/lib.rs` **+2 −0** | `bddc3ce2644ae228…` |
 | #1272 review round 3 (this head) | `rust/pokezero-search/src/rollout.rs` **+143 −1** (the `get_all_options` option-invariant test — the machine-checked reason `rollout_dead_ends` is zero by construction — plus a note on the fallback fraction's two layers) | `25abc1c9380ab96d…` |
+| #1272 review round 3, `dead_ends` field doc | `rust/pokezero-search/src/rollout.rs` (doc comment only — the field's own statement of why it is zero by construction) | `4651509ba82eb97e…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -534,7 +535,8 @@ defect did not exist on either of their trees.** A typed `25` would have shipped
 Where CI gates on the merge, **local green and CI green are different measurements**; §6 declares
 that coupling and the assertion carries the fix in its own failure message.
 
-**Every measurement behind T2–T6 predates the head build**, and none is at `25abc1c9380ab96d` —
+**Every measurement behind T2–T6 predates the head build**, and none is at `4651509ba82eb97e` —
+nor at `25abc1c9380ab96d` (round 3's first head, before the `dead_ends` field doc landed),
 nor at `bddc3ce2644ae228` (this branch's round-2 head, and the value this row pinned until
 round 3's `rollout.rs` invariant test moved it again),
 nor at `65092feac14da111` (the head this branch was cut from), nor at `76b3b3a7ff29aba5`, `5ab0010b7da31708`
@@ -763,7 +765,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.head_fingerprint` | 25abc1c9380ab96d |
+| `t1.head_fingerprint` | 4651509ba82eb97e |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
