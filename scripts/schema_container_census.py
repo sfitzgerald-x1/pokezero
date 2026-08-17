@@ -123,7 +123,7 @@ def containers() -> list[tuple[str, int, tuple[str, ...], str]]:
                 # ordinary comparison, and a mixed container is not a schema table.
                 rel = str(path.relative_to(REPO))
                 # LINE-QUALIFIED when there is no assignment target. A bare "<inline>" collided two genuinely
-                # different argparse tuples in neural_cli.py (train at :467, iterate at :1951) into ONE
+                # different argparse tuples in neural_cli.py (train at :467, iterate at :1952) into ONE
                 # classification row -- so a third was classified for free, and the injection, which runs
                 # once per row, inserted the synthetic schema TWICE into each. Also resolve through call
                 # wrappers: `frozenset({...})` / `tuple([...])` put the container inside a Call, so
@@ -137,7 +137,16 @@ def containers() -> list[tuple[str, int, tuple[str, ...], str]]:
 
 
 def classification() -> dict[tuple[str, tuple[str, ...]], str]:
-    """Committed classification, keyed on (file, members) -- NOT on line, which drifts."""
+    """Committed classification, keyed on (file, members, variable name).
+
+    The variable name is in the key on purpose; keying on (file, members) alone let a NEW routing
+    tuple whose member set duplicated an existing row be classified for free. For a container with
+    no assignment target that name is `<inline:LINE>`, so those rows -- and ONLY those -- are line
+    sensitive, which the spec file's header states as a deliberate trade: "a drifting line is a loud
+    reclassify, whereas a silent collision is a free pass." An earlier form of this docstring said
+    the key was "NOT on line, which drifts", which described neither the key nor the intent and
+    invited reading the resulting abort as a census bug rather than as the reclassify prompt it is.
+    """
     if not SPEC.is_file():
         raise SystemExit(f"census: no classification file at {SPEC}")
     out: dict[tuple[str, tuple[str, ...]], str] = {}
