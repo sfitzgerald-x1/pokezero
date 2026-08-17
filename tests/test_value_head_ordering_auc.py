@@ -1025,7 +1025,12 @@ def test_it_refuses_a_negative_tau(cell):
 # public-repo hygiene: the artifact must not carry the bank's filesystem layout
 # ----------------------------------------------------------------------------------------
 def test_provenance_records_the_basename_and_hash_and_never_the_directory(tmp_path):
-    nested = tmp_path / "shared" / "scott-experiment" / "phase3-valuetune-20260816"
+    """The directory components here are DELIBERATELY NEUTRAL. This repo is public and the real
+    banks live under cluster-internal paths; a test that spells the real layout out in order to
+    prove the layout is stripped has leaked it into the tree. (This repo has learned that one
+    before -- see "Use a neutral absolute path in the bare-path naming test".) The property under
+    test is that no directory component survives, which neutral names pin just as well."""
+    nested = tmp_path / "outer-dir" / "middle-dir" / "inner-dir"
     nested.mkdir(parents=True)
     path = nested / "pairs-v1.json"
     path.write_text(json.dumps({"pairs": make_pairs(n=10)}))
@@ -1033,11 +1038,15 @@ def test_provenance_records_the_basename_and_hash_and_never_the_directory(tmp_pa
     assert prov["file"] == "pairs-v1.json"
     assert len(prov["sha256"]) == 64
     blob = json.dumps(prov)
-    assert "/" not in blob and "scott-experiment" not in blob
+    assert "/" not in blob and str(path.parent) not in blob
+    # the components this test created (those above tmp_path are the runner's own, and can be
+    # short generic words that legitimately appear inside English prose)
+    for component in path.parent.relative_to(tmp_path).parts:
+        assert component not in blob, component
 
 
 def test_the_cli_writes_an_artifact_with_no_absolute_paths_in_it(tmp_path, monkeypatch):
-    nested = tmp_path / "shared" / "bank"
+    nested = tmp_path / "outer-dir" / "bank-dir"      # neutral on purpose; see the test above
     nested.mkdir(parents=True)
     rows = make_pairs(n=200, seed=4)
     (nested / "base.json").write_text(json.dumps({"pairs": rows}))
@@ -1051,7 +1060,11 @@ def test_the_cli_writes_an_artifact_with_no_absolute_paths_in_it(tmp_path, monke
         "--bootstrap-reps", "50", "--json", str(out)])
     assert oi.main() == 0
     text = out.read_text()
-    assert str(tmp_path) not in text and "/shared" not in text
+    assert str(tmp_path) not in text and str(nested) not in text
+    # the components this test created; the ones above tmp_path are the runner's own and can be
+    # short generic words ("var") that legitimately appear inside English prose in the caveats.
+    for component in nested.relative_to(tmp_path).parts:
+        assert component not in text, component
     doc = json.loads(text)
     assert doc["cells"]["arm"][str(oi.TAU_PRIMARY)]["delta_c"] == 0.0
 

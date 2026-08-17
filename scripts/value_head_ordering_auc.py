@@ -578,7 +578,7 @@ def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
         "tau": tau,
         "n_eligible": n,
         "n_excluded_true_gap_zero": sum(1 for k in keys if float(ref_rows[k]["true_gap"]) == 0.0),
-        "n_excluded_below_tau": len(keys) + n
+        "n_excluded_below_tau": len(keys) - n
         - sum(1 for k in keys if float(ref_rows[k]["true_gap"]) == 0.0),
         "c_baseline": c_base,
         "c_arm": c_arm,
