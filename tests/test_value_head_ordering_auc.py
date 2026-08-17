@@ -20,6 +20,7 @@ this repo.
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import json
 import math
 import random
@@ -468,26 +469,86 @@ def test_the_abstention_guard_charges_exactly_the_abstention_credit_and_nothing_
 def test_a_bucketed_head_keeps_a_gain_the_blunt_guard_would_have_taken(cell):
     """The legitimate arm a review measured the first guard convicting: a bucketed /
     distributional readout emits on a finite grid, so it manufactures exact ties as a matter of
-    course. At 32 levels its reordering is real and the gate must leave it a gain."""
+    course. At 32 levels its reordering is real and the gate must leave it a gain.
+
+    The numbers the module docstring and the demo table QUOTE are pinned here, because a previous
+    revision of this file asserted only the inequalities and shipped three quoted figures that
+    its own fixture did not produce."""
     r = cmp_at(cell, demo(cell, "positive_control_bucketed_head_32"))
     assert r["head_ties_created_by_arm"] > 0, "the fixture must contain its own subject"
     assert r["delta_c"] > 0 and r["delta_c_gate"] > 0
     assert r["delta_c_gate"] >= r["delta_c_all_new_ties_scored_wrong"]
     assert r["verdict"] in ("PASS", "PASS_PENDING_REMEASURE")
+    assert r["delta_c"] == pytest.approx(0.1402, abs=5e-5)
+    assert r["delta_c_gate"] == pytest.approx(0.0915, abs=5e-5)
+    assert r["delta_c_all_new_ties_scored_wrong"] == pytest.approx(0.0823, abs=5e-5)
+    assert (r["head_ties_created_by_arm"],
+            r["head_ties_created_on_pairs_baseline_got_wrong"]) == (19, 16)
+
+
+def test_the_blunt_guard_would_convict_this_arm_at_tau_0_05_and_this_one_does_not(cell):
+    """The collateral damage, as a VERDICT FLIP rather than a difference of decimals -- the whole
+    reason the guard was narrowed, and the one property a reviewer asked to see reproduced.
+
+    At tau=0.05 the 32-bucket arm's reordering is still real, but scoring every new tie as wrong
+    drags the statistic to +0.0164, BELOW the 0.02 advancement threshold. Withdrawing only the
+    abstention credit leaves +0.0382, above it. Same data, same arm, opposite verdict.
+    """
+    r = cmp_at(cell, demo(cell, "positive_control_bucketed_head_32"), tau=0.05)
+    blunt, gated = r["delta_c_all_new_ties_scored_wrong"], r["delta_c_gate"]
+    assert blunt == pytest.approx(0.0164, abs=5e-5)
+    assert gated == pytest.approx(0.0382, abs=5e-5)
+    assert blunt < oi.ADVANCE_DELTA_C < gated, (blunt, oi.ADVANCE_DELTA_C, gated)
+    assert gated > blunt, "the narrowed guard must be the more permissive of the two"
+
+
+def test_no_manufactured_tie_can_ever_raise_the_gated_statistic(cell):
+    """The invariant that makes narrowing the guard safe, checked per pair rather than argued.
+
+    A new tie is neutralised to the baseline's own 0.0 where the baseline was wrong (contributing
+    exactly 0) and keeps its honest -0.5 where the baseline was right. So across every demo, every
+    tau, no manufactured tie contributes a POSITIVE amount to the gated statistic -- which is why
+    no abstention, aimed or accidental, can buy advancement under the narrower rule.
+    """
+    rows, keys = cell
+    seen_ties = 0
+    for name in oi.DEMOS:
+        arm_rows = demo(cell, name)
+        for tau in (0.05, oi.TAU_PRIMARY, 0.20):
+            sel = oi.eligible_keys(rows, keys, tau)
+            base = oi.score_cell(rows, sel)
+            arm = oi.score_cell(arm_rows, sel)
+            for k, b, a in zip(sel, base, arm):
+                is_new_tie = (float(arm_rows[k]["head_gap"]) == 0.0
+                              and float(rows[k]["head_gap"]) != 0.0)
+                if not is_new_tie:
+                    continue
+                seen_ties += 1
+                assert b in (0.0, 1.0), (name, tau, b)
+                contribution = (0.0 if b == 0.0 else a) - b
+                assert contribution <= 0.0, (name, tau, k, b, a, contribution)
+    assert seen_ties > 100, f"the sweep must actually contain manufactured ties, saw {seen_ties}"
 
 
 def test_a_coarse_bucketed_head_whose_gain_is_all_abstention_is_convicted_on_purpose(cell):
     """The other side of the same fixture family, and the case that decides the design question
-    on principle rather than taste. At 16 levels the arm's naive gain is +0.0426 while 23 of its
-    41 new ties sit on pairs the baseline got wrong -- worth more abstention credit than the whole
-    gain. Its REORDERING is negative, OI-1 measures ordering, so the gate reads negative. That is
-    the instrument working, not collateral damage."""
+    on principle rather than taste. At 16 levels the arm's naive gain is +0.0579 while 26 of its
+    51 new ties sit on pairs the baseline got wrong -- worth +0.0793 of abstention credit, more
+    than the whole gain. Its REORDERING is -0.0213, OI-1 measures ordering, so the gate reads
+    negative. That is the instrument working, not collateral damage: the narrowed guard is not the
+    soft option, it is the one that charges the right amount."""
     r = cmp_at(cell, demo(cell, "bucketed_head_16_gain_is_all_abstention"))
     assert r["delta_c"] > 0
     abstention_credit = 0.5 * r["head_ties_created_on_pairs_baseline_got_wrong"] / r["n_eligible"]
     assert abstention_credit > r["delta_c"], "its whole naive gain is abstention"
     assert r["delta_c_gate"] < 0
     assert not r["verdict"].startswith("PASS")
+    assert r["delta_c"] == pytest.approx(0.0579, abs=5e-5)
+    assert abstention_credit == pytest.approx(0.0793, abs=5e-5)
+    assert r["delta_c_gate"] == pytest.approx(-0.0213, abs=5e-5)
+    assert r["delta_c_all_new_ties_scored_wrong"] == pytest.approx(-0.0976, abs=5e-5)
+    assert (r["head_ties_created_by_arm"],
+            r["head_ties_created_on_pairs_baseline_got_wrong"]) == (51, 26)
 
 
 def test_new_tie_selectivity_separates_an_aimed_attack_from_an_innocent_grid(cell):
@@ -593,15 +654,47 @@ def test_the_signflip_null_distribution_is_exact_for_half_swings():
     assert oi.exact_signflip_p([0.5, 0.5, 0.5]) == pytest.approx(0.25)
 
 
+def _signflip_bruteforce(diffs):
+    """Ground truth by DEFINITION: walk all 2^m sign assignments and count the tail.
+
+    Deliberately a different algorithm from anything in the module -- no lattice, no unit, no
+    convolution, no integer weights. Only usable at tiny m, which is exactly why the two
+    references below exist as well, and why this one pins them.
+    """
+    d = [x for x in diffs if x != 0]
+    if not d:
+        return 1.0
+    s_obs = abs(sum(d))
+    hits = 0
+    for signs in itertools.product((1, -1), repeat=len(d)):
+        if abs(sum(g * x for g, x in zip(signs, d))) >= s_obs - 1e-9:
+            hits += 1
+    return hits / (1 << len(d))
+
+
+def _signflip_binomial_closed_form(m, s_obs):
+    """Ground truth in CLOSED FORM for the all-full-swing case, straight from the binomial.
+
+    With m differences of magnitude 1 the signed sum is 2j - m for j positives, so the exact
+    two-sided p is a sum of binomial coefficients and needs no enumeration at all. Independent of
+    both the module and the DP below, and usable at any m -- which is what lets the fallback
+    branch above the cutoff be checked against something that is not itself.
+    """
+    return sum(math.comb(m, j) for j in range(m + 1)
+               if abs(2 * j - m) >= s_obs - 1e-9) / (1 << m)
+
+
 def _signflip_exact_reference(diffs):
-    """An INDEPENDENT exact enumeration of the sign-flip null, written in the test file.
+    """Exact enumeration by dynamic programming, for MIXED half/full swings at m too large to
+    brute-force. Pinned against `_signflip_bruteforce` and `_signflip_binomial_closed_form` by
+    `test_the_test_file_s_own_references_agree_with_brute_force` before anything relies on it.
 
     The previous version of the test below compared the approximation branch against a
     re-derivation of THE CODE'S OWN FORMULA at rel=1e-9. That is not a check: it asserted the
     code equals itself, it was named `..._tracks_the_exact_value` while being the one place the
     exact value was excluded, and it FAILED on both correct fixes for the branch -- a review had
-    to break it to fix the anti-conservative p underneath. A reference implementation belongs in
-    the test, so the assertion has something to disagree with.
+    to break it to fix the anti-conservative p underneath. So the references live here, and the
+    chain that makes them trustworthy is brute force, not the shipped code.
     """
     d = [x for x in diffs if x != 0]
     if not d:
@@ -623,14 +716,39 @@ def _signflip_exact_reference(diffs):
     return hits / (1 << len(w))
 
 
-def test_the_exact_signflip_branch_matches_an_independent_enumeration():
+def test_the_test_file_s_own_references_agree_with_brute_force():
+    """The references are only worth as much as their own validation, so validate them first: the
+    DP and the closed form must both reproduce the all-sign-assignments count at m small enough to
+    enumerate. Without this the DP is just a transcription of the algorithm it is checking."""
     for diffs in ([1.0] * 7 + [-1.0] * 3,
                   [0.5] * 9 + [-1.0] * 4,
                   [1.0, 0.5, -0.5, -1.0, 0.5, 0.5, -1.0],
-                  [1.0] * 220 + [-1.0] * 180,
-                  [0.5] * 205 + [1.0] * 205):
-        assert oi.exact_signflip_p(diffs) == pytest.approx(_signflip_exact_reference(diffs),
-                                                          rel=1e-12)
+                  [0.5, 0.5, 0.5],
+                  [1.0] * 6 + [-1.0] * 6,
+                  [2.0, 1.0, 1.0, -1.0, -0.5]):
+        brute = _signflip_bruteforce(diffs)
+        assert _signflip_exact_reference(diffs) == pytest.approx(brute, rel=1e-12), diffs
+        if all(abs(x) == 1.0 for x in diffs):
+            assert _signflip_binomial_closed_form(
+                len(diffs), abs(sum(diffs))) == pytest.approx(brute, rel=1e-12), diffs
+    # and the closed form agrees with the DP well past brute-force range
+    for m, s in ((410, 40), (1200, 40), (3000, 90)):
+        diffs = [1.0] * ((m + s) // 2) + [-1.0] * ((m - s) // 2)
+        assert _signflip_binomial_closed_form(m, s) == pytest.approx(
+            _signflip_exact_reference(diffs), rel=1e-12), (m, s)
+
+
+def test_the_exact_signflip_branch_matches_an_independent_enumeration():
+    """The exact branch against brute force where brute force reaches, and against the two
+    validated references beyond it."""
+    for diffs in ([1.0] * 7 + [-1.0] * 3,
+                  [0.5] * 9 + [-1.0] * 4,
+                  [1.0, 0.5, -0.5, -1.0, 0.5, 0.5, -1.0]):
+        assert oi.exact_signflip_p(diffs) == pytest.approx(_signflip_bruteforce(diffs), rel=1e-12)
+    assert oi.exact_signflip_p([1.0] * 220 + [-1.0] * 180) == pytest.approx(
+        _signflip_binomial_closed_form(400, 40), rel=1e-12)
+    assert oi.exact_signflip_p([0.5] * 205 + [1.0] * 205) == pytest.approx(
+        _signflip_exact_reference([0.5] * 205 + [1.0] * 205), rel=1e-12)
 
 
 def test_the_signflip_p_is_never_anti_conservative_near_alpha():
@@ -649,23 +767,59 @@ def test_the_signflip_p_is_never_anti_conservative_near_alpha():
         got = oi.exact_signflip_p(diffs)
         assert got == pytest.approx(exact, rel=1e-9), (m, n_half)
         assert not (exact >= oi.ALPHA > got), (m, n_half, exact, got)
-    # the specific case the review constructed
+    # The specific case the review constructed, against the CLOSED FORM rather than a literal:
+    # m=410 all-full swings with |S| = 40. The uncorrected fallback returned 0.048216 here and
+    # so rejected; the exact value does not reject, and neither does the corrected fallback
+    # (0.054095, checked below on the same data).
     diffs = [1.0] * 225 + [-1.0] * 185
-    assert oi.exact_signflip_p(diffs) == pytest.approx(0.053963, abs=1e-5)
+    truth = _signflip_binomial_closed_form(410, 40)
+    assert truth == pytest.approx(0.053963, abs=1e-6), "the review's stated exact value"
+    assert oi.exact_signflip_p(diffs) == pytest.approx(truth, rel=1e-12)
     assert oi.exact_signflip_p(diffs) > oi.ALPHA, "must NOT reject where the exact test does not"
+    # and the uncorrected formula, spelled out, is on the wrong side of alpha -- so this test
+    # cannot pass against the implementation it replaced
+    sd = math.sqrt(410.0)
+    assert math.erfc(40 / sd / math.sqrt(2)) == pytest.approx(0.048216, abs=1e-6)
+    assert math.erfc(40 / sd / math.sqrt(2)) < oi.ALPHA < truth
+    assert math.erfc((40 - 1) / sd / math.sqrt(2)) == pytest.approx(0.054095, abs=1e-6)
+    # And the exact case the DELETED test pinned, kept because it is the clearest statement of why
+    # that test was the defect rather than the detector: m=1200 with |S| = 40. It asserted the
+    # code's own erfc expression (0.248213) at rel=1e-9, where the exact value is 0.260227 -- so
+    # it agreed with the implementation by construction and could not fail on a wrong one.
+    big = [1.0] * 620 + [-1.0] * 580
+    truth_1200 = _signflip_binomial_closed_form(1200, 40)
+    assert truth_1200 == pytest.approx(0.260227, abs=1e-6)
+    assert math.erfc(40 / math.sqrt(1200) / math.sqrt(2)) == pytest.approx(0.248213, abs=1e-6)
+    assert oi.exact_signflip_p(big) == pytest.approx(truth_1200, rel=1e-12)
 
 
 def test_the_corrected_fallback_beyond_the_cutoff_is_conservative_and_close():
     """The approximation is still reachable above SIGNFLIP_EXACT_MAX_M, so it gets its own check
-    against the independent enumeration -- conservative (p not below exact by more than rounding)
-    and within 1e-3."""
+    against the CLOSED-FORM binomial tail -- conservative (never materially below exact) and
+    within 1e-3. Checked at two distances from the mean so that deleting the correction is caught
+    where it matters (near alpha) and not only where the tail is wide.
+    """
     m = oi.SIGNFLIP_EXACT_MAX_M + 200
-    up = m // 2 + 60
-    diffs = [1.0 if i < up else -1.0 for i in range(m)]
-    exact = _signflip_exact_reference(diffs)
-    got = oi.exact_signflip_p(diffs)                      # -> corrected normal branch
-    assert got == pytest.approx(exact, abs=1e-3)
-    assert got >= exact - 1e-6, (got, exact)
+    assert m > oi.SIGNFLIP_EXACT_MAX_M, "this test must reach the approximation branch"
+    sd = math.sqrt(float(m))
+    for s in (110, 140):
+        diffs = [1.0] * ((m + s) // 2) + [-1.0] * ((m - s) // 2)
+        exact = _signflip_binomial_closed_form(m, s)
+        got = oi.exact_signflip_p(diffs)                  # -> corrected normal branch
+        assert got == pytest.approx(exact, abs=1e-4), (s, got, exact)
+        assert got >= exact - 1e-6, (s, got, exact)
+        # The uncorrected formula falls at least 3% BELOW the exact value at both distances -- the
+        # gap the correction closes, and the reason it was anti-conservative. Asserted so this
+        # test cannot pass against the implementation it replaced.
+        uncorrected = math.erfc(s / sd / math.sqrt(2))
+        assert uncorrected < exact * 0.97, (s, uncorrected, exact)
+    # Scoped honestly: at THIS m the lattice is coarse enough (|S| even, one step = 0.004 of p
+    # near alpha) that no reachable |S| has the uncorrected p below alpha while the exact p is
+    # above it -- s=110 gives 0.05183 vs 0.05398 and s=112 gives 0.04772 vs 0.04972, and both
+    # land on the same side. The bias is the same one; it is the m=410 case above, now inside the
+    # exact branch, that turns it into a wrong REJECTION. That is the argument for the cutoff.
+    assert _signflip_binomial_closed_form(m, 110) == pytest.approx(0.053979, abs=1e-6)
+    assert math.erfc(110 / sd / math.sqrt(2)) == pytest.approx(0.051830, abs=1e-6)
     assert oi.SIGNFLIP_EXACT_MAX_M >= 3000, "the exact branch must cover any plausible bank"
 
 
@@ -857,11 +1011,11 @@ def test_the_percentile_picks_the_order_statistic_it_names():
     Python's banker's rounding takes 2.5 DOWN to 2 while 97.5 goes UP to 98 -- asymmetric, worth
     spelling out because a reader would not predict it from the code.
 
-    Scope of the bug this replaced, stated accurately after a review measured it: at 12,000 draws
+    Scope of the bug this replaced, stated only as far as it is checked here: at 12,000 draws
     `int(q * len)` and this both pick index 300 for the lower tail, so only the UPPER index moved
-    (11700 -> 11699), which is why exactly 5 of 27 clustered intervals changed. The reason it was
-    worth fixing is not the size of the shift but that inline in the resampler no test could reach
-    it at all.
+    (11700 -> 11699) -- one order statistic at one end. How many banked intervals that shifted is
+    not asserted, because it was not measured on the banked arms. The reason it was worth fixing
+    is not the size of the shift but that inline in the resampler no test could reach it at all.
     """
     draws = [float(i) for i in range(101)]
     assert oi.percentile(draws, 0.025) == 2.0
@@ -869,6 +1023,11 @@ def test_the_percentile_picks_the_order_statistic_it_names():
     assert oi.percentile(draws, 0.0) == 0.0 and oi.percentile(draws, 1.0) == 100.0
     assert oi.percentile([7.0], 0.5) == 7.0
     assert math.isnan(oi.percentile([], 0.5))
+    # the 12,000-draw statement in the docstring, pinned instead of only asserted in prose
+    big = [float(i) for i in range(12000)]
+    assert oi.percentile(big, 0.025) == 300.0 == float(int(0.025 * len(big)))   # lower: no change
+    assert oi.percentile(big, 0.975) == 11699.0                                # upper: moved by 1
+    assert int(0.975 * len(big)) == 11700
 
 
 def test_the_bootstrap_resamples_whole_clusters_and_not_single_pairs():

@@ -41,11 +41,15 @@ over pairs eligible at tau. This is the tie-aware AUC of head-gap against the si
     WRONG (`delta_c_abstention_gain_withdrawn`), and the PASS branch reads the worse of the two.
     That withdraws the abstention gain and nothing else: the attack is paid exactly 0.0000, while
     a tie on a pair the baseline got RIGHT keeps its honest half-loss instead of being charged a
-    full wrong. The first version charged every new tie, and a review measured the collateral: a
-    bucketed value head with a REAL +0.0698 ordering gain read as a regression (-0.0620) at 16
-    buckets. The harsher number is still reported as `delta_c_all_new_ties_scored_wrong`.
-    Aiming the attack needs the labels, but "the attacker would need the labels" is not a
-    property of the statistic.
+    full wrong. What makes that safe is an invariant rather than a tolerance: a manufactured tie
+    contributes 0 where the baseline was wrong and -0.5 where it was right, so no set of new ties
+    can ever RAISE the gated statistic. The first version charged every new tie, and a review
+    measured the collateral; reproduced here with the shipped `*bucketed_head_*` fixtures, a
+    32-bucket arm whose reordering is real is CONVICTED by the blunt rule at tau=0.05 (+0.0164,
+    below the 0.02 threshold) and passes under this one (+0.0382). The harsher number is still
+    reported as `delta_c_all_new_ties_scored_wrong`, so the judgement stays visible with its
+    numbers. Aiming the attack needs the labels, but "the attacker would need the labels" is not
+    a property of the statistic.
 
     PAIRS WITH true_gap == 0 ARE EXCLUDED, NEVER SCORED (95 of the banked 465). There is no
     ordering to be right about, so counting them as failures would penalise a perfect head
@@ -143,10 +147,13 @@ POWER = 0.80
 ASSUMED_DISCORDANCE_RATE = 0.20    # only for the "required n" projection when none observed
 GAP_SCALE = 2.0                    # head_gap == (head_a - head_b) / GAP_SCALE (win-prob units)
 MUCH_LESS_THAN_RATIO = 0.2         # the reading of "label SE << tau" this instrument commits to
-# Discordance count up to which the sign-flip null is enumerated EXACTLY. Measured cost of the
-# enumeration: m=800 0.03s, m=1600 0.13s, m=3200 0.74s. Set high on purpose -- the approximation
-# beyond it is corrected but still an approximation, and this gate has been bitten twice by
-# anti-conservative p-values.
+# Discordance count up to which the sign-flip null is enumerated EXACTLY. Set high on purpose:
+# the approximation beyond it is corrected but still an approximation, and this gate has been
+# bitten twice by anti-conservative p-values, so the cutoff buys exactness with time we have.
+# Measured cost of `exact_signflip_p` itself (best of 3, this machine), all-full swings:
+# m=800 0.024s, m=1600 0.116s, m=3000 0.544s; on the mixed 0.5/1.0 lattice that makes the
+# weight sum ~1.5m -- the real worst case -- m=3000 costs 0.719s. `compare` calls it twice, and
+# never inside the bootstrap, so the cutoff costs at most ~1.5s per comparison at the limit.
 SIGNFLIP_EXACT_MAX_M = 3000
 
 # 0.5 * sqrt(2/R): the gap SE of the R-rollout label near p=0.5, i.e. the worst case. The
@@ -245,14 +252,22 @@ def exact_signflip_p(diffs: Sequence[float]) -> float:
         thresh = s_obs / unit - 1e-9
         hits = sum(c for j, c in enumerate(counts) if abs(2 * j - total) >= thresh)
         return min(1.0, hits / (1 << len(wi)))
-    # Beyond the exact cutoff: normal approximation WITH A CONTINUITY CORRECTION of one lattice
-    # step. The correction is not decoration -- an independent review found the uncorrected
-    # version anti-conservative in exactly the direction that manufactures significance: at
-    # m=410 all-full-swings the exact p is 0.053963 and the uncorrected approximation returned
-    # 0.048216, i.e. a real alpha of about 0.054 while claiming 0.05. Same failure direction as
-    # the count-test defect above, which is why the cutoff was also raised until the branch is
-    # nearly unreachable (exact enumeration measured: m=800 0.03s, m=1600 0.13s, m=3200 0.74s --
-    # the old cutoff of 400 was two orders of magnitude more cautious than it needed to be).
+    # Beyond the exact cutoff: normal approximation WITH A CONTINUITY CORRECTION of half a
+    # lattice step. Sign-flipping one difference moves S by 2*d_i, so the reachable values of S
+    # are spaced 2*unit apart and half a step is `unit`. On all-full swings this reduces to
+    # EXACTLY the (|S| - 1) / sqrt(m) that `exact_mcnemar_p`'s own normal branch already used --
+    # the two branches were inconsistent, and this one was the wrong one.
+    #
+    # The correction is not decoration. An independent review found the uncorrected version
+    # anti-conservative in precisely the direction that manufactures significance: at m=410
+    # all-full swings the exact p is 0.053963 and the uncorrected approximation returned
+    # 0.048216, so it REJECTED where the exact test does not -- a real alpha of about 0.054
+    # while claiming 0.05. Same failure direction as the count-test defect above. Correcting it
+    # brings that case to 0.054095, an error of +1.3e-4 instead of -5.7e-3.
+    #
+    # The cutoff above was raised at the same time, because the cheaper fix was to stop
+    # approximating: the old cutoff of 400 cost 0.005s and was two orders of magnitude more
+    # cautious than it needed to be. The branch is kept, corrected, for banks past the cutoff.
     # Var(S) = sum(d_i^2) for independent +-d_i.
     sd = math.sqrt(sum(x * x for x in d))
     if sd == 0:
@@ -505,10 +520,12 @@ def percentile(sorted_draws: Sequence[float], q: float) -> float:
     """The q-th order statistic, indexed on len-1.
 
     Extracted from the bootstrap so it can be fed a known answer. `int(q * len)` picks the
-    (q*len + 1)-th order statistic; at 12,000 draws that moves only the UPPER tail (11700 vs
-    11699) and leaves the lower one alone, so the shift is small -- 5 of 27 clustered intervals
-    changed. The reason it is a function now is not the size of the error but that inline in a
-    resampler no test could reach it, which is how a mutation of it survived a sweep.
+    (q*len + 1)-th order statistic. Scope of that error, stated only as far as it was checked:
+    at 12,000 draws it and this agree on the LOWER index (both 300) and differ by one on the
+    upper (11700 vs 11699), so the interval moves by one order statistic at one end. How many
+    banked intervals that actually shifts is not recorded here, because it was not measured on
+    the banked arms. The reason this is a function is not the size of the error but that inline
+    in a resampler no test could reach it, which is how a mutation of it survived a sweep.
     """
     if not sorted_draws:
         return float("nan")
@@ -572,19 +589,32 @@ def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
     # The first version of this guard scored EVERY new tie as wrong, and a review measured what
     # that costs a plausible arm rather than an attacker: a bucketed / distributional value head
     # (an HL-Gauss-style readout, the realistic way exact ties arise, and a plausible V3 shape)
-    # carrying a real gain. Measured here, on the banked pairs at tau=0.10, with the fixtures
-    # shipped as `*bucketed_head_*`:
+    # carrying a real gain. Measured on the synthetic bank of `make_pairs`, with the fixtures
+    # shipped as `*bucketed_head_*` and pinned by name in the suite:
     #
-    #     32 buckets: dC +0.1124, 9 new ties (9 on wrong pairs) -> gate +0.0775, still a gain
-    #     16 buckets: dC +0.0426, 41 new ties (23 on wrong pairs) -> gate -0.0465
+    #     32 buckets, tau=0.10: dC +0.1402, 19 new ties (16 on wrong pairs)
+    #                           blunt -> +0.0823 | this guard -> +0.0915   (both pass)
+    #     32 buckets, tau=0.05: dC +0.1218
+    #                           blunt -> +0.0164 | this guard -> +0.0382
+    #                           and 0.0164 is BELOW the 0.02 threshold, so the blunt guard
+    #                           CONVICTS an arm whose reordering is real. That verdict flip is
+    #                           the collateral damage, measured, not argued.
+    #     16 buckets, tau=0.10: dC +0.0579, 51 new ties (26 on wrong pairs)
+    #                           blunt -> -0.0976 | this guard -> -0.0213   (both convict)
     #
     # Charging a full wrong where the baseline was RIGHT asserts a tie is worse than a coin flip,
-    # which contradicts the 0.5 credit the statistic is built on -- hence the narrower rule. But
-    # note what the 16-bucket row shows, because it decides the remaining case on principle rather
-    # than on taste: 23 wrong-pair ties are worth +0.0891 of abstention credit, so that arm's
-    # entire +0.0426 naive "gain" is abstention and its REORDERING is negative. OI-1 measures
-    # ordering. Withdrawing that credit is the instrument doing its job, not collateral damage,
-    # and a coarse-grid arm being convicted here is a true statement about what it improved.
+    # which contradicts the 0.5 credit the statistic is built on -- hence the narrower rule. The
+    # 16-bucket row shows the narrower rule is still not soft: 26 wrong-pair ties are worth
+    # +0.0793 of abstention credit against a naive gain of +0.0579, so that arm's whole gain is
+    # abstention and its REORDERING is -0.0213. OI-1 measures ordering, so it reads negative.
+    # That is the instrument working, not collateral damage.
+    #
+    # What makes the narrowing safe is not the size of any of those numbers but an invariant:
+    # under this rule a manufactured tie can never RAISE the gated statistic. On a pair the
+    # baseline got wrong it is neutralised to the baseline's own 0.0 (contributing 0), and on a
+    # pair the baseline got right it keeps its honest -0.5. So no set of new ties buys
+    # advancement, which is the whole job -- pinned by
+    # `test_no_manufactured_tie_can_ever_raise_the_gated_statistic`.
     #
     # The honest caveat on the other side: IF the crate's sibling tie-break is uniformly random
     # (an OPEN ITEM in the caveats block), then knowing-when-you-do-not-know has real DECISION
@@ -707,16 +737,22 @@ def _pointwise(g: Callable[[float], float]) -> Callable[[Mapping[str, Any], rand
     return lambda p, _rng: (g(float(p["head_a"])), g(float(p["head_b"])))
 
 
-def _bucketed_blend(rho: float, buckets: int) -> Callable[[Mapping[str, Any], random.Random], tuple]:
+def _bucketed_blend(rho: float,
+                    buckets: int) -> Callable[[Mapping[str, Any], random.Random], tuple]:
     """A REAL ordering improvement carried by a BUCKETED head -- the legitimate arm that the
     abstention guard must not convict.
 
     A distributional / HL-Gauss-style readout (a plausible V3 shape) emits a value on a finite
     grid, so it produces exact head-side ties as a matter of course rather than as an attack, and
     at a rate set by the grid. This fixture is the positive control put through that grid: a real
-    gain plus unavoidable ties. It exists because a review measured the first guard convicting it
-    -- a real +0.0698 gain read as -0.0620 at 16 buckets -- and a guard's collateral damage
-    belongs in the demo table next to the attacks it stops, not in a review comment.
+    gain plus unavoidable ties. It exists because a review measured the first, blunter guard
+    convicting such an arm, and a guard's collateral damage belongs in the demo table next to the
+    attacks it stops, not in a review comment. Reproduced here: at 32 buckets and tau=0.05 the
+    blunt rule reads +0.0164 -- below the 0.02 threshold -- against +0.0382 under the shipped one.
+
+    Coarseness is a dial, and the two shipped counts sit deliberately on either side of the line:
+    32 levels keeps a real reordering gain, 16 levels does not (its whole naive gain is abstention
+    credit), so the demo table carries both a case the guard must spare and a case it must convict.
     """
     blend = _blend_toward_truth(rho)
 
@@ -795,14 +831,17 @@ DEMOS: dict[str, tuple[Callable, str, str]] = {
         "POSITIVE CONTROL, BUCKETED: the same real gain emitted on a 32-level grid, so it "
         "manufactures head-side ties without abstaining -- the legitimate arm the abstention "
         "guard must not convict",
-        "dC positive AND delta_c_gate still positive (+0.1124 -> +0.0775): its reordering is "
-        "real, so withdrawing the abstention credit leaves a gain"),
+        "dC positive AND delta_c_gate still clearly positive (+0.1402 -> +0.0915 at tau=0.10): "
+        "its reordering is real, so withdrawing the abstention credit leaves a gain. The blunt "
+        "rule reads +0.0823 here and +0.0164 at tau=0.05, i.e. it convicts this arm"),
     "bucketed_head_16_gain_is_all_abstention": (
         _bucketed_blend(0.15, 16),
-        "BUCKETED at 16 levels, and NOT a positive control at the gate: coarse enough that its whole naive gain is abstention credit rather than reordering",
-        "dC positive (+0.0426) but delta_c_gate NEGATIVE (-0.0465), and that is correct: 23 of "
-        "its 41 new ties sit on pairs the baseline got wrong, worth +0.0891 of abstention credit, "
-        "so its whole naive gain is abstention and its reordering is negative"),
+        "BUCKETED at 16 levels, and NOT a positive control at the gate: coarse enough that its "
+        "whole naive gain is abstention credit rather than reordering",
+        "dC positive (+0.0579) but delta_c_gate NEGATIVE (-0.0213) at tau=0.10, and that is "
+        "correct: 26 of its 51 new ties sit on pairs the baseline got wrong, worth +0.0793 of "
+        "abstention credit against a +0.0579 naive gain, so its whole gain is abstention and its "
+        "reordering is negative. The blunt rule reads -0.0976, over four times the true shortfall"),
 }
 
 
@@ -913,7 +952,9 @@ def _fmt(row: dict) -> str:
     mde = row["mde_delta_c_at_80pct_power"]
     half = row["discordant_half_swings_tie_transitions"]
     adv = ("" if row["delta_c_gate"] == row["delta_c"]
-           else f" (gate reads {row['delta_c_gate']:+.4f} with new ties scored wrong)")
+           else f" (gate reads {row['delta_c_gate']:+.4f} with the abstention credit withdrawn "
+                f"from {row['head_ties_created_on_pairs_baseline_got_wrong']} tie(s) the arm "
+                f"made on pairs the baseline got wrong)")
     return (f"  tau={row['tau']:<5.2f} n={row['n_eligible']:<4d} C {row['c_baseline']:.4f} -> "
             f"{row['c_arm']:.4f}  dC {row['delta_c']:+.4f}{adv}  "
             f"disc {row['discordant_total']:<3d} (arm+{row['discordant_arm_better']}/"
