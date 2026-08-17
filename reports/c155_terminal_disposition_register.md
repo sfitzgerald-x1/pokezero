@@ -165,8 +165,8 @@ mutation in this battery to survive: blocks A and B target the DOCUMENT and the 
 targets the DERIVATION. `TheFingerprintDerivationReadsTheTreeTests` closes it.
 
 ⚠ **AND IT TOOK THREE ROUNDS, because the first two fixes were the same mistake.** Two independent
-review rounds returned **eighteen** further surviving mutants (`B55`–`B67`, `B70`–`B74`) and I found **two** more
-myself by testing my own fixes (`B68`, `B69`) — **twenty** in all, over four rounds. ⚠ A first
+review rounds returned **twenty** further surviving mutants (`B55`–`B67`, `B70`–`B76`) and I found **two** more
+myself by testing my own fixes (`B68`, `B69`) — **twenty-two** in all, over five rounds. ⚠ A first
 revision of this sentence said "thirteen … a fourteenth", which does not add up to the range beside
 it; the arithmetic is stated because getting it wrong here is the same defect as everywhere else in
 this document. The
@@ -245,15 +245,33 @@ finding of this whole row, and it is worth more than any individual mutant: **wh
 list, derive the list, because a hand-written one is a floor and every floor in this battery has been
 walked through.**
 
-**Four rounds, twenty surviving mutants, and four times the fix was to move the termination further
-out of code:** to primary bytes (`B64`), to the document (`B68`), to the tree's own index (`B69`), to
-the path's external anchors (`B70`). Every round I believed the previous one had closed it and said
-so; every round was wrong. The claim made here is therefore deliberately weak: there are now four
-mutually independent anchors, the failure messages name which one fired, and **an eighth frame should
-be assumed to exist rather than argued away.** What this row records is not a closed hole — it is a
-defect whose shape is "the guard's own reader can be re-pointed, and its own lists can be short", and
-the only durable answers found are to terminate outside the artefact being checked and to derive
-rather than enumerate.
+⚠ **AND ROUND 5 FOUND AN EIGHTH FRAME, ALSO TWICE, AND ONE OF THEM IS THE WORST ERROR IN THIS ROW.**
+`B75`: the `FILTERS` parser **normalised where the shell does not** — it stripped `#` comments and
+whitespace; the workflow skips a pattern only when its *first* character is `#` and otherwise passes
+the line verbatim to `case`. So a trailing comment on the register's entry, or two extra spaces of
+indentation, leave this module green while `mass-gate` **never runs on a register-only PR** — verbatim
+the outcome the assertion's own error message names. Round 4 asked for the trailing-comment case to
+stay *green* and I implemented that and recorded it as a verified property: **the previous round
+requested the wrong behaviour and the fix advertised the hole.** `B76`: every content probe in the
+class perturbed a file's **head or its tail**, never its middle, so `sha256(blob[:512] + st_size)`
+survived all eleven tests reseated and hid an `f32`→`f64` at byte 3010 of `tree.rs` — `B73`'s own
+sentence one frame out, with "region" substituted for "length".
+
+**Five rounds, twenty-two surviving mutants, and the two lessons that generalise past this row:**
+
+1. **Terminate outside the artefact being checked.** Four times the fix was to move the termination
+   further out of code — primary bytes (`B64`), the document (`B68`), the tree's own index (`B69`),
+   the path's external anchors (`B70`).
+2. **Derive the list; never write it.** A hand-written list is a floor, and every floor in this
+   battery has been walked through — six names of eleven (`B72`), one perturbation shape (`B73`,
+   `B76`), one text grep (`B74`, `B75`). Each fix **removed** a literal.
+
+Every round I believed the previous one had closed it and said so; every round was wrong. The claim
+made here is therefore deliberately weak: there are four mutually independent anchors, the failure
+messages name which one fired, and **a ninth frame should be assumed to exist rather than argued
+away.** What this row records is not a closed hole — it is a defect whose shape is *"the guard's own
+reader can be re-pointed, its own lists can be short, and its own probes can all be blind in the same
+place"*.
 
 What the class asserts now: the helper-free comparison above; a second comparison routing through
 neither `derive()` nor the loop; `derive()` required to part company with the document on an edited
@@ -789,12 +807,12 @@ does not exist on either tree. Resolved by merging `origin/main` into the branch
 rebase) and re-deriving all four trees; the assertion now carries that diagnosis in its own failure
 message.
 
-**Mutation evidence.** **74 mutations applied, 74 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
-partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B74** edit **only the tree
+**Mutation evidence.** **76 mutations applied, 76 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
+partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B76** edit **only the tree
 and never this document**. That second number is the one that matters, because a pin reading a
 document against a hard-coded copy of itself passes every document-side mutation — and ⚠ **a first
 revision put it at ten and two of those ten edited the register**, which is the property being
-claimed, mis-stated. Thirty-seven is the measured figure: a patch line shift, the tie-refusal arm deleted,
+claimed, mis-stated. Thirty-nine is the measured figure: a patch line shift, the tie-refusal arm deleted,
 a damage push made to consult the truncation flag (G33c *fixed*), a sub-keyed single-seat counter
 added to a committed sweep, a freeze constant added to the differential, a real Showdown checkout
 added to the workflow, the head fingerprint written into an artifact, an `hp`-ceiling context line
@@ -834,9 +852,8 @@ sentence now sources all six would overstate what was done. Pinning them is the 
 `tests/test_final_holdout_guard.py` and `tests/test_boundary_verdict_partition.py` cannot import
 without a built engine in this environment and are unchanged by this branch. Full suite, with the
 flag that is required rather than stylistic:
-`pytest tests/ -q -p no:randomly --continue-on-collection-errors` — **165 failed at base, 165 failed
-at head**, and the `FAILED` id lists are **identical in both directions**. That is the whole claim:
-this branch adds no failures.
+`pytest tests/ -q -p no:randomly --continue-on-collection-errors` — the `FAILED` id lists are
+**identical in both directions**, and that is the whole claim: this branch adds no failures.
 
 ⚠ **THE ABSOLUTE PASS/ERROR FIGURES ARE DE-NUMBERED HERE, not re-pointed, and the first attempt at
 this repair was half done.** They read "4,420 → 4,462 passed (**+42**, exactly this module), 33
@@ -844,13 +861,17 @@ errors both sides". The parenthetical was a SEVENTH copy of this module's test c
 no pin polices, so it went stale green while the other six were updated — and removing it left the
 PAIR, which is equally stale: the head figure is by construction base plus this module's method
 count, and the module has grown since. Review round 3 caught the half-repair. **The pair has NOT
-been re-measured** (the suite needs a built engine, and 165 of its failures are pre-existing), so it
-is removed rather than replaced by a figure nobody ran. What survives is the invariant that does not
-churn — identical `FAILED` sets at base and at head — and the rule: do not write an absolute suite
-figure here without re-running the suite and naming the commit and machine that produced it. Re-measured against the merge-base after
-each of the two `origin/main` merges rather than carried: at `6ef682bf` the pair read 164 / 4,416,
-and #1203 brought one more engine-dependent module. The absolute figure is a property of the machine; the
-delta is that this branch adds zero failures.
+been re-measured** (the suite needs a built engine, and most of its failures are pre-existing), so it
+is removed rather than replaced by a figure nobody ran.
+
+⚠ **AND THAT REPAIR WAS ITSELF HALF DONE — TWICE, which is why the rule below is now absolute.**
+Round 3 removed the parenthetical and left the pass pair. Round 5 then found the FAILURE pair
+(`165 failed at base, 165 failed at head`) and a historical `164 / 4,416` still standing **three
+lines above the new rule forbidding exactly that**. All of them are gone now. THE RULE: do not write
+an absolute suite figure in this document without re-running the suite and naming the commit and the
+machine that produced it. What survives is the only claim that does not churn — the `FAILED` id lists
+are identical at base and at head, so this branch adds zero failures — and that claim is a SET
+comparison, not a count, which is why it is the one worth keeping.
 
 ---
 

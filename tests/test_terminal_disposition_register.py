@@ -66,7 +66,7 @@ are pinned against the two census modules' own constants, read by AST rather tha
 update the register in the same change. That is deliberate: the document that goes stale is
 the one nothing forces an author through.
 
-MUTATION BATTERY: 74 applied, 74 caught, plus 1 NEGATIVE CONTROL verified green.
+MUTATION BATTERY: 76 applied, 76 caught, plus 1 NEGATIVE CONTROL verified green.
 Partitioned by WHAT IS MUTATED. Enumerated because
 an unrecorded battery is what `tests/test_wide_seed_negative_census.py` records costing it a
 surviving mutation, and because "the tests pass" is the same kind of claim this module
@@ -140,7 +140,7 @@ BLOCK A -- A1-A37, applied to the REGISTER's own bytes.
        `TheDocumentsClaimsAboutItselfAreReDerivedTests`, which exists because review blocked
        two successive revisions on claims the document made about ITSELF.
 
-BLOCK B -- B38-B74, THIRTY-SEVEN mutations applied ONLY to the tree and never to the document.
+BLOCK B -- B38-B76, THIRTY-NINE mutations applied ONLY to the tree and never to the document.
 Block A can be passed by a pin that reads the register against a hard-coded copy of itself.
 These are the ones that prove each derivation reads what it claims to: every one MAKES A REAL
 CHANGE TO THE TREE and the document, unedited, must go red. Six are the absences, and an
@@ -358,8 +358,35 @@ has recorded.
        comment on the real entry; FALSE-TRIP it with a second legitimate `reports/c155*`
        entry. Closed by extracting the `FILTERS: |` block BY INDENTATION, so only entries the
        match loop actually consumes are counted. Hand-parsed rather than via PyYAML, which is
-       not in the CI job's install list. Verified: the decoy is red, the trailing comment is
-       green.
+       not in the CI job's install list.
+  B75. ⚠ AND B74's FIX ADVERTISED THE HOLE AS THE FIX -- review round 5, and it is the worst
+       single error in this row's history because the previous round ASKED for the wrong
+       behaviour and I implemented it. The parser did `line.split("#", 1)[0].strip()`. The
+       workflow does NEITHER: it skips a pattern only when its FIRST character is `#`, and
+       otherwise passes the line VERBATIM to `case "$file" in $pattern)`. So a trailing
+       comment on the register's entry -- and, separately, two extra spaces of indentation --
+       produce a glob matching NOTHING, `fidelity=false`, and `mass-gate` never runs on a
+       register-only PR, which is verbatim the outcome the assertion's own error message
+       names. Both were green. Round 4 asked for the trailing-comment case to stay green and
+       B74's note recorded that as a verified property; the correct answer was RED. The parser
+       now replicates the shell -- YAML's block dedent, then the shell's own first-character
+       rule, then exact membership -- because the shell is the only authority for what the
+       gate actually consumes. Verified: trailing comment RED, extra indentation RED, decoy in
+       a `run:` body RED.
+  B76. ⚠ EVERY CONTENT PROBE IN THE CLASS PERTURBED A FILE'S HEAD OR ITS TAIL, NEVER ITS
+       MIDDLE. `_perturb` appended; the length-preserving probe swapped the FIRST adjacent
+       differing pair. So `sha256(blob[:512] + str(st_size))` survived all eleven tests
+       reseated and hid an `f32` -> `f64` at byte 3010 of `tree.rs`. That is B73's own sentence
+       one frame out: B73 was "a probe family that all change LENGTH is blind to a size
+       proxy", and this is "a probe family that all perturb the same REGION is blind in that
+       region". Closed twice over: `_perturb` splices into the MIDDLE, and the
+       length-preserving probe now swaps at HEAD, MIDDLE and TAIL under separate subTests so
+       the report names which region a proxy ignores. Verified: head+size RED,
+       head+tail RED.
+       ⚠ The mid-file splice had to learn the manifest's shape: a byte spliced mid-LINE in
+       `poke-engine-gen3-patches.txt` renames a patch and `compute_fingerprint` RAISES rather
+       than moving, so the probe would error instead of measure. It inserts a whole comment
+       line at the newline nearest the middle instead. Found by running it.
 
 
 BLOCK C -- NEGATIVE CONTROLS. Mutations that must stay GREEN because they do not change the
@@ -420,6 +447,7 @@ from test_ledger_table_uniformity import (  # noqa: E402
 )
 
 REGISTER = "reports/c155_terminal_disposition_register.md"
+PATCH_MANIFEST_NAME = "poke-engine-gen3-patches.txt"
 LEDGER = "reports/c138_known_gaps_ledger.md"
 WORKFLOW = ".github/workflows/engine-fidelity-gates.yml"
 EVENTS = "rust/pokezero-search/src/events.rs"
@@ -1358,6 +1386,12 @@ class TheFingerprintGateIsOpenTests(unittest.TestCase):
         self.assertEqual(freeze_declaration_constants(), 0)
 
 
+def _strip_rust_comments(source: str) -> str:
+    """`/* */` and `//` removed, so a commented-out `mod x;` is not read as a declaration."""
+
+    return re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", source, flags=re.S))
+
+
 def _tree_side_hashed_inputs(root: Path | None = None) -> list[Path]:
     """Every file the fingerprint SHOULD read, enumerated without asking the hasher.
 
@@ -1510,7 +1544,22 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
 
         if path.suffix == ".json":
             return json.dumps(json.loads(blob.decode()), indent=4).encode()
-        return blob + b"\n"
+        # ⚠ SPLICED INTO THE MIDDLE, not appended. Review round 5: every content probe in
+        # this class perturbed a file's HEAD or its TAIL, so a one-line proxy --
+        # `sha256(blob[:512] + str(st_size))` -- survived all eleven of them reseated and hid
+        # an `f32` -> `f64` edit in the middle of `tree.rs`. That is B73's own sentence one
+        # frame out: a probe family that all perturb the same REGION is blind in the same
+        # place, exactly as a probe family that all change LENGTH was blind to a size proxy.
+        middle = len(blob) // 2
+        if path.name == PATCH_MANIFEST_NAME:
+            # The manifest is PARSED FOR FILENAMES, so a byte spliced mid-line renames a
+            # patch and `compute_fingerprint` raises instead of moving -- the probe would then
+            # error rather than measure. Insert a whole COMMENT LINE at the newline nearest
+            # the middle: middle bytes change, every filename survives intact. Found by
+            # running it; the first mid-file version raised `patch listed but missing`.
+            boundary = blob.rfind(b"\n", 0, middle) + 1
+            return blob[:boundary] + b"# sensitivity probe\n" + blob[boundary:]
+        return blob[:middle] + b"\n" + blob[middle:]
 
     def test_the_sandbox_reproduces_the_head_fingerprint_exactly(self) -> None:
         # The negative control, and it is load-bearing twice over: it proves the copy
@@ -1608,11 +1657,27 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
 
     @staticmethod
     def _workflow_filters() -> list[str]:
-        """The `FILTERS` entries the `changes` job actually feeds to its match loop.
+        """The `FILTERS` patterns the `changes` job's match loop actually receives.
 
-        Extracted by INDENTATION from the `FILTERS: |` literal block, so a line that merely
-        looks like a filter somewhere else in the file -- inside a `run:` body, say -- is not
-        counted, and a trailing comment on a real entry does not break it.
+        ⚠ REPLICATES THE SHELL'S SEMANTICS RATHER THAN A TIDIER VERSION OF THEM, and review
+        round 5 is why. A first revision did `line.split("#", 1)[0].strip()`. The workflow
+        (`engine-fidelity-gates.yml`, the `changes` job) does neither: it skips a pattern only
+        when its FIRST character is `#`, and otherwise passes the line VERBATIM to
+        `case "$file" in $pattern)`. A YAML block scalar cannot hold YAML comments, which is
+        why the provenance comments live inside the block and why that first-character rule
+        exists.
+
+        So a trailing comment on the register's entry, or two extra spaces of indentation,
+        produce a glob that matches NOTHING -- `fidelity=false`, `mass-gate` never runs on a
+        register-only PR -- while the normalising parser reported the entry present and the
+        module went green. Round 4 asked for the trailing-comment case to stay GREEN and I
+        implemented that; the correct answer is RED, and the previous docstring advertised the
+        hole as if it were the fix. Corrected in the direction of the shell, which is the only
+        authority here.
+
+        Block dedent follows YAML's literal-scalar rule -- the indentation of the block is
+        taken from its least-indented line, so EXCESS indentation survives into the value
+        exactly as the shell would see it.
         """
 
         lines = (
@@ -1622,17 +1687,28 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
         if len(starts) != 1:
             raise AssertionError(f"expected one `FILTERS: |` block, found {len(starts)}")
         head = starts[0]
-        indent = len(lines[head]) - len(lines[head].lstrip())
-        entries: list[str] = []
+        key_indent = len(lines[head]) - len(lines[head].lstrip())
+        block: list[str] = []
         for line in lines[head + 1:]:
             if not line.strip():
+                block.append("")
                 continue
-            if len(line) - len(line.lstrip()) <= indent:
+            if len(line) - len(line.lstrip()) <= key_indent:
                 break
-            body = line.split("#", 1)[0].strip()
-            if body:
-                entries.append(body)
-        return entries
+            block.append(line)
+        body = [line for line in block if line.strip()]
+        if not body:
+            raise AssertionError("the FILTERS block is empty")
+        base = min(len(line) - len(line.lstrip()) for line in body)
+        patterns: list[str] = []
+        for line in block:
+            value = line[base:]
+            if not value:                      # `[ -z "$pattern" ] && continue`
+                continue
+            if value.startswith("#"):          # `case "$pattern" in \#*) continue`
+                continue
+            patterns.append(value)
+        return patterns
 
     @staticmethod
     def _tracked(pathspec: str) -> set[Path]:
@@ -1694,23 +1770,41 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
             declared = {
                 f"{name}.rs"
                 for name in re.findall(
-                    # `pub(crate) mod priors;` is how the file review round 4 used to
-                    # defeat the literal list is actually declared, so the visibility
-                    # qualifier is part of the pattern rather than an afterthought.
+                    # Visibility qualifier included: `priors` is `pub(crate) mod`, exactly the
+                    # file round 4's literal list missed -- and a first version of this regex
+                    # missed it too, which the derivation caught immediately.
                     r"(?m)^\s*(?:pub\s*(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;",
-                    (REPO / "rust" / "pokezero-search" / "src" / "lib.rs").read_text("utf-8"),
+                    # COMMENTS STRIPPED FIRST. Review round 5: the raw regex false-trips on a
+                    # `mod x;` inside `/* */` or behind `//`, demanding a source that does not
+                    # exist. Stripping can only REMOVE candidates, so it cannot hide a real
+                    # module -- a missing one still reddens the equality below.
+                    _strip_rust_comments(
+                        (REPO / "rust" / "pokezero-search" / "src" / "lib.rs").read_text("utf-8")
+                    ),
                 )
             } | {"lib.rs"}
             self.assertGreater(len(declared), 5, "`lib.rs` declares no modules; the derivation read nothing")
+            # TOP-LEVEL sources only on the right. The nested layout (`mod tree;` served by
+            # `src/tree/mod.rs` or `src/tree/helper.rs`) is legal Rust and would make a flat
+            # name comparison spuriously red -- round 5 flagged that as future brittleness.
+            # Nested sources are covered by the loop below instead, which asserts the property
+            # that actually matters: the hasher must read them.
             self.assertEqual(
                 sorted(declared),
-                sorted(path.name for path in tracked),
-                "the crate's declared module set and the sources this anchor can see "
-                "disagree. If the anchor is short, it has been narrowed -- most likely "
+                sorted(path.name for path in tracked if path.parent == crate_src),
+                "the crate's declared module set and the top-level sources this anchor can "
+                "see disagree. If the anchor is short, it has been narrowed -- most likely "
                 "filtered through the hasher, which makes it agree with the thing it is "
                 "supposed to check. If `lib.rs` is short, a tracked source is no longer "
                 "compiled and should not be hashed.",
             )
+            for path in sorted(item for item in tracked if item.parent != crate_src):
+                self.assertIn(
+                    path,
+                    hashed,
+                    f"{path.relative_to(REPO)} is a tracked crate source in a subdirectory "
+                    "and the fingerprint does not hash it.",
+                )
             for label, produced in (("hasher", hashed), ("enumerator", enumerated)):
                 under = sorted(
                     str(path.relative_to(REPO))
@@ -1804,28 +1898,48 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
             sources = sorted((root / "rust" / "pokezero-search" / "src").rglob("*.rs"))
             self.assertTrue(sources, "no crate sources in the sandbox to perturb")
             target = max(sources, key=lambda path: path.stat().st_size)
-            blob = bytearray(target.read_bytes())
-            index = next(
-                (i for i in range(len(blob) - 1) if blob[i] != blob[i + 1]), None
-            )
-            self.assertIsNotNone(index, f"{target.name} has no two adjacent differing bytes")
-            before = len(blob)
-            blob[index], blob[index + 1] = blob[index + 1], blob[index]
-            target.write_bytes(bytes(blob))
-            self.assertEqual(
-                target.stat().st_size,
-                before,
-                "the probe changed the file's LENGTH, so it no longer isolates content from "
-                "size and a size-based digest would still pass it.",
-            )
-            self.assertNotEqual(
-                head_fingerprint(),
-                baseline,
-                f"swapping two adjacent bytes in {target.name} -- same length, different "
-                "content -- left the head fingerprint unchanged. The digest is reading a "
-                "proxy for the bytes rather than the bytes, so any edit that preserves the "
-                "proxy is invisible to this identity and to the build stamp that shares it.",
-            )
+            original = target.read_bytes()
+            self.assertGreater(len(original), 2048, "probe file too small to place offsets")
+            # THREE REGIONS, because a probe family that only ever touches one is blind in one
+            # place: round 5 defeated the single mid-free version with a
+            # `sha256(blob[:512] + st_size)` proxy. Head / middle / tail, each its own subTest
+            # so the report names WHICH region a proxy is ignoring.
+            for label, start in (
+                ("head", 0),
+                ("middle", len(original) // 2),
+                ("tail", len(original) - 512),
+            ):
+                with self.subTest(region=label):
+                    blob = bytearray(original)
+                    index = next(
+                        (
+                            i
+                            for i in range(start, len(blob) - 1)
+                            if blob[i] != blob[i + 1]
+                        ),
+                        None,
+                    )
+                    self.assertIsNotNone(
+                        index, f"{target.name} has no adjacent differing pair at/after {start}"
+                    )
+                    blob[index], blob[index + 1] = blob[index + 1], blob[index]
+                    target.write_bytes(bytes(blob))
+                    self.assertEqual(
+                        target.stat().st_size,
+                        len(original),
+                        "the probe changed the file's LENGTH, so it no longer isolates "
+                        "content from size and a size-based digest would still pass it.",
+                    )
+                    self.assertNotEqual(
+                        head_fingerprint(),
+                        baseline,
+                        f"swapping two adjacent bytes in the {label} of {target.name} -- same "
+                        "length, different content -- left the head fingerprint unchanged. "
+                        "The digest is reading a PROXY for the bytes rather than the bytes, "
+                        f"and the proxy ignores the {label} of a file. Any edit there is "
+                        "invisible to this identity and to the build stamp that shares it.",
+                    )
+            target.write_bytes(original)
 
     def test_renaming_a_hashed_file_moves_the_head_fingerprint(self) -> None:
         """The digest must bind content to a NAME, not merely to a position in a sequence.
@@ -1939,6 +2053,12 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
         # indentation, and only entries inside it count. Hand-parsed rather than via PyYAML,
         # which is not in the CI job's install list.
         filters = self._workflow_filters()
+        # NON-VACUITY on the parser itself before trusting it: the block carries the whole
+        # fidelity trigger, so a parser that returned a short list would make the two
+        # assertions below meaningless. It must also see this module's OWN path, which is a
+        # second independent entry in the same block.
+        self.assertGreater(len(filters), 20, "the FILTERS parser read almost nothing")
+        self.assertIn("tests/test_terminal_disposition_register.py", filters)
         self.assertIn(
             relative,
             filters,
@@ -2478,6 +2598,7 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
             30: "THIRTY", 31: "THIRTY-ONE", 32: "THIRTY-TWO",
             33: "THIRTY-THREE", 34: "THIRTY-FOUR", 35: "THIRTY-FIVE",
             36: "THIRTY-SIX", 37: "THIRTY-SEVEN", 38: "THIRTY-EIGHT",
+            39: "THIRTY-NINE", 40: "FORTY", 41: "FORTY-ONE",
         }
         self.assertIn(size, words, f"block B has {size} entries; extend `words`")
         word = words[size]
