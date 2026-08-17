@@ -303,9 +303,24 @@ OPPONENT_JOURNAL_MODES = ("off", "addressed", "full")
 # into a worker thread. Its clock is therefore already ticking while we think, on the
 # same host. CPU taken from it shows up as a WEAKER OPPONENT, and reads as a strength
 # gain for whichever arm spends more CPU per decision: a confound in the flattering
-# direction, on exactly the arm whose job is to arbitrate a disputed effect (the
-# oracle-leaf rollout arbiter spends 3-4 orders of magnitude more CPU per decision than
-# the raw arm it is paired against). `EngineMctsConfig.rollout_threads` FENCES that
+# direction, on exactly the arm whose job is to arbitrate a disputed effect.
+#
+# HOW MUCH MORE CPU, MEASURED -- and the retraction that makes this block MORE necessary
+# rather than less. An earlier revision of this comment said the oracle-leaf arbiter
+# spends "3-4 orders of magnitude more CPU per decision than the raw arm". Nobody had
+# measured that. Measured, at the priors-on panel's own per-world budget (d4, b64,
+# s4096) on one core, arm wall against the same search with model leaves: 1.8x at R=8
+# and 4.3x at R=32. Single digits, not thousands; the old figure is withdrawn.
+#
+# The old number let a reader dismiss the confound as self-evidently dominant -- "of
+# course the opponent is starved". At 1.8x it is PLAUSIBLE BUT NOT OBVIOUS, which is
+# precisely the regime in which a fence decides nothing and only a measurement does. The
+# ratio is also deployment-dependent: that baseline runs the model's forwards on the same
+# CPU, so where the raw arm's forwards go to a GPU the raw arm gets faster and the ratio
+# grows. It is a property of the deployment, not of the arm -- which is itself the
+# argument for measuring contention per run instead of reasoning about it once.
+#
+# `EngineMctsConfig.rollout_threads` FENCES that
 # hazard behind an explicit ack; this block MEASURES it, which is what turns "our extra
 # CPU did not weaken the opponent" from an assertion into a falsifiable reading.
 #
