@@ -366,6 +366,15 @@ def load_cell(path: Path, name: str, rollouts: int = PINNED_ROLLOUTS) -> dict[tu
         for field in ("head_a", "head_b", "head_gap", "true_gap"):
             if not math.isfinite(float(p[field])):
                 raise SystemExit(f"REFUSING: {name} ({path.name}) has a non-finite {field}.")
+        # noise_var is optional, but if present it must be usable: a NaN here propagated silently
+        # into `label_gap_se_banked_mean` and `se_over_tau_banked` in a committed artifact, which
+        # is how a caveat about label noise turns into a NaN nobody reads.
+        nv = p.get("noise_var")
+        if nv is not None and not (math.isfinite(float(nv)) and float(nv) >= 0.0):
+            raise SystemExit(
+                f"REFUSING: {name} ({path.name}) pair {pair_key(p)} has noise_var={nv!r}. The "
+                f"label-SE caveat is computed from this column; a NaN or negative there is "
+                f"reported as a NaN caveat, which is worse than no caveat.")
         # THE TRANSFORM SURFACE MUST BE THE VALUES, NOT THE GAP. Every fixture and every
         # rescore in this programme derives head_gap as (head_a - head_b)/2; if a file
         # disagrees, then head_a/head_b are not the quantities its head_gap came from and
@@ -472,9 +481,21 @@ def clustered_bootstrap_ci(base: Sequence[float], arm: Sequence[float],
     draws.sort()
     if not draws:
         return (float("nan"), float("nan"))
-    lo = draws[max(0, int(0.025 * len(draws)))]
-    hi = draws[min(len(draws) - 1, int(0.975 * len(draws)))]
-    return (lo, hi)
+    return (percentile(draws, 0.025), percentile(draws, 0.975))
+
+
+def percentile(sorted_draws: Sequence[float], q: float) -> float:
+    """The q-th order statistic, indexed on len-1.
+
+    Extracted from the bootstrap so it can be fed a known answer: `int(q * len)` picks the
+    (q*len + 1)-th order statistic -- the 2.508th percentile of 12,000 draws rather than the
+    2.5th -- and inline in a resampler that defect is unreachable by any test, which is how a
+    mutation of it survived a sweep.
+    """
+    if not sorted_draws:
+        return float("nan")
+    last = len(sorted_draws) - 1
+    return sorted_draws[min(last, max(0, int(round(q * last))))]
 
 
 def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
@@ -557,7 +578,7 @@ def compare(ref_rows: Mapping[tuple, dict], arm_rows: Mapping[tuple, dict],
         "tau": tau,
         "n_eligible": n,
         "n_excluded_true_gap_zero": sum(1 for k in keys if float(ref_rows[k]["true_gap"]) == 0.0),
-        "n_excluded_below_tau": len(keys) - n
+        "n_excluded_below_tau": len(keys) + n
         - sum(1 for k in keys if float(ref_rows[k]["true_gap"]) == 0.0),
         "c_baseline": c_base,
         "c_arm": c_arm,
@@ -914,6 +935,16 @@ def main() -> int:
                 "465 pairs from 80 games at ~6 sampled decisions each; the exact test assumes "
                 "independence, so a game-clustered bootstrap interval accompanies every dC and "
                 "is the one to read when the two disagree."),
+            "half_credit_assumes_a_random_tie_break": (
+                "The 0.5 credit for a head-side tie assumes SEARCH BREAKS AN EXACT TIE UNIFORMLY "
+                "AT RANDOM. Nothing in this instrument verifies that: if the crate's tie-break is "
+                "deterministic (by action index, say), then a tie is worth whatever that "
+                "deterministic choice is worth on the pair, and 0.5 flatters an abstaining head. "
+                "OPEN ITEM -- verify the crate's sibling tie-break. Mitigations already in place: "
+                "the abstention guard re-reads advancement with every newly manufactured tie "
+                "scored WRONG (the pessimistic end of that range), and on this bank the question "
+                "is moot because zero baseline head ties survive eligibility at tau >= 0.05 "
+                "(34 of the bank's 36 ties sit on true_gap == 0 pairs, which are never scored)."),
         },
         "provenance": prov,
     }

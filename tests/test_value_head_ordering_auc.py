@@ -539,12 +539,22 @@ def test_the_signflip_large_m_fallback_tracks_the_exact_value():
     assert oi.exact_signflip_p(big) == pytest.approx(math.erfc(z / math.sqrt(2)), rel=1e-9)
 
 
-def test_the_mcnemar_normal_branch_tracks_the_exact_value_at_the_cutoff():
-    b, c = 1100, 900
-    exact = oi.exact_mcnemar_p(b, c)                # n = 2000, exact branch
-    approx = oi.exact_mcnemar_p(b + 1, c)          # n = 2001, normal branch
-    assert exact == pytest.approx(approx, abs=2e-3)
-    assert 0.0 < approx < 1.0
+def test_the_mcnemar_normal_branch_tracks_the_exact_value_including_its_continuity_correction():
+    """The approximation branch had zero coverage, and a mutation deleting its continuity
+    correction survived a loose test. Compared here against the exact binomial tail computed in
+    this file, at a (b, c) where the correction is worth 1.6e-2 -- dropping it misses by three
+    orders of magnitude more than keeping it.
+    """
+    def exact_tail(b, c):
+        n, lo = b + c, min(b, c)
+        return min(1.0, 2 * sum(math.comb(n, k) for k in range(lo + 1)) / (1 << n))
+
+    for b, c in ((1010, 991), (1060, 941)):
+        got = oi.exact_mcnemar_p(b, c)                       # n = 2001 -> normal branch
+        assert got == pytest.approx(exact_tail(b, c), abs=1e-4)
+    # and the branch boundary itself is continuous
+    assert oi.exact_mcnemar_p(1000, 1000) == 1.0
+    assert 0.0 < oi.exact_mcnemar_p(1100, 901) < 1e-4
 
 
 def test_exact_mcnemar_matches_hand_computed_binomial_tails():
@@ -689,7 +699,12 @@ def test_fewer_discordances_make_a_given_delta_easier_not_harder_to_see():
 
 def test_the_clustered_bootstrap_widens_when_pairs_share_a_game():
     """The exact test assumes independent pairs; the bank has ~6 per game. If the clustered
-    interval were not wider under strong clustering, it would not be measuring clustering."""
+    interval were not wider under strong clustering, it would not be measuring clustering.
+
+    The comparison is against an EQUAL-COUNT i.i.d. pair resample (every pair its own cluster),
+    which is the only control that pins block resampling: a review showed that resampling one
+    random pair per draw also passes, because that shrinks the effective sample by itself.
+    """
     n = 600
     rng = random.Random(3)
     per_game = {g: (1 if rng.random() < 0.5 else 0) for g in range(n // 6 + 1)}
@@ -698,11 +713,113 @@ def test_the_clustered_bootstrap_widens_when_pairs_share_a_game():
         game = i // 6
         base.append(1.0)
         arm.append(1.0 - per_game[game])   # the effect is COMMON to a whole game
-        tight.append(i)                    # every pair its own cluster
+        tight.append(i)                    # every pair its own cluster: i.i.d. resample
         loose.append(game)
     lo_t, hi_t = oi.clustered_bootstrap_ci(base, arm, tight, reps=400)
     lo_l, hi_l = oi.clustered_bootstrap_ci(base, arm, loose, reps=400)
-    assert (hi_l - lo_l) > (hi_t - lo_t)
+    assert (hi_l - lo_l) > 1.5 * (hi_t - lo_t)
+    # and the i.i.d. arm really is an equal-count resample of the same data, not a smaller one
+    assert len(set(tight)) == n
+
+
+def test_the_percentile_picks_the_order_statistic_it_names():
+    """Known answer: on 0..100 the 2.5th percentile is 2.5 -> index 2 (rounded), and the 97.5th
+    is 97.5 -> index 98. `int(q * len)` would return 2 and 97: the off-by-one a review found,
+    which was unreachable by any test while it sat inline in the resampler."""
+    draws = [float(i) for i in range(101)]
+    assert oi.percentile(draws, 0.025) == 2.0
+    assert oi.percentile(draws, 0.975) == 98.0
+    assert oi.percentile(draws, 0.0) == 0.0 and oi.percentile(draws, 1.0) == 100.0
+    assert oi.percentile([7.0], 0.5) == 7.0
+    assert math.isnan(oi.percentile([], 0.5))
+
+
+def test_the_bootstrap_resamples_whole_clusters_and_not_single_pairs():
+    """The sharp version of the clustering test. Each game here holds five 0s and one 6, so a
+    WHOLE-BLOCK resample has mean exactly 1.0 every draw and the interval collapses; resampling
+    one pair per block instead (the mutation that survived a width-only test) draws from {0, 6}
+    and gives an interval an order of magnitude wider."""
+    base, arm, clusters = [], [], []
+    for g in range(100):
+        for j in range(6):
+            base.append(0.0)
+            arm.append(6.0 if j == 5 else 0.0)
+            clusters.append(g)
+    lo, hi = oi.clustered_bootstrap_ci(base, arm, clusters, reps=300)
+    assert lo == pytest.approx(1.0) and hi == pytest.approx(1.0)
+
+
+def test_wilson_matches_hand_computed_values():
+    """Pins the z^2/4n^2 term, which a mutation could delete unnoticed. Reference values from the
+    closed form at k=7, n=10 and the symmetric case k=n/2."""
+    # The published Wilson 95% interval for 7/10 is [0.3968, 0.8922]. (My first draft of this
+    # test asserted 0.9018 for the upper bound -- which is a different interval's number, and the
+    # implementation was the thing that turned out to be right. Hence the reference.)
+    lo, hi = oi.wilson(7, 10)
+    assert lo == pytest.approx(0.3968, abs=1e-4) and hi == pytest.approx(0.8922, abs=1e-4)
+    # deleting the z^2/(4n^2) term would give [0.4392, 0.8495]: outside that tolerance
+    lo, hi = oi.wilson(50, 100)
+    assert lo == pytest.approx(1 - hi, abs=1e-12)          # symmetric about 0.5
+    assert oi.wilson(0, 10)[0] == 0.0
+    assert oi.wilson(10, 10)[1] == pytest.approx(1.0)
+    assert all(math.isnan(x) for x in oi.wilson(3, 0))
+
+
+def test_the_worst_case_label_se_is_the_r_rollout_formula():
+    """LABEL_GAP_SE_WORST_CASE = 0.5*sqrt(2/R). Halving it survived an earlier suite."""
+    assert oi.LABEL_GAP_SE_WORST_CASE == pytest.approx(0.5 * math.sqrt(2 / oi.PINNED_ROLLOUTS))
+    assert oi.LABEL_GAP_SE_WORST_CASE == pytest.approx(0.0884, abs=5e-5)
+
+
+def test_the_eligibility_boundary_is_inclusive_and_the_exclusion_counts_add_up():
+    """Two unwitnessed cosmetics from a review: `>= tau` vs `> tau` is inert on the real bank
+    (every |true_gap| is a multiple of 1/64, so none lands exactly on 0.05/0.10/0.15), and the
+    n_excluded_* arithmetic was never checked. A fixture with a gap sitting EXACTLY on tau pins
+    the boundary; the counts are pinned as a partition."""
+    rows = {}
+    for i, tg in enumerate([0.0, 0.10, -0.10, 0.09, 0.2]):
+        rows[(i, 0, "p1")] = {"seed": i, "prefix": 0, "seat": "p1", "head_a": 0.3,
+                              "head_b": 0.1, "head_gap": 0.1, "true_gap": tg,
+                              "true_a": 0.5, "true_b": 0.5 - tg, "noise_var": 0.004,
+                              "rollouts_a": 64, "rollouts_b": 64}
+    keys = sorted(rows)
+    assert len(oi.eligible_keys(rows, keys, 0.10)) == 3       # 0.10, -0.10 and 0.2; 0.0 excluded
+    r = oi.compare(rows, rows, keys, 0.10, bootstrap_reps=10)
+    assert r["n_eligible"] == 3
+    assert r["n_excluded_true_gap_zero"] == 1
+    assert r["n_excluded_below_tau"] == 1
+    assert (r["n_eligible"] + r["n_excluded_true_gap_zero"] + r["n_excluded_below_tau"]
+            == len(keys))
+
+
+def test_it_refuses_a_non_finite_or_negative_noise_var(tmp_path):
+    """A NaN here reached a committed artifact's label-SE caveat as a NaN. A caveat that reads
+    NaN is worse than no caveat, so the loader refuses the column outright."""
+    for bad in (float("nan"), float("inf"), -1.0):
+        rows = make_pairs(n=20)
+        rows[3]["noise_var"] = bad
+        with pytest.raises(SystemExit) as e:
+            oi.load_cell(write(tmp_path, "nv", rows), "nv")
+        assert "noise_var" in str(e.value)
+    ok = make_pairs(n=20)
+    for p in ok:
+        p.pop("noise_var")            # optional column: absent is fine, unusable is not
+    assert len(oi.load_cell(write(tmp_path, "nonv", ok), "nonv")) == 20
+
+
+def test_the_tie_break_assumption_is_stated_in_the_caveats(tmp_path, monkeypatch):
+    """The 0.5 credit assumes search breaks an exact head tie uniformly at random; this
+    instrument does not verify the crate's tie-break, and a review asked for that to be said
+    out loud rather than assumed."""
+    rows = make_pairs(n=100, seed=4)
+    (tmp_path / "base.json").write_text(json.dumps({"pairs": rows}))
+    out = tmp_path / "b.json"
+    monkeypatch.setattr("sys.argv", [
+        "value_head_ordering_auc.py", "--ref", f"base={tmp_path / 'base.json'}",
+        "--bootstrap-reps", "10", "--json", str(out)])
+    oi.main()
+    text = json.loads(out.read_text())["caveats"]["half_credit_assumes_a_random_tie_break"]
+    assert "UNIFORMLY" in text and "OPEN ITEM" in text
 
 
 # ----------------------------------------------------------------------------------------
