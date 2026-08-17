@@ -171,7 +171,7 @@ pub(crate) struct RolloutStats {
 }
 
 impl RolloutStats {
-    fn merge(&mut self, other: &RolloutStats) {
+    pub(crate) fn merge(&mut self, other: &RolloutStats) {
         self.leaves_priced += other.leaves_priced;
         self.rollouts_run += other.rollouts_run;
         self.plies_stepped += other.plies_stepped;
@@ -180,11 +180,27 @@ impl RolloutStats {
         self.dead_ends += other.dead_ends;
     }
 
+    /// The sequential driver's report block: the round shape plus the rollout
+    /// ledger.
     pub(crate) fn to_json_fields(self, cfg: &RolloutConfig, batch: usize, rounds: usize) -> String {
+        format!(
+            "\"leaf_batch\":{batch},\"rounds\":{rounds},{}",
+            self.to_rollout_only_json_fields(cfg)
+        )
+    }
+
+    /// The rollout ledger ALONE, for a driver that already reports its own
+    /// round shape. The encoded (model-priors) core does: it has emitted
+    /// `batch_size` and `rounds` since before this seam existed, and appending
+    /// a second `"rounds"` key would produce a duplicate-key JSON object whose
+    /// meaning depends on which parser reads it -- `json.loads` silently keeps
+    /// the last. Splitting the block is what keeps the two callers from
+    /// disagreeing about the same field name.
+    pub(crate) fn to_rollout_only_json_fields(self, cfg: &RolloutConfig) -> String {
         let denom = self.rollouts_run.max(1) as f64;
         format!(
             "\"rollouts\":{},\"rollout_policy\":\"{}\",\"rollout_max_plies\":{},\
-             \"rollout_seed\":{},\"rollout_threads\":{},\"leaf_batch\":{},\"rounds\":{},\
+             \"rollout_seed\":{},\"rollout_threads\":{},\
              \"leaves_priced\":{},\"rollouts_run\":{},\"rollout_plies\":{},\
              \"rollout_terminal_hits\":{},\"rollout_cap_hits\":{},\"rollout_dead_ends\":{},\
              \"rollout_terminal_fraction\":{:.6},\"rollout_fallback_fraction\":{:.6},\
@@ -194,8 +210,6 @@ impl RolloutStats {
             cfg.max_plies,
             cfg.seed,
             cfg.threads,
-            batch,
-            rounds,
             self.leaves_priced,
             self.rollouts_run,
             self.plies_stepped,
@@ -379,7 +393,24 @@ fn reduce_trials(trials: &[f32], rows: usize, r: usize) -> Result<Vec<f32>, Stri
 /// Tasks are handed out by a shared atomic cursor rather than split into
 /// contiguous blocks: rollout length varies by an order of magnitude with how
 /// close the leaf is to terminal, so static splits idle.
-fn price_rows(
+///
+/// # Seat convention — read before wiring this into a driver
+///
+/// The returned values are **side-one-absolute**: `rollout_once` prices a
+/// terminal from `State::battle_is_over()` (`> 0.0` = side ONE won) and the
+/// `HpFractionEval` cap fallback is side-one-absolute too. That is the SAME
+/// frame `crate::tree::finalize` wants, and the same frame production's
+/// terminal branches are priced in.
+///
+/// It is NOT the frame the model's value head speaks. A checkpoint's value is
+/// SELF-relative (+1 iff the encoding seat won), so `model.rs` reflects it at
+/// the seat boundary when the searching seat is side two. A driver that feeds
+/// these rollout values through that same reflection would invert every leaf
+/// on p2 decisions while leaving terminal branches alone — the two conventions
+/// are complements, so the bug is silent on p1 and total on p2. Rollout rows
+/// must therefore bypass the reflection, and
+/// `model.rs::rollout_values_are_not_seat_reflected` is the gate that says so.
+pub(crate) fn price_rows(
     rows: &[State],
     ordinals: &[u64],
     cfg: &RolloutConfig,

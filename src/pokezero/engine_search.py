@@ -578,6 +578,29 @@ class EngineMctsConfig:
     #: shard concurrency of the run it is used in. Required, so the hazard
     #: above cannot be walked into by editing one number.
     rollout_threads_cpu_budget_ack: bool = False
+    #: Compose the rollout leaf with MODEL PRIORS: run `leaf_eval="model"`'s
+    #: `_search_ladder` -> `search_batched_multi_encoded` path with leaf values
+    #: replaced by R rollouts. This -- not `leaf_eval="rollout_crate"` -- is the
+    #: search-ceiling program's arbiter arm, because the campaign's surviving
+    #: config is priors ON and priors live only on the model path. The knobs
+    #: above (`rollout_count`, `rollout_max_plies`, `rollout_policy`,
+    #: `rollout_seed`, `rollout_threads` and its ack) are shared by both paths.
+    #:
+    #: The estimand warning on `leaf_eval` applies here UNCHANGED, and so does
+    #: the CPU-contention hazard: the opponent is time-budgeted and thinks
+    #: concurrently with this search, so `rollout_threads > 1` still needs the
+    #: acknowledgement.
+    #:
+    #: The fidelity claim on this path is NOT inherited from the sequential
+    #: one. `tests/test_rollout_model_priors.py` re-establishes it against the
+    #: model driver: `rollout_leaf_mode="model_value"` reproduces production
+    #: field for field, and the gate reads False on the rollout pricer and on a
+    #: changed batch.
+    rollout_leaf_eval: bool = False
+    #: Damage-roll branching INSIDE rollouts. Independent of the search's own
+    #: `branch_on_damage`: a rollout samples one outcome either way, so this only
+    #: refines the sampled damage distribution.
+    rollout_branch_on_damage: bool = False
     # Rows priced per round. On THIS (sequential) path 1 is the production
     # regime and the only value the fidelity gate certifies; >1 is a measured
     # fidelity LOSS, not an approximation.
@@ -766,6 +789,57 @@ class EngineMctsConfig:
                 raise ValueError(
                     "rollout_policy must be 'uniform' (the only in-crate policy "
                     f"implemented), got {self.rollout_policy!r}."
+                )
+        if self.rollout_leaf_eval:
+            # The seam only exists on the model path. Silently ignoring the flag
+            # on any other `leaf_eval` is how a cell gets banked as "oracle-leaf
+            # with model priors" having actually run the handcrafted leaf -- the
+            # exact class of failure this program lost two artifacts to, where an
+            # input was ABSENT rather than wrong. Refuse.
+            if self.leaf_eval != "model":
+                raise ValueError(
+                    "rollout_leaf_eval=True requires leaf_eval='model': the rollout "
+                    "seam with MODEL PRIORS lives on the encoded search path "
+                    "(_search_ladder -> search_batched_multi_encoded), and the "
+                    f"campaign's surviving config is priors ON. Got leaf_eval="
+                    f"{self.leaf_eval!r}. For the uniform-priors sequential arm use "
+                    "leaf_eval='rollout_crate' instead."
+                )
+            if self.rollout_count <= 0:
+                raise ValueError(
+                    "rollout_count must be > 0 for rollout_leaf_eval=True "
+                    f"(got {self.rollout_count})."
+                )
+            if self.rollout_max_plies <= 0:
+                raise ValueError(
+                    "rollout_max_plies must be > 0 for rollout_leaf_eval=True "
+                    f"(got {self.rollout_max_plies})."
+                )
+            if self.rollout_threads <= 0:
+                raise ValueError(
+                    "rollout_threads must be > 0 for rollout_leaf_eval=True "
+                    f"(got {self.rollout_threads})."
+                )
+            if self.rollout_policy != "uniform":
+                raise ValueError(
+                    "rollout_policy must be 'uniform' (the only in-crate policy "
+                    f"implemented), got {self.rollout_policy!r}."
+                )
+            if self.rollout_threads > 1 and not self.rollout_threads_cpu_budget_ack:
+                # Identical hazard, identical fence, and it must be repeated on
+                # THIS path rather than inherited: the paired-eval opponent is
+                # time-budgeted and thinks concurrently with this search on the
+                # same host, its realized work is recorded nowhere, and this arm
+                # spends 3-4 orders of magnitude more CPU per decision than the
+                # raw arm it is paired against. Cores taken here weaken the
+                # opponent in the direction that flatters this arm.
+                raise ValueError(
+                    f"rollout_threads={self.rollout_threads} > 1 requires "
+                    "rollout_threads_cpu_budget_ack=True. The paired-eval opponent is "
+                    "TIME-budgeted and thinks concurrently with this search on the same "
+                    "host, and its realized work is not recorded anywhere, so cores taken "
+                    "here weaken the opponent in the direction that flatters this arm. Set "
+                    "the ack only after checking cores against the run's shard concurrency."
                 )
         if self.leaf_eval == "model":
             if not self.model_path or not self.checkpoint_path or not self.tables_path:
@@ -1976,23 +2050,68 @@ def native_search_args(
     ]
     fpu_reduction = getattr(config, "fpu_reduction", None)
     override_telemetry = bool(getattr(config, "override_telemetry", False))
+    # The rollout seam is the OUTERMOST slot, so it joins every widening
+    # condition below -- not just its own. Omitting it from even one of them puts
+    # `"rollout"` into that slot instead: into `early_stop_min_sims` (truncating
+    # the search budget), into `use_opponent_priors` (a non-empty string is
+    # truthy, turning the opponent head on by accident), or into `fpu_reduction`.
+    # This is the same cascade `use_opponent_priors` and `fpu_reduction` are
+    # written as, and the reason it is a widening chain rather than four
+    # independent `if`s.
+    rollout_leaf_eval = bool(getattr(config, "rollout_leaf_eval", False))
     if (
         early_stop_min_sims
         or config.use_opponent_priors
         or fpu_reduction is not None
         or override_telemetry
+        or rollout_leaf_eval
     ):
         search_args.extend([early_stop_min_sims, record["side_key"] == "side_one"])
-    if config.use_opponent_priors or fpu_reduction is not None or override_telemetry:
+    if (
+        config.use_opponent_priors
+        or fpu_reduction is not None
+        or override_telemetry
+        or rollout_leaf_eval
+    ):
         search_args.append(bool(config.use_opponent_priors))
-    if fpu_reduction is not None or override_telemetry:
+    if fpu_reduction is not None or override_telemetry or rollout_leaf_eval:
         # `None` is the crate's own default for this slot, so materializing it to
         # reach the slot behind it changes nothing -- unlike the two booleans
         # above, whose default is False and whose materialized value is the
         # config's.
         search_args.append(None if fpu_reduction is None else float(fpu_reduction))
-    if override_telemetry:
-        search_args.append(True)
+    if override_telemetry or rollout_leaf_eval:
+        # `arm_priors` is pure telemetry, so materializing it to reach the slot
+        # behind it must pass the config's OWN value, never an unconditional
+        # True: writing True here would silently switch the arm-name column on
+        # for every rollout cell and change the report a shard is compared
+        # against.
+        search_args.append(override_telemetry)
+    # THE ROLLOUT SEAM, one slot further out again and under the same rule: it
+    # is appended LAST, so with `rollout_leaf_eval` off every earlier slot keeps
+    # the value it has without it and the pre-seam call is byte for byte what it
+    # always was. Asking for the seam must materialize all four earlier
+    # conditional slots, or `"rollout"` lands in `fpu_reduction` -- a string the
+    # crate's validator rejects, so that one fails loudly rather than silently,
+    # but the cascade is written as a widening condition anyway because the NEXT
+    # knob appended here may not be so lucky.
+    #
+    # Search-ceiling program Phase 1 instrument 2. The campaign's surviving
+    # search config is priors ON, which is this call; the sequential
+    # `leaf_eval="rollout_crate"` path is uniform-priors and cannot answer the
+    # question the arbiter is for.
+    if rollout_leaf_eval:
+        search_args.extend(
+            [
+                "rollout",
+                int(config.rollout_count),
+                int(config.rollout_max_plies),
+                str(config.rollout_policy),
+                int(config.rollout_seed),
+                int(config.rollout_threads),
+                bool(getattr(config, "rollout_branch_on_damage", False)),
+            ]
+        )
     return search_args
 
 
