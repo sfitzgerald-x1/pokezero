@@ -3502,12 +3502,23 @@ def compare_foulplay_think(
 #:      So a threshold at 1.10 would REFUSE A MATCHED PAIR, which is the hazard a gate like
 #:      this one walks into: manufacturing the defect it detects. 1.25 sits at 1 + 3.1x the
 #:      observed matched-pair excess.
-#:   2. THE SAMPLING FLOOR, from the same data. Per-decision CV of the rate within that
-#:      stratum was **0.1151** (48 decisions; 0.1198 and 0.0995 in the two passes). The
-#:      log-ratio of two stratum means over n_a, n_b decisions has SE = cv * sqrt(1/n_a +
-#:      1/n_b), so at `FOULPLAY_THINK_MIN_STRATUM_DECISIONS` on both sides that is 0.0728 and
-#:      a 3-sigma bound is a fold ratio of **1.244**. The two derivations land on the same
-#:      number from different directions, which is why it is 1.25 and not a round guess.
+#:   2. THE SAMPLING FLOOR, from the same data, as a CROSS-CHECK and not as the basis.
+#:      Per-decision CV of the rate within that stratum was **0.1151** (48 decisions; 0.1198
+#:      and 0.0995 in the two passes). The log-ratio of two stratum means over n_a, n_b
+#:      decisions has SE = cv * sqrt(1/n_a + 1/n_b), so at
+#:      `FOULPLAY_THINK_MIN_STRATUM_DECISIONS` on both sides that is 0.0728 and a 3-sigma
+#:      fold ratio is exp(3 * 0.0728) = **1.244**. The two derivations land on the same number
+#:      from different directions, which is why it is 1.25 and not a round guess.
+#:
+#: WHY THE THRESHOLD IS FIXED RATHER THAN COMPUTED FROM n, which is the obvious alternative
+#: and is wrong. The sampling band shrinks with n -- 1.244 at n=5, 1.115 at n=20, 1.035 at
+#: n=200 -- while the run-to-run part does not: the measured matched pair sat 8.1% apart at
+#: n=24 (2.34 sigma, so consistent with sampling noise at THAT n, which is why the two
+#: derivations do not contradict each other). Two arms play over hours on a shared host, and
+#: an n-dependent bound would refuse a matched pair on any well-powered stratum while the host
+#: drifted by less than the 8.1% already observed. A fixed bound above the observed drift
+#: trades sensitivity at large n for not manufacturing the confound, which is the correct
+#: trade for a gate whose failure mode is a false verdict either way.
 #:
 #: AND IT IS FAR BELOW WHAT THE INSTRUMENT HAS ALREADY CAUGHT: the starvation that a thin
 #: stratum hid was **3.8x** (an excess of 2.8 against this gate's 0.25), and the arbiter arm's
@@ -3696,6 +3707,15 @@ def cross_arm_foulplay_contention(
     second against the hungry arm** -- the flattering direction -- and the direction is named
     rather than left to a sign convention.
 
+    AND IT DOES NOT REPLACE THE WITHIN-ARM GATE; the two catch different shapes and neither
+    subsumes the other. This one pools an arm's seats, so what it bounds is the ARM-LEVEL
+    contamination -- which is the quantity that actually contaminates a paired delta -- and a
+    starvation confined to one seat is diluted by the seat count. Measured on the fixtures:
+    3.8x on one of four seats pools to a 1.2258 fold and PASSES, on one of two seats it pools
+    to 1.5833 and refuses. The pass is correct against a bound stated at arm level -- an 18%
+    arm-level shortfall is inside it -- but that is what a pass means here, and per-seat
+    asymmetry is `compare_foulplay_think` on p1-against-p2, in the merged shard.
+
     THE COMPARISON IS STRATIFIED and reuses `by_stratum` rather than recomputing it: 8x500 ms
     at 60,000 visits/sample and 2x1000 ms at 240,000/sample are identical realized work
     reading 120,000/s against 240,000/s, so an unstratified comparison invents an effect out
@@ -3770,9 +3790,12 @@ def cross_arm_foulplay_contention(
             # per-decision CV. Reported rather than gated on purpose -- the within-arm floor
             # already keeps n at 5 or more, where this sits just under the threshold, so a
             # gate on it could never read False and would certify nothing.
-            "detectable_fold_ratio_3sigma": (
-                1.0
-                + 3.0
+            # exp(3 * SE(log ratio)), NOT 1 + 3 * SE: the gated quantity is a FOLD ratio, so
+            # its noise is multiplicative and the bound has to be too. The two forms differ by
+            # 2.6 points at the per-stratum floor (1.244 against 1.218), which straddles the
+            # threshold this number is compared against by a reader.
+            "detectable_fold_ratio_3sigma": math.exp(
+                3.0
                 * FOULPLAY_THINK_MEASURED_RATE_CV
                 * math.sqrt(1.0 / n_hungry + 1.0 / n_lean)
             )

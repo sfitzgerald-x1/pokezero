@@ -20,6 +20,7 @@ checkpoint, no crate.
 from __future__ import annotations
 
 import json
+import math
 import unittest
 
 from pokezero.foulplay_bridge import (
@@ -150,10 +151,28 @@ class MatchedArmsTest(unittest.TestCase):
         self.assertGreater(FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO, matched_fold)
         self.assertLess(FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO, MEASURED_STARVATION_FOLD)
         # And 3 sigma at the within-arm gate's own per-stratum floor, the second derivation.
+        # exp(3 * SE(log ratio)), because the gated quantity is a FOLD ratio and its noise is
+        # multiplicative: the linear form gives 1.2183 and this one 1.2441, and only one of
+        # them is the number the docstring quotes.
         floor = FOULPLAY_THINK_MIN_STRATUM_DECISIONS
-        three_sigma = 1.0 + 3.0 * FOULPLAY_THINK_MEASURED_RATE_CV * (2.0 / floor) ** 0.5
-        self.assertAlmostEqual(three_sigma, 1.2183, places=3)
+        three_sigma = math.exp(
+            3.0 * FOULPLAY_THINK_MEASURED_RATE_CV * (2.0 / floor) ** 0.5
+        )
+        self.assertAlmostEqual(three_sigma, 1.2441, places=4)
         self.assertGreater(FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO, three_sigma)
+
+    def test_the_matched_pair_sits_inside_the_sampling_band_at_its_own_n(self) -> None:
+        """The two derivations must not be in tension, and this is the check.
+
+        If the measured 8.1% matched-pair gap were LARGER than sampling noise at n=24, the CV
+        would be understating the real run-to-run uncertainty and derivation 2 would be
+        unusable rather than corroborating. It sits at 2.34 sigma, so it is not.
+        """
+        a_rate, b_rate, n = MEASURED_MATCHED_PAIR
+        se = FOULPLAY_THINK_MEASURED_RATE_CV * (2.0 / n) ** 0.5
+        sigmas = math.log(b_rate / a_rate) / se
+        self.assertAlmostEqual(sigmas, 2.3407, places=3)
+        self.assertLess(sigmas, 3.0)
 
     def test_a_pure_decision_mix_difference_is_not_refused(self) -> None:
         """The strata exist because an unstratified comparison INVENTS an effect.
@@ -362,7 +381,7 @@ class EveryRatioCarriesItsDenominatorsTest(unittest.TestCase):
             thick["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"],
         )
         self.assertAlmostEqual(
-            thick["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"], 1.0345, places=4
+            thick["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"], 1.0351, places=4
         )
 
 
