@@ -502,6 +502,246 @@ class CellIdentityTest(unittest.TestCase):
         )
 
 
+class RawArmRefusesTheArmTest(unittest.TestCase):
+    """`--arm raw --engine-rollout-leaf`, on the PAIRED DRIVER.
+
+    The bridge refuses `engine_rollout_leaf` outside `policy_mode='engine-mcts'`
+    (`ArgvReachesTheConfigTest.test_the_arm_is_refused_where_it_would_reach_nothing`)
+    -- but the paired driver forwards the whole rollout block inside
+    `if args.arm != "raw"`, so the raw arm sends the child `--policy-mode raw` and
+    NONE of the seam's flags. The bridge's refusal is therefore unreachable
+    through this driver, and what survived was the driver's own shard body writing
+    `"rollout_leaf": true` into a `raw@<tag>` shard.
+
+    That shard is the DENOMINATOR of every paired delta. A false witness there is
+    worse than one on the treatment arm: it makes the comparison silently
+    self-referential rather than merely noisy. Refused in `config_id_for`, beside
+    the sibling opponent refusal, before any game runs.
+    """
+
+    def test_the_raw_arm_refuses_the_rollout_leaf(self) -> None:
+        """FAILING INPUT: `--arm raw --engine-rollout-leaf`.
+
+        Demonstrated as the two states of ONE assertion pair, so neither a refusal
+        that never fires nor one that fires on every raw cell passes:
+
+        * `arm=raw, engine_rollout_leaf=True`  -> SystemExit
+        * `arm=raw, engine_rollout_leaf=False` -> `raw@k0`, byte-unchanged
+        """
+        with self.assertRaises(SystemExit) as caught:
+            _DRIVER.config_id_for(_cell_args(arm="raw", engine_rollout_leaf=True,
+                                             engine_rollout_count=8,
+                                             engine_rollout_max_plies=200))
+        message = str(caught.exception)
+        self.assertIn("--arm raw", message)
+        self.assertIn("--engine-rollout-leaf", message)
+        # The ordinary raw anchor is untouched: every banked raw shard must still
+        # render the id it has always rendered.
+        self.assertEqual(
+            _DRIVER.config_id_for(_cell_args(arm="raw", engine_rollout_leaf=False)),
+            "raw@k0",
+        )
+
+    def test_the_refusal_precedes_the_shard_and_the_child(self) -> None:
+        """It must fire before anything is written, not be caught downstream.
+
+        `config_id_for` is called at the top of `main` -- before the model config
+        is loaded, before `run_seat` spawns a child, and before the shard body is
+        built -- which is why the refusal belongs there. Pinned on the argv
+        builder too: the child argv for this invocation carries `--policy-mode raw`
+        and no rollout flag at all, which is precisely why the bridge's refusal
+        cannot see it.
+        """
+        from test_foulplay_paired_eval import args as _full_args  # noqa: PLC0415
+
+        raw_with_arm = _full_args(arm="raw", engine_rollout_leaf=True,
+                                  engine_rollout_count=8,
+                                  engine_rollout_max_plies=200)
+        argv = _DRIVER.bridge_argv(raw_with_arm, seat="p1")
+        self.assertIn("raw", argv)
+        self.assertEqual(
+            [flag for flag in argv if flag.startswith("--engine-rollout")],
+            [],
+            "the driver sends the raw arm no rollout flag, so the bridge's refusal "
+            "is structurally unreachable and this driver must refuse itself",
+        )
+        # ... and `main` refuses before it can do anything else. The parser is real,
+        # so this is the actual command line a campaign would have queued.
+        with self.assertRaises(SystemExit):
+            _DRIVER.config_id_for(_DRIVER.build_parser().parse_args([
+                "--checkpoint", "/c/k0.pt", "--showdown-root", "/s",
+                "--arm", "raw", "--seed-start", "1", "--pairs", "2",
+                "--depth", "4", "--sims", "64", "--batch", "16", "--worlds", "1",
+                "--checkpoint-tag", "k0", "--out", "/o.json",
+                "--engine-rollout-leaf",
+            ]))
+
+
+class ShardBodyMatchesTheCellIdTest(unittest.TestCase):
+    """The driver's shard-body witness, and the guard that reads it against the id.
+
+    Two records of the same fact leave every shard -- the cell **id** the merger
+    keys on, and the **body** a reader of a single shard sees -- built by
+    different code from different inputs. A disagreement is individually plausible
+    on each side, so it is refused rather than reconciled.
+
+    The previous revision had no test on the body at all, and no guard that could
+    see a body/id disagreement: the body was an inline literal inside `main`,
+    reachable only by running a whole paired campaign.
+    """
+
+    @staticmethod
+    def _args(**overrides):
+        from test_foulplay_paired_eval import args as _full_args  # noqa: PLC0415
+
+        return _full_args(**overrides)
+
+    def test_the_body_records_every_knob_including_the_two_the_id_omits(self) -> None:
+        """FAILING INPUT: the seed and the thread count are set to NON-defaults.
+
+        Both are deliberately outside the id (a replicate axis and a knob proven
+        value-invariant crate-side), so this body is their only record and a
+        rollout draw cannot be reproduced without them. A body that dropped them,
+        or echoed the dataclass default instead of the argv, fails here.
+        """
+        body = _DRIVER.rollout_body_fields(
+            self._args(engine_rollout_leaf=True, engine_rollout_count=8,
+                       engine_rollout_max_plies=200, engine_rollout_policy="uniform",
+                       engine_rollout_seed=1234, engine_rollout_threads=1),
+            "d4-s1024-b64-w4+rollout8p200@k0",
+        )
+        self.assertEqual(body, {
+            "rollout_leaf": True,
+            "rollout_count": 8,
+            "rollout_max_plies": 200,
+            "rollout_policy": "uniform",
+            "rollout_seed": 1234,
+            "rollout_threads": 1,
+        })
+        # Arm off: the body still records the knobs (they are inert), and says so.
+        off = _DRIVER.rollout_body_fields(self._args(), "d4-s1024-b64-w4@k0")
+        self.assertFalse(off["rollout_leaf"])
+
+    def test_a_body_that_contradicts_the_id_is_refused_in_both_directions(self) -> None:
+        """THE GUARD, on the two disagreements it exists to catch.
+
+        FAILING INPUT, twice over -- and each direction is a different corruption:
+
+        * body ON / id without the fragment: the shard pools into the value-head
+          CONTROL while claiming to be the arm. This is the exact shape
+          `--arm raw --engine-rollout-leaf` produced (`raw@k0` + `rollout_leaf:
+          true`).
+        * body OFF / id WITH the fragment: the reverse misfile, averaging a
+          value-head game into the arm's own cell.
+
+        The agreeing pairs in `test_the_body_records_every_knob...` above are what
+        stops this passing for a guard that refuses everything.
+        """
+        with self.assertRaises(SystemExit) as body_on_id_off:
+            _DRIVER.rollout_body_fields(
+                self._args(engine_rollout_leaf=True, engine_rollout_count=8,
+                           engine_rollout_max_plies=200),
+                "raw@k0",
+            )
+        self.assertIn("rollout_leaf=True", str(body_on_id_off.exception))
+        self.assertIn("raw@k0", str(body_on_id_off.exception))
+
+        with self.assertRaises(SystemExit) as body_off_id_on:
+            _DRIVER.rollout_body_fields(
+                self._args(engine_rollout_leaf=False),
+                "d4-s1024-b64-w4+rollout8p200@k0",
+            )
+        self.assertIn("rollout_leaf=False", str(body_off_id_on.exception))
+
+    def test_the_fragment_is_matched_not_substring_searched(self) -> None:
+        """`+rollout` alone must not satisfy the id side.
+
+        A future fragment named `+rolloutpolicy` or a cell tag containing the word
+        would make a substring check read True for an id that carries no arm, and
+        the guard would then certify the disagreement it exists to catch. Matched
+        as `+rollout<R>p<cap>`.
+
+        FAILING INPUT: an id carrying the literal `+rollout` and no R/cap, with the
+        body ON -- which must still refuse.
+        """
+        with self.assertRaises(SystemExit):
+            _DRIVER.rollout_body_fields(
+                self._args(engine_rollout_leaf=True, engine_rollout_count=8,
+                           engine_rollout_max_plies=200),
+                "d4-s1024-b64-w4+rolloutish@k0",
+            )
+        # The real renderings, including the policy suffix, are accepted.
+        for cid in ("d4-s1024-b64-w4+rollout8p200@k0",
+                    "d4-s1024-b64-w4+opp-priors+rollout32p20-greedy@k1"):
+            with self.subTest(cid=cid):
+                self.assertTrue(
+                    _DRIVER.rollout_body_fields(
+                        self._args(engine_rollout_leaf=True, engine_rollout_count=8,
+                                   engine_rollout_max_plies=200),
+                        cid,
+                    )["rollout_leaf"]
+                )
+
+    def test_main_builds_the_shard_body_through_this_helper(self) -> None:
+        """THE CALL SITE. A guard that is never called certifies nothing.
+
+        `main` cannot be driven in a unit test (it fingerprints the engine build,
+        loads a checkpoint's model config and spawns a child per seat), so the
+        call is pinned structurally: the shard body's rollout keys must come from
+        `rollout_body_fields(args, config_id)` -- splatted, unconditional, and
+        passed BOTH records -- and no rollout key may be re-introduced as a
+        literal beside it.
+
+        FAILING INPUT: replacing the splat with the six inline literals it
+        replaced, or dropping `config_id` from the call, fails this.
+        """
+        import ast  # noqa: PLC0415
+        import inspect  # noqa: PLC0415
+
+        source = inspect.getsource(_DRIVER.main)
+        tree = ast.parse(source.lstrip() if source.startswith(" ") else source)
+        calls = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "rollout_body_fields"
+        ]
+        self.assertEqual(len(calls), 1, "main must build the body through the guard once")
+        self.assertEqual(
+            [ast.unparse(argument) for argument in calls[0].args],
+            ["args", "config_id"],
+            "the guard must be handed BOTH of the shard's own records -- this run's "
+            "`args` and this shard's `config_id`. A literal id in either position "
+            "makes the comparison self-satisfying, which is the failure mode the "
+            "guard exists to prevent one layer down",
+        )
+        # Splatted into the report dict, so the attachment carries no logic.
+        splats = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Dict) and any(key is None for key in node.keys)
+        ]
+        self.assertTrue(
+            any(
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Name)
+                and value.func.id == "rollout_body_fields"
+                for node in splats
+                for key, value in zip(node.keys, node.values)
+                if key is None
+            ),
+            "the report dict must splat rollout_body_fields(...) directly",
+        )
+        # And the literals it replaced are gone, so there is exactly one writer.
+        for key in ("rollout_leaf", "rollout_count", "rollout_max_plies",
+                    "rollout_policy", "rollout_seed", "rollout_threads"):
+            with self.subTest(key=key):
+                self.assertNotIn(
+                    f'"{key}":', source,
+                    f"{key} must come from rollout_body_fields, not from a second "
+                    "literal in main that the guard never sees",
+                )
+
+
 class ChildArgvTest(unittest.TestCase):
     """What the paired driver actually tells the bridge."""
 
@@ -946,6 +1186,205 @@ class RuntimeWitnessTest(unittest.TestCase):
         self.assertAlmostEqual(payload["rollout_fallback_fraction"], 0.09)
         self.assertAlmostEqual(payload["rollout_terminal_fraction"], 0.91)
         self.assertAlmostEqual(payload["rollout_mean_plies"], 55.0)
+
+    def test_a_dead_end_is_refused_and_is_not_a_term_in_the_fallback_fraction(self) -> None:
+        """`rollout_dead_ends`, which review found pinned to zero by construction.
+
+        It was a second term in `rollout_fallback_fraction`, and four mutants on
+        that term survived the whole suite -- because the term cannot read non-zero.
+        The reason is now machine-checked crate-side
+        (`rollout.rs::get_all_options_never_yields_an_empty_option_vector`, which
+        fails when the pokezero fidelity patch to gen3's `get_all_options` is
+        removed): every exit from that function backfills an empty option vector,
+        so the engine cannot present a position with no legal continuation that it
+        did not call over.
+
+        So the field is no longer a term. It is an assertion, and this is the test
+        that it can read non-zero and does something when it does.
+
+        FAILING INPUTS, both halves asserted here:
+          * `rollout_dead_ends=1` -> refused, and nothing is absorbed
+          * `rollout_dead_ends=0` -> absorbed, and the fraction is cap/run exactly
+        """
+        shell = self._policy_shell()
+        with self.assertRaises(ValueError) as caught:
+            shell._absorb_rollout_report({
+                "rollout_leaf_mode": "rollout", "rollouts_run": 10,
+                "rollout_terminal_hits": 8, "rollout_cap_hits": 1,
+                "rollout_dead_ends": 1, "leaves_priced": 2,
+            })
+        self.assertIn("rollout_dead_ends=1", str(caught.exception))
+        self.assertIn("could not step", str(caught.exception))
+
+        # The fraction is cap/run -- NOT (cap + dead)/run, and not terminal-derived.
+        # 3/12 = 0.25 is distinct from every other ratio these numbers can form
+        # (terminal 9/12 = 0.75, (cap+dead)/run would be 0.25 too if dead were
+        # absorbed, which is why dead is 0 here and the refusal above carries that
+        # half of the assertion).
+        clean = self._policy_shell()
+        self.assertTrue(clean._absorb_rollout_report({
+            "rollout_leaf_mode": "rollout", "rollouts_run": 12,
+            "rollout_terminal_hits": 9, "rollout_cap_hits": 3,
+            "rollout_dead_ends": 0, "leaves_priced": 4,
+        }))
+        payload = clean.stats.to_dict()
+        self.assertEqual(payload["rollout_dead_ends"], 0)
+        self.assertAlmostEqual(payload["rollout_fallback_fraction"], 0.25)
+        self.assertAlmostEqual(payload["rollout_terminal_fraction"], 0.75)
+
+    def test_the_fallback_fraction_does_not_read_the_dead_end_counter(self) -> None:
+        """A STRUCTURAL guard, and it says so, because this one has no behavioural
+        signature and pretending otherwise would be the very defect under review.
+
+        Re-adding `+ self.rollout_dead_ends` to `rollout_fallback_fraction` is an
+        EQUIVALENT mutation: `_absorb_rollout_report` refuses a non-zero reading, so
+        the counter is provably always 0 and the two expressions cannot differ on
+        any input. Mutation testing therefore reports that mutant as surviving, and
+        it is right to -- it is exactly the "term that cannot read non-zero" the
+        review objected to, restored.
+
+        So the decision is pinned where it lives: the fraction's numerator reads the
+        cap counter and does not read the dead-end counter. That is a claim about the
+        source, asserted against the source, rather than a behavioural test dressed
+        up as one.
+
+        FAILING INPUT: re-adding the term, or swapping cap for terminal, both land
+        here (the second also fails behaviourally, above).
+        """
+        import ast  # noqa: PLC0415
+        import inspect  # noqa: PLC0415
+        import textwrap  # noqa: PLC0415
+
+        from pokezero.engine_search import EngineMctsStats
+
+        tree = ast.parse(textwrap.dedent(inspect.getsource(EngineMctsStats.to_dict)))
+        fraction = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Dict):
+                for key, value in zip(node.keys, node.values):
+                    if (
+                        isinstance(key, ast.Constant)
+                        and key.value == "rollout_fallback_fraction"
+                    ):
+                        fraction = value
+        self.assertIsNotNone(fraction, "the fallback fraction must be in `to_dict`")
+        read = {
+            node.attr for node in ast.walk(fraction) if isinstance(node, ast.Attribute)
+        }
+        self.assertIn("rollout_cap_hits", read)
+        self.assertIn("rollouts_run", read)
+        self.assertNotIn(
+            "rollout_dead_ends", read,
+            "the dead-end counter is an invariant witness, refused in "
+            "`_absorb_rollout_report` and provably zero, so it must not be a term in "
+            "a fraction that is read as an estimand",
+        )
+
+    def test_the_decision_row_fraction_is_cap_over_run_too(self) -> None:
+        """The per-decision copy must agree with the shard copy.
+
+        FAILING INPUT: `rollout_cap_hits` and `rollout_terminal_hits` are DISTINCT
+        and neither equals half, so a row that summed the wrong fields, or that
+        re-added a `dead` term, lands on a different number.
+        """
+        row = EngineMctsPolicy._rollout_decision_row([
+            {"report": {"rollout_leaf_mode": "rollout", "rollouts_run": 20,
+                        "rollout_terminal_hits": 17, "rollout_cap_hits": 3,
+                        "rollout_dead_ends": 0, "leaves_priced": 5}}
+        ])
+        assert row is not None
+        self.assertAlmostEqual(row["rollout_fallback_fraction"], 0.15)
+        self.assertEqual(row["rollout_dead_ends"], 0)
+
+    def test_the_absorption_is_CALLED_on_the_world_report_path(self) -> None:
+        """THE CALL, not the method. This change's headline claim depends on it.
+
+        Extracting `_absorb_rollout_report` made the METHOD testable and moved the
+        untested boundary exactly one line out: review demonstrated that replacing
+        the CALL with `pass` passes the whole suite, and that on a real game the
+        resulting shard reads `rollout_leaf: true` with `rollout_leaf_modes {}` and
+        `rollouts_run 0` -- byte-identical to the value-head twin -- while 16,908
+        rollouts actually ran. Absence of a call is not mutation-testable inside
+        the method, so it is pinned here, following the sibling
+        `_rollout_metadata_fields`.
+
+        Structural rather than a substring search, and that is the point: the call
+        must be an UNCONDITIONAL statement in the same function body that absorbs
+        `model_evals` -- the per-invocation world-report path. A substring check
+        passes for `if False: self._absorb_rollout_report(report)`; this does not.
+
+        `_search_model` cannot be driven in a unit test (it needs a dex, a
+        candidate-set source, a TorchScript artifact and a live battle), which is
+        why the inline block was unreachable in the first place.
+
+        FAILING INPUTS, all four demonstrated:
+          * the call replaced with `pass`                -> no such Call node
+          * the call deleted outright                    -> no such Call node
+          * the call wrapped in `if False:`              -> not statement-level
+          * the call handed something other than `report` -> argument mismatch
+        """
+        import ast  # noqa: PLC0415
+        import inspect  # noqa: PLC0415
+        import textwrap  # noqa: PLC0415
+
+        tree = ast.parse(
+            textwrap.dedent(inspect.getsource(EngineMctsPolicy._search_model))
+        )
+        def owned(function: ast.AST):
+            """Nodes belonging to `function` itself, not to a function nested in it.
+
+            `ast.walk` crosses function boundaries, so an unqualified walk reports
+            `_search_model` as an absorber merely because `run_world` is defined
+            inside it -- and the guard would then be aimed one level too high,
+            where the call is not.
+            """
+            stack = list(ast.iter_child_nodes(function))
+            while stack:
+                node = stack.pop()
+                yield node
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                         ast.Lambda, ast.ClassDef)):
+                    stack.extend(ast.iter_child_nodes(node))
+
+        absorbers = [
+            node for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and any(
+                isinstance(inner, ast.AugAssign)
+                and isinstance(inner.target, ast.Attribute)
+                and inner.target.attr == "model_evals"
+                for inner in owned(node)
+            )
+        ]
+        self.assertEqual(
+            len(absorbers), 1,
+            "one world-report absorber is assumed; if `model_evals` moved, this "
+            "guard is pointing at the wrong function and must be re-aimed",
+        )
+        # Statement level in the absorber's own body: `for`/`with` wrappers are the
+        # ones the absorption legitimately sits under today (none), and a
+        # conditional is exactly what must NOT be accepted.
+        statement_calls = [
+            node.value for node in absorbers[0].body
+            if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == "_absorb_rollout_report"
+        ]
+        self.assertEqual(
+            len(statement_calls), 1,
+            "the world-report absorber must call self._absorb_rollout_report(report) "
+            "unconditionally -- replacing it with `pass`, deleting it, or guarding it "
+            "behind a conditional all land here",
+        )
+        call = statement_calls[0]
+        self.assertEqual(
+            [ast.unparse(argument) for argument in call.args], ["report"],
+            "the crate's REPORT must be what is absorbed -- not the config, which "
+            "says only what was asked for, and not the record, whose top level does "
+            "not carry the rollout keys",
+        )
+        self.assertEqual(ast.unparse(call.func), "self._absorb_rollout_report")
 
     def test_the_metadata_fields_helper_is_what_the_decision_splats(self) -> None:
         """The attachment, isolated so it is reachable at all.

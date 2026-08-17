@@ -618,6 +618,89 @@ class RolloutCellReferenceIdTest(unittest.TestCase):
             "its own reference -- a cell reading against itself",
         )
 
+    def test_an_ABSENT_rollout_leaf_is_refused_not_read_as_false(self) -> None:
+        """Absent is not false, and here the difference is the whole experiment.
+
+        `bool(cell.get("rollout_leaf"))` mapped a MISSING key to `False`, which does
+        not render a broken id -- it renders the value-head control's id, byte for
+        byte, and that is a real shard. So a rollout cell whose flag was renamed,
+        typo'd or dropped resolved cleanly to the thing the arm is measured against,
+        `depth_reference` pointed at the control, and the §5 rule reported applied.
+        Every other knob here loses at most a suffix to an absent key; this one
+        loses the fragment and lands on a legitimate neighbour.
+
+        FAILING INPUTS, three of them, each a different way to be absent-or-wrong
+        while the WELL-FORMED campaign above still renders (asserted in the sibling
+        tests, which is what stops this passing for a refusal that fires always):
+
+        * the flag dropped while its own knobs remain -> incoherent cell;
+        * the flag AND all its knobs dropped together -> nothing is left in the cell
+          to notice, so the tell is structural: the cell's reference id equals its
+          own id, i.e. it reads against itself;
+        * the flag as the STRING ``"false"`` -> truthy, and would file the control
+          under the arm.
+
+        What is NOT the rule, recorded because it was written and measured wrong:
+        "once any cell declares the flag, every cell must". `CAMPAIGN` above is the
+        normal shape and refutes it -- the value-head control legitimately omits the
+        flag while its rollout twin carries it.
+        """
+        base = json.loads(json.dumps(self.CAMPAIGN))
+
+        def run_campaign(campaign):
+            n = 6
+            raw = {(i, "p1"): 0.0 for i in range(n)}
+            v = {(i, "p1"): 1.0 for i in range(n)}
+            with tempfile.TemporaryDirectory() as d:
+                cpath = Path(d) / "campaign.json"
+                cpath.write_text(json.dumps(campaign), encoding="utf-8")
+                return run([shard("d4-s2048-b64-w4@k0", "search", "/c/k0.pt", v),
+                            shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None)],
+                           campaign=str(cpath))
+
+        # 1. The flag dropped, its own knobs left behind.
+        orphaned = json.loads(json.dumps(base))
+        del orphaned["cells"][1]["rollout_leaf"]
+        with self.assertRaises(SystemExit) as caught:
+            run_campaign(orphaned)
+        self.assertIn("absent is not false", str(caught.exception))
+        self.assertIn("rollout_count", str(caught.exception))
+
+        # 2. The flag AND its knobs dropped together, so nothing in the cell says
+        #    anything is missing. The tell is structural: cell R keeps
+        #    `reads_against: V` and now renders V's id, so it reads against itself.
+        silently_lost = json.loads(json.dumps(base))
+        for key in ("rollout_leaf", "rollout_count", "rollout_max_plies"):
+            silently_lost["cells"][1].pop(key, None)
+        with self.assertRaises(SystemExit) as caught:
+            run_campaign(silently_lost)
+        self.assertIn("read against ITSELF", str(caught.exception))
+        self.assertIn("d4-s2048-b64-w4@k0", str(caught.exception))
+
+        # 3. A truthy string. `bool("false")` is True.
+        stringly = json.loads(json.dumps(base))
+        stringly["cells"][1]["rollout_leaf"] = "false"
+        with self.assertRaises(SystemExit) as caught:
+            run_campaign(stringly)
+        self.assertIn("a real boolean is required", str(caught.exception))
+
+        # AND THE CONTROLS, so none of the above passes for a refusal that fires on
+        # every campaign. A pre-arm campaign mentions the arm nowhere and every cell
+        # is legitimately a value-head cell; it must still render, or this refusal
+        # breaks every banked campaign.
+        pre_arm = json.loads(json.dumps(base))
+        pre_arm["cells"] = [pre_arm["cells"][0]]
+        self.assertTrue(run_campaign(pre_arm), "a pre-arm campaign must still render")
+        # ... as must an EXPLICIT false, which is the control's honest declaration --
+        # and it must NOT collide with its own reference, so it reads against the
+        # value-head cell rather than tripping the self-reference guard.
+        explicit_false = json.loads(json.dumps(base))
+        explicit_false["cells"][1]["rollout_leaf"] = False
+        for key in ("rollout_count", "rollout_max_plies"):
+            explicit_false["cells"][1].pop(key, None)
+        explicit_false["cells"][1]["sims"] = 4096
+        self.assertTrue(run_campaign(explicit_false))
+
     def test_pooling_a_rollout_shard_with_a_value_head_shard_is_refused(self) -> None:
         """The runtime defence, for the case an older driver wrote the shard.
 

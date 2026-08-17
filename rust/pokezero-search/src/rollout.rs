@@ -217,6 +217,18 @@ impl RolloutStats {
             self.cap_hits,
             self.dead_ends,
             self.terminal_hits as f64 / denom,
+            // `cap + dead` HERE, `cap` alone in `EngineMctsStats.to_dict`, and the
+            // two agree on every input the Python layer accepts -- not by accident.
+            // This layer partitions its own three counters, so
+            // `terminal_fraction + fallback_fraction == 1.0` is a true identity here
+            // and two tests assert it. The Python layer drops `dead` because it is
+            // zero by construction (see
+            // `get_all_options_never_yields_an_empty_option_vector`) and a term that
+            // cannot read non-zero is not a measurement, and it REFUSES a non-zero
+            // reading outright -- so the only reports it ever prices have
+            // `dead_ends == 0`, where the two formulas are the same number. Stated
+            // because two layers computing one published field by different
+            // expressions is precisely the drift this campaign keeps paying for.
             (self.cap_hits + self.dead_ends) as f64 / denom,
             self.plies_stepped as f64 / denom,
         )
@@ -816,6 +828,137 @@ mod tests {
                      (iterations {iterations}, depth {depth}, seed {seed})"
                 );
             }
+        }
+    }
+
+    /// WHY `dead_ends` IS ZERO BY CONSTRUCTION, machine-checked rather than argued.
+    ///
+    /// Review measured this counter at 0 on three real games and found four
+    /// mutants on the Python fallback fraction's `dead` term all surviving, then
+    /// asked the right question: is it pinned to zero *by construction*? It is,
+    /// and this test is the proof, because the answer is a property of the
+    /// vendored engine and nothing in this crate makes it visible.
+    ///
+    /// `rollout_once`'s first dead-end branch fires on
+    /// `s1_options.is_empty() || s2_options.is_empty()`. In the **gen3** engine
+    /// this crate compiles against, `State::get_all_options` cannot return an
+    /// empty vector from ANY exit: every path ends in either a
+    /// `if vec.len() == 0 { push(MoveChoice::None) }` backfill or
+    /// `Side::add_switches`, which carries the same backfill. The two exits that
+    /// once could -- the `force_switch` early returns, where
+    /// `Pokemon::add_move_from_choice` pushes nothing if the saved move is absent
+    /// from the current active's four slots -- were closed by a pokezero fidelity
+    /// patch, whose comment in `third_party/poke-engine-src/src/gen3/state.rs`
+    /// records what it cost: `Node::expand` indexed `s2_options[0]` on a
+    /// zero-length vector and panicked out of the whole search.
+    ///
+    /// So this is not defensive paranoia about an impossible state -- it is a
+    /// REGRESSION DETECTOR on a defect this repo has already had, in a vendored
+    /// dependency that is re-fetched by a script and could come back without the
+    /// patch. That is why the counter is kept and why it is now **refused** rather
+    /// than summed into `rollout_fallback_fraction`: a term that provably cannot
+    /// be non-zero is not a measurement, and a fraction that carries it invites
+    /// being read as though it were.
+    ///
+    /// FAILING INPUT: the third shape below is the exact state that used to return
+    /// `[]` (side one owes a replacement while side two carries a saved-move
+    /// commitment its active does not know). If the patch is ever lost, that
+    /// assertion fails here -- in a unit test -- instead of in a game.
+    #[test]
+    fn get_all_options_never_yields_an_empty_option_vector() {
+        use poke_engine::choices::Choices;
+
+        let base = crate::parse_state(MINIMAL.trim()).expect("fixture parses");
+
+        // Named so a failure says WHICH shape regressed.
+        let mut shapes: Vec<(&str, State)> = Vec::new();
+        shapes.push(("ordinary", base.clone()));
+
+        let mut both_owe = base.clone();
+        both_owe.side_one.force_switch = true;
+        both_owe.side_two.force_switch = true;
+        shapes.push(("both sides owe a replacement", both_owe));
+
+        // THE HISTORICALLY BROKEN ONE. The fixture's side-two active is a SQUIRTLE
+        // with WATERGUN/TACKLE, so SOLARBEAM is a commitment it cannot satisfy.
+        let mut unsatisfiable = base.clone();
+        unsatisfiable.side_one.force_switch = true;
+        unsatisfiable.side_two.switch_out_move_second_saved_move = Choices::SOLARBEAM;
+        shapes.push((
+            "side one owes a replacement, side two owes a move it does not know",
+            unsatisfiable,
+        ));
+
+        // The mirror of it, through the other early return.
+        let mut mirrored = base.clone();
+        mirrored.side_two.force_switch = true;
+        mirrored.side_one.switch_out_move_second_saved_move = Choices::SOLARBEAM;
+        shapes.push((
+            "mirrored: side two owes a replacement, side one owes an unknown move",
+            mirrored,
+        ));
+
+        // A side with nothing left to switch to, which is the other way
+        // `add_switches` could have produced an empty vector.
+        let mut nothing_to_switch_to = base.clone();
+        nothing_to_switch_to.side_one.force_switch = true;
+        for index in [
+            poke_engine::state::PokemonIndex::P1,
+            poke_engine::state::PokemonIndex::P2,
+            poke_engine::state::PokemonIndex::P3,
+            poke_engine::state::PokemonIndex::P4,
+            poke_engine::state::PokemonIndex::P5,
+        ] {
+            nothing_to_switch_to.side_one.pokemon[index].hp = 0;
+        }
+        shapes.push((
+            "side one owes a replacement with every reserve fainted",
+            nothing_to_switch_to,
+        ));
+
+        for (name, state) in &shapes {
+            let (one, two) = state.get_all_options();
+            assert!(
+                !one.is_empty(),
+                "side one options were EMPTY for shape {name:?}: rollout_dead_ends is \
+                 no longer zero by construction, and `Node::expand` indexes \
+                 s1_options[0]"
+            );
+            assert!(
+                !two.is_empty(),
+                "side two options were EMPTY for shape {name:?}: rollout_dead_ends is \
+                 no longer zero by construction, and `Node::expand` indexes \
+                 s2_options[0]"
+            );
+        }
+
+        // ... and with the invariant holding, a rollout from every shape counts NO
+        // dead end. This is the counter's measured reading, not an assumption.
+        let cfg = RolloutConfig {
+            rollouts: 1,
+            max_plies: 64,
+            policy: RolloutPolicy::Uniform,
+            branch_on_damage: true,
+            seed: 1,
+            threads: 1,
+        };
+        for (name, state) in &shapes {
+            let mut stats = RolloutStats::default();
+            let mut rng = StdRng::seed_from_u64(11);
+            let mut scratch = state.clone();
+            rollout_once(&mut scratch, &cfg, &mut rng, &mut stats);
+            assert_eq!(
+                stats.dead_ends, 0,
+                "shape {name:?} counted a dead end while get_all_options is \
+                 non-empty, so the second branch (empty instruction list) is \
+                 reachable after all and the Python-side refusal must become a \
+                 measured term again"
+            );
+            assert_eq!(
+                stats.terminal_hits + stats.cap_hits,
+                1,
+                "every rollout must end as a terminal or a cap hit for shape {name:?}"
+            );
         }
     }
 

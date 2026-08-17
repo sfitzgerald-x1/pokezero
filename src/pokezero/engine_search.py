@@ -1410,6 +1410,29 @@ class EngineMctsStats:
     rollout_plies: int = 0
     rollout_terminal_hits: int = 0
     rollout_cap_hits: int = 0
+    #: AN INVARIANT WITNESS, NOT AN ESTIMAND TERM, and asserted to be zero.
+    #:
+    #: A dead end is a rollout the engine could not continue and did not call
+    #: over. In the gen3 engine this crate compiles against that cannot happen:
+    #: every exit from `State::get_all_options` ends in a
+    #: `if vec.len() == 0 { push(MoveChoice::None) }` backfill or in
+    #: `Side::add_switches`, which carries the same one. The two exits that once
+    #: could return `[]` were closed by a pokezero fidelity patch, after
+    #: `Node::expand` indexed `s2_options[0]` on a zero-length vector and panicked
+    #: out of a whole search; `rollout.rs`'s
+    #: `get_all_options_never_yields_an_empty_option_vector` pins that invariant
+    #: over five state shapes, including the one that used to break, and fails when
+    #: the patch is removed.
+    #:
+    #: So this field is zero BY CONSTRUCTION -- review measured it at 0 on three
+    #: real games and found four mutants on the old fallback-fraction `dead` term
+    #: all surviving, because a term that cannot be non-zero cannot be tested.
+    #: It is therefore no longer summed into `rollout_fallback_fraction`, which now
+    #: reads `cap_hits / rollouts_run` -- the quantity it always actually computed.
+    #: A non-zero reading is not a measurement of leaf quality; it means a vendored
+    #: dependency regressed and the decision's leaf values are untrustworthy, so
+    #: `_absorb_rollout_report` REFUSES it rather than diluting an honest fraction
+    #: with it.
     rollout_dead_ends: int = 0
     rollout_leaves_priced: int = 0
     #: Leaves whose model forward was SKIPPED because a rollout priced them. The
@@ -1814,8 +1837,16 @@ class EngineMctsStats:
                 if self.rollouts_run
                 else None
             ),
+            # CAP HITS ALONE. `rollout_dead_ends` used to be a second term here and
+            # is not one any more: it is zero by construction (see its field
+            # comment, and `rollout.rs`'s invariant test), so four mutants on it
+            # survived the whole suite -- a term that cannot read non-zero is not a
+            # measurement, and carrying it made this fraction look like it summed
+            # two measured things. It sums one. The dead-end case is REFUSED in
+            # `_absorb_rollout_report` instead, which is the honest handling of a
+            # state that means the engine regressed.
             "rollout_fallback_fraction": (
-                (self.rollout_cap_hits + self.rollout_dead_ends) / self.rollouts_run
+                self.rollout_cap_hits / self.rollouts_run
                 if self.rollouts_run
                 else None
             ),
@@ -3285,7 +3316,10 @@ class EngineMctsPolicy:
                     # The honesty columns. A high fallback fraction means the
                     # "oracle" was mostly the handcrafted evaluator.
                     "rollout_terminal_fraction": round(terminal_hits / denom, 6),
-                    "rollout_fallback_fraction": round((cap_hits + dead_ends) / denom, 6),
+                    # Cap hits alone; `dead_ends` is an invariant witness rather
+                    # than a term. Same reason as the shard-level copy in
+                    # `EngineMctsStats.to_dict` -- see the field comment there.
+                    "rollout_fallback_fraction": round(cap_hits / denom, 6),
                     "rollout_cap_hits": cap_hits,
                     "rollout_dead_ends": dead_ends,
                     "rollout_mean_plies": round(rollout_plies / denom, 3),
@@ -4626,7 +4660,27 @@ class EngineMctsPolicy:
         self.stats.rollout_plies += int(report.get("rollout_plies") or 0)
         self.stats.rollout_terminal_hits += int(report.get("rollout_terminal_hits") or 0)
         self.stats.rollout_cap_hits += int(report.get("rollout_cap_hits") or 0)
-        self.stats.rollout_dead_ends += int(report.get("rollout_dead_ends") or 0)
+        # REFUSED, not absorbed into a fraction. A dead end means the engine handed
+        # a rollout a position with no legal continuation that it did not call over,
+        # which the gen3 option invariant makes impossible -- so a non-zero reading
+        # is a regression in a re-fetched vendored dependency (it has happened: the
+        # same empty vector panicked `Node::expand` out of a whole search), and
+        # every leaf value behind this decision was priced from a position the
+        # engine could not step. Raising here costs a COUNTED world failure and a
+        # fallback decision, which is the fail-closed handling; summing it into
+        # `rollout_fallback_fraction` was the fail-open one, and it hid the state
+        # inside a number that reads as an estimand.
+        dead_ends = int(report.get("rollout_dead_ends") or 0)
+        if dead_ends:
+            raise ValueError(
+                f"crate reported rollout_dead_ends={dead_ends}: the engine offered no "
+                "legal continuation from a position it did not call over, which the "
+                "gen3 option invariant makes unreachable (see rollout.rs's "
+                "get_all_options_never_yields_an_empty_option_vector). Refused rather "
+                "than priced: this decision's leaf values came from a state the engine "
+                "could not step."
+            )
+        self.stats.rollout_dead_ends += dead_ends
         self.stats.rollout_leaves_priced += int(report.get("leaves_priced") or 0)
         self.stats.rollout_encode_skipped += int(
             report.get("rollout_encode_skipped") or 0
@@ -4748,8 +4802,10 @@ class EngineMctsPolicy:
             # None rather than 0.0 with no rollouts, for the reason spelled out on
             # the shard-level copy in `to_dict`: 0.0 is the oracle claim, and an
             # un-engaged seam must not be able to make it.
+            # Cap hits alone, like the shard-level copy: `dead` is an invariant
+            # witness, is zero by construction, and is refused rather than summed.
             "rollout_fallback_fraction": (
-                (cap + dead) / rollouts_run if rollouts_run else None
+                cap / rollouts_run if rollouts_run else None
             ),
         }
 

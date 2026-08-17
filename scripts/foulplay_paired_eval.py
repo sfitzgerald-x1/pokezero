@@ -43,10 +43,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -300,6 +302,31 @@ def config_id_for(args: argparse.Namespace) -> str:
                 "refused: the raw arm's cell id carries no opponent fragment, so such a "
                 "shard would pool into the paired delta's control."
             )
+        # THE SAME SHAPE, ONE LAYER IN, AND WORSE. The bridge refuses
+        # `engine_rollout_leaf` outside `policy_mode='engine-mcts'`, but this driver
+        # forwards the whole rollout block INSIDE `if args.arm != "raw"` (see
+        # `bridge_argv`), so `--arm raw --engine-rollout-leaf` sends the child
+        # `--policy-mode raw` and NONE of the seam's flags -- the bridge's refusal is
+        # never reached. What survives is this driver's own shard body, which writes
+        # `"rollout_leaf": bool(args.engine_rollout_leaf)` unconditionally: a `raw@<tag>`
+        # shard claiming the arm ran, while nothing rollout-shaped was even asked of the
+        # child.
+        #
+        # That is a false witness on the DENOMINATOR of every paired delta, which is
+        # strictly worse than one on the treatment arm: a control mislabelled as the arm
+        # makes the comparison silently self-referential rather than merely noisy. And
+        # the id cannot carry the contradiction -- `raw@<tag>` has no `+rollout`
+        # fragment, so the shard body and the shard id disagree and only the body says
+        # so. Refused here, at the same boundary and for the same reason as the opponent
+        # fragment above.
+        if args.engine_rollout_leaf:
+            raise SystemExit(
+                "--arm raw with --engine-rollout-leaf is refused: the raw arm has no "
+                "search and therefore no leaf evaluator, the driver does not forward the "
+                "seam to the child (so the bridge's own refusal is unreachable), and the "
+                "shard body would still record \"rollout_leaf\": true -- a false witness "
+                "on the control arm of every paired delta."
+            )
         return f"raw@{tag}"
     # Attributes read directly, not through getattr: a caller whose Namespace
     # predates a knob must raise here rather than be handed the default id and
@@ -337,6 +364,67 @@ def config_id_for(args: argparse.Namespace) -> str:
         rollout_max_plies=args.engine_rollout_max_plies,
         rollout_policy=args.engine_rollout_policy,
     )
+
+
+# The rendered arm fragment, as `search_config_id` writes it: `+rollout<R>p<cap>`
+# with an optional `-<policy>` suffix. Matched rather than substring-searched so
+# `+rollout` in some future fragment name cannot satisfy the check below.
+_ROLLOUT_FRAGMENT = re.compile(r"\+rollout\d+p\d+")
+
+
+def rollout_body_fields(
+    args: argparse.Namespace, config_id: str
+) -> dict[str, Any]:
+    """The shard body's rollout witness, refused if it contradicts the cell id.
+
+    Two records of the same fact leave the same shard: the cell **id**, which the
+    merger keys on, and the **body**, which is what a reader of a single shard
+    sees. They are built by different code from different inputs, so they can
+    disagree -- and a disagreement is unreadable in the worst way, because each
+    side is individually plausible:
+
+    * body says the arm ran, id says it did not -> the shard pools into the
+      value-head control while claiming to be the arm. This is not hypothetical:
+      it is exactly what `--arm raw --engine-rollout-leaf` produced, since the
+      raw branch of `config_id_for` returns `raw@<tag>` with no fragment while
+      this body wrote `rollout_leaf: true`. `config_id_for` now refuses that
+      specific input by name; this guard is the GENERAL form, and it fires on any
+      future path -- a new arm, a dropped fragment, an id builder that normalises
+      the arm away -- without anyone having to anticipate it.
+    * id says the arm ran, body says it did not -> the reverse misfile, which
+      averages a value-head game into the arm's cell.
+
+    Both are refused. Nothing here defaults or reconciles: a shard whose two
+    records disagree is not written.
+
+    The seed and the thread count are body-ONLY on purpose (a replicate axis and
+    a knob proven value-invariant crate-side), so they have no id to agree with
+    and are simply recorded -- this body is their sole record, and a rollout draw
+    cannot be reproduced without the seed.
+
+    Still only the ASKED-FOR side. Whether the seam actually engaged at runtime is
+    a per-seat reading off `policy_stats.rollout_leaf_modes`; a shard with
+    `rollout_leaf: true` here and no leaf modes there ran the value head.
+    """
+    body_says_on = bool(args.engine_rollout_leaf)
+    id_says_on = _ROLLOUT_FRAGMENT.search(config_id) is not None
+    if body_says_on != id_says_on:
+        raise SystemExit(
+            "the shard body and the cell id disagree about the rollout-leaf arm: "
+            f"body rollout_leaf={body_says_on}, config_id={config_id!r} "
+            f"({'carries' if id_says_on else 'carries no'} +rollout<R>p<cap> fragment). "
+            "Refused rather than written: one of the two records is wrong and a reader "
+            "of the shard cannot tell which, so the shard would pool into the wrong "
+            "cell while reading as evidence for the other."
+        )
+    return {
+        "rollout_leaf": body_says_on,
+        "rollout_count": args.engine_rollout_count,
+        "rollout_max_plies": args.engine_rollout_max_plies,
+        "rollout_policy": args.engine_rollout_policy,
+        "rollout_seed": args.engine_rollout_seed,
+        "rollout_threads": args.engine_rollout_threads,
+    }
 
 
 def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
@@ -895,20 +983,14 @@ def main(argv=None) -> int:
         # In config_id AND here, same reason c_puct is: arm identity witnessed
         # from the shard body, never from a job label.
         "oracle_belief": bool(args.engine_oracle_belief),
-        # In config_id AND here, same reason as oracle_belief. The seed and thread
-        # count are here ONLY -- they are deliberately outside the id (a replicate
-        # axis and a value-invariant throughput knob), so this body is the sole
-        # record of them, and a rollout draw cannot be reproduced without the seed.
-        #
-        # Still only the ASKED-FOR side. Whether the seam actually engaged is a
-        # per-seat reading off `policy_stats.rollout_leaf_modes`; a shard with
-        # `rollout_leaf: true` here and no leaf modes there ran the value head.
-        "rollout_leaf": bool(args.engine_rollout_leaf),
-        "rollout_count": args.engine_rollout_count,
-        "rollout_max_plies": args.engine_rollout_max_plies,
-        "rollout_policy": args.engine_rollout_policy,
-        "rollout_seed": args.engine_rollout_seed,
-        "rollout_threads": args.engine_rollout_threads,
+        # THE ARM, in config_id AND here for the same reason oracle_belief is --
+        # plus the seed and thread count, which are here ONLY. Built by
+        # `rollout_body_fields` rather than written inline, because that helper
+        # REFUSES a body that contradicts `config_id`: two records of one fact,
+        # each individually plausible, and a shard is not written when they
+        # disagree. See its docstring for the two disagreements and what each
+        # corrupts.
+        **rollout_body_fields(args, config_id),
         # Named, never silently dropped: an incomplete seat makes the paired
         # delta unscoreable for those seeds and the merger must see it.
         "missing_seeds": missing,

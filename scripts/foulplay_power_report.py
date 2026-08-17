@@ -391,6 +391,65 @@ def main(argv=None) -> int:
         # comment below records, and the selection knobs doubled the surface.
         from foulplay_paired_eval import search_config_id  # noqa: PLC0415
 
+        # ABSENT IS NOT FALSE, and `bool(cell.get("rollout_leaf"))` made it False.
+        #
+        # Every other knob below loses at most a suffix to an absent key. This one
+        # loses the WHOLE `+rollout<R>p<cap>` fragment, and what it renders instead
+        # is not a broken id that matches no shard -- it is byte-identical to the
+        # VALUE-HEAD CONTROL's id, which is a real shard. So a rollout cell whose
+        # `rollout_leaf` key is missing (renamed, typo'd, dropped by a launcher that
+        # predates the arm) does not fail to resolve: it resolves to the thing the
+        # arm is measured against, and `depth_reference` then points the §5
+        # non-starvation rule at the control while reporting clean.
+        #
+        # A cell that says `false` and a cell that says nothing are therefore
+        # different inputs and must not produce the same answer. Two checks, because
+        # neither alone is enough:
+        #
+        #   * here, per cell: the arm's own knobs present with no `rollout_leaf` is
+        #     an incoherent cell, and a non-boolean flag is a control filed as the
+        #     arm (`bool("false")` is True);
+        #   * at the `depth_reference` assignment below, structurally: a cell whose
+        #     reference id EQUALS its own id is reading against itself, which is what
+        #     a lost fragment actually produces. That check needs no guess about
+        #     WHICH key went missing, and it is the one that catches the case where
+        #     the flag and all its knobs vanished together.
+        #
+        # What is deliberately NOT done: requiring the key on every cell once any
+        # cell declares it. The fixture in
+        # `tests/test_foulplay_power_report.RolloutCellReferenceIdTest` is the normal
+        # shape and refutes it -- the value-head CONTROL legitimately omits the flag
+        # while its rollout twin carries it, so that rule refuses correct campaigns.
+        # Measured, not reasoned: it was written that way and the fixture failed.
+        #: The knobs that only exist because the arm does. Any one of them present
+        #: without `rollout_leaf` is an incoherent cell whichever way the campaign
+        #: as a whole reads.
+        _ROLLOUT_SIBLINGS = (
+            "rollout_count", "rollout_max_plies", "rollout_policy",
+            "rollout_seed", "rollout_threads",
+        )
+
+        def rollout_leaf_of(cell):
+            """The cell's arm flag, with absent refused rather than read as False."""
+            present = "rollout_leaf" in cell
+            siblings = [key for key in _ROLLOUT_SIBLINGS if key in cell]
+            if not present and siblings:
+                raise SystemExit(
+                    f"campaign cell {cell.get('cell_id')!r} carries {siblings} but no "
+                    "'rollout_leaf': absent is not false. Refused rather than rendered, "
+                    "because dropping the fragment renders the VALUE-HEAD CONTROL's id "
+                    "-- a real shard -- so the arm would be measured against itself."
+                )
+            value = cell.get("rollout_leaf", False)
+            if not isinstance(value, bool):
+                # `"false"` is truthy. A string here would turn a control into the arm.
+                raise SystemExit(
+                    f"campaign cell {cell.get('cell_id')!r} has rollout_leaf="
+                    f"{value!r}: a real boolean is required, because every non-empty "
+                    "string is truthy and would file a value-head cell under the arm."
+                )
+            return value
+
         def cid_of(cell):
             # The campaign KEY (k0/k1), matching what the launcher passes as
             # --checkpoint-tag. Deriving it from the checkpoint path instead
@@ -430,7 +489,9 @@ def main(argv=None) -> int:
                 # happened. `search_config_id` requires R and the cap whenever the
                 # arm is on, so a campaign cell that sets `rollout_leaf` without
                 # them fails here loudly rather than rendering a pooled id.
-                rollout_leaf=bool(cell.get("rollout_leaf")),
+                # Through `rollout_leaf_of`, never `bool(cell.get(...))`: see the
+                # note above that helper for what an ABSENT flag renders.
+                rollout_leaf=rollout_leaf_of(cell),
                 rollout_count=cell.get("rollout_count"),
                 rollout_max_plies=cell.get("rollout_max_plies"),
                 rollout_policy=cell.get("rollout_policy") or "uniform",
@@ -439,7 +500,28 @@ def main(argv=None) -> int:
         for cell in campaign.get("cells", []):
             ref = cell.get("reads_against")
             if ref and ref in by_cell:
-                depth_reference[cid_of(cell)] = cid_of(by_cell[ref])
+                own_id, reference_id = cid_of(cell), cid_of(by_cell[ref])
+                # A CELL MAY NOT READ AGAINST ITSELF, and this is what a lost id
+                # fragment actually produces: two DIFFERENT campaign cells rendering
+                # one id. Every prior instance of that in this campaign was silent
+                # -- an absent knob drops its fragment, the id lands on the cell's
+                # own reference, `depth_reference` populates, `depth_rule_applied`
+                # reports true, and the section 5 non-starvation rule compares a
+                # cell to itself and finds no starvation by construction.
+                #
+                # Checked here rather than per knob because it needs no guess about
+                # WHICH knob went missing: any fragment this builder can drop
+                # (`rollout_leaf`, the oracle belief, early stop, the opponent) shows
+                # up as this equality when the two cells differ only by that knob.
+                if own_id == reference_id and cell.get("cell_id") != ref:
+                    raise SystemExit(
+                        f"campaign cells {cell.get('cell_id')!r} and {ref!r} both render "
+                        f"the id {own_id!r}, so {cell.get('cell_id')!r} would read "
+                        "against ITSELF. Refused: the two cells differ by a knob this "
+                        "id builder dropped, and the comparison would report no "
+                        "difference by construction."
+                    )
+                depth_reference[own_id] = reference_id
 
     raw_arms = {c: r for c, r in rows.items() if meta[c]["arm"] == "raw"}
     if not raw_arms:
