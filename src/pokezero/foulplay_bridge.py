@@ -395,6 +395,18 @@ OPPONENT_JOURNAL_MODES = ("off", "addressed", "full")
 # and the coverage to match. Neither is assumed: both are checked by
 # `compare_foulplay_think`, which REFUSES rather than reporting a ratio it cannot defend.
 #
+# AND ADMISSIBLE IS NOT UNCONFOUNDED. `compare_foulplay_think` answers "may these two
+# readings be compared", reports the ratio and deliberately never judges it -- so its
+# `status: "ok"` means admissible. It is also run WITHIN one arm in the merged shard (p1
+# against p2), where both seats are equally starved and the between-arm confound is invisible
+# by construction. The judgement is `cross_arm_foulplay_contention`, which pools an arm's
+# shards with `pool_foulplay_think` and refuses when the opponent's realized work per granted
+# second differs between the arms beyond `FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO` -- a
+# threshold derived from this instrument's own measured precision, not from taste. Its caller
+# is `scripts/foulplay_power_report.py`, which is the first place a search arm's shards and
+# its raw arm's shards are both in hand, and a refusal there makes the cell INELIGIBLE: the
+# verdict is not banked.
+#
 # COVERAGE IS NOT INDEPENDENT OF THE TREATMENT, which is the subtlest hazard here and it
 # points the same flattering way as the confound the instrument was built for. The mean is
 # taken over decisions that PARSED. Under contention foul-play's stdout drains later, so
@@ -3470,6 +3482,370 @@ def compare_foulplay_think(
         # LAST and clearly labelled: a difference here can be pure decision mix.
         "unstratified_ratio": unstratified,
     }
+
+
+#: THE PREREGISTERED CROSS-ARM THRESHOLD. `compare_foulplay_think` answers "may these two
+#: readings be compared at all"; it deliberately does NOT judge the ratio it reports, so
+#: `status: "ok"` there means ADMISSIBLE, not UNCONFOUNDED. This is the number that turns an
+#: admissible comparison into a verdict, and it is a fold ratio: a stratum refuses when
+#: `max(r, 1/r) > FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO`, in either direction, because a
+#: paired delta is contaminated whichever arm the opponent was weaker against.
+#:
+#: DERIVED FROM THE INSTRUMENT'S OWN MEASURED PRECISION, twice, independently:
+#:
+#:   1. A MATCHED PAIR, measured. Two passes of 24 real foul-play searches over the SAME 24
+#:      positions -- foul-play's own `get_result_from_mcts` over poke_engine under `fork`,
+#:      parsed by `_foulplay_think_work_from_log_lines`, 48/48 decisions measured, zero miss
+#:      reasons, all in the `2x1000ms` stratum -- returned per-stratum means of 367,062 and
+#:      396,750 visits per budget-second: a fold ratio of **1.081** with nothing contending
+#:      that was not contending in both passes. Same-position paired ratios ran 0.834-1.214.
+#:      So a threshold at 1.10 would REFUSE A MATCHED PAIR, which is the hazard a gate like
+#:      this one walks into: manufacturing the defect it detects. 1.25 sits at 1 + 3.1x the
+#:      observed matched-pair excess.
+#:   2. THE SAMPLING FLOOR, from the same data. Per-decision CV of the rate within that
+#:      stratum was **0.1151** (48 decisions; 0.1198 and 0.0995 in the two passes). The
+#:      log-ratio of two stratum means over n_a, n_b decisions has SE = cv * sqrt(1/n_a +
+#:      1/n_b), so at `FOULPLAY_THINK_MIN_STRATUM_DECISIONS` on both sides that is 0.0728 and
+#:      a 3-sigma bound is a fold ratio of **1.244**. The two derivations land on the same
+#:      number from different directions, which is why it is 1.25 and not a round guess.
+#:
+#: AND IT IS FAR BELOW WHAT THE INSTRUMENT HAS ALREADY CAUGHT: the starvation that a thin
+#: stratum hid was **3.8x** (an excess of 2.8 against this gate's 0.25), and the arbiter arm's
+#: measured CPU appetite over the raw arm is 1.8x at R=8 / 4.3x at R=32. A 25% drop in the
+#: opponent's realized work is the smallest effect this gate claims to see.
+#:
+#: WHAT IT THEREFORE DOES NOT CLAIM, stated because the gate's value is the bound and not the
+#: pass: at the 20-decision arm floor a 1.25 fold is a ~6-sigma departure, so the gate is
+#: silent on a real 10% starvation. A passing verdict bounds the opponent-throughput confound
+#: at 25% per stratum; it does not show it is zero. `detectable_fold_ratio_3sigma` is reported
+#: per stratum so that bound is readable rather than assumed.
+#:
+#: SCOPE OF THE MEASUREMENT, since a threshold inherits its evidence's limits: taken at
+#: `2x1000ms` on constructed gen3 positions, on an 18-core macOS box at load average 4.7-6.5,
+#: CPython 3.12.13. A loaded box inflates dispersion and therefore loosens this threshold,
+#: which is the unsafe direction, so both derivations are anchored on the LOOSER of the two
+#: and a real randbat campaign should re-derive rather than inherit. The early-game
+#: `8x500ms` stratum was not measured; per-stratum gating means an unmeasured stratum
+#: borrows this bound, which is the residual assumption here.
+FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO = 1.25
+#: Per-decision coefficient of variation of `iterations_per_budget_second` within one
+#: stratum on an uncontended opponent, measured as described above. Used to report each
+#: compared stratum's 3-sigma detectable fold ratio, so a stratum that passed at n=5 is not
+#: read as strongly as one that passed at n=200.
+FOULPLAY_THINK_MEASURED_RATE_CV = 0.1151
+
+
+def pool_foulplay_think(
+    headers: Sequence[Mapping[str, Any] | None],
+    *,
+    label: str = "arm",
+) -> dict[str, Any]:
+    """Pool per-shard, per-seat think headers into ONE arm-level reading of the same shape.
+
+    An arm is not one shard. A cell is a seed band per shard and two seats per shard, so the
+    cross-arm comparison has to pool before it compares -- and pooling is where an arm can
+    lose half its evidence without the number changing shape. Every way that happens is
+    named in `pool_refusals` rather than averaged over:
+
+    * a seat or shard carrying NO think block at all (`seat_block` emits
+      `foulplay_think: None` for a producer too old to measure). Its decisions are unknown,
+      so they cannot enter the coverage denominator -- and coverage over the remaining
+      shards then reads clean while a quarter of the arm was never measured;
+    * a header written against a different `FOULPLAY_THINK_SCHEMA_VERSION`, which may have no
+      `by_stratum` or no `decisions_attempted` and would pool as a silent subset;
+    * a header whose start method cannot emit `Iterations` at all, or whose probe failed so
+      the method is UNKNOWN. Neither is "no contention detected"; both are "not measured".
+      `iterations_observable is None` is refused here by name, because
+      `foulplay_think_reading_status` only refuses the explicit `False`;
+    * shards that disagree about the start method, where the `fork` ones supply every
+      measured decision and the others supply the denominator.
+
+    The pooled means are weighted by each header's own measured-decision count, so pooling
+    four seats is the same number as one run of their union. `iterations_observable` folds to
+    True only when EVERY constituent proved observable.
+    """
+
+    reasons: list[str] = []
+    if not headers:
+        # An arm with no headers at all is not an arm with a flat reading.
+        return {
+            "pooled_headers": 0,
+            "pool_refusals": [f"{label}:no_think_headers"],
+            "iterations_measured_decisions": 0,
+            "mean_iterations_per_budget_second": None,
+            "iterations_coverage": None,
+            "by_stratum": {},
+        }
+    usable: list[Mapping[str, Any]] = []
+    absent = 0
+    for header in headers:
+        if not header:
+            absent += 1
+            continue
+        version = header.get("schema_version")
+        if version != FOULPLAY_THINK_SCHEMA_VERSION:
+            reasons.append(f"{label}:think_schema_mismatch")
+            continue
+        usable.append(header)
+    if absent:
+        reasons.append(f"{label}:think_block_absent_in_pool")
+    start_methods = sorted(
+        {
+            str(header.get("opponent_start_method"))
+            for header in usable
+            if header.get("opponent_start_method") is not None
+        }
+    )
+    observables = [header.get("iterations_observable") for header in usable]
+    if any(flag is False for flag in observables):
+        reasons.append(f"{label}:start_method_cannot_emit_iterations")
+    if any(flag is None for flag in observables):
+        # A failed probe records `iterations_observable: null`. UNKNOWN is not observable,
+        # and the run-level reading status does not refuse it.
+        reasons.append(f"{label}:start_method_unknown")
+    if len(start_methods) > 1:
+        # The `fork` shards supply every measured decision and the others supply the
+        # denominator, so the pooled coverage is a blend of "measured" and "unmeasurable".
+        reasons.append(f"{label}:start_method_not_uniform")
+
+    def _num(header: Mapping[str, Any], key: str) -> float:
+        value = header.get(key)
+        return float(value) if isinstance(value, (int, float)) else 0.0
+
+    measured = sum(int(_num(h, "iterations_measured_decisions")) for h in usable)
+    decisions = sum(int(_num(h, "decisions")) for h in usable)
+    attempted = sum(int(_num(h, "decisions_attempted")) for h in usable)
+    record_failures = sum(int(_num(h, "record_failures")) for h in usable)
+    rate_weight = 0.0
+    rate_total = 0.0
+    for header in usable:
+        rate = header.get("mean_iterations_per_budget_second")
+        n = int(_num(header, "iterations_measured_decisions"))
+        if isinstance(rate, (int, float)) and n:
+            rate_total += float(rate) * n
+            rate_weight += n
+    strata: dict[str, dict[str, float]] = {}
+    for header in usable:
+        for name, block in (header.get("by_stratum") or {}).items():
+            rate = (block or {}).get("mean_iterations_per_budget_second")
+            n = (block or {}).get("iterations_measured_decisions") or 0
+            if not isinstance(rate, (int, float)) or not int(n):
+                continue
+            bucket = strata.setdefault(str(name), {"total": 0.0, "n": 0.0})
+            bucket["total"] += float(rate) * int(n)
+            bucket["n"] += int(n)
+    return {
+        "pooled_headers": len(usable),
+        "headers_without_block": absent,
+        "pool_refusals": sorted(dict.fromkeys(reasons)),
+        "opponent_start_methods": start_methods,
+        # Only when every constituent proved observable. `False` here also trips
+        # `foulplay_think_reading_status`, so the refusal is caught twice by design.
+        "iterations_observable": (
+            True
+            if usable and all(flag is True for flag in observables)
+            else False
+            if any(flag is False for flag in observables)
+            else None
+        ),
+        "decisions": decisions,
+        "decisions_attempted": attempted,
+        "record_failures": record_failures,
+        "iterations_measured_decisions": measured,
+        "total_iterations": sum(int(_num(h, "total_iterations")) for h in usable),
+        "mean_iterations_per_budget_second": (
+            (rate_total / rate_weight) if rate_weight else None
+        ),
+        # Over decisions ATTEMPTED, pooled, for the same reason the per-run figure is: a
+        # decision the telemetry lost is a decision that was not measured.
+        "iterations_coverage": (measured / attempted) if attempted else None,
+        "by_stratum": {
+            name: {
+                "iterations_measured_decisions": int(bucket["n"]),
+                "mean_iterations_per_budget_second": bucket["total"] / bucket["n"],
+            }
+            for name, bucket in sorted(strata.items())
+        },
+        "miss_decisions": sum(int(_num(h, "miss_decisions")) for h in usable),
+    }
+
+
+def cross_arm_foulplay_contention(
+    hungry: Mapping[str, Any] | None,
+    lean: Mapping[str, Any] | None,
+    *,
+    hungry_label: str = "search",
+    lean_label: str = "raw",
+    max_fold_ratio: float = FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
+) -> dict[str, Any]:
+    """BETWEEN two arms: was the time-budgeted opponent equally strong against both?
+
+    `compare_foulplay_think` compares two readings and refuses when they are not comparable.
+    That is a within-shard check in practice -- the merged shard runs it on p1 against p2 of
+    ONE arm -- and symmetry inside an arm cannot see the confound that matters: the
+    oracle-leaf arm spends measurably more CPU per decision than the raw arm (1.8x at R=8,
+    4.3x at R=32), and a time-budgeted opponent given less effective compute against the
+    hungrier arm hands that arm a weaker opponent, in the flattering direction, undetectably.
+    This is the caller for that, and it is a REFUSAL rather than a report: when the opponent's
+    realized work per budget-second differs between arms beyond
+    `FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO`, the paired delta is confounded and the verdict
+    must not be banked.
+
+    `hungry` is the arm expected to spend more CPU (the search/oracle arm). The ratio is
+    reported as `lean / hungry`, so **> 1 means the opponent realized less work per granted
+    second against the hungry arm** -- the flattering direction -- and the direction is named
+    rather than left to a sign convention.
+
+    THE COMPARISON IS STRATIFIED and reuses `by_stratum` rather than recomputing it: 8x500 ms
+    at 60,000 visits/sample and 2x1000 ms at 240,000/sample are identical realized work
+    reading 120,000/s against 240,000/s, so an unstratified comparison invents an effect out
+    of a decision-mix difference. Admissibility -- coverage parity, the per-stratum floor,
+    `FOULPLAY_THINK_MIN_COMPARED_SHARE` of EACH arm inside the compared strata, and both
+    denominators on every ratio -- is delegated whole to `compare_foulplay_think` so there is
+    one implementation of it.
+
+    ON A REFUSAL THE RATES ARE WITHHELD, which is the same rule the per-decision rows follow:
+    a row that cannot say which decision its work belongs to omits the inputs from which the
+    rate is recoverable, because a caller will otherwise reconstruct a withheld number. Here
+    the number at risk is the reassuring one -- a 500-vs-1 sliver reads a ratio of 1.0 while
+    a 3.8x starvation sits in the 99.8% that was never compared like-for-like -- so an
+    inadmissible comparison reports the strata, their denominators and the reasons, and NO
+    ratio at all. `compare_foulplay_think`'s own payload is available to an analyst who calls
+    it directly; what must not exist is a 1.0 inside a report artifact.
+    """
+
+    admissibility = compare_foulplay_think(
+        hungry, lean, first_label=hungry_label, second_label=lean_label
+    )
+    refusals = [
+        *(hungry or {}).get("pool_refusals", ()),
+        *(lean or {}).get("pool_refusals", ()),
+        *admissibility["refusal_reasons"],
+    ]
+    # THE ARM READINGS MUST HAVE COME THROUGH `pool_foulplay_think`. A caller handing over a
+    # single shard's run header directly gets the within-arm gate's checks but not the pooling
+    # ones -- absent blocks, a mixed think schema, an UNKNOWN start method, disagreeing start
+    # methods -- and every one of those bypasses fails toward "comparable".
+    for label, header in ((hungry_label, hungry), (lean_label, lean)):
+        if not header or "pool_refusals" not in header:
+            refusals.append(f"{label}:not_pooled")
+    # STRATA THAT VANISHED WITHOUT A STATED REASON. `compare_foulplay_think` skips a stratum
+    # whose hungry-arm rate is 0 rather than dividing by it, and a skip is not a refusal: a
+    # stratum where the opponent realized ZERO visits per granted second -- total starvation,
+    # the strongest possible reading of the confound -- drops out of the comparison, and if it
+    # holds less than a fifth of the arm the compared-share floor does not notice. Anything
+    # well-powered on both arms and absent from both the compared set and the named thin list
+    # is refused here by name.
+    hungry_strata_all = (hungry or {}).get("by_stratum") or {}
+    lean_strata_all = (lean or {}).get("by_stratum") or {}
+    thin = set(admissibility.get("thin_strata") or ())
+    for name in sorted(set(hungry_strata_all) & set(lean_strata_all)):
+        if name in (admissibility.get("by_stratum") or {}) or name in thin:
+            continue
+        n_hungry = (hungry_strata_all[name] or {}).get("iterations_measured_decisions") or 0
+        n_lean = (lean_strata_all[name] or {}).get("iterations_measured_decisions") or 0
+        if min(int(n_hungry), int(n_lean)) >= FOULPLAY_THINK_MIN_STRATUM_DECISIONS:
+            refusals.append("stratum_dropped_without_reason")
+    admissible = not refusals
+    per_stratum: dict[str, Any] = {}
+    worst: dict[str, Any] | None = None
+    for name, block in (admissibility.get("by_stratum") or {}).items():
+        ratio = block["ratio"]
+        fold = max(ratio, 1.0 / ratio) if ratio else None
+        n_hungry = block[f"{hungry_label}_iterations_measured_decisions"]
+        n_lean = block[f"{lean_label}_iterations_measured_decisions"]
+        entry = {
+            f"{hungry_label}_mean_iterations_per_budget_second": block[
+                f"{hungry_label}_mean_iterations_per_budget_second"
+            ],
+            f"{lean_label}_mean_iterations_per_budget_second": block[
+                f"{lean_label}_mean_iterations_per_budget_second"
+            ],
+            f"{hungry_label}_iterations_measured_decisions": n_hungry,
+            f"{lean_label}_iterations_measured_decisions": n_lean,
+            "ratio_lean_over_hungry": ratio,
+            "fold_ratio": fold,
+            # HOW STRONGLY THIS STRATUM PASSED, not merely that it did: the smallest fold
+            # ratio a 3-sigma test could resolve at these two denominators, from the measured
+            # per-decision CV. Reported rather than gated on purpose -- the within-arm floor
+            # already keeps n at 5 or more, where this sits just under the threshold, so a
+            # gate on it could never read False and would certify nothing.
+            "detectable_fold_ratio_3sigma": (
+                1.0
+                + 3.0
+                * FOULPLAY_THINK_MEASURED_RATE_CV
+                * math.sqrt(1.0 / n_hungry + 1.0 / n_lean)
+            )
+            if n_hungry and n_lean
+            else None,
+        }
+        per_stratum[name] = entry
+        if fold is None:
+            # A compared stratum whose ratio is not a ratio -- the lean arm realized zero
+            # visits per granted second -- would otherwise be skipped when picking the worst
+            # stratum, i.e. the most extreme reading in the payload would be the one that
+            # could not raise a refusal.
+            refusals.append("stratum_rate_not_a_ratio")
+            continue
+        if worst is None or fold > worst["fold_ratio"]:
+            worst = {"stratum": name, **entry}
+    admissible = admissible and not refusals
+    if admissible and worst is not None and worst["fold_ratio"] > max_fold_ratio:
+        refusals.append("cross_arm_rate_ratio_exceeds_threshold")
+    if admissible and worst is None:
+        # Admissible with no comparable stratum is not reachable through
+        # `compare_foulplay_think` today, which refuses first. Named anyway: the alternative
+        # is a verdict of `ok` computed over nothing.
+        refusals.append("no_stratum_carried_a_ratio")
+    verdict = {
+        "status": "refused" if refusals else "ok",
+        "refusal_reasons": sorted(dict.fromkeys(refusals)),
+        "max_fold_ratio": max_fold_ratio,
+        "measured_rate_cv": FOULPLAY_THINK_MEASURED_RATE_CV,
+        "hungry_arm": hungry_label,
+        "lean_arm": lean_label,
+        "coverage_gap": admissibility.get("coverage_gap"),
+        "compared_share": admissibility.get("compared_share"),
+        "thin_strata": admissibility.get("thin_strata"),
+        "reading_status": admissibility.get("reading_status"),
+        "verdict_note": (
+            "A ratio above 1.0 means the opponent realized LESS work per granted "
+            f"budget-second against the {hungry_label} arm: the flattering direction, and "
+            "the paired delta is confounded. Refusal means the arbiter verdict must not be "
+            "banked. A pass bounds the confound at the fold ratio, it does not show it is "
+            "zero."
+        ),
+    }
+    if not admissible:
+        # WITHHELD, not reported-with-a-caveat. See the docstring: the reassuring 1.0 is
+        # exactly what an inadmissible comparison produces, and a number in an artifact
+        # outlives the sentence next to it.
+        #
+        # The DENOMINATORS still travel, and they are taken from each arm's own `by_stratum`
+        # rather than from the admissible subset -- that subset is empty in the case that
+        # matters (a sliver below the per-stratum floor), which would leave the refusal
+        # describing nothing. Counts carry no rate, so nothing is reconstructible from them.
+        verdict["rates_withheld_because"] = verdict["refusal_reasons"]
+        hungry_strata = (hungry or {}).get("by_stratum") or {}
+        lean_strata = (lean or {}).get("by_stratum") or {}
+        verdict["by_stratum"] = {
+            name: {
+                f"{hungry_label}_iterations_measured_decisions": int(
+                    (hungry_strata.get(name) or {}).get("iterations_measured_decisions") or 0
+                ),
+                f"{lean_label}_iterations_measured_decisions": int(
+                    (lean_strata.get(name) or {}).get("iterations_measured_decisions") or 0
+                ),
+            }
+            for name in sorted(set(hungry_strata) | set(lean_strata))
+        }
+        return verdict
+    verdict["by_stratum"] = per_stratum
+    verdict["worst_stratum"] = worst
+    # LAST and labelled, exactly as the within-arm gate does it: a difference here can be
+    # pure decision mix, and it is never what the status is computed from.
+    verdict["unstratified_ratio_lean_over_hungry"] = admissibility.get("unstratified_ratio")
+    return verdict
 
 
 class _FoulPlayWebsocketServer:

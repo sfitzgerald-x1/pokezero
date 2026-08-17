@@ -28,7 +28,15 @@ plausible number:
 * a depth cell that does not out-reach its reference is BUDGET-STARVED and
   excluded, rather than being read as a null (the confound the depth axis
   exists to avoid). Requires `--campaign` to know each cell's reference; the
-  report records whether the rule was applied.
+  report records whether the rule was applied;
+* a cell whose OPPONENT was not equally strong against both arms is
+  CONTENTION-CONFOUNDED and ineligible. The reference opponent is time-budgeted
+  and thinks concurrently with our search on the same host, so whichever arm
+  spends more CPU per decision faces a weaker opponent and is flattered by it.
+  `contention_of` compares the opponent's realized work per granted
+  budget-second BETWEEN the arms, stratified by foul-play's own per-decision
+  schedule, and refuses -- including when it was never measured, because an
+  unmeasured confound reads as a clean delta rather than as a fault.
 
 Usage::
 
@@ -246,6 +254,51 @@ def health_of(meta_entry: dict) -> dict:
     }
 
 
+def think_headers_of(meta_entry: dict) -> list[dict | None]:
+    """Every seat's opponent-think header for one cell, absences INCLUDED as None.
+
+    One per (shard, seat), and a seat whose block is missing contributes a None rather than
+    being skipped: `pool_foulplay_think` counts those and refuses, because coverage computed
+    over the shards that DID carry a block reads clean while a quarter of the arm was never
+    measured. Skipping them here would launder that into a pass.
+    """
+    headers: list[dict | None] = []
+    for per_seat in meta_entry["per_seat"]:
+        for seat in (per_seat or {}).values():
+            headers.append(seat.get("foulplay_think"))
+    return headers
+
+
+def contention_of(search_meta: dict, raw_meta: dict) -> dict:
+    """THE CROSS-ARM CONTENTION GATE, run where the two arms actually meet.
+
+    The reference opponent is TIME-budgeted and its search overlaps ours on the same host, so
+    CPU taken from it shows up as a weaker opponent and reads as a strength gain for whichever
+    arm spends more CPU per decision -- a confound in the flattering direction, on exactly the
+    arm whose job is to arbitrate a disputed effect. The instrument that measures it
+    (`foulplay_think`, see OPPONENT-THINK CONTENTION INSTRUMENT in `pokezero/foulplay_bridge.py`)
+    lands per shard, and the merged shard runs it p1-against-p2 WITHIN one arm. Within-arm
+    symmetry cannot see a between-arm difference: both seats of the hungry arm are equally
+    starved. This report is the first place the search arm's shards and its raw arm's shards
+    are both in hand, so this is where the between-arm comparison belongs.
+
+    Imported rather than reimplemented, per this file's own rule about `search_config_id`: a
+    second copy of the admissibility rules is how two files end up disagreeing about whether a
+    contention number may be used.
+    """
+    from pokezero.foulplay_bridge import (  # noqa: PLC0415
+        cross_arm_foulplay_contention,
+        pool_foulplay_think,
+    )
+
+    return cross_arm_foulplay_contention(
+        pool_foulplay_think(think_headers_of(search_meta), label="search"),
+        pool_foulplay_think(think_headers_of(raw_meta), label="raw"),
+        hungry_label="search",
+        lean_label="raw",
+    )
+
+
 def paired_improvement(candidate: dict, cand_raw: dict, anchor: dict, anchor_raw: dict):
     """CI on (candidate_delta - anchor_delta), per pair.
 
@@ -353,6 +406,13 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=None)
     args = ap.parse_args(argv)
 
+    # Named at module scope in the bridge so the report and the gate cannot drift apart on
+    # the number the whole refusal turns on.
+    from pokezero.foulplay_bridge import (  # noqa: PLC0415
+        FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
+        FOULPLAY_THINK_MEASURED_RATE_CV,
+    )
+
     shards = load_shards(args.shards)
     fingerprint = assert_single_build(shards, args.expect_fingerprint)
     rows, meta = collect_rows(shards)
@@ -432,6 +492,8 @@ def main(argv=None) -> int:
         scored["raw_arm"] = candidates[0]
         scored["latency"] = latency_of(meta[cid])
         scored["health"] = health_of(meta[cid])
+        # BETWEEN the arms, not within one. See contention_of.
+        scored["contention"] = contention_of(meta[cid], meta[candidates[0]])
         scored["opponent_priors"] = meta[cid]["opponent_priors"]
         # Arm identity witnessed from the shards, not from the cell id alone --
         # and for the telemetry the cell id says nothing at all.
@@ -480,6 +542,18 @@ def main(argv=None) -> int:
                 f"OPPONENT fallback {ofb:.1%} over {FALLBACK_LIMIT:.0%}")
         if cell.get("min_pairs_shortfall"):
             reasons.append(cell["min_pairs_shortfall"])
+        # THE CROSS-ARM CONTENTION GATE, held to the same bar as the cap: a comparison the
+        # gate cannot defend is UNSCORED, not a null. Anything but `ok` makes the cell
+        # ineligible, including "not measured" -- a cell whose opponent-throughput parity is
+        # unknown is exactly as unbankable as one whose opponent was starved, and it reads as
+        # a clean delta rather than as a fault, which is worse. Same precedent as
+        # `cap: UNEVALUABLE`.
+        contention = cell.get("contention") or {}
+        if contention.get("status") != "ok":
+            reasons.append(
+                "CONTENTION-CONFOUNDED - cross-arm opponent throughput not comparable: "
+                + ", ".join(contention.get("refusal_reasons") or ["contention unknown"])
+            )
         # Depth cells: a d6/d8 cell that did not out-reach its reference is
         # BUDGET-STARVED, and its flat strength is void rather than a null.
         # This is the confound section 5 exists to prevent, and it is why the
@@ -608,9 +682,25 @@ def main(argv=None) -> int:
             c for c in depth_reference if c not in cells
         ),
         "min_pairs": args.min_pairs,
+        # THE PREREGISTRATION, in the artifact. Deliberately not a CLI flag: a threshold
+        # that can be loosened at report time is not preregistered, and the direction it
+        # would be loosened in is known in advance.
+        "contention_gate": {
+            "max_fold_ratio": FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO,
+            "measured_rate_cv": FOULPLAY_THINK_MEASURED_RATE_CV,
+            "note": (
+                "Refuses when the opponent's realized visits per granted budget-second "
+                "differ between the arms by more than the fold ratio in any compared "
+                "stratum. Threshold derived from the instrument's own measured precision: a "
+                "matched pair of uncontended real foul-play passes read 1.081, and 3 sigma "
+                "at the per-stratum floor is 1.244. A pass BOUNDS the confound at the fold "
+                "ratio; it does not show it is zero."
+            ),
+        },
         "winner_note": (
             "Eligibility requires shared pairs, >= the section 8 minimum, a passing "
-            "cap, seat and fallback health, and -- for depth cells, when --campaign "
+            "cap, seat and fallback health, a cross-arm opponent-throughput comparison "
+            "the contention gate accepts, and -- for depth cells, when --campaign "
             "is given -- reached-depth clearing their reference. A cell excluded by "
             "the cap or as budget-starved is NOT a miss for its strength prediction; "
             "it is unscored. Adoption compares the paired IMPROVEMENT over the "
