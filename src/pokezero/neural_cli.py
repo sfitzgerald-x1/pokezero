@@ -462,6 +462,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # --initial-checkpoint the masks come from the checkpoint; explicitly-passed flags
     # must AGREE with it or the command hard-fails (never silently retrain under
     # different observation content — the #492 mismatch class).
+
     train.add_argument(
         "--observation-schema",
         choices=("v2.1", "v2.2", "v3", "v4"),
