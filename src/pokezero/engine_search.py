@@ -1282,6 +1282,26 @@ def world_cache_key(record: Mapping[str, Any], side_key: str) -> tuple[str, str,
     return (str(record["state_str"]), str(record["ctx_json"]), str(side_key))
 
 
+#: The CURRENT rollout-leaf shard schema version, stamped into every shard block that
+#: carries the arm's telemetry.
+#:
+#: DECLARED HERE SO THIS BRANCH AGREES WITH #1271 RATHER THAN COMPETING WITH IT. The
+#: two branches invented divergent schemas for one shard surface -- this one wrote the
+#: already-banked arbiter shards with `rollout_leaf_world_records` (`+= 1` per crate
+#: report) and a `cap`-only fallback numerator, #1271 with `rollout_leaf_worlds`
+#: (`+= weight`) and `cap + dead_ends` -- and whichever landed second would have
+#: silently re-schemaed the banked artifacts, because an absent key reads as zero
+#: engaged worlds rather than as an absence.
+#:
+#: v2 is #1271's and this branch adopts it. #1271 owns the reader
+#: (`require_rollout_leaf_shard_schema`, which refuses a v1 shard by name and points
+#: at `migrate_rollout_leaf_shard_v1`) and this constant; the merge keeps exactly ONE
+#: definition. Migration of the four banked shards is provably value-preserving --
+#: `worlds_collapsed == 0` and `rollout_dead_ends == 0` on all four, which are exactly
+#: the conditions under which the two accumulation rules and the two numerators agree.
+ROLLOUT_LEAF_SHARD_SCHEMA = 2
+
+
 @dataclass
 class EngineMctsStats:
     """Cumulative per-policy telemetry; every fallback is counted, never hidden."""
@@ -1403,9 +1423,19 @@ class EngineMctsStats:
     # turns "was the seam engaged" into a field of `policy_stats` instead of a
     # claim about the launch command.
     #
-    # Per INVOCATION, matching `model_evals` and the phase walls directly above:
-    # a conservatively replayed world ran its rollouts twice and spent that work.
-    rollout_leaf_world_records: int = 0
+    # PER WORLD, weighted by the collapse multiplicity. This counter was named for
+    # crate REPORTS and accumulated `+= 1` per report, which under-counts a collapsed
+    # draw: two identical belief draws share ONE search, so `+= 1` records one world
+    # where two were represented. Renamed and reweighted to the canonical rollout-leaf
+    # shard schema (v2, #1271), because the two branches had divergent names AND
+    # divergent accumulation for one quantity and whichever landed second would have
+    # silently re-schemaed the already-banked arbiter shards.
+    #
+    # The cost ledger below stays PER INVOCATION and unweighted -- it measures compute
+    # that happened once no matter how many draws the search served -- so
+    # `rollouts_run / rollout_leaf_worlds` is not rollouts-per-world on a run with
+    # collapses. Use `unique_worlds_searched` for that denominator.
+    rollout_leaf_worlds: int = 0
     rollouts_run: int = 0
     rollout_plies: int = 0
     rollout_terminal_hits: int = 0
@@ -1815,8 +1845,15 @@ class EngineMctsStats:
             "model_evals": self.model_evals,
             # THE ARM'S RUNTIME WITNESS. `rollout_leaf_modes` is what says the
             # seam was engaged; the counters say how much work it did.
+            # THE SCHEMA STAMP, first, because it is what makes every key below
+            # readable. An unstamped block is unresolvable after the fact: "written
+            # before the rename" and "written by a writer that dropped a field" are the
+            # same artifact. The version and its reader
+            # (`require_rollout_leaf_shard_schema`) are #1271's; the merge keeps ONE
+            # definition of the constant.
+            "rollout_leaf_schema": ROLLOUT_LEAF_SHARD_SCHEMA,
             "rollout_leaf_modes": dict(self.rollout_leaf_modes),
-            "rollout_leaf_world_records": self.rollout_leaf_world_records,
+            "rollout_leaf_worlds": self.rollout_leaf_worlds,
             "rollouts_run": self.rollouts_run,
             "rollout_plies": self.rollout_plies,
             "rollout_terminal_hits": self.rollout_terminal_hits,
@@ -1837,16 +1874,22 @@ class EngineMctsStats:
                 if self.rollouts_run
                 else None
             ),
-            # CAP HITS ALONE. `rollout_dead_ends` used to be a second term here and
-            # is not one any more: it is zero by construction (see its field
-            # comment, and `rollout.rs`'s invariant test), so four mutants on it
-            # survived the whole suite -- a term that cannot read non-zero is not a
-            # measurement, and carrying it made this fraction look like it summed
-            # two measured things. It sums one. The dead-end case is REFUSED in
-            # `_absorb_rollout_report` instead, which is the honest handling of a
-            # state that means the engine regressed.
+            # THE WHOLE PARTITION, `cap + dead_ends`, to match the canonical schema
+            # (v2, #1271).
+            #
+            # This read CAP ALONE, on the argument that `rollout_dead_ends` is zero by
+            # construction and four mutants on the term survived the suite -- "a term
+            # that cannot read non-zero is not a measurement". The objection was sound
+            # and its conclusion was not: zero-by-construction is a property of THIS
+            # WRITER (which refuses a non-zero count in `_absorb_rollout_report`), not
+            # of the schema, so a reader cannot check a cap-only fraction against the
+            # counts printed beside it. #1271 makes the term testable at the writer
+            # instead, with a stats-level fixture that sets dead_ends non-zero and so
+            # never passes through the absorb refusal. On every shard this writer can
+            # produce the two rules give the same number, because dead_ends is refused
+            # upstream -- so this is a schema alignment, not a value change.
             "rollout_fallback_fraction": (
-                self.rollout_cap_hits / self.rollouts_run
+                (self.rollout_cap_hits + self.rollout_dead_ends) / self.rollouts_run
                 if self.rollouts_run
                 else None
             ),
@@ -4326,7 +4369,7 @@ class EngineMctsPolicy:
             # the 900 characters following the `model_evals` line), so inserting
             # here keeps that guard measuring what it was written to measure
             # instead of measuring this block's comment length.
-            self._absorb_rollout_report(report)
+            self._absorb_rollout_report(report, weight=weight)
             return report
 
         for world, state in worlds:
@@ -4655,7 +4698,9 @@ class EngineMctsPolicy:
             },
         )
 
-    def _absorb_rollout_report(self, report: Mapping[str, Any]) -> bool:
+    def _absorb_rollout_report(
+        self, report: Mapping[str, Any], *, weight: int = 1
+    ) -> bool:
         """Absorb ONE world's rollout-leaf telemetry into the shard stats.
 
         A NAMED METHOD rather than an inline block inside `_search_model`'s world
@@ -4672,14 +4717,18 @@ class EngineMctsPolicy:
         configured and not run). Returns whether the seam was seen, so a caller
         can assert on it.
 
-        Per INVOCATION, matching `model_evals` and the phase walls: a
-        conservatively replayed world ran its rollouts twice and spent that work.
+        THE WORLD COUNTERS ARE WEIGHTED, the cost ledger is not. `rollout_leaf_modes`
+        and `rollout_leaf_worlds` count WORLDS (`+= weight`), so two identical belief
+        draws served by one search count two; `rollouts_run` and the rest count
+        INVOCATION work, which happened once. Both units are named in the field
+        comments, because `rollouts_run / rollout_leaf_worlds` is not
+        rollouts-per-world on a run with collapses.
         """
         leaf_mode = report.get("rollout_leaf_mode")
         if leaf_mode is None:
             return False
-        self.stats.rollout_leaf_modes[str(leaf_mode)] += 1
-        self.stats.rollout_leaf_world_records += 1
+        self.stats.rollout_leaf_modes[str(leaf_mode)] += weight
+        self.stats.rollout_leaf_worlds += weight
         self.stats.rollouts_run += int(report.get("rollouts_run") or 0)
         self.stats.rollout_plies += int(report.get("rollout_plies") or 0)
         self.stats.rollout_terminal_hits += int(report.get("rollout_terminal_hits") or 0)

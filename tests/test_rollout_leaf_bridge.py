@@ -1137,7 +1137,7 @@ class RuntimeWitnessTest(unittest.TestCase):
         }))
         s = shell.stats
         self.assertEqual(s.rollout_leaf_modes, Counter({"rollout": 1}))
-        self.assertEqual(s.rollout_leaf_world_records, 1)
+        self.assertEqual(s.rollout_leaf_worlds, 1)
         # Each counter asserted individually and at a DISTINCT value, so a
         # copy-paste that read the wrong report key cannot pass.
         self.assertEqual(s.rollouts_run, 64)
@@ -1154,7 +1154,7 @@ class RuntimeWitnessTest(unittest.TestCase):
             "rollout_terminal_hits": 64,
         })
         self.assertEqual(shell.stats.rollouts_run, 128)
-        self.assertEqual(shell.stats.rollout_leaf_world_records, 2)
+        self.assertEqual(shell.stats.rollout_leaf_worlds, 2)
 
     def test_every_absorbed_counter_survives_to_dict(self) -> None:
         """The payload must carry what was absorbed.
@@ -1175,7 +1175,7 @@ class RuntimeWitnessTest(unittest.TestCase):
         })
         payload = shell.stats.to_dict()
         self.assertEqual(payload["rollout_leaf_modes"], {"rollout": 1})
-        self.assertEqual(payload["rollout_leaf_world_records"], 1)
+        self.assertEqual(payload["rollout_leaf_worlds"], 1)
         self.assertEqual(payload["rollouts_run"], 100)
         self.assertEqual(payload["rollout_plies"], 5500)
         self.assertEqual(payload["rollout_terminal_hits"], 91)
@@ -1297,24 +1297,33 @@ class RuntimeWitnessTest(unittest.TestCase):
         self.assertIn("crate_search_rollout", handler_source)
         self.assertIn("world_failure_reasons", handler_source)
 
-    def test_the_fallback_fraction_does_not_read_the_dead_end_counter(self) -> None:
-        """A STRUCTURAL guard, and it says so, because this one has no behavioural
-        signature and pretending otherwise would be the very defect under review.
+    def test_the_fallback_fraction_reads_its_whole_partition(self) -> None:
+        """REVERSED, and the reversal is the cross-PR schema resolution.
 
-        Re-adding `+ self.rollout_dead_ends` to `rollout_fallback_fraction` is an
-        EQUIVALENT mutation: `_absorb_rollout_report` refuses a non-zero reading, so
-        the counter is provably always 0 and the two expressions cannot differ on
-        any input. Mutation testing therefore reports that mutant as surviving, and
-        it is right to -- it is exactly the "term that cannot read non-zero" the
-        review objected to, restored.
+        This assertion previously required the numerator NOT to read
+        `rollout_dead_ends`, on the argument that the counter is refused upstream and
+        therefore provably zero, so the term "cannot read non-zero" and four mutants
+        on it survived. The premise was right and the conclusion was wrong in a way
+        that matters:
 
-        So the decision is pinned where it lives: the fraction's numerator reads the
-        cap counter and does not read the dead-end counter. That is a claim about the
-        source, asserted against the source, rather than a behavioural test dressed
-        up as one.
+        * zero-by-construction is a property of THIS WRITER, not of the schema. A
+          reader holding a banked shard cannot check a `cap`-only fraction against the
+          counts printed beside it, and "the writer refuses the other case" is a claim
+          about a version of the writer;
+        * #1271's per-decision guard already requires `(cap + dead) / run` and refuses
+          a fraction that is not its own partition's quotient. Two surfaces of one
+          number under two rules is the exact defect this module has been burned by
+          before (`root_q_gap_sum` versus its histogram);
+        * the term's untestability was a property of the FIXTURES, not of the term.
+          #1271 kills the mutant with a stats-level fixture that sets `dead_ends`
+          non-zero and so never passes through the absorb refusal.
 
-        FAILING INPUT: re-adding the term, or swapping cap for terminal, both land
-        here (the second also fails behaviourally, above).
+        So the shard schema is v2 (`rollout_leaf_schema == 2`) and the numerator is the
+        whole partition. On every shard this writer can produce the two rules give the
+        same number, because the dead-end case is still refused upstream -- this is a
+        schema alignment, not a value change, and the test below asserts exactly that.
+
+        FAILING INPUT: dropping the term, or swapping cap for terminal, both land here.
         """
         import ast  # noqa: PLC0415
         import inspect  # noqa: PLC0415
@@ -1338,11 +1347,32 @@ class RuntimeWitnessTest(unittest.TestCase):
         }
         self.assertIn("rollout_cap_hits", read)
         self.assertIn("rollouts_run", read)
-        self.assertNotIn(
+        self.assertIn(
             "rollout_dead_ends", read,
-            "the dead-end counter is an invariant witness, refused in "
-            "`_absorb_rollout_report` and provably zero, so it must not be a term in "
-            "a fraction that is read as an estimand",
+            "the fallback fraction must be the quotient of its OWN partition "
+            "(cap + dead_ends) / rollouts_run, so a reader can check it against the "
+            "counts printed beside it; a cap-only numerator is checkable only against "
+            "a claim about the writer",
+        )
+        # AND THE VALUE IS UNCHANGED ON ANYTHING THIS WRITER CAN PRODUCE, which is what
+        # makes this an alignment rather than a re-measurement: the dead-end case is
+        # still refused in `_absorb_rollout_report`, so `dead == 0` on every shard and
+        # the two numerators coincide. Asserted rather than argued.
+        from pokezero.engine_search import ROLLOUT_LEAF_SHARD_SCHEMA
+
+        stats = EngineMctsStats()
+        stats.rollout_leaf_modes["rollout"] = 65
+        stats.rollout_leaf_worlds = 65
+        stats.rollouts_run = 71832
+        stats.rollout_terminal_hits = 70529
+        stats.rollout_cap_hits = 1303
+        stats.rollout_dead_ends = 0
+        payload = stats.to_dict()
+        self.assertEqual(payload["rollout_leaf_schema"], ROLLOUT_LEAF_SHARD_SCHEMA)
+        # The arm's own banked whole-game figure, at the launched 200-ply cap: a 98.2%
+        # ORACLE. Reproduced here to the last digit under the v2 numerator.
+        self.assertEqual(
+            payload["rollout_fallback_fraction"], 0.018139547833834504
         )
 
     def test_the_decision_row_fraction_is_cap_over_run_too(self) -> None:
