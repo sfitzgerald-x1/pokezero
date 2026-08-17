@@ -523,8 +523,17 @@ class EngineMctsConfig:
     # `rollout_fallback_fraction` so a blend can never be reported as an oracle.
     rollout_max_plies: int = 200
     rollout_policy: str = "uniform"
-    # Rollout RNG root. Disjoint from the search RNG by construction, so
-    # changing it cannot move which chance branches the tree sampled.
+    # Rollout RNG root. Disjoint from the search RNG by construction: rollouts
+    # never draw from the stream `traverse` uses to sample chance branches.
+    #
+    # What that does and does not buy, stated exactly because the looser version
+    # of this sentence was measurably false. It buys: at a FIXED leaf-value
+    # vector the selection sequence is bit-identical to production's. It does
+    # NOT buy invariance of the tree to this knob -- moving it reprices the
+    # leaves, repriced leaves change selection, and changed selection samples
+    # different chance branches. Measured, search seed held, this knob 1 -> 2:
+    # chance_nodes 344 -> 348, decision_nodes 139 -> 149. That is the
+    # instrument working; it is not a leak between the streams.
     rollout_seed: int = 0
     # Throughput only -- priced values are thread-count invariant (crate test
     # `thread_count_does_not_change_values`).
@@ -554,9 +563,29 @@ class EngineMctsConfig:
     #: shard concurrency of the run it is used in. Required, so the hazard
     #: above cannot be walked into by editing one number.
     rollout_threads_cpu_budget_ack: bool = False
-    # Rows priced per round. 1 is the sequential selection regime and the only
-    # value the fidelity gate certifies; >1 is a measured fidelity LOSS.
+    # Rows priced per round. On THIS (sequential) path 1 is the production
+    # regime and the only value the fidelity gate certifies; >1 is a measured
+    # fidelity LOSS, not an approximation.
+    #
+    # THE GATE WAS ON THE WRONG KNOB. `rollout_threads` -- proven value-invariant
+    # by `thread_count_does_not_change_values` -- required an acknowledgement,
+    # while this one, the only uncertified regime the arm has, was accepted
+    # silently with no warning. Measured magnitude on `symmetric.state`:
+    # root_value 0.518034 at 1, 0.505411 at 8, 0.435800 at 64 -- 8.2 pp on the
+    # reported quantity, which is LARGER than the ~0.6 pp vs ~13 pp contrast this
+    # arm exists to resolve. So an unacknowledged batch could swamp the arbiter's
+    # own signal.
     leaf_batch: int = 1
+    #: Acknowledge that `leaf_batch > 1` trades selection fidelity for pricer
+    #: amortisation on the sequential path, and that the fidelity gate does not
+    #: cover the chosen value. Required, so the arm's one uncertified regime
+    #: cannot be entered by editing a number.
+    #:
+    #: Scope note: this is a SEQUENTIAL-path fence. On the model-priors path the
+    #: campaign's production configuration is itself batched (the panel ran
+    #: b64), so there `search_batch > 1` IS production and the control
+    #: reproduces production at the panel's own batch -- no ack applies.
+    leaf_batch_fidelity_loss_ack: bool = False
     # TorchScript artifact (scripts/export_model.py; per-device trace — a CPU
     # artifact must run on cpu) and the encoder tables JSON
     # (scripts/export_encoder_tables.py), plus the source checkpoint whose
@@ -706,6 +735,17 @@ class EngineMctsConfig:
                 raise ValueError(
                     "leaf_batch must be > 0 for leaf_eval='rollout_crate' "
                     f"(got {self.leaf_batch})."
+                )
+            if self.leaf_batch > 1 and not self.leaf_batch_fidelity_loss_ack:
+                raise ValueError(
+                    f"leaf_batch={self.leaf_batch} > 1 requires "
+                    "leaf_batch_fidelity_loss_ack=True. leaf_batch=1 is the only value "
+                    "the fidelity gate certifies on the sequential path, and batching is "
+                    "a measured fidelity LOSS rather than an approximation: root_value "
+                    "moved 0.518034 -> 0.505411 -> 0.435800 at leaf_batch 1 -> 8 -> 64 on "
+                    "one fixture, i.e. 8.2 pp on the reported quantity -- larger than the "
+                    "effect contrast this arm exists to resolve. Set the ack only if the "
+                    "amortisation is worth an uncertified selection regime."
                 )
             if self.rollout_policy != "uniform":
                 raise ValueError(

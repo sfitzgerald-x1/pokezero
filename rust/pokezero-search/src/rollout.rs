@@ -15,9 +15,26 @@
 //! - The search RNG stream and the rollout RNG stream are DISJOINT. Rollouts
 //!   draw from per-leaf RNGs seeded by `splitmix64(rollout_seed, ordinal,
 //!   trial)`, never from the `&mut StdRng` that `traverse` uses to sample
-//!   chance branches. Consequence: for a fixed leaf-value vector the selection
-//!   sequence is bit-identical to production's, and adding/removing rollouts
-//!   cannot perturb which branches were sampled.
+//!   chance branches.
+//!
+//!   THE EXACT CLAIM, because a looser wording of it was measurably false and
+//!   shipped in review. Disjointness buys this and only this: **at a fixed
+//!   leaf-value vector** the selection sequence is bit-identical to
+//!   production's, so nothing about the tree changes for a reason other than
+//!   the leaf values. It does NOT buy invariance to `rollout_seed` or to `R`.
+//!   Those knobs reprice the leaves; repriced leaves change selection; changed
+//!   selection descends elsewhere and therefore samples different chance
+//!   branches. Measured on `symmetric.state` with the search seed held and only
+//!   `rollout_seed` moved 1 -> 2: `chance_nodes` 344 -> 348,
+//!   `decision_nodes` 139 -> 149, `depth_occupancy`
+//!   [600, 596, 512] -> [600, 596, 509]. That is the instrument working as
+//!   designed, not a leak -- but "changing R cannot perturb which branches were
+//!   sampled" was the wrong sentence for it, on the one knob whose whole
+//!   purpose is redrawing labels.
+//!
+//!   The narrow claim is what the fidelity gate actually tests, and it is
+//!   verified over 1440 configurations (5 fixtures x max_depth {1,2,3,5,8,12} x
+//!   seeds x iterations x `deep_ko_split` x `fpu_reduction`), 0 mismatches.
 //! - The leaf pricer is a PARAMETER ([`LeafMode`]). With
 //!   [`LeafMode::HpFraction`] this driver prices leaves exactly as
 //!   `multiply_search_with_eval` does, which is what the fidelity gate
@@ -305,6 +322,45 @@ fn rollout_trial(
 // Row pricing: the batching seam's payload
 // ---------------------------------------------------------------------------
 
+/// Canonical reduction of a `[row][trial]` matrix to one value per row, and
+/// the refusal that makes an unpriced slot an error instead of a NaN.
+///
+/// Split out of `price_rows` for one reason: it is the piece that has to be
+/// callable with a doctored matrix. A guard whose only demonstration is "someone
+/// mutated the writer and rebuilt" is a guard nobody can regression-test, and
+/// this program's rule is that every guard ships with a demonstrated failing
+/// input -- so the failing input has to be reachable from a test.
+///
+/// Row-major, trial order, f64 accumulator: f32 addition is not associative, so
+/// this order is what makes the priced value independent of how the scheduler
+/// split the work.
+///
+/// Returns `Result<_, String>` rather than `PyResult`: `PyErr::to_string`
+/// requires an initialised interpreter, so a `PyResult` here would force the
+/// guard's own test to boot Python just to read the refusal it is asserting on.
+/// The caller wraps it.
+fn reduce_trials(trials: &[f32], rows: usize, r: usize) -> Result<Vec<f32>, String> {
+    if let Some(task) = trials.iter().position(|v| !v.is_finite()) {
+        return Err(format!(
+            "rollout trial {} of {} was never priced (row {}, trial {}); refusing to \
+             average a non-finite slot into a leaf value",
+            task,
+            trials.len(),
+            task / r.max(1),
+            task % r.max(1),
+        ));
+    }
+    Ok((0..rows)
+        .map(|row| {
+            let total: f64 = trials[row * r..(row + 1) * r]
+                .iter()
+                .map(|v| f64::from(*v))
+                .sum();
+            (total / r as f64) as f32
+        })
+        .collect())
+}
+
 /// Price one round's rows: `rows.len() * R` independent rollouts.
 ///
 /// Threading is a THROUGHPUT knob only, and two design choices are what make
@@ -323,12 +379,16 @@ fn rollout_trial(
 /// Tasks are handed out by a shared atomic cursor rather than split into
 /// contiguous blocks: rollout length varies by an order of magnitude with how
 /// close the leaf is to terminal, so static splits idle.
-fn price_rows(rows: &[State], ordinals: &[u64], cfg: &RolloutConfig) -> (Vec<f32>, RolloutStats) {
+fn price_rows(
+    rows: &[State],
+    ordinals: &[u64],
+    cfg: &RolloutConfig,
+) -> PyResult<(Vec<f32>, RolloutStats)> {
     let n = rows.len();
     let r = cfg.rollouts as usize;
     let mut stats = RolloutStats::default();
     if n == 0 {
-        return (Vec::new(), stats);
+        return Ok((Vec::new(), stats));
     }
     stats.leaves_priced = n as u64;
     let tasks = n * r;
@@ -385,21 +445,24 @@ fn price_rows(rows: &[State], ordinals: &[u64], cfg: &RolloutConfig) -> (Vec<f32
             stats.merge(local_stats);
         }
     }
-    debug_assert!(
-        trials.iter().all(|v| v.is_finite()),
-        "every (row, trial) must be priced"
-    );
-    // Canonical reduction: row-major, trial order, f64 accumulator.
-    let values: Vec<f32> = (0..n)
-        .map(|row| {
-            let total: f64 = trials[row * r..(row + 1) * r]
-                .iter()
-                .map(|v| f64::from(*v))
-                .sum();
-            (total / r as f64) as f32
-        })
-        .collect();
-    (values, stats)
+    // NOT a `debug_assert!`. This crate ships `--release` (Cargo.toml sets
+    // `[profile.release]` and `scripts/build_search_crate_model.sh` builds
+    // `--release`), where `debug_assert!` is compiled OUT -- so the guard that
+    // used to stand here did not exist in any wheel anyone ran.
+    //
+    // Demonstrated, by deliberately skipping the write of task 0 and rebuilding
+    // with the exact shipping command: `root_value` and every root arm's `q`
+    // came back `nan`, with NO exception, and the report string carried a bare
+    // `NaN` token -- which is invalid JSON that Python's non-strict
+    // `json.loads` accepts, so `_search_rollout_crate` would have taken a
+    // decision off a degenerate tree and banked it as a measurement. An
+    // unpriced slot is a lost rollout, and a lost rollout must be an error, not
+    // a quiet NaN that propagates into a win-rate number.
+    //
+    // `events.rs` already wrote this rule down for this crate; the seam simply
+    // has to obey it.
+    let values = reduce_trials(&trials, n, r).map_err(PyValueError::new_err)?;
+    Ok((values, stats))
 }
 
 // ---------------------------------------------------------------------------
@@ -465,7 +528,7 @@ pub(crate) fn multiply_search_rollout(
                 rows.iter().map(|leaf| HpFractionEval.eval(leaf)).collect()
             }
             LeafMode::Rollout => {
-                let (values, round_stats) = price_rows(&rows, &ordinals, rcfg);
+                let (values, round_stats) = price_rows(&rows, &ordinals, rcfg)?;
                 stats.merge(&round_stats);
                 values
             }
@@ -803,6 +866,40 @@ mod tests {
     /// not depend on the search seed's stream. Both are load-bearing: the
     /// first makes results reproducible off the cluster, the second is what
     /// makes the fidelity gate meaningful.
+    #[test]
+    fn an_unpriced_trial_slot_is_refused_rather_than_averaged() {
+        // THE DEMONSTRATED FAILING INPUT for the guard that replaced a
+        // `debug_assert!`. That assert was compiled out of every shipped
+        // `--release` wheel, and a skipped write produced `root_value: nan` with
+        // no exception and a bare `NaN` token in the report -- invalid JSON that
+        // Python's non-strict `json.loads` accepts, so a decision came off a
+        // degenerate tree and would have been banked as a measurement.
+        //
+        // Reachable from a test because the reduction is its own function: a
+        // guard whose only demonstration is "mutate the writer and rebuild" is
+        // one nobody can regression-test.
+        let clean = [0.0_f32, 1.0, 0.5, 0.5];
+        let values = reduce_trials(&clean, 2, 2).expect("a fully priced matrix reduces");
+        assert_eq!(values, vec![0.5, 0.5]);
+
+        for (label, doctored) in [
+            ("never written", [f32::NAN, 1.0, 0.5, 0.5]),
+            ("infinite", [0.0, f32::INFINITY, 0.5, 0.5]),
+            ("last slot", [0.0, 1.0, 0.5, f32::NAN]),
+        ] {
+            let message = reduce_trials(&doctored, 2, 2)
+                .expect_err(&format!("{label}: a non-finite slot must be refused"));
+            assert!(
+                message.contains("was never priced"),
+                "{label}: refusal must name the cause, got {message}"
+            );
+            assert!(
+                message.contains("row") && message.contains("trial"),
+                "{label}: refusal must locate the slot, got {message}"
+            );
+        }
+    }
+
     #[test]
     fn thread_count_does_not_change_values() {
         let one = puct_search_multi_rollout(

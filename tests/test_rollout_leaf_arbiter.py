@@ -367,6 +367,33 @@ class RolloutConfigGuardTests(unittest.TestCase):
         `leaf_eval` accepts the arm's fields and ignores them, so a stray value
         cannot change what a production cell does."""
 
+    def test_a_batched_arm_requires_the_fidelity_loss_ack(self) -> None:
+        # The demonstrated failing input for the guard that was previously on the
+        # wrong knob: `leaf_batch > 1` is the arm's ONLY uncertified selection
+        # regime and used to be accepted silently, while `rollout_threads` --
+        # proven value-invariant -- required an acknowledgement.
+        for leaf_batch in (2, 8, 64, 4096):
+            with self.subTest(leaf_batch=leaf_batch), self.assertRaises(ValueError) as caught:
+                self._config(leaf_batch=leaf_batch)
+            message = str(caught.exception)
+            self.assertIn("leaf_batch_fidelity_loss_ack=True", message)
+            # The refusal must carry the MAGNITUDE, so a reader deciding whether
+            # to set the ack sees what it costs rather than only that it is
+            # uncertified.
+            self.assertIn("8.2 pp", message)
+
+    def test_the_batch_ack_admits_the_regime_rather_than_banning_it(self) -> None:
+        # A fence that cannot be opened would make the batching seam untestable;
+        # the requirement is an explicit choice, not a prohibition.
+        config = self._config(leaf_batch=8, leaf_batch_fidelity_loss_ack=True)
+        self.assertEqual(config.leaf_batch, 8)
+
+    def test_the_batch_ack_is_inert_on_other_leaf_evals(self) -> None:
+        from pokezero.engine_search import EngineMctsConfig
+
+        EngineMctsConfig(leaf_eval="hp_fraction", leaf_batch=64)
+
+
         from pokezero.engine_search import EngineMctsConfig
 
         production = EngineMctsConfig(
