@@ -72,12 +72,35 @@ FULL = {f"pokezero.observation.{s}" for s in SHORT}
 # silencing an abort by editing the spec now requires editing this file too, in a differently
 # shaped place, with an explicit number a reviewer can question.
 #
-# KNOWN RESIDUAL, stated because a count is exactly as strong as its arithmetic: a PAIRED swap
-# (one REGISTER->PARTIAL and one PARTIAL->REGISTER) leaves all three counts unchanged and is
-# still exit 0. A legitimate reclassification must update these numbers, which is the same
-# deliberate trade the spec header records for line-qualified rows -- a loud reclassify beats a
-# silent free pass.
-EXPECTED_CLASS_COUNTS = {"REGISTER": 10, "PARTIAL": 1, "MIRRORED": 8}
+# PINNED PER FILE, not as three global totals. Three globals were the first form of this pin, and
+# review showed the residual they leave is not the single pair the comment disclosed: ANY
+# permutation of classes across rows is free. REGISTER<->MIRRORED is the one that matters most --
+# those are the two large classes and theirs is the subtle judgement ("does the mirror carry it, or
+# must the injection edit it?"), so it is the likeliest accidental reclassification -- and a
+# three-cycle (R->M, M->P, P->R) was free too. Both were measured exit 0 against the global form.
+#
+# Keying the counts by FILE removes every permutation that crosses a file, because a swap between
+# two files changes two entries. What remains is a swap WITHIN one file that holds more than one
+# class, and today exactly one file does: showdown.py (3 MIRRORED + 1 REGISTER). So the residual is
+# now one intra-file swap in one file rather than any pairing in the spec -- stated, because a
+# count is exactly as strong as its arithmetic and the last statement of this residual was wrong by
+# understatement.
+#
+# A legitimate reclassification, or a newly classified container, must update this table in the
+# same commit. That is the same deliberate trade the spec header records for line-qualified rows:
+# a loud reclassify beats a silent free pass.
+EXPECTED_CLASS_COUNTS_BY_FILE = {
+    "scripts/export_encoder_tables.py": {"REGISTER": 2},
+    "scripts/schema_identity_gate_scan.py": {"REGISTER": 1},
+    "scripts/vocab_shift_probe.py": {"PARTIAL": 1},
+    "src/pokezero/engine_env.py": {"REGISTER": 1},
+    "src/pokezero/mcts_eval/lattice.py": {"REGISTER": 1},
+    "src/pokezero/mcts_eval/resolver.py": {"REGISTER": 1},
+    "src/pokezero/neural_cli.py": {"REGISTER": 2},
+    "src/pokezero/observation.py": {"MIRRORED": 5},
+    "src/pokezero/rollout_cli.py": {"REGISTER": 1},
+    "src/pokezero/showdown.py": {"MIRRORED": 3, "REGISTER": 1},
+}
 
 
 def _assigned_names(tree: ast.AST) -> dict[int, str]:
@@ -266,8 +289,9 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="print every container and its class")
     ap.add_argument(
         "--check", action="store_true",
-        help="exit 15 if any container is unclassified, any classification is now unused, or the "
-             "per-class counts have drifted from the pin",
+        help="kept for the drill's invocation and for readability at the call site; every abort "
+             "applies with or without it. It widens the LISTING to every container, not just the "
+             "unclassified ones",
     )
     args = ap.parse_args()
 
@@ -287,7 +311,9 @@ def main() -> int:
         print(f"ABORT: {matched_nodes} container node(s) collapsed into {len(found)} distinct "
               "entr(ies). Two unnamed containers on the SAME line with the SAME members key "
               "identically, so one spec row would cover both and the printed count is short. "
-              "Put them on separate lines, or give at least one an assignment target.")
+              "Put them on separate lines so each gets its own <inline:LINE> key. An earlier form "
+              "of this message also offered 'or give at least one an assignment target', which is "
+              "not always possible -- a literal nested inside a list has nowhere to put one.")
         return 15
 
     unclassified = []
@@ -318,8 +344,11 @@ def main() -> int:
               "is how a new table gets registered for free.")
         return 15
 
-    if not args.check:
-        return 0
+    # EVERY abort now applies whatever the flags, and `--check` only decides how loud the listing
+    # is. It used to gate the three aborts below, so `--list` -- the thing a human reaches for when
+    # diagnosing -- printed the stale rows and the unclassified containers of the exact e496e9b8
+    # shape and then exited 0. A diagnostic that shows a contradiction and reports success is the
+    # same defect as a gate that states a contradiction and ignores it, which is what G6 was.
     if unclassified:
         print()
         print(f"ABORT: {len(unclassified)} schema-name container(s) are not classified. The drill "
@@ -334,23 +363,35 @@ def main() -> int:
               "them; a stale row is a claim about the code that is no longer true.")
         return 15
 
-    # The class pin. See EXPECTED_CLASS_COUNTS: every check above verifies that a row EXISTS for
-    # each container, and none of them looks at what the row SAYS.
-    actual = {k: 0 for k in EXPECTED_CLASS_COUNTS}
-    for kind in spec.values():
-        actual[kind] = actual.get(kind, 0) + 1
-    if actual != EXPECTED_CLASS_COUNTS:
+    # The class pin. See EXPECTED_CLASS_COUNTS_BY_FILE: every check above verifies that a row
+    # EXISTS for each container, and none of them looks at what the row SAYS.
+    actual: dict[str, dict[str, int]] = {}
+    for (path, _members, _var), kind in spec.items():
+        actual.setdefault(path, {})[kind] = actual.setdefault(path, {}).get(kind, 0) + 1
+    if actual != EXPECTED_CLASS_COUNTS_BY_FILE:
         print()
-        print(f"ABORT: classification counts {actual} do not match the pin "
-              f"{EXPECTED_CLASS_COUNTS} in {pathlib.Path(__file__).name}.")
+        print(f"ABORT: the per-file classification counts do not match the pin in "
+              f"{pathlib.Path(__file__).name}.")
+        for path in sorted(set(actual) | set(EXPECTED_CLASS_COUNTS_BY_FILE)):
+            want = EXPECTED_CLASS_COUNTS_BY_FILE.get(path)
+            got = actual.get(path)
+            if want != got:
+                print(f"    {path}")
+                print(f"      pinned: {want}")
+                print(f"      found:  {got}")
         print("The drill registers its synthetic schema in REGISTER rows only, so a REGISTER that "
-              "became PARTIAL shrinks the registration list with no other symptom until a "
-              "17-70 minute drill run charges the omission to the codebase. If the "
+              "became PARTIAL or MIRRORED shrinks the registration list with no other symptom "
+              "until a 17-70 minute drill run charges the omission to the codebase. If the "
               "reclassification is deliberate, change the pin in the same commit and say why.")
         return 15
 
-    print(f"  every schema-name container is classified, and the class counts match the pin "
-          f"({', '.join(f'{k} {actual[k]}' for k in sorted(actual))}).")
+    totals: dict[str, int] = {}
+    for per_file in actual.values():
+        for kind, n in per_file.items():
+            totals[kind] = totals.get(kind, 0) + n
+    print(f"  every schema-name container is classified, and the per-file class counts match the "
+          f"pin ({', '.join(f'{k} {totals[k]}' for k in sorted(totals))} "
+          f"across {len(actual)} file(s)).")
     return 0
 
 

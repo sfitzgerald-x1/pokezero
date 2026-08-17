@@ -41,11 +41,16 @@
 #     here today), and "MIRRORED equals the drill's `_MIRRORED` tuple" is refuted in both directions
 #     (5 there, 8 here). The class is an INTENT, and the only true oracle is the runtime consequence
 #     -- the full 17-70 minute drill, which is how the original nine were found. So the census pins
-#     the per-class COUNTS in scripts/schema_container_census.py instead. BLAST RADIUS: silencing an
-#     abort by editing a row here now also requires editing a number in that script, so the change is
-#     loud rather than free; but a PAIRED swap (one REGISTER->PARTIAL and one PARTIAL->REGISTER)
-#     leaves the counts equal and is still exit 0, and a wrong class agreed to in both files is not
-#     detected at all. A deliberate reclassification must update the pin in the same commit.
+#     the class counts PER FILE in scripts/schema_container_census.py instead. BLAST RADIUS:
+#     silencing an abort by editing a row here now also requires editing a number in that script, so
+#     the change is loud rather than free. RESIDUAL, corrected after review found the first statement
+#     of it understated: pinning three GLOBAL totals left ANY permutation of classes free, not just
+#     the one pair originally disclosed -- REGISTER<->MIRRORED (the two large classes, and the subtle
+#     judgement) and a three-cycle R->M->P->R were both measured exit 0. Keying the counts by FILE
+#     removes every permutation that crosses a file. What is left is a swap WITHIN a single file that
+#     holds more than one class, and today exactly one file does: showdown.py (3 MIRRORED +
+#     1 REGISTER). A wrong class agreed to in both files is still not detected at all. A deliberate
+#     reclassification must update the pin in the same commit.
 #
 #  2. SCAN ROOTS ARE src/ AND scripts/ ONLY. Measured by re-running the enumerator with the roots
 #     swapped: 12 real containers live under tests/ (in test_engine_env.py, test_observation.py,
@@ -64,6 +69,20 @@
 #     AST nodes against distinct entries and aborts -- but the remedy it offers is "separate the
 #     lines", not "classify both". The per-(file, members) ordinal that would tell them apart is a
 #     PREDICTION; nobody has built it.
+#
+#  4. A MIXED-CONVENTION CONTAINER IS INVISIBLE, and this gap was missing from the list above until
+#     review pointed out that a list calling itself exhaustive had four members, not three. The
+#     enumerator accepts a container only when EVERY member is a schema name in ONE convention
+#     (`vals <= SHORT or vals <= FULL`), so a container spanning both is not counted, not classified
+#     and not even mentioned. Measured: adding
+#         COMPAT_MAP = {"v3": "pokezero.observation.v4", "pokezero.observation.v3": "v4"}
+#         LEGACY_ALIASES = {"v2", "pokezero.observation.v2.1", "v3"}
+#     leaves the census at exit 0, still reporting 19 containers, with the new file unnamed. The
+#     census docstring says "a mixed container is not a schema table", which is a DESIGN CLAIM about
+#     what deserves classification, not a measurement -- and a short<->full alias map is precisely
+#     the shape the drill would need to register, since it maps between the two vocabularies the
+#     drill injects into. BLAST RADIUS: the same as gap 2, but reachable inside the scanned roots,
+#     so it is the cheapest way to add an unregistered schema container to src/ with a green gate.
 #
 # Format:  REGISTER|PARTIAL|MIRRORED  <file>  <members>  <variable name or <inline:LINE>>
 # Keyed on file + members + VARIABLE NAME. Every container needs its OWN row: `--check` aborts if the

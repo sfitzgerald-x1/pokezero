@@ -2290,21 +2290,27 @@ jobs:
             exit 1
           fi
 
-          # The positive confirmation, which DOES need the parents, so it is tolerant of not
-          # having them rather than failing closed on a bookkeeping detail. Failing closed here
-          # was wrong twice over: it reddens a required check over clone depth, and the condition
-          # it would be protecting against is already caught above.
-          if second_parent=$(git rev-parse --verify --quiet 'HEAD^2'); then
-            if [ "${second_parent}" != "${HEAD_SHA}" ]; then
-              echo "::error::HEAD^2 is ${second_parent}, not the PR head ${HEAD_SHA}; the tree"
-              echo "::error::censused is not the merge of this pull request."
-              exit 1
-            fi
-            echo "confirmed: HEAD is the merge of the base with PR head ${HEAD_SHA}"
-          else
-            echo "note: HEAD^2 is not present locally (shallow clone), so the merge was confirmed"
-            echo "note: only by HEAD != the PR head. That check is the one that matters."
+          # THE POSITIVE CONFIRMATION, and it is a hard failure when the parent is missing. An
+          # earlier revision of this step made a missing `HEAD^2` a green `note:`, on the reasoning
+          # that failing closed there only reddens the check over clone depth. That was FAIL-OPEN
+          # for the case the step exists to catch: `ref: main` or `ref: ${{ github.base_ref }}`
+          # checks out a SINGLE-parent base tip, so the check above passes (HEAD is not the PR
+          # head), `HEAD^2` does not resolve, and the step would have gone green while the census
+          # counted the base tree. `fetch-depth: 2` above is what makes demanding the parent safe;
+          # the tolerant arm was compensating for a depth this job no longer uses.
+          if ! second_parent=$(git rev-parse --verify --quiet 'HEAD^2'); then
+            echo "::error::HEAD has no second parent, so this is not a merge commit -- the census"
+            echo "::error::would count a single-parent tree (the base tip, or the PR head) rather"
+            echo "::error::than the merge result. Check \`fetch-depth\` is still at least 2 and that"
+            echo "::error::no \`ref:\` has been added to this job's checkout."
+            exit 1
           fi
+          if [ "${second_parent}" != "${HEAD_SHA}" ]; then
+            echo "::error::HEAD^2 is ${second_parent}, not the PR head ${HEAD_SHA}; the tree"
+            echo "::error::censused is not the merge of this pull request."
+            exit 1
+          fi
+          echo "confirmed: HEAD is the merge of the base with PR head ${HEAD_SHA}"
 
       - name: The census reddens on known-bad input
         # Kill-confirm IN CI, before trusting the green run below -- the convention the floor gate
@@ -2316,28 +2322,80 @@ jobs:
         # repo root from `__file__`, so a copy censuses the copy; and it excludes only the RUNNING
         # script by resolved path, so the copied census is skipped as itself rather than scanned.
         #
-        # ONE perturbation: a single file holding one container the committed spec cannot classify.
-        # That trips the count-equality abort (20 containers, 19 rows) which returns 15, the same
-        # code every other abort returns. The claim being confirmed is "the census still exits 15 on
-        # a tree it should reject", which is what this step's own verdict depends on.
+        # ONE PERTURBATION PER CASE, and every abort path this job relies on gets its own. An
+        # earlier revision perturbed only an unclassified container, which trips the PRE-EXISTING
+        # count-equality abort -- so the four aborts added alongside this job were confirmed by
+        # nothing here, which is the same "unproven where it counts" shape the job header objects
+        # to. Each case below rebuilds the scratch tree from scratch so the perturbations cannot
+        # compound and let one case pass on another's abort.
+        #
+        # Expected codes are exact, not "non-zero": 15 is the census's verdict and 1 is
+        # "the spec cannot be read". A case that returns the OTHER red is a real change in meaning
+        # and must not be waved through.
         run: |
           set -euo pipefail
-          scratch="${RUNNER_TEMP}/census-kill-confirm"
-          rm -rf "${scratch}"
-          mkdir -p "${scratch}/tests/data"
-          cp -R src scripts "${scratch}/"
-          cp tests/data/schema_drill_schema_containers.txt "${scratch}/tests/data/"
+          spec=tests/data/schema_drill_schema_containers.txt
+          fail=0
+
+          build() {
+            scratch="${RUNNER_TEMP}/census-kill-confirm/$1"
+            rm -rf "${scratch}"
+            mkdir -p "${scratch}/tests/data"
+            cp -R src scripts "${scratch}/"
+            cp "${spec}" "${scratch}/tests/data/"
+          }
+
+          expect() {
+            # expect <name> <wanted rc>
+            set +e
+            python "${scratch}/scripts/schema_container_census.py" --check >/dev/null 2>&1
+            rc=$?
+            set -e
+            if [ "${rc}" -ne "$2" ]; then
+              echo "::error::kill-confirm case '$1' returned ${rc}, wanted $2"
+              fail=1
+            else
+              echo "  kill-confirm '$1': exit ${rc} as expected"
+            fi
+          }
+
+          # 1. An unclassified container -> the count-equality abort.
+          build unclassified
           printf 'KILL_CONFIRM_TABLE = {"v3", "v4"}\n' \
             > "${scratch}/src/pokezero/zz_census_kill_confirm.py"
-          set +e
-          python "${scratch}/scripts/schema_container_census.py" --check
-          rc=$?
-          set -e
-          echo "kill-confirm exit code: ${rc}"
-          if [ "${rc}" -ne 15 ]; then
-            echo "::error::the census did not abort with 15 on a deliberately unclassified"
-            echo "::error::container (got ${rc}). The run below cannot be trusted -- it would"
-            echo "::error::report green without having checked anything."
+          expect "unclassified container" 15
+
+          # 2. A REGISTER row demoted to PARTIAL -> the per-file class pin. Counts stay 19/19 and
+          #    every container still has a row, so ONLY the pin can see this.
+          build classflip
+          perl -0pi -e 's/^REGISTER(\s+src\/pokezero\/rollout_cli\.py)/PARTIAL $1/m' \
+            "${scratch}/tests/data/schema_drill_schema_containers.txt"
+          expect "REGISTER demoted to PARTIAL" 15
+
+          # 3. Two contradictory rows for one container -> exit 1, and note the arithmetic this
+          #    catches: the duplicate SHRINKS len(spec), so the count check reads 19 == 19.
+          build conflict
+          grep -m1 '^REGISTER' "${spec}" | sed 's/^REGISTER/PARTIAL /' \
+            >> "${scratch}/tests/data/schema_drill_schema_containers.txt"
+          expect "conflicting duplicate row" 1
+
+          # 4. Two unnamed containers on ONE physical line, with a row -> the collapse abort.
+          build collapse
+          printf 'def f(x):\n    return x in {"v3", "v4"} or x in {"v3", "v4"}\n' \
+            > "${scratch}/src/pokezero/zz_census_collapse.py"
+          printf 'PARTIAL   src/pokezero/zz_census_collapse.py  v3,v4  <inline:2>\n' \
+            >> "${scratch}/tests/data/schema_drill_schema_containers.txt"
+          expect "two containers collapsed onto one line" 15
+
+          # 5. THE NEGATIVE CONTROL, without which the four above prove only that SOMETHING
+          #    reddens: an unperturbed copy must be green. If this is red, the cases above are
+          #    passing on a broken scratch tree rather than on their own perturbation.
+          build clean
+          expect "unperturbed copy (negative control)" 0
+
+          if [ "${fail}" -ne 0 ]; then
+            echo "::error::the census failed its own kill-confirm, so the run below cannot be"
+            echo "::error::trusted -- it would report green without checking what it claims to."
             exit 1
           fi
 
@@ -2367,8 +2425,13 @@ jobs:
             echo "::error::container, two containers collapsed onto one spec row, or the per-class"
             echo "::error::counts drifted from the pin. Read the abort above and fix"
             echo "::error::tests/data/schema_drill_schema_containers.txt -- an unregistered"
-            echo "::error::container makes its consumers fail on the drill's own omission, which"
-            echo "::error::has been reported as surviving codebase defects nine times."
+            echo "::error::container makes its consumers fail on the drill's own omission, and"
+            echo "::error::NINE schema-keyed structures went unregistered that way, one at a time."
+            # "NINE structures" and not "nine times", because the census's own abort printed just
+            # above this says "which has happened six times" -- SIX being the number found by the
+            # run-read-a-stack-trace-add-one loop, NINE the total structures the spec file records.
+            # Both are true and they count different things; a CI reader sees both in one log, so
+            # this one names its unit.
             exit 1
           fi
           if [ "${rc}" -ne 0 ]; then
