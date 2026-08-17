@@ -3504,15 +3504,35 @@ def compare_foulplay_think(
 #:      1.09-1.12 -- because two of the six passes ran ~10% slower for the whole pass while the
 #:      box was busier. That is the effect a cross-arm gate must not read as contention. 1.25
 #:      leaves 2.1x margin on the largest matched-arm fold actually observed.
-#:   2. THE VARIANCE DECOMPOSITION, which says why the margin has to be that wide. On log rates,
-#:      with the shared position effect removed (two paired arms play the same battle seeds, so
-#:      position largely cancels between them): per-decision residual SD **0.0529** (df=115) and
-#:      a WHOLE-RUN SD of **0.0516** (df=5). The fold ratio between two runs then has
-#:      SD = sqrt(2*run^2 + decision^2*(1/n_a + 1/n_b)), which is 0.0803 at
-#:      `FOULPLAY_THINK_MIN_STRATUM_DECISIONS` on both sides and 0.0732 at n=200 -- barely
-#:      moving, because the whole-run term dominates. A 3-sigma bound is a fold of **1.272** at
-#:      n=5 and **1.246** at n=200, so 1.25 is a ~3-sigma bound on matched-arm variation at
-#:      EVERY n the gate will see (2.78 sigma at n=5, 2.98 at n=20, 3.05 at n=200).
+#:   2. THE VARIANCE DECOMPOSITION, which supplies the SHAPE of the threshold and not its size.
+#:      On log rates, with the shared position effect removed (two paired arms play the same
+#:      battle seeds, so position largely cancels between them): per-decision residual SD
+#:      **0.0529** (df=115) and a WHOLE-RUN SD of **0.0516** (df=5). The fold ratio between two
+#:      runs has SD = sqrt(2*run^2 + decision^2*(1/n_a + 1/n_b)), which is 0.0803 at 5 decisions
+#:      a side and 0.0732 at 200 -- barely moving, because the whole-run term dominates at every
+#:      n this gate will see. THAT is what justifies a FIXED threshold rather than one computed
+#:      from n, and the inference is robust in direction even though the magnitude is not.
+#:
+#: WHAT THIS IS NOT, retracted after independent review rather than left standing. An earlier
+#: revision called 1.25 "the instrument's 3-sigma resolution floor, rounded up" and claimed it
+#: was the tightest threshold the instrument could support at any n. Both are unsupported, and
+#: the review's degrees-of-freedom objection is why:
+#:
+#:   * the whole-run variance has **5 degrees of freedom** (six passes). Its 95% chi-square
+#:     interval on the variance is [0.00108, 0.01673], i.e. a run SD anywhere in
+#:     [0.033, 0.129] -- so the nominal "3-sigma fold" is 1.2506 at n=24 (the calibration n) and
+#:     **1.7312** at the 95% upper bound, and 1.6692 if the quantile is t(df=5) instead of z=3.
+#:     A number whose confidence interval reaches 1.73 cannot be quoted as a 3-sigma floor;
+#:   * worse, the margin is 0.4% the other way: 1.25 clears the point-estimate ASYMPTOTE (1.2448)
+#:     by less than the arithmetic's own rounding, and at the n the calibration actually had it
+#:     does not clear it at all -- 1.2506 against 1.25. The old claim
+#:     rested entirely on a margin narrower than the arithmetic's own rounding, which is how a
+#:     coincidence gets written up as a derivation.
+#:
+#: SO THE JUSTIFICATION IS THE FIRST ANCHOR ALONE, and it is empirical: 1.25 exceeds the largest
+#: matched-arm fold measured across six uncontended passes (1.1170) by **2.14x** in excess terms.
+#: The false-refusal rate is NOT measured -- 0 of 15 pairs exceeded it, on only 5 independent
+#: degrees of freedom -- and no sigma level is claimed for it.
 #:
 #: A TWO-PASS PREDECESSOR OF THIS MEASUREMENT GOT THE SAME 1.25 FOR THE WRONG REASON, and the
 #: correction is why the constant is documented this way. It read a per-decision CV of 0.1151
@@ -3521,13 +3541,17 @@ def compare_foulplay_think(
 #: gate is a ~6-sigma test at n=20 and can resolve a 3.5% effect at n=200. Both are false. With
 #: the whole-run term measured at 5 df instead of inferred from one pair, the bound is nearly
 #: flat in n and the gate is a ~3-sigma test everywhere. The threshold survived; its
-#: justification did not, and `detectable_fold_ratio_3sigma` was reporting the optimistic
-#: number -- an error in the flattering direction, in a field whose whole job is to say how
-#: strongly a stratum passed.
+#: justification did not, and the reported resolution field was carrying the optimistic number --
+#: an error in the flattering direction, in a field whose whole job is to say how strongly a
+#: stratum passed. That field is now named `nominal_fold_resolution_point_estimate`, because at
+#: 5 degrees of freedom it is a point estimate and not a bound (see below).
 #:
 #: WHY THE THRESHOLD IS FIXED RATHER THAN COMPUTED FROM n: because the measurement says the
-#: matched-arm spread is nearly flat in n. An n-dependent bound would tighten to 1.035 at
-#: n=200 and refuse matched arms on exactly the well-powered strata where a verdict matters.
+#: matched-arm spread is nearly flat in n. An n-dependent bound built from the SAMPLING term
+#: alone would tighten to 1.035 at n=200 and refuse matched pairs on exactly the well-powered
+#: strata where a verdict matters. This is the one inference the 5-df problem does not damage:
+#: the run term dominates the per-decision term at every admissible n under any value in its
+#: confidence interval.
 #:
 #: AND IT IS FAR BELOW WHAT THE INSTRUMENT HAS ALREADY CAUGHT: the starvation that a thin
 #: stratum hid was **3.8x** (an excess of 2.8 against this gate's 0.25), and the arbiter arm's
@@ -3540,9 +3564,9 @@ def compare_foulplay_think(
 #: separable by this instrument. A passing verdict bounds the confound at 25% ON STRATA COVERING
 #: AT LEAST 95% OF EACH ARM -- see `FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE`, and see the
 #: function docstring for why the shorter phrase "bounds the confound at 25%" was false. It does
-#: not show the confound is zero, and it says nothing in WIN-RATE units. At ~3 sigma it also
-#: refuses a genuinely matched pair on the order of once in 300 strata, which is the safe
-#: direction: a false refusal blocks banking.
+#: not show the confound is zero, and it says nothing in WIN-RATE units. NO false-refusal rate is
+#: claimed: the observation is 0 of 15 matched pairs at 5 independent degrees of freedom, and the
+#: direction of that error is the safe one anyway -- a false refusal blocks banking.
 #:
 #: SCOPE OF THE MEASUREMENT, since a threshold inherits its evidence's limits: taken at
 #: `2x1000ms` on constructed gen3 positions, on an 18-core macOS box at load average 6.8-8.8,
@@ -3586,10 +3610,29 @@ FOULPLAY_THINK_MEASURED_RUN_LOG_SD = 0.0516
 #: arms play both phases, so the expectation is ~1.0 -- but that is an inference, and if a real
 #: run refuses on this floor the refusal is information about the shard, not licence to lower it.
 FOULPLAY_THINK_MIN_CROSS_ARM_COMPARED_SHARE = 0.95
+#: Minimum measured decisions per arm WITHIN a compared stratum, at THIS layer -- the number of
+#: decisions each calibration pass had. The threshold's only surviving justification is empirical
+#: (1.25 clears the largest matched-arm fold seen across six passes of 24 decisions each), and an
+#: empirical margin measured at 24 decisions does not transfer to a stratum holding 5. So the
+#: comparison is restricted to strata at least as thick as the evidence behind its own threshold.
+#:
+#: DELIBERATELY NOT DERIVED FROM THE VARIANCE COMPONENTS, which is what an earlier revision did
+#: and what independent review broke. That version refused a stratum whose nominal 3-sigma fold
+#: exceeded the threshold, giving a crossover of n=27 -- a number that came out of a 0.3% margin
+#: between a point-estimate asymptote (1.2448) and the threshold (1.25). At the 95% upper bound
+#: of a 5-df variance the asymptote is 1.73 and NO stratum at any n would ever certify; at a
+#: slightly lower run SD every stratum would. A gate whose behaviour flips on the third decimal
+#: place of a 5-df estimate is not a gate. This one is a flat count with a stated reason.
+FOULPLAY_THINK_MIN_CROSS_ARM_STRATUM_DECISIONS = 24
 
 
 def foulplay_think_detectable_fold_ratio(n_a: int, n_b: int) -> float:
-    """The smallest fold ratio a 3-sigma reading could resolve at these two denominators.
+    """Nominal fold resolution at these two denominators, from POINT-ESTIMATE variance components.
+
+    NOT A CONFIDENCE BOUND, and the name of the field it feeds says so. The run term has 5
+    degrees of freedom; at the 95% upper end of its chi-square interval this same arithmetic
+    reads 1.73 instead of 1.25, and with t(df=5) in place of z=3 it reads 1.67. Comparing two
+    strata of one run against each other is what it is good for.
 
     sqrt(2*run^2 + decision^2*(1/n_a + 1/n_b)), exponentiated: the gated quantity is a FOLD
     ratio, so its noise is multiplicative and the bound has to be too (the linear form
@@ -3920,23 +3963,26 @@ def cross_arm_foulplay_contention(
             f"{lean_label}_iterations_measured_decisions": n_lean,
             "ratio_lean_over_hungry": ratio,
             "fold_ratio": fold,
-            # HOW STRONGLY THIS STRATUM PASSED, and now GATED on rather than merely reported.
-            # The first version said a gate on it "could never read False", which was wrong on
-            # its own numbers: at the within-arm floor of 5 decisions this reads 1.272, wider
-            # than the 1.25 it is compared against, so such a stratum certifies nothing while
-            # returning `ok`. The crossover is n ~= 27 on both arms.
-            "detectable_fold_ratio_3sigma": (
+            # HOW STRONGLY THIS STRATUM PASSED -- reported, and named for what it actually is.
+            # A POINT-ESTIMATE variance-components figure whose run term carries 5 degrees of
+            # freedom, so it is not a confidence bound: the same arithmetic at the 95% upper end
+            # of that variance reads 1.73 rather than 1.25. Useful for comparing two strata of
+            # this run against each other, useless as an absolute claim, and deliberately not
+            # what any refusal is computed from -- see
+            # `FOULPLAY_THINK_MIN_CROSS_ARM_STRATUM_DECISIONS` for the floor that replaced it.
+            "nominal_fold_resolution_point_estimate": (
                 foulplay_think_detectable_fold_ratio(n_hungry, n_lean)
                 if n_hungry and n_lean
                 else None
             ),
         }
         per_stratum[name] = entry
-        resolution = entry["detectable_fold_ratio_3sigma"]
-        if resolution is not None and resolution > max_fold_ratio:
-            # A stratum whose own 3-sigma resolution is wider than the threshold cannot tell a
-            # matched pair from a starved one, so an `ok` computed over it certifies nothing.
-            refusals.append("stratum_cannot_resolve_the_threshold")
+        if min(int(n_hungry), int(n_lean)) < FOULPLAY_THINK_MIN_CROSS_ARM_STRATUM_DECISIONS:
+            # Thinner than the passes the threshold was calibrated on, so the empirical margin
+            # behind the threshold does not cover this stratum. Named rather than excluded: an
+            # exclusion would land in the uncompared remainder and be reported as a coverage
+            # problem, which is a different diagnosis.
+            refusals.append("stratum_thinner_than_the_calibration")
         if fold is None:
             # A compared stratum whose ratio is not a ratio -- the lean arm realized zero
             # visits per granted second -- would otherwise be skipped when picking the worst

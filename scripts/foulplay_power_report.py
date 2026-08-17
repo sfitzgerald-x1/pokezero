@@ -717,11 +717,16 @@ def main(argv=None) -> int:
                 "differ between the arms by more than the fold ratio in any compared "
                 "stratum. Threshold derived from the instrument's own measured precision: "
                 "six uncontended passes of real foul-play searches gave 15 matched-arm fold "
-                "ratios spanning 1.0013-1.1170, and a 3-sigma bound on matched-arm variation "
-                "is 1.272 at the per-stratum floor and 1.246 at n=200 -- nearly flat in n, "
-                "because the whole-run term dominates the per-decision one. A pass BOUNDS the "
-                "confound at the fold ratio; it does not show it is zero, and between 1.117 "
-                "and 1.25 the gate is deliberately silent."
+                "ratios spanning 1.0013-1.1170, so 1.25 clears the largest matched-arm fold "
+                "observed by 2.14x in excess terms. NO sigma level is claimed: the whole-run "
+                "variance behind any such bound carries 5 degrees of freedom, and its 95% "
+                "chi-square upper end puts the same arithmetic at 1.73. The variance "
+                "decomposition supplies only the SHAPE -- the spread is nearly flat in n, which "
+                "is why the threshold is fixed rather than computed from n. A pass BOUNDS the "
+                "confound at the fold ratio on strata covering at least 95% of each arm (so at "
+                "most 1.3158 at arm level); it does not show it is zero, it is in THROUGHPUT "
+                "units with no calibration to win-rate points, and between 1.117 and 1.25 the "
+                "gate is deliberately silent."
             ),
         },
         "winner_note": (

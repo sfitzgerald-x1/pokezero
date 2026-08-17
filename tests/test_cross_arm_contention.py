@@ -171,46 +171,59 @@ class MatchedArmsTest(unittest.TestCase):
         # Bimodal, and both modes matter: seven pairs inside one regime, eight across the shift.
         self.assertEqual(sum(1 for f in folds if f > 1.05), 8)
 
-    def test_the_measurements_own_n_is_too_thin_to_certify_anything(self) -> None:
-        """The gate's honesty about its own evidence, and it is not a formality.
+    def test_a_stratum_thinner_than_the_calibration_is_refused(self) -> None:
+        """The threshold's evidence was measured at 24 decisions a pass; it does not transfer down.
 
-        The threshold was derived from passes of 24 decisions each, and 24 decisions cannot
-        resolve a 1.25 fold: the 3-sigma bound there is 1.2508. So the gate refuses at that n --
-        including on the matched pairs it was derived from -- and refuses for THINNESS, never for
-        contention. A gate that certified at the n of its own calibration would be certifying
-        noise.
+        The only surviving justification for 1.25 is empirical -- it clears the largest matched-arm
+        fold seen across six passes of 24 decisions each -- so a stratum holding fewer than 24 is
+        thinner than the evidence behind the number it is being compared against. A flat count,
+        deliberately not a variance calculation: see
+        `FOULPLAY_THINK_MIN_CROSS_ARM_STRATUM_DECISIONS`.
         """
-        for a, b, result in self._pairs(MEASURED_PASS_N):
-            with self.subTest(a=a, b=b):
-                self.assertIn(
-                    "stratum_cannot_resolve_the_threshold", result["refusal_reasons"]
+        for n, expected in ((23, True), (24, False)):
+            result = verdict([think(380_000.0, n)], [think(380_000.0, n)])
+            with self.subTest(n=n):
+                self.assertEqual(
+                    "stratum_thinner_than_the_calibration" in result["refusal_reasons"],
+                    expected,
                 )
-                self.assertNotIn(
-                    "cross_arm_rate_ratio_exceeds_threshold", result["refusal_reasons"]
-                )
-                self.assertIn("rates_withheld_because", result)
+                if expected:
+                    self.assertIn("rates_withheld_because", result)
+                    self.assertNotIn(
+                        "cross_arm_rate_ratio_exceeds_threshold", result["refusal_reasons"]
+                    )
 
-    def test_the_threshold_cannot_be_tightened_below_the_instruments_resolution(self) -> None:
-        """1.25 is not a choice with margin; it is the instrument's floor, rounded up.
+    def test_the_nominal_resolution_is_not_quotable_as_a_bound_at_five_df(self) -> None:
+        """The retraction, pinned so it cannot quietly come back.
 
-        The whole-run term never shrinks, so no n makes the resolution better than
-        exp(3*sqrt(2)*run_sd) = 1.2448. A threshold below that is a threshold the instrument
-        cannot resolve at ANY denominator, and the gate says so rather than pretending: at 1.24,
-        every one of the 15 matched pairs refuses with `stratum_cannot_resolve_the_threshold`
-        even at 10^6 decisions per arm. 1.25 is the tightest value that certifies at all.
+        An earlier revision called 1.25 "the instrument's 3-sigma resolution floor, rounded up",
+        from exp(3*sqrt(2)*run_sd) = 1.2448. The run variance has FIVE degrees of freedom: its 95%
+        chi-square interval is [0.00108, 0.01673], so the same arithmetic reads 1.7312 at the
+        upper end -- and 1.25 sits 0.3% BELOW even the point estimate. A margin narrower than the
+        arithmetic's own rounding is not a derivation, so no refusal is computed from this number
+        any more and the field that reports it is named for a point estimate.
         """
-        floor = math.exp(3.0 * (2**0.5) * FOULPLAY_THINK_MEASURED_RUN_LOG_SD)
-        self.assertAlmostEqual(floor, 1.24473, places=5)
-        self.assertGreater(FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO, floor)
-        for a, b, result in self._pairs(10**6, max_fold_ratio=1.24):
-            with self.subTest(a=a, b=b):
-                self.assertIn(
-                    "stratum_cannot_resolve_the_threshold", result["refusal_reasons"]
-                )
-        # And at the shipped threshold the same arms certify.
-        for a, b, result in self._pairs(10**6):
-            with self.subTest(a=a, b=b):
-                self.assertEqual(result["refusal_reasons"], [])
+        point = math.exp(3.0 * (2**0.5) * FOULPLAY_THINK_MEASURED_RUN_LOG_SD)
+        self.assertAlmostEqual(point, 1.24473, places=5)
+        # The margin is 0.4%, which is the whole problem: 1.25 clears the asymptotic point
+        # estimate by less than the arithmetic's own rounding, and at the n the calibration
+        # actually had (24) it does not clear it at all -- 1.2506 against 1.25.
+        margin = FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO / point - 1.0
+        self.assertLess(margin, 0.005)
+        at_calibration_n = foulplay_think_detectable_fold_ratio(
+            MEASURED_PASS_N, MEASURED_PASS_N
+        )
+        self.assertAlmostEqual(at_calibration_n, 1.25065, places=5)
+        self.assertGreater(at_calibration_n, FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO)
+        # 95% chi-square upper bound at df=5 (chi2_{0.025,5} = 0.8312) reaches 1.73.
+        var_upper = 5 * (FOULPLAY_THINK_MEASURED_RUN_LOG_SD**2 * 6 / 5) / 0.8312
+        self.assertGreater(math.exp(3.0 * (2.0 * var_upper) ** 0.5), 1.7)
+        # So the surviving justification is the empirical one, and it is a real margin.
+        self.assertGreater(
+            (FOULPLAY_THINK_MAX_CROSS_ARM_FOLD_RATIO - 1.0)
+            / (MEASURED_MAX_MATCHED_FOLD - 1.0),
+            2.0,
+        )
 
     def test_a_threshold_below_the_measured_spread_would_call_matched_arms_contended(self) -> None:
         """The failing input for the CHOICE of threshold, separated from the floor above.
@@ -476,35 +489,20 @@ class EveryRatioCarriesItsDenominatorsTest(unittest.TestCase):
         )
 
     def test_each_stratum_reports_what_it_could_have_resolved(self) -> None:
-        """A stratum that passed at n=30 must not read like one that passed at n=2000."""
-        thin = verdict([think(380_000.0, 30)], [think(380_000.0, 30)])
+        """A stratum that passed at n=24 must not read like one that passed at n=2000."""
+        thin = verdict([think(380_000.0, 24)], [think(380_000.0, 24)])
         thick = verdict([think(380_000.0, 2000)], [think(380_000.0, 2000)])
         self.assertEqual(thin["status"], "ok")
         self.assertEqual(thick["status"], "ok")
         self.assertGreater(
-            thin["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"],
-            thick["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"],
+            thin["by_stratum"]["2x1000ms"]["nominal_fold_resolution_point_estimate"],
+            thick["by_stratum"]["2x1000ms"]["nominal_fold_resolution_point_estimate"],
         )
         self.assertAlmostEqual(
-            thick["by_stratum"]["2x1000ms"]["detectable_fold_ratio_3sigma"], 1.24480, places=5
+            thick["by_stratum"]["2x1000ms"]["nominal_fold_resolution_point_estimate"],
+            1.24480,
+            places=5,
         )
-
-    def test_a_stratum_that_cannot_resolve_the_threshold_is_refused(self) -> None:
-        """The guard the "reported, not gated" comment used to stand in for.
-
-        The first version said a gate on `detectable_fold_ratio_3sigma` "could never read False,
-        and would certify nothing". Wrong on its own numbers: at the within-arm floor of 5 the
-        bound is 1.2723 -- WIDER than the 1.25 it is compared against -- so such a stratum
-        returned `ok` while being unable to tell a matched pair from a starved one. Crossover is
-        n = 27 on both arms.
-        """
-        for n, expected in ((26, True), (27, False)):
-            result = verdict([think(380_000.0, n)], [think(380_000.0, n)])
-            with self.subTest(n=n):
-                self.assertEqual(
-                    "stratum_cannot_resolve_the_threshold" in result["refusal_reasons"],
-                    expected,
-                )
 
 
 class UnmeasuredIsNotFlatTest(unittest.TestCase):
