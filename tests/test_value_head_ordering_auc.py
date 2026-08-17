@@ -389,8 +389,9 @@ def test_manufacturing_ties_where_the_head_is_wrong_cannot_buy_advancement(cell)
     assert r["delta_c"] > 0.05, "the attack must really work against naive scoring"
     assert r["head_ties_created_by_arm"] > 0
     assert r["discordant_full_swings"] == 0, "it reorders nothing"
-    assert r["delta_c_new_ties_scored_wrong"] <= 0.0
-    assert r["delta_c_gate"] == r["delta_c_new_ties_scored_wrong"]
+    assert r["delta_c_abstention_gain_withdrawn"] == 0.0, (
+        "withdrawing the abstention credit must leave the attack with exactly nothing")
+    assert r["delta_c_gate"] == r["delta_c_abstention_gain_withdrawn"]
     assert not r["verdict"].startswith("PASS") and r["advanced"] is False
 
 
@@ -399,11 +400,30 @@ def test_the_p_reported_with_the_gated_statistic_is_that_statistic_s_p(cell):
     tie-guarded dC it must report the tie-guarded p, not the naive one. A mutation that reverted
     only the p half survived an earlier suite because the two were computed independently."""
     r = cmp_at(cell, demo(cell, "abstention_gaming_label_aimed_ties"))
-    assert r["delta_c_gate"] == r["delta_c_new_ties_scored_wrong"] != r["delta_c"]
-    assert r["p_gate"] == r["exact_signflip_p_new_ties_scored_wrong"]
+    assert r["delta_c_gate"] == r["delta_c_abstention_gain_withdrawn"] != r["delta_c"]
+    assert r["p_gate"] == r["exact_signflip_p_abstention_gain_withdrawn"]
     assert r["p_gate"] != r["exact_signflip_p_two_sided"]
     # and the naive p is the one that looked like overwhelming evidence
     assert r["exact_signflip_p_two_sided"] < 1e-6 < r["p_gate"]
+
+
+def test_the_gated_delta_and_the_gated_p_move_together(cell):
+    """Both halves of the coupling, witnessed. A review found two mixed variants surviving the
+    suite -- naive delta with guarded p, and guarded delta with naive p -- because only the
+    conjunction was tested, never each half separately. Neither reopens the attack, but the
+    coupling is the thing the code was written for, so it gets pinned."""
+    r = cmp_at(cell, demo(cell, "abstention_gaming_label_aimed_ties"))
+    assert r["delta_c_gate"] != r["delta_c"], "the guard must bite on this cell"
+    assert r["exact_signflip_p_abstention_gain_withdrawn"] != r["exact_signflip_p_two_sided"]
+    # the gated pair is (guarded delta, guarded p) -- not either mixture
+    assert (r["delta_c_gate"], r["p_gate"]) == (
+        r["delta_c_abstention_gain_withdrawn"], r["exact_signflip_p_abstention_gain_withdrawn"])
+    assert (r["delta_c_gate"], r["p_gate"]) != (r["delta_c"], r["p_gate"])
+    assert (r["delta_c_gate"], r["p_gate"]) != (r["delta_c_gate"],
+                                               r["exact_signflip_p_two_sided"])
+    # and on a cell where the guard is inert, the gated pair is the naive pair, both halves
+    q = cmp_at(cell, demo(cell, "positive_control_blend_truth_0.15"))
+    assert (q["delta_c_gate"], q["p_gate"]) == (q["delta_c"], q["exact_signflip_p_two_sided"])
 
 
 def test_the_signflip_test_is_invariant_to_a_common_rescale_of_the_differences():
@@ -425,17 +445,63 @@ def test_the_abstention_guard_is_inert_for_an_arm_that_creates_no_ties(cell):
     assert r["p_gate"] == r["exact_signflip_p_two_sided"]
 
 
-def test_the_abstention_guard_charges_exactly_half_a_credit_per_new_tie(cell):
-    """The guard's PRICE, as an identity rather than a hand-wave, because it is charged to
-    legitimate arms too: delta - delta_adv = 0.5 * (new ties) / n_eligible. An arm that ties on
-    genuinely ambiguous siblings pays that; an arm that creates no ties pays nothing. The gate is
-    a deliberate conservative bias against buying advancement with abstentions, not a claim that
-    every tie is an abstention -- and the size of the bias should be checkable, not asserted."""
+def test_the_abstention_guard_charges_exactly_the_abstention_credit_and_nothing_else(cell):
+    """The guard's PRICE, as an identity rather than a hand-wave, because legitimate arms pay it
+    too:
+
+        delta - delta_gate = 0.5 * (new ties on pairs the BASELINE GOT WRONG) / n_eligible
+
+    That quantity IS the abstention credit. A tie on a pair the baseline got right keeps its
+    honest half-loss instead of being charged a full wrong -- which is what the blunt first
+    version did, and `delta_c_all_new_ties_scored_wrong` still reports."""
     for name in ("saturating_tanh50", "abstention_gaming_label_aimed_ties",
-                 "positive_control_blend_truth_0.10"):
+                 "positive_control_blend_truth_0.10", "bucketed_head_16_gain_is_all_abstention"):
         r = cmp_at(cell, demo(cell, name))
-        charge = 0.5 * r["head_ties_created_by_arm"] / r["n_eligible"]
-        assert r["delta_c"] - r["delta_c_new_ties_scored_wrong"] == pytest.approx(charge), name
+        charge = 0.5 * r["head_ties_created_on_pairs_baseline_got_wrong"] / r["n_eligible"]
+        assert r["delta_c"] - r["delta_c_abstention_gain_withdrawn"] == pytest.approx(charge), name
+        # the blunt variant charges every new tie its half credit, wrong-pair or not
+        blunt = 0.5 * r["head_ties_created_by_arm"] / r["n_eligible"]
+        assert r["delta_c"] - r["delta_c_all_new_ties_scored_wrong"] == pytest.approx(blunt), name
+        assert r["delta_c_all_new_ties_scored_wrong"] <= r["delta_c_abstention_gain_withdrawn"]
+
+
+def test_a_bucketed_head_keeps_a_gain_the_blunt_guard_would_have_taken(cell):
+    """The legitimate arm a review measured the first guard convicting: a bucketed /
+    distributional readout emits on a finite grid, so it manufactures exact ties as a matter of
+    course. At 32 levels its reordering is real and the gate must leave it a gain."""
+    r = cmp_at(cell, demo(cell, "positive_control_bucketed_head_32"))
+    assert r["head_ties_created_by_arm"] > 0, "the fixture must contain its own subject"
+    assert r["delta_c"] > 0 and r["delta_c_gate"] > 0
+    assert r["delta_c_gate"] >= r["delta_c_all_new_ties_scored_wrong"]
+    assert r["verdict"] in ("PASS", "PASS_PENDING_REMEASURE")
+
+
+def test_a_coarse_bucketed_head_whose_gain_is_all_abstention_is_convicted_on_purpose(cell):
+    """The other side of the same fixture family, and the case that decides the design question
+    on principle rather than taste. At 16 levels the arm's naive gain is +0.0426 while 23 of its
+    41 new ties sit on pairs the baseline got wrong -- worth more abstention credit than the whole
+    gain. Its REORDERING is negative, OI-1 measures ordering, so the gate reads negative. That is
+    the instrument working, not collateral damage."""
+    r = cmp_at(cell, demo(cell, "bucketed_head_16_gain_is_all_abstention"))
+    assert r["delta_c"] > 0
+    abstention_credit = 0.5 * r["head_ties_created_on_pairs_baseline_got_wrong"] / r["n_eligible"]
+    assert abstention_credit > r["delta_c"], "its whole naive gain is abstention"
+    assert r["delta_c_gate"] < 0
+    assert not r["verdict"].startswith("PASS")
+
+
+def test_new_tie_selectivity_separates_an_aimed_attack_from_an_innocent_grid(cell):
+    """The diagnostic that makes the two cases distinguishable by eye rather than by argument:
+    a label-aimed abstention ties on wrong pairs 100% of the time, a bucketed head lands between
+    that and the baseline's own error rate."""
+    attack = cmp_at(cell, demo(cell, "abstention_gaming_label_aimed_ties"))
+    grid = cmp_at(cell, demo(cell, "bucketed_head_16_gain_is_all_abstention"))
+    assert attack["new_tie_selectivity"] == 1.0
+    base_err = attack["baseline_error_rate_on_eligible"]
+    assert 0.0 < base_err < 0.5
+    assert base_err < grid["new_tie_selectivity"] < attack["new_tie_selectivity"]
+    assert cmp_at(cell, demo(cell, "positive_control_blend_truth_0.15"))[
+        "new_tie_selectivity"] is None
 
 
 def test_a_powered_abstention_attack_is_refused_rather_than_advanced():
@@ -527,23 +593,87 @@ def test_the_signflip_null_distribution_is_exact_for_half_swings():
     assert oi.exact_signflip_p([0.5, 0.5, 0.5]) == pytest.approx(0.25)
 
 
-def test_the_signflip_large_m_fallback_tracks_the_exact_value():
-    """The approximation branch had zero coverage. Compare it to the exact enumeration just
-    below the switchover, on the same data."""
-    diffs = [1.0] * 220 + [-1.0] * 180
-    exact = oi.exact_signflip_p(diffs)                       # m = 400, still exact
-    approx = oi.exact_signflip_p(diffs + [0.0] * 5)          # zeros are dropped: same data
-    assert exact == pytest.approx(approx, rel=1e-12)
-    big = [1.0] * 620 + [-1.0] * 580                          # m = 1200 -> normal branch
-    z = 40 / math.sqrt(1200)
-    assert oi.exact_signflip_p(big) == pytest.approx(math.erfc(z / math.sqrt(2)), rel=1e-9)
+def _signflip_exact_reference(diffs):
+    """An INDEPENDENT exact enumeration of the sign-flip null, written in the test file.
+
+    The previous version of the test below compared the approximation branch against a
+    re-derivation of THE CODE'S OWN FORMULA at rel=1e-9. That is not a check: it asserted the
+    code equals itself, it was named `..._tracks_the_exact_value` while being the one place the
+    exact value was excluded, and it FAILED on both correct fixes for the branch -- a review had
+    to break it to fix the anti-conservative p underneath. A reference implementation belongs in
+    the test, so the assertion has something to disagree with.
+    """
+    d = [x for x in diffs if x != 0]
+    if not d:
+        return 1.0
+    unit = min(abs(x) for x in d)
+    w = [round(abs(x) / unit) for x in d]
+    total = sum(w)
+    counts = [0] * (total + 1)
+    counts[0] = 1
+    for weight in w:
+        nxt = [0] * (total + 1)
+        for j, c in enumerate(counts):
+            if c:
+                nxt[j] += c
+                nxt[j + weight] += c
+        counts = nxt
+    thresh = abs(sum(d)) / unit - 1e-9
+    hits = sum(c for j, c in enumerate(counts) if abs(2 * j - total) >= thresh)
+    return hits / (1 << len(w))
+
+
+def test_the_exact_signflip_branch_matches_an_independent_enumeration():
+    for diffs in ([1.0] * 7 + [-1.0] * 3,
+                  [0.5] * 9 + [-1.0] * 4,
+                  [1.0, 0.5, -0.5, -1.0, 0.5, 0.5, -1.0],
+                  [1.0] * 220 + [-1.0] * 180,
+                  [0.5] * 205 + [1.0] * 205):
+        assert oi.exact_signflip_p(diffs) == pytest.approx(_signflip_exact_reference(diffs),
+                                                          rel=1e-12)
+
+
+def test_the_signflip_p_is_never_anti_conservative_near_alpha():
+    """THE round-2 blocking defect, kept as a regression test.
+
+    The fallback had no continuity correction, so its p was biased LOW -- significance
+    manufactured, the same direction as the count-test defect. At m=410 all-full-swings the exact
+    p is 0.053963 and the uncorrected approximation returned 0.048216: it rejected where the
+    exact test does not. The cutoff is now high enough that these cases are exact, and the
+    corrected fallback beyond it must never sit materially below the exact value.
+    """
+    for m, n_half in ((410, 0), (410, 205), (500, 0), (1000, 500)):
+        up = m // 2 + 20
+        diffs = [(0.5 if i < n_half else 1.0) * (1 if i < up else -1) for i in range(m)]
+        exact = _signflip_exact_reference(diffs)
+        got = oi.exact_signflip_p(diffs)
+        assert got == pytest.approx(exact, rel=1e-9), (m, n_half)
+        assert not (exact >= oi.ALPHA > got), (m, n_half, exact, got)
+    # the specific case the review constructed
+    diffs = [1.0] * 225 + [-1.0] * 185
+    assert oi.exact_signflip_p(diffs) == pytest.approx(0.053963, abs=1e-5)
+    assert oi.exact_signflip_p(diffs) > oi.ALPHA, "must NOT reject where the exact test does not"
+
+
+def test_the_corrected_fallback_beyond_the_cutoff_is_conservative_and_close():
+    """The approximation is still reachable above SIGNFLIP_EXACT_MAX_M, so it gets its own check
+    against the independent enumeration -- conservative (p not below exact by more than rounding)
+    and within 1e-3."""
+    m = oi.SIGNFLIP_EXACT_MAX_M + 200
+    up = m // 2 + 60
+    diffs = [1.0 if i < up else -1.0 for i in range(m)]
+    exact = _signflip_exact_reference(diffs)
+    got = oi.exact_signflip_p(diffs)                      # -> corrected normal branch
+    assert got == pytest.approx(exact, abs=1e-3)
+    assert got >= exact - 1e-6, (got, exact)
+    assert oi.SIGNFLIP_EXACT_MAX_M >= 3000, "the exact branch must cover any plausible bank"
 
 
 def test_the_mcnemar_normal_branch_tracks_the_exact_value_including_its_continuity_correction():
     """The approximation branch had zero coverage, and a mutation deleting its continuity
     correction survived a loose test. Compared here against the exact binomial tail computed in
-    this file, at a (b, c) where the correction is worth 1.6e-2 -- dropping it misses by three
-    orders of magnitude more than keeping it.
+    this file. The correction is worth 1.6e-2 at (1010, 991) and only 5.2e-4 at (1060, 941) --
+    the abs=1e-4 tolerance catches its deletion at BOTH, which is why both are asserted.
     """
     def exact_tail(b, c):
         n, lo = b + c, min(b, c)
@@ -723,9 +853,16 @@ def test_the_clustered_bootstrap_widens_when_pairs_share_a_game():
 
 
 def test_the_percentile_picks_the_order_statistic_it_names():
-    """Known answer: on 0..100 the 2.5th percentile is 2.5 -> index 2 (rounded), and the 97.5th
-    is 97.5 -> index 98. `int(q * len)` would return 2 and 97: the off-by-one a review found,
-    which was unreachable by any test while it sat inline in the resampler."""
+    """Known answer on 0..100 (101 draws, last index 100). q=0.025 -> 2.5, q=0.975 -> 97.5, and
+    Python's banker's rounding takes 2.5 DOWN to 2 while 97.5 goes UP to 98 -- asymmetric, worth
+    spelling out because a reader would not predict it from the code.
+
+    Scope of the bug this replaced, stated accurately after a review measured it: at 12,000 draws
+    `int(q * len)` and this both pick index 300 for the lower tail, so only the UPPER index moved
+    (11700 -> 11699), which is why exactly 5 of 27 clustered intervals changed. The reason it was
+    worth fixing is not the size of the shift but that inline in the resampler no test could reach
+    it at all.
+    """
     draws = [float(i) for i in range(101)]
     assert oi.percentile(draws, 0.025) == 2.0
     assert oi.percentile(draws, 0.975) == 98.0
@@ -757,7 +894,7 @@ def test_wilson_matches_hand_computed_values():
     # implementation was the thing that turned out to be right. Hence the reference.)
     lo, hi = oi.wilson(7, 10)
     assert lo == pytest.approx(0.3968, abs=1e-4) and hi == pytest.approx(0.8922, abs=1e-4)
-    # deleting the z^2/(4n^2) term would give [0.4392, 0.8495]: outside that tolerance
+    # deleting the z^2/(4n^2) term would give [0.4393, 0.8497]: outside that tolerance
     lo, hi = oi.wilson(50, 100)
     assert lo == pytest.approx(1 - hi, abs=1e-12)          # symmetric about 0.5
     assert oi.wilson(0, 10)[0] == 0.0
