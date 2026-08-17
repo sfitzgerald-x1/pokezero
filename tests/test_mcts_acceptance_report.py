@@ -213,15 +213,24 @@ class ModelPathDepthInstrumentationTest(unittest.TestCase):
                 "leaf_eval='model' would carry no reached-depth evidence",
             )
         # Matches the ACCUMULATION, not the literal increment. The guard's
-        # property is "both paths accumulate the histogram"; pinning `+= 1`
+        # property is "every leaf path accumulates the histogram"; pinning `+= 1`
         # additionally pinned the increment, which the model path no longer uses
         # -- duplicate belief worlds are searched once and the sample is weighted
-        # by how many worlds it stands for. Still exactly two sites, so the guard
-        # is not weakened in the dimension it exists for.
+        # by how many worlds it stands for.
+        #
+        # THREE sites now, not two: `_search_rollout_crate` -- the sequential
+        # arbiter arm -- is a third leaf path with its own search loop, and it
+        # accumulates the histogram exactly as the other two do. The count was
+        # left at 2 when that path landed, so this guard has been failing on the
+        # composition branch independently of any caller; raising it to 3 restores
+        # the assertion instead of deleting it. Still an EQUALITY and not a
+        # `>=`, which is the dimension the guard exists for: a fourth leaf path
+        # that forgot the histogram, or a deleted site, both still fail here.
         self.assertEqual(
             len(re.findall(r"depth_reached_histogram\[reached\] \+= ", source)),
-            2,
-            "expected exactly two accumulation sites: hp_fraction and model",
+            3,
+            "expected exactly three accumulation sites: hp_fraction, "
+            "rollout_crate, and model",
         )
 
     def test_runner_emits_the_policy_stats_payload(self) -> None:

@@ -1372,6 +1372,38 @@ class EngineMctsStats:
     choices_unmapped_causes: Counter = field(default_factory=Counter)
     # Model-mode telemetry (zero on the hp_fraction path).
     model_evals: int = 0
+    # ROLLOUT-LEAF telemetry on the MODEL path (`rollout_leaf_eval=True`, the
+    # search-ceiling program's arbiter arm). Zero on every other leaf regime, the
+    # same way `model_evals` is zero on the hp_fraction path.
+    #
+    # These exist because the arm's engagement has to be READ OFF A RUN rather
+    # than inferred from the config that was passed. `native_search_args` appends
+    # the seam's positionals as the OUTERMOST slots, so an extension module that
+    # predates the seam, or a leaf regime that ignores it, produces a search that
+    # looks configured and is not -- and the only difference visible to a caller
+    # is that the crate report carries no `rollout_leaf_mode`. Absorbing it here
+    # turns "was the seam engaged" into a field of `policy_stats` instead of a
+    # claim about the launch command.
+    #
+    # Per INVOCATION, matching `model_evals` and the phase walls directly above:
+    # a conservatively replayed world ran its rollouts twice and spent that work.
+    rollout_leaf_world_records: int = 0
+    rollouts_run: int = 0
+    rollout_plies: int = 0
+    rollout_terminal_hits: int = 0
+    rollout_cap_hits: int = 0
+    rollout_dead_ends: int = 0
+    rollout_leaves_priced: int = 0
+    #: Leaves whose model forward was SKIPPED because a rollout priced them. The
+    #: arm's whole cost argument rests on this being nonzero: under rollout
+    #: leaves the model's value head is unused, so a leaf that still paid for a
+    #: forward is a leaf the seam did not actually take over.
+    rollout_encode_skipped: int = 0
+    #: Every distinct `rollout_leaf_mode` the crate reported, counted. A SET
+    #: rather than a flag: a shard that silently ran some decisions on the seam
+    #: and some off it must not read as either one, and the control mode
+    #: (`model_value`) shares this whole block with the arm.
+    rollout_leaf_modes: Counter = field(default_factory=Counter)
     # Native per-phase search wall (crate-measured, never derived by
     # subtraction): leaf encoding, model forwards, and tree work. These are the
     # inputs to the depth/throughput study's phase attribution
@@ -1740,6 +1772,38 @@ class EngineMctsStats:
             "unmapped_choices": dict(self.unmapped_choices),
             "choices_unmapped_causes": dict(self.choices_unmapped_causes),
             "model_evals": self.model_evals,
+            # THE ARM'S RUNTIME WITNESS. `rollout_leaf_modes` is what says the
+            # seam was engaged; the counters say how much work it did.
+            "rollout_leaf_modes": dict(self.rollout_leaf_modes),
+            "rollout_leaf_world_records": self.rollout_leaf_world_records,
+            "rollouts_run": self.rollouts_run,
+            "rollout_plies": self.rollout_plies,
+            "rollout_terminal_hits": self.rollout_terminal_hits,
+            "rollout_cap_hits": self.rollout_cap_hits,
+            "rollout_dead_ends": self.rollout_dead_ends,
+            "rollout_leaves_priced": self.rollout_leaves_priced,
+            "rollout_encode_skipped": self.rollout_encode_skipped,
+            # THE ESTIMAND LEDGER, and the reason these are `None` rather than
+            # 0.0 when no rollout ran. `rollout_fallback_fraction == 0.0` is the
+            # strongest claim this arm can make -- every rollout reached a
+            # terminal, so the leaf is a real oracle rather than a blend of an
+            # oracle and a handcrafted cap value. A shard that ran NO rollouts at
+            # all would render exactly that number from `0/0` guarded to zero,
+            # i.e. an un-engaged seam would advertise a perfect oracle. None
+            # instead: absent is not zero.
+            "rollout_terminal_fraction": (
+                self.rollout_terminal_hits / self.rollouts_run
+                if self.rollouts_run
+                else None
+            ),
+            "rollout_fallback_fraction": (
+                (self.rollout_cap_hits + self.rollout_dead_ends) / self.rollouts_run
+                if self.rollouts_run
+                else None
+            ),
+            "rollout_mean_plies": (
+                self.rollout_plies / self.rollouts_run if self.rollouts_run else None
+            ),
             "encode_wall_seconds": self.encode_wall_seconds,
             "model_wall_seconds": self.model_wall_seconds,
             "tree_wall_seconds": self.tree_wall_seconds,
@@ -4170,6 +4234,37 @@ class EngineMctsPolicy:
                     field_name,
                     getattr(self.stats, field_name) + int(report.get(field_name) or 0),
                 )
+            # THE ROLLOUT SEAM'S RUNTIME WITNESS, on the same per-invocation
+            # footing as `model_evals` and the phase walls above. Keyed off the
+            # REPORT rather than off `config.rollout_leaf_eval` on purpose: the
+            # config says what was asked for and the report says what the crate
+            # did, and the failure this block exists to catch is exactly those two
+            # disagreeing -- an extension module that predates the seam ignores
+            # positionals it does not know, so the arm can be configured and not
+            # run. `.get(...)` throughout, so a pre-seam report stays readable and
+            # simply contributes nothing.
+            #
+            # Placed at the END of the absorption deliberately: the depth block
+            # above is pinned by a SOURCE-PROXIMITY test
+            # (test_mcts_acceptance_report.ModelPathDepthInstrumentationTest reads
+            # the 900 characters following the `model_evals` line), so inserting
+            # here keeps that guard measuring what it was written to measure
+            # instead of measuring this block's comment length.
+            leaf_mode = report.get("rollout_leaf_mode")
+            if leaf_mode is not None:
+                self.stats.rollout_leaf_modes[str(leaf_mode)] += 1
+                self.stats.rollout_leaf_world_records += 1
+                self.stats.rollouts_run += int(report.get("rollouts_run") or 0)
+                self.stats.rollout_plies += int(report.get("rollout_plies") or 0)
+                self.stats.rollout_terminal_hits += int(
+                    report.get("rollout_terminal_hits") or 0
+                )
+                self.stats.rollout_cap_hits += int(report.get("rollout_cap_hits") or 0)
+                self.stats.rollout_dead_ends += int(report.get("rollout_dead_ends") or 0)
+                self.stats.rollout_leaves_priced += int(report.get("leaves_priced") or 0)
+                self.stats.rollout_encode_skipped += int(
+                    report.get("rollout_encode_skipped") or 0
+                )
             return report
 
         for world, state in worlds:
@@ -4486,9 +4581,81 @@ class EngineMctsPolicy:
                     # aggregate lives in `policy_stats`; this is the per-decision
                     # row, which is what the fork probe forks on.
                     **({"override": override} if override is not None else {}),
+                    # Same rule: absent unless the crate actually reported a leaf
+                    # mode, so a flag-off decision's metadata is byte for byte
+                    # what it has always been. Present, it is the per-DECISION
+                    # witness that the seam was engaged for this decision --
+                    # which `policy_stats` cannot give, because a shard aggregate
+                    # reads the same whether the seam ran on every decision or on
+                    # one.
+                    **(
+                        {"rollout": rollout_row}
+                        if (rollout_row := self._rollout_decision_row(world_runs))
+                        is not None
+                        else {}
+                    ),
                 }
             },
         )
+
+    @staticmethod
+    def _rollout_decision_row(
+        world_runs: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """This decision's rollout-leaf witness, or None if the seam did not run.
+
+        Over the decision's FINAL world records, which is the set whose values
+        actually reached `aggregated` -- unlike `policy_stats`, which counts every
+        invocation including a conservatively replayed world's discarded first
+        pass. The two therefore do not have to agree, and neither is wrong: this
+        answers "what priced the values behind THIS choice", the shard aggregate
+        answers "what work did the shard do".
+
+        `modes` is a sorted list rather than a single string for the same reason
+        the shard-level counter is a Counter: a decision whose worlds disagreed
+        about the leaf regime must not render as either regime.
+        """
+        # `world_runs` holds RECORD dicts, and the crate's report is nested under
+        # `record["report"]` -- not spread onto the record. Reading the rollout
+        # keys off the record directly returns None for every world, so this block
+        # silently vanished from every decision's metadata while the shard-level
+        # counters (absorbed from `report` at its own seam) populated correctly.
+        # That asymmetry is what made it survive a green unit run and fail on a
+        # real game, and it is why the per-decision witness is asserted against a
+        # PLAYED decision below rather than against a hand-built record.
+        rows = [
+            report
+            for report in (r.get("report") for r in world_runs)
+            if isinstance(report, Mapping)
+            and report.get("rollout_leaf_mode") is not None
+        ]
+        if not rows:
+            return None
+        rollouts_run = sum(int(r.get("rollouts_run") or 0) for r in rows)
+        cap = sum(int(r.get("rollout_cap_hits") or 0) for r in rows)
+        dead = sum(int(r.get("rollout_dead_ends") or 0) for r in rows)
+        return {
+            # The two fields that say the seam was ENGAGED at runtime. Both come
+            # from the crate's own report, never from the config.
+            "rollout_leaf_modes": sorted({str(r["rollout_leaf_mode"]) for r in rows}),
+            "rollout_encode_skipped": sum(
+                int(r.get("rollout_encode_skipped") or 0) for r in rows
+            ),
+            "world_records": len(rows),
+            "rollouts_run": rollouts_run,
+            "rollout_terminal_hits": sum(
+                int(r.get("rollout_terminal_hits") or 0) for r in rows
+            ),
+            "rollout_cap_hits": cap,
+            "rollout_dead_ends": dead,
+            "leaves_priced": sum(int(r.get("leaves_priced") or 0) for r in rows),
+            # None rather than 0.0 with no rollouts, for the reason spelled out on
+            # the shard-level copy in `as_dict`: 0.0 is the oracle claim, and an
+            # un-engaged seam must not be able to make it.
+            "rollout_fallback_fraction": (
+                (cap + dead) / rollouts_run if rollouts_run else None
+            ),
+        }
 
     def _record_root_telemetry(
         self,

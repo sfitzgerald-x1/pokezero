@@ -558,6 +558,50 @@ class ControlledFoulPlayConfig:
     # sampled world: an oracle arm that silently contains sampled decisions reads
     # as "truth does not help", which is exactly the finding §4a exists to make.
     engine_oracle_belief: bool = False
+    # ROLLOUT LEAVES (search-ceiling program Phase 1 instrument 2 -- the ARBITER).
+    # Price every leaf of the native search with R uniform-policy rollouts to a
+    # terminal instead of the model's value head, keeping model PRIORS on. The
+    # program uses this to separate "the value head is the ceiling" from "the
+    # search is the ceiling": if a near-oracle leaf does not move strength, the
+    # value head is not what is binding.
+    #
+    # Default OFF, and OFF must reproduce the existing search byte for byte --
+    # `native_search_args` appends the seam's positionals only when this is set,
+    # so a flag-off cell renders the identical native call and the identical
+    # config_id it did before the seam existed. Every banked shard stays mergeable.
+    engine_rollout_leaf: bool = False
+    # R: rollouts averaged per leaf. IN the cell identity (see
+    # `foulplay_paired_eval.search_config_id`): it is the leaf estimator's
+    # variance, so two R values are two different pricers.
+    engine_rollout_count: int = 32
+    # Ply cap per rollout. Also IN the cell identity, and it is the knob that
+    # decides whether this arm is an ORACLE at all: a capped rollout is not a
+    # terminal observation, it falls back to a handcrafted value, and the shard
+    # reports the share as `rollout_fallback_fraction`. A cell at a short cap is
+    # measuring a blend, not an oracle.
+    engine_rollout_max_plies: int = 200
+    # The rollout policy. Only "uniform" is implemented in the crate; the config
+    # validator refuses anything else rather than silently substituting.
+    engine_rollout_policy: str = "uniform"
+    # Rollout RNG root. NOT in the cell identity -- it is a replicate axis like
+    # the game seed, so two shards that differ only here are two draws of the same
+    # estimand and MUST pool (that is how the Monte-Carlo noise averages out).
+    # Recorded in the shard body instead, so a reader can still reproduce a draw.
+    engine_rollout_seed: int = 0
+    # Rollout worker threads. Also not in the cell identity: proven
+    # value-invariant crate-side (`thread_count_does_not_change_values`), so it
+    # buys wall-clock only. It is nonetheless FENCED -- see the ack below.
+    engine_rollout_threads: int = 1
+    # The CPU-BUDGET ACKNOWLEDGEMENT, forwarded so the fence is reachable rather
+    # than unreachable from the CLI. The hazard is stated at length on
+    # EngineMctsConfig.rollout_threads: the foul-play opponent is TIME-budgeted
+    # and thinks concurrently with this search on the same host, its realized
+    # work is recorded nowhere, so cores taken here weaken the opponent in the
+    # direction that flatters this arm. `EngineMctsConfig.__post_init__` raises
+    # unless threads > 1 is paired with this; the bridge does not pre-empt that
+    # check, it just carries both values so the refusal fires with the real
+    # values in the message.
+    engine_rollout_threads_cpu_budget_ack: bool = False
     # DYNAMIC SEARCH BUDGET (docs/dynamic-search-budget-plan-20260812.md).
     #
     # The per-decision budget is otherwise FIXED: every decision spends
@@ -1810,6 +1854,25 @@ class ControlledFoulPlayBenchmarkResult:
                 # witnessed from shard telemetry, not job labels" is a standing
                 # rule of this campaign.
                 "oracle_belief": self.config.engine_oracle_belief,
+                # Same standing again, and this block is the ASKED-FOR side only.
+                # What the crate actually DID is in `policy_stats`
+                # (`rollout_leaf_modes`, `rollout_encode_skipped`), and the two
+                # must be read together: a cell whose config says
+                # `rollout_leaf: true` while `policy_stats.rollout_leaf_modes` is
+                # empty ran the model's value head on an image that ignored the
+                # seam, which is the "builds clean, wrong at runtime" failure this
+                # program has already paid for once.
+                "rollout_leaf": self.config.engine_rollout_leaf,
+                # The knobs, reported whether or not the arm is on, so a flag-off
+                # shard witnesses that it was off AT these settings rather than
+                # leaving a reader to assume the defaults.
+                "rollout_count": self.config.engine_rollout_count,
+                "rollout_max_plies": self.config.engine_rollout_max_plies,
+                "rollout_policy": self.config.engine_rollout_policy,
+                # In the body and NOT in config_id, unlike count/max_plies: a
+                # replicate axis, recorded so a draw can be reproduced.
+                "rollout_seed": self.config.engine_rollout_seed,
+                "rollout_threads": self.config.engine_rollout_threads,
                 "early_stop": self.config.engine_early_stop,
                 "depth_min": self.config.engine_depth_min,
                 "worlds_min": self.config.engine_worlds_min,
@@ -3740,6 +3803,35 @@ def _build_policy(
                 early_stop=config.engine_early_stop,
                 depth_min=config.engine_depth_min,
                 worlds_min=config.engine_worlds_min,
+                # THE ROLLOUT SEAM. Passed UNCONDITIONALLY, unlike
+                # `early_stop_min_sims` above, and the difference is deliberate:
+                # these knobs' dataclass defaults ARE the bridge defaults, so
+                # naming them changes nothing when the arm is off, and the
+                # unconditional form cannot develop a gap between "the operator
+                # set it" and "the search received it".
+                #
+                # Safe because `native_search_args` appends NONE of the seam's
+                # positionals with `rollout_leaf_eval=False`, so the native call
+                # is byte for byte the pre-seam one no matter what the other six
+                # hold. `tests/test_rollout_leaf_bridge.py`'s
+                # `test_arm_off_makes_the_pre_seam_call_byte_for_byte` asserts
+                # exactly that, with the knobs set to non-defaults.
+                #
+                # NOT a fence, and deliberately not described as one: the
+                # threads/ack refusal in `EngineMctsConfig.__post_init__` sits
+                # INSIDE `if self.rollout_leaf_eval`, so `rollout_threads > 1`
+                # with the arm off is accepted here and simply inert (nothing
+                # reads it). Verified, not assumed. The fence fires when the arm
+                # is on, which is the only regime in which threads spend cores.
+                rollout_leaf_eval=config.engine_rollout_leaf,
+                rollout_count=config.engine_rollout_count,
+                rollout_max_plies=config.engine_rollout_max_plies,
+                rollout_policy=config.engine_rollout_policy,
+                rollout_seed=config.engine_rollout_seed,
+                rollout_threads=config.engine_rollout_threads,
+                rollout_threads_cpu_budget_ack=(
+                    config.engine_rollout_threads_cpu_budget_ack
+                ),
                 **(
                     {"early_stop_min_sims": config.engine_early_stop_min_sims}
                     if config.engine_early_stop
@@ -5508,6 +5600,43 @@ def build_arg_parser() -> argparse.ArgumentParser:
                              "override_measured_decisions) instead of leaving unmeasurable "
                              "decisions to read as agreement. Needs an image whose crate "
                              "accepts `arm_priors` (the per-arm prior column).")
+    parser.add_argument("--engine-rollout-leaf", action="store_true",
+                        help="ROLLOUT LEAVES with model priors (search-ceiling program "
+                             "Phase 1 instrument 2, the ARBITER): price every leaf of the "
+                             "native search with R uniform-policy rollouts to a terminal "
+                             "instead of the model's value head. engine-mcts only. Read the "
+                             "shard's `rollout_fallback_fraction` before calling the result "
+                             "an oracle: a capped rollout is a handcrafted value, not a "
+                             "terminal observation. Needs an image whose crate accepts the "
+                             "seam's positionals.")
+    parser.add_argument("--engine-rollout-count", type=int, default=32,
+                        help="R, the rollouts averaged per leaf (--engine-rollout-leaf). "
+                             "Part of the cell identity: it is the leaf estimator's "
+                             "variance, so two R values are two pricers.")
+    parser.add_argument("--engine-rollout-max-plies", type=int, default=200,
+                        help="Ply cap per rollout (--engine-rollout-leaf). Part of the cell "
+                             "identity, and the knob that decides whether the arm is an "
+                             "oracle at all -- a capped rollout falls back to a handcrafted "
+                             "value and is counted in `rollout_fallback_fraction`.")
+    parser.add_argument("--engine-rollout-policy", default="uniform",
+                        help="Rollout policy (--engine-rollout-leaf). 'uniform' is the only "
+                             "one implemented in the crate; anything else is refused by the "
+                             "config validator rather than silently substituted.")
+    parser.add_argument("--engine-rollout-seed", type=int, default=0,
+                        help="Rollout RNG root (--engine-rollout-leaf). NOT part of the cell "
+                             "identity: it is a replicate axis like the game seed, so shards "
+                             "differing only here are draws of the same estimand and pool.")
+    parser.add_argument("--engine-rollout-threads", type=int, default=1,
+                        help="Rollout worker threads (--engine-rollout-leaf). Buys wall-clock "
+                             "only -- proven value-invariant crate-side -- and >1 REQUIRES "
+                             "--engine-rollout-threads-cpu-budget-ack.")
+    parser.add_argument("--engine-rollout-threads-cpu-budget-ack", action="store_true",
+                        help="Acknowledge that --engine-rollout-threads > 1 has been checked "
+                             "against the run's shard concurrency. The foul-play opponent is "
+                             "TIME-budgeted and thinks concurrently with this search on the "
+                             "same host with its realized work recorded nowhere, so cores "
+                             "taken here weaken the opponent in the direction that flatters "
+                             "this arm.")
     parser.add_argument("--engine-oracle-belief", action="store_true",
                         help="Search the TRUE hidden state instead of sampled belief worlds "
                              "(value-gap plan §4a / H5). Every world is the true completion, "
@@ -5891,6 +6020,19 @@ def _config_from_args(
         engine_worlds_min=getattr(args, "engine_worlds_min", None),
         engine_early_stop_min_sims=getattr(args, "engine_early_stop_min_sims", None),
         engine_oracle_belief=getattr(args, "engine_oracle_belief", False),
+        # getattr with the dataclass's own default, on the same rule as every
+        # engine axis above: the comparison driver and several entry points build
+        # Namespaces that never saw these flags, and on those paths the arm must
+        # be OFF rather than an AttributeError.
+        engine_rollout_leaf=getattr(args, "engine_rollout_leaf", False),
+        engine_rollout_count=getattr(args, "engine_rollout_count", 32),
+        engine_rollout_max_plies=getattr(args, "engine_rollout_max_plies", 200),
+        engine_rollout_policy=getattr(args, "engine_rollout_policy", "uniform"),
+        engine_rollout_seed=getattr(args, "engine_rollout_seed", 0),
+        engine_rollout_threads=getattr(args, "engine_rollout_threads", 1),
+        engine_rollout_threads_cpu_budget_ack=getattr(
+            args, "engine_rollout_threads_cpu_budget_ack", False
+        ),
         device=args.device,
         temperature=args.temperature,
         cpuct=args.cpuct,
@@ -5987,9 +6129,20 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
+        # NAME THE ACTUAL OPPONENT. This line said "vs foul-play"
+        # unconditionally, including on a head-to-head run where the opponent seat
+        # is a second pokezero policy -- so the headline of every neural-opponent
+        # run asserted the one thing that makes a win rate comparable to the
+        # banked panel, and asserted it falsely. A rate against a raw pokezero
+        # seat is a DIFFERENT ESTIMAND from a rate against the reference bot, and
+        # the whole point of the label is to say which one was measured.
+        opponent_label = getattr(args, "opponent_policy_mode", "foul-play")
+        opponent_label = (
+            "foul-play" if opponent_label == "foul-play" else f"pokezero-{opponent_label}"
+        )
         print(
             f"RESULT: {result.policy_id} won {result.wins}/{result.completed_games} "
-            f"vs foul-play ({result.win_rate:.1%})"
+            f"vs {opponent_label} ({result.win_rate:.1%})"
         )
         root = payload["root_puct"]
         if isinstance(root, Mapping) and root.get("searches"):

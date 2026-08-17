@@ -401,6 +401,18 @@ def main(argv=None) -> int:
                 early_stop_min_sims=cell.get("early_stop_min_sims"),
                 depth_min=cell.get("depth_min"),
                 worlds_min=cell.get("worlds_min"),
+                # Lockstep again, for the third time and the same reason. A
+                # rollout cell whose reference id was built without this fragment
+                # would match no shard, `depth_reference` would populate from
+                # nothing, and the §5 non-starvation rule would report clean --
+                # the precise failure the tag comment above records having already
+                # happened. `search_config_id` requires R and the cap whenever the
+                # arm is on, so a campaign cell that sets `rollout_leaf` without
+                # them fails here loudly rather than rendering a pooled id.
+                rollout_leaf=bool(cell.get("rollout_leaf")),
+                rollout_count=cell.get("rollout_count"),
+                rollout_max_plies=cell.get("rollout_max_plies"),
+                rollout_policy=cell.get("rollout_policy") or "uniform",
             )
 
         for cell in campaign.get("cells", []):

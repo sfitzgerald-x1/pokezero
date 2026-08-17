@@ -102,6 +102,12 @@ class DefaultsAreOffTest(unittest.TestCase):
             # is to name the knob -- not to soften the driver to getattr.
             engine_early_stop=False, engine_depth_min=None, engine_worlds_min=None, engine_early_stop_min_sims=None,
             opponent_policy_mode="foul-play", opponent_engine_depth=None, opponent_engine_sims=None,
+            # Named for the same documented reason as the knobs above: the arbiter
+            # arm's knobs are read directly by config_id_for, so this Namespace has
+            # to carry them. Arm OFF here, which is what keeps the expected id below
+            # byte-identical to the one this test asserted before the arm existed.
+            engine_rollout_leaf=False, engine_rollout_count=32,
+            engine_rollout_max_plies=200, engine_rollout_policy="uniform",
             checkpoint="/c/k0.pt",
         )
         self.assertEqual(

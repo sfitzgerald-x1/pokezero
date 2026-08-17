@@ -60,6 +60,19 @@ def args(**overrides) -> argparse.Namespace:
         opponent_policy_mode="foul-play",
         opponent_engine_depth=None,
         opponent_engine_sims=None,
+        # ROLLOUT-LEAF (arbiter arm) knobs, in the shared fixture for exactly the
+        # reason the head-to-head knobs above are: config_id_for reads them
+        # DIRECTLY, so a Namespace that omits them must raise rather than render
+        # the value-head control's id. Defaults are the arm OFF at the bridge's
+        # own R/cap, so every assertion in this file that predates the arm keeps
+        # its expected id and its expected child argv unchanged.
+        engine_rollout_leaf=False,
+        engine_rollout_count=32,
+        engine_rollout_max_plies=200,
+        engine_rollout_policy="uniform",
+        engine_rollout_seed=0,
+        engine_rollout_threads=1,
+        engine_rollout_threads_cpu_budget_ack=False,
         engine_model_path=None,
         engine_tables_path=None,
         foulplay_root=None,

@@ -134,6 +134,10 @@ def search_config_id(
     opponent_policy_mode: str = "foul-play",
     opponent_engine_depth: int | None = None,
     opponent_engine_sims: int | None = None,
+    rollout_leaf: bool = False,
+    rollout_count: int | None = None,
+    rollout_max_plies: int | None = None,
+    rollout_policy: str = "uniform",
 ) -> str:
     """The search-arm cell identity, over primitives rather than a Namespace.
 
@@ -200,6 +204,49 @@ def search_config_id(
     # set that agrees on this flag.
     if opponent_priors:
         base = f"{base}+opp-priors"
+    if rollout_leaf:
+        if rollout_count is None or rollout_max_plies is None:
+            # Refused rather than defaulted. Both values are IN the id, so a
+            # caller that omits one is asking for an id that cannot describe the
+            # cell it ran -- and silently substituting this module's idea of a
+            # default is how the reference builder and the driver drift, which
+            # the docstring above records as having already cost this campaign a
+            # rule that reported clean while firing on nothing.
+            raise ValueError(
+                "rollout_leaf=True requires rollout_count and rollout_max_plies: "
+                "both are part of the cell identity (R is the leaf estimator's "
+                "variance, the cap decides whether the leaf is an oracle at all), "
+                f"got rollout_count={rollout_count!r}, "
+                f"rollout_max_plies={rollout_max_plies!r}."
+            )
+        # THE LEAF EVALUATOR ITSELF -- the most semantic axis on this list, ahead
+        # even of the belief. A rollout cell prices its leaves with R rollouts to
+        # a terminal instead of the model's value head, so its numbers answer a
+        # different question from its value-head twin's, and the arbiter arm's
+        # ENTIRE reading is rollout-leaf against the same config off. Pooling the
+        # two would merge the experiment into its own control and the merged win
+        # rate would look like "the leaf made no difference" by construction --
+        # the exact shape of erasure `+opp-priors` and `+oracle-belief` exist to
+        # prevent, and the one this arm is least able to survive, because the
+        # program's whole decision hangs on that single contrast.
+        #
+        # R and the ply cap ride INSIDE the fragment rather than beside it: R is
+        # the leaf estimator's variance and the cap decides whether the leaf is an
+        # oracle at all (a capped rollout is a handcrafted fallback value, counted
+        # in `rollout_fallback_fraction`), so R=8/cap=200 and R=32/cap=20 are
+        # three-way different pricers that must never merge. Rendered
+        # unconditionally, NOT omitted at their defaults: unlike every other knob
+        # here there are no banked shards at any value of them to stay mergeable
+        # with -- nothing has ever run this arm in a game -- so there is no
+        # backward-compatibility claim to buy, and an id that hid R behind a
+        # default would let a re-tuned cell silently pool with the first one.
+        base = f"{base}+rollout{int(rollout_count)}p{int(rollout_max_plies)}"
+        if rollout_policy != "uniform":
+            # Omitted at the default, because "uniform" is the only policy the
+            # crate implements and the config validator refuses the rest -- so
+            # today this branch is unreachable and every id renders without it.
+            # Present so that adding a second policy cannot silently pool the two.
+            base = f"{base}-{rollout_policy}"
     if oracle_belief:
         # The belief itself, which is the most semantic axis there is: this arm
         # searches the TRUE hidden state. §4a's whole reading is truth-arm vs
@@ -276,6 +323,19 @@ def config_id_for(args: argparse.Namespace) -> str:
         opponent_engine_sims=args.opponent_engine_sims,
         depth_min=args.engine_depth_min,
         worlds_min=args.engine_worlds_min,
+        # DIRECT reads, on the rule stated above and for the sharpest instance of
+        # it on this driver. A Namespace predating the arbiter arm is a caller from
+        # before the rollout leaf existed; handing it the default id would file its
+        # value-head shard under a cell id that reads as "value-head", which is
+        # correct -- but the same silence in the other direction is what the note
+        # above describes losing a whole fragment to, and the arm cannot afford it:
+        # a rollout shard misfiled into the value-head control does not corrupt a
+        # delta, it INVERTS the program's conclusion by averaging the arm into what
+        # it is measured against. Raise.
+        rollout_leaf=args.engine_rollout_leaf,
+        rollout_count=args.engine_rollout_count,
+        rollout_max_plies=args.engine_rollout_max_plies,
+        rollout_policy=args.engine_rollout_policy,
     )
 
 
@@ -342,6 +402,28 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
         # belief the search runs on, which is the one thing §4a varies.
         if args.engine_oracle_belief:
             argv.append("--engine-oracle-belief")
+        # THE ARBITER ARM, on the same "only when set" rule: an arm-off cell must
+        # render the byte-identical child argv it rendered before the seam existed,
+        # so R/cap/policy/seed/threads are forwarded ONLY under the flag. Sending
+        # them unconditionally would be harmless to the search (the bridge's
+        # defaults equal the dataclass's) but it would change every banked cell's
+        # launch command, and "the argv is the record" is how these shards are
+        # audited.
+        if args.engine_rollout_leaf:
+            argv += [
+                "--engine-rollout-leaf",
+                "--engine-rollout-count", str(args.engine_rollout_count),
+                "--engine-rollout-max-plies", str(args.engine_rollout_max_plies),
+                "--engine-rollout-policy", str(args.engine_rollout_policy),
+                "--engine-rollout-seed", str(args.engine_rollout_seed),
+                "--engine-rollout-threads", str(args.engine_rollout_threads),
+            ]
+            # The ack travels with the threads it acknowledges. Forwarded only
+            # when set, so a child that is told threads > 1 WITHOUT it still hits
+            # `EngineMctsConfig.__post_init__`'s refusal -- the fence has to be
+            # reachable through this driver, not merely reachable in the library.
+            if args.engine_rollout_threads_cpu_budget_ack:
+                argv.append("--engine-rollout-threads-cpu-budget-ack")
         # Same "only when set" rule. Both IN config_id: they change how many
         # simulations a decision gets, which is the search itself.
         if args.engine_depth_min is not None:
@@ -546,6 +628,37 @@ def build_parser() -> argparse.ArgumentParser:
                          "its own denominator. OBSERVATIONAL -- it does not change the "
                          "search and so is NOT part of config_id; the shard reports it "
                          "as `override_telemetry` instead.")
+    ap.add_argument("--engine-rollout-leaf", action="store_true",
+                    help="ROLLOUT LEAVES with model priors -- the ARBITER arm "
+                         "(search-ceiling program Phase 1 instrument 2). Prices every leaf "
+                         "with R rollouts to a terminal instead of the model's value head. "
+                         "Its value-head twin is the SAME cell with this flag off, so run "
+                         "both on the same seed band. Carries a "
+                         "'+rollout<R>p<cap>' fragment in config_id -- this changes the "
+                         "leaf evaluator, which is the most semantic axis there is.")
+    ap.add_argument("--engine-rollout-count", type=int, default=32,
+                    help="R, rollouts averaged per leaf. IN config_id: it is the leaf "
+                         "estimator's variance, so two R values are two pricers.")
+    ap.add_argument("--engine-rollout-max-plies", type=int, default=200,
+                    help="ply cap per rollout. IN config_id, and the knob that decides "
+                         "whether the arm is an oracle at all -- read the shard's "
+                         "`rollout_fallback_fraction` before calling it one.")
+    ap.add_argument("--engine-rollout-policy", default="uniform",
+                    help="rollout policy. 'uniform' is the only one the crate implements; "
+                         "anything else is refused by the config validator.")
+    ap.add_argument("--engine-rollout-seed", type=int, default=0,
+                    help="rollout RNG root. NOT in config_id -- a replicate axis like the "
+                         "game seed, so shards differing only here pool, which is how the "
+                         "Monte-Carlo noise averages out. Recorded in the shard body.")
+    ap.add_argument("--engine-rollout-threads", type=int, default=1,
+                    help="rollout worker threads. Not in config_id (proven value-invariant "
+                         "crate-side, so it buys wall-clock only), but >1 REQUIRES "
+                         "--engine-rollout-threads-cpu-budget-ack.")
+    ap.add_argument("--engine-rollout-threads-cpu-budget-ack", action="store_true",
+                    help="acknowledge --engine-rollout-threads > 1 against THIS run's shard "
+                         "concurrency. The opponent is time-budgeted and thinks concurrently "
+                         "on the same host with its realized work recorded nowhere, so cores "
+                         "taken here weaken it in the direction that flatters this arm.")
     ap.add_argument("--engine-oracle-belief", action="store_true",
                     help="search the TRUE hidden state instead of sampled belief worlds "
                          "(docs/mcts_value_gap_investigation_20260811.md §4a / H5). Its "
@@ -782,6 +895,20 @@ def main(argv=None) -> int:
         # In config_id AND here, same reason c_puct is: arm identity witnessed
         # from the shard body, never from a job label.
         "oracle_belief": bool(args.engine_oracle_belief),
+        # In config_id AND here, same reason as oracle_belief. The seed and thread
+        # count are here ONLY -- they are deliberately outside the id (a replicate
+        # axis and a value-invariant throughput knob), so this body is the sole
+        # record of them, and a rollout draw cannot be reproduced without the seed.
+        #
+        # Still only the ASKED-FOR side. Whether the seam actually engaged is a
+        # per-seat reading off `policy_stats.rollout_leaf_modes`; a shard with
+        # `rollout_leaf: true` here and no leaf modes there ran the value head.
+        "rollout_leaf": bool(args.engine_rollout_leaf),
+        "rollout_count": args.engine_rollout_count,
+        "rollout_max_plies": args.engine_rollout_max_plies,
+        "rollout_policy": args.engine_rollout_policy,
+        "rollout_seed": args.engine_rollout_seed,
+        "rollout_threads": args.engine_rollout_threads,
         # Named, never silently dropped: an incomplete seat makes the paired
         # delta unscoreable for those seeds and the merger must see it.
         "missing_seeds": missing,
