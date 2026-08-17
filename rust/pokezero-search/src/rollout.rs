@@ -17,24 +17,49 @@
 //!   trial)`, never from the `&mut StdRng` that `traverse` uses to sample
 //!   chance branches.
 //!
-//!   THE EXACT CLAIM, because a looser wording of it was measurably false and
-//!   shipped in review. Disjointness buys this and only this: **at a fixed
-//!   leaf-value vector** the selection sequence is bit-identical to
-//!   production's, so nothing about the tree changes for a reason other than
-//!   the leaf values. It does NOT buy invariance to `rollout_seed` or to `R`.
-//!   Those knobs reprice the leaves; repriced leaves change selection; changed
-//!   selection descends elsewhere and therefore samples different chance
-//!   branches. Measured on `symmetric.state` with the search seed held and only
-//!   `rollout_seed` moved 1 -> 2: `chance_nodes` 344 -> 348,
-//!   `decision_nodes` 139 -> 149, `depth_occupancy`
-//!   [600, 596, 512] -> [600, 596, 509]. That is the instrument working as
-//!   designed, not a leak -- but "changing R cannot perturb which branches were
-//!   sampled" was the wrong sentence for it, on the one knob whose whole
-//!   purpose is redrawing labels.
+//!   THE EXACT CLAIM, derived from the code rather than restated with a hedge,
+//!   because the design intent ("adding, removing or reordering rollouts cannot
+//!   perturb which chance branches the tree sampled") is FALSE as written and
+//!   two successive revisions of this comment got the replacement wrong. What
+//!   disjointness gives is a conditional, and the condition is not decoration:
 //!
-//!   The narrow claim is what the fidelity gate actually tests, and it is
-//!   verified over 1440 configurations (5 fixtures x max_depth {1,2,3,5,8,12} x
-//!   seeds x iterations x `deep_ko_split` x `fpu_reduction`), 0 mismatches.
+//!   1. No rollout draw ever advances the search RNG. `rollout_trial` builds a
+//!      fresh `StdRng::seed_from_u64(rollout_seed(seed, ordinal, trial))` per
+//!      (leaf ordinal, trial); the only `&mut StdRng` `traverse` sees is the
+//!      search one. So the search's draw SEQUENCE is a function of the search
+//!      seed and of the values handed back to it -- nothing else.
+//!   2. Therefore, GIVEN the same leaf-value vector, this driver's selection is
+//!      bit-identical to production's. That is the fidelity gate:
+//!      `leaf_mode="hp_fraction"` hands back exactly production's values and
+//!      the two reports match field for field, with the rollout knobs pinned at
+//!      non-defaults so a leak would show. Verified for this commit over 600
+//!      comparisons on 18 report keys (5 fixtures x `max_depth` {1,2,3,4,6} x
+//!      seed {0,7,99} x iterations {200,800} x `deep_ko_split` {T,F} x
+//!      `fpu_reduction` {None,0.25}), 0 mismatches --
+//!      `scripts/sweep_leaf_batch_fidelity_gap.py`'s sibling grid, and a
+//!      superset of what `rollout_batch1_matches_sequential_report` runs in CI.
+//!   3. Therefore, the label of trial `t` at leaf ordinal `k` is a pure function
+//!      of (leaf state, `rollout_seed`, `k`, `t`). It does NOT depend on the
+//!      thread count, on the scheduling order, or on which other rows shared
+//!      its round -- which is what makes `rollout_threads` a throughput knob
+//!      and what "reordering rollouts" is actually true of.
+//!
+//!   What it does NOT give, and what no wording should imply: invariance of the
+//!   realized tree to `rollout_seed`, to `R`, or to `leaf_batch`. Each of those
+//!   reprices leaves; repriced leaves change selection; changed selection
+//!   descends elsewhere and therefore samples different chance branches. Note
+//!   the loop this closes: because the label is keyed on ARRIVAL ORDINAL and not
+//!   on leaf content (see `rollout_seed`), anything that shifts arrival order
+//!   re-draws labels too.
+//!
+//!   Measured, with the provenance the number needs to be re-derivable:
+//!   `symmetric.state`, 600 iterations, `max_depth=3`, `c_puct=1.4`, search
+//!   `seed=99`, `R=8`, `rollout_max_plies=200`, `rollout_threads=1`,
+//!   `leaf_batch=1`, moving ONLY `rollout_seed` 1 -> 2: `chance_nodes`
+//!   344 -> 348, `decision_nodes` 139 -> 149, `terminal_branches` 368 -> 373,
+//!   `depth_occupancy` [600, 596, 512] -> [600, 596, 509], `root_value`
+//!   0.487721 -> 0.512324. That is the instrument working as designed; it is
+//!   not a leak between the streams.
 //! - The leaf pricer is a PARAMETER ([`LeafMode`]). With
 //!   [`LeafMode::HpFraction`] this driver prices leaves exactly as
 //!   `multiply_search_with_eval` does, which is what the fidelity gate
@@ -74,8 +99,8 @@ use poke_engine::engine::state::MoveChoice;
 use poke_engine::state::State;
 
 use crate::tree::{
-    finalize, multiply_report_json, traverse, BranchSeam, LeafPrice, MultiPlyConfig,
-    MultiPlyOutcome, SearchCounters, Traversal,
+    finalize, multiply_report_json, traverse, validated_report, BranchSeam, LeafPrice,
+    MultiPlyConfig, MultiPlyOutcome, SearchCounters, Traversal,
 };
 use crate::{parse_state, HpFractionEval, LeafEval};
 
@@ -102,9 +127,19 @@ pub(crate) enum LeafMode {
 /// be stated wherever a result from it is quoted: it prices
 /// `P(side one wins | both seats play uniformly at random from here)`, which
 /// is NOT the vhprobe shards' `true_*` (terminal win probability under POLICY
-/// continuation). The estimand-faithful pricer is the Python row callback
-/// (`row_pricer`), which hands whole leaf states out to the same
-/// `continue_rollout_from_current_state` machinery the shards were built with.
+/// continuation).
+///
+/// NOTHING IN THIS REPO CLOSES THAT GAP YET, stated in the indicative because an
+/// earlier revision of this comment described the remedy as if it were built: it
+/// named a `row_pricer` Python row callback that "hands whole leaf states out to
+/// the same `continue_rollout_from_current_state` machinery the shards were built
+/// with". `grep -rn row_pricer rust/ src/ tests/ scripts/` hit that sentence and
+/// nothing else -- and after this rewrite its only hits are the two lines of
+/// this paragraph. The machinery it named is real
+/// (`pokezero.rollout.continue_rollout_from_current_state`); the seam connecting
+/// it to this driver is not. Building it means a Python row callback at the
+/// batching seam, and until then a result off this arm carries the
+/// uniform-rollout estimand and must be read that way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RolloutPolicy {
     Uniform,
@@ -213,9 +248,8 @@ impl RolloutStats {
 // Rollout RNG: order-independent by construction
 // ---------------------------------------------------------------------------
 
-/// SplitMix64. Used to derive a per-(leaf, trial) seed so a rollout's draws
-/// depend on WHICH leaf and WHICH trial it is, never on thread scheduling or
-/// on how many rows shared its round.
+/// SplitMix64. Used to derive a per-(arrival ordinal, trial) seed so a rollout's
+/// draws never depend on thread scheduling or on how many rows shared its round.
 fn splitmix64(mut z: u64) -> u64 {
     z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut x = z;
@@ -224,6 +258,26 @@ fn splitmix64(mut z: u64) -> u64 {
     x ^ (x >> 31)
 }
 
+/// `ordinal` is the leaf's ARRIVAL ORDINAL (`ordinal_next`, bumped once per
+/// deferred row in collection order), NOT a function of the leaf's content. An
+/// earlier revision of this comment said the draws "depend on WHICH leaf and
+/// WHICH trial it is", which reads as content-keyed and overstates what the seam
+/// provides. Three consequences worth having in writing, because they govern how
+/// a label may be used:
+///
+/// * Two IDENTICAL leaf states arriving at different ordinals get different
+///   labels. `identical_leaf_states_get_different_labels_by_arrival_ordinal` is
+///   the demonstration.
+/// * A label is therefore not comparable or cacheable across searches, and not
+///   a function of (state, `rollout_seed`, R).
+/// * Anything that shifts arrival order re-draws every label after the shift --
+///   including `leaf_batch`, which is one more reason batching is a fidelity
+///   loss rather than an amortisation.
+///
+/// What it IS keyed on is enough for reproducibility of a run: at a fixed search
+/// seed the arrival order is deterministic, so (search seed, `rollout_seed`)
+/// replays the labels exactly. Both seeds therefore have to reach the artifact,
+/// which is why `_search_rollout_crate` records the pair it drew per world.
 fn rollout_seed(root: u64, ordinal: u64, trial: u32) -> u64 {
     splitmix64(
         root ^ splitmix64(ordinal.wrapping_mul(0x2545_F491_4F6C_DD1D))
@@ -241,62 +295,124 @@ fn pick(policy: RolloutPolicy, rng: &mut StdRng, options: &[MoveChoice]) -> Move
     }
 }
 
-/// Play one rollout to terminal (or to the ply cap) from `state`.
+/// Why a rollout stopped. Total on its input and priced differently per arm, so
+/// it is a value rather than three counter bumps scattered through the loop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RolloutStop {
+    /// `battle_is_over() != 0` on a state the rollout actually reached: a real
+    /// terminal observation, priced exactly.
+    Terminal,
+    /// The ply cap ran out with the battle still live. Priced by the
+    /// handcrafted fallback and counted, so the report can say what share of
+    /// the "oracle" was HP-fraction.
+    CapHit,
+    /// The engine offered no legal continuation (empty option vector or empty
+    /// instruction list) without the battle reading as over. Also priced by
+    /// the fallback, counted separately because it means something different
+    /// from a cap hit: a cap hit says "we ran out of budget", a dead end says
+    /// "the engine had nowhere to go".
+    DeadEnd,
+}
+
+/// The discriminator, as a pure function of the loop's outcome.
 ///
-/// `state` is mutated and RESTORED: every applied instruction list is reversed
-/// in reverse order before returning, so a caller may hand the same `&mut
-/// State` to successive rollouts. This mirrors what `expand_edge` does around
-/// the pricing seam, and it is why the leaf clone can be reused across all R
-/// trials of one leaf instead of cloned R times.
+/// Split out because review found the `dead_ends` column had NO firing input
+/// anywhere: 0 dead ends across every in-repo fixture. Re-measured for this
+/// commit -- 60 configurations (5 fixtures x `rollout_max_plies`
+/// {1,2,5,50,400,2000} x search seed {0,7}, R=16, 200 iterations, `max_depth=3`),
+/// 147,856 rollouts, `total dead_ends = 0` -- so the branch that separates it from `cap_hits` was
+/// argued from the loop structure and never exercised. It feeds
+/// `rollout_fallback_fraction`, which is an honesty column. As a pure function
+/// all three arms have demonstrated inputs in
+/// `the_stop_discriminator_separates_a_cap_hit_from_a_dead_end` even though the
+/// engine will not produce the third on any state this repo ships.
+fn classify_stop(terminal: bool, plies_applied: u32, max_plies: u32) -> RolloutStop {
+    if terminal {
+        RolloutStop::Terminal
+    } else if plies_applied >= max_plies {
+        RolloutStop::CapHit
+    } else {
+        RolloutStop::DeadEnd
+    }
+}
+
+/// Play one rollout from `scratch`, to a terminal or to the ply cap.
+///
+/// `scratch` is CONSUMED: it is left wherever the rollout ended, and the caller
+/// is responsible for resetting it. Its only caller (`rollout_trial`) does that
+/// with `scratch.clone_from(leaf)` at the top of every trial, which for
+/// `poke_engine::state::State` -- `#[derive(Debug, Clone)]`, no hand-written
+/// `clone_from` (`third_party/poke-engine-src/src/state.rs:1478`) -- is the
+/// default `*self = source.clone()`, i.e. a full reset.
+///
+/// An earlier revision reversed every applied instruction list here and the
+/// docstring claimed that reversal "is why the leaf clone can be reused across
+/// all R trials instead of cloned R times". That was false twice over: the
+/// clone-per-trial happens anyway one frame up, so the reversal could not be
+/// observed by anything, and it ran on the hot path for every ply of every
+/// rollout. Deleted. Report identity across the deletion is checked, not
+/// assumed: 90 report fingerprints (5 fixtures x both leaf modes x cap
+/// {1,2,200} x 3 knob triples) are unchanged except where the cap binds, which
+/// is the terminal-on-the-last-ply fix below.
 fn rollout_once(
-    state: &mut State,
+    scratch: &mut State,
     cfg: &RolloutConfig,
     rng: &mut StdRng,
     stats: &mut RolloutStats,
 ) -> f32 {
-    let mut applied: Vec<Vec<poke_engine::instruction::Instruction>> = Vec::new();
-    let mut value: Option<f32> = None;
+    let mut plies: u32 = 0;
+    let mut terminal: Option<f32> = None;
     for _ in 0..cfg.max_plies {
-        let over = state.battle_is_over();
+        let over = scratch.battle_is_over();
         if over != 0.0 {
-            stats.terminal_hits += 1;
-            value = Some(if over > 0.0 { 1.0 } else { 0.0 });
+            terminal = Some(if over > 0.0 { 1.0 } else { 0.0 });
             break;
         }
-        let (s1_options, s2_options) = state.get_all_options();
+        let (s1_options, s2_options) = scratch.get_all_options();
         if s1_options.is_empty() || s2_options.is_empty() {
-            stats.dead_ends += 1;
             break;
         }
         let s1 = pick(cfg.policy, rng, &s1_options);
         let s2 = pick(cfg.policy, rng, &s2_options);
         let branches =
-            generate_instructions_from_move_pair(state, &s1, &s2, cfg.branch_on_damage);
+            generate_instructions_from_move_pair(scratch, &s1, &s2, cfg.branch_on_damage);
         if branches.is_empty() {
-            stats.dead_ends += 1;
             break;
         }
         let index = crate::sample_branch_index(rng, &branches);
-        let instructions = branches[index].instruction_list.clone();
-        state.apply_instructions(&instructions);
-        applied.push(instructions);
-        stats.plies_stepped += 1;
+        scratch.apply_instructions(&branches[index].instruction_list);
+        plies += 1;
     }
-    if value.is_none() {
-        // Not a terminal observation. Either the ply cap ran out (the loop
-        // completed `max_plies` steps) or the engine offered no legal
-        // continuation — the dead-end branches already counted themselves, so
-        // the applied-ply count is the discriminator, and it cannot reach
-        // `max_plies` on a dead end because that path breaks before applying.
-        if applied.len() == cfg.max_plies as usize {
-            stats.cap_hits += 1;
+    // THE STATE AFTER THE LAST PERMITTED PLY. `battle_is_over()` above is only
+    // reached at the TOP of an iteration, so a rollout that ends the battle on
+    // its final permitted ply used to be counted as a cap hit and priced by the
+    // handcrafted fallback -- discarding a real terminal observation, and doing
+    // it precisely when the cap binds, which biases the "oracle" toward
+    // HP-fraction exactly where it is least entitled to be.
+    //
+    // Magnitude, with the "before" DERIVED rather than guessed: at
+    // `max_plies=1` the old code could only ever report `terminal_hits=0` and
+    // `rollout_fallback_fraction=1.000`, because its single check ran at the top
+    // of the first iteration and a leaf that reaches this pricer is non-terminal
+    // by construction (`price_outcome` prices terminal branches exactly and
+    // never defers them). Measured after, on `analytic_toxic.state`, 200
+    // iterations, `max_depth=1`, search `seed=3`, `R=40`, `rollout_seed=3`, cap
+    // the only thing moving: cap 1 -> 44 of 80 rollouts read as the terminals
+    // they reached, `fallback_fraction` 0.450; cap 2 -> 64 of 80, 0.200; cap 400
+    // -> 80 of 80, 0.000.
+    if terminal.is_none() && plies >= cfg.max_plies {
+        let over = scratch.battle_is_over();
+        if over != 0.0 {
+            terminal = Some(if over > 0.0 { 1.0 } else { 0.0 });
         }
-        value = Some(HpFractionEval.eval(state));
     }
-    for instructions in applied.iter().rev() {
-        state.reverse_instructions(instructions);
+    stats.plies_stepped += u64::from(plies);
+    match classify_stop(terminal.is_some(), plies, cfg.max_plies) {
+        RolloutStop::Terminal => stats.terminal_hits += 1,
+        RolloutStop::CapHit => stats.cap_hits += 1,
+        RolloutStop::DeadEnd => stats.dead_ends += 1,
     }
-    value.expect("value set on every exit path")
+    terminal.unwrap_or_else(|| HpFractionEval.eval(scratch))
 }
 
 /// One trial's outcome for one leaf. Stored per (row, trial) rather than
@@ -680,7 +796,11 @@ pub(crate) fn puct_search_multi_rollout(
         LeafMode::Rollout => "rollout",
         LeafMode::HpFraction => "hp_fraction",
     };
-    Ok(multiply_report_json(
+    // THE ARTIFACT GATE (`crate::tree::validated_report`). The per-invariant
+    // guards above each cover one way of producing a non-finite leaf value; this
+    // covers the artifact, so an invariant nobody anticipated still cannot ship
+    // `"root_value":NaN` to a consumer that reads it as a win rate.
+    validated_report(multiply_report_json(
         &result.outcome,
         iterations,
         &cfg,
@@ -703,6 +823,9 @@ mod tests {
     // than re-exported through that module's private test scope.
     const MINIMAL: &str = include_str!("test_fixtures/minimal.state");
     const ANALYTIC_TOXIC: &str = include_str!("test_fixtures/analytic_toxic.state");
+    const STRADDLE: &str = include_str!("test_fixtures/straddle.state");
+    const SYMMETRIC: &str = include_str!("test_fixtures/symmetric.state");
+    const DEPTH_BENEFIT: &str = include_str!("test_fixtures/depth_benefit.state");
 
     /// Strip the fields that are allowed to differ between two runs of the
     /// same search: wall-clock timings and the rollout-specific extras.
@@ -743,18 +866,37 @@ mod tests {
     /// That is the "same search, same everything" requirement discharged as a
     /// measurement: whatever the batching seam does, it does not change
     /// selection, expansion, backup, or the RNG stream.
+    ///
+    /// ENVELOPE, widened because review showed the shipped one was narrower than
+    /// the claim it made: it ran only `minimal`/`analytic_toxic`, always
+    /// `deep_ko_split=true`, always `fpu_reduction=None`, and on `minimal` the
+    /// tree never got past 2 ply and `deep_ko_triggers` was 0 -- so two pieces of
+    /// tree-shaping code the report threads were never exercised by the gate that
+    /// certifies them. `straddle` (deep-KO splits fire), `symmetric` (a genuinely
+    /// deeper tree), a `deep_ko_split=false` case and an `fpu_reduction=0.25`
+    /// case are now in. `the_widened_envelope_is_not_vacuous` is what stops those
+    /// four additions from being decorative.
     #[test]
     fn rollout_batch1_matches_sequential_report() {
-        for fixture in [MINIMAL, ANALYTIC_TOXIC] {
-            for (iterations, depth, seed) in [(400usize, 1u8, 7u64), (1200, 3, 99), (800, 4, 5)] {
+        for fixture in [MINIMAL, ANALYTIC_TOXIC, STRADDLE, SYMMETRIC] {
+            for (iterations, depth, seed, deep_ko_split, fpu) in [
+                (400usize, 1u8, 7u64, true, None),
+                (1200, 3, 99, true, None),
+                (800, 4, 5, true, None),
+                // ONE perturbation each against the case above, so a failure
+                // names one cause: the KO-split policy, then the first-play
+                // urgency.
+                (800, 4, 5, false, None),
+                (800, 4, 5, true, Some(0.25f32)),
+            ] {
                 let production = crate::tree::puct_search_multi(
                     fixture.trim(),
                     iterations,
                     depth,
                     1.4,
                     seed,
-                    true,
-                    None,
+                    deep_ko_split,
+                    fpu,
                 )
                 .expect("production search runs");
                 let arm = puct_search_multi_rollout(
@@ -763,8 +905,8 @@ mod tests {
                     depth,
                     1.4,
                     seed,
-                    true,
-                    None,
+                    deep_ko_split,
+                    fpu,
                     // Rollout knobs are inert under leaf_mode="hp_fraction";
                     // set them to non-defaults so the gate would catch a
                     // pricer that leaked into the tree.
@@ -782,10 +924,62 @@ mod tests {
                     normalize(&production),
                     normalize(&arm),
                     "batch=1 hp_fraction must reproduce the sequential report \
-                     (iterations {iterations}, depth {depth}, seed {seed})"
+                     (iterations {iterations}, depth {depth}, seed {seed}, \
+                      deep_ko_split {deep_ko_split}, fpu {fpu:?})"
                 );
             }
         }
+    }
+
+    /// The four envelope additions above have to EXERCISE something, or widening
+    /// the gate is a wider way of measuring nothing. Each check below is the
+    /// demonstrated firing input for one addition.
+    #[test]
+    fn the_widened_envelope_is_not_vacuous() {
+        let field = |report: &str, key: &str| -> serde_json::Value {
+            serde_json::from_str::<serde_json::Value>(report).expect("report parses")[key].clone()
+        };
+        let arm = |fixture: &str, depth: u8, deep_ko_split: bool, fpu: Option<f32>| -> String {
+            puct_search_multi_rollout(
+                fixture.trim(), 800, depth, 1.4, 5, deep_ko_split, fpu,
+                17, 13, "uniform", 12345, 4, true, 1, "hp_fraction",
+            )
+            .expect("rollout driver runs")
+        };
+
+        // (1) `straddle` at depth 4 fires deep-KO splits, so the
+        //     `deep_ko_split=false` case is a real perturbation rather than a
+        //     second copy of the true case.
+        let split_on = arm(STRADDLE, 4, true, None);
+        assert!(
+            field(&split_on, "deep_ko_triggers").as_u64().expect("count") > 0,
+            "straddle at depth 4 must trigger deep KO splits, or the \
+             deep_ko_split=false envelope case is vacuous"
+        );
+        let split_off = arm(STRADDLE, 4, false, None);
+        assert_eq!(field(&split_off, "deep_ko_triggers").as_u64(), Some(0));
+        assert_ne!(
+            normalize(&split_on),
+            normalize(&split_off),
+            "the KO-split policy must move the report on this fixture"
+        );
+
+        // (2) `fpu_reduction` reaches the boundary code the gate now covers.
+        let plain = arm(SYMMETRIC, 4, true, None);
+        let tuned = arm(SYMMETRIC, 4, true, Some(0.25));
+        assert_ne!(
+            normalize(&plain),
+            normalize(&tuned),
+            "fpu_reduction=0.25 must move the report, or threading it through \
+             this driver is untested by the fidelity gate"
+        );
+
+        // (3) `symmetric` reaches deeper than the 2 ply `minimal` tops out at,
+        //     which is what the old envelope never checked.
+        assert!(
+            field(&plain, "max_depth_reached").as_u64().expect("depth") >= 3,
+            "symmetric at depth 4 must build a tree deeper than minimal's 2 ply"
+        );
     }
 
     /// THE FIDELITY GATE'S DEMONSTRATED FAILING INPUT (program-wide rule: a
@@ -974,23 +1168,198 @@ mod tests {
         assert!(call(4, 10, "uniform", 1, "rollout").is_ok(), "valid call rejected");
     }
 
-    /// The cap-hit accounting is honest: a 1-ply cap makes essentially every
-    /// rollout a fallback, and the report must SAY so rather than presenting
-    /// the blend as an oracle.
+    /// The cap-hit accounting is honest: when the cap BINDS a material share of
+    /// the "oracle" is the handcrafted evaluator, and the report must say so
+    /// rather than presenting the blend as an oracle. The cap is the only
+    /// perturbation between the two calls.
+    ///
+    /// THRESHOLD PROVENANCE, because the previous one silently stopped measuring
+    /// what it claimed. It asserted `fallback > 0.9` at `rollout_max_plies=1` on
+    /// `minimal.state` -- true only because a rollout that ENDED THE BATTLE on its
+    /// one permitted ply was miscounted as a cap hit (NIT 4). With that fixed the
+    /// same call reads 0.198, so a `> 0.9` bar would now fail for the right
+    /// reason and pass only while the bug was present. Re-measured on
+    /// `depth_benefit.state` at these exact arguments: cap 1 -> fallback 0.625,
+    /// cap 400 -> fallback 0.000.
     #[test]
     fn fallback_fraction_reports_the_blend() {
-        let report = puct_search_multi_rollout(
-            MINIMAL.trim(), 100, 2, 1.4, 1, true, None,
-            4, 1, "uniform", 7, 1, false, 1, "rollout",
-        )
-        .expect("runs");
-        let v: serde_json::Value = serde_json::from_str(&report).unwrap();
-        let fallback = v["rollout_fallback_fraction"].as_f64().unwrap();
+        let at_cap = |max_plies: u32| -> serde_json::Value {
+            let report = puct_search_multi_rollout(
+                DEPTH_BENEFIT.trim(), 100, 2, 1.4, 1, true, None,
+                4, max_plies, "uniform", 7, 1, false, 1, "rollout",
+            )
+            .expect("runs");
+            serde_json::from_str(&report).expect("report parses")
+        };
+        let capped = at_cap(1);
+        let fallback = capped["rollout_fallback_fraction"].as_f64().unwrap();
         assert!(
-            fallback > 0.9,
-            "a 1-ply cap must report a near-total fallback fraction, got {fallback}"
+            fallback > 0.4,
+            "a 1-ply cap must report a substantial fallback share, got {fallback}"
         );
-        assert!(v["rollouts_run"].as_u64().unwrap() > 0);
+        assert!(capped["rollouts_run"].as_u64().unwrap() > 0);
+        // The neighbour that must read the other way: with a cap that never
+        // binds, every rollout is a real terminal and the column must be exactly
+        // zero -- otherwise "fallback" is measuring something else.
+        let deep = at_cap(400);
+        assert_eq!(
+            deep["rollout_fallback_fraction"].as_f64(),
+            Some(0.0),
+            "with a non-binding cap every rollout reached a terminal: {deep}"
+        );
+    }
+
+    /// NIT 3's remedy: the `dead_ends` / `cap_hits` discriminator, exercised.
+    ///
+    /// The column had no firing input anywhere: re-measured for this commit over
+    /// 60 configurations (5 fixtures x `rollout_max_plies` {1,2,5,50,400,2000} x
+    /// search seed {0,7}, R=16) and 147,856 rollouts, the engine produced 0 dead
+    /// ends -- so the branch separating it from `cap_hits` was argued from the
+    /// loop structure and never run. It feeds
+    /// `rollout_fallback_fraction`, an honesty column, and the exhaustiveness
+    /// identity `terminal + cap + dead == rollouts_run` is vacuous on a term
+    /// that is always zero.
+    ///
+    /// One perturbation per case: `terminal` alone, then `plies_applied` alone.
+    #[test]
+    fn the_stop_discriminator_separates_a_cap_hit_from_a_dead_end() {
+        // Terminal wins over everything, whatever the ply count.
+        assert_eq!(classify_stop(true, 0, 4), RolloutStop::Terminal);
+        assert_eq!(classify_stop(true, 4, 4), RolloutStop::Terminal);
+        // Non-terminal, cap exhausted -> the budget ran out.
+        assert_eq!(classify_stop(false, 4, 4), RolloutStop::CapHit);
+        // Non-terminal, cap NOT exhausted -> the engine had nowhere to go. This
+        // is the arm no in-repo fixture reaches; it is reachable here because
+        // the classification is a function rather than three scattered counter
+        // bumps.
+        assert_eq!(classify_stop(false, 3, 4), RolloutStop::DeadEnd);
+        assert_eq!(classify_stop(false, 0, 4), RolloutStop::DeadEnd);
+    }
+
+    /// NIT 4's remedy, with the cap as the ONLY perturbation.
+    ///
+    /// `battle_is_over()` is tested at the top of the rollout loop, so a rollout
+    /// that ended the battle on its final permitted ply used to be counted as a
+    /// cap hit and priced by the handcrafted fallback -- discarding a real
+    /// terminal observation, and doing so precisely when the cap binds, which is
+    /// when the "oracle" is least entitled to be HP-fraction. At
+    /// `rollout_max_plies=1` on the analytic fixture every rollout applies its
+    /// one ply and then hits the KO, so before the fix this read
+    /// `terminal_hits=0, fallback=1.0`.
+    #[test]
+    fn a_terminal_reached_on_the_last_permitted_ply_is_read_as_terminal() {
+        let at_cap = |max_plies: u32| -> serde_json::Value {
+            let report = puct_search_multi_rollout(
+                ANALYTIC_TOXIC.trim(), 200, 1, 1.4, 0, true, None,
+                8, max_plies, "uniform", 3, 1, false, 1, "rollout",
+            )
+            .expect("runs");
+            serde_json::from_str(&report).expect("report parses")
+        };
+        let capped = at_cap(1);
+        let terminal_hits = capped["rollout_terminal_hits"].as_u64().expect("count");
+        assert!(
+            terminal_hits > 0,
+            "a rollout that ends the battle on its last permitted ply must be \
+             counted as the terminal it reached, not as a cap hit \
+             (terminal_hits {terminal_hits})"
+        );
+        // The accounting stays exhaustive: nothing is double-counted by the new
+        // reading.
+        let run = capped["rollouts_run"].as_u64().expect("count");
+        let cap_hits = capped["rollout_cap_hits"].as_u64().expect("count");
+        let dead = capped["rollout_dead_ends"].as_u64().expect("count");
+        assert_eq!(terminal_hits + cap_hits + dead, run, "{capped}");
+        assert!(
+            (capped["rollout_terminal_fraction"].as_f64().expect("f")
+                + capped["rollout_fallback_fraction"].as_f64().expect("f")
+                - 1.0)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    /// NIT 6's remedy: `rollout_branch_on_damage` is wired, and this is the
+    /// first coverage of it in the mode where it does anything.
+    ///
+    /// Under `leaf_mode="hp_fraction"` it is inert (the fidelity gate sets it
+    /// true for exactly that reason), so a test there proves nothing. It stays
+    /// off the `EngineMctsConfig` surface deliberately -- it refines the sampled
+    /// damage distribution inside a rollout and is not part of the arm's
+    /// configuration -- but "not on the Python surface" is not a reason for it to
+    /// be untested where it is live.
+    #[test]
+    fn branch_on_damage_moves_the_labels_under_rollout_leaves() {
+        let root_value = |branch_on_damage: bool| -> f64 {
+            let report = puct_search_multi_rollout(
+                SYMMETRIC.trim(), 300, 2, 1.4, 4, true, None,
+                8, 200, "uniform", 77, 1, branch_on_damage, 1, "rollout",
+            )
+            .expect("runs");
+            serde_json::from_str::<serde_json::Value>(&report).expect("parses")["root_value"]
+                .as_f64()
+                .expect("root_value")
+        };
+        let off = root_value(false);
+        let on = root_value(true);
+        assert!(
+            (off - on).abs() > 1e-9,
+            "rollout_branch_on_damage made no difference ({off} vs {on}) -- it is \
+             either not wired to the rollout's engine calls or the fixture cannot \
+             show it"
+        );
+    }
+
+    /// The label is keyed on ARRIVAL ORDINAL, not on leaf content (NIT 7). Two
+    /// identical leaf states priced at different ordinals get different labels.
+    ///
+    /// This is the claim the module docs now make instead of the false invariance
+    /// claim, and it is the reason a label is not cacheable or comparable across
+    /// searches. One perturbation: the ordinal.
+    #[test]
+    fn identical_leaf_states_get_different_labels_by_arrival_ordinal() {
+        // (a) The mechanism, exactly: the derived seeds are distinct across both
+        //     axes. This is the check that cannot be luck -- 8 ordinals x 8
+        //     trials must give 64 distinct streams.
+        let mut seen = std::collections::HashSet::new();
+        for ordinal in 0..8u64 {
+            for trial in 0..8u32 {
+                assert!(
+                    seen.insert(rollout_seed(4242, ordinal, trial)),
+                    "seed collision at (ordinal {ordinal}, trial {trial}): two rollouts \
+                     would share a stream"
+                );
+            }
+        }
+        assert_eq!(seen.len(), 64);
+
+        // (b) The consequence at the seam: three copies of the SAME leaf state
+        //     priced in ONE round at ordinals 0, 1, 7 get three different
+        //     labels. R=64 because at R=4 a concentrated leaf can return the
+        //     same mean from different streams by coincidence -- which would
+        //     make this test pass for the wrong reason at small R.
+        let leaf = parse_state(MINIMAL.trim()).expect("fixture parses");
+        let cfg = RolloutConfig {
+            rollouts: 64,
+            max_plies: 200,
+            policy: RolloutPolicy::Uniform,
+            branch_on_damage: false,
+            seed: 4242,
+            threads: 1,
+        };
+        let rows = vec![leaf.clone(), leaf.clone(), leaf.clone()];
+        let (labels, _stats) =
+            price_rows(&rows, &[0, 1, 7], &cfg).expect("a fully priced matrix reduces");
+        assert_eq!(labels.len(), 3);
+        assert_ne!(labels[0], labels[1], "labels {labels:?} are content-keyed, not ordinal-keyed");
+        assert_ne!(labels[0], labels[2], "labels {labels:?} are content-keyed, not ordinal-keyed");
+        assert_ne!(labels[1], labels[2], "labels {labels:?} are content-keyed, not ordinal-keyed");
+
+        // ... and the same (state, rollout_seed, ordinal) replays exactly, which
+        // is what makes a run reproducible from the two seeds the artifact now
+        // records.
+        let (again, _stats) = price_rows(&rows, &[0, 1, 7], &cfg).expect("reduces");
+        assert_eq!(labels, again, "the same (state, seed, ordinal) must replay");
     }
 
     /// The oracle's terminal reading is exact where the truth is known: from
@@ -1019,3 +1388,4 @@ mod tests {
         );
     }
 }
+
