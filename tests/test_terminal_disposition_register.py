@@ -66,7 +66,7 @@ are pinned against the two census modules' own constants, read by AST rather tha
 update the register in the same change. That is deliberate: the document that goes stale is
 the one nothing forces an author through.
 
-MUTATION BATTERY: 71 applied, 71 caught, plus 1 NEGATIVE CONTROL verified green.
+MUTATION BATTERY: 74 applied, 74 caught, plus 1 NEGATIVE CONTROL verified green.
 Partitioned by WHAT IS MUTATED. Enumerated because
 an unrecorded battery is what `tests/test_wide_seed_negative_census.py` records costing it a
 surviving mutation, and because "the tests pass" is the same kind of claim this module
@@ -140,7 +140,7 @@ BLOCK A -- A1-A37, applied to the REGISTER's own bytes.
        `TheDocumentsClaimsAboutItselfAreReDerivedTests`, which exists because review blocked
        two successive revisions on claims the document made about ITSELF.
 
-BLOCK B -- B38-B71, THIRTY-FOUR mutations applied ONLY to the tree and never to the document.
+BLOCK B -- B38-B74, THIRTY-SEVEN mutations applied ONLY to the tree and never to the document.
 Block A can be passed by a pin that reads the register against a hard-coded copy of itself.
 These are the ones that prove each derivation reads what it claims to: every one MAKES A REAL
 CHANGE TO THE TREE and the document, unedited, must go red. Six are the absences, and an
@@ -332,6 +332,34 @@ has recorded.
        `mass-gate` runs that module too, so the CI-level guard exists; it is simply not in
        this file, and the class docstring says so rather than implying this module is
        self-sufficient.
+  B72. ⚠ B71's FIX WAS SIX OF ELEVEN -- review round 4, and the seventh frame. The named
+       literals were `tree.rs`, `leaf.rs`, `model.rs`, `events.rs`, `encoder.rs`, `lib.rs`;
+       git tracks ELEVEN crate sources. B71 re-run with `priors.rs` substituted for one of
+       the six is a clean `Ran 52 tests, OK`, and with it landed and reseated a LIVE EDIT to
+       `priors.rs` is invisible -- a file this register's own T1 commit table cites as having
+       moved this row. Six of eleven is a floor with five files of slack, which is the same
+       defect as every other floor in this battery, committed while fixing one of them.
+       Closed by DERIVING the name set from `lib.rs`'s own `mod` declarations (10 + `lib.rs`
+       = 11), which is exact, self-maintaining, and removes a literal instead of adding five.
+       The pattern includes the visibility qualifier because `priors` is declared
+       `pub(crate) mod` -- a first attempt matched only `pub mod` and missed exactly the file
+       the finding was about.
+  B73. ⚠ `_perturb` IS APPEND-ONLY, so A SIZE PASSED FOR A HASH -- and this one defeats every
+       other probe in the class at once. `compute_fingerprint` hashing `path.stat().st_size`
+       instead of the file's contents satisfies the exhaustive loop, the transposition probe
+       AND the rename probe, all reseated, and an `f32` -> `f64` edit to `tree.rs` is then
+       invisible with the fingerprint unmoved. Closed by swapping two ADJACENT DIFFERING
+       bytes: content changes, length cannot. The probe asserts the length is unchanged
+       first, because a probe that alters the length silently stops isolating the two.
+  B74. THE FILTER ANCHOR WAS A POSITION-BLIND LINE GREP, defeated three ways in one round:
+       DELETE the real `FILTERS` entry and satisfy the scan with a decoy indented inside a
+       `run:` body (green, and register-only PRs then skip `mass-gate` -- the failure that
+       filter's own comment calls the worst in the file); FALSE-TRIP it with a trailing
+       comment on the real entry; FALSE-TRIP it with a second legitimate `reports/c155*`
+       entry. Closed by extracting the `FILTERS: |` block BY INDENTATION, so only entries the
+       match loop actually consumes are counted. Hand-parsed rather than via PyYAML, which is
+       not in the CI job's install list. Verified: the decoy is red, the trailing comment is
+       green.
 
 
 BLOCK C -- NEGATIVE CONTROLS. Mutations that must stay GREEN because they do not change the
@@ -1579,6 +1607,34 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
             )
 
     @staticmethod
+    def _workflow_filters() -> list[str]:
+        """The `FILTERS` entries the `changes` job actually feeds to its match loop.
+
+        Extracted by INDENTATION from the `FILTERS: |` literal block, so a line that merely
+        looks like a filter somewhere else in the file -- inside a `run:` body, say -- is not
+        counted, and a trailing comment on a real entry does not break it.
+        """
+
+        lines = (
+            REPO / ".github" / "workflows" / "engine-fidelity-gates.yml"
+        ).read_text(encoding="utf-8").splitlines()
+        starts = [i for i, line in enumerate(lines) if line.strip() == "FILTERS: |"]
+        if len(starts) != 1:
+            raise AssertionError(f"expected one `FILTERS: |` block, found {len(starts)}")
+        head = starts[0]
+        indent = len(lines[head]) - len(lines[head].lstrip())
+        entries: list[str] = []
+        for line in lines[head + 1:]:
+            if not line.strip():
+                continue
+            if len(line) - len(line.lstrip()) <= indent:
+                break
+            body = line.split("#", 1)[0].strip()
+            if body:
+                entries.append(body)
+        return entries
+
+    @staticmethod
     def _tracked(pathspec: str) -> set[Path]:
         """What GIT says is in the tree. A third anchor, and deliberately not code."""
 
@@ -1625,21 +1681,36 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
                 if path.suffix == ".rs"
             }
             self.assertTrue(tracked, "git tracks no crate sources; the anchor read nothing")
-            # ⚠ NAMED LITERALS, because review round 3 filtered `_tracked` THROUGH
-            # `crate_sources()` in three lines and this anchor then agreed with the hasher it
-            # exists to check -- B67's own sentence ("a control populated by the thing it
-            # controls is not a control") landing on the anchor added to close B69. A
-            # non-vacuity floor derived from git alone cannot see that; these can. They are
-            # the crate's long-lived modules, so they do not churn, and `tree.rs` is here
-            # explicitly because it is the file every collusion mutant in this battery drops.
-            for name in ("tree.rs", "leaf.rs", "model.rs", "events.rs", "encoder.rs", "lib.rs"):
-                self.assertIn(
-                    name,
-                    {path.name for path in tracked},
-                    f"git tracks the crate but this anchor cannot see {name}. The anchor "
-                    "itself has been narrowed -- most likely filtered through the hasher, "
-                    "which makes it agree with the thing it is supposed to check.",
+            # ⚠ DERIVED FROM `lib.rs`'s OWN `mod` DECLARATIONS, not a hand-written list.
+            # This arm exists because review round 3 filtered `_tracked` through
+            # `crate_sources()` and the anchor then agreed with the hasher it checks. The
+            # first fix was six literal names -- and round 4 walked through it by substituting
+            # `priors.rs`, one of the five the list did not name, which is a file this
+            # register's own commit table cites as having moved this row. Six of eleven is a
+            # floor with five files of slack, the same defect as every other floor in this
+            # battery. The crate declares its own module set, so DERIVE it: every `mod x;` in
+            # `lib.rs`, plus `lib.rs` itself. Exact, self-maintaining, and it removes a
+            # literal rather than adding five.
+            declared = {
+                f"{name}.rs"
+                for name in re.findall(
+                    # `pub(crate) mod priors;` is how the file review round 4 used to
+                    # defeat the literal list is actually declared, so the visibility
+                    # qualifier is part of the pattern rather than an afterthought.
+                    r"(?m)^\s*(?:pub\s*(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;",
+                    (REPO / "rust" / "pokezero-search" / "src" / "lib.rs").read_text("utf-8"),
                 )
+            } | {"lib.rs"}
+            self.assertGreater(len(declared), 5, "`lib.rs` declares no modules; the derivation read nothing")
+            self.assertEqual(
+                sorted(declared),
+                sorted(path.name for path in tracked),
+                "the crate's declared module set and the sources this anchor can see "
+                "disagree. If the anchor is short, it has been narrowed -- most likely "
+                "filtered through the hasher, which makes it agree with the thing it is "
+                "supposed to check. If `lib.rs` is short, a tracked source is no longer "
+                "compiled and should not be hashed.",
+            )
             for label, produced in (("hasher", hashed), ("enumerator", enumerated)):
                 under = sorted(
                     str(path.relative_to(REPO))
@@ -1710,6 +1781,50 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
                 f"transposing the contents of {first.name} and {second.name} left the head "
                 "fingerprint unchanged, so the identity no longer records WHICH input held "
                 "which bytes -- only that the bytes were present somewhere.",
+            )
+
+    def test_a_length_PRESERVING_edit_moves_the_head_fingerprint(self) -> None:
+        """The digest must read BYTES, not a cheap proxy for them.
+
+        ⚠ Review round 4's finding, and it is the sharpest one in this class's history because
+        it defeats every probe above at once. `_perturb` only ever APPENDS -- so a
+        `compute_fingerprint` that hashed `path.stat().st_size` instead of the file's contents
+        satisfied the whole exhaustive loop, the transposition probe and the rename probe, and
+        an `f32` -> `f64` edit to `tree.rs` was then invisible while the fingerprint sat
+        unmoved. A size is not a hash, and until now nothing here could tell them apart.
+
+        Two adjacent bytes that DIFFER are swapped, which changes the content and cannot
+        change the length. A crate source is used rather than the JSON pin because
+        `compute_fingerprint` parses that one, so a byte-level edit there would raise instead
+        of moving the digest and the probe would pass for the wrong reason.
+        """
+
+        with _fingerprint_sandbox() as root:
+            baseline = head_fingerprint()
+            sources = sorted((root / "rust" / "pokezero-search" / "src").rglob("*.rs"))
+            self.assertTrue(sources, "no crate sources in the sandbox to perturb")
+            target = max(sources, key=lambda path: path.stat().st_size)
+            blob = bytearray(target.read_bytes())
+            index = next(
+                (i for i in range(len(blob) - 1) if blob[i] != blob[i + 1]), None
+            )
+            self.assertIsNotNone(index, f"{target.name} has no two adjacent differing bytes")
+            before = len(blob)
+            blob[index], blob[index + 1] = blob[index + 1], blob[index]
+            target.write_bytes(bytes(blob))
+            self.assertEqual(
+                target.stat().st_size,
+                before,
+                "the probe changed the file's LENGTH, so it no longer isolates content from "
+                "size and a size-based digest would still pass it.",
+            )
+            self.assertNotEqual(
+                head_fingerprint(),
+                baseline,
+                f"swapping two adjacent bytes in {target.name} -- same length, different "
+                "content -- left the head fingerprint unchanged. The digest is reading a "
+                "proxy for the bytes rather than the bytes, so any edit that preserves the "
+                "proxy is invisible to this identity and to the build stamp that shares it.",
             )
 
     def test_renaming_a_hashed_file_moves_the_head_fingerprint(self) -> None:
@@ -1783,12 +1898,18 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
           * `re` and `compute_fingerprint` are shared and that is the point -- the second IS
             the tree-side authority being checked, and shadowing the first is a mutation of
             the assertion itself, not a way around it.
-          * `REPO` and `REGISTER` are now anchored OUTSIDE this module, below, to the
-            workflow's `changes` paths filter and to git's index. That filter is what decides
-            whether `mass-gate` runs on this document at all, so a mutant that re-points the
-            path has to move the thing that makes the gate fire -- and the register must be
-            a file git actually tracks, so a doctored copy has to be committed to exist in a
-            CI checkout, where the filter then names the wrong one.
+          * `REGISTER` -- and only `REGISTER` -- is anchored OUTSIDE this module, below: to
+            the `FILTERS` block the `changes` job feeds its match loop, which is what decides
+            whether `mass-gate` runs on this document at all, and to git's index, so a
+            doctored copy has to be committed to exist in a CI checkout, where the filter then
+            names the wrong one.
+          * ⚠ `REPO` IS **NOT** ANCHORED, and a previous revision of this list said it was.
+            Re-pointing `REPO` alone is one line and leaves the published register stale. It
+            is not CI-shippable -- `REPO` is derived from this file's own location, so any
+            substitute is an absolute path that does not exist on a runner -- but that is a
+            property of the environment, not a guard, and the claim is retracted rather than
+            defended. Stated as a known reachable edit, which is what this register requires
+            of everyone else.
 
         A separate bypass worth recording because it is NOT closed here: a module-level
         `load_tests` can drop this assertion while holding the printed count at its pinned
@@ -1809,21 +1930,29 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
         # pointing at a doctored copy. The workflow's `changes` paths filter is what decides
         # whether `mass-gate` runs on this document, so it is the one place where naming the
         # wrong file has a consequence that cannot be hidden inside this module.
-        workflow = (REPO / ".github" / "workflows" / "engine-fidelity-gates.yml").read_text(
-            encoding="utf-8"
+        # ⚠ POSITION-AWARE, not a line grep. Review round 4 defeated the grep version by
+        # DELETING the real entry and satisfying the scan with a decoy indented inside a
+        # `run:` body -- which is the exact failure the filter's own comment calls the worst
+        # in that file, since register-only PRs then skip `mass-gate` and go green. The grep
+        # also FALSE-TRIPPED on a trailing comment and on a second legitimate `reports/c155*`
+        # entry. So the block that the shell loop actually consumes is extracted by
+        # indentation, and only entries inside it count. Hand-parsed rather than via PyYAML,
+        # which is not in the CI job's install list.
+        filters = self._workflow_filters()
+        self.assertIn(
+            relative,
+            filters,
+            "the workflow's `FILTERS` block does not name this register, so a PR whose only "
+            "change is editing it matches no filter, skips `mass-gate` -- the only job that "
+            "runs this pin -- and goes green. Either the path here was re-pointed at another "
+            "document, or the filter was.",
         )
-        filtered = [
-            line.strip()
-            for line in workflow.splitlines()
-            if line.strip().startswith("reports/c155") and not line.strip().startswith("#")
-        ]
         self.assertEqual(
-            filtered,
+            [entry for entry in filters if entry.startswith("reports/c155")],
             [relative],
-            "the workflow's paths filter does not name exactly this register. Either the "
-            "path here was re-pointed at another document, or the filter was, and in the "
-            "second case a PR whose only change is editing the register skips `mass-gate` "
-            "entirely and goes green.",
+            "the FILTERS block names a different or additional `reports/c155*` path. Exact, "
+            "because a decoy entry beside a deleted real one is how the grep this replaced "
+            "was defeated.",
         )
         # ...and it must be a file git actually tracks, so a doctored copy cannot be an
         # untracked local file: to exist in a CI checkout it has to be committed, at which
@@ -2348,6 +2477,7 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
             27: "TWENTY-SEVEN", 28: "TWENTY-EIGHT", 29: "TWENTY-NINE",
             30: "THIRTY", 31: "THIRTY-ONE", 32: "THIRTY-TWO",
             33: "THIRTY-THREE", 34: "THIRTY-FOUR", 35: "THIRTY-FIVE",
+            36: "THIRTY-SIX", 37: "THIRTY-SEVEN", 38: "THIRTY-EIGHT",
         }
         self.assertIn(size, words, f"block B has {size} entries; extend `words`")
         word = words[size]

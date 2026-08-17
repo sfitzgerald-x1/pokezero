@@ -165,8 +165,8 @@ mutation in this battery to survive: blocks A and B target the DOCUMENT and the 
 targets the DERIVATION. `TheFingerprintDerivationReadsTheTreeTests` closes it.
 
 ⚠ **AND IT TOOK THREE ROUNDS, because the first two fixes were the same mistake.** Two independent
-review rounds returned **fifteen** further surviving mutants (`B55`–`B67` and `B70`–`B71`) and I found **two** more
-myself by testing my own fixes (`B68`, `B69`) — **seventeen** in all. ⚠ A first
+review rounds returned **eighteen** further surviving mutants (`B55`–`B67`, `B70`–`B74`) and I found **two** more
+myself by testing my own fixes (`B68`, `B69`) — **twenty** in all, over four rounds. ⚠ A first
 revision of this sentence said "thirteen … a fourteenth", which does not add up to the range beside
 it; the arithmetic is stated because getting it wrong here is the same defect as everywhere else in
 this document. The
@@ -228,14 +228,32 @@ wrong one. And **B71**: `_tracked` filtered through `crate_sources()` in three l
 sentence landing on the anchor added one round earlier; closed by naming six core crate sources as
 literals.
 
-**Four times now the fix has been to move the termination further out of code: to primary bytes
-(B64), to the document (B68), to the tree's own index (B69), and to the path's own external anchors
-(B70).** Every round I believed the previous one had closed it and said so, and every round was
-wrong. The claim made here is therefore deliberately weak: there are now four mutually independent
-anchors, the failure messages name which one fired, and **the next frame should be assumed to exist
-rather than argued away.** What this row records is not a closed hole; it is a defect whose shape is
-"the guard's own reader can be re-pointed", and the only durable answer found for it is to terminate
-outside the artefact being checked.
+⚠ **AND ROUND 4 FOUND A SEVENTH FRAME — TWICE — inside the fixes for the sixth.** `B72`: the six
+named crate sources were **six of eleven**, so substituting `priors.rs` walked straight through, and
+with that landed a live edit to `priors.rs` was invisible — a file this row's own commit table cites
+as having moved the fingerprint. `B73`: `_perturb` only ever **appends**, so a hasher reading
+`st_size` instead of the bytes satisfied the exhaustive loop, the transposition probe *and* the rename
+probe at once, and an `f32`→`f64` edit was invisible. **A size passed for a hash.** `B74`: the filter
+anchor was a line grep — defeated by a decoy indented in a `run:` body while the real entry was
+deleted, and false-tripped twice.
+
+**Every one of those three was a hand-maintained artefact standing where a derivation belonged: a
+tuple of names, an append-only perturbation, a text grep.** All three fixes **remove** a literal —
+the module set now comes from `lib.rs`'s own `mod` declarations, the perturbation swaps two adjacent
+differing bytes, and the `FILTERS` block is extracted by indentation. That is the generalisable
+finding of this whole row, and it is worth more than any individual mutant: **when a guard needs a
+list, derive the list, because a hand-written one is a floor and every floor in this battery has been
+walked through.**
+
+**Four rounds, twenty surviving mutants, and four times the fix was to move the termination further
+out of code:** to primary bytes (`B64`), to the document (`B68`), to the tree's own index (`B69`), to
+the path's external anchors (`B70`). Every round I believed the previous one had closed it and said
+so; every round was wrong. The claim made here is therefore deliberately weak: there are now four
+mutually independent anchors, the failure messages name which one fired, and **an eighth frame should
+be assumed to exist rather than argued away.** What this row records is not a closed hole — it is a
+defect whose shape is "the guard's own reader can be re-pointed, and its own lists can be short", and
+the only durable answers found are to terminate outside the artefact being checked and to derive
+rather than enumerate.
 
 What the class asserts now: the helper-free comparison above; a second comparison routing through
 neither `derive()` nor the loop; `derive()` required to part company with the document on an edited
@@ -711,7 +729,7 @@ the merge. The register documents that class; it now has a first-party instance,
 failure message names the cause and the fix (merge `origin/main`, do not rebase, re-derive) rather
 than leaving the next author to rediscover it.
 
-**The `Ran N tests` guard.** The step carries an exact `Ran 52 tests`, re-derived from the module's
+**The `Ran N tests` guard.** The step carries an exact `Ran 53 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
 rather than inherited from #1205's figure. The workflow holds **34** lines containing the unittest
@@ -724,7 +742,7 @@ predicts exactly this and says to merge `origin/main` and re-derive. `origin/mai
 `tests.test_render_dropped_move_line_crate` invocation while this branch was open. Re-derived on the
 merged tree with `grep -c 'python -m unittest'`, not adjusted by one.) **This step is among the
 resolved ones** — the number is not restated here, because a fourth copy of it is a fourth thing to
-go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 52 from the module's AST
+go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 53 from the module's AST
 and matches the guard. All three numbers are **re-derived by the pin** rather than typed.
 
 ⚠ **#1205 IS CLOSED (C156), AND THE SENTENCE ABOVE IS WHAT ITS CLOSURE LOOKS LIKE.** This register
@@ -771,12 +789,12 @@ does not exist on either tree. Resolved by merging `origin/main` into the branch
 rebase) and re-deriving all four trees; the assertion now carries that diagnosis in its own failure
 message.
 
-**Mutation evidence.** **71 mutations applied, 71 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
-partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B71** edit **only the tree
+**Mutation evidence.** **74 mutations applied, 74 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
+partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B74** edit **only the tree
 and never this document**. That second number is the one that matters, because a pin reading a
 document against a hard-coded copy of itself passes every document-side mutation — and ⚠ **a first
 revision put it at ten and two of those ten edited the register**, which is the property being
-claimed, mis-stated. Thirty-four is the measured figure: a patch line shift, the tie-refusal arm deleted,
+claimed, mis-stated. Thirty-seven is the measured figure: a patch line shift, the tie-refusal arm deleted,
 a damage push made to consult the truncation flag (G33c *fixed*), a sub-keyed single-seat counter
 added to a committed sweep, a freeze constant added to the differential, a real Showdown checkout
 added to the workflow, the head fingerprint written into an artifact, an `hp`-ceiling context line
@@ -803,7 +821,7 @@ And the id list is justified by the mutation that actually needs it: **B52**, a 
 marker and adds one to G1, holding the count at **9** while the membership changes — red on the ids,
 green on the count, and the only mutation in the battery a count cannot catch.
 
-**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 52
+**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 53
 tests, OK**. The gated family together: ledger uniformity **19**, never-fired **22**, wide-seed
 **36**, C154 re-adjudication **38**, seed registry **41**, single-seat coverage **3** — all OK.
 (⚠ C154 re-adjudication was stated as **34** and is **38** — re-derived here with
