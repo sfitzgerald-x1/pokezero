@@ -1033,6 +1033,61 @@ class CrossArmContentionGateTest(unittest.TestCase):
             rep["contention_gate"]["max_fold_ratio"],
         )
 
+    def test_the_headline_a_winner_reader_sees_is_the_shortfall_and_its_scope(self) -> None:
+        """`contention: ok` must not read as "the strength comparison is clean" in three months.
+
+        What the gate bounds is opponent THROUGHPUT; the campaign's deliverable is a win-rate
+        delta, and nothing in this repo converts between them. This asserts the CLAIM a reader of
+        `winner` sees, which is the durable artifact.
+
+        An earlier version of this test asserted a keyed `tracked_follow_ups` entry instead. That
+        was withdrawn on review: it tested the project's bookkeeping rather than the report's
+        behaviour, and would have gone stale the moment the item was closed anywhere else. The
+        prose is what survives, so the prose is what is pinned.
+        """
+        rep = self._cells(think(224_200.0, 200), think(224_200.0, 200))
+        note = rep["winner_note"]
+        # The number is the SHORTFALL, because readers subtract. Not the 1.3158 fold.
+        self.assertIn("shortfall is at most 24.0%", note)
+        self.assertIn("SHORTFALL is at most 24.0%", rep["contention_gate"]["pass_bounds"])
+        # And the scope limit travels with it, including the measurement that would close it.
+        self.assertIn("not in win-rate units", note)
+        self.assertIn("unknown, not small", note)
+        self.assertIn("NOT clearance", note)
+        self.assertIn("has not been run", note)
+        # No bookkeeping field: withdrawn deliberately, not forgotten.
+        self.assertNotIn("tracked_follow_ups", rep)
+
+    def test_the_gate_note_claims_no_error_rate_and_no_five_digit_floor(self) -> None:
+        """Two retracted claims, kept out of the artifact that outlives the discussion.
+
+        The preregistration note used to say a 3-sigma bound and left a reader to infer a rate.
+        The run term has 5 degrees of freedom, so the note now carries the df, the chi-square
+        upper bound and the <18% the data actually support -- and does NOT carry "1 in 300" or
+        "the tightest threshold this instrument can support".
+        """
+        rep = self._cells(think(224_200.0, 200), think(224_200.0, 200))
+        note = rep["contention_gate"]["note"]
+        self.assertIn("5 degrees of freedom", note)
+        self.assertIn("<18%", note)
+        self.assertIn("1.58", note)
+        self.assertIn("1.47-1.49", note)
+        for struck in ("1 in 300", "once in 300", "tightest threshold", "1.2448"):
+            self.assertNotIn(struck, note, f"retracted claim back in the artifact: {struck}")
+        # BOTH conventions labelled, because one sentence's sign flips with each.
+        self.assertIn("p=0.0027", note)
+        self.assertIn("quote the p", note)
+        self.assertIn("n=24", note)
+        self.assertIn("quote the n", note)
+        # The scope qualifier carries its MAGNITUDE, not only its mechanism.
+        scope = rep["contention_gate"]["scope"]
+        self.assertIn("UNDERSTATES", scope)
+        self.assertIn("7.3%", scope)
+        self.assertIn("0.9%", scope)
+        self.assertIn("1.126", scope)
+        # The constant itself did not move.
+        self.assertEqual(rep["contention_gate"]["max_fold_ratio"], 1.25)
+
     def test_every_scored_cell_carries_a_contention_verdict(self) -> None:
         """Deleting the call must not leave this file green.
 

@@ -717,21 +717,57 @@ def main(argv=None) -> int:
                 "differ between the arms by more than the fold ratio in any compared "
                 "stratum. Threshold derived from the instrument's own measured precision: "
                 "six uncontended passes of real foul-play searches gave 15 matched-arm fold "
-                "ratios spanning 1.0013-1.1170, and a 3-sigma bound on matched-arm variation "
-                "is 1.272 at the per-stratum floor and 1.246 at n=200 -- nearly flat in n, "
-                "because the whole-run term dominates the per-decision one. A pass BOUNDS the "
-                "confound at the fold ratio; it does not show it is zero, and between 1.117 "
-                "and 1.25 the gate is deliberately silent."
+                "ratios spanning 1.0013-1.1170, so 1.25 leaves ~2x log-margin on the largest "
+                "matched-arm fold observed; and the variance decomposition says that spread is "
+                "nearly flat in n (a nominal z=3 bound is 1.272 at the per-stratum floor and "
+                "1.246 at n=200, because the whole-run term dominates the per-decision one), so "
+                "a FIXED bound is the right shape. Six passes justify a fixed constant of about "
+                "this size. They do not justify more digits or a false-refusal rate: the run "
+                "term carries 5 degrees of freedom, so its point-estimate floor of 1.2447 (the "
+                "n->inf asymptote; 1.2506 at the calibration's own n=24, and 1.25 is 0.42% above "
+                "the first and 0.05% below the second -- quote the n) has a 95% chi-square upper "
+                "bound near 1.58 and a t-based floor of 1.47-1.49 at the two-sided tail of z=3, "
+                "p=0.0027 (t=5.51 on 5 df; p=0.002 would give 1.537 instead, so quote the p). "
+                "The false-refusal probability is bounded BY THE DATA only at <18% (0 of 15 "
+                "matched pairs). A pass BOUNDS the confound; it does not show it is zero, and "
+                "between 1.117 and 1.25 the gate is deliberately silent."
+            ),
+            "scope": (
+                "The 1.1170 anchor was measured with position variance CANCELLED: the six "
+                "calibration passes replayed identical positions. Real paired arms share a "
+                "battle seed but diverge after their first differing choice, and position SD "
+                "(0.1003) is the largest of the three terms, so 1.1170 UNDERSTATES real "
+                "matched-arm variation. Measured magnitude: SD(log fold) rises 7.3% at n=24 and "
+                "0.9% at n=200, because the run term dominates -- which makes the anchor ~1.126 "
+                "rather than 1.117, and leaves 1.25 with 1.88x log-margin instead of 2.02x. A "
+                "scope qualifier, not a threshold change. Also unmeasured: the bound was taken "
+                "at 2x1000ms on an 18-core macOS box; the early-game 8x500ms stratum borrows it."
+            ),
+            "pass_bounds": (
+                "A passing cell's mix-standardized arm-level opponent-throughput SHORTFALL is "
+                "at most 24.0% (a composed fold of 1.3158 = max_fold_ratio / "
+                "min_cross_arm_compared_share). Stated as a shortfall because readers subtract: "
+                "the fold would be misread as 31.6% and the per-stratum threshold as 25%."
             ),
         },
+        # THE SCOPE LIMIT STAYS PROSE, HERE AND IN `contention_gate`. A keyed
+        # `tracked_follow_ups` entry was tried and withdrawn: an artifact field asserting a
+        # project's own bookkeeping tests the bookkeeping rather than the behaviour, and it rots
+        # the moment the item is closed somewhere else. What has to survive is the claim a reader
+        # of `winner` sees, so that is what is written and what the note tests pin.
         "winner_note": (
             "Eligibility requires shared pairs, >= the section 8 minimum, a passing "
             "cap, seat and fallback health, a cross-arm opponent-throughput comparison "
             "the contention gate accepts (which bounds the opponent-strength confound in "
-            "THROUGHPUT units, not in win-rate units -- nothing here calibrates opponent "
-            "visits to opponent strength, so a passing cell still carries a residual of "
-            "unknown size in pp), and -- for depth cells, when --campaign "
-            "is given -- reached-depth clearing their reference. A cell excluded by "
+            "THROUGHPUT units, not in win-rate units -- a passing cell's mix-standardized "
+            "arm-level opponent-throughput shortfall is at most 24.0%, but nothing here "
+            "calibrates opponent visits to opponent strength, so the residual in pp is "
+            "unknown, not small. `contention: ok` is therefore NOT clearance of the strength "
+            "comparison; the measurement that would convert one to the other is raw against "
+            "raw with the opponent's per-battle budget cut 24%, and it has not been run), "
+            "and -- for depth "
+            "cells, when --campaign is given -- reached-depth clearing their reference. "
+            "A cell excluded by "
             "the cap or as budget-starved is NOT a miss for its strength prediction; "
             "it is unscored. Adoption compares the paired IMPROVEMENT over the "
             "anchor, not two independent deltas."
