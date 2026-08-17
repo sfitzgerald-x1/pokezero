@@ -533,6 +533,141 @@ class ImprovementOverlapTest(unittest.TestCase):
         self.assertEqual(rep["winner"], "thin@k0")
 
 
+class RolloutCellReferenceIdTest(unittest.TestCase):
+    """`cid_of` must build the ROLLOUT fragment the driver's builder builds.
+
+    The shared docstring on `search_config_id` records that these two builders
+    drifting is a SILENT failure: the reference matches no shard, `depth_reference`
+    is populated from nothing, `depth_rule_applied` reports true, and the section 5
+    non-starvation rule never fires for the cell. It has already happened once, on
+    the checkpoint tag.
+
+    This drives the REAL `cid_of` through `main`, rather than grepping the module's
+    source for the kwarg names. A source grep is vacuous against exactly the
+    mutations that matter -- hardcoding `rollout_leaf=False`, or passing
+    `rollout_count=cell.get("rollout_max_plies")` -- because both leave the literal
+    text present. Both were confirmed to survive a source-grep version of this test.
+    """
+
+    CAMPAIGN = {
+        "checkpoints": {"k0": {"path": "/store/k0/transformer-policy.pt"}},
+        "cells": [
+            # The value-head control and its rollout twin: same budget, different
+            # leaf. If `cid_of` dropped or garbled the fragment, the rollout cell's
+            # reference id would be the CONTROL's id and the two would collide.
+            {"cell_id": "V", "arm": "search", "checkpoint": "k0",
+             "depth": 4, "sims": 2048, "batch": 64, "worlds": 4},
+            {"cell_id": "R", "arm": "search", "checkpoint": "k0",
+             "depth": 4, "sims": 2048, "batch": 64, "worlds": 4,
+             "rollout_leaf": True, "rollout_count": 8, "rollout_max_plies": 200,
+             "reads_against": "V"},
+        ],
+    }
+
+    def _report(self, *, count, max_plies):
+        """Drive `main` with a rollout cell at R=count, cap=max_plies.
+
+        The rollout SHARD is named with the fragment the driver would render, so
+        `cid_of` matching it is the lockstep assertion.
+        """
+        campaign = json.loads(json.dumps(self.CAMPAIGN))
+        campaign["cells"][1]["rollout_count"] = count
+        campaign["cells"][1]["rollout_max_plies"] = max_plies
+        n = 20
+        raw = {(i, "p1"): 0.0 for i in range(n)}
+        v = {(i, "p1"): 1.0 if i < 10 else 0.0 for i in range(n)}
+        r = {(i, "p1"): 1.0 for i in range(n)}
+        sh_v = shard("d4-s2048-b64-w4@k0", "search", "/c/k0.pt", v)
+        sh_r = shard(
+            f"d4-s2048-b64-w4+rollout{count}p{max_plies}@k0",
+            "search", "/c/k0.pt", r,
+        )
+        for seat in sh_v["per_seat"].values():
+            seat["depth_reached_mean"] = 3.1
+        for seat in sh_r["per_seat"].values():
+            seat["depth_reached_mean"] = 3.1
+        with tempfile.TemporaryDirectory() as d:
+            cpath = Path(d) / "campaign.json"
+            cpath.write_text(json.dumps(campaign), encoding="utf-8")
+            return run([sh_v, sh_r,
+                        shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None)],
+                       campaign=str(cpath))
+
+    def test_the_rollout_cell_is_matched_to_its_own_shard_not_the_control(self) -> None:
+        """`depth_reference` is keyed by `cid_of(cell)`, so it says WHICH shard the
+        rollout campaign cell was identified with.
+
+        Asserting only "no cell went unmatched" is NOT enough and was measured to
+        be vacuous: with `rollout_leaf` hardcoded false, the rollout cell derives
+        the CONTROL's id, which is a real shard -- so nothing is unmatched, the
+        rollout id simply never appears, and the cell silently reads against
+        itself. Both of those are asserted here instead.
+        """
+        rep = self._report(count=8, max_plies=200)
+        rollout_id = "d4-s2048-b64-w4+rollout8p200@k0"
+        control_id = "d4-s2048-b64-w4@k0"
+        self.assertEqual(rep["depth_rule_unmatched"], [])
+        self.assertIn(
+            rollout_id, rep["depth_rule_applied"],
+            "the rollout campaign cell was not identified with the rollout shard; "
+            "cid_of dropped or garbled the fragment",
+        )
+        self.assertNotIn(
+            control_id, rep["depth_rule_applied"],
+            "the CONTROL id carries the rule, so the rollout cell was folded into "
+            "its own reference -- a cell reading against itself",
+        )
+
+    def test_pooling_a_rollout_shard_with_a_value_head_shard_is_refused(self) -> None:
+        """The runtime defence, for the case an older driver wrote the shard.
+
+        `cid_of` keeps the cells apart only if the shard's id already carries the
+        fragment. A shard written by a driver that predates it lands on the CONTROL
+        id, and then the cell's centerpiece figure is the average of the experiment
+        and its own control -- which reads as "the leaf made no difference" by
+        construction. So the merge is refused, exactly as the oracle/sampled split
+        is.
+
+        FAILING INPUT: two shards agreeing on `rollout_leaf` merge fine (asserted
+        second), so this is not a test that any two shards refuse to pool.
+        """
+        n = 6
+        raw = {(i, "p1"): 0.0 for i in range(n)}
+        a = {(i, "p1"): 1.0 for i in range(n)}
+        b = {(i, "p2"): 1.0 for i in range(n)}
+        # SAME config_id, disagreeing about the leaf evaluator.
+        s_roll = shard("d4-s2048-b64-w4@k0", "search", "/c/k0.pt", a)
+        s_roll["rollout_leaf"] = True
+        s_value = shard("d4-s2048-b64-w4@k0", "search", "/c/k0.pt", b)
+        s_value["rollout_leaf"] = False
+        with self.assertRaises(SystemExit) as caught:
+            run([s_roll, s_value,
+                 shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None)])
+        self.assertIn("rollout-leaf", str(caught.exception))
+
+        # Agreement pools normally, and the cell WITNESSES which side it is on.
+        s_value["rollout_leaf"] = True
+        rep = run([s_roll, s_value,
+                   shard("raw@k0", "raw", "/c/k0.pt", raw, gate=None)])
+        self.assertTrue(rep["cells"]["d4-s2048-b64-w4@k0"]["rollout_leaf"])
+
+    def test_r_and_the_cap_are_read_from_the_cell_not_defaulted(self) -> None:
+        """Both numbers must come from the campaign cell.
+
+        FAILING INPUT: each sub-case names an R/cap pair that no default and no
+        swap can reproduce. `rollout_count=32` (the module default) fails 8 and 4;
+        swapping R for the cap fails whenever they differ; hardcoding the cap to
+        200 fails the 400 case. Each is a mutation a source grep cannot see, and
+        all three were confirmed to survive a grep-based version of this test.
+        """
+        for count, max_plies in ((8, 200), (4, 200), (8, 400)):
+            with self.subTest(R=count, cap=max_plies):
+                rep = self._report(count=count, max_plies=max_plies)
+                expected = f"d4-s2048-b64-w4+rollout{count}p{max_plies}@k0"
+                self.assertEqual(rep["depth_rule_unmatched"], [])
+                self.assertIn(expected, rep["depth_rule_applied"])
+
+
 class DepthRuleTest(unittest.TestCase):
     """The section 5 non-starvation rule, and that it reports honestly."""
 

@@ -4250,21 +4250,7 @@ class EngineMctsPolicy:
             # the 900 characters following the `model_evals` line), so inserting
             # here keeps that guard measuring what it was written to measure
             # instead of measuring this block's comment length.
-            leaf_mode = report.get("rollout_leaf_mode")
-            if leaf_mode is not None:
-                self.stats.rollout_leaf_modes[str(leaf_mode)] += 1
-                self.stats.rollout_leaf_world_records += 1
-                self.stats.rollouts_run += int(report.get("rollouts_run") or 0)
-                self.stats.rollout_plies += int(report.get("rollout_plies") or 0)
-                self.stats.rollout_terminal_hits += int(
-                    report.get("rollout_terminal_hits") or 0
-                )
-                self.stats.rollout_cap_hits += int(report.get("rollout_cap_hits") or 0)
-                self.stats.rollout_dead_ends += int(report.get("rollout_dead_ends") or 0)
-                self.stats.rollout_leaves_priced += int(report.get("leaves_priced") or 0)
-                self.stats.rollout_encode_skipped += int(
-                    report.get("rollout_encode_skipped") or 0
-                )
+            self._absorb_rollout_report(report)
             return report
 
         for world, state in worlds:
@@ -4588,15 +4574,65 @@ class EngineMctsPolicy:
                     # which `policy_stats` cannot give, because a shard aggregate
                     # reads the same whether the seam ran on every decision or on
                     # one.
-                    **(
-                        {"rollout": rollout_row}
-                        if (rollout_row := self._rollout_decision_row(world_runs))
-                        is not None
-                        else {}
-                    ),
+                    **self._rollout_metadata_fields(world_runs),
                 }
             },
         )
+
+    def _absorb_rollout_report(self, report: Mapping[str, Any]) -> bool:
+        """Absorb ONE world's rollout-leaf telemetry into the shard stats.
+
+        A NAMED METHOD rather than an inline block inside `_search_model`'s world
+        loop, and extracted for one reason: as an inline block it could not be
+        reached by any test that did not run a full model search, so review
+        demonstrated that deleting it wholesale -- `leaf_mode = None`, i.e. the
+        shard-level witness never populating -- passed the entire suite. The
+        witness is this change's headline claim, so it has to be callable.
+
+        Keyed off the REPORT rather than `config.rollout_leaf_eval`: the config
+        says what was asked for, the report says what the crate did, and the whole
+        point is to catch those two disagreeing (an extension that predates the
+        seam ignores positionals it does not recognise, so the arm can be
+        configured and not run). Returns whether the seam was seen, so a caller
+        can assert on it.
+
+        Per INVOCATION, matching `model_evals` and the phase walls: a
+        conservatively replayed world ran its rollouts twice and spent that work.
+        """
+        leaf_mode = report.get("rollout_leaf_mode")
+        if leaf_mode is None:
+            return False
+        self.stats.rollout_leaf_modes[str(leaf_mode)] += 1
+        self.stats.rollout_leaf_world_records += 1
+        self.stats.rollouts_run += int(report.get("rollouts_run") or 0)
+        self.stats.rollout_plies += int(report.get("rollout_plies") or 0)
+        self.stats.rollout_terminal_hits += int(report.get("rollout_terminal_hits") or 0)
+        self.stats.rollout_cap_hits += int(report.get("rollout_cap_hits") or 0)
+        self.stats.rollout_dead_ends += int(report.get("rollout_dead_ends") or 0)
+        self.stats.rollout_leaves_priced += int(report.get("leaves_priced") or 0)
+        self.stats.rollout_encode_skipped += int(
+            report.get("rollout_encode_skipped") or 0
+        )
+        return True
+
+    @classmethod
+    def _rollout_metadata_fields(
+        cls, world_runs: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """The `rollout` entry for a decision's metadata, or `{}` if the seam
+        did not run.
+
+        Exists so the attachment site in `_search_model` holds NO logic beyond
+        `**self._rollout_metadata_fields(world_runs)` -- review demonstrated that
+        replacing the inline conditional with `if False` (the block never
+        attaching to any decision) passed the whole suite, because no test could
+        reach an expression embedded in that return statement.
+
+        `{}` rather than `{"rollout": None}`: a flag-off decision's metadata must
+        be byte for byte what it always was.
+        """
+        row = cls._rollout_decision_row(world_runs)
+        return {} if row is None else {"rollout": row}
 
     @staticmethod
     def _rollout_decision_row(
@@ -4611,6 +4647,20 @@ class EngineMctsPolicy:
         answers "what priced the values behind THIS choice", the shard aggregate
         answers "what work did the shard do".
 
+        ONE RECORD PER SEARCH, NOT PER WORLD. Duplicate belief draws are searched
+        once and the SAME report object is written into every twin's record
+        (`record["report"] = dict(report)` on the collapse path), so summing over
+        `world_runs` multiplies every work counter by the collapse multiplicity --
+        measured on a 4-way collapse as 512 rollouts and 16 leaves reported for
+        128 rollouts and 4 leaves actually run. The ratio fields survive that (it
+        cancels), but the counters do not, and `policy_stats` -- absorbed once per
+        INVOCATION -- would then disagree with the sum of the decision rows by
+        exactly the multiplicity. Deduped on `_collapse_key`, the same fix and the
+        same reason as the `stopped_runs` dedupe in `_search_model` ("measured at
+        120 simulations_saved where the true figure was 40"). The fully-revealed
+        lategame is the common collapse case and the regime this arm is most
+        interesting in, so this is not a corner.
+
         `modes` is a sorted list rather than a single string for the same reason
         the shard-level counter is a Counter: a decision whose worlds disagreed
         about the leaf regime must not render as either regime.
@@ -4620,15 +4670,35 @@ class EngineMctsPolicy:
         # keys off the record directly returns None for every world, so this block
         # silently vanished from every decision's metadata while the shard-level
         # counters (absorbed from `report` at its own seam) populated correctly.
-        # That asymmetry is what made it survive a green unit run and fail on a
-        # real game, and it is why the per-decision witness is asserted against a
-        # PLAYED decision below rather than against a hand-built record.
-        rows = [
-            report
-            for report in (r.get("report") for r in world_runs)
-            if isinstance(report, Mapping)
-            and report.get("rollout_leaf_mode") is not None
-        ]
+        # That asymmetry is what made it survive a green unit run and show up only
+        # when a played game's metadata was captured: the shard aggregate looked
+        # right, so nothing pointed at this reader. The regression is pinned by
+        # feeding this helper the FLAT shape the bug assumed and requiring None
+        # (`test_the_per_decision_row_reads_the_report_not_the_record`) -- against
+        # hand-built records, not a played decision, so the record SHAPE below is
+        # load-bearing and must stay in step with `_search_model`'s writer.
+        rows = []
+        worlds_represented = 0
+        seen_searches: set[Any] = set()
+        for record in world_runs:
+            report = record.get("report")
+            if not isinstance(report, Mapping):
+                continue
+            if report.get("rollout_leaf_mode") is None:
+                continue
+            # One entry per SEARCH. `_collapse_key` is absent on a record that was
+            # never collapsed, and `None` is a legitimate key for exactly one such
+            # record -- so fall back to the record's identity, which is unique per
+            # record and therefore never merges two independent searches.
+            marker = record.get("_collapse_key", id(record))
+            if marker in seen_searches:
+                continue
+            seen_searches.add(marker)
+            rows.append(report)
+            # AFTER the dedupe, and once per surviving search. Every twin carries
+            # the SAME `_collapse_multiplicity` (= the number of twins), so adding
+            # it per record would square it -- 4 worlds would report 16.
+            worlds_represented += int(record.get("_collapse_multiplicity", 1))
         if not rows:
             return None
         rollouts_run = sum(int(r.get("rollouts_run") or 0) for r in rows)
@@ -4641,7 +4711,15 @@ class EngineMctsPolicy:
             "rollout_encode_skipped": sum(
                 int(r.get("rollout_encode_skipped") or 0) for r in rows
             ),
-            "world_records": len(rows),
+            # SEARCHES, after the collapse dedupe -- the unit every counter below
+            # is on. Named `searches` rather than `world_records` because those are
+            # different numbers whenever a draw collapsed, and the old name made
+            # the work counters look like per-world sums.
+            "searches": len(rows),
+            # ... and the worlds those searches stand for, which is what the
+            # decision's belief breadth actually was. Both, because neither alone
+            # distinguishes "4 worlds, 1 search" from "4 worlds, 4 searches".
+            "worlds_represented": worlds_represented,
             "rollouts_run": rollouts_run,
             "rollout_terminal_hits": sum(
                 int(r.get("rollout_terminal_hits") or 0) for r in rows
@@ -4650,7 +4728,7 @@ class EngineMctsPolicy:
             "rollout_dead_ends": dead,
             "leaves_priced": sum(int(r.get("leaves_priced") or 0) for r in rows),
             # None rather than 0.0 with no rollouts, for the reason spelled out on
-            # the shard-level copy in `as_dict`: 0.0 is the oracle claim, and an
+            # the shard-level copy in `to_dict`: 0.0 is the oracle claim, and an
             # un-engaged seam must not be able to make it.
             "rollout_fallback_fraction": (
                 (cap + dead) / rollouts_run if rollouts_run else None

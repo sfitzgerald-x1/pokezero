@@ -132,6 +132,13 @@ def collect_rows(shards: list[dict]) -> tuple[dict, dict]:
                               # config_id CARRIES this one, so every shard of a
                               # cell must agree; disagreement is asserted below.
                               "oracle_belief": bool(shard.get("oracle_belief", False)),
+                              # config_id carries this one too (`+rollout<R>p<cap>`),
+                              # so the same agreement rule applies and is asserted
+                              # below. Recorded as well as keyed, because the id can
+                              # be recomputed wrongly and the witness cannot -- and
+                              # because the merged report otherwise never states
+                              # which cells priced their leaves by rollout.
+                              "rollout_leaf": bool(shard.get("rollout_leaf", False)),
                               # config_id deliberately does NOT carry this one --
                               # it is observational, so telemetry-on and
                               # telemetry-off are the same search and pool into one
@@ -146,6 +153,20 @@ def collect_rows(shards: list[dict]) -> tuple[dict, dict]:
             raise SystemExit(
                 f"cell {cid} pools oracle-belief and sampled-belief shards "
                 f"({shard['_path']}). config_id must carry +oracle-belief -- an "
+                "older driver wrote one of these shards."
+            )
+        if bool(shard.get("rollout_leaf", False)) != meta[cid]["rollout_leaf"]:
+            # Not a warning either, and for a strictly stronger reason than the
+            # oracle split above: the arbiter arm's ENTIRE reading is rollout-leaf
+            # against the same config with the leaf off. Pooled, the centerpiece
+            # figure is the average of the experiment and its own control, which
+            # reads as "the leaf made no difference" by construction -- i.e. the
+            # merge does not merely blur the answer, it manufactures the null.
+            # Reachable exactly one way: a driver that predates the
+            # `+rollout<R>p<cap>` fragment wrote one of these shards.
+            raise SystemExit(
+                f"cell {cid} pools rollout-leaf and value-head shards "
+                f"({shard['_path']}). config_id must carry +rollout<R>p<cap> -- an "
                 "older driver wrote one of these shards."
             )
         meta[cid]["override_telemetry_shards"][
@@ -448,6 +469,10 @@ def main(argv=None) -> int:
         # Arm identity witnessed from the shards, not from the cell id alone --
         # and for the telemetry the cell id says nothing at all.
         scored["oracle_belief"] = meta[cid]["oracle_belief"]
+        # Same standing: the arbiter arm is read as rollout-leaf against the same
+        # config off, so a reader of the merged report must be able to tell which
+        # side of that contrast a cell is on without re-parsing its id.
+        scored["rollout_leaf"] = meta[cid]["rollout_leaf"]
         scored["override_telemetry_shards"] = dict(
             meta[cid]["override_telemetry_shards"]
         )

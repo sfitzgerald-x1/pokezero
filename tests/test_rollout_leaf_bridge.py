@@ -30,6 +30,7 @@ import dataclasses
 import importlib.util
 import unittest
 from collections import Counter
+from typing import Any
 from pathlib import Path
 from unittest import mock
 
@@ -482,25 +483,14 @@ class CellIdentityTest(unittest.TestCase):
                         **{"rollout_count": 8, "rollout_max_plies": 200, **missing},
                     )
 
-    def test_the_merger_builds_the_identical_id(self) -> None:
-        """Lockstep with `foulplay_power_report.cid_of`.
+    def test_the_driver_and_the_helper_agree_on_the_fragment(self) -> None:
+        """`config_id_for` must render what `search_config_id` renders.
 
-        The shared docstring records that these two builders drifting is a SILENT
-        failure -- the reference matches no shard, so the non-starvation rule
-        reports clean while firing on nothing -- and that it has already happened
-        once. FAILING INPUT: the id built from the campaign-cell dict must equal
-        the id built from the Namespace; a fragment added to one only fails here.
+        An earlier revision of the opponent fragment added it to the helper but not
+        to `config_id_for`, the only production caller -- so the helper worked in
+        isolation while every real shard still rendered the pooled id, and the
+        tests were green because they called the helper directly. This calls BOTH.
         """
-        source = (REPO_ROOT / "scripts" / "foulplay_power_report.py").read_text()
-        for kwarg in ("rollout_leaf=", "rollout_count=", "rollout_max_plies=",
-                      "rollout_policy="):
-            with self.subTest(kwarg=kwarg):
-                self.assertIn(
-                    kwarg,
-                    source,
-                    "foulplay_power_report.cid_of does not pass "
-                    f"{kwarg} so a rollout cell's reference id would match no shard",
-                )
         cell = dict(depth=4, sims=1024, batch=64, worlds=4, tag="k0",
                     rollout_leaf=True, rollout_count=8, rollout_max_plies=200)
         self.assertEqual(
@@ -534,9 +524,17 @@ class ChildArgvTest(unittest.TestCase):
         self.assertIn("--engine-rollout-leaf", self._argv(engine_rollout_leaf=True))
 
     def test_the_arm_reaches_the_child_with_every_knob(self) -> None:
+        # R=4 DELIBERATELY, because the fixture's --engine-worlds is also 4: any
+        # value-locating logic that searches argv by VALUE instead of by position
+        # matches the wrong token here. R=8 alone would hide that.
+        for count in (8, 4):
+            with self.subTest(R=count):
+                self._assert_every_knob_reaches_the_child(count)
+
+    def _assert_every_knob_reaches_the_child(self, count: int) -> None:
         argv = self._argv(
             engine_rollout_leaf=True,
-            engine_rollout_count=8,
+            engine_rollout_count=count,
             engine_rollout_max_plies=400,
             engine_rollout_policy="uniform",
             engine_rollout_seed=11,
@@ -544,24 +542,44 @@ class ChildArgvTest(unittest.TestCase):
         )
         self.assertIn("--engine-rollout-leaf", argv)
         for flag, value in (
-            ("--engine-rollout-count", "8"),
+            ("--engine-rollout-count", str(count)),
             ("--engine-rollout-max-plies", "400"),
             ("--engine-rollout-policy", "uniform"),
             ("--engine-rollout-seed", "11"),
             ("--engine-rollout-threads", "1"),
         ):
             with self.subTest(flag=flag):
+                # By POSITION of the FLAG, which is unambiguous; the hazard is
+                # locating a VALUE by `argv.index(value)`.
                 self.assertEqual(argv[argv.index(flag) + 1], value)
         # And the child's parser accepts every one of them, which is the half a
         # string comparison cannot cover: a forwarded flag the bridge does not
         # define would fail the run, not this assertion, without it.
+        # Sliced BY POSITION, never by `argv.index(value)`: index() finds the
+        # FIRST occurrence of a value, so the moment a rollout knob's value
+        # collides with an earlier token (set R to 4 and it matches
+        # `--engine-worlds 4`) the filter silently drops it and the parse fails
+        # for a reason that has nothing to do with the property under test.
+        rollout_slice: list[str] = []
+        for i, token in enumerate(argv):
+            if token.startswith("--engine-rollout"):
+                rollout_slice.append(token)
+            elif (
+                i
+                and argv[i - 1].startswith("--engine-rollout")
+                and not token.startswith("--")
+            ):
+                # Only a VALUE, so a boolean flag such as
+                # --engine-rollout-threads-cpu-budget-ack does not drag the next
+                # unrelated token in behind it.
+                rollout_slice.append(token)
         parsed = build_arg_parser().parse_args(
-            ["--checkpoint", "/tmp/c.pt"]
-            + [a for a in argv if a.startswith("--engine-rollout")
-               or (argv.index(a) > 0 and argv[argv.index(a) - 1].startswith("--engine-rollout"))]
+            ["--checkpoint", "/tmp/c.pt", "--policy-mode", "engine-mcts",
+             "--engine-model-path", "/tmp/m.pt",
+             "--engine-tables-path", "/tmp/t.json"] + rollout_slice
         )
         self.assertTrue(parsed.engine_rollout_leaf)
-        self.assertEqual(parsed.engine_rollout_count, 8)
+        self.assertEqual(parsed.engine_rollout_count, count)
         self.assertEqual(parsed.engine_rollout_max_plies, 400)
 
     def test_the_ack_travels_only_when_set(self) -> None:
@@ -576,6 +594,182 @@ class ChildArgvTest(unittest.TestCase):
             engine_rollout_threads_cpu_budget_ack=True,
         )
         self.assertIn("--engine-rollout-threads-cpu-budget-ack", withack)
+
+
+class ArgvReachesTheConfigTest(unittest.TestCase):
+    """argv -> `ControlledFoulPlayConfig`, the layer the other tests skip.
+
+    `FlagReachesEngineConfigTest` builds a `ControlledFoulPlayConfig` DIRECTLY and
+    checks it reaches `EngineMctsConfig`, so it cannot see `_config_from_args` at
+    all. Review demonstrated the gap: hardcoding `engine_rollout_leaf=False` in
+    `_config_from_args` -- i.e. the CLI flag never reaching the config, the exact
+    gap this change exists to close -- survived the entire suite.
+    """
+
+    def _parse(self, extra: list[str]) -> argparse.Namespace:
+        return build_arg_parser().parse_args(
+            ["--checkpoint", "/tmp/c.pt", "--policy-mode", "engine-mcts",
+             "--engine-model-path", "/tmp/m.pt",
+             "--engine-tables-path", "/tmp/t.json"] + extra
+        )
+
+    def test_the_whole_chain_from_argv_to_the_config(self) -> None:
+        """FAILING INPUT: the arm-off half. Asserted from the same function, so a
+        hardcoded value on either side fails one of the two.
+        """
+        from pokezero.foulplay_bridge import _config_from_args
+
+        off = _config_from_args(self._parse([]))
+        self.assertFalse(off.engine_rollout_leaf)
+
+        on = _config_from_args(self._parse([
+            "--engine-rollout-leaf",
+            "--engine-rollout-count", "8",
+            "--engine-rollout-max-plies", "400",
+            "--engine-rollout-policy", "uniform",
+            "--engine-rollout-seed", "11",
+            "--engine-rollout-threads", "3",
+            "--engine-rollout-threads-cpu-budget-ack",
+        ]))
+        self.assertTrue(on.engine_rollout_leaf)
+        self.assertEqual(on.engine_rollout_count, 8)
+        self.assertEqual(on.engine_rollout_max_plies, 400)
+        self.assertEqual(on.engine_rollout_policy, "uniform")
+        self.assertEqual(on.engine_rollout_seed, 11)
+        self.assertEqual(on.engine_rollout_threads, 3)
+        self.assertTrue(on.engine_rollout_threads_cpu_budget_ack)
+
+    def test_the_arm_is_refused_where_it_would_reach_nothing(self) -> None:
+        """`policy_mode != 'engine-mcts'` must refuse, like every sibling flag.
+
+        The seam is the native search's leaf evaluator, so under 'raw' the flag
+        reaches nothing -- while the shard body would still echo
+        `rollout_leaf: true` for the cell. That is a false witness on the only
+        record of what ran, and it was reachable from the paired driver as
+        `--arm raw --engine-rollout-leaf`.
+
+        FAILING INPUT: engine-mcts constructs (asserted above), so this is not a
+        test that every mode raises.
+        """
+        from pokezero.foulplay_bridge import _config_from_args
+
+        args = build_arg_parser().parse_args(
+            ["--checkpoint", "/tmp/c.pt", "--policy-mode", "raw",
+             "--engine-rollout-leaf"]
+        )
+        with self.assertRaises(ValueError) as caught:
+            _config_from_args(args)
+        self.assertIn("engine_rollout_leaf", str(caught.exception))
+        self.assertIn("engine-mcts", str(caught.exception))
+
+    def test_a_non_engine_opponent_seat_does_not_inherit_the_arm(self) -> None:
+        """The derived opponent config sets `policy_mode = opponent_policy_mode`.
+
+        So without `engine_rollout_leaf` in `_ENGINE_ONLY_FIELDS` the new refusal
+        above would break a LEGITIMATE head-to-head run -- rollout pokezero seat
+        against a raw opponent, which is exactly the configuration the first game
+        was played in. The two changes only work together.
+
+        FAILING INPUT: the engine-mcts opponent below KEEPS the arm, so this does
+        not pass by clearing unconditionally.
+        """
+        from pokezero.foulplay_bridge import _opponent_seat_config
+
+        base = _bridge_config(
+            engine_rollout_leaf=True,
+            opponent_policy_mode="raw",
+        )
+        raw_opponent = _opponent_seat_config(base)
+        self.assertEqual(raw_opponent.policy_mode, "raw")
+        self.assertFalse(
+            raw_opponent.engine_rollout_leaf,
+            "a raw opponent seat must not carry the arm, or building it raises",
+        )
+        # An engine-mcts opponent legitimately DOES inherit it: both seats price
+        # leaves by rollout. That is a different experiment from
+        # rollout-vs-value-head, which is why the shard witnesses it per seat.
+        # `opponent_engine_depth` differs so this is a budget-vs-budget pairing
+        # rather than a mirror match, which the config refuses outright.
+        engine_opponent = _opponent_seat_config(
+            _bridge_config(engine_rollout_leaf=True,
+                           opponent_policy_mode="engine-mcts",
+                           opponent_engine_depth=2)
+        )
+        self.assertTrue(engine_opponent.engine_rollout_leaf)
+
+
+class ShardTelemetryWitnessTest(unittest.TestCase):
+    """The shard body must say whether the arm was ASKED FOR, per seat.
+
+    Review demonstrated that hardcoding `"rollout_leaf": False` in the engine
+    telemetry block survived the suite. That block is the only record a reader of
+    one shard has.
+    """
+
+    def _engine_block(self, **overrides) -> dict[str, Any]:
+        from pokezero.foulplay_bridge import ControlledFoulPlayBenchmarkResult
+
+        result = ControlledFoulPlayBenchmarkResult(
+            config=_bridge_config(**overrides), policy_id="pid", games=(),
+        )
+        return result.to_dict()["engine_mcts"]
+
+    def test_the_block_records_the_arm_and_its_knobs(self) -> None:
+        """FAILING INPUT: the arm-off block must read False, the arm-on block True,
+        from the same builder.
+        """
+        off = self._engine_block()
+        self.assertFalse(off["rollout_leaf"])
+        on = self._engine_block(
+            engine_rollout_leaf=True,
+            engine_rollout_count=8,
+            engine_rollout_max_plies=400,
+            engine_rollout_seed=11,
+            engine_rollout_threads=2,
+            engine_rollout_threads_cpu_budget_ack=True,
+        )
+        self.assertTrue(on["rollout_leaf"])
+        self.assertEqual(on["rollout_count"], 8)
+        self.assertEqual(on["rollout_max_plies"], 400)
+        self.assertEqual(on["rollout_policy"], "uniform")
+        # Outside config_id on purpose, so the body is their ONLY record.
+        self.assertEqual(on["rollout_seed"], 11)
+        self.assertEqual(on["rollout_threads"], 2)
+
+    def test_the_opponent_seat_is_witnessed_separately(self) -> None:
+        """An engine-mcts opponent inherits the arm, so the shard must say so.
+
+        FAILING INPUT: the raw-opponent case must read False for the opponent seat
+        while the pokezero seat reads True -- a single shared field cannot satisfy
+        both halves.
+        """
+        from pokezero.foulplay_bridge import ControlledFoulPlayBenchmarkResult
+
+        # `opponent_engine_depth` on the engine case only, so it is a
+        # budget-vs-budget pairing rather than the mirror match the config refuses.
+        for mode, extra, expected in (
+            ("raw", {}, False),
+            ("engine-mcts", {"opponent_engine_depth": 2}, True),
+        ):
+            with self.subTest(opponent=mode):
+                payload = ControlledFoulPlayBenchmarkResult(
+                    config=_bridge_config(
+                        engine_rollout_leaf=True,
+                        opponent_policy_mode=mode,
+                        **extra,
+                    ),
+                    policy_id="pid",
+                    games=(),
+                ).to_dict()
+                opponent_block = payload["opponent_engine_mcts"]
+                self.assertIsNotNone(opponent_block)
+                self.assertEqual(
+                    opponent_block["rollout_leaf"], expected,
+                    f"the {mode} opponent seat's rollout witness is wrong",
+                )
+                # The POKEZERO seat is on in both cases, so the two fields are
+                # genuinely independent rather than one value rendered twice.
+                self.assertTrue(payload["engine_mcts"]["rollout_leaf"])
 
 
 class RuntimeWitnessTest(unittest.TestCase):
@@ -651,7 +845,7 @@ class RuntimeWitnessTest(unittest.TestCase):
         self.assertEqual(row["rollouts_run"], 16)
         self.assertEqual(row["rollout_encode_skipped"], 3)
         self.assertEqual(row["rollout_fallback_fraction"], 0.125)
-        self.assertEqual(row["world_records"], 1)
+        self.assertEqual(row["searches"], 1)
 
         # The keys spread on the RECORD instead of the report -- the bug's shape.
         flat = [{"side_key": "side_one", "rollout_leaf_mode": "rollout",
@@ -660,6 +854,175 @@ class RuntimeWitnessTest(unittest.TestCase):
             EngineMctsPolicy._rollout_decision_row(flat),
             "the helper must read report[...] and not the record's top level",
         )
+
+    @staticmethod
+    def _policy_shell() -> Any:
+        """An `EngineMctsPolicy` with only `.stats`, for the absorption tests.
+
+        `_absorb_rollout_report` touches nothing else, and constructing a real
+        policy needs a dex, a candidate-set source and a TorchScript artifact --
+        none of which the absorption reads.
+        """
+        from pokezero.engine_search import EngineMctsStats
+
+        shell = EngineMctsPolicy.__new__(EngineMctsPolicy)
+        shell.stats = EngineMctsStats()
+        return shell
+
+    def test_the_shard_absorption_reads_the_report_and_populates_the_witness(self) -> None:
+        """The shard-level witness, which is this change's headline claim.
+
+        FAILING INPUT: a report with NO `rollout_leaf_mode` must leave every
+        counter at zero and the mode set empty, while a report with one must
+        populate all of them -- so neither an absorption that never fires nor one
+        that fires unconditionally passes.
+        """
+        shell = self._policy_shell()
+        self.assertFalse(
+            shell._absorb_rollout_report({"model_evals": 7}),
+            "a pre-seam report must not register as an engaged seam",
+        )
+        self.assertEqual(shell.stats.rollout_leaf_modes, Counter())
+        self.assertEqual(shell.stats.rollouts_run, 0)
+
+        self.assertTrue(shell._absorb_rollout_report({
+            "rollout_leaf_mode": "rollout",
+            "rollouts_run": 64,
+            "rollout_plies": 1280,
+            "rollout_terminal_hits": 60,
+            "rollout_cap_hits": 4,
+            "rollout_dead_ends": 0,
+            "leaves_priced": 8,
+            "rollout_encode_skipped": 3,
+        }))
+        s = shell.stats
+        self.assertEqual(s.rollout_leaf_modes, Counter({"rollout": 1}))
+        self.assertEqual(s.rollout_leaf_world_records, 1)
+        # Each counter asserted individually and at a DISTINCT value, so a
+        # copy-paste that read the wrong report key cannot pass.
+        self.assertEqual(s.rollouts_run, 64)
+        self.assertEqual(s.rollout_plies, 1280)
+        self.assertEqual(s.rollout_terminal_hits, 60)
+        self.assertEqual(s.rollout_cap_hits, 4)
+        self.assertEqual(s.rollout_dead_ends, 0)
+        self.assertEqual(s.rollout_leaves_priced, 8)
+        self.assertEqual(s.rollout_encode_skipped, 3)
+
+        # ... and it ACCUMULATES per invocation, which is the documented unit.
+        shell._absorb_rollout_report({
+            "rollout_leaf_mode": "rollout", "rollouts_run": 64,
+            "rollout_terminal_hits": 64,
+        })
+        self.assertEqual(shell.stats.rollouts_run, 128)
+        self.assertEqual(shell.stats.rollout_leaf_world_records, 2)
+
+    def test_every_absorbed_counter_survives_to_dict(self) -> None:
+        """The payload must carry what was absorbed.
+
+        FAILING INPUT: every value below is distinct and non-zero, so a hardcoded
+        constant or a duplicated key fails on at least one.
+        """
+        shell = self._policy_shell()
+        shell._absorb_rollout_report({
+            "rollout_leaf_mode": "rollout",
+            "rollouts_run": 100,
+            "rollout_plies": 5500,
+            "rollout_terminal_hits": 91,
+            "rollout_cap_hits": 9,
+            "rollout_dead_ends": 0,
+            "leaves_priced": 12,
+            "rollout_encode_skipped": 5,
+        })
+        payload = shell.stats.to_dict()
+        self.assertEqual(payload["rollout_leaf_modes"], {"rollout": 1})
+        self.assertEqual(payload["rollout_leaf_world_records"], 1)
+        self.assertEqual(payload["rollouts_run"], 100)
+        self.assertEqual(payload["rollout_plies"], 5500)
+        self.assertEqual(payload["rollout_terminal_hits"], 91)
+        self.assertEqual(payload["rollout_cap_hits"], 9)
+        self.assertEqual(payload["rollout_dead_ends"], 0)
+        self.assertEqual(payload["rollout_leaves_priced"], 12)
+        self.assertEqual(payload["rollout_encode_skipped"], 5)
+        self.assertAlmostEqual(payload["rollout_fallback_fraction"], 0.09)
+        self.assertAlmostEqual(payload["rollout_terminal_fraction"], 0.91)
+        self.assertAlmostEqual(payload["rollout_mean_plies"], 55.0)
+
+    def test_the_metadata_fields_helper_is_what_the_decision_splats(self) -> None:
+        """The attachment, isolated so it is reachable at all.
+
+        FAILING INPUT: the no-seam case must yield `{}` -- not `{"rollout": None}`
+        -- because a flag-off decision's metadata must be byte for byte unchanged.
+        """
+        self.assertEqual(
+            EngineMctsPolicy._rollout_metadata_fields(
+                [{"report": {"model_evals": 3}}]
+            ),
+            {},
+        )
+        fields = EngineMctsPolicy._rollout_metadata_fields(
+            [{"report": {"rollout_leaf_mode": "rollout", "rollouts_run": 8,
+                         "rollout_terminal_hits": 8}}]
+        )
+        self.assertEqual(list(fields), ["rollout"])
+        self.assertEqual(fields["rollout"]["rollout_leaf_modes"], ["rollout"])
+        # And the attachment site carries no logic of its own beyond the splat, so
+        # this helper IS the behaviour.
+        import inspect
+
+        source = inspect.getsource(EngineMctsPolicy._search_model)
+        self.assertIn("**self._rollout_metadata_fields(world_runs),", source)
+
+    def test_collapsed_twin_worlds_are_counted_once(self) -> None:
+        """THE COLLAPSE OVER-COUNT, found in review.
+
+        Duplicate belief draws are searched ONCE and the same report object is
+        written into every twin's record, so summing over `world_runs` multiplied
+        every work counter by the collapse multiplicity -- 512 rollouts reported
+        for 128 actually run.
+
+        FAILING INPUT: the two records below carry the SAME `_collapse_key`, so a
+        reader that does not dedupe reports double. The distinct-key case
+        immediately after must still sum, so this is not satisfied by always
+        taking one record.
+        """
+        report = {
+            "rollout_leaf_mode": "rollout", "rollouts_run": 128,
+            "rollout_terminal_hits": 120, "rollout_cap_hits": 8,
+            "rollout_dead_ends": 0, "leaves_priced": 4,
+            "rollout_encode_skipped": 2,
+        }
+        twins = [
+            {"report": dict(report), "_collapse_key": "k", "_collapse_multiplicity": 2},
+            {"report": dict(report), "_collapse_key": "k", "_collapse_multiplicity": 2},
+        ]
+        row = EngineMctsPolicy._rollout_decision_row(twins)
+        assert row is not None
+        self.assertEqual(row["searches"], 1, "one search, not two records")
+        self.assertEqual(row["rollouts_run"], 128, "the work must not be doubled")
+        self.assertEqual(row["leaves_priced"], 4)
+        self.assertEqual(row["rollout_encode_skipped"], 2)
+        # The worlds those searches stood for are still reported, because belief
+        # breadth is a per-world quantity -- and it must not be squared either.
+        self.assertEqual(row["worlds_represented"], 2)
+
+        # Two INDEPENDENT searches must sum, or the dedupe has eaten real work.
+        independent = [
+            {"report": dict(report), "_collapse_key": "a", "_collapse_multiplicity": 1},
+            {"report": dict(report), "_collapse_key": "b", "_collapse_multiplicity": 1},
+        ]
+        row2 = EngineMctsPolicy._rollout_decision_row(independent)
+        assert row2 is not None
+        self.assertEqual(row2["searches"], 2)
+        self.assertEqual(row2["rollouts_run"], 256)
+        self.assertEqual(row2["worlds_represented"], 2)
+
+        # Records with NO collapse key are independent by identity, never merged
+        # into one another by a shared default.
+        bare = [{"report": dict(report)}, {"report": dict(report)}]
+        row3 = EngineMctsPolicy._rollout_decision_row(bare)
+        assert row3 is not None
+        self.assertEqual(row3["searches"], 2)
+        self.assertEqual(row3["rollouts_run"], 256)
 
     def test_no_seam_means_no_per_decision_block_at_all(self) -> None:
         """A value-head decision's metadata must be byte for byte what it was."""
@@ -682,7 +1045,7 @@ class RuntimeWitnessTest(unittest.TestCase):
         row = EngineMctsPolicy._rollout_decision_row(rows)
         assert row is not None
         self.assertEqual(row["rollout_leaf_modes"], ["model_value", "rollout"])
-        self.assertEqual(row["world_records"], 2)
+        self.assertEqual(row["searches"], 2)
 
 
 if __name__ == "__main__":

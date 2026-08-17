@@ -782,6 +782,20 @@ class ControlledFoulPlayConfig:
                 f"(got {self.policy_mode!r}); it injects through "
                 "EngineMctsPolicy's fixed_override hook, which no other policy has."
             )
+        if self.engine_rollout_leaf and self.policy_mode != "engine-mcts":
+            # Refused rather than ignored, on the same rule as engine_oracle_belief
+            # directly above and every other engine-only flag. The seam lives in
+            # the native search's leaf evaluator, so under 'raw' or 'root-puct' the
+            # flag reaches nothing -- and the shard body would still echo
+            # `rollout_leaf: true` for the cell, which is a false witness on the
+            # only record of what ran. Reachable today from the paired driver as
+            # `--arm raw --engine-rollout-leaf`, which rendered `raw@k0` with
+            # `"rollout_leaf": true` in the shard.
+            raise ValueError(
+                "engine_rollout_leaf requires policy_mode='engine-mcts' "
+                f"(got {self.policy_mode!r}); the rollout seam is the native "
+                "search's leaf evaluator, which no other policy has."
+            )
         for _name, _floor, _cap, _capname in (
             ("engine_depth_min", self.engine_depth_min, self.engine_depth, "engine_depth"),
             ("engine_worlds_min", self.engine_worlds_min, self.engine_worlds, "engine_worlds"),
@@ -1827,6 +1841,21 @@ class ControlledFoulPlayBenchmarkResult:
                 "sims": (self.config.opponent_engine_sims
                          if self.config.opponent_engine_sims is not None
                          else self.config.engine_sims),
+                # THE ARM, ON THIS SEAT. An engine-mcts opponent inherits the
+                # rollout leaf from the shared config (`_opponent_seat_config`
+                # clears it only for a NON-engine opponent), so a head-to-head
+                # rollout cell prices BOTH seats' leaves by rollout. That is a
+                # legitimate configuration -- and it is a different experiment from
+                # rollout-vs-value-head, so it must be readable from the shard
+                # instead of inferred from the fact that one config field is shared.
+                # Witnessed rather than refused, unlike engine_oracle_belief: the
+                # oracle override is installed for one seat only and so would be a
+                # false claim, whereas this really does apply to both.
+                "rollout_leaf": (
+                    self.config.engine_rollout_leaf
+                    if self.config.opponent_policy_mode == "engine-mcts"
+                    else False
+                ),
             } if self.config.opponent_policy_mode != "foul-play" else None),
             "engine_mcts": {
                 "decisions": engine_decisions,
@@ -3675,6 +3704,11 @@ def _validate_external_paths(config: ControlledFoulPlayConfig) -> None:
 # write a witness claiming an instrument that never ran -- so the opponent-seat config has
 # to CLEAR them rather than suppress the checks.
 _ENGINE_ONLY_FIELDS: tuple[tuple[str, Any], ...] = (
+    # Cleared for a non-engine opponent seat, and it MUST be in this tuple rather
+    # than only carrying the new `policy_mode` refusal: the derived opponent config
+    # sets `policy_mode = opponent_policy_mode`, so a raw opponent under a rollout
+    # pokezero seat would hit that refusal and break a legitimate head-to-head run.
+    ("engine_rollout_leaf", False),
     ("engine_oracle_belief", False),
     ("engine_override_telemetry", False),
     ("engine_early_stop", False),
