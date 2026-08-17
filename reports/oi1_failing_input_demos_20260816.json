@@ -1,0 +1,1739 @@
+{
+ "baseline_cell": "base",
+ "caveats": {
+  "absolute_levels_never_gated": "Absolute C is DESCRIPTIVE AND NEVER GATED: eligibility selects on a noisy measured gap, so C conditions on selection and is biased upward as a statement about the latent gap. The gate reads only the paired dC, where the selection is common to both cells.",
+  "advancement_requires_supporting_beta_ece": "A PASS here is NECESSARY, NOT SUFFICIENT for arm advancement: the ceiling programme requires the ordering metric to move WITH beta/ECE as supporting evidence, never the pair alone and never ordering alone.",
+  "conditioned_on_realized_reply": "OI-1 measures ordering GIVEN THE OPPONENT'S SINGLE REALIZED REPLY: both the label (true_a/true_b) and the head's input are conditioned on the reply that actually happened at that decision, while search integrates over the reply DISTRIBUTION. C is therefore an UPPER BOUND on the ordering quality search can cash, and more rollouts cannot fix it -- only a reply-marginalised label would.",
+  "label_se_vs_tau": {
+   "condition_label_se_much_less_than_tau_met": false,
+   "label_gap_se_banked_mean": 0.06527915870261528,
+   "label_gap_se_worst_case": 0.08838834764831845,
+   "rollouts_R": 64,
+   "se_over_tau_banked": 0.6527915870261527,
+   "tau": 0.1,
+   "text": "The programme's spec asks for label SE << tau. At R=64 the per-pair gap SE is 0.0653 (banked mean) / 0.0884 (worst case near p=0.5) against tau=0.1, a ratio of 0.65 -- the << condition IS NOT MET and no tau this bank supports would meet it. This is reported, not waived: it is why absolute levels are never gated. It does not transfer to dC, because a common selection on a noisy label ATTENUATES a real difference rather than manufacturing one (see the attenuation test)."
+  },
+  "pairs_cluster_by_game": "465 pairs from 80 games at ~6 sampled decisions each; the exact test assumes independence, so a game-clustered bootstrap interval accompanies every dC and is the one to read when the two disagree."
+ },
+ "demo_summary": {
+  "gaming_or_corruption_inputs_that_PASSED": [],
+  "positive_controls_delta_c_at_tau_primary": {
+   "positive_control_blend_truth_0.10": 0.07751937984496127,
+   "positive_control_blend_truth_0.15": 0.11627906976744184
+  }
+ },
+ "demos": {
+  "additive_offset_plus0.2": {
+   "by_tau": {
+    "0.05": {
+     "advanced": false,
+     "c_arm": 0.6635514018691588,
+     "c_arm_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "c_baseline": 0.6635514018691588,
+     "c_baseline_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.0,
+      0.0
+     ],
+     "delta_c": 0.0,
+     "discordant_arm_better": 0,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 0,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 1.0,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": NaN,
+     "mean_swing": 1.0,
+     "n_eligible": 214,
+     "n_excluded_below_tau": 156,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": null,
+     "required_n_eligible_for_target": null,
+     "target_delta_c": 0.02,
+     "tau": 0.05,
+     "verdict": "NO_ADVANCE_INVARIANT"
+    },
+    "0.1": {
+     "advanced": false,
+     "c_arm": 0.7286821705426356,
+     "c_arm_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "c_baseline": 0.7286821705426356,
+     "c_baseline_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.0,
+      0.0
+     ],
+     "delta_c": 0.0,
+     "discordant_arm_better": 0,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 0,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 1.0,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": NaN,
+     "mean_swing": 1.0,
+     "n_eligible": 129,
+     "n_excluded_below_tau": 241,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": null,
+     "required_n_eligible_for_target": null,
+     "target_delta_c": 0.02,
+     "tau": 0.1,
+     "verdict": "NO_ADVANCE_INVARIANT"
+    },
+    "0.15": {
+     "advanced": false,
+     "c_arm": 0.7721518987341772,
+     "c_arm_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "c_baseline": 0.7721518987341772,
+     "c_baseline_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.0,
+      0.0
+     ],
+     "delta_c": 0.0,
+     "discordant_arm_better": 0,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 0,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 1.0,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": NaN,
+     "mean_swing": 1.0,
+     "n_eligible": 79,
+     "n_excluded_below_tau": 291,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": null,
+     "required_n_eligible_for_target": null,
+     "target_delta_c": 0.02,
+     "tau": 0.15,
+     "verdict": "NO_ADVANCE_INVARIANT"
+    }
+   },
+   "drop_ties_counterfactual": {
+    "0.05": {
+     "c_arm_drop_ties": 0.6635514018691588,
+     "c_baseline_drop_ties": 0.6635514018691588,
+     "delta_c_drop_ties": 0.0,
+     "n_arm_kept": 214,
+     "n_baseline_kept": 214,
+     "tau": 0.05
+    },
+    "0.1": {
+     "c_arm_drop_ties": 0.7286821705426356,
+     "c_baseline_drop_ties": 0.7286821705426356,
+     "delta_c_drop_ties": 0.0,
+     "n_arm_kept": 129,
+     "n_baseline_kept": 129,
+     "tau": 0.1
+    },
+    "0.15": {
+     "c_arm_drop_ties": 0.7721518987341772,
+     "c_baseline_drop_ties": 0.7721518987341772,
+     "delta_c_drop_ties": 0.0,
+     "n_arm_kept": 79,
+     "n_baseline_kept": 79,
+     "tau": 0.15
+    }
+   },
+   "must": "dC exactly 0 / NO_ADVANCE_INVARIANT",
+   "what": "the ECE-gaming vector: a constant offset, which cancels in every sibling gap"
+  },
+  "affine_rescale_k3.2764": {
+   "by_tau": {
+    "0.05": {
+     "advanced": false,
+     "c_arm": 0.6635514018691588,
+     "c_arm_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "c_baseline": 0.6635514018691588,
+     "c_baseline_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.0,
+      0.0
+     ],
+     "delta_c": 0.0,
+     "discordant_arm_better": 0,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 0,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 1.0,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": NaN,
+     "mean_swing": 1.0,
+     "n_eligible": 214,
+     "n_excluded_below_tau": 156,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": null,
+     "required_n_eligible_for_target": null,
+     "target_delta_c": 0.02,
+     "tau": 0.05,
+     "verdict": "NO_ADVANCE_INVARIANT"
+    },
+    "0.1": {
+     "advanced": false,
+     "c_arm": 0.7286821705426356,
+     "c_arm_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "c_baseline": 0.7286821705426356,
+     "c_baseline_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.0,
+      0.0
+     ],
+     "delta_c": 0.0,
+     "discordant_arm_better": 0,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 0,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 1.0,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": NaN,
+     "mean_swing": 1.0,
+     "n_eligible": 129,
+     "n_excluded_below_tau": 241,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": null,
+     "required_n_eligible_for_target": null,
+     "target_delta_c": 0.02,
+     "tau": 0.1,
+     "verdict": "NO_ADVANCE_INVARIANT"
+    },
+    "0.15": {
+     "advanced": false,
+     "c_arm": 0.7721518987341772,
+     "c_arm_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "c_baseline": 0.7721518987341772,
+     "c_baseline_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.0,
+      0.0
+     ],
+     "delta_c": 0.0,
+     "discordant_arm_better": 0,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 0,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 1.0,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": NaN,
+     "mean_swing": 1.0,
+     "n_eligible": 79,
+     "n_excluded_below_tau": 291,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": null,
+     "required_n_eligible_for_target": null,
+     "target_delta_c": 0.02,
+     "tau": 0.15,
+     "verdict": "NO_ADVANCE_INVARIANT"
+    }
+   },
+   "drop_ties_counterfactual": {
+    "0.05": {
+     "c_arm_drop_ties": 0.6635514018691588,
+     "c_baseline_drop_ties": 0.6635514018691588,
+     "delta_c_drop_ties": 0.0,
+     "n_arm_kept": 214,
+     "n_baseline_kept": 214,
+     "tau": 0.05
+    },
+    "0.1": {
+     "c_arm_drop_ties": 0.7286821705426356,
+     "c_baseline_drop_ties": 0.7286821705426356,
+     "delta_c_drop_ties": 0.0,
+     "n_arm_kept": 129,
+     "n_baseline_kept": 129,
+     "tau": 0.1
+    },
+    "0.15": {
+     "c_arm_drop_ties": 0.7721518987341772,
+     "c_baseline_drop_ties": 0.7721518987341772,
+     "delta_c_drop_ties": 0.0,
+     "n_arm_kept": 79,
+     "n_baseline_kept": 79,
+     "tau": 0.15
+    }
+   },
+   "must": "dC exactly 0 / NO_ADVANCE_INVARIANT",
+   "what": "the banked beta-gaming factor applied as a pure output rescale"
+  },
+  "ctlL": {
+   "by_tau": {
+    "0.05": {
+     "advanced": false,
+     "c_arm": 0.6542056074766355,
+     "c_arm_ci95_descriptive_only": [
+      0.5882675422048192,
+      0.7147050891634125
+     ],
+     "c_baseline": 0.6635514018691588,
+     "c_baseline_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.04128440366972477,
+      0.022222222222222223
+     ],
+     "delta_c": -0.009345794392523366,
+     "discordant_arm_better": 4,
+     "discordant_baseline_better": 6,
+     "discordant_full_swings": 10,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 10,
+     "exact_mcnemar_p_full_swings_only": 0.75390625,
+     "exact_mcnemar_p_two_sided": 0.75390625,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.04139902032998701,
+     "mean_swing": 1.0,
+     "n_eligible": 214,
+     "n_excluded_below_tau": 156,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 1993,
+     "required_n_eligible_for_target": 917,
+     "target_delta_c": 0.02,
+     "tau": 0.05,
+     "verdict": "UNDERPOWERED_NO_VERDICT"
+    },
+    "0.1": {
+     "advanced": false,
+     "c_arm": 0.7054263565891473,
+     "c_arm_ci95_descriptive_only": [
+      0.6217403648124402,
+      0.7772314657479122
+     ],
+     "c_baseline": 0.7286821705426356,
+     "c_baseline_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.06569343065693431,
+      0.009009009009009009
+     ],
+     "delta_c": -0.023255813953488302,
+     "discordant_arm_better": 1,
+     "discordant_baseline_better": 4,
+     "discordant_full_swings": 5,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 5,
+     "exact_mcnemar_p_full_swings_only": 0.375,
+     "exact_mcnemar_p_two_sided": 0.375,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.04856228677596978,
+     "mean_swing": 1.0,
+     "n_eligible": 129,
+     "n_excluded_below_tau": 241,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 2744,
+     "required_n_eligible_for_target": 761,
+     "target_delta_c": 0.02,
+     "tau": 0.1,
+     "verdict": "UNDERPOWERED_NO_VERDICT"
+    },
+    "0.15": {
+     "advanced": false,
+     "c_arm": 0.7721518987341772,
+     "c_arm_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "c_baseline": 0.7721518987341772,
+     "c_baseline_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.03614457831325301,
+      0.0379746835443038
+     ],
+     "delta_c": 0.0,
+     "discordant_arm_better": 1,
+     "discordant_baseline_better": 1,
+     "discordant_full_swings": 2,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 2,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 1.0,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.05015240269160962,
+     "mean_swing": 1.0,
+     "n_eligible": 79,
+     "n_excluded_below_tau": 291,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 2926,
+     "required_n_eligible_for_target": 497,
+     "target_delta_c": 0.02,
+     "tau": 0.15,
+     "verdict": "UNDERPOWERED_NO_VERDICT"
+    }
+   },
+   "drop_ties_counterfactual": {
+    "0.05": {
+     "c_arm_drop_ties": 0.6542056074766355,
+     "c_baseline_drop_ties": 0.6635514018691588,
+     "delta_c_drop_ties": -0.009345794392523366,
+     "n_arm_kept": 214,
+     "n_baseline_kept": 214,
+     "tau": 0.05
+    },
+    "0.1": {
+     "c_arm_drop_ties": 0.7054263565891473,
+     "c_baseline_drop_ties": 0.7286821705426356,
+     "delta_c_drop_ties": -0.023255813953488302,
+     "n_arm_kept": 129,
+     "n_baseline_kept": 129,
+     "tau": 0.1
+    },
+    "0.15": {
+     "c_arm_drop_ties": 0.7721518987341772,
+     "c_baseline_drop_ties": 0.7721518987341772,
+     "delta_c_drop_ties": 0.0,
+     "n_arm_kept": 79,
+     "n_baseline_kept": 79,
+     "tau": 0.15
+    }
+   },
+   "must": "must not PASS: it gamed the beta/ECE pair with no mechanism change",
+   "what": "a REAL rescored arm"
+  },
+  "monotone_sigmoid6": {
+   "by_tau": {
+    "0.05": {
+     "advanced": false,
+     "c_arm": 0.6635514018691588,
+     "c_arm_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "c_baseline": 0.6635514018691588,
+     "c_baseline_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.0,
+      0.0
+     ],
+     "delta_c": 0.0,
+     "discordant_arm_better": 0,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 0,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 1.0,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": NaN,
+     "mean_swing": 1.0,
+     "n_eligible": 214,
+     "n_excluded_below_tau": 156,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": null,
+     "required_n_eligible_for_target": null,
+     "target_delta_c": 0.02,
+     "tau": 0.05,
+     "verdict": "NO_ADVANCE_INVARIANT"
+    },
+    "0.1": {
+     "advanced": false,
+     "c_arm": 0.7286821705426356,
+     "c_arm_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "c_baseline": 0.7286821705426356,
+     "c_baseline_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.0,
+      0.0
+     ],
+     "delta_c": 0.0,
+     "discordant_arm_better": 0,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 0,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 1.0,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": NaN,
+     "mean_swing": 1.0,
+     "n_eligible": 129,
+     "n_excluded_below_tau": 241,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": null,
+     "required_n_eligible_for_target": null,
+     "target_delta_c": 0.02,
+     "tau": 0.1,
+     "verdict": "NO_ADVANCE_INVARIANT"
+    },
+    "0.15": {
+     "advanced": false,
+     "c_arm": 0.7721518987341772,
+     "c_arm_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "c_baseline": 0.7721518987341772,
+     "c_baseline_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.0,
+      0.0
+     ],
+     "delta_c": 0.0,
+     "discordant_arm_better": 0,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 0,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 1.0,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": NaN,
+     "mean_swing": 1.0,
+     "n_eligible": 79,
+     "n_excluded_below_tau": 291,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": null,
+     "required_n_eligible_for_target": null,
+     "target_delta_c": 0.02,
+     "tau": 0.15,
+     "verdict": "NO_ADVANCE_INVARIANT"
+    }
+   },
+   "drop_ties_counterfactual": {
+    "0.05": {
+     "c_arm_drop_ties": 0.6635514018691588,
+     "c_baseline_drop_ties": 0.6635514018691588,
+     "delta_c_drop_ties": 0.0,
+     "n_arm_kept": 214,
+     "n_baseline_kept": 214,
+     "tau": 0.05
+    },
+    "0.1": {
+     "c_arm_drop_ties": 0.7286821705426356,
+     "c_baseline_drop_ties": 0.7286821705426356,
+     "delta_c_drop_ties": 0.0,
+     "n_arm_kept": 129,
+     "n_baseline_kept": 129,
+     "tau": 0.1
+    },
+    "0.15": {
+     "c_arm_drop_ties": 0.7721518987341772,
+     "c_baseline_drop_ties": 0.7721518987341772,
+     "delta_c_drop_ties": 0.0,
+     "n_arm_kept": 79,
+     "n_baseline_kept": 79,
+     "tau": 0.15
+    }
+   },
+   "must": "dC exactly 0 / NO_ADVANCE_INVARIANT",
+   "what": "a strictly monotone recalibration onto (0,1)"
+  },
+  "monotone_tanh2": {
+   "by_tau": {
+    "0.05": {
+     "advanced": false,
+     "c_arm": 0.6635514018691588,
+     "c_arm_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "c_baseline": 0.6635514018691588,
+     "c_baseline_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.0,
+      0.0
+     ],
+     "delta_c": 0.0,
+     "discordant_arm_better": 0,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 0,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 1.0,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": NaN,
+     "mean_swing": 1.0,
+     "n_eligible": 214,
+     "n_excluded_below_tau": 156,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": null,
+     "required_n_eligible_for_target": null,
+     "target_delta_c": 0.02,
+     "tau": 0.05,
+     "verdict": "NO_ADVANCE_INVARIANT"
+    },
+    "0.1": {
+     "advanced": false,
+     "c_arm": 0.7286821705426356,
+     "c_arm_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "c_baseline": 0.7286821705426356,
+     "c_baseline_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.0,
+      0.0
+     ],
+     "delta_c": 0.0,
+     "discordant_arm_better": 0,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 0,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 1.0,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": NaN,
+     "mean_swing": 1.0,
+     "n_eligible": 129,
+     "n_excluded_below_tau": 241,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": null,
+     "required_n_eligible_for_target": null,
+     "target_delta_c": 0.02,
+     "tau": 0.1,
+     "verdict": "NO_ADVANCE_INVARIANT"
+    },
+    "0.15": {
+     "advanced": false,
+     "c_arm": 0.7721518987341772,
+     "c_arm_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "c_baseline": 0.7721518987341772,
+     "c_baseline_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.0,
+      0.0
+     ],
+     "delta_c": 0.0,
+     "discordant_arm_better": 0,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 0,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 1.0,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": NaN,
+     "mean_swing": 1.0,
+     "n_eligible": 79,
+     "n_excluded_below_tau": 291,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": null,
+     "required_n_eligible_for_target": null,
+     "target_delta_c": 0.02,
+     "tau": 0.15,
+     "verdict": "NO_ADVANCE_INVARIANT"
+    }
+   },
+   "drop_ties_counterfactual": {
+    "0.05": {
+     "c_arm_drop_ties": 0.6635514018691588,
+     "c_baseline_drop_ties": 0.6635514018691588,
+     "delta_c_drop_ties": 0.0,
+     "n_arm_kept": 214,
+     "n_baseline_kept": 214,
+     "tau": 0.05
+    },
+    "0.1": {
+     "c_arm_drop_ties": 0.7286821705426356,
+     "c_baseline_drop_ties": 0.7286821705426356,
+     "delta_c_drop_ties": 0.0,
+     "n_arm_kept": 129,
+     "n_baseline_kept": 129,
+     "tau": 0.1
+    },
+    "0.15": {
+     "c_arm_drop_ties": 0.7721518987341772,
+     "c_baseline_drop_ties": 0.7721518987341772,
+     "delta_c_drop_ties": 0.0,
+     "n_arm_kept": 79,
+     "n_baseline_kept": 79,
+     "tau": 0.15
+    }
+   },
+   "must": "dC exactly 0 / NO_ADVANCE_INVARIANT",
+   "what": "a strictly monotone recalibration"
+  },
+  "ordering_corrupted_15pct": {
+   "by_tau": {
+    "0.05": {
+     "advanced": false,
+     "c_arm": 0.6308411214953271,
+     "c_arm_ci95_descriptive_only": [
+      0.564409078345194,
+      0.692658608876336
+     ],
+     "c_baseline": 0.6635514018691588,
+     "c_baseline_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.08866995073891626,
+      0.02040816326530612
+     ],
+     "delta_c": -0.032710280373831724,
+     "discordant_arm_better": 13,
+     "discordant_baseline_better": 20,
+     "discordant_full_swings": 33,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 33,
+     "exact_mcnemar_p_full_swings_only": 0.296206368599087,
+     "exact_mcnemar_p_two_sided": 0.296206368599087,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.07520505513682464,
+     "mean_swing": 1.0,
+     "n_eligible": 214,
+     "n_excluded_below_tau": 156,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 6576,
+     "required_n_eligible_for_target": 3026,
+     "target_delta_c": 0.02,
+     "tau": 0.05,
+     "verdict": "UNDERPOWERED_NO_VERDICT"
+    },
+    "0.1": {
+     "advanced": false,
+     "c_arm": 0.6511627906976745,
+     "c_arm_ci95_descriptive_only": [
+      0.5656266293876464,
+      0.7279564157416696
+     ],
+     "c_baseline": 0.7286821705426356,
+     "c_baseline_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.15447154471544716,
+      0.0
+     ],
+     "delta_c": -0.07751937984496116,
+     "discordant_arm_better": 5,
+     "discordant_baseline_better": 15,
+     "discordant_full_swings": 20,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 20,
+     "exact_mcnemar_p_full_swings_only": 0.04138946533203125,
+     "exact_mcnemar_p_two_sided": 0.04138946533203125,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.09712457355193956,
+     "mean_swing": 1.0,
+     "n_eligible": 129,
+     "n_excluded_below_tau": 241,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 10969,
+     "required_n_eligible_for_target": 3043,
+     "target_delta_c": 0.02,
+     "tau": 0.1,
+     "verdict": "REGRESSED"
+    },
+    "0.15": {
+     "advanced": false,
+     "c_arm": 0.7088607594936709,
+     "c_arm_ci95_descriptive_only": [
+      0.6008711991561764,
+      0.7974800668618054
+     ],
+     "c_baseline": 0.7721518987341772,
+     "c_baseline_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.14814814814814814,
+      0.0136986301369863
+     ],
+     "delta_c": -0.06329113924050633,
+     "discordant_arm_better": 3,
+     "discordant_baseline_better": 8,
+     "discordant_full_swings": 11,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 11,
+     "exact_mcnemar_p_full_swings_only": 0.2265625,
+     "exact_mcnemar_p_two_sided": 0.2265625,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.11761780998886835,
+     "mean_swing": 1.0,
+     "n_eligible": 79,
+     "n_excluded_below_tau": 291,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 16087,
+     "required_n_eligible_for_target": 2733,
+     "target_delta_c": 0.02,
+     "tau": 0.15,
+     "verdict": "UNDERPOWERED_NO_VERDICT"
+    }
+   },
+   "drop_ties_counterfactual": {
+    "0.05": {
+     "c_arm_drop_ties": 0.6308411214953271,
+     "c_baseline_drop_ties": 0.6635514018691588,
+     "delta_c_drop_ties": -0.032710280373831724,
+     "n_arm_kept": 214,
+     "n_baseline_kept": 214,
+     "tau": 0.05
+    },
+    "0.1": {
+     "c_arm_drop_ties": 0.6511627906976745,
+     "c_baseline_drop_ties": 0.7286821705426356,
+     "delta_c_drop_ties": -0.07751937984496116,
+     "n_arm_kept": 129,
+     "n_baseline_kept": 129,
+     "tau": 0.1
+    },
+    "0.15": {
+     "c_arm_drop_ties": 0.7088607594936709,
+     "c_baseline_drop_ties": 0.7721518987341772,
+     "delta_c_drop_ties": -0.06329113924050633,
+     "n_arm_kept": 79,
+     "n_baseline_kept": 79,
+     "tau": 0.15
+    }
+   },
+   "must": "dC clearly negative",
+   "what": "ordering deliberately corrupted: 15% of pairs have their two head values swapped"
+  },
+  "ordering_corrupted_25pct": {
+   "by_tau": {
+    "0.05": {
+     "advanced": false,
+     "c_arm": 0.602803738317757,
+     "c_arm_ci95_descriptive_only": [
+      0.5359872897374364,
+      0.6659944645080514
+     ],
+     "c_baseline": 0.6635514018691588,
+     "c_baseline_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.12682926829268293,
+      0.0049504950495049506
+     ],
+     "delta_c": -0.06074766355140182,
+     "discordant_arm_better": 20,
+     "discordant_baseline_better": 33,
+     "discordant_full_swings": 53,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 53,
+     "exact_mcnemar_p_full_swings_only": 0.09837064844049181,
+     "exact_mcnemar_p_two_sided": 0.09837064844049181,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.0953077021373309,
+     "mean_swing": 1.0,
+     "n_eligible": 214,
+     "n_excluded_below_tau": 156,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 10561,
+     "required_n_eligible_for_target": 4860,
+     "target_delta_c": 0.02,
+     "tau": 0.05,
+     "verdict": "UNDERPOWERED_NO_VERDICT"
+    },
+    "0.1": {
+     "advanced": false,
+     "c_arm": 0.5891472868217055,
+     "c_arm_ci95_descriptive_only": [
+      0.5028661010486245,
+      0.6702726178737927
+     ],
+     "c_baseline": 0.7286821705426356,
+     "c_baseline_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.23140495867768596,
+      -0.05511811023622047
+     ],
+     "delta_c": -0.13953488372093015,
+     "discordant_arm_better": 7,
+     "discordant_baseline_better": 25,
+     "discordant_full_swings": 32,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 32,
+     "exact_mcnemar_p_full_swings_only": 0.0021024015732109547,
+     "exact_mcnemar_p_two_sided": 0.0021024015732109547,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.12285394767867164,
+     "mean_swing": 1.0,
+     "n_eligible": 129,
+     "n_excluded_below_tau": 241,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": true,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 17548,
+     "required_n_eligible_for_target": 4868,
+     "target_delta_c": 0.02,
+     "tau": 0.1,
+     "verdict": "REGRESSED"
+    },
+    "0.15": {
+     "advanced": false,
+     "c_arm": 0.6455696202531646,
+     "c_arm_ci95_descriptive_only": [
+      0.5355927424329845,
+      0.7420460187310634
+     ],
+     "c_baseline": 0.7721518987341772,
+     "c_baseline_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.2236842105263158,
+      -0.039473684210526314
+     ],
+     "delta_c": -0.12658227848101267,
+     "discordant_arm_better": 4,
+     "discordant_baseline_better": 14,
+     "discordant_full_swings": 18,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 18,
+     "exact_mcnemar_p_full_swings_only": 0.0308837890625,
+     "exact_mcnemar_p_two_sided": 0.0308837890625,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.15045720807482885,
+     "mean_swing": 1.0,
+     "n_eligible": 79,
+     "n_excluded_below_tau": 291,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 26317,
+     "required_n_eligible_for_target": 4471,
+     "target_delta_c": 0.02,
+     "tau": 0.15,
+     "verdict": "REGRESSED"
+    }
+   },
+   "drop_ties_counterfactual": {
+    "0.05": {
+     "c_arm_drop_ties": 0.602803738317757,
+     "c_baseline_drop_ties": 0.6635514018691588,
+     "delta_c_drop_ties": -0.06074766355140182,
+     "n_arm_kept": 214,
+     "n_baseline_kept": 214,
+     "tau": 0.05
+    },
+    "0.1": {
+     "c_arm_drop_ties": 0.5891472868217055,
+     "c_baseline_drop_ties": 0.7286821705426356,
+     "delta_c_drop_ties": -0.13953488372093015,
+     "n_arm_kept": 129,
+     "n_baseline_kept": 129,
+     "tau": 0.1
+    },
+    "0.15": {
+     "c_arm_drop_ties": 0.6455696202531646,
+     "c_baseline_drop_ties": 0.7721518987341772,
+     "delta_c_drop_ties": -0.12658227848101267,
+     "n_arm_kept": 79,
+     "n_baseline_kept": 79,
+     "tau": 0.15
+    }
+   },
+   "must": "dC clearly negative",
+   "what": "ordering deliberately corrupted at 25%"
+  },
+  "positive_control_blend_truth_0.10": {
+   "by_tau": {
+    "0.05": {
+     "advanced": false,
+     "c_arm": 0.7476635514018691,
+     "c_arm_ci95_descriptive_only": [
+      0.6854516729884087,
+      0.8011407349666301
+     ],
+     "c_baseline": 0.6635514018691588,
+     "c_baseline_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.047619047619047616,
+      0.125
+     ],
+     "delta_c": 0.08411214953271029,
+     "discordant_arm_better": 18,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 18,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 18,
+     "exact_mcnemar_p_full_swings_only": 7.62939453125e-06,
+     "exact_mcnemar_p_two_sided": 7.62939453125e-06,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.05554261419584803,
+     "mean_swing": 1.0,
+     "n_eligible": 214,
+     "n_excluded_below_tau": 156,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": true,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 3588,
+     "required_n_eligible_for_target": 1651,
+     "target_delta_c": 0.02,
+     "tau": 0.05,
+     "verdict": "PASS_PENDING_REMEASURE"
+    },
+    "0.1": {
+     "advanced": false,
+     "c_arm": 0.8062015503875969,
+     "c_arm_ci95_descriptive_only": [
+      0.7295493574027377,
+      0.8651445032438251
+     ],
+     "c_baseline": 0.7286821705426356,
+     "c_baseline_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.03389830508474576,
+      0.12598425196850394
+     ],
+     "delta_c": 0.07751937984496127,
+     "discordant_arm_better": 10,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 10,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 10,
+     "exact_mcnemar_p_full_swings_only": 0.001953125,
+     "exact_mcnemar_p_two_sided": 0.001953125,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.06867744457842806,
+     "mean_swing": 1.0,
+     "n_eligible": 129,
+     "n_excluded_below_tau": 241,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": true,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 5487,
+     "required_n_eligible_for_target": 1522,
+     "target_delta_c": 0.02,
+     "tau": 0.1,
+     "verdict": "PASS_PENDING_REMEASURE"
+    },
+    "0.15": {
+     "advanced": false,
+     "c_arm": 0.8481012658227848,
+     "c_arm_ci95_descriptive_only": [
+      0.7530014556229535,
+      0.9109173210736826
+     ],
+     "c_baseline": 0.7721518987341772,
+     "c_baseline_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.024691358024691357,
+      0.136986301369863
+     ],
+     "delta_c": 0.07594936708860756,
+     "discordant_arm_better": 6,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 6,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 6,
+     "exact_mcnemar_p_full_swings_only": 0.03125,
+     "exact_mcnemar_p_two_sided": 0.03125,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.08686650958352196,
+     "mean_swing": 1.0,
+     "n_eligible": 79,
+     "n_excluded_below_tau": 291,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 8777,
+     "required_n_eligible_for_target": 1491,
+     "target_delta_c": 0.02,
+     "tau": 0.15,
+     "verdict": "PASS_PENDING_REMEASURE"
+    }
+   },
+   "drop_ties_counterfactual": {
+    "0.05": {
+     "c_arm_drop_ties": 0.7476635514018691,
+     "c_baseline_drop_ties": 0.6635514018691588,
+     "delta_c_drop_ties": 0.08411214953271029,
+     "n_arm_kept": 214,
+     "n_baseline_kept": 214,
+     "tau": 0.05
+    },
+    "0.1": {
+     "c_arm_drop_ties": 0.8062015503875969,
+     "c_baseline_drop_ties": 0.7286821705426356,
+     "delta_c_drop_ties": 0.07751937984496127,
+     "n_arm_kept": 129,
+     "n_baseline_kept": 129,
+     "tau": 0.1
+    },
+    "0.15": {
+     "c_arm_drop_ties": 0.8481012658227848,
+     "c_baseline_drop_ties": 0.7721518987341772,
+     "delta_c_drop_ties": 0.07594936708860756,
+     "n_arm_kept": 79,
+     "n_baseline_kept": 79,
+     "tau": 0.15
+    }
+   },
+   "must": "dC clearly positive -- if this does not move, the instrument is dead",
+   "what": "POSITIVE CONTROL: head values shrunk 10% toward the (return-scaled) labels, a real ordering improvement with no scale, offset or calibration change available to it"
+  },
+  "positive_control_blend_truth_0.15": {
+   "by_tau": {
+    "0.05": {
+     "advanced": false,
+     "c_arm": 0.7710280373831776,
+     "c_arm_ci95_descriptive_only": [
+      0.7102482279450744,
+      0.8222491241566663
+     ],
+     "c_baseline": 0.6635514018691588,
+     "c_baseline_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.06511627906976744,
+      0.15463917525773196
+     ],
+     "delta_c": 0.10747663551401876,
+     "discordant_arm_better": 23,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 23,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 23,
+     "exact_mcnemar_p_full_swings_only": 2.384185791015625e-07,
+     "exact_mcnemar_p_two_sided": 2.384185791015625e-07,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.06278472293360987,
+     "mean_swing": 1.0,
+     "n_eligible": 214,
+     "n_excluded_below_tau": 156,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": true,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 4583,
+     "required_n_eligible_for_target": 2109,
+     "target_delta_c": 0.02,
+     "tau": 0.05,
+     "verdict": "PASS_PENDING_REMEASURE"
+    },
+    "0.1": {
+     "advanced": false,
+     "c_arm": 0.8449612403100775,
+     "c_arm_ci95_descriptive_only": [
+      0.7726338105870777,
+      0.8973377539387969
+     ],
+     "c_baseline": 0.7286821705426356,
+     "c_baseline_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.06349206349206349,
+      0.17355371900826447
+     ],
+     "delta_c": 0.11627906976744184,
+     "discordant_arm_better": 15,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 15,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 15,
+     "exact_mcnemar_p_full_swings_only": 6.103515625e-05,
+     "exact_mcnemar_p_two_sided": 6.103515625e-05,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.08411234802770987,
+     "mean_swing": 1.0,
+     "n_eligible": 129,
+     "n_excluded_below_tau": 241,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": true,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 8226,
+     "required_n_eligible_for_target": 2282,
+     "target_delta_c": 0.02,
+     "tau": 0.1,
+     "verdict": "PASS_PENDING_REMEASURE"
+    },
+    "0.15": {
+     "advanced": false,
+     "c_arm": 0.8987341772151899,
+     "c_arm_ci95_descriptive_only": [
+      0.8127005885203687,
+      0.9477881920594146
+     ],
+     "c_baseline": 0.7721518987341772,
+     "c_baseline_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      0.05555555555555555,
+      0.20652173913043478
+     ],
+     "delta_c": 0.12658227848101267,
+     "discordant_arm_better": 10,
+     "discordant_baseline_better": 0,
+     "discordant_full_swings": 10,
+     "discordant_half_swings_tie_transitions": 0,
+     "discordant_total": 10,
+     "exact_mcnemar_p_full_swings_only": 0.001953125,
+     "exact_mcnemar_p_two_sided": 0.001953125,
+     "head_ties_arm": 0,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 0,
+     "mde_delta_c_at_80pct_power": 0.11214418165338254,
+     "mean_swing": 1.0,
+     "n_eligible": 79,
+     "n_excluded_below_tau": 291,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": true,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 14622,
+     "required_n_eligible_for_target": 2484,
+     "target_delta_c": 0.02,
+     "tau": 0.15,
+     "verdict": "PASS_PENDING_REMEASURE"
+    }
+   },
+   "drop_ties_counterfactual": {
+    "0.05": {
+     "c_arm_drop_ties": 0.7710280373831776,
+     "c_baseline_drop_ties": 0.6635514018691588,
+     "delta_c_drop_ties": 0.10747663551401876,
+     "n_arm_kept": 214,
+     "n_baseline_kept": 214,
+     "tau": 0.05
+    },
+    "0.1": {
+     "c_arm_drop_ties": 0.8449612403100775,
+     "c_baseline_drop_ties": 0.7286821705426356,
+     "delta_c_drop_ties": 0.11627906976744184,
+     "n_arm_kept": 129,
+     "n_baseline_kept": 129,
+     "tau": 0.1
+    },
+    "0.15": {
+     "c_arm_drop_ties": 0.8987341772151899,
+     "c_baseline_drop_ties": 0.7721518987341772,
+     "delta_c_drop_ties": 0.12658227848101267,
+     "n_arm_kept": 79,
+     "n_baseline_kept": 79,
+     "tau": 0.15
+    }
+   },
+   "must": "dC clearly positive",
+   "what": "POSITIVE CONTROL at 15%"
+  },
+  "saturating_tanh50": {
+   "by_tau": {
+    "0.05": {
+     "advanced": false,
+     "c_arm": 0.6308411214953271,
+     "c_arm_ci95_descriptive_only": [
+      0.564409078345194,
+      0.692658608876336
+     ],
+     "c_baseline": 0.6635514018691588,
+     "c_baseline_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.078125,
+      0.010869565217391304
+     ],
+     "delta_c": -0.032710280373831724,
+     "discordant_arm_better": 28,
+     "discordant_baseline_better": 42,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 70,
+     "discordant_total": 70,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 0.11960933562988493,
+     "head_ties_arm": 70,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 70,
+     "mde_delta_c_at_80pct_power": 0.05476575615742638,
+     "mean_swing": 0.5,
+     "n_eligible": 214,
+     "n_excluded_below_tau": 156,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 3488,
+     "required_n_eligible_for_target": 1605,
+     "target_delta_c": 0.02,
+     "tau": 0.05,
+     "verdict": "UNDERPOWERED_NO_VERDICT"
+    },
+    "0.1": {
+     "advanced": false,
+     "c_arm": 0.6937984496124031,
+     "c_arm_ci95_descriptive_only": [
+      0.6096148182576424,
+      0.7667737011389164
+     ],
+     "c_baseline": 0.7286821705426356,
+     "c_baseline_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.08582089552238806,
+      0.015037593984962405
+     ],
+     "delta_c": -0.03488372093023251,
+     "discordant_arm_better": 16,
+     "discordant_baseline_better": 25,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 41,
+     "discordant_total": 41,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 0.21102359760880063,
+     "head_ties_arm": 41,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 41,
+     "mde_delta_c_at_80pct_power": 0.06953061324818467,
+     "mean_swing": 0.5,
+     "n_eligible": 129,
+     "n_excluded_below_tau": 241,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 5624,
+     "required_n_eligible_for_target": 1560,
+     "target_delta_c": 0.02,
+     "tau": 0.1,
+     "verdict": "UNDERPOWERED_NO_VERDICT"
+    },
+    "0.15": {
+     "advanced": false,
+     "c_arm": 0.7278481012658228,
+     "c_arm_ci95_descriptive_only": [
+      0.6208611186696178,
+      0.813703898804544
+     ],
+     "c_baseline": 0.7721518987341772,
+     "c_baseline_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.1038961038961039,
+      0.022058823529411766
+     ],
+     "delta_c": -0.044303797468354444,
+     "discordant_arm_better": 10,
+     "discordant_baseline_better": 17,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 27,
+     "discordant_total": 27,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 0.24778856337070465,
+     "head_ties_arm": 27,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 27,
+     "mde_delta_c_at_80pct_power": 0.0921358469767719,
+     "mean_swing": 0.5,
+     "n_eligible": 79,
+     "n_excluded_below_tau": 291,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": false,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 9871,
+     "required_n_eligible_for_target": 1677,
+     "target_delta_c": 0.02,
+     "tau": 0.15,
+     "verdict": "UNDERPOWERED_NO_VERDICT"
+    }
+   },
+   "drop_ties_counterfactual": {
+    "0.05": {
+     "c_arm_drop_ties": 0.6944444444444444,
+     "c_baseline_drop_ties": 0.6635514018691588,
+     "delta_c_drop_ties": 0.03089304257528558,
+     "n_arm_kept": 144,
+     "n_baseline_kept": 214,
+     "tau": 0.05
+    },
+    "0.1": {
+     "c_arm_drop_ties": 0.7840909090909091,
+     "c_baseline_drop_ties": 0.7286821705426356,
+     "delta_c_drop_ties": 0.05540873854827344,
+     "n_arm_kept": 88,
+     "n_baseline_kept": 129,
+     "tau": 0.1
+    },
+    "0.15": {
+     "c_arm_drop_ties": 0.8461538461538461,
+     "c_baseline_drop_ties": 0.7721518987341772,
+     "delta_c_drop_ties": 0.07400194741966892,
+     "n_arm_kept": 52,
+     "n_baseline_kept": 79,
+     "tau": 0.15
+    }
+   },
+   "must": "dC negative, and NOT launderable by dropping the ties it created",
+   "what": "MONOTONE BUT COLLAPSING: saturates the head and manufactures head-side ties"
+  },
+  "saturating_tanh50_on_winprob": {
+   "by_tau": {
+    "0.05": {
+     "advanced": false,
+     "c_arm": 0.544392523364486,
+     "c_arm_ci95_descriptive_only": [
+      0.4774703743544635,
+      0.6097490195242699
+     ],
+     "c_baseline": 0.6635514018691588,
+     "c_baseline_ci95_descriptive_only": [
+      0.5978567268449588,
+      0.7234778821819536
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.18160377358490565,
+      -0.055
+     ],
+     "delta_c": -0.11915887850467288,
+     "discordant_arm_better": 53,
+     "discordant_baseline_better": 104,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 157,
+     "discordant_total": 157,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 5.73972746966961e-05,
+     "head_ties_arm": 157,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 157,
+     "mde_delta_c_at_80pct_power": 0.08201813592620542,
+     "mean_swing": 0.5,
+     "n_eligible": 214,
+     "n_excluded_below_tau": 156,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": true,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 7821,
+     "required_n_eligible_for_target": 3599,
+     "target_delta_c": 0.02,
+     "tau": 0.05,
+     "verdict": "REGRESSED"
+    },
+    "0.1": {
+     "advanced": false,
+     "c_arm": 0.5426356589147286,
+     "c_arm_ci95_descriptive_only": [
+      0.45667754222201284,
+      0.62612793204523
+     ],
+     "c_baseline": 0.7286821705426356,
+     "c_baseline_ci95_descriptive_only": [
+      0.6461688074154056,
+      0.7979696454725337
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.25984251968503935,
+      -0.108
+     ],
+     "delta_c": -0.18604651162790697,
+     "discordant_arm_better": 23,
+     "discordant_baseline_better": 71,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 94,
+     "discordant_total": 94,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 7.254366616123082e-07,
+     "head_ties_arm": 94,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 94,
+     "mde_delta_c_at_80pct_power": 0.1052805289475893,
+     "mean_swing": 0.5,
+     "n_eligible": 129,
+     "n_excluded_below_tau": 241,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": true,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 12887,
+     "required_n_eligible_for_target": 3575,
+     "target_delta_c": 0.02,
+     "tau": 0.1,
+     "verdict": "REGRESSED"
+    },
+    "0.15": {
+     "advanced": false,
+     "c_arm": 0.5443037974683544,
+     "c_arm_ci95_descriptive_only": [
+      0.4349833293376871,
+      0.6495154240600667
+     ],
+     "c_baseline": 0.7721518987341772,
+     "c_baseline_ci95_descriptive_only": [
+      0.6683315177395119,
+      0.8507322531324035
+     ],
+     "clustered_bootstrap_ci95_delta_c": [
+      -0.31451612903225806,
+      -0.14556962025316456
+     ],
+     "delta_c": -0.22784810126582278,
+     "discordant_arm_better": 11,
+     "discordant_baseline_better": 47,
+     "discordant_full_swings": 0,
+     "discordant_half_swings_tie_transitions": 58,
+     "discordant_total": 58,
+     "exact_mcnemar_p_full_swings_only": 1.0,
+     "exact_mcnemar_p_two_sided": 2.031594536044956e-06,
+     "head_ties_arm": 58,
+     "head_ties_baseline": 0,
+     "head_ties_created_by_arm": 58,
+     "mde_delta_c_at_80pct_power": 0.13503947698404695,
+     "mean_swing": 0.5,
+     "n_eligible": 79,
+     "n_excluded_below_tau": 291,
+     "n_excluded_true_gap_zero": 95,
+     "powered_for_observed_effect": true,
+     "powered_for_target": false,
+     "required_n_banked_pairs_for_target": 21202,
+     "required_n_eligible_for_target": 3602,
+     "target_delta_c": 0.02,
+     "tau": 0.15,
+     "verdict": "REGRESSED"
+    }
+   },
+   "drop_ties_counterfactual": {
+    "0.05": {
+     "c_arm_drop_ties": 0.6666666666666666,
+     "c_baseline_drop_ties": 0.6635514018691588,
+     "delta_c_drop_ties": 0.0031152647975077885,
+     "n_arm_kept": 57,
+     "n_baseline_kept": 214,
+     "tau": 0.05
+    },
+    "0.1": {
+     "c_arm_drop_ties": 0.6571428571428571,
+     "c_baseline_drop_ties": 0.7286821705426356,
+     "delta_c_drop_ties": -0.07153931339977848,
+     "n_arm_kept": 35,
+     "n_baseline_kept": 129,
+     "tau": 0.1
+    },
+    "0.15": {
+     "c_arm_drop_ties": 0.6666666666666666,
+     "c_baseline_drop_ties": 0.7721518987341772,
+     "delta_c_drop_ties": -0.10548523206751059,
+     "n_arm_kept": 21,
+     "n_baseline_kept": 79,
+     "tau": 0.15
+    }
+   },
+   "must": "dC strongly negative",
+   "what": "the same saturation applied after a win-prob reparameterisation (harsher: almost every pair collapses)"
+  }
+ },
+ "instrument": "OI-1",
+ "n_pairs_aligned": 465,
+ "preregistered": {
+  "advancement_statistic": "dC = C_arm - C_baseline on the identical eligible set",
+  "alpha": 0.05,
+  "head_side_ties": "score 0.5, never dropped",
+  "pair_sampling_distribution": "top-2 sibling action pairs at 6 sampled decision prefixes per game, 80 self-play games (8 shards x 10), seat p1 only, one checkpoint, paired seeds (common random numbers) across the two arms of a pair; labels are R=64 policy-continuation rollouts to terminal and are win probabilities for the acting seat",
+  "pass_threshold_delta_c": 0.02,
+  "power": 0.8,
+  "rollouts_R": 64,
+  "statistic": "C(tau) = mean[ 1{sign(head_gap)==sign(true_gap)} + 0.5*1{head_gap==0} ]",
+  "tau_checks": [
+   0.05,
+   0.15
+  ],
+  "tau_primary": 0.1,
+  "test": "exact two-sided McNemar/sign test over discordant orderings (paired)",
+  "true_gap_zero_pairs": "excluded, never scored",
+  "verdicts": [
+   "PASS",
+   "PASS_PENDING_REMEASURE",
+   "REGRESSED",
+   "NO_ADVANCE",
+   "NO_ADVANCE_INVARIANT",
+   "UNDERPOWERED_NO_VERDICT"
+  ]
+ },
+ "provenance": {
+  "base": {
+   "bytes": 236855,
+   "file": "vhprobe-pairs-20260815.json",
+   "sha256": "8f591a744e1225ecf89c26bf3beb4cebd1222121e233a38c7bd1fc3835933558"
+  },
+  "ctlL": {
+   "bytes": 230438,
+   "file": "pairs-ctlL.json",
+   "sha256": "4b9042b3e84b65bfdb83c8d4807412065ae124bc3577a2495a86477a2b25a45d"
+  }
+ },
+ "schema": "pokezero.phase3.ordering-instrument.v1"
+}

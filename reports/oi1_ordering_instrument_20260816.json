@@ -1,0 +1,1333 @@
+{
+ "baseline_cell": "base",
+ "caveats": {
+  "absolute_levels_never_gated": "Absolute C is DESCRIPTIVE AND NEVER GATED: eligibility selects on a noisy measured gap, so C conditions on selection and is biased upward as a statement about the latent gap. The gate reads only the paired dC, where the selection is common to both cells.",
+  "advancement_requires_supporting_beta_ece": "A PASS here is NECESSARY, NOT SUFFICIENT for arm advancement: the ceiling programme requires the ordering metric to move WITH beta/ECE as supporting evidence, never the pair alone and never ordering alone.",
+  "conditioned_on_realized_reply": "OI-1 measures ordering GIVEN THE OPPONENT'S SINGLE REALIZED REPLY: both the label (true_a/true_b) and the head's input are conditioned on the reply that actually happened at that decision, while search integrates over the reply DISTRIBUTION. C is therefore an UPPER BOUND on the ordering quality search can cash, and more rollouts cannot fix it -- only a reply-marginalised label would.",
+  "label_se_vs_tau": {
+   "condition_label_se_much_less_than_tau_met": false,
+   "label_gap_se_banked_mean": 0.06527915870261528,
+   "label_gap_se_worst_case": 0.08838834764831845,
+   "rollouts_R": 64,
+   "se_over_tau_banked": 0.6527915870261527,
+   "tau": 0.1,
+   "text": "The programme's spec asks for label SE << tau. At R=64 the per-pair gap SE is 0.0653 (banked mean) / 0.0884 (worst case near p=0.5) against tau=0.1, a ratio of 0.65 -- the << condition IS NOT MET and no tau this bank supports would meet it. This is reported, not waived: it is why absolute levels are never gated. It does not transfer to dC, because a common selection on a noisy label ATTENUATES a real difference rather than manufacturing one (see the attenuation test)."
+  },
+  "pairs_cluster_by_game": "465 pairs from 80 games at ~6 sampled decisions each; the exact test assumes independence, so a game-clustered bootstrap interval accompanies every dC and is the one to read when the two disagree."
+ },
+ "cells": {
+  "ctl": {
+   "0.05": {
+    "advanced": false,
+    "c_arm": 0.6635514018691588,
+    "c_arm_ci95_descriptive_only": [
+     0.5978567268449588,
+     0.7234778821819536
+    ],
+    "c_baseline": 0.6635514018691588,
+    "c_baseline_ci95_descriptive_only": [
+     0.5978567268449588,
+     0.7234778821819536
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.02830188679245283,
+     0.029556650246305417
+    ],
+    "delta_c": 0.0,
+    "discordant_arm_better": 5,
+    "discordant_baseline_better": 5,
+    "discordant_full_swings": 10,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 10,
+    "exact_mcnemar_p_full_swings_only": 1.0,
+    "exact_mcnemar_p_two_sided": 1.0,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.04139902032998701,
+    "mean_swing": 1.0,
+    "n_eligible": 214,
+    "n_excluded_below_tau": 156,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 1993,
+    "required_n_eligible_for_target": 917,
+    "target_delta_c": 0.02,
+    "tau": 0.05,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.1": {
+    "advanced": false,
+    "c_arm": 0.7131782945736435,
+    "c_arm_ci95_descriptive_only": [
+     0.6298564009894583,
+     0.7841709703467565
+    ],
+    "c_baseline": 0.7286821705426356,
+    "c_baseline_ci95_descriptive_only": [
+     0.6461688074154056,
+     0.7979696454725337
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.03787878787878788,
+     0.0
+    ],
+    "delta_c": -0.015503875968992165,
+    "discordant_arm_better": 0,
+    "discordant_baseline_better": 2,
+    "discordant_full_swings": 2,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 2,
+    "exact_mcnemar_p_full_swings_only": 0.5,
+    "exact_mcnemar_p_two_sided": 0.5,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": true,
+    "mde_delta_c_at_80pct_power": 0.03071348691966791,
+    "mean_swing": 1.0,
+    "n_eligible": 129,
+    "n_excluded_below_tau": 241,
+    "n_excluded_true_gap_zero": 95,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 1100,
+    "required_n_eligible_for_target": 305,
+    "target_delta_c": 0.02,
+    "tau": 0.1,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.15": {
+    "advanced": false,
+    "c_arm": 0.759493670886076,
+    "c_arm_ci95_descriptive_only": [
+     0.6546430708772921,
+     0.8402781990238368
+    ],
+    "c_baseline": 0.7721518987341772,
+    "c_baseline_ci95_descriptive_only": [
+     0.6683315177395119,
+     0.8507322531324035
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.0410958904109589,
+     0.0
+    ],
+    "delta_c": -0.012658227848101222,
+    "discordant_arm_better": 0,
+    "discordant_baseline_better": 1,
+    "discordant_full_swings": 1,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 1,
+    "exact_mcnemar_p_full_swings_only": 1.0,
+    "exact_mcnemar_p_two_sided": 1.0,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.035463104036035614,
+    "mean_swing": 1.0,
+    "n_eligible": 79,
+    "n_excluded_below_tau": 291,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 1466,
+    "required_n_eligible_for_target": 249,
+    "target_delta_c": 0.02,
+    "tau": 0.15,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "sign_consistency": {
+    "all_nonzero_signs_agree": true,
+    "note": "tau checks carry NO independent p; only tau=0.10 is the test.",
+    "primary_sign": -1,
+    "signs_by_tau": {
+     "0.05": 0,
+     "0.1": -1,
+     "0.15": -1
+    }
+   }
+  },
+  "ctlE24": {
+   "0.05": {
+    "advanced": false,
+    "c_arm": 0.677570093457944,
+    "c_arm_ci95_descriptive_only": [
+     0.6122911599293978,
+     0.7365864155855358
+    ],
+    "c_baseline": 0.6635514018691588,
+    "c_baseline_ci95_descriptive_only": [
+     0.5978567268449588,
+     0.7234778821819536
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.023255813953488372,
+     0.05116279069767442
+    ],
+    "delta_c": 0.014018691588785104,
+    "discordant_arm_better": 9,
+    "discordant_baseline_better": 6,
+    "discordant_full_swings": 15,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 15,
+    "exact_mcnemar_p_full_swings_only": 0.60723876953125,
+    "exact_mcnemar_p_two_sided": 0.60723876953125,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.050703237829787716,
+    "mean_swing": 1.0,
+    "n_eligible": 214,
+    "n_excluded_below_tau": 156,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 2990,
+    "required_n_eligible_for_target": 1376,
+    "target_delta_c": 0.02,
+    "tau": 0.05,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.1": {
+    "advanced": false,
+    "c_arm": 0.7364341085271318,
+    "c_arm_ci95_descriptive_only": [
+     0.6543665197830991,
+     0.8048274738807025
+    ],
+    "c_baseline": 0.7286821705426356,
+    "c_baseline_ci95_descriptive_only": [
+     0.6461688074154056,
+     0.7979696454725337
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.031496062992125984,
+     0.04838709677419355
+    ],
+    "delta_c": 0.007751937984496138,
+    "discordant_arm_better": 4,
+    "discordant_baseline_better": 3,
+    "discordant_full_swings": 7,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 7,
+    "exact_mcnemar_p_full_swings_only": 1.0,
+    "exact_mcnemar_p_two_sided": 1.0,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": true,
+    "mde_delta_c_at_80pct_power": 0.057459672603280124,
+    "mean_swing": 1.0,
+    "n_eligible": 129,
+    "n_excluded_below_tau": 241,
+    "n_excluded_true_gap_zero": 95,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 3839,
+    "required_n_eligible_for_target": 1065,
+    "target_delta_c": 0.02,
+    "tau": 0.1,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.15": {
+    "advanced": false,
+    "c_arm": 0.7721518987341772,
+    "c_arm_ci95_descriptive_only": [
+     0.6683315177395119,
+     0.8507322531324035
+    ],
+    "c_baseline": 0.7721518987341772,
+    "c_baseline_ci95_descriptive_only": [
+     0.6683315177395119,
+     0.8507322531324035
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.037037037037037035,
+     0.037037037037037035
+    ],
+    "delta_c": 0.0,
+    "discordant_arm_better": 1,
+    "discordant_baseline_better": 1,
+    "discordant_full_swings": 2,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 2,
+    "exact_mcnemar_p_full_swings_only": 1.0,
+    "exact_mcnemar_p_two_sided": 1.0,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.05015240269160962,
+    "mean_swing": 1.0,
+    "n_eligible": 79,
+    "n_excluded_below_tau": 291,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 2926,
+    "required_n_eligible_for_target": 497,
+    "target_delta_c": 0.02,
+    "tau": 0.15,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "sign_consistency": {
+    "all_nonzero_signs_agree": true,
+    "note": "tau checks carry NO independent p; only tau=0.10 is the test.",
+    "primary_sign": 1,
+    "signs_by_tau": {
+     "0.05": 1,
+     "0.1": 1,
+     "0.15": 0
+    }
+   }
+  },
+  "ctlL": {
+   "0.05": {
+    "advanced": false,
+    "c_arm": 0.6542056074766355,
+    "c_arm_ci95_descriptive_only": [
+     0.5882675422048192,
+     0.7147050891634125
+    ],
+    "c_baseline": 0.6635514018691588,
+    "c_baseline_ci95_descriptive_only": [
+     0.5978567268449588,
+     0.7234778821819536
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.04128440366972477,
+     0.022222222222222223
+    ],
+    "delta_c": -0.009345794392523366,
+    "discordant_arm_better": 4,
+    "discordant_baseline_better": 6,
+    "discordant_full_swings": 10,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 10,
+    "exact_mcnemar_p_full_swings_only": 0.75390625,
+    "exact_mcnemar_p_two_sided": 0.75390625,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.04139902032998701,
+    "mean_swing": 1.0,
+    "n_eligible": 214,
+    "n_excluded_below_tau": 156,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 1993,
+    "required_n_eligible_for_target": 917,
+    "target_delta_c": 0.02,
+    "tau": 0.05,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.1": {
+    "advanced": false,
+    "c_arm": 0.7054263565891473,
+    "c_arm_ci95_descriptive_only": [
+     0.6217403648124402,
+     0.7772314657479122
+    ],
+    "c_baseline": 0.7286821705426356,
+    "c_baseline_ci95_descriptive_only": [
+     0.6461688074154056,
+     0.7979696454725337
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.06569343065693431,
+     0.009009009009009009
+    ],
+    "delta_c": -0.023255813953488302,
+    "discordant_arm_better": 1,
+    "discordant_baseline_better": 4,
+    "discordant_full_swings": 5,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 5,
+    "exact_mcnemar_p_full_swings_only": 0.375,
+    "exact_mcnemar_p_two_sided": 0.375,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": true,
+    "mde_delta_c_at_80pct_power": 0.04856228677596978,
+    "mean_swing": 1.0,
+    "n_eligible": 129,
+    "n_excluded_below_tau": 241,
+    "n_excluded_true_gap_zero": 95,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 2744,
+    "required_n_eligible_for_target": 761,
+    "target_delta_c": 0.02,
+    "tau": 0.1,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.15": {
+    "advanced": false,
+    "c_arm": 0.7721518987341772,
+    "c_arm_ci95_descriptive_only": [
+     0.6683315177395119,
+     0.8507322531324035
+    ],
+    "c_baseline": 0.7721518987341772,
+    "c_baseline_ci95_descriptive_only": [
+     0.6683315177395119,
+     0.8507322531324035
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.03614457831325301,
+     0.0379746835443038
+    ],
+    "delta_c": 0.0,
+    "discordant_arm_better": 1,
+    "discordant_baseline_better": 1,
+    "discordant_full_swings": 2,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 2,
+    "exact_mcnemar_p_full_swings_only": 1.0,
+    "exact_mcnemar_p_two_sided": 1.0,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.05015240269160962,
+    "mean_swing": 1.0,
+    "n_eligible": 79,
+    "n_excluded_below_tau": 291,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 2926,
+    "required_n_eligible_for_target": 497,
+    "target_delta_c": 0.02,
+    "tau": 0.15,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "sign_consistency": {
+    "all_nonzero_signs_agree": true,
+    "note": "tau checks carry NO independent p; only tau=0.10 is the test.",
+    "primary_sign": -1,
+    "signs_by_tau": {
+     "0.05": -1,
+     "0.1": -1,
+     "0.15": 0
+    }
+   }
+  },
+  "reproduce": {
+   "0.05": {
+    "advanced": false,
+    "c_arm": 0.6635514018691588,
+    "c_arm_ci95_descriptive_only": [
+     0.5978567268449588,
+     0.7234778821819536
+    ],
+    "c_baseline": 0.6635514018691588,
+    "c_baseline_ci95_descriptive_only": [
+     0.5978567268449588,
+     0.7234778821819536
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     0.0,
+     0.0
+    ],
+    "delta_c": 0.0,
+    "discordant_arm_better": 0,
+    "discordant_baseline_better": 0,
+    "discordant_full_swings": 0,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 0,
+    "exact_mcnemar_p_full_swings_only": 1.0,
+    "exact_mcnemar_p_two_sided": 1.0,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": NaN,
+    "mean_swing": 1.0,
+    "n_eligible": 214,
+    "n_excluded_below_tau": 156,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": null,
+    "required_n_eligible_for_target": null,
+    "target_delta_c": 0.02,
+    "tau": 0.05,
+    "verdict": "NO_ADVANCE_INVARIANT"
+   },
+   "0.1": {
+    "advanced": false,
+    "c_arm": 0.7286821705426356,
+    "c_arm_ci95_descriptive_only": [
+     0.6461688074154056,
+     0.7979696454725337
+    ],
+    "c_baseline": 0.7286821705426356,
+    "c_baseline_ci95_descriptive_only": [
+     0.6461688074154056,
+     0.7979696454725337
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     0.0,
+     0.0
+    ],
+    "delta_c": 0.0,
+    "discordant_arm_better": 0,
+    "discordant_baseline_better": 0,
+    "discordant_full_swings": 0,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 0,
+    "exact_mcnemar_p_full_swings_only": 1.0,
+    "exact_mcnemar_p_two_sided": 1.0,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": true,
+    "mde_delta_c_at_80pct_power": NaN,
+    "mean_swing": 1.0,
+    "n_eligible": 129,
+    "n_excluded_below_tau": 241,
+    "n_excluded_true_gap_zero": 95,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": null,
+    "required_n_eligible_for_target": null,
+    "target_delta_c": 0.02,
+    "tau": 0.1,
+    "verdict": "NO_ADVANCE_INVARIANT"
+   },
+   "0.15": {
+    "advanced": false,
+    "c_arm": 0.7721518987341772,
+    "c_arm_ci95_descriptive_only": [
+     0.6683315177395119,
+     0.8507322531324035
+    ],
+    "c_baseline": 0.7721518987341772,
+    "c_baseline_ci95_descriptive_only": [
+     0.6683315177395119,
+     0.8507322531324035
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     0.0,
+     0.0
+    ],
+    "delta_c": 0.0,
+    "discordant_arm_better": 0,
+    "discordant_baseline_better": 0,
+    "discordant_full_swings": 0,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 0,
+    "exact_mcnemar_p_full_swings_only": 1.0,
+    "exact_mcnemar_p_two_sided": 1.0,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": NaN,
+    "mean_swing": 1.0,
+    "n_eligible": 79,
+    "n_excluded_below_tau": 291,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": null,
+    "required_n_eligible_for_target": null,
+    "target_delta_c": 0.02,
+    "tau": 0.15,
+    "verdict": "NO_ADVANCE_INVARIANT"
+   },
+   "sign_consistency": {
+    "all_nonzero_signs_agree": true,
+    "note": "tau checks carry NO independent p; only tau=0.10 is the test.",
+    "primary_sign": 0,
+    "signs_by_tau": {
+     "0.05": 0,
+     "0.1": 0,
+     "0.15": 0
+    }
+   }
+  },
+  "v1": {
+   "0.05": {
+    "advanced": false,
+    "c_arm": 0.6448598130841121,
+    "c_arm_ci95_descriptive_only": [
+     0.5787047622556015,
+     0.7059058914539494
+    ],
+    "c_baseline": 0.6635514018691588,
+    "c_baseline_ci95_descriptive_only": [
+     0.5978567268449588,
+     0.7234778821819536
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.06598984771573604,
+     0.027906976744186046
+    ],
+    "delta_c": -0.01869158878504673,
+    "discordant_arm_better": 13,
+    "discordant_baseline_better": 17,
+    "discordant_full_swings": 30,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 30,
+    "exact_mcnemar_p_full_swings_only": 0.584664711728692,
+    "exact_mcnemar_p_two_sided": 0.584664711728692,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.07170520659511435,
+    "mean_swing": 1.0,
+    "n_eligible": 214,
+    "n_excluded_below_tau": 156,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 5978,
+    "required_n_eligible_for_target": 2751,
+    "target_delta_c": 0.02,
+    "tau": 0.05,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.1": {
+    "advanced": false,
+    "c_arm": 0.6821705426356589,
+    "c_arm_ci95_descriptive_only": [
+     0.5975458593064132,
+     0.7562593489263519
+    ],
+    "c_baseline": 0.7286821705426356,
+    "c_baseline_ci95_descriptive_only": [
+     0.6461688074154056,
+     0.7979696454725337
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.10204081632653061,
+     0.008130081300813009
+    ],
+    "delta_c": -0.046511627906976716,
+    "discordant_arm_better": 5,
+    "discordant_baseline_better": 11,
+    "discordant_full_swings": 16,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 16,
+    "exact_mcnemar_p_full_swings_only": 0.210113525390625,
+    "exact_mcnemar_p_two_sided": 0.210113525390625,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": true,
+    "mde_delta_c_at_80pct_power": 0.08687085949912601,
+    "mean_swing": 1.0,
+    "n_eligible": 129,
+    "n_excluded_below_tau": 241,
+    "n_excluded_true_gap_zero": 95,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 8774,
+    "required_n_eligible_for_target": 2434,
+    "target_delta_c": 0.02,
+    "tau": 0.1,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.15": {
+    "advanced": false,
+    "c_arm": 0.6962025316455697,
+    "c_arm_ci95_descriptive_only": [
+     0.5876533928859551,
+     0.7865553721612399
+    ],
+    "c_baseline": 0.7721518987341772,
+    "c_baseline_ci95_descriptive_only": [
+     0.6683315177395119,
+     0.8507322531324035
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.14457831325301204,
+     -0.0125
+    ],
+    "delta_c": -0.07594936708860756,
+    "discordant_arm_better": 1,
+    "discordant_baseline_better": 7,
+    "discordant_full_swings": 8,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 8,
+    "exact_mcnemar_p_full_swings_only": 0.0703125,
+    "exact_mcnemar_p_two_sided": 0.0703125,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.10030480538321924,
+    "mean_swing": 1.0,
+    "n_eligible": 79,
+    "n_excluded_below_tau": 291,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 11702,
+    "required_n_eligible_for_target": 1988,
+    "target_delta_c": 0.02,
+    "tau": 0.15,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "sign_consistency": {
+    "all_nonzero_signs_agree": true,
+    "note": "tau checks carry NO independent p; only tau=0.10 is the test.",
+    "primary_sign": -1,
+    "signs_by_tau": {
+     "0.05": -1,
+     "0.1": -1,
+     "0.15": -1
+    }
+   }
+  },
+  "v1E": {
+   "0.05": {
+    "advanced": false,
+    "c_arm": 0.6495327102803738,
+    "c_arm_ci95_descriptive_only": [
+     0.5834828822247302,
+     0.7103087603141611
+    ],
+    "c_baseline": 0.6635514018691588,
+    "c_baseline_ci95_descriptive_only": [
+     0.5978567268449588,
+     0.7234778821819536
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.059113300492610835,
+     0.03286384976525822
+    ],
+    "delta_c": -0.014018691588784993,
+    "discordant_arm_better": 13,
+    "discordant_baseline_better": 16,
+    "discordant_full_swings": 29,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 29,
+    "exact_mcnemar_p_full_swings_only": 0.711071103811264,
+    "exact_mcnemar_p_two_sided": 0.711071103811264,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.07049999123701906,
+    "mean_swing": 1.0,
+    "n_eligible": 214,
+    "n_excluded_below_tau": 156,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 5780,
+    "required_n_eligible_for_target": 2660,
+    "target_delta_c": 0.02,
+    "tau": 0.05,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.1": {
+    "advanced": false,
+    "c_arm": 0.7131782945736435,
+    "c_arm_ci95_descriptive_only": [
+     0.6298564009894583,
+     0.7841709703467565
+    ],
+    "c_baseline": 0.7286821705426356,
+    "c_baseline_ci95_descriptive_only": [
+     0.6461688074154056,
+     0.7979696454725337
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.07142857142857142,
+     0.04032258064516129
+    ],
+    "delta_c": -0.015503875968992165,
+    "discordant_arm_better": 7,
+    "discordant_baseline_better": 9,
+    "discordant_full_swings": 16,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 16,
+    "exact_mcnemar_p_full_swings_only": 0.803619384765625,
+    "exact_mcnemar_p_two_sided": 0.803619384765625,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": true,
+    "mde_delta_c_at_80pct_power": 0.08687085949912601,
+    "mean_swing": 1.0,
+    "n_eligible": 129,
+    "n_excluded_below_tau": 241,
+    "n_excluded_true_gap_zero": 95,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 8774,
+    "required_n_eligible_for_target": 2434,
+    "target_delta_c": 0.02,
+    "tau": 0.1,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.15": {
+    "advanced": false,
+    "c_arm": 0.7848101265822784,
+    "c_arm_ci95_descriptive_only": [
+     0.682128319163289,
+     0.8610779526794132
+    ],
+    "c_baseline": 0.7721518987341772,
+    "c_baseline_ci95_descriptive_only": [
+     0.6683315177395119,
+     0.8507322531324035
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.05405405405405406,
+     0.07792207792207792
+    ],
+    "delta_c": 0.012658227848101222,
+    "discordant_arm_better": 4,
+    "discordant_baseline_better": 3,
+    "discordant_full_swings": 7,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 7,
+    "exact_mcnemar_p_full_swings_only": 1.0,
+    "exact_mcnemar_p_two_sided": 1.0,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.09382655399776121,
+    "mean_swing": 1.0,
+    "n_eligible": 79,
+    "n_excluded_below_tau": 291,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 10236,
+    "required_n_eligible_for_target": 1739,
+    "target_delta_c": 0.02,
+    "tau": 0.15,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "sign_consistency": {
+    "all_nonzero_signs_agree": false,
+    "note": "tau checks carry NO independent p; only tau=0.10 is the test.",
+    "primary_sign": -1,
+    "signs_by_tau": {
+     "0.05": -1,
+     "0.1": -1,
+     "0.15": 1
+    }
+   }
+  },
+  "v1E24": {
+   "0.05": {
+    "advanced": false,
+    "c_arm": 0.6822429906542056,
+    "c_arm_ci95_descriptive_only": [
+     0.6171164330009817,
+     0.740942131343292
+    ],
+    "c_baseline": 0.6635514018691588,
+    "c_baseline_ci95_descriptive_only": [
+     0.5978567268449588,
+     0.7234778821819536
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.030303030303030304,
+     0.07111111111111111
+    ],
+    "delta_c": 0.01869158878504673,
+    "discordant_arm_better": 17,
+    "discordant_baseline_better": 13,
+    "discordant_full_swings": 30,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 30,
+    "exact_mcnemar_p_full_swings_only": 0.584664711728692,
+    "exact_mcnemar_p_two_sided": 0.584664711728692,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.07170520659511435,
+    "mean_swing": 1.0,
+    "n_eligible": 214,
+    "n_excluded_below_tau": 156,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 5978,
+    "required_n_eligible_for_target": 2751,
+    "target_delta_c": 0.02,
+    "tau": 0.05,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.1": {
+    "advanced": false,
+    "c_arm": 0.7054263565891473,
+    "c_arm_ci95_descriptive_only": [
+     0.6217403648124402,
+     0.7772314657479122
+    ],
+    "c_baseline": 0.7286821705426356,
+    "c_baseline_ci95_descriptive_only": [
+     0.6461688074154056,
+     0.7979696454725337
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.08403361344537816,
+     0.04065040650406504
+    ],
+    "delta_c": -0.023255813953488302,
+    "discordant_arm_better": 7,
+    "discordant_baseline_better": 10,
+    "discordant_full_swings": 17,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 17,
+    "exact_mcnemar_p_full_swings_only": 0.629058837890625,
+    "exact_mcnemar_p_two_sided": 0.629058837890625,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": true,
+    "mde_delta_c_at_80pct_power": 0.08954443237577195,
+    "mean_swing": 1.0,
+    "n_eligible": 129,
+    "n_excluded_below_tau": 241,
+    "n_excluded_true_gap_zero": 95,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 9322,
+    "required_n_eligible_for_target": 2586,
+    "target_delta_c": 0.02,
+    "tau": 0.1,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.15": {
+    "advanced": false,
+    "c_arm": 0.7848101265822784,
+    "c_arm_ci95_descriptive_only": [
+     0.682128319163289,
+     0.8610779526794132
+    ],
+    "c_baseline": 0.7721518987341772,
+    "c_baseline_ci95_descriptive_only": [
+     0.6683315177395119,
+     0.8507322531324035
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.06578947368421052,
+     0.08333333333333333
+    ],
+    "delta_c": 0.012658227848101222,
+    "discordant_arm_better": 5,
+    "discordant_baseline_better": 4,
+    "discordant_full_swings": 9,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 9,
+    "exact_mcnemar_p_full_swings_only": 1.0,
+    "exact_mcnemar_p_two_sided": 1.0,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.10638931210810686,
+    "mean_swing": 1.0,
+    "n_eligible": 79,
+    "n_excluded_below_tau": 291,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 13162,
+    "required_n_eligible_for_target": 2236,
+    "target_delta_c": 0.02,
+    "tau": 0.15,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "sign_consistency": {
+    "all_nonzero_signs_agree": false,
+    "note": "tau checks carry NO independent p; only tau=0.10 is the test.",
+    "primary_sign": -1,
+    "signs_by_tau": {
+     "0.05": 1,
+     "0.1": -1,
+     "0.15": 1
+    }
+   }
+  },
+  "v1L": {
+   "0.05": {
+    "advanced": false,
+    "c_arm": 0.6915887850467289,
+    "c_arm_ci95_descriptive_only": [
+     0.6267881433021997,
+     0.7496323987007548
+    ],
+    "c_baseline": 0.6635514018691588,
+    "c_baseline_ci95_descriptive_only": [
+     0.5978567268449588,
+     0.7234778821819536
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.01694915254237288,
+     0.07441860465116279
+    ],
+    "delta_c": 0.028037383177570097,
+    "discordant_arm_better": 15,
+    "discordant_baseline_better": 9,
+    "discordant_full_swings": 24,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 24,
+    "exact_mcnemar_p_full_swings_only": 0.30745625495910645,
+    "exact_mcnemar_p_two_sided": 0.30745625495910645,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.06413508651493677,
+    "mean_swing": 1.0,
+    "n_eligible": 214,
+    "n_excluded_below_tau": 156,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 4783,
+    "required_n_eligible_for_target": 2201,
+    "target_delta_c": 0.02,
+    "tau": 0.05,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.1": {
+    "advanced": false,
+    "c_arm": 0.7286821705426356,
+    "c_arm_ci95_descriptive_only": [
+     0.6461688074154056,
+     0.7979696454725337
+    ],
+    "c_baseline": 0.7286821705426356,
+    "c_baseline_ci95_descriptive_only": [
+     0.6461688074154056,
+     0.7979696454725337
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.05343511450381679,
+     0.05128205128205128
+    ],
+    "delta_c": 0.0,
+    "discordant_arm_better": 6,
+    "discordant_baseline_better": 6,
+    "discordant_full_swings": 12,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 12,
+    "exact_mcnemar_p_full_swings_only": 1.0,
+    "exact_mcnemar_p_two_sided": 1.0,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": true,
+    "mde_delta_c_at_80pct_power": 0.07523237117483184,
+    "mean_swing": 1.0,
+    "n_eligible": 129,
+    "n_excluded_below_tau": 241,
+    "n_excluded_true_gap_zero": 95,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 6583,
+    "required_n_eligible_for_target": 1826,
+    "target_delta_c": 0.02,
+    "tau": 0.1,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.15": {
+    "advanced": false,
+    "c_arm": 0.7974683544303798,
+    "c_arm_ci95_descriptive_only": [
+     0.696039875520555,
+     0.8713088972929341
+    ],
+    "c_baseline": 0.7721518987341772,
+    "c_baseline_ci95_descriptive_only": [
+     0.6683315177395119,
+     0.8507322531324035
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.05405405405405406,
+     0.10126582278481013
+    ],
+    "delta_c": 0.025316455696202556,
+    "discordant_arm_better": 4,
+    "discordant_baseline_better": 2,
+    "discordant_full_swings": 6,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 6,
+    "exact_mcnemar_p_full_swings_only": 0.6875,
+    "exact_mcnemar_p_two_sided": 0.6875,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.08686650958352196,
+    "mean_swing": 1.0,
+    "n_eligible": 79,
+    "n_excluded_below_tau": 291,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 8777,
+    "required_n_eligible_for_target": 1491,
+    "target_delta_c": 0.02,
+    "tau": 0.15,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "sign_consistency": {
+    "all_nonzero_signs_agree": true,
+    "note": "tau checks carry NO independent p; only tau=0.10 is the test.",
+    "primary_sign": 0,
+    "signs_by_tau": {
+     "0.05": 1,
+     "0.1": 0,
+     "0.15": 1
+    }
+   }
+  },
+  "v2": {
+   "0.05": {
+    "advanced": false,
+    "c_arm": 0.6635514018691588,
+    "c_arm_ci95_descriptive_only": [
+     0.5978567268449588,
+     0.7234778821819536
+    ],
+    "c_baseline": 0.6635514018691588,
+    "c_baseline_ci95_descriptive_only": [
+     0.5978567268449588,
+     0.7234778821819536
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.028169014084507043,
+     0.02926829268292683
+    ],
+    "delta_c": 0.0,
+    "discordant_arm_better": 5,
+    "discordant_baseline_better": 5,
+    "discordant_full_swings": 10,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 10,
+    "exact_mcnemar_p_full_swings_only": 1.0,
+    "exact_mcnemar_p_two_sided": 1.0,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.04139902032998701,
+    "mean_swing": 1.0,
+    "n_eligible": 214,
+    "n_excluded_below_tau": 156,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 1993,
+    "required_n_eligible_for_target": 917,
+    "target_delta_c": 0.02,
+    "tau": 0.05,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.1": {
+    "advanced": false,
+    "c_arm": 0.7054263565891473,
+    "c_arm_ci95_descriptive_only": [
+     0.6217403648124402,
+     0.7772314657479122
+    ],
+    "c_baseline": 0.7286821705426356,
+    "c_baseline_ci95_descriptive_only": [
+     0.6461688074154056,
+     0.7979696454725337
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.04964539007092199,
+     0.0
+    ],
+    "delta_c": -0.023255813953488302,
+    "discordant_arm_better": 0,
+    "discordant_baseline_better": 3,
+    "discordant_full_swings": 3,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 3,
+    "exact_mcnemar_p_full_swings_only": 0.25,
+    "exact_mcnemar_p_two_sided": 0.25,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": true,
+    "mde_delta_c_at_80pct_power": 0.03761618558741592,
+    "mean_swing": 1.0,
+    "n_eligible": 129,
+    "n_excluded_below_tau": 241,
+    "n_excluded_true_gap_zero": 95,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 1648,
+    "required_n_eligible_for_target": 457,
+    "target_delta_c": 0.02,
+    "tau": 0.1,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "0.15": {
+    "advanced": false,
+    "c_arm": 0.759493670886076,
+    "c_arm_ci95_descriptive_only": [
+     0.6546430708772921,
+     0.8402781990238368
+    ],
+    "c_baseline": 0.7721518987341772,
+    "c_baseline_ci95_descriptive_only": [
+     0.6683315177395119,
+     0.8507322531324035
+    ],
+    "clustered_bootstrap_ci95_delta_c": [
+     -0.0410958904109589,
+     0.0
+    ],
+    "delta_c": -0.012658227848101222,
+    "discordant_arm_better": 0,
+    "discordant_baseline_better": 1,
+    "discordant_full_swings": 1,
+    "discordant_half_swings_tie_transitions": 0,
+    "discordant_total": 1,
+    "exact_mcnemar_p_full_swings_only": 1.0,
+    "exact_mcnemar_p_two_sided": 1.0,
+    "head_ties_arm": 0,
+    "head_ties_baseline": 0,
+    "head_ties_created_by_arm": 0,
+    "is_primary_tau": false,
+    "mde_delta_c_at_80pct_power": 0.035463104036035614,
+    "mean_swing": 1.0,
+    "n_eligible": 79,
+    "n_excluded_below_tau": 291,
+    "n_excluded_true_gap_zero": 95,
+    "p_is_a_sign_consistency_check_not_an_independent_test": true,
+    "powered_for_observed_effect": false,
+    "powered_for_target": false,
+    "required_n_banked_pairs_for_target": 1466,
+    "required_n_eligible_for_target": 249,
+    "target_delta_c": 0.02,
+    "tau": 0.15,
+    "verdict": "UNDERPOWERED_NO_VERDICT"
+   },
+   "sign_consistency": {
+    "all_nonzero_signs_agree": true,
+    "note": "tau checks carry NO independent p; only tau=0.10 is the test.",
+    "primary_sign": -1,
+    "signs_by_tau": {
+     "0.05": 0,
+     "0.1": -1,
+     "0.15": -1
+    }
+   }
+  }
+ },
+ "instrument": "OI-1",
+ "n_pairs_aligned": 465,
+ "preregistered": {
+  "advancement_statistic": "dC = C_arm - C_baseline on the identical eligible set",
+  "alpha": 0.05,
+  "head_side_ties": "score 0.5, never dropped",
+  "pair_sampling_distribution": "top-2 sibling action pairs at 6 sampled decision prefixes per game, 80 self-play games (8 shards x 10), seat p1 only, one checkpoint, paired seeds (common random numbers) across the two arms of a pair; labels are R=64 policy-continuation rollouts to terminal and are win probabilities for the acting seat",
+  "pass_threshold_delta_c": 0.02,
+  "power": 0.8,
+  "rollouts_R": 64,
+  "statistic": "C(tau) = mean[ 1{sign(head_gap)==sign(true_gap)} + 0.5*1{head_gap==0} ]",
+  "tau_checks": [
+   0.05,
+   0.15
+  ],
+  "tau_primary": 0.1,
+  "test": "exact two-sided McNemar/sign test over discordant orderings (paired)",
+  "true_gap_zero_pairs": "excluded, never scored",
+  "verdicts": [
+   "PASS",
+   "PASS_PENDING_REMEASURE",
+   "REGRESSED",
+   "NO_ADVANCE",
+   "NO_ADVANCE_INVARIANT",
+   "UNDERPOWERED_NO_VERDICT"
+  ]
+ },
+ "provenance": {
+  "base": {
+   "bytes": 236855,
+   "file": "vhprobe-pairs-20260815.json",
+   "sha256": "8f591a744e1225ecf89c26bf3beb4cebd1222121e233a38c7bd1fc3835933558"
+  },
+  "ctl": {
+   "bytes": 229982,
+   "file": "pairs-ctl.json",
+   "sha256": "e76389f440df575acea3c47c871272f73e4a379ac28af3bbdad1d1286a636bea"
+  },
+  "ctlE24": {
+   "bytes": 231379,
+   "file": "pairs-ctlE24.json",
+   "sha256": "fc68c39b07dbd68253e44a1ce379eac822aa8d0d559ccfe73a82d36ee1aceb14"
+  },
+  "ctlL": {
+   "bytes": 230438,
+   "file": "pairs-ctlL.json",
+   "sha256": "4b9042b3e84b65bfdb83c8d4807412065ae124bc3577a2495a86477a2b25a45d"
+  },
+  "reproduce": {
+   "bytes": 234659,
+   "file": "pairs-reproduce.json",
+   "sha256": "3a42ad4fbb37c743e973153377fd60af2aa97318b573322e36dc1a6c1ff0adaf"
+  },
+  "v1": {
+   "bytes": 229456,
+   "file": "pairs-v1.json",
+   "sha256": "8067f320d5645d55d6217184ddcc651a767be2ebc59699f50ef28cef7fdf8997"
+  },
+  "v1E": {
+   "bytes": 230010,
+   "file": "pairs-v1E.json",
+   "sha256": "419980545b1de91041a8fd82b5c83474038f0c7add9fe4139c11369cd701a946"
+  },
+  "v1E24": {
+   "bytes": 230947,
+   "file": "pairs-v1E24.json",
+   "sha256": "7ba8025e2fad18c11fc57efbcf62c1b8287139330e7ca09046b3dd8823098c59"
+  },
+  "v1L": {
+   "bytes": 229972,
+   "file": "pairs-v1L.json",
+   "sha256": "04d4da889d87e56c197ad1656f02a65cab6468498436ac31256809c63970ba18"
+  },
+  "v2": {
+   "bytes": 229534,
+   "file": "pairs-v2.json",
+   "sha256": "412a6a42bc00385a4a1ae9c544d599a3adace2a89116b10b072896ab6da6f696"
+  }
+ },
+ "schema": "pokezero.phase3.ordering-instrument.v1"
+}
