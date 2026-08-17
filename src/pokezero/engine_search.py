@@ -3244,6 +3244,30 @@ class EngineMctsPolicy:
                         ),
                     )
                 )
+                # REFUSED, symmetrically with `_absorb_rollout_report` on the model
+                # path -- see the long note there. Two search paths reading one crate
+                # counter by two rules is the drift this campaign keeps paying for,
+                # and a dead end means the same thing on either: the engine could not
+                # step a position it did not call over, so the leaf values are
+                # untrustworthy whichever driver priced them.
+                #
+                # INSIDE the `try`, and that placement IS the behaviour: here it costs
+                # a COUNTED world failure and a fallback decision (fail-closed, and
+                # visible in `world_failures`), whereas the same check below the
+                # `except` would crash the whole decision. A first revision of this put
+                # it below and asserted in its own comment that it was inside -- the
+                # comment was the only thing making it look safe, which is the defect
+                # class this whole round is about.
+                if int(report.get("rollout_dead_ends") or 0):
+                    raise ValueError(
+                        "crate reported rollout_dead_ends="
+                        f"{int(report['rollout_dead_ends'])}: the engine offered no "
+                        "legal continuation from a position it did not call over, "
+                        "which the gen3 option invariant makes unreachable (see "
+                        "rollout.rs's "
+                        "get_all_options_never_yields_an_empty_option_vector). "
+                        "Refused rather than priced."
+                    )
             except Exception as error:  # noqa: BLE001 — count, keep the other worlds
                 detail = (
                     _bounded_reason_detail(str(error).splitlines()[0])

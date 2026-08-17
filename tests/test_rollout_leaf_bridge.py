@@ -1232,6 +1232,71 @@ class RuntimeWitnessTest(unittest.TestCase):
         self.assertAlmostEqual(payload["rollout_fallback_fraction"], 0.25)
         self.assertAlmostEqual(payload["rollout_terminal_fraction"], 0.75)
 
+    def test_the_crate_only_path_refuses_a_dead_end_FAIL_CLOSED(self) -> None:
+        """The second search path, and the placement that makes its refusal safe.
+
+        `_search_rollout_crate` is the sequential crate-only driver;
+        `_absorb_rollout_report` never runs on it, so a dead-end refusal on the
+        model path alone would leave two search paths reading one crate counter by
+        two rules. Both refuse now.
+
+        THE PLACEMENT IS THE BEHAVIOUR, which is why it is asserted structurally
+        rather than by the presence of the text. Inside the world loop's `try`, a
+        raise costs a COUNTED world failure and a fallback decision -- fail-closed
+        and visible in `world_failures`. Below the `except`, the identical code
+        crashes the whole decision. The first revision of this fix put it below the
+        handler and asserted *in its own comment* that it was inside; the comment
+        was the only thing that made it look safe. This test is what that comment
+        was pretending to be.
+
+        `_search_rollout_crate` needs a live battle and a native extension, so it
+        cannot be driven from a unit test -- the same reason the absorption block
+        was unreachable before it was extracted.
+
+        FAILING INPUTS: the check deleted; the check moved out of the `try` (below
+        the handler, i.e. crash instead of fallback); the check reading the config
+        instead of the report.
+        """
+        import ast  # noqa: PLC0415
+        import inspect  # noqa: PLC0415
+        import textwrap  # noqa: PLC0415
+
+        tree = ast.parse(
+            textwrap.dedent(inspect.getsource(EngineMctsPolicy._search_rollout_crate))
+        )
+        tries = [node for node in ast.walk(tree) if isinstance(node, ast.Try)]
+        self.assertTrue(tries, "the world loop must still guard the native call")
+
+        def raises_on_dead_ends(statements) -> bool:
+            for node in statements:
+                for inner in ast.walk(node):
+                    if not isinstance(inner, ast.Raise):
+                        continue
+                    test_source = ast.unparse(node)
+                    if (
+                        "rollout_dead_ends" in test_source
+                        and isinstance(node, ast.If)
+                        and "report" in ast.unparse(node.test)
+                    ):
+                        return True
+            return False
+
+        guarded = [handler for handler in tries if raises_on_dead_ends(handler.body)]
+        self.assertEqual(
+            len(guarded), 1,
+            "exactly one `try` body must raise on a non-zero rollout_dead_ends read "
+            "off the REPORT. Deleting the check, or moving it below the `except` "
+            "where it would crash the decision instead of costing a counted world "
+            "failure, both land here",
+        )
+        # ... and the handler it sits under is the one that counts the failure, so
+        # the fail-closed path is the one that receives it.
+        handler_source = "".join(
+            ast.unparse(handler) for handler in guarded[0].handlers
+        )
+        self.assertIn("crate_search_rollout", handler_source)
+        self.assertIn("world_failure_reasons", handler_source)
+
     def test_the_fallback_fraction_does_not_read_the_dead_end_counter(self) -> None:
         """A STRUCTURAL guard, and it says so, because this one has no behavioural
         signature and pretending otherwise would be the very defect under review.
