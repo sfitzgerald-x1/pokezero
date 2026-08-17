@@ -66,7 +66,7 @@ are pinned against the two census modules' own constants, read by AST rather tha
 update the register in the same change. That is deliberate: the document that goes stale is
 the one nothing forces an author through.
 
-MUTATION BATTERY: 54 applied, 54 caught, plus 1 NEGATIVE CONTROL verified green.
+MUTATION BATTERY: 62 applied, 62 caught, plus 1 NEGATIVE CONTROL verified green.
 Partitioned by WHAT IS MUTATED. Enumerated because
 an unrecorded battery is what `tests/test_wide_seed_negative_census.py` records costing it a
 surviving mutation, and because "the tests pass" is the same kind of claim this module
@@ -140,7 +140,7 @@ BLOCK A -- A1-A37, applied to the REGISTER's own bytes.
        `TheDocumentsClaimsAboutItselfAreReDerivedTests`, which exists because review blocked
        two successive revisions on claims the document made about ITSELF.
 
-BLOCK B -- B38-B54, SEVENTEEN mutations applied ONLY to the tree and never to the document.
+BLOCK B -- B38-B62, TWENTY-FIVE mutations applied ONLY to the tree and never to the document.
 Block A can be passed by a pin that reads the register against a hard-coded copy of itself.
 These are the ones that prove each derivation reads what it claims to: every one MAKES A REAL
 CHANGE TO THE TREE and the document, unedited, must go red. Six are the absences, and an
@@ -197,6 +197,39 @@ has recorded.
        blind to the one edit that turns the row into a tautology. Now caught, sensitivity
        and specificity both, and the new class carries the negative control that keeps its
        sandbox honest.
+  B55. ⚠ SURVIVED THE FIRST REVISION OF B54's FIX, and independent review found it.
+       `derive()`'s `t1.head_fingerprint` line re-pointed at `register_facts()`. The row
+       reaches CI through THREE seams -- `head_fingerprint`, `derive()`, the comparison
+       loop -- and pinning only the first moved the tautology one frame up: clean 48/OK on
+       an edited crate source. A guard that pins one seam of a three-seam path names the
+       seam it pins.
+  B56. ⚠ SURVIVED likewise: `test_every_value_re_derives`' loop taught to `continue` on
+       `t1.head_fingerprint`. Now caught by a SECOND, independent comparison that routes
+       through neither `derive()` nor the loop.
+  B57. ⚠ SURVIVED: `cargo = []` inside `compute_fingerprint`, so `Cargo.toml`/`Cargo.lock`
+       stop reaching the digest while still being listed as inputs.
+  B58. ⚠ SURVIVED: `build_metadata = []` likewise, dropping `build.rs` and the crate's
+       `pyproject.toml` -- the maturin FEATURE FLAGS, which decide what the extension can
+       even do. One line, and green.
+  B59. ⚠ SURVIVED: `digest.update(hashlib.sha256(BASE_SOURCE.read_bytes()).digest())`
+       deleted, so the pinned upstream sdist could change under the whole patch stack.
+  B60. ⚠ SURVIVED: `digest.update(PATCH_LIST.read_bytes())` deleted. `build_inputs()` does
+       not contain `PATCH_LIST`, so a probe set taken from it alone leaves the manifest
+       unprobed -- which is precisely why the probe set adds it explicitly.
+       B57-B60 are one defect with four faces: the first revision claimed "sensitivity to
+       each hashed input class" while probing TWO of the five. The unscoped negative this
+       register exists to prosecute, committed in the guard against it. The sensitivity is
+       now EXHAUSTIVE -- every file the hasher reads, derived from `build_inputs()` -- so a
+       class added later is covered the day it lands.
+  B61. `cargo_inputs()` and `build_metadata_inputs()` each returning `[]`. Distinct from
+       B57/B58 and the reason the by-name floor exists: this shrinks the PROBE SET and the
+       digest together, so an exhaustive loop derived from `build_inputs()` goes green over
+       a smaller world. A floor derived from the thing it floors is not a floor, so the
+       required input names are literals.
+  B62. The exhaustive loop's `finally: path.write_bytes(original)` removed. Probes then
+       compound and every one after the first measures an already-changed tree, which would
+       make the whole loop pass on a single real sensitivity. Caught by a post-loop identity
+       check against the baseline.
 
 
 BLOCK C -- NEGATIVE CONTROLS. Mutations that must stay GREEN because they do not change the
@@ -1230,13 +1263,77 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
     exists to redden. The CI step's `Ran N tests` and `^OK$` guards both pass too, because
     the count is unchanged and the count is what they read.
 
-    So the pin was one line from being permanently satisfied. These four close that:
-    SENSITIVITY to each hashed input class, SPECIFICITY against unhashed neighbours, and a
-    NEGATIVE CONTROL that the sandbox is a faithful copy -- without which a sandbox missing
-    an input class would report sensitivity it had not earned. All four drive
-    `head_fingerprint()` itself rather than `compute_fingerprint`, because the seam the
-    mutant cuts is between them.
+    So the pin was one line from being permanently satisfied.
+
+    ⚠ AND THE FIRST REVISION OF THIS CLASS DID NOT CLOSE IT, which independent review
+    established with eight surviving mutants and is recorded because the miss is the
+    instructive part. Two defects, both of them this class's own claim landing on itself:
+
+      1. It pinned `head_fingerprint` and nothing else, so the tautology simply moved one
+         frame up. `derive()`'s `t1.head_fingerprint` line re-pointed at
+         `register_facts()`, or the comparison loop taught to `continue` on that one key,
+         each left the module at a clean 46/OK **on an edited crate source**. A guard that
+         pins one seam of a three-seam path names the seam it pins.
+      2. It claimed "SENSITIVITY to each hashed input class" while probing TWO of the five
+         -- crate sources and patch bodies. Nothing touched the manifest bytes, the sdist
+         digest pin, `cargo_inputs()` or `build_metadata_inputs()`, so `cargo = []`,
+         `build_metadata = []`, and dropping either `BASE_SOURCE`'s or `PATCH_LIST`'s bytes
+         from the digest were each ONE LINE and green. That is the unscoped-negative defect
+         this whole register exists to prosecute, committed in the guard against it.
+
+    Both are closed below, and the sensitivity is now EXHAUSTIVE rather than enumerated:
+    every file the hasher reads is perturbed in turn, derived from `build_inputs()` so a
+    newly added input class is covered the day it lands and cannot be forgotten. Because
+    that probe set comes from the hasher's own accounting, it is floored INDEPENDENTLY by
+    name -- otherwise deleting a class from `build_inputs()` shrinks the probe set with it
+    and the loop goes quietly green over a smaller world.
+
+    All of it drives `head_fingerprint()` and `derive()` -- the functions the register is
+    actually read through -- rather than `compute_fingerprint`, because the seams the
+    mutants cut are between them.
     """
+
+    #: Floors the probe set BY NAME, independently of the hasher's own accounting. Without
+    #: this, `build_metadata_inputs() -> []` shrinks both the digest and the probe set
+    #: together and the exhaustive loop below certifies a smaller world in silence.
+    REQUIRED_INPUT_NAMES = frozenset(
+        {
+            "poke-engine-gen3-patches.txt",
+            "poke-engine-base-source.json",
+            "Cargo.toml",
+            "Cargo.lock",
+            "build.rs",
+            "pyproject.toml",
+        }
+    )
+
+    @staticmethod
+    def _hashed_inputs() -> list[Path]:
+        """Every file `compute_fingerprint` reads.
+
+        `PATCH_LIST` is added explicitly: `build_inputs()` omits it (it contributes the
+        ordered patch NAMES, and its bytes are hashed by `compute_fingerprint` directly),
+        so a probe set taken from `build_inputs()` alone leaves the manifest unprobed --
+        which is exactly one of the two classes review found unprobed.
+        """
+
+        seen: dict[Path, None] = {}
+        for path in [engine_build_fingerprint.PATCH_LIST] + engine_build_fingerprint.build_inputs():
+            seen.setdefault(path, None)
+        return list(seen)
+
+    @staticmethod
+    def _perturb(blob: bytes, path: Path) -> bytes:
+        """One byte-level change that keeps the file PARSEABLE.
+
+        `poke-engine-base-source.json` is `json.loads`-ed by `compute_fingerprint` for its
+        payload, so appending a byte would raise instead of moving the digest and the probe
+        would pass for the wrong reason. Re-indenting changes the bytes and keeps the JSON.
+        """
+
+        if path.suffix == ".json":
+            return json.dumps(json.loads(blob.decode()), indent=4).encode()
+        return blob + b"\n"
 
     def test_the_sandbox_reproduces_the_head_fingerprint_exactly(self) -> None:
         # The negative control, and it is load-bearing twice over: it proves the copy
@@ -1252,32 +1349,94 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
                 "`build_inputs` gained a class this copy does not mirror.",
             )
 
-    def test_a_hashed_crate_source_moves_the_head_fingerprint(self) -> None:
+    def test_the_hashed_input_set_still_covers_every_class_by_name(self) -> None:
+        # THE ANTI-VACUITY FLOOR for the exhaustive loop below, and it is not decoration:
+        # that loop derives its probe set from `build_inputs()`, so deleting a class from
+        # `build_inputs()` deletes the probes for it too and the loop stays green over a
+        # smaller world. Review measured exactly that -- `cargo_inputs()` and
+        # `build_metadata_inputs()` were unprobed and each was one line from being dropped.
+        # Named literals, because a floor derived from the thing it floors is not a floor.
+        with _fingerprint_sandbox():
+            names = {path.name for path in self._hashed_inputs()}
+            missing = sorted(self.REQUIRED_INPUT_NAMES - names)
+            self.assertEqual(
+                missing,
+                [],
+                f"the hashed input set no longer reaches {missing}. Either an input class "
+                "was dropped from `build_inputs`/`compute_fingerprint` -- in which case an "
+                "edit to those files is now invisible to the fingerprint -- or the file "
+                "moved and the hasher stopped finding it. Both are silent.",
+            )
+            suffixes = [path for path in self._hashed_inputs() if path.suffix == ".rs"]
+            patches = [path for path in self._hashed_inputs() if path.suffix == ".patch"]
+            self.assertGreater(len(suffixes), 5, "the crate-source class collapsed")
+            self.assertGreater(len(patches), 50, "the patch-stack class collapsed")
+
+    def test_every_hashed_input_moves_the_head_fingerprint(self) -> None:
+        # EXHAUSTIVE, not enumerated. The first revision probed a crate source and a patch
+        # body and CLAIMED "each hashed input class"; that was two of five, and the three it
+        # skipped were each one line from being dropped from the digest with nothing red.
+        # Deriving the probe set from `build_inputs()` means a class added later is covered
+        # the day it lands rather than the day someone remembers -- and the by-name floor
+        # above is what stops the set being shrunk instead of satisfied.
         with _fingerprint_sandbox() as root:
-            before = head_fingerprint()
-            source = sorted((root / "rust" / "pokezero-search" / "src").rglob("*.rs"))
-            self.assertTrue(source, "no crate sources in the sandbox to perturb")
-            with source[0].open("ab") as handle:
-                handle.write(b"\n// sensitivity probe\n")
-            self.assertNotEqual(
+            baseline = head_fingerprint()
+            inputs = self._hashed_inputs()
+            self.assertGreater(len(inputs), 70, "the hashed input set collapsed")
+            for path in inputs:
+                with self.subTest(input=str(path.relative_to(root))):
+                    original = path.read_bytes()
+                    try:
+                        path.write_bytes(self._perturb(original, path))
+                        self.assertNotEqual(
+                            head_fingerprint(),
+                            baseline,
+                            f"editing {path.relative_to(root)} did not move the head "
+                            "fingerprint, so the hasher reads it in name only. An engine "
+                            "built from a different version of this file is invisible to "
+                            "Appendix A's row and to the build stamp that shares its "
+                            "derivation.",
+                        )
+                    finally:
+                        path.write_bytes(original)
+            self.assertEqual(
                 head_fingerprint(),
-                before,
-                f"appending a byte to {source[0].name} did not move the head fingerprint. "
-                "`head_fingerprint` is not reading the crate sources; a pin that cannot "
-                "notice an edited crate is not a pin.",
+                baseline,
+                "the loop did not restore the sandbox, so a later probe measured a tree "
+                "the earlier ones had already changed.",
             )
 
-    def test_a_hashed_patch_file_moves_the_head_fingerprint(self) -> None:
+    def test_the_appendix_row_is_compared_without_going_through_derive(self) -> None:
+        # BLOCKING FINDING 1 of review, half one. The row reaches CI through THREE seams --
+        # `head_fingerprint`, `derive()`, and the comparison loop -- and the first revision
+        # pinned only the first, so the tautology moved up a frame: `derive()`'s line
+        # re-pointed at `register_facts()`, or the loop taught to `continue` on this one
+        # key, each left the module at a clean 46/OK on an edited crate source. This is a
+        # SECOND, INDEPENDENT comparison that routes through neither.
+        self.assertEqual(
+            register_facts()["t1.head_fingerprint"],
+            head_fingerprint()[:16],
+            "Appendix A's fingerprint row disagrees with the tree, and the generic "
+            "appendix comparison did not say so -- which means that comparison no longer "
+            "reaches this key. Re-derive the row; do not soften the loop.",
+        )
+
+    def test_derive_reports_the_tree_and_not_the_document(self) -> None:
+        # BLOCKING FINDING 1 of review, half two, and the direct one. Inside the sandbox
+        # with a crate source edited, the DERIVED value must part company with the STATED
+        # one. A `derive()` that reads Appendix A cannot part company with it, by
+        # construction, so this is the assertion that mutation could not survive.
+        stated = register_facts()["t1.head_fingerprint"]
         with _fingerprint_sandbox() as root:
-            before = head_fingerprint()
-            patch = root / "third_party" / engine_build_fingerprint.patch_files()[0].name
-            with patch.open("ab") as handle:
-                handle.write(b"\n")
+            source = sorted((root / "rust" / "pokezero-search" / "src").rglob("*.rs"))
+            self.assertTrue(source, "no crate sources in the sandbox to perturb")
+            source[0].write_bytes(source[0].read_bytes() + b"\n// derivation probe\n")
             self.assertNotEqual(
-                head_fingerprint(),
-                before,
-                f"appending a byte to the patch {patch.name} did not move the head "
-                "fingerprint. The patch stack is half of what this identity is FOR.",
+                derive()["t1.head_fingerprint"],
+                stated,
+                "`derive()` reported the DOCUMENT's fingerprint for a tree whose crate "
+                "sources had been edited. The appendix is then being compared against "
+                "itself and the row certifies nothing.",
             )
 
     def test_an_unhashed_neighbour_leaves_the_head_fingerprint_alone(self) -> None:
@@ -1285,6 +1444,12 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
         # "fingerprint" that hashes the whole worktree, which would redden this gate on
         # every Python-only PR -- and a gate that reddens on everything is triaged as noise
         # and then bypassed, which is how a guard stops firing without anyone editing it.
+        # ⚠ Each shape gets its OWN subTest and its own assertion. A first revision wrote
+        # all three files and then asserted ONCE, so the first over-capture short-circuited
+        # the other two and the report named a single failure for three different causes --
+        # the "perturb one field per fixture" rule, broken inside the fixture that enforces
+        # it. The writes are cumulative on purpose (an unhashed file must stay unhashed
+        # whatever else is beside it) and the assertion is per shape.
         with _fingerprint_sandbox() as root:
             before = head_fingerprint()
             crate = root / "rust" / "pokezero-search"
@@ -1294,8 +1459,24 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
                 ("../../third_party/unlisted.patch", b"--- not in the patch list\n"),
             ):
                 target = (crate / relative).resolve()
+                self.assertTrue(
+                    # `root.resolve()` on both sides: on macOS the temp dir is reached
+                    # through a symlink, so an unresolved comparison fails on a path that
+                    # never left the sandbox.
+                    target.is_relative_to(root.resolve()),
+                    f"the probe {relative} escaped the sandbox to {target}",
+                )
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(body)
+                with self.subTest(unhashed=relative):
+                    self.assertEqual(
+                        head_fingerprint(),
+                        before,
+                        f"{relative} is not a build input, and writing it moved the head "
+                        "fingerprint. Appendix A would then have to be re-derived by every "
+                        "PR in the repo, which is how this row gets softened rather than "
+                        "maintained.",
+                    )
             self.assertEqual(
                 head_fingerprint(),
                 before,
@@ -1707,7 +1888,9 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         words = {
             8: "EIGHT", 9: "NINE", 10: "TEN", 11: "ELEVEN", 12: "TWELVE",
             13: "THIRTEEN", 14: "FOURTEEN", 15: "FIFTEEN", 16: "SIXTEEN",
-            17: "SEVENTEEN", 18: "EIGHTEEN",
+            17: "SEVENTEEN", 18: "EIGHTEEN", 19: "NINETEEN", 20: "TWENTY",
+            21: "TWENTY-ONE", 22: "TWENTY-TWO", 23: "TWENTY-THREE",
+            24: "TWENTY-FOUR", 25: "TWENTY-FIVE", 26: "TWENTY-SIX",
         }
         self.assertIn(size, words, f"block B has {size} entries; extend `words`")
         word = words[size]
