@@ -2250,6 +2250,14 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Depth 2, so the merge commit's two PARENTS exist locally. The default is depth 1,
+          # which checks out the right tree but GRAFTS the parents away -- and the first CI run of
+          # this job proved it the loud way: `git rev-list --parents -n 1 HEAD` reported zero
+          # parents, `HEAD^2` did not resolve, and the assertion below failed the job on a
+          # perfectly good tree. A false red on the required check, caught on the first run rather
+          # than by reasoning, which is the reason the assertion was written as an assertion.
+          fetch-depth: 2
 
       - uses: actions/setup-python@v5
         with:
@@ -2269,21 +2277,34 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          n_parents=$(( $(git rev-list --parents -n 1 HEAD | wc -w) - 1 ))
-          echo "censusing $(git rev-parse HEAD) with ${n_parents} parent(s)"
-          if [ "${n_parents}" -ne 2 ]; then
-            echo "::error::checkout left a ${n_parents}-parent commit, not the two-parent"
-            echo "::error::refs/pull/N/merge -- the census would count the branch tip, not the"
-            echo "::error::merge result. Do not add a \`ref:\` to this job's checkout."
+          head_commit=$(git rev-parse HEAD)
+          echo "censusing ${head_commit}; PR head is ${HEAD_SHA}"
+
+          # THE LOAD-BEARING HALF, and deliberately the one that needs no history: if the checked
+          # out commit IS the PR head, this job is censusing the branch tip. That is what a `ref:`
+          # line would cause, and it is decidable from one `rev-parse` at any clone depth.
+          if [ "${head_commit}" = "${HEAD_SHA}" ]; then
+            echo "::error::HEAD is the PR head itself, so the census is counting the BRANCH TIP"
+            echo "::error::rather than the merge result. Remove the \`ref:\` from this job's"
+            echo "::error::checkout; whole-file counts must derive from the merge ref."
             exit 1
           fi
-          second_parent=$(git rev-parse 'HEAD^2')
-          if [ "${second_parent}" != "${HEAD_SHA}" ]; then
-            echo "::error::HEAD^2 is ${second_parent}, not the PR head ${HEAD_SHA}; this is not"
-            echo "::error::the merge ref for this pull request."
-            exit 1
+
+          # The positive confirmation, which DOES need the parents, so it is tolerant of not
+          # having them rather than failing closed on a bookkeeping detail. Failing closed here
+          # was wrong twice over: it reddens a required check over clone depth, and the condition
+          # it would be protecting against is already caught above.
+          if second_parent=$(git rev-parse --verify --quiet 'HEAD^2'); then
+            if [ "${second_parent}" != "${HEAD_SHA}" ]; then
+              echo "::error::HEAD^2 is ${second_parent}, not the PR head ${HEAD_SHA}; the tree"
+              echo "::error::censused is not the merge of this pull request."
+              exit 1
+            fi
+            echo "confirmed: HEAD is the merge of the base with PR head ${HEAD_SHA}"
+          else
+            echo "note: HEAD^2 is not present locally (shallow clone), so the merge was confirmed"
+            echo "note: only by HEAD != the PR head. That check is the one that matters."
           fi
-          echo "confirmed: HEAD is the merge of the base with PR head ${HEAD_SHA}"
 
       - name: The census reddens on known-bad input
         # Kill-confirm IN CI, before trusting the green run below -- the convention the floor gate
