@@ -100,21 +100,24 @@ SEATS = ("p1", "p2")
 # stays v1 so every pre-arm campaign on disk stays readable.
 SCHEMA_VERSION = "pokezero.foulplay-paired-shard.v1"
 
-#: The witness schema the READER understands, mirrored from the writer's own
-#: constant at import time rather than copied as a literal -- a hardcoded duplicate
-#: of a derived value is exactly what the stamp exists to prevent.
-def _current_witness_schema() -> int:
+def current_witness_schema() -> int:
+    """The witness schema the reader understands: the WRITER'S OWN constant.
+
+    A function rather than a module-level constant, and DELIBERATELY without a
+    fallback. An earlier revision of this cached it at import time behind
+    `except Exception: ROLLOUT_WITNESS_SCHEMA = 2` -- which is a hardcoded duplicate
+    of a derived value, i.e. exactly the defect the stamp exists to prevent, sitting
+    in the stamp's own reader. If `pokezero.engine_search` is not importable, the
+    right outcome is a loud failure, not a shard validated against a guess.
+
+    Lazy for the same reason every other `pokezero` import in this module is: it is
+    the heavy package, and this file's CLI surface must not pay for it at import.
+    """
     from pokezero.engine_search import (  # noqa: PLC0415 — lazy: heavy module
         ROLLOUT_LEAF_SHARD_SCHEMA,
     )
 
     return int(ROLLOUT_LEAF_SHARD_SCHEMA)
-
-
-try:
-    ROLLOUT_WITNESS_SCHEMA = _current_witness_schema()
-except Exception:  # noqa: BLE001 — the CLI must import without the package on path
-    ROLLOUT_WITNESS_SCHEMA = 2
 
 #: THE WITNESS, key by key. A literal tuple rather than "whatever the writer put
 #: there", for the reason `ROLLOUT_LEAF_WITNESS_FIELDS` is one in `engine_search`: a

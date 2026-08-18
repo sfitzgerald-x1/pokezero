@@ -1766,10 +1766,18 @@ class AgreedShardWitnessShapeTest(unittest.TestCase):
         self.assertEqual(payload["rollout_leaf_schema"], ROLLOUT_LEAF_SHARD_SCHEMA)
         self.assertEqual(ROLLOUT_LEAF_SHARD_SCHEMA, 2)
         self.assertEqual(
-            _DRIVER.ROLLOUT_WITNESS_SCHEMA, ROLLOUT_LEAF_SHARD_SCHEMA,
+            _DRIVER.current_witness_schema(), ROLLOUT_LEAF_SHARD_SCHEMA,
             "the reader's notion of the current schema must be the writer's own "
             "constant, not a copy of its value",
         )
+        # ... and it must be READ, not cached at import behind a literal fallback.
+        # FAILING INPUT: `except Exception: ROLLOUT_WITNESS_SCHEMA = 2` -- which an
+        # earlier revision of this had, a hardcoded duplicate of a derived value
+        # sitting in the stamp's own reader -- reads 2 here where the writer says 99.
+        with mock.patch(
+            "pokezero.engine_search.ROLLOUT_LEAF_SHARD_SCHEMA", 99
+        ):
+            self.assertEqual(_DRIVER.current_witness_schema(), 99)
         # THE STAMP MUST *DERIVE* FROM THE CONSTANT, not merely equal it today.
         # Asserting the two are equal is satisfied by a hardcoded `2` beside the
         # constant -- measured: that mutant SURVIVED until this block existed. A

@@ -129,11 +129,13 @@ def load_shards(paths: list[str]) -> list[dict]:
     """
     from foulplay_paired_eval import (  # noqa: PLC0415 — sibling script, lazy like `search_config_id`
         ROLLOUT_WITNESS_KEYS,
-        ROLLOUT_WITNESS_SCHEMA,
         ROLLOUT_WITNESS_STAMP,
         ROLLOUT_WITNESS_SUPERSEDED_KEYS,
         SCHEMA_VERSION as SHARD_SCHEMA_VERSION,
+        current_witness_schema,
     )
+
+    expected_schema = current_witness_schema()
 
     shards = []
     for path in paths:
@@ -181,11 +183,11 @@ def load_shards(paths: list[str]) -> list[dict]:
                     "the rename' and 'written by a writer that dropped a field' are the "
                     "same artifact. Both pre-adoption writers produced this shape."
                 )
-            if stamp != ROLLOUT_WITNESS_SCHEMA:
+            if stamp != expected_schema:
                 raise SystemExit(
                     f"{path}: seat {seat} is stamped "
                     f"{ROLLOUT_WITNESS_STAMP}={stamp!r}; this reader implements "
-                    f"{ROLLOUT_WITNESS_SCHEMA!r}. Refused rather than read on the "
+                    f"{expected_schema!r}. Refused rather than read on the "
                     "assumption that the fields it knows mean what they used to."
                 )
             missing = [key for key in ROLLOUT_WITNESS_KEYS if key not in stats]
