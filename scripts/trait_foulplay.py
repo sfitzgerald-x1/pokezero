@@ -62,7 +62,16 @@ def _active_species(req):
 
 
 def _movesets(request_history):
-    """First request per seat fully reveals that seat's own team (species + move ids)."""
+    """First request per seat fully reveals that seat's own team (species + move ids + ability).
+
+    The ability MUST be captured here. trait_extract resolves ability-gated traits through
+    GameParse.ability_of(), which looks the species up in these movesets and returns "" when the
+    field is missing -- so omitting it does not fail, it silently reports every carrier denominator
+    as zero. That blanked seven metric families in every foul-play set (Natural Cure, Immunity,
+    Insomnia/Vital Spirit, Limber, Liquid Ooze on drain and on Leech Seed, and the absorb reads)
+    while the type- and protocol-tag-derived ones kept working, which is why it looked like sparse
+    data rather than a capture bug. Same field the self-play path reads, so the two agree.
+    """
     out = {}
     for seat, line in request_history:
         if seat in out:
@@ -71,7 +80,8 @@ def _movesets(request_history):
         if req is None:
             continue
         team = [{"species": (m.get("details") or "").split(",")[0].strip(),
-                 "moves": list(m.get("moves") or [])}
+                 "moves": list(m.get("moves") or []),
+                 "ability": m.get("baseAbility") or m.get("ability") or ""}
                 for m in ((req.get("side") or {}).get("pokemon") or [])]
         if team:
             out[seat] = team
