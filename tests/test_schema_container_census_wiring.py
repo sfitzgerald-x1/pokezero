@@ -40,7 +40,7 @@ has a known answer that does not move when a container is added to src/. The cla
 substituted per fixture for the same reason -- these tests are about the mechanism, not about the
 current contents of the spec file.
 
-⚠ THE SAME BOUNDARY HAS MOVED FOUR TIMES IN THIS PR, ONE FRAME PER ROUND, AND EVERY FIX BUT THE
+⚠ THE SAME BOUNDARY HAS MOVED FIVE TIMES IN THIS PR, ONE FRAME PER ROUND, AND EVERY FIX BUT THE
 LAST PINNED THE FRAME RATHER THAN THE PROPERTY. The record, because the pattern is the finding:
 
   * the call site -- `assertIn("fetch-depth: 2", block)` was satisfied by the step's own COMMENT;
@@ -52,13 +52,30 @@ LAST PINNED THE FRAME RATHER THAN THE PROPERTY. The record, because the pattern 
   * ADJACENCY -- with all three in place, ONE diagnostic `echo` inserted between the census
     invocation and a standalone `rc=$?` gave `STEP EXIT=0` on a census that exited 15, with 22/22
     green. Every pin was textual; the property is runtime.
+  * A REGEX OVER EXIT STATEMENTS -- `_first_exit`, written in the same commit as the fix above to
+    hold the three shell regions that fix did not reach. It collects `re.fullmatch(r"exit \\d+",
+    ...)`, so `exit 0 # r4`, `true && exit 0`, `exit 0;`, `trap 'exit 0' EXIT`, a call to a function
+    that exits, and wrapping the real `exit 1` in `if false; then ... fi` are all invisible to it.
+    Each was 26/26 green, and the first made `gate-status` -- the ONLY required context -- exit 0
+    over a red census. `gate-status` was green on that commit itself, produced by the one arm
+    nothing executed.
 
-So the fourth fix is not a fifth textual pin. `TheStepsBehaveWhenExecutedTests` extracts each
-step's own `run:` body and RUNS it against a stub whose status and output it chooses, and the
-class's docstring answers the question the earlier three never asked about themselves: what is the
-next frame out, and what would have to change for the pin to hold while the property is false.
+So the fix is not a sixth textual pin, and it is not a better regex either: it is the fix round 4
+already got right, applied to the OTHER THREE `run:` bodies. `TheStepsBehaveWhenExecutedTests`
+extracts each step's own `run:` body and RUNS it -- against a stub whose status and output it
+chooses for the two census steps, a stub that answers per scratch case for the kill-confirm, a
+throwaway git repo with a real merge commit for the merge-parent step, and seven bound
+`needs.*.result` names for `gate-status`. Its docstring answers the question the earlier four pins
+never asked about themselves: what is the next frame out, and what would have to change for the pin
+to hold while the property is false. `_first_exit` is kept as belt, and documented as belt.
 
-The same round found the workflow-side guards forgeable in two ways that KEEP the real invocation
+Two further seams closed in the same round, both measured green beforehand: the module-name
+assertion and the capture-line assertion were UNLINKED, so substituting `tests.test_linear_policy`
+(26 tests, stdlib only) while leaving the old string in a no-op line ran a module with no opinion
+about this job; and the top-level `defaults:` prohibition was a raw substring that `defaults :`
+walked past.
+
+Round 4 also found the workflow-side guards forgeable in two ways that KEEP the real invocation
 (a swallowed status plus an appended summary, and an env-gated wrapper), and the self-check
 job-scoped where it had to be step-scoped. Both are recorded at their assertions.
 """
@@ -69,6 +86,7 @@ import ast
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -84,6 +102,15 @@ JOB = "schema-container-census"
 VERDICT_STEP = "Schema-container census"
 KILL_CONFIRM_STEP = "The census reddens on known-bad input"
 WIRING_STEP = "The census wiring pins"
+MERGE_STEP = "The tree censused is the MERGE result, not the branch tip"
+GATE_JOB = "gate-status"
+GATE_STEP = "Report the fidelity gate result"
+
+#: This module's own dotted name, DERIVED rather than spelled. The step that runs it must name
+#: THIS module, and a literal here would have to be kept in step with the filename by hand --
+#: which is the kind of hand-maintained agreement `test_the_workflow_test_count_guard_matches_
+#: this_module` exists to remove for the count.
+MODULE = f"tests.{pathlib.Path(__file__).stem}"
 
 #: The census invocation AND the capture of its status, on one line. Pinned as one string because
 #: splitting them is the defect: see `TheStepsBehaveWhenExecutedTests`.
@@ -151,6 +178,35 @@ def _has_line(block: str, text: str) -> bool:
     return any(line.strip() == text for line in block.splitlines())
 
 
+def _keys(block: str) -> list[str]:
+    """Every YAML key in `block`, NORMALIZED, so a spelling variant cannot hide one.
+
+    `assertNotIn("\\ndefaults:", text)` was the previous form of the top-level `defaults:`
+    prohibition and `defaults :` -- a space before the colon, which YAML accepts -- walked
+    straight past it. The same class of miss as `if : false`, which
+    `test_the_job_is_unconditional` already normalizes against; recorded there and not applied
+    here until review pointed at the second copy. Raw-substring key prohibitions are a defect
+    shape in this file, so they are all routed through this one helper.
+    """
+
+    out: list[str] = []
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or ":" not in stripped:
+            continue
+        if stripped.startswith("- "):
+            stripped = stripped[2:]
+        out.append(stripped.split(":")[0].strip().strip("\"'"))
+    return out
+
+
+def _top_level_keys() -> list[str]:
+    """Normalized keys at column 0 of the workflow -- `on`, `jobs`, and what must not join them."""
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+    return _keys("\n".join(line for line in text.splitlines() if line[:1] not in ("", " ", "#")))
+
+
 def _step_block(job: str, step_name: str, *, keep_comments: bool = False) -> str:
     """The YAML text of ONE named step of a job, comments removed unless `keep_comments`.
 
@@ -216,6 +272,33 @@ def _step_script(job: str, step_name: str) -> str:
     raise AssertionError(f"step {step_name!r} of job {job!r} has no literal `run: |` block")
 
 
+def _step_env_names(job: str, step_name: str) -> set[str]:
+    """The names a step's YAML `env:` block binds.
+
+    `_step_script` extracts the `run:` body and NOTHING ELSE, so a step whose script reads
+    `${CENSUS}` under `set -u` is only executable here if this test supplies that name itself.
+    That makes the fixture's env a second hand-maintained agreement, and the executed pins would
+    go quietly green-on-a-green-control if a name were renamed on both sides of the fixture while
+    the YAML kept the old one. Derived and compared instead: see
+    `test_the_executed_gate_status_fixture_binds_the_names_the_step_declares`.
+    """
+
+    lines = _step_block(job, step_name).splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != "env:":
+            continue
+        indent = len(line) - len(line.lstrip())
+        names = set()
+        for following in lines[index + 1 :]:
+            if not following.strip():
+                continue
+            if (len(following) - len(following.lstrip())) <= indent:
+                break
+            names.add(following.strip().split(":")[0].strip().strip("\"'"))
+        return names
+    return set()
+
+
 def _guard_body(block: str, needle: str) -> str:
     """The shell `if ...; then ... fi` region containing `needle`.
 
@@ -245,6 +328,27 @@ def _first_exit(block: str, needle: str) -> str:
     NOT CAUGHT. That is the same shape as every other displacement in this file: the pin
     named a token the mutation left in place. Asserting the first exit is the one that
     decides pins the arm's verdict rather than its vocabulary.
+
+    ⚠ AND THIS HELPER IS BELT, NOT THE PIN -- which is the round-5 finding and the reason it is
+    documented here rather than hardened. It was written as a SIXTH textual pin, to hold the three
+    regions round 4's `_execute` did not reach, and `re.fullmatch(r"exit \\d+", ...)` means every
+    exit that is not a bare `exit N` line is invisible to it. All six of these were measured
+    26/26 GREEN, and `gate-status` -- the sole required context -- exited 0 over a red census on
+    the first of them:
+
+      * `exit 0 # r4` (a trailing comment)      * `true && exit 0`
+      * `exit 0;` (a trailing semicolon)        * `trap 'exit 0' EXIT`
+      * a helper function whose body exits, called from the arm
+      * `if false; then exit 1; fi` -- a pure restructuring with NO `exit 0` anywhere, which no
+        regex over exit statements can see, because the mutation adds none
+
+    Hardening the pattern would have been the SEVENTH pin in the sequence call site -> whole line
+    -> step scope -> adjacency -> regex, and each of the first four was displaced by the next
+    mutation. So the remedy is the same one round 4 got right and applied to only two of the five
+    regions: EXECUTE the arm. `TheStepsBehaveWhenExecutedTests` now runs all five, and every
+    bypass above is red there whatever it looks like. This helper stays because a first-exit
+    assertion names the arm a reader is looking for, and reads it in the YAML where the mistake
+    would be made -- but nothing here is load-bearing any more.
     """
 
     exits = [
@@ -274,14 +378,7 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
         required context still passed.
         """
 
-        keys: list[str] = []
-        for line in _job_block(JOB).splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#") or ":" not in stripped:
-                continue
-            if stripped.startswith("- "):
-                stripped = stripped[2:]
-            keys.append(stripped.split(":")[0].strip().strip("\"'"))
+        keys = _keys(_job_block(JOB))
 
         self.assertNotIn("if", keys, "the job or one of its steps became skippable")
         self.assertNotIn(
@@ -498,7 +595,10 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
 
         At 8d32dcb2 this module executed NOWHERE. `grep -rn test_schema_container_census_wiring
         .github/ scripts/` returned zero hits, and this workflow names test modules one by one --
-        35 explicit `python -m unittest tests.<module>` invocations, no `unittest discover`, no
+        35 lines carry `-m unittest`, ONE of them a comment, so 34 EXECUTABLE invocation sites
+        (test_unreachable_readjudication's `python3?\\s+-m\\s*unittest` scan over the workflow,
+        re-derived; the same 35/1/34 split the workflow's own note at the wiring step records, and
+        an earlier form of this sentence read the 35 as invocations), no `unittest discover`, no
         pytest anywhere in .github/ -- so a new module is invisible to CI by default. Every
         assertion here was therefore local-only: a job-level `if: false`, a `continue-on-error`,
         removal from `gate-status`'s `needs:`, an `exit 1` flipped to `exit 0` or an emptied pin
@@ -518,25 +618,36 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
         The step captures the runner's output into a shell variable and its status on the same line,
         and the status is the verdict; `TheStepsBehaveWhenExecutedTests` executes all of that rather
         than matching it.
+
+        ⚠ AND THE MODULE NAME AND THE CAPTURE LINE WERE TWO UNLINKED ASSERTIONS, which is a
+        SUBSTITUTION seam review measured. The name check was `assertIn(<this module>, step)` --
+        satisfied by ANY line of the step -- while the capture-line check tested only
+        `startswith("log=$(python -m unittest tests.")` and `endswith(") || rc=$?")`, so the dotted
+        name in the middle of the executed line was pinned by nothing. Swapping it for
+        `tests.test_linear_policy` -- 26 tests, stdlib-only, so the count guard and the clean `OK`
+        tail both still match -- ran a module with no opinion about this job at all and was MISSED
+        here, caught only by `test_unreachable_readjudication` in the PATH-FILTERED `mass-gate`
+        job, which does not run on a PR that touches neither. The two are now ONE assertion over
+        the capture line itself, and the name is DERIVED from `__file__` rather than spelled.
         """
 
         step = _step_block(JOB, WIRING_STEP)
-        self.assertIn(
-            "python -m unittest tests.test_schema_container_census_wiring",
-            step,
-            "the job no longer runs this module; every pin in this file is inert again",
-        )
-        # The status must be captured BY the invocation, for the same reason as the verdict step's:
-        # a standalone capture is orphaned by anything inserted above it.
-        self.assertTrue(
-            any(
-                line.strip().startswith("log=$(python -m unittest tests.")
-                and line.strip().endswith(") || rc=$?")
-                for line in step.splitlines()
-            ),
-            "the runner's output is no longer captured into a variable with its status captured on "
-            "the same line; a log file can be appended to by any later command, which is how a "
-            "`|| true` + `printf ... >>` forge exited 0 over a red suite",
+        # THE CAPTURE LINE, read once and asserted about as a whole: the module it names, the
+        # variable it captures the output into, and the status capture are one property, and
+        # splitting them into separate `assertIn`s is what let the name be substituted.
+        captures = [
+            line.strip()
+            for line in step.splitlines()
+            if re.match(r"^log=\$\(python3? -m ?unittest ", line.strip())
+        ]
+        self.assertEqual(
+            [f"log=$(python -m unittest {MODULE} -v 2>&1) || rc=$?"],
+            captures,
+            "the step's runner line is no longer EXACTLY one invocation of THIS module whose output "
+            "is captured into `log` and whose status is captured on the same line. A second such "
+            "line, a different module (`tests.test_linear_policy` also has 26 stdlib-only tests, so "
+            "the count guard and the OK tail keep matching), a log FILE instead of a variable, or a "
+            "detached `rc=$?` each defeat this step while leaving its shape intact",
         )
         self.assertNotIn(
             "tee ",
@@ -611,62 +722,229 @@ class TheStepsBehaveWhenExecutedTests(unittest.TestCase):
     a single diagnostic `echo` between the census invocation and a standalone `rc=$?`, which gave
     `STEP EXIT=0` on a census that exited 15 with all 22 pins green.
 
-    Every one of those pins is TEXTUAL, and the property is RUNTIME. So these tests extract the
-    step's own `run:` body and EXECUTE it, with `python` replaced by a stub that chooses the exit
-    status (and, for the wiring step, the output) independently. A rearrangement of the text that
-    breaks the relationship now fails here whatever it looks like, because nothing here reads the
-    text.
+    Every one of those pins is TEXTUAL, and the property is RUNTIME. So these tests extract each
+    step's own `run:` body and EXECUTE it, against stubs whose status and output they choose. A
+    rearrangement of the text that breaks the relationship now fails here whatever it looks like,
+    because nothing here reads the text.
+
+    ⚠ AND ROUND 4 APPLIED THAT FIX TO TWO OF THE FIVE SHELL REGIONS THIS MODULE PINS, which is the
+    round-5 finding. The verdict step and the wiring step were executed; the merge-parent step, the
+    kill-confirm step and `gate-status`'s own body were left to `_first_exit`, a SIXTH textual pin
+    written in the same commit -- and its `re.fullmatch(r"exit \\d+", ...)` cannot see an exit that
+    is not a bare `exit N` line. Six bypasses were measured 26/26 GREEN against it, and the first
+    of them made `gate-status`, the ONLY required context, exit 0 over a red census:
+
+        exit 0 # r4        true && exit 0        exit 0;        trap 'exit 0' EXIT
+        a helper function whose body exits        if false; then exit 1; fi
+
+    The reviewer's own summary is the diagnosis, and it partitions this class exactly: *the arms
+    that are EXECUTED resist; the arms that are only `_first_exit`-pinned fail open.* All five
+    regions are executed here now. The remedy was never a better regex -- that would have been the
+    seventh pin in a sequence whose first four were each displaced -- it was the one round 4 already
+    got right, applied to the rest of its own subject.
 
     WHAT WOULD HAVE TO CHANGE for these pins to be satisfied while the property is false -- the
     question the textual pins never asked about themselves:
 
       1. **The script executed here stops being the script the runner executes.** That is the one
-         real remaining frame, and it has exactly three cheap openings: a `shell:` key on this job
-         or one of its steps, a workflow-level `defaults: run: shell:`, and a folded `run: >` whose
-         line joining changes the script's meaning. All three are asserted against --
+         real remaining frame, and it has exactly three cheap openings: a `shell:` key on either
+         job or one of their steps, a workflow-level `defaults: run: shell:`, and a folded `run: >`
+         whose line joining changes the script's meaning. All three are asserted against --
          `test_these_pins_execute_the_shell_the_runner_does` for the first two, `_step_script`'s
          literal-`run: |` requirement for the third.
-      2. **The stub is not the census.** These tests pin "the step's status tracks its subject's
+      2. **The step reads a name its YAML `env:` block does not bind.** New with `gate-status`,
+         whose whole input is seven `needs.<job>.result` bindings that `_step_script` does not
+         extract: a fixture that supplies its own `CENSUS` would keep passing if the YAML renamed
+         the binding, because `set -u` would only fire on the runner.
+         `test_the_executed_fixtures_bind_the_names_the_steps_declare` derives the names from the
+         YAML and compares them to the fixture's.
+      3. **The stub is not the census.** These tests pin "the step's status tracks its subject's
          status", not "the subject's status is a correct verdict". The second is a different
          property with different pins: `TheCensusStillAbortsOnWhatItClaimsToCatchTests` below, and
-         the kill-confirm step in CI.
-      3. So the residual is a census (or a wiring suite) that returns 0 from an abort. Structure,
+         the kill-confirm step's real run in CI.
+      4. So the residual is a census (or a wiring suite) that returns 0 from an abort. Structure,
          consumption and execution are all green then, and only behaviour can see it -- which is why
-         (2) is a separate battery rather than an extension of this one.
+         (3) is a separate battery rather than an extension of this one.
     """
 
+    #: Every gate `gate-status` reports on, at its green value. Fixtures below copy this and spoil
+    #: ONE entry, so a red verdict is attributable to that entry and not to the fixture's shape.
+    #: `set -u` is on in that step, so an incomplete dict here would redden every case for the
+    #: wrong reason -- which is what the all-green control catches.
+    GREEN_GATE_ENV = {
+        "TOUCHED": "true",
+        "RESULT": "success",
+        "FILTER": "success",
+        "REGISTRY": "success",
+        "HARNESS": "success",
+        "FLOOR": "success",
+        "CENSUS": "success",
+    }
+
+    #: The kill-confirm step's five scratch case directories, each with the exit code and the abort
+    #: text that case's `expect()` demands. Keyed on the directory name because that is what the
+    #: step passes the census, and therefore the only thing a stub can dispatch on.
+    KILL_CONFIRM_VERDICTS = {
+        "unclassified": (15, "needs its own row"),
+        "classflip": (15, "per-file classification counts do not match"),
+        "conflict": (1, "CONFLICTING rows for"),
+        "collapse": (15, "container node(s) collapsed into"),
+        "clean": (0, "every schema-name container is classified"),
+    }
+
     def _execute(
-        self, step_name: str, *, status: int, stub_output: str = ""
+        self,
+        step_name: str,
+        *,
+        status: int | None = None,
+        stub_output: str = "",
+        job: str = JOB,
+        env: dict[str, str] | None = None,
+        cwd: pathlib.Path | None = None,
+        stub: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Run one step's `run:` body under the runner's own shell, with `python` stubbed.
 
-        The stub writes `stub_output` to STDERR because that is where `unittest` writes, and exits
-        `status`. It never runs the real census or the real suite: the wiring step invokes THIS
-        module, so a passthrough stub would recurse.
+        The default stub writes `stub_output` to STDERR because that is where `unittest` writes,
+        and exits `status`. It never runs the real census or the real suite: the wiring step
+        invokes THIS module, so a passthrough stub would recurse.
+
+        `stub` replaces that body outright, for the kill-confirm step, whose five cases each need
+        their own verdict from one `python` on the PATH. `env` and `cwd` exist for the two regions
+        whose input is not a stub at all: `gate-status` reads seven `needs.*.result` names under
+        `set -u`, and the merge-parent step reads a git history rather than a command's status.
         """
 
-        script = _step_script(JOB, step_name)
+        script = _step_script(job, step_name)
         root = pathlib.Path(tempfile.mkdtemp(prefix="census-step-"))
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         (root / "bin").mkdir()
-        stub = root / "bin" / "python"
-        stub.write_text(
-            '#!/bin/sh\nprintf "%s" "${STUB_OUTPUT}" >&2\n' f"exit {status}\n", encoding="utf-8"
-        )
-        stub.chmod(0o755)
+        (root / "runner-temp").mkdir()
+        if stub is None:
+            stub = '#!/bin/sh\nprintf "%s" "${STUB_OUTPUT}" >&2\n' f"exit {status}\n"
+        stub_path = root / "bin" / "python"
+        stub_path.write_text(stub, encoding="utf-8")
+        stub_path.chmod(0o755)
         (root / "step.sh").write_text(script, encoding="utf-8")
         environ = dict(os.environ)
         environ["PATH"] = f"{root / 'bin'}{os.pathsep}{environ['PATH']}"
         environ["STUB_OUTPUT"] = stub_output
+        # The runner sets this and the kill-confirm step builds its scratch trees under it. A
+        # fixture that let it default to the real runner's value would write outside the tmpdir
+        # this test cleans up.
+        environ["RUNNER_TEMP"] = str(root / "runner-temp")
+        environ.update(env or {})
         # `bash -e` with no `-o pipefail`, which is what GitHub hands a `run:` body that names no
-        # `shell:`. Steps that want pipefail say so themselves, and both steps here do.
+        # `shell:`. Steps that want pipefail say so themselves, and every step here does.
         return subprocess.run(
             ["bash", "--noprofile", "--norc", "-e", str(root / "step.sh")],
-            cwd=str(REPO),
+            cwd=str(cwd or REPO),
             capture_output=True,
             text=True,
             timeout=_TIMEOUT,
             env=environ,
+        )
+
+    def _merge_repo(self) -> tuple[pathlib.Path, str, str, str]:
+        """A throwaway git repo holding the shape `actions/checkout@v4` leaves on `pull_request`.
+
+        Returns the root and the three commits the merge-parent step can be pointed at: the base
+        tip, the PR head, and the merge of the two, which is what `refs/pull/N/merge` resolves to
+        and the only tree whose whole-file counts are the ones that would land.
+
+        Identity comes from the environment rather than `git config`, and both config files are
+        pointed at /dev/null, so a developer's global `commit.gpgsign` or hook path cannot make
+        this fixture fail for a reason that has nothing to do with its subject.
+        """
+
+        root = pathlib.Path(tempfile.mkdtemp(prefix="census-merge-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        environ = dict(os.environ)
+        environ.update(
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_CONFIG_SYSTEM=os.devnull,
+            GIT_AUTHOR_NAME="census fixture",
+            GIT_AUTHOR_EMAIL="census@example.invalid",
+            GIT_COMMITTER_NAME="census fixture",
+            GIT_COMMITTER_EMAIL="census@example.invalid",
+        )
+
+        def git(*args: str) -> str:
+            done = subprocess.run(
+                ["git", *args], cwd=str(root), capture_output=True, text=True,
+                timeout=_TIMEOUT, env=environ,
+            )
+            self.assertEqual(done.returncode, 0, f"git {args}: {done.stdout}{done.stderr}")
+            return done.stdout.strip()
+
+        git("init", "--quiet")
+        # Not `init --initial-branch`, which predates neither git 2.28 nor every runner image.
+        git("symbolic-ref", "HEAD", "refs/heads/base")
+        git("commit", "--quiet", "--allow-empty", "-m", "base")
+        base = git("rev-parse", "HEAD")
+        git("checkout", "--quiet", "-b", "feature")
+        git("commit", "--quiet", "--allow-empty", "-m", "the pull request")
+        head = git("rev-parse", "HEAD")
+        git("checkout", "--quiet", "base")
+        git("merge", "--quiet", "--no-ff", "-m", "merge", "feature")
+        merge = git("rev-parse", "HEAD")
+        self.assertEqual(head, git("rev-parse", "HEAD^2"), "fixture: HEAD^2 is not the PR head")
+        return root, base, head, merge
+
+    def _detach(self, root: pathlib.Path, commit: str) -> None:
+        """Point the fixture repo's HEAD at one commit, as a `ref:` on the checkout would."""
+
+        done = subprocess.run(
+            ["git", "checkout", "--quiet", "--detach", commit],
+            cwd=str(root), capture_output=True, text=True, timeout=_TIMEOUT,
+        )
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def _kill_confirm_tree(self) -> pathlib.Path:
+        """The smallest tree the kill-confirm step's own commands run against.
+
+        Minimal rather than the repo, for the reason the behaviour battery is: `cp -R src scripts`
+        runs once per case, and a fixture whose answer moves when a file is added to src/ is not a
+        fixture. The REAL spec file is copied in, though, because two of the five cases perturb it
+        with commands that must find something -- case 2's `perl` needs the `REGISTER
+        src/pokezero/rollout_cli.py` row and case 3's `grep -m1 '^REGISTER'` fails the step outright
+        under `set -o pipefail` if nothing matches. Only the interpreter is stubbed.
+        """
+
+        root = pathlib.Path(tempfile.mkdtemp(prefix="census-killconfirm-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "src" / "pokezero").mkdir(parents=True)
+        (root / "src" / "pokezero" / "__init__.py").write_text("", encoding="utf-8")
+        (root / "scripts").mkdir()
+        shutil.copy(CENSUS, root / "scripts" / CENSUS.name)
+        (root / "tests" / "data").mkdir(parents=True)
+        shutil.copy(SPEC, root / "tests" / "data" / SPEC.name)
+        return root
+
+    def _kill_confirm_stub(self, verdicts: dict[str, tuple[int, str]]) -> str:
+        """A `python` that answers per SCRATCH CASE, so one case can be spoiled and four behave.
+
+        Anchored on `census-kill-confirm/<case>/` rather than on `<case>` alone: the enclosing
+        tmpdir name is random, and a glob loose enough to match it somewhere else would make a
+        spoiled case pass by accident.
+        """
+
+        arms = "\n".join(
+            f"  */census-kill-confirm/{case}/*)\n"
+            f"    printf '%s\\n' {shlex.quote(text)}\n"
+            f"    exit {rc} ;;"
+            for case, (rc, text) in verdicts.items()
+        )
+        return (
+            "#!/bin/sh\n"
+            "# Stands in for the COPIED census. Its exit code and its abort text are chosen by\n"
+            "# which scratch case invoked it; the real one is never run here.\n"
+            'case "$1" in\n'
+            f"{arms}\n"
+            "  *)\n"
+            "    printf '%s\\n' \"stub reached for an unrecognized case: $1\"\n"
+            "    exit 99 ;;\n"
+            "esac\n"
         )
 
     def test_the_verdict_steps_status_is_the_censuss_status(self) -> None:
@@ -753,33 +1031,338 @@ class TheStepsBehaveWhenExecutedTests(unittest.TestCase):
                     f"the wiring step accepted '{case}' as a pass\n" + result.stdout + result.stderr,
                 )
 
+    def test_the_merge_parent_step_reddens_on_every_wrong_checkout(self) -> None:
+        """REGION 3 OF 5, and the first of the three round 4 left to `_first_exit`.
+
+        Two of this step's three arms were pinned by a first-exit assertion and the third
+        (`HEAD^2 != HEAD_SHA`) by NOTHING AT ALL. Measured against the textual pin: `exit 0 # r4`,
+        `true && exit 0`, `exit 0;`, `trap 'exit 0' EXIT`, a helper function that exits, and
+        `if false; then exit 1; fi` were each 26/26 green in either arm. Executed, each of the
+        four checkouts below decides the step's status, so a mutation that stops an arm from
+        failing is red here regardless of how it spells not exiting.
+
+        The step reads a git HISTORY rather than a command's status, so the fixture is a repo and
+        not a stub: three commits in the shape `actions/checkout@v4` leaves on `pull_request`, and
+        HEAD pointed at each of the wrong ones in turn.
+
+        ⚠ AND THE EXIT CODE ALONE DOES NOT IDENTIFY WHICH ARM FIRED, which the first revision of
+        this test got wrong and its own battery caught: THE THREE ARMS MASK EACH OTHER. Neuter arm
+        1 and the branch-tip checkout falls through to arm 2, because a branch tip has no `HEAD^2`
+        either -- exit 1, test green, arm dead. Neuter arm 2 and the failed command substitution
+        leaves `second_parent` set to the empty string, so arm 3 fires on `"" != HEAD_SHA` -- exit
+        1, test green, arm dead. Both were live MISSES with `if false; then exit 1; fi`.
+
+        ⚠ AND NAMING THE ARM'S OWN `::error::` LINE WAS NOT ENOUGH EITHER, which is the same
+        mistake one frame further in: the echoes come BEFORE the exit, so a neutered arm still
+        prints its message and the needle was present on both misses. What distinguishes "this arm
+        decided" from "this arm ran and something later decided" is that NO OTHER ARM SPOKE. So
+        each case asserts the set of arm messages in the log is EXACTLY its own -- which also makes
+        the case that reddens via a sibling report the sibling by name.
+        """
+
+        script = _step_script(JOB, MERGE_STEP)
+        # Each arm's own line, and it must identify that arm ALONE: these are compared as a set
+        # below, so a needle shared by two arms would make the comparison unable to tell them
+        # apart -- the `_has_line` lesson, in the observations rather than in the assertions.
+        arms = {
+            "the BRANCH TIP arm": "so the census is counting the BRANCH TIP",
+            "the missing-HEAD^2 arm": "HEAD has no second parent",
+            "the wrong-HEAD^2 arm": "censused is not the merge of this pull request",
+        }
+        for arm, needle in arms.items():
+            self.assertEqual(
+                1, script.count(needle),
+                f"anti-vacuity: {needle!r} does not appear exactly once in this step, so it cannot "
+                f"identify {arm}",
+            )
+        confirmed = "confirmed: HEAD is the merge of the base with PR head"
+        self.assertIn(confirmed, script, "anti-vacuity: the step has no success line to look for")
+
+        def spoke(log: str) -> set[str]:
+            return {arm for arm, needle in arms.items() if needle in log}
+
+        root, base, head, merge = self._merge_repo()
+        # THE CONTROL, and it is load-bearing three times over: it says the fixture repo is the
+        # shape the step expects, it says the red cases below are red because of their arm rather
+        # than because `set -u` tripped over a name this fixture forgot to bind, and its own needle
+        # says the step reached its end rather than exiting 0 without doing anything.
+        clean = self._execute(MERGE_STEP, env={"HEAD_SHA": head}, cwd=root)
+        self.assertEqual(
+            clean.returncode, 0,
+            "control: censusing the merge of the base with the PR head must be green\n"
+            + clean.stdout + clean.stderr,
+        )
+        self.assertEqual(
+            (set(), True),
+            (spoke(clean.stdout), f"{confirmed} {head}" in clean.stdout),
+            "control: the merge result must reach the step's own confirmation with no arm speaking\n"
+            + clean.stdout + clean.stderr,
+        )
+        for case, at, head_sha, arm in (
+            ("`ref: <head sha>` -- the BRANCH TIP", head, head, "the BRANCH TIP arm"),
+            ("`ref: main` -- a single-parent BASE TIP", base, head, "the missing-HEAD^2 arm"),
+            ("the merge of a DIFFERENT pull request", merge, base, "the wrong-HEAD^2 arm"),
+        ):
+            with self.subTest(checkout=case):
+                self._detach(root, at)
+                result = self._execute(MERGE_STEP, env={"HEAD_SHA": head_sha}, cwd=root)
+                self.assertEqual(
+                    result.returncode,
+                    1,
+                    f"the census would have counted {case} and the step exited "
+                    f"{result.returncode}; {arm} no longer fails the step, so whole-file counts "
+                    "would derive from a tree that is not the one that would land.\n"
+                    + result.stdout
+                    + result.stderr,
+                )
+                # WHICH ARM DECIDED. Exactly its own, and the step must not have reached the end.
+                # A neutered arm still prints its message and then falls through, so "my needle is
+                # present" is satisfied by a dead arm; "no other arm spoke" is not.
+                self.assertEqual(
+                    {arm},
+                    spoke(result.stdout),
+                    f"the step reddened on {case}, but {arm} is not what decided: the arms that "
+                    f"spoke were {sorted(spoke(result.stdout))}. The three mask each other -- a "
+                    "branch tip has no HEAD^2 either, and a failed `HEAD^2` leaves `second_parent` "
+                    "empty for the arm after it -- so an arm can print its error, fall through, "
+                    "and be red on its successor's verdict.\n"
+                    + result.stdout
+                    + result.stderr,
+                )
+                self.assertNotIn(
+                    confirmed,
+                    result.stdout,
+                    f"the step printed its CONFIRMATION on {case} and reddened anyway",
+                )
+
+    def test_the_kill_confirm_step_reddens_when_a_case_misses_its_verdict(self) -> None:
+        """REGION 4 OF 5. The `fail` arm is what makes four aborts and a control into a gate.
+
+        Its `exit 1` was `_first_exit`-pinned only, and the same six bypasses applied to it were
+        26/26 green -- so the step could run all five cases, print `::error::` for a case that
+        returned the wrong code, and exit 0. That is worse than no kill-confirm: the real census
+        run in the next step is trusted BECAUSE this one passed.
+
+        Each case is spoiled ONE AT A TIME and in two independent ways, because the step has two
+        rejection arms and a fixture that spoils both at once pins neither -- the code check
+        short-circuits the needle check. `expect` is called five times per execution, so a spoiled
+        case must also be shown not to be masked by the four that behave.
+        """
+
+        tree = self._kill_confirm_tree()
+        verdicts = self.KILL_CONFIRM_VERDICTS
+        # THE CONTROL: every case answering exactly what its `expect` demands. Without it a step
+        # body that had stopped extracting, or a stub the step never reached, would satisfy every
+        # red case below and prove nothing.
+        clean = self._execute(
+            KILL_CONFIRM_STEP, cwd=tree, stub=self._kill_confirm_stub(verdicts)
+        )
+        self.assertEqual(
+            clean.returncode,
+            0,
+            "control: five cases each returning the code and the abort text they name must leave "
+            "the kill-confirm green\n" + clean.stdout + clean.stderr,
+        )
+        for case, (rc, text) in verdicts.items():
+            for how, spoiled in (
+                # A DIFFERENT EXIT CODE. 15 and 0 are each other's wrong answer here, which also
+                # covers the negative control's direction: a `clean` copy that aborts is as much a
+                # broken kill-confirm as a perturbed copy that passes.
+                ("returns the wrong exit code", (0 if rc else 15, text)),
+                # THE RIGHT CODE VIA THE WRONG ABORT -- the case the needle arm exists for, and the
+                # one a bare code check cannot see, because four distinct aborts return 15.
+                ("returns the right code but never prints its abort", (rc, "an unrelated abort")),
+            ):
+                with self.subTest(case=case, spoiled=how):
+                    result = self._execute(
+                        KILL_CONFIRM_STEP,
+                        cwd=tree,
+                        stub=self._kill_confirm_stub({**verdicts, case: spoiled}),
+                    )
+                    self.assertEqual(
+                        result.returncode,
+                        1,
+                        f"kill-confirm case '{case}' {how} and the step exited "
+                        f"{result.returncode}. The `fail` arm no longer fails the step, so the "
+                        "census's real run below is trusted on the strength of a kill-confirm that "
+                        "reported its own failure and passed anyway.\n"
+                        + result.stdout
+                        + result.stderr,
+                    )
+
+    def test_gate_status_actually_exits_nonzero_over_a_red_census(self) -> None:
+        """REGION 5 OF 5, AND THE ONE THAT MATTERS MOST: `gate-status` is the only required context.
+
+        Every other pin in this file is about a job whose result nothing has to read. This is the
+        arm that makes the census non-advisory, and it was `_first_exit`-pinned only. Measured with
+        `CENSUS=failure`: all six bypasses -- including `if false; then exit 1; fi`, which adds no
+        `exit 0` for any regex to find -- exited 0 over a red census with 26/26 green. `gate-status`
+        was green on cb310479 itself, produced by the one arm nothing executed.
+
+        `skipped` and the empty string are in the sweep because the arm demands the POSITIVE rather
+        than excluding a list of negatives, and that choice is only worth anything if the negatives
+        it was not written against are red too. The empty string is what a job that never ran
+        leaves behind.
+        """
+
+        control = self._execute(GATE_STEP, job=GATE_JOB, env=dict(self.GREEN_GATE_ENV))
+        self.assertEqual(
+            control.returncode,
+            0,
+            "control: every gate green must leave the required context green -- otherwise the red "
+            "cases below prove only that this fixture is missing an env name `set -u` needs\n"
+            + control.stdout
+            + control.stderr,
+        )
+        for result_value in ("failure", "cancelled", "skipped", ""):
+            with self.subTest(census=result_value or "<the empty string>"):
+                run = self._execute(
+                    GATE_STEP,
+                    job=GATE_JOB,
+                    env={**self.GREEN_GATE_ENV, "CENSUS": result_value},
+                )
+                self.assertEqual(
+                    run.returncode,
+                    1,
+                    f"the schema-container census result was {result_value!r} and the REQUIRED "
+                    f"context exited {run.returncode}. The census is advisory again: it runs, it "
+                    "aborts, and branch protection is satisfied by a green gate-status that never "
+                    "looked at it.\n" + run.stdout + run.stderr,
+                )
+                # ...and via the CENSUS arm, not via a sibling. Every other gate is green in this
+                # fixture so no sibling can fire today, but the merge-parent step's three arms were
+                # each found masking the next, and this step has seven in a row.
+                self.assertIn(
+                    "the schema-container census did not pass",
+                    run.stdout,
+                    "gate-status reddened, but not via its census arm\n" + run.stdout + run.stderr,
+                )
+
+    def test_gate_status_exits_nonzero_over_every_other_gate_it_reports(self) -> None:
+        """The census arm above must not be the only one executed, for the reason `_step_block`
+        exists: an assertion that holds for one arm says nothing about its four siblings, and all
+        five were written from the same template and carry the same failure mode. Two of them
+        (`mass-gate`'s skipped-while-touched arm, and the path filter's own verdict) are the arms
+        that once printed "gates correctly not run" and exited 0 on a PR whose gates never ran.
+        """
+
+        for case, env in (
+            ("seed-registry red", {"REGISTRY": "failure"}),
+            ("harness-provenance red", {"HARNESS": "failure"}),
+            ("python-floor-syntax red", {"FLOOR": "failure"}),
+            ("the path filter itself red", {"FILTER": "failure"}),
+            ("the path filter produced no verdict", {"TOUCHED": ""}),
+            ("mass-gate red", {"RESULT": "failure"}),
+            ("mass-gate cancelled", {"RESULT": "cancelled"}),
+            ("mass-gate skipped while fidelity paths WERE touched",
+             {"RESULT": "skipped", "TOUCHED": "true"}),
+        ):
+            with self.subTest(case=case):
+                run = self._execute(
+                    GATE_STEP, job=GATE_JOB, env={**self.GREEN_GATE_ENV, **env}
+                )
+                self.assertEqual(
+                    run.returncode,
+                    1,
+                    f"'{case}' left the required context exiting {run.returncode}\n"
+                    + run.stdout
+                    + run.stderr,
+                )
+        # ...and the one skip that IS legitimate must stay green, or the arms above are satisfied by
+        # a step that fails on everything and the required context can never pass.
+        allowed = self._execute(
+            GATE_STEP,
+            job=GATE_JOB,
+            env={**self.GREEN_GATE_ENV, "RESULT": "skipped", "TOUCHED": "false"},
+        )
+        self.assertEqual(
+            allowed.returncode,
+            0,
+            "control: mass-gate skipped with no fidelity paths touched is the one deliberate skip\n"
+            + allowed.stdout
+            + allowed.stderr,
+        )
+
+    def test_the_executed_fixtures_bind_the_names_the_steps_declare(self) -> None:
+        """Frame 2 from the class docstring: `_step_script` extracts the `run:` body and nothing else.
+
+        So the env a step reads is a SECOND hand-maintained agreement between this module and the
+        YAML, invisible to every other pin here. Rename `CENSUS` to `CENSUS_RESULT` in
+        `gate-status`'s `env:` block and the executed pins above keep passing on their own fixture
+        while the real step dies on `set -u` -- red in CI, but only after a push, and for a reason
+        the local suite cannot state. Derived from the YAML and compared both ways, so a name added
+        there without a fixture is as loud as a fixture name the YAML dropped.
+        """
+
+        self.assertEqual(
+            set(self.GREEN_GATE_ENV),
+            _step_env_names(GATE_JOB, GATE_STEP),
+            f"the `{GATE_STEP}` step's `env:` block and this class's GREEN_GATE_ENV no longer bind "
+            "the same names, so the executed gate-status pins are running against a fixture the "
+            "runner would not reproduce",
+        )
+        self.assertEqual(
+            {"HEAD_SHA"},
+            _step_env_names(JOB, MERGE_STEP),
+            f"the `{MERGE_STEP}` step's `env:` block changed; its executed pin binds HEAD_SHA only",
+        )
+        # And the census result must still be plumbed from the job this file is about, not from a
+        # name that merely looks like it. This is the value half of the agreement above.
+        self.assertIn(
+            f"CENSUS: ${{{{ needs.{JOB}.result }}}}",
+            _step_block(GATE_JOB, GATE_STEP),
+            "gate-status's CENSUS no longer reads this job's result",
+        )
+
     def test_these_pins_execute_the_shell_the_runner_does(self) -> None:
         """Frame 1 from the class docstring, closed rather than recorded.
 
-        The two tests above execute the text this module extracts. If the runner interprets that
-        text differently they measure nothing -- and `shell:` on a job or step, and a workflow-level
+        The tests above execute the text this module extracts. If the runner interprets that text
+        differently they measure nothing -- and `shell:` on a job or step, and a workflow-level
         `defaults: run: shell:`, are the two ways to arrange that in this file. Neither exists, and
         neither may: the default for a `run:` body on `ubuntu-latest` is `bash -e {0}`, which is
         what `_execute` invokes.
+
+        BOTH JOBS, not just the census job: `gate-status`'s own `run:` body is executed here now,
+        so its interpreter is load-bearing too and was outside this pin's scope while only the
+        census job was executed.
+
+        ⚠ AND THE `defaults:` HALF WAS A RAW SUBSTRING (`assertNotIn("\\ndefaults:", text)`), which
+        `defaults :` -- a space before the colon, valid YAML, the very variant this file already
+        normalizes against for `if :` one class up -- walked past. Routed through `_keys` now, which
+        also covers `"defaults":` and `'defaults' :`. Review could not get that spelling to fail
+        OPEN under `sh -e` or with `-e` dropped, so it was a latent seam rather than a live
+        bypass; it is closed at the cost of one helper call because the next spelling might not be.
         """
 
+        for job in (JOB, GATE_JOB):
+            with self.subTest(job=job):
+                self.assertNotIn(
+                    "shell",
+                    _keys(_job_block(job)),
+                    f"the {job} job now names a `shell:`, so the executed pins above may be running "
+                    "a different interpreter than CI does",
+                )
         self.assertNotIn(
-            "shell:",
-            _job_block(JOB),
-            f"the {JOB} job now names a `shell:`, so the two executed pins above may be running a "
-            "different interpreter than CI does",
-        )
-        text = WORKFLOW.read_text(encoding="utf-8")
-        self.assertNotIn(
-            "\ndefaults:",
-            text,
+            "defaults",
+            _top_level_keys(),
             "this workflow now sets top-level `defaults:`, which can change the shell every `run:` "
-            "body is interpreted by without touching the job at all",
+            "body is interpreted by without touching either job at all",
         )
-        # Anti-vacuity: the extraction must actually be producing the scripts those pins run.
-        for step_name in (VERDICT_STEP, WIRING_STEP):
+        # Anti-vacuity for BOTH scans: a key scan that found nothing would satisfy every
+        # prohibition above. `on` and `jobs` are the two keys a workflow cannot omit.
+        self.assertIn("jobs", _top_level_keys(), "anti-vacuity: the top-level key scan found nothing")
+        self.assertIn("runs-on", _keys(_job_block(GATE_JOB)), f"anti-vacuity: no keys in {GATE_JOB}")
+        # ...and the extraction must actually be producing the scripts those pins run.
+        for job, step_name, token in (
+            (JOB, VERDICT_STEP, "python"),
+            (JOB, WIRING_STEP, "python"),
+            (JOB, MERGE_STEP, "git rev-parse"),
+            (JOB, KILL_CONFIRM_STEP, "python"),
+            (GATE_JOB, GATE_STEP, "${CENSUS}"),
+        ):
             with self.subTest(step=step_name):
-                self.assertIn("python", _step_script(JOB, step_name))
+                self.assertIn(token, _step_script(job, step_name))
 
 
 class TheCensusStillAbortsOnWhatItClaimsToCatchTests(unittest.TestCase):

@@ -2280,6 +2280,20 @@ jobs:
         # a future `ref: ${{ github.event.pull_request.head.sha }}` line, which looks like a
         # tightening, would silently census a tree that is not the one that would land. Asserted,
         # not assumed -- the same reason the filter job above fails closed.
+        #
+        # ⚠ ALL THREE ARMS ARE EXECUTED, not pattern-matched. This body's `exit 1`s were pinned by a
+        # regex over bare `exit N` lines (arms 1 and 2) and by nothing at all (arm 3), and six ways
+        # of spelling "exit 0" that the regex cannot see -- a trailing comment, `true && exit 0`, a
+        # trailing semicolon, an EXIT trap, a call to a function that exits, and wrapping the
+        # `exit 1` in `if false; then ... fi` -- were each measured GREEN on the whole wiring suite.
+        # tests/test_schema_container_census_wiring.py now builds a throwaway repo with a real merge
+        # commit and RUNS this script against four checkouts, one per arm plus the merge result.
+        #
+        # AND THE THREE ARMS MASK EACH OTHER, which is why each case there also asserts that no
+        # OTHER arm spoke: a branch tip has no `HEAD^2` either, so arm 2 covers for a dead arm 1;
+        # and a failed `HEAD^2` leaves `second_parent` empty, so arm 3 covers for a dead arm 2. Both
+        # were live misses until the assertion moved from "the step exited 1" to "this arm decided".
+        # Keep each arm's `::error::` text distinct -- that is what makes the arm identifiable.
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
@@ -2351,6 +2365,16 @@ jobs:
         # census, a separate process whose behaviour is what this step is measuring), whereas a
         # self-grep reads a log the asserting step wrote itself and can therefore forge with an
         # `echo`. This step cannot forge the census's abort text without editing the census.
+        #
+        # ⚠ AND THE `fail` ARM AT THE BOTTOM IS EXECUTED. It was pinned by a regex over bare
+        # `exit N` lines, and six spellings that regex cannot see were each measured green on the
+        # whole wiring suite -- so this step could run all five cases, print `::error::` for one that
+        # returned the wrong code, and exit 0. That is worse than having no kill-confirm, because the
+        # real census run below is trusted BECAUSE this step passed. The wiring module runs this
+        # body against a `python` that answers per scratch case, spoils ONE case at a time in two
+        # ways (wrong code, and right code via the wrong abort -- the two arms of `expect`), and
+        # requires the step to redden on each. Keep the scratch directory names distinct: they are
+        # the only thing a per-case stand-in can dispatch on.
         run: |
           set -euo pipefail
           spec=tests/data/schema_drill_schema_containers.txt
@@ -2572,8 +2596,8 @@ jobs:
           # loader, and that assertion is scoped to THIS STEP -- job-scoping it was a live hole,
           # because `Ran 22 tests` is not unique in this file and a sibling step's guard satisfied
           # it while this one was weakened to a floor.
-          if ! grep -qE '^Ran 26 tests in ' <<<"${summary}"; then
-            echo "::error::expected 26 census-wiring pins as the runner's own summary line; the"
+          if ! grep -qE '^Ran 31 tests in ' <<<"${summary}"; then
+            echo "::error::expected 31 census-wiring pins as the runner's own summary line; the"
             echo "::error::suite shrank, grew, or that line is not the runner's. Update this count"
             echo "::error::and the module's own guard assertion in the same commit. Saw: ${summary}"
             exit 1
@@ -2669,6 +2693,16 @@ jobs:
           # -- a correct check whose result nothing consumes is not meaningfully different from a
           # correct check nothing runs. Demand the positive, so `failure`, `cancelled` and the
           # empty string a job that never ran leaves behind are all red.
+          #
+          # ⚠ THIS ARM IS EXECUTED BY tests/test_schema_container_census_wiring.py, and it is the
+          # arm that most needed it: this job is the ONLY required context, so every other pin in
+          # that module is about a job whose result nothing has to read. The arm was pinned by a
+          # regex over bare `exit N` lines, and all six spellings that regex cannot see -- including
+          # `if false; then exit 1; fi`, which adds no `exit 0` anywhere -- made this step exit 0
+          # over `CENSUS=failure` with the whole wiring suite green. The module now runs THIS body
+          # with the seven `needs.*.result` names bound by hand, once per red value of each, and
+          # asserts both the status and WHICH arm printed. If a name in the `env:` block above is
+          # renamed, that module fails LOCALLY rather than this step dying on `set -u` after a push.
           if [ "${CENSUS}" != "success" ]; then
             echo "::error::the schema-container census did not pass (${CENSUS}); a container of schema names in src/ or scripts/ is unclassified, a classification row is stale, duplicated or self-contradictory, or the per-class counts drifted from their pin -- either way the rotation drill cannot know where to register a synthetic schema"
             exit 1
