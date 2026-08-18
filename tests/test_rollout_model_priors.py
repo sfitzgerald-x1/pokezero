@@ -72,6 +72,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from test_model_priors_search import _EncodedSearchFixture, _crate_ready
 
+from pokezero import engine_search
 from pokezero.engine_search import (
     EngineMctsConfig,
     EngineMctsPolicy,
@@ -203,6 +204,36 @@ def _power_report_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _script_module(filename: str, alias: str):
+    """A `scripts/` writer, imported as a module.
+
+    The two loaders above predate this one and are kept as they are; these are the
+    two writer modules the battery's `targets` never listed, so nothing had ever
+    imported them under test at all.
+    """
+
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / filename
+    spec = importlib.util.spec_from_file_location(alias, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _acceptance_h2h_module():
+    """`scripts/mcts_acceptance_h2h.py` -- THE THIRD WRITER, never a battery target."""
+
+    return _script_module("mcts_acceptance_h2h.py", "_acceptance_h2h_under_test")
+
+
+def _depth_grid_module():
+    """`scripts/hc_depth_grid.py` -- THE FOURTH WRITER, never a battery target."""
+
+    return _script_module("hc_depth_grid.py", "_depth_grid_under_test")
 
 
 def _sanctioned_span(window: str) -> tuple[int, int]:
@@ -3187,6 +3218,370 @@ class BankedShardCarriesThePooledWitnessTest(unittest.TestCase):
             )
             bridge._write_json(target, self._payload(policy_stats={"decisions": 1}))
             self.assertTrue(target.exists())
+
+
+class EverySeventhWriterIsPinnedTest(unittest.TestCase):
+    """The four guard call sites review measured as FREE DELETIONS, plus the
+    seventh writer the enumeration missed.
+
+    THE FINDING, recorded as measured rather than as described. Review deleted the
+    `require_rollout_leaf_document_schema` calls at `scripts/foulplay_paired_eval.py`,
+    `scripts/mcts_acceptance_h2h.py`, `scripts/hc_depth_grid.py` and
+    `src/pokezero/engine_search.py` -- individually and all four together -- and got
+    ZERO semantic failures across the whole suite. The only red was the battery's
+    sha256 content pin, which pins the bytes and not the behaviour: it fires for a
+    whitespace change and says nothing about whether the refusal still runs. Four of
+    seven guard sites were therefore decorative, and the battery's `targets` list
+    only four FILES, so `hc_depth_grid.py` and `mcts_acceptance_h2h.py` had never
+    been mutated at all.
+
+    AND THERE WAS A SEVENTH WRITER. `engine_search.main`'s
+    `print(json.dumps(printable, indent=2))` is an unconditional top-level statement;
+    the refusal sat nine lines below it inside `if args.out:`. With a shell redirect
+    and no `--out` that document reached disk unguarded -- verbatim the shape
+    `_shard_json_text`'s own docstring names. Latent (no `add_argument` exposes the
+    rollout arm on this CLI), so it was a miscount of the writer surface rather than a
+    live corruption path, and it is closed as a miscount: the guard is hoisted above
+    both emissions.
+
+    THE FIX IS STRUCTURAL, not another guard call. All four sites now write THROUGH
+    `write_guarded_document`, so "the shard is refused before it is written" is a
+    property of the call graph rather than of four statements a mutation can lift
+    out one at a time.
+    """
+
+    def test_the_document_funnel_REFUSES_BEFORE_IT_WRITES(self) -> None:
+        """Behaviour, and the reason the refusal precedes the `open`.
+
+        This is the ONE remaining deletable statement for all four writers, so it is
+        driven directly rather than asserted structurally. A half-written shard is
+        worse than no shard: it is the one a pooling reader might still parse.
+        """
+        import tempfile
+        from pathlib import Path
+
+        v1_block = {
+            "rollout_leaf_world_records": 4,
+            "rollouts_run": 12,
+            "rollout_cap_hits": 1,
+            "rollout_dead_ends": 0,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "shard.json"
+            with self.assertRaises(engine_search.EngineShardSchemaError):
+                engine_search.write_guarded_document(
+                    target, {"engine_mcts": {"policy_stats": v1_block}}
+                )
+            self.assertFalse(
+                target.exists(),
+                "the refusal must happen BEFORE the bytes land; a document that is "
+                "written and then complained about is a banked document",
+            )
+            # And the positive control, so this is not a function that refuses
+            # everything.
+            engine_search.write_guarded_document(target, {"engine_mcts": {"games": 1}})
+            self.assertTrue(target.exists())
+
+        # `guarded_document_text` is the same refusal without the file, and the
+        # stdout writers use it; deleting the refusal in EITHER must be caught.
+        with self.assertRaises(engine_search.EngineShardSchemaError):
+            engine_search.guarded_document_text({"policy_stats": v1_block})
+        self.assertEqual(
+            engine_search.guarded_document_text({"a": 1}, indent=None),
+            '{"a": 1}',
+        )
+
+    def test_EVERY_document_writer_writes_THROUGH_the_funnel(self) -> None:
+        """The call graph, per site, so reverting one site to a raw write is caught.
+
+        Deleting the refusal is no longer expressible at these four sites; what IS
+        still expressible is reverting one of them to `write_text(json.dumps(...))`.
+        That is the mutation this asserts against, keyed on the writing frame rather
+        than on the file, so a fifth writer added to one of these modules does not
+        pass vacuously.
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        paired = _paired_eval_module()
+        h2h = _acceptance_h2h_module()
+        grid = _depth_grid_module()
+        for label, function in (
+            ("scripts/foulplay_paired_eval.py::main", paired.main),
+            ("scripts/mcts_acceptance_h2h.py::main", h2h.main),
+            ("scripts/hc_depth_grid.py::main", grid.main),
+            ("src/pokezero/engine_search.py::main", engine_search.main),
+        ):
+            with self.subTest(writer=label):
+                source = textwrap.dedent(inspect.getsource(function))
+                tree = ast.parse(source)
+                funnelled = [
+                    node
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "write_guarded_document"
+                ]
+                self.assertTrue(
+                    funnelled,
+                    f"{label} must reach disk through `write_guarded_document`; a "
+                    "bare guard call beside the write was measured as a free "
+                    "deletion at exactly this site",
+                )
+                # NO RAW ESCAPE HATCH in the same frame. `write_text(json.dumps(...))`
+                # and `json.dump(...)` are the two spellings that bypass the funnel.
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    func = node.func
+                    if isinstance(func, ast.Attribute) and func.attr == "write_text":
+                        rendered = ast.dump(node)
+                        self.assertNotIn(
+                            "'dumps'",
+                            rendered,
+                            f"{label} renders a document to disk without the funnel",
+                        )
+                    if isinstance(func, ast.Attribute) and func.attr == "dump":
+                        self.assertNotEqual(
+                            getattr(func.value, "id", None),
+                            "json",
+                            f"{label} uses `json.dump` to write past the funnel",
+                        )
+
+    def test_the_STDOUT_arm_of_the_engine_search_CLI_is_guarded_TOO(self) -> None:
+        """THE SEVENTH WRITER. The refusal must dominate the unconditional print.
+
+        Not "the call exists somewhere in `main`" -- that was already true while the
+        stdout arm was open, because the call sat inside `if args.out:`. What is
+        asserted is DOMINANCE: the refusal is a statement of `main`'s own body (not
+        nested in any `if`), and it comes before the `print(json.dumps(...))`.
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        source = textwrap.dedent(inspect.getsource(engine_search.main))
+        (function,) = [
+            node
+            for node in ast.parse(source).body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+
+        def _top_level_index(predicate) -> int | None:
+            for index, statement in enumerate(function.body):
+                for node in ast.walk(statement):
+                    if predicate(node):
+                        # Only if the statement ITSELF is unnested at `main`'s level.
+                        return index
+            return None
+
+        guard_at = _top_level_index(
+            lambda node: isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "require_rollout_leaf_document_schema"
+        )
+        print_at = _top_level_index(
+            lambda node: isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "print"
+            and any(
+                isinstance(arg, ast.Call)
+                and isinstance(arg.func, ast.Attribute)
+                and arg.func.attr == "dumps"
+                for arg in node.args
+            )
+        )
+        self.assertIsNotNone(guard_at, "the CLI must refuse its own document")
+        self.assertIsNotNone(print_at, "expected the unconditional json print")
+
+        # THE GUARD'S OWN STATEMENT MUST BE UNCONDITIONAL. This is the assertion that
+        # fails if the refusal is pushed back inside `if args.out:`.
+        guard_statement = function.body[guard_at]
+        self.assertIsInstance(
+            guard_statement,
+            ast.Expr,
+            "the refusal must be a bare statement of `main`, not nested in a branch; "
+            "inside `if args.out:` it leaves the stdout writer unguarded",
+        )
+        self.assertLess(
+            guard_at,
+            print_at,
+            "the refusal must DOMINATE the unconditional `print(json.dumps(...))`; "
+            "with a shell redirect and no `--out` that print is the only copy that "
+            "reaches disk",
+        )
+
+    def test_the_battery_targets_EVERY_file_it_claims_to_cover(self) -> None:
+        """"Nine mutants across every writer, all KILLED" overstated its scope.
+
+        The battery's `targets` named four files, so two of the writer modules were
+        never mutated at all and their guard sites could not have been measured. The
+        target list must contain every module that carries a guard call site.
+        """
+        import importlib.util
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        path = root / "scripts" / "mutate_rollout_leaf_witness.py"
+        spec = importlib.util.spec_from_file_location("_battery_under_test", path)
+        battery = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(battery)
+
+        # READ FROM `ALL_TARGETS`, not from the file's text. `ALL_TARGETS` is derived
+        # from the mutants' own edit paths, so this reads what the sweep would
+        # actually touch; a `grep` for the path string would pass on a module that is
+        # merely MENTIONED in a comment and never mutated, which is the failure mode
+        # being closed here.
+        targets = {Path(target).resolve() for target in battery.ALL_TARGETS}
+        for module in (
+            "src/pokezero/engine_search.py",
+            "src/pokezero/foulplay_bridge.py",
+            "scripts/foulplay_paired_eval.py",
+            "scripts/foulplay_power_report.py",
+            "scripts/mcts_acceptance_h2h.py",
+            "scripts/hc_depth_grid.py",
+        ):
+            with self.subTest(module=module):
+                self.assertIn(
+                    (root / module).resolve(),
+                    targets,
+                    f"{module} carries a guard call site and is not a battery "
+                    "target, so a mutation there would report NOT APPLIED and the "
+                    "sweep would read as clean. '\"Nine mutants across every "
+                    "writer, all KILLED\"' was true of the mutants written and "
+                    "overstated as to scope.",
+                )
+
+
+class TheUnstampedBlockAndTheDeadEndTermTest(unittest.TestCase):
+    """Two survivors from the independent battery, closed at their own sites.
+
+    Both are the same class of gap the body already names once: a term or a set
+    whose only exercised value is the one where the mutation makes no difference.
+    """
+
+    def test_an_UNSTAMPED_rollout_block_is_found_by_its_OWN_columns(self) -> None:
+        """Narrowing `ROLLOUT_LEAF_SHARD_MARKERS` to the stamp survived.
+
+        Every existing fixture's block carries either the stamp
+        (`rollout_leaf_schema`) or the v1 world field, so a marker set narrowed to
+        just those two finds every fixture and the whole point of a MARKER SET --
+        that an UNSTAMPED block is still recognised as a rollout block, by the
+        columns it does carry -- rested on nothing.
+
+        That case is the dangerous one: a block with the rollout counts and no stamp
+        is exactly what a pre-seam writer, or a writer whose stamp was dropped,
+        produces. If it is not FOUND it is not refused, and it pools silently.
+        """
+        # No `rollout_leaf_schema`, no `rollout_leaf_world_records` -- identified
+        # only by the partition columns.
+        unstamped = {
+            "rollouts_run": 12,
+            "rollout_cap_hits": 1,
+            "rollout_terminal_hits": 11,
+            "rollout_dead_ends": 0,
+        }
+        found = engine_search.iter_rollout_leaf_shard_blocks(
+            {"engine_mcts": {"policy_stats": unstamped}}
+        )
+        self.assertEqual(
+            len(found),
+            1,
+            "an unstamped rollout block must still be FOUND by its own columns; a "
+            "marker set narrowed to the stamp cannot see it, and an unfound block "
+            "is an unrefused one",
+        )
+        with self.assertRaises(engine_search.EngineShardSchemaError) as caught:
+            engine_search.require_rollout_leaf_document_schema(
+                {"engine_mcts": {"policy_stats": unstamped}}
+            )
+        self.assertIn("rollout_leaf_schema", str(caught.exception))
+
+        # Per-column, so the set cannot be narrowed to any SINGLE marker and pass.
+        for column in (
+            "rollout_leaf_modes",
+            "rollout_leaf_worlds",
+            "rollout_leaves_priced",
+            "rollouts_run",
+            "rollout_plies",
+            "rollout_terminal_hits",
+            "rollout_cap_hits",
+            "rollout_dead_ends",
+            "rollout_encode_skipped",
+            "rollout_terminal_fraction",
+            "rollout_fallback_fraction",
+            "rollout_mean_plies",
+        ):
+            with self.subTest(marker=column):
+                self.assertEqual(
+                    len(
+                        engine_search.iter_rollout_leaf_shard_blocks(
+                            {"engine_mcts": {"policy_stats": {column: 0}}}
+                        )
+                    ),
+                    1,
+                    f"{column} is a declared shard field and must identify a block "
+                    "on its own",
+                )
+        # THE NEGATIVE SIDE, so this is not satisfied by `startswith('rollout')`:
+        # the config echoes must NOT be read as a shard block.
+        for echo in ("rollout_leaf", "rollout_count", "rollout_max_plies"):
+            with self.subTest(config_echo=echo):
+                self.assertEqual(
+                    engine_search.iter_rollout_leaf_shard_blocks({echo: True}),
+                    [],
+                    f"{echo} is a CONFIG echo, not a shard column; treating it as "
+                    "one refuses every legitimate payload",
+                )
+
+    def test_the_PER_DECISION_fallback_numerator_counts_DEAD_ENDS(self) -> None:
+        """`(cap + dead) / denominator` at the per-decision writer survived.
+
+        This is the FOURTH site carrying the `cap + dead` rule; the body counts
+        three, and the AST guard's reversal was justified by "#1271 makes the term
+        testable at the writer instead" -- true at the shard reader and the shard
+        writer, and NOT true here, because no fixture anywhere in `tests/` drives
+        `_rollout_leaf_witness` with a non-zero `rollout_dead_ends`. Every fixture
+        sat at `dead == 0`, where `cap` and `cap + dead` are the same number.
+
+        The partition is balanced (`terminal + cap + dead == rollouts_run`), so the
+        numerator rule is the only thing that can make this fail.
+        """
+        modes = {"model": 3}
+        ledger = {
+            "worlds": 3,
+            "leaves_priced": 9,
+            "rollouts_run": 20,
+            "rollout_plies": 100,
+            "rollout_encode_skipped": 0,
+            "rollout_terminal_hits": 11,
+            "rollout_cap_hits": 4,
+            # THE FIELD THAT WAS ALWAYS ZERO. Non-zero here and nowhere else.
+            "rollout_dead_ends": 5,
+        }
+        self.assertEqual(
+            ledger["rollout_terminal_hits"]
+            + ledger["rollout_cap_hits"]
+            + ledger["rollout_dead_ends"],
+            ledger["rollouts_run"],
+            "the fixture's own partition must balance, or this measures nothing",
+        )
+        witness = EngineMctsPolicy._rollout_leaf_witness(None, modes, ledger)
+        self.assertEqual(witness["rollout_cap_hits"], 4)
+        self.assertEqual(witness["rollout_dead_ends"], 5)
+        # (4 + 5) / 20 == 0.45; cap alone would read 0.20.
+        self.assertEqual(witness["rollout_fallback_fraction"], 0.45)
+        self.assertNotEqual(
+            witness["rollout_fallback_fraction"],
+            ledger["rollout_cap_hits"] / ledger["rollouts_run"],
+            "a cap-only numerator must not reproduce this value",
+        )
+        # And the three quotients still partition to 1.
+        self.assertAlmostEqual(
+            witness["rollout_terminal_fraction"] + witness["rollout_fallback_fraction"],
+            1.0,
+        )
 
 
 #: Sentinel for "the key is absent", distinct from `None` -- the two are different

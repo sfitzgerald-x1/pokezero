@@ -233,6 +233,36 @@ PRINT_UNGUARDED_AGAIN = (
     "    if args.json:\n"
     "        print(json.dumps(payload, indent=2, sort_keys=True))\n"
 )
+# ---- B1b: the four FREE DELETIONS, and the funnel that closed them --------------
+# Review measured that four of the seven `require_rollout_leaf_document_schema` call
+# sites were free deletions -- zero semantic failures suite-wide, because all four sat
+# in a `main()` no test drives. Two of the four modules were not even battery TARGETS,
+# so a mutation there would have reported NOT APPLIED and the sweep would have read
+# clean. All four now write THROUGH `write_guarded_document`, so the mutation that
+# remains expressible is reverting a site to a raw write; that is what these anchor.
+FUNNEL_REFUSAL = "    require_rollout_leaf_document_schema(document)\n"
+H2H_THROUGH_THE_FUNNEL = "    write_guarded_document(args.out, report, indent=2)\n"
+H2H_RAW_WRITE_AGAIN = (
+    "    Path(args.out).write_text(json.dumps(report, indent=2), encoding=\"utf-8\")\n"
+)
+PAIRED_WRITER_THROUGH_THE_FUNNEL = (
+    "    write_guarded_document(args.out, report, indent=2)\n"
+)
+PAIRED_WRITER_RAW_AGAIN = (
+    "    Path(args.out).write_text(json.dumps(report, indent=2), encoding=\"utf-8\")\n"
+)
+GRID_THROUGH_THE_FUNNEL = (
+    "        write_guarded_document(\n"
+    "            target, payload, indent=2, sort_keys=True, trailing_newline=True\n"
+    "        )\n"
+)
+GRID_RAW_WRITE_AGAIN = (
+    '        target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n")\n'
+)
+# THE SEVENTH WRITER. Hoisting this line above the unconditional print is the fix;
+# deleting it puts the stdout arm back outside every refusal.
+ENGINE_CLI_HOISTED_GUARD = "    require_rollout_leaf_document_schema(report)\n"
+
 BLOCK_FINDER_MARKERS = (
     "        if ROLLOUT_LEAF_SHARD_MARKERS & {str(key) for key in document}:\n"
 )
@@ -583,6 +613,56 @@ MUTANTS: list[tuple[str, str, list[tuple[Path, str, str]]]] = [
                 READER_POWER_REPORT_CALL,
                 "",
             ),
+        ],
+    ),
+    (
+        # THE FUNNEL'S OWN REFUSAL. After the four free deletions were closed by
+        # routing the writes through `guarded_document_text`, this is the ONE
+        # remaining deletable statement for all four of them, so it must be killed.
+        "b1b_the_document_funnel_drops_its_refusal",
+        "B1b the four free deletions",
+        [(ENGINE, FUNNEL_REFUSAL, "")],
+    ),
+    (
+        # THE SEVENTH WRITER, put back. Deleting the hoisted guard returns
+        # `engine_search.main`'s unconditional `print(json.dumps(...))` to the state
+        # review found it in: reachable with a shell redirect and no `--out`, past
+        # every refusal.
+        "b1b_the_engine_CLI_stdout_arm_loses_its_guard",
+        "B1b the four free deletions",
+        [(ENGINE, ENGINE_CLI_HOISTED_GUARD, "")],
+    ),
+    (
+        "b1b_the_h2h_writer_bypasses_the_funnel",
+        "B1b the four free deletions",
+        [
+            (
+                ROOT / "scripts" / "mcts_acceptance_h2h.py",
+                H2H_THROUGH_THE_FUNNEL,
+                H2H_RAW_WRITE_AGAIN,
+            )
+        ],
+    ),
+    (
+        "b1b_the_depth_grid_writer_bypasses_the_funnel",
+        "B1b the four free deletions",
+        [
+            (
+                ROOT / "scripts" / "hc_depth_grid.py",
+                GRID_THROUGH_THE_FUNNEL,
+                GRID_RAW_WRITE_AGAIN,
+            )
+        ],
+    ),
+    (
+        "b1b_the_paired_eval_WRITER_bypasses_the_funnel",
+        "B1b the four free deletions",
+        [
+            (
+                ROOT / "scripts" / "foulplay_paired_eval.py",
+                PAIRED_WRITER_THROUGH_THE_FUNNEL,
+                PAIRED_WRITER_RAW_AGAIN,
+            )
         ],
     ),
     (

@@ -2701,6 +2701,59 @@ def require_rollout_leaf_document_schema(document: Any) -> None:
         require_rollout_leaf_shard_schema(block)
 
 
+def guarded_document_text(
+    document: Any, *, indent: int = 2, sort_keys: bool = False
+) -> str:
+    """Render a document to JSON, refusing it FIRST. THE ONE PLACE A DOCUMENT
+    BECOMES BYTES outside `foulplay_bridge._shard_json_text`.
+
+    WHY A FUNNEL AND NOT A GUARD CALL PER WRITER, stated as the correction it is.
+    Review measured that FOUR of the seven `require_rollout_leaf_document_schema`
+    call sites were FREE DELETIONS: deleting the calls at
+    `scripts/foulplay_paired_eval.py`, `scripts/mcts_acceptance_h2h.py`,
+    `scripts/hc_depth_grid.py` and this module's own CLI -- individually and all
+    four together -- produced ZERO semantic failures across the whole suite. The
+    only red was a sha256 content pin, which is a pin on the bytes and not on the
+    behaviour. All four sites are the same shape: a `main()` body no test drives,
+    where the guard is one deletable statement standing beside the write it is
+    supposed to dominate.
+
+    Routing the write THROUGH the refusal makes the guard non-deletable by
+    construction rather than by discipline: there is no longer a spelling of "write
+    the shard" at those sites that does not refuse it first, so the only remaining
+    mutation is deleting the refusal in HERE -- one site, directly unit-testable,
+    and killed by `test_the_document_funnel_REFUSES_BEFORE_IT_WRITES`. This is the
+    same argument `_shard_json_text` already makes for the bridge's two writers,
+    applied to the four the enumeration missed.
+    """
+
+    require_rollout_leaf_document_schema(document)
+    return json.dumps(document, indent=indent, sort_keys=sort_keys)
+
+
+def write_guarded_document(
+    path: Any,
+    document: Any,
+    *,
+    indent: int = 2,
+    sort_keys: bool = False,
+    trailing_newline: bool = False,
+) -> None:
+    """Write a document to `path`, refusing it first.
+
+    The refusal happens BEFORE the file is opened, so a refused document leaves no
+    partial artifact behind -- a half-written shard is worse than no shard, because
+    it is the one a pooling reader might still parse.
+    """
+
+    from pathlib import Path  # noqa: PLC0415 — stdlib, imported at the use site
+
+    text = guarded_document_text(document, indent=indent, sort_keys=sort_keys)
+    if trailing_newline:
+        text += "\n"
+    Path(path).write_text(text, encoding="utf-8")
+
+
 def require_rollout_leaf_shard_schema(shard: Mapping[str, Any]) -> None:
     """Refuse a shard whose rollout-leaf block is not this reader's schema.
 
@@ -6569,6 +6622,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"argmax compare: {agreements}/{len(compare_records)} agree, "
             f"{len(illegal)} illegal decisions (must be 0; agreement not required)"
         )
+    # THE FIFTH **AND SEVENTH** WRITERS, both this module's own CLI, and the refusal
+    # now dominates BOTH of them.
+    #
+    # THE SEVENTH WRITER, and why the enumeration said "six". The
+    # `print(json.dumps(printable, ...))` below is an UNCONDITIONAL top-level
+    # statement of `main`: with a shell redirect and no `--out` it reaches disk
+    # having passed no guard at all. The refusal used to sit nine lines down INSIDE
+    # `if args.out:`, so it covered the `--out` arm and not the stdout arm -- which
+    # is verbatim the shape `_shard_json_text`'s own docstring names ("`--json` and
+    # a shell redirect but no `--summary-out`"), reproduced in the module that
+    # documents it. Latent rather than live -- no `add_argument` exposes the rollout
+    # arm here -- so it was a MISCOUNT of the writer surface rather than a live
+    # corruption path, and it is fixed as a miscount: the guard is hoisted above
+    # both emissions, and the count is seven.
+    #
+    # `report` rather than `printable`: `printable` is a derived subset, so guarding
+    # the full document covers both the subset that is printed and the whole that is
+    # written, and there is no arm on which the refusal is skipped.
+    require_rollout_leaf_document_schema(report)
     printable = {k: v for k, v in report.items() if k != "games"}
     if "argmax_compare" in printable:
         printable["argmax_compare"] = {
@@ -6576,14 +6648,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
     print(json.dumps(printable, indent=2))
     if args.out:
-        # THE FIFTH WRITER, this module's own CLI. Its `engine_mcts` block is
-        # `stats.to_dict()` DIRECTLY -- so it has a `decisions` field and no nested
-        # `policy_stats`, i.e. exactly the shape `require_banked_shard_witness` refuses
-        # -- and it never went near `_write_json`. Refused on the column-keyed walk
-        # instead, which is the check that is actually about this payload.
-        require_rollout_leaf_document_schema(report)
-        with open(args.out, "w") as handle:
-            json.dump(report, handle, indent=2)
+        # THE FIFTH WRITER. Its `engine_mcts` block is `stats.to_dict()` DIRECTLY --
+        # so it has a `decisions` field and no nested `policy_stats`, i.e. exactly
+        # the shape `require_banked_shard_witness` refuses -- and it never went near
+        # `_write_json`. Refused on the column-keyed walk instead, which is the check
+        # that is actually about this payload. Written THROUGH the funnel so the
+        # refusal is not a deletable statement standing beside the write.
+        write_guarded_document(args.out, report)
     fallback_count = policy.stats.fallback_decisions
     if fallback_count:
         import sys as _sys

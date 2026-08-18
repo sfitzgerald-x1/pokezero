@@ -497,12 +497,12 @@ def main(argv=None) -> int:
     # `stats.to_dict()` at the DOCUMENT ROOT under `policy_stats`, not inside an
     # `engine_mcts` block, so `require_banked_shard_witness` walks straight past it.
     # `require_rollout_leaf_document_schema` keys off the block's own columns.
-    from pokezero.engine_search import (  # noqa: PLC0415
-        require_rollout_leaf_document_schema,
-    )
+    # THROUGH THE FUNNEL, not beside it: the bare guard call that used to stand here
+    # was measured as a FREE DELETION (zero semantic failures suite-wide, because no
+    # test drives this `main()`), so the write now carries the refusal.
+    from pokezero.engine_search import write_guarded_document  # noqa: PLC0415
 
-    require_rollout_leaf_document_schema(report)
-    Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    write_guarded_document(args.out, report, indent=2)
     print("\n=== SHARD COMPLETE ===")
     print(json.dumps(
         {k: v for k, v in report.items() if k not in ("results", "per_game")}, indent=2

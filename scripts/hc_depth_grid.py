@@ -303,13 +303,18 @@ def main(argv: list[str] | None = None) -> int:
         # `policy_stats`. A guard that finds blocks by their parent's key name has to
         # learn each spelling; this one keys off the block's own columns and therefore
         # already covers a fifth writer that picks a fifth name.
-        from pokezero.engine_search import (  # noqa: PLC0415
-            require_rollout_leaf_document_schema,
-        )
+        # THROUGH THE FUNNEL, not beside it. Review measured that the bare
+        # `require_rollout_leaf_document_schema(payload)` that used to stand here was
+        # a FREE DELETION -- zero semantic failures across the whole suite, because
+        # no test drives this `main()`. `write_guarded_document` refuses before it
+        # opens the file, so there is no spelling of "write this cell" here that
+        # skips the refusal.
+        from pokezero.engine_search import write_guarded_document  # noqa: PLC0415
 
-        require_rollout_leaf_document_schema(payload)
         target = out_dir / f"{cell.replace(':', '-').replace('/', '_')}.json"
-        target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        write_guarded_document(
+            target, payload, indent=2, sort_keys=True, trailing_newline=True
+        )
         print(
             f"[{cell}] score {payload['score']:.3f} "
             f"[{low:.3f}, {high:.3f}] n={len(results)} -> {target}",

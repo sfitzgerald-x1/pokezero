@@ -58,6 +58,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 # rather than the only copy. See `require_rollout_leaf_document_schema`.
 from pokezero.engine_search import (  # noqa: E402
     require_rollout_leaf_document_schema,
+    write_guarded_document,
 )
 
 SEATS = ("p1", "p2")
@@ -816,9 +817,11 @@ def main(argv=None) -> int:
     # `engine_mcts` block with a `decisions` field and therefore invisible to
     # `require_banked_shard_witness`'s parent-keyed block finder.
     # `require_rollout_leaf_document_schema` finds blocks by their OWN columns, so it
-    # sees this layout and the three others the repo writes.
-    require_rollout_leaf_document_schema(report)
-    Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    # sees this layout and the three others the repo writes. THROUGH THE FUNNEL, not
+    # beside it: the bare guard call that used to stand here was measured as a FREE
+    # DELETION (zero semantic failures suite-wide, because no test drives this
+    # `main()`), so the write now carries the refusal it cannot be separated from.
+    write_guarded_document(args.out, report, indent=2)
     print("\n=== SHARD COMPLETE ===")
     print(json.dumps({k: v for k, v in report.items() if k != "rows"}, indent=2))
     return 0
