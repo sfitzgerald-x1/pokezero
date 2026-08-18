@@ -170,9 +170,11 @@ function scheduleReady(battle, requested = actionableRequestedPlayers(battle)) {
 function scheduleTerminal(battle) {
   if (battle.terminalScheduled) return;
   battle.readyEpoch += 1;
+  const terminalEpoch = battle.readyEpoch;
   battle.terminalScheduled = true;
   const procMs = nodeProcMs(battle);
   setImmediate(() => {
+    if (battle.readyEpoch !== terminalEpoch || !battle.terminalScheduled) return;
     emit({ type: "terminal", battleId: battle.battleId, nodeProcMs: procMs });
   });
 }
