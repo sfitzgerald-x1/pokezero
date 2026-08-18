@@ -1941,11 +1941,17 @@ jobs:
           # its behavioral tests skip, which is no CI coverage at all. Build a wheel
           # with the same libtorch environment as the feature-gated crate rung above,
           # then execute every writer, reader, fidelity, and mutation-record pin.
+          #
+          # Keep auditwheel out of this build.  Its repair phase copies PyTorch's
+          # shared libraries into the wheel, which loads a second libtorch beside the
+          # runtime Python already imported and can SIGSEGV during the extension
+          # import.  The supported model-wheel recipe deliberately links the venv's
+          # PyTorch runtime instead; see scripts/build_search_crate_model.sh.
           rollout_leaf_torch_lib="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')"
           export LD_LIBRARY_PATH="${rollout_leaf_torch_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-          LIBTORCH_USE_PYTORCH=1 LIBTORCH_BYPASS_VERSION_CHECK=1 maturin build \
+          LIBTORCH_USE_PYTORCH=1 LIBTORCH_BYPASS_VERSION_CHECK=1 python -m maturin build \
             --release --features model --manifest-path rust/pokezero-search/Cargo.toml \
-            --out /tmp/rollout-leaf-wheels
+            --skip-auditwheel -i "$(command -v python)" --out /tmp/rollout-leaf-wheels
           python -m pip install --quiet --force-reinstall --no-deps /tmp/rollout-leaf-wheels/*.whl
           python -c "import pokezero_search; print('model wheel ok')"
           python -m unittest tests.test_rollout_model_priors \
