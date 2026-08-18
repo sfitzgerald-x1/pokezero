@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -68,6 +69,17 @@ SCHEMA_VERSION = "pokezero.foulplay-paired-shard.v1"
 # every arm and every cell must face the same opponent strength or the paired
 # delta is measuring the opponent instead of the search config.
 FOULPLAY_SEARCH_TIME_MS = 1000
+
+# The closing contention calibration deliberately changes FoulPlay's *own* budget while
+# holding the raw PokeZero policy fixed. It is not a new power-report cell: its two shards
+# must never pool with the ordinary `raw@checkpoint` control, nor with a calibration made
+# under another CPU/resource layout. The named experiment in the handoff is a 24% cut,
+# i.e. 1000 ms -> 760 ms, and the reader accepts no nearby value such as 750 ms.
+FOULPLAY_BUDGET_CALIBRATION_SCHEMA_VERSION = "pokezero.foulplay-budget-calibration.v1"
+FOULPLAY_BUDGET_CALIBRATION_BASELINE_MS = FOULPLAY_SEARCH_TIME_MS
+FOULPLAY_BUDGET_CALIBRATION_CUT_FRACTION = 0.24
+FOULPLAY_BUDGET_CALIBRATION_REDUCED_MS = 760
+_CALIBRATION_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 # The bridge's own --engine-c-puct default, mirrored so config_id can normalise
 # an explicitly-passed 1.4 back to the unsuffixed string. Stage 3 reads its
@@ -115,6 +127,108 @@ def checkpoint_tag(checkpoint: str, explicit: str | None = None) -> str:
     if stem in {"transformer-policy", "model", "checkpoint"} and path.parent.name:
         return f"{path.parent.name}-{stem}"
     return stem
+
+
+def _calibration_token(value: str, *, label: str) -> str:
+    """Return one unambiguous component of the dedicated calibration identity."""
+
+    if not _CALIBRATION_TOKEN.fullmatch(value):
+        raise SystemExit(
+            f"{label} must match {_CALIBRATION_TOKEN.pattern!r}; got {value!r}"
+        )
+    return value
+
+
+def foulplay_budget_calibration_config_id(
+    *,
+    checkpoint: str,
+    checkpoint_tag_value: str | None,
+    calibration_id: str,
+    layout: str,
+    foulplay_search_time_ms: int,
+) -> str:
+    """The raw-vs-FoulPlay budget-calibration cell, distinct from ordinary raw.
+
+    The budget, raw checkpoint, named reservation, and resource layout are all in the
+    identity. Omitting any one would permit the pooling reader to turn two different
+    opponent strengths or host layouts into one apparent calibration condition.
+    """
+
+    tag = _calibration_token(
+        checkpoint_tag(checkpoint, checkpoint_tag_value), label="--checkpoint-tag"
+    )
+    calibration_id = _calibration_token(
+        calibration_id, label="--foulplay-budget-calibration-id"
+    )
+    layout = _calibration_token(
+        layout, label="--foulplay-budget-calibration-layout"
+    )
+    budget = int(foulplay_search_time_ms)
+    if budget not in {
+        FOULPLAY_BUDGET_CALIBRATION_BASELINE_MS,
+        FOULPLAY_BUDGET_CALIBRATION_REDUCED_MS,
+    }:
+        raise SystemExit(
+            "the FoulPlay budget calibration accepts exactly "
+            f"{FOULPLAY_BUDGET_CALIBRATION_BASELINE_MS} or "
+            f"{FOULPLAY_BUDGET_CALIBRATION_REDUCED_MS} ms, not {budget}"
+        )
+    return f"raw+fp{budget}ms+cal-{calibration_id}+layout-{layout}@{tag}"
+
+
+def validate_foulplay_budget_calibration(args: argparse.Namespace) -> dict | None:
+    """Fail closed around the only sanctioned non-default FoulPlay budget.
+
+    Ordinary paired-eval shards retain the historical fixed 1000 ms opponent. A caller
+    may lower that budget only through the named calibration, which is raw-only and
+    checkpoint/layout-qualified so its rows cannot silently become a generic raw arm.
+    """
+
+    calibration_id = getattr(args, "foulplay_budget_calibration_id", None)
+    layout = getattr(args, "foulplay_budget_calibration_layout", None)
+    budget = int(getattr(args, "foulplay_search_time_ms", FOULPLAY_SEARCH_TIME_MS))
+    if bool(calibration_id) != bool(layout):
+        raise SystemExit(
+            "--foulplay-budget-calibration-id and "
+            "--foulplay-budget-calibration-layout must be supplied together"
+        )
+    if calibration_id is None:
+        if budget != FOULPLAY_SEARCH_TIME_MS:
+            raise SystemExit(
+                "--foulplay-search-time-ms may differ from 1000 only with the named "
+                "FoulPlay budget calibration; otherwise raw@checkpoint would pool a "
+                "different opponent strength into the ordinary control"
+            )
+        return None
+    if args.arm != "raw":
+        raise SystemExit("the FoulPlay budget calibration is raw-only")
+    if getattr(args, "opponent_policy_mode", "foul-play") != "foul-play":
+        raise SystemExit("the FoulPlay budget calibration requires --opponent-policy-mode foul-play")
+    config_id = foulplay_budget_calibration_config_id(
+        checkpoint=str(args.checkpoint),
+        checkpoint_tag_value=getattr(args, "checkpoint_tag", None),
+        calibration_id=str(calibration_id),
+        layout=str(layout),
+        foulplay_search_time_ms=budget,
+    )
+    condition = (
+        "baseline"
+        if budget == FOULPLAY_BUDGET_CALIBRATION_BASELINE_MS
+        else "reduced"
+    )
+    return {
+        "schema_version": FOULPLAY_BUDGET_CALIBRATION_SCHEMA_VERSION,
+        "calibration_id": str(calibration_id),
+        "resource_layout": str(layout),
+        "checkpoint_tag": checkpoint_tag(str(args.checkpoint), getattr(args, "checkpoint_tag", None)),
+        "condition": condition,
+        "foulplay_search_time_ms": budget,
+        "baseline_foulplay_search_time_ms": FOULPLAY_BUDGET_CALIBRATION_BASELINE_MS,
+        "reduced_foulplay_search_time_ms": FOULPLAY_BUDGET_CALIBRATION_REDUCED_MS,
+        "budget_cut_fraction": FOULPLAY_BUDGET_CALIBRATION_CUT_FRACTION,
+        "thread_pin": dict(sorted(THREAD_PIN_ENV.items())),
+        "config_id": config_id,
+    }
 
 
 def _knob_label(value: float) -> str:
@@ -250,6 +364,7 @@ def config_id_for(args: argparse.Namespace) -> str:
     #   - cells A (k0) and G (k1) run the SAME search config, so an unqualified
     #     id pools them -- and cell G's entire job is the checkpoint contrast.
     tag = checkpoint_tag(args.checkpoint, getattr(args, "checkpoint_tag", None))
+    calibration = validate_foulplay_budget_calibration(args)
     if args.arm == "raw":
         # The raw arm is the DENOMINATOR of every paired delta, and its id carries no
         # search config -- so it also carries no opponent fragment, and a raw cell run
@@ -263,7 +378,14 @@ def config_id_for(args: argparse.Namespace) -> str:
                 "refused: the raw arm's cell id carries no opponent fragment, so such a "
                 "shard would pool into the paired delta's control."
             )
+        if calibration is not None:
+            return calibration["config_id"]
         return f"raw@{tag}"
+    if calibration is not None:
+        # `validate_foulplay_budget_calibration` names the raw-only violation above; keep
+        # this branch adjacent to the generic search identity so a future refactor cannot
+        # accidentally discard its returned identity for a search arm.
+        raise AssertionError("raw-only calibration reached a search config identity")
     # Attributes read directly, not through getattr: a caller whose Namespace
     # predates a knob must raise here rather than be handed the default id and
     # merged into the control.
@@ -290,6 +412,10 @@ def config_id_for(args: argparse.Namespace) -> str:
 
 
 def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
+    # This function is also a public pure seam in the tests. Validate here as well as at
+    # config construction so a caller cannot bypass the calibrated identity and hand the
+    # bridge a low-budget opponent with an ordinary raw id.
+    validate_foulplay_budget_calibration(args)
     argv = [
         sys.executable, "-m", "pokezero.foulplay_bridge",
         "--checkpoint", str(args.checkpoint),
@@ -297,7 +423,7 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
         "--games", str(args.pairs),
         "--seed-start", str(args.seed_start),
         "--pokezero-player", seat,
-        "--search-time-ms", str(FOULPLAY_SEARCH_TIME_MS),
+        "--search-time-ms", str(getattr(args, "foulplay_search_time_ms", FOULPLAY_SEARCH_TIME_MS)),
         "--policy-mode", "raw" if args.arm == "raw" else "engine-mcts",
         "--summary-out", str(seat_summary_path(args, seat)),
     ]
@@ -582,6 +708,26 @@ def build_parser() -> argparse.ArgumentParser:
              "--arm search --opponent-policy-mode raw measures what the search buys over "
              "the model it searches with, directly rather than through a third opponent.",
     )
+    ap.add_argument(
+        "--foulplay-search-time-ms",
+        type=int,
+        default=FOULPLAY_SEARCH_TIME_MS,
+        help="FoulPlay's per-battle budget. The ordinary paired evaluator is fixed at "
+             "1000 ms; a non-default value is accepted only by the named raw-only "
+             "budget calibration.",
+    )
+    ap.add_argument(
+        "--foulplay-budget-calibration-id",
+        default=None,
+        help="Named raw-vs-FoulPlay 1000-vs-760-ms calibration. Requires "
+             "--foulplay-budget-calibration-layout and makes a distinct raw cell.",
+    )
+    ap.add_argument(
+        "--foulplay-budget-calibration-layout",
+        default=None,
+        help="Pinned resource-layout/reservation label for the named FoulPlay budget "
+             "calibration. Required with --foulplay-budget-calibration-id.",
+    )
     ap.add_argument("--seed-start", type=int, required=True,
                     help="first BATTLE seed of this shard's band")
     ap.add_argument("--pairs", type=int, required=True,
@@ -667,6 +813,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    # Reject a low opponent budget before any build check, model materialization, or game.
+    # The only valid non-default is the named 24% calibration, whose identity is captured
+    # again in both config_id and the emitted shard.
+    calibration = validate_foulplay_budget_calibration(args)
 
     # REFUSED, deliberately: the MAPPING is fixed, the CRATE-SIDE GATHER is not.
     #
@@ -835,7 +985,8 @@ def main(argv=None) -> int:
         "commit": _source_commit(),
         "seed_start": args.seed_start,
         "pairs": args.pairs,
-        "foulplay_search_time_ms": FOULPLAY_SEARCH_TIME_MS,
+        "foulplay_search_time_ms": args.foulplay_search_time_ms,
+        "foulplay_budget_calibration": calibration,
         # Refusal reasons, per-stratum ratios and the compared share -- see the gate's
         # docstring in pokezero/foulplay_bridge.py. `status: "refused"` here means this
         # shard's own two seats do not support a contention statement; it does NOT mean the

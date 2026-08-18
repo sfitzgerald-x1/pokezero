@@ -299,6 +299,7 @@ jobs:
             src/pokezero/engine_search.py
             src/pokezero/foulplay_bridge.py
             scripts/foulplay_paired_eval.py
+            scripts/foulplay_budget_calibration.py
             scripts/foulplay_power_report.py
             scripts/hc_depth_grid.py
             scripts/mcts_acceptance_h2h.py
@@ -315,6 +316,13 @@ jobs:
             tests/test_mcts_acceptance_report.py
             tests/test_rollout_leaf_arbiter.py
             tests/test_rollout_leaf_witness_mutation_battery.py
+            # The FoulPlay throughput calibration is a distinct paired-data
+            # contract.  Its reader refuses mixed 1000/760-ms conditions and
+            # forged think telemetry, while the paired driver owns the named
+            # condition identity that prevents those shards pooling with a
+            # normal raw arm.  Exercise both whenever either side moves.
+            tests/test_foulplay_paired_eval.py
+            tests/test_foulplay_budget_calibration.py
             # The schema-default gate and everything it depends on. 332 of its 390 rows live
             # outside src/ (288 tests/, 43 scripts/, 1 docs/).
             #
@@ -1960,7 +1968,7 @@ jobs:
             exit 1
           fi
 
-      - name: Rollout-leaf arbiter witnesses and mutation record run on the model wheel
+      - name: Rollout-leaf arbiter and FoulPlay calibration contracts run on the model wheel
         env:
           POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
         run: |
@@ -1968,7 +1976,8 @@ jobs:
           # The Phase 1 arbiter is a model-path feature. A plain maturin wheel makes
           # its behavioral tests skip, which is no CI coverage at all. Build a wheel
           # with the same libtorch environment as the feature-gated crate rung above,
-          # then execute every writer, reader, fidelity, and mutation-record pin.
+          # then execute every writer, reader, fidelity, mutation-record, and
+          # FoulPlay budget-calibration pin.
           #
           # Keep auditwheel out of this build.  Its repair phase copies PyTorch's
           # shared libraries into the wheel, which loads a second libtorch beside the
@@ -1985,18 +1994,20 @@ jobs:
           python -m unittest tests.test_rollout_model_priors \
             tests.test_mcts_acceptance_report \
             tests.test_rollout_leaf_arbiter \
-            tests.test_rollout_leaf_witness_mutation_battery -v 2>&1 \
+            tests.test_rollout_leaf_witness_mutation_battery \
+            tests.test_foulplay_paired_eval \
+            tests.test_foulplay_budget_calibration -v 2>&1 \
             | tee /tmp/rollout-leaf-arbiter.log
-          if ! grep -qE 'Ran 165 tests' /tmp/rollout-leaf-arbiter.log; then
-            echo "::error::the rollout-leaf arbiter suite did not run all 165 tests"
+          if ! grep -qE 'Ran 286 tests' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the arbiter and calibration suite did not run all 286 tests"
             exit 1
           fi
           if grep -qE 'skipped|OK \\(skipped' /tmp/rollout-leaf-arbiter.log; then
-            echo "::error::a rollout-leaf arbiter pin SKIPPED; the model wheel was not exercised"
+            echo "::error::an arbiter or calibration pin SKIPPED; the model wheel was not exercised"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/rollout-leaf-arbiter.log; then
-            echo "::error::the rollout-leaf arbiter suite did not report a clean OK"
+            echo "::error::the arbiter and calibration suite did not report a clean OK"
             exit 1
           fi
           # `build_search_crate_engine.sh` attests the engine and its plain

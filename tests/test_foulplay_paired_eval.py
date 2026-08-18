@@ -60,6 +60,9 @@ def args(**overrides) -> argparse.Namespace:
         opponent_policy_mode="foul-play",
         opponent_engine_depth=None,
         opponent_engine_sims=None,
+        foulplay_search_time_ms=1000,
+        foulplay_budget_calibration_id=None,
+        foulplay_budget_calibration_layout=None,
         engine_model_path=None,
         engine_tables_path=None,
         foulplay_root=None,
@@ -934,6 +937,98 @@ class OpponentDefinitionTest(unittest.TestCase):
             },
         )
         self.assertEqual(_DRIVER.THREAD_PIN_ENV["OMP_NUM_THREADS"], "1")
+
+
+class FoulPlayBudgetCalibrationTest(unittest.TestCase):
+    """The one sanctioned change to the FoulPlay opponent's own budget.
+
+    This is deliberately raw-only: a search-vs-raw delta with two opponent budgets would
+    confound the campaign cell, while the calibration's purpose is to measure that opponent
+    change in score units before it is used as a bound on another comparison.
+    """
+
+    def test_the_24_percent_cut_is_pinned_as_1000_to_760_ms(self) -> None:
+        self.assertEqual(_DRIVER.FOULPLAY_BUDGET_CALIBRATION_BASELINE_MS, 1000)
+        self.assertEqual(_DRIVER.FOULPLAY_BUDGET_CALIBRATION_REDUCED_MS, 760)
+        self.assertEqual(_DRIVER.FOULPLAY_BUDGET_CALIBRATION_CUT_FRACTION, 0.24)
+
+    def test_each_budget_has_a_distinct_checkpoint_and_layout_qualified_raw_id(self) -> None:
+        baseline = args(
+            arm="raw",
+            checkpoint_tag="k0",
+            foulplay_budget_calibration_id="ceiling-24pct",
+            foulplay_budget_calibration_layout="cpu1-c3",
+            foulplay_search_time_ms=1000,
+        )
+        reduced = args(
+            arm="raw",
+            checkpoint_tag="k0",
+            foulplay_budget_calibration_id="ceiling-24pct",
+            foulplay_budget_calibration_layout="cpu1-c3",
+            foulplay_search_time_ms=760,
+        )
+        self.assertEqual(
+            _DRIVER.config_id_for(baseline),
+            "raw+fp1000ms+cal-ceiling-24pct+layout-cpu1-c3@k0",
+        )
+        self.assertEqual(
+            _DRIVER.config_id_for(reduced),
+            "raw+fp760ms+cal-ceiling-24pct+layout-cpu1-c3@k0",
+        )
+        self.assertNotEqual(_DRIVER.config_id_for(baseline), _DRIVER.config_id_for(reduced))
+        metadata = _DRIVER.validate_foulplay_budget_calibration(reduced)
+        assert metadata is not None
+        self.assertEqual(metadata["condition"], "reduced")
+        self.assertEqual(metadata["thread_pin"], dict(sorted(_DRIVER.THREAD_PIN_ENV.items())))
+
+    def test_the_reduced_budget_reaches_the_bridge_on_both_seats(self) -> None:
+        calibrated = args(
+            arm="raw",
+            checkpoint_tag="k0",
+            foulplay_budget_calibration_id="ceiling-24pct",
+            foulplay_budget_calibration_layout="cpu1-c3",
+            foulplay_search_time_ms=760,
+        )
+        for seat in ("p1", "p2"):
+            with self.subTest(seat=seat):
+                argv = _DRIVER.bridge_argv(calibrated, seat=seat)
+                self.assertEqual(argv[argv.index("--search-time-ms") + 1], "760")
+
+    def test_an_unlabeled_nondefault_budget_is_refused_before_it_can_pool(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "raw@checkpoint"):
+            _DRIVER.config_id_for(args(arm="raw", foulplay_search_time_ms=760))
+
+    def test_the_calibration_refuses_wrong_arm_opponent_layout_and_cut(self) -> None:
+        common = dict(
+            checkpoint_tag="k0",
+            foulplay_budget_calibration_id="ceiling-24pct",
+            foulplay_budget_calibration_layout="cpu1-c3",
+        )
+        for label, changed, needle in (
+            ("search", {"arm": "search"}, "raw-only"),
+            ("non-foulplay", {"opponent_policy_mode": "raw"}, "requires"),
+            ("wrong-budget", {"foulplay_search_time_ms": 750}, "exactly"),
+            ("missing-layout", {"foulplay_budget_calibration_layout": None}, "together"),
+        ):
+            with self.subTest(label=label):
+                values = {"arm": "raw", "foulplay_search_time_ms": 760, **common, **changed}
+                with self.assertRaisesRegex(SystemExit, needle):
+                    _DRIVER.config_id_for(args(**values))
+
+    def test_the_real_cli_exposes_and_carries_the_calibration_fields(self) -> None:
+        ns = _DRIVER.build_parser().parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--checkpoint-tag", "k0",
+            "--showdown-root", "/tmp/showdown", "--arm", "raw",
+            "--seed-start", "1", "--pairs", "2", "--out", "/tmp/shard.json",
+            "--foulplay-search-time-ms", "760",
+            "--foulplay-budget-calibration-id", "ceiling-24pct",
+            "--foulplay-budget-calibration-layout", "cpu1-c3",
+        ])
+        self.assertEqual(ns.foulplay_search_time_ms, 760)
+        self.assertEqual(
+            _DRIVER.config_id_for(ns),
+            "raw+fp760ms+cal-ceiling-24pct+layout-cpu1-c3@k0",
+        )
 
 
 class BridgeArgvTest(unittest.TestCase):
