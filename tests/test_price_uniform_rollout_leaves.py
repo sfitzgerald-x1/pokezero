@@ -66,6 +66,22 @@ def _state_row(seed: int, prefix: int, seat: str, arm: int, opponent_action: int
     }
 
 
+def _terminal_row(seed: int, prefix: int, seat: str, arm: int, opponent_action: int, winner: str | None) -> dict:
+    terminal = {"winner": winner, "turn_count": prefix + 1, "capped": False}
+    value = 1.0 if winner == "p1" else 0.0 if winner == "p2" else 0.5
+    return {
+        "seed": seed,
+        "prefix": prefix,
+        "seat": seat,
+        "arm": arm,
+        "subject_action": arm,
+        "opponent_action": opponent_action,
+        "terminal": terminal,
+        "terminal_value": value,
+        "terminal_sha256": hashlib.sha256(writer.canonical_json(terminal)).hexdigest(),
+    }
+
+
 def _state_document(bank_sha: str = BANK_SHA) -> dict:
     return {
         "schema": writer.STATE_SCHEMA,
@@ -272,6 +288,41 @@ class UniformRolloutLeafWriterTest(unittest.TestCase):
                 rollouts=3, max_plies=40, seed=99, threads=2, branch_on_damage=False,
                 price=fallback_blend, writer_sha256=WRITER, validator_sha256=VALIDATOR,
             )
+
+    def test_records_a_completed_terminal_successor_as_an_exact_uniform_value(self) -> None:
+        source = _state_document()
+        source["leaves"][0] = _terminal_row(1, 2, "p1", 0, 5, "p1")
+        self.states_path.write_text(json.dumps(source), encoding="utf-8")
+
+        document = self._document()
+
+        terminal_leaf = next(row for row in document["leaves"] if row["arm"] == 0)
+        self.assertEqual(terminal_leaf["uniform_value"], 1.0)
+        self.assertEqual(terminal_leaf["value_source"], "exact_terminal")
+        self.assertIn("terminal_sha256", terminal_leaf)
+        self.assertNotIn("state_sha256", terminal_leaf)
+        self.assertEqual(document["provenance"]["native_priced_leaves"], 3)
+        self.assertEqual(document["provenance"]["terminal_successor_leaves"], 1)
+        self.assertEqual(document["rollout_ledger"]["rollouts_run"], 9)
+        self.assertEqual(document["rollout_ledger"]["total_leaves"], 4)
+
+    def test_refuses_a_capped_or_forged_terminal_successor(self) -> None:
+        source = _state_document()
+        terminal = _terminal_row(1, 2, "p1", 0, 5, None)
+        terminal["terminal"]["capped"] = True
+        terminal["terminal_sha256"] = hashlib.sha256(writer.canonical_json(terminal["terminal"])).hexdigest()
+        source["leaves"][0] = terminal
+        self.states_path.write_text(json.dumps(source), encoding="utf-8")
+
+        with self.assertRaisesRegex(writer.UniformLeafWriterError, "uncapped completed battle"):
+            self._loaded()
+
+        terminal = _terminal_row(1, 2, "p1", 0, 5, "p1")
+        terminal["terminal_value"] = 0.0
+        source["leaves"][0] = terminal
+        self.states_path.write_text(json.dumps(source), encoding="utf-8")
+        with self.assertRaisesRegex(writer.UniformLeafWriterError, "exact side-one terminal result"):
+            self._loaded()
 
     def test_refuses_an_unreviewed_validator_before_pricing(self) -> None:
         noop = Path(self.tmp.name) / "noop_validator.py"

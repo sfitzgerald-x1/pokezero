@@ -44,6 +44,11 @@ The output intentionally does not copy the serialized states.  It carries the
 keyed state hashes, native extension digest, writer digest, and the full
 terminal/fallback rollout ledger so the deploy validator can join values to the
 bank without publishing private state material.
+
+An action that completes the battle has no successor observation to
+materialize. Its input row therefore carries an uncapped terminal record plus
+the exact side-one value (1, 0, or 0.5) and never enters the native pricer.
+That is an exact uniform-continuation value, not a rollout fallback.
 """
 
 from __future__ import annotations
@@ -95,8 +100,10 @@ class LeafState:
     key: LeafKey
     subject_action: int
     opponent_action: int
-    state: str
-    state_sha256: str
+    state: str | None
+    state_sha256: str | None
+    terminal_value: float | None = None
+    terminal_sha256: str | None = None
 
 
 def sha256_file(path: Path) -> str:
@@ -109,6 +116,51 @@ def sha256_file(path: Path) -> str:
 
 def canonical_json(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def _terminal_successor(
+    row: Mapping[str, Any], *, label: str
+) -> tuple[float, str]:
+    """Validate an exact post-branch terminal result in side-one coordinates.
+
+    These rows deliberately do not enter the native rollout pricer: uniform
+    continuation after a completed battle is already known exactly.  A capped
+    trajectory is not a completed battle and must never be smuggled in as a
+    terminal value.
+    """
+
+    terminal = row.get("terminal")
+    if not isinstance(terminal, Mapping):
+        raise UniformLeafWriterError(
+            f"{label} must supply a non-empty state or an exact terminal successor"
+        )
+    if set(terminal) != {"winner", "turn_count", "capped"}:
+        raise UniformLeafWriterError(
+            f"{label}.terminal must contain exactly winner, turn_count, and capped"
+        )
+    winner = terminal.get("winner")
+    if winner not in {"p1", "p2", None}:
+        raise UniformLeafWriterError(f"{label}.terminal.winner must be p1, p2, or null")
+    turn_count = _int(terminal.get("turn_count"), field=f"{label}.terminal.turn_count")
+    if turn_count < 0:
+        raise UniformLeafWriterError(f"{label}.terminal.turn_count must be non-negative")
+    if terminal.get("capped") is not False:
+        raise UniformLeafWriterError(
+            f"{label}.terminal must be an uncapped completed battle, not a rollout cap"
+        )
+    value = 1.0 if winner == "p1" else 0.0 if winner == "p2" else 0.5
+    declared_value = _probability(row.get("terminal_value"), field=f"{label}.terminal_value")
+    if declared_value != value:
+        raise UniformLeafWriterError(
+            f"{label}.terminal_value must equal the exact side-one terminal result {value}"
+        )
+    terminal_sha256 = _hex(row.get("terminal_sha256"), field=f"{label}.terminal_sha256", length=64)
+    actual_terminal_sha256 = hashlib.sha256(canonical_json(dict(terminal))).hexdigest()
+    if terminal_sha256 != actual_terminal_sha256:
+        raise UniformLeafWriterError(
+            f"{label}.terminal_sha256 does not match the canonical terminal record"
+        )
+    return value, terminal_sha256
 
 
 def _load_object(path: Path, *, label: str) -> Mapping[str, Any]:
@@ -271,21 +323,43 @@ def load_leaf_states(
             raise UniformLeafWriterError(f"{label}.subject_action must equal its canonical arm")
         opponent_action = _int(row.get("opponent_action"), field=f"{label}.opponent_action")
         state = row.get("state")
-        if not isinstance(state, str) or not state:
-            raise UniformLeafWriterError(f"{label}.state must be a non-empty serialized state")
-        state_sha256 = _hex(row.get("state_sha256"), field=f"{label}.state_sha256", length=64)
-        actual_state_sha256 = hashlib.sha256(state.encode("utf-8")).hexdigest()
-        if actual_state_sha256 != state_sha256:
+        has_state = isinstance(state, str) and bool(state)
+        has_terminal = "terminal" in row
+        if has_state == has_terminal:
             raise UniformLeafWriterError(
-                f"{label}.state_sha256 does not match the serialized state bytes"
+                f"{label} must supply exactly one of a non-empty state or an exact terminal successor"
             )
+        state_sha256: str | None = None
+        terminal_value: float | None = None
+        terminal_sha256: str | None = None
+        if has_state:
+            state_sha256 = _hex(row.get("state_sha256"), field=f"{label}.state_sha256", length=64)
+            actual_state_sha256 = hashlib.sha256(state.encode("utf-8")).hexdigest()
+            if actual_state_sha256 != state_sha256:
+                raise UniformLeafWriterError(
+                    f"{label}.state_sha256 does not match the serialized state bytes"
+                )
+            if "terminal_value" in row or "terminal_sha256" in row:
+                raise UniformLeafWriterError(f"{label} cannot mix state and terminal successor fields")
+        else:
+            if state is not None or "state_sha256" in row:
+                raise UniformLeafWriterError(f"{label}.state must be absent for an exact terminal successor")
+            terminal_value, terminal_sha256 = _terminal_successor(row, label=label)
         position = (key.seed, key.prefix, key.seat)
         existing_opponent = opponent_by_position.setdefault(position, opponent_action)
         if existing_opponent != opponent_action:
             raise UniformLeafWriterError(
                 f"{label}.opponent_action differs between the two arms at position {position!r}"
             )
-        result[key] = LeafState(key, subject_action, opponent_action, state, state_sha256)
+        result[key] = LeafState(
+            key,
+            subject_action,
+            opponent_action,
+            state if has_state else None,
+            state_sha256,
+            terminal_value,
+            terminal_sha256,
+        )
     missing = sorted(expected_keys - set(result))
     foreign = sorted(set(result) - expected_keys)
     if missing or foreign:
@@ -482,11 +556,22 @@ def _run_reviewed_validator(
 
 def _state_manifest_sha256(rows: Sequence[LeafState]) -> str:
     manifest = [
-        {
-            **row.key.as_dict(),
-            "opponent_action": row.opponent_action,
-            "state_sha256": row.state_sha256,
-        }
+        (
+            {
+                **row.key.as_dict(),
+                "opponent_action": row.opponent_action,
+                "state_sha256": row.state_sha256,
+                "value_source": "native_uniform_rollout",
+            }
+            if row.state is not None
+            else {
+                **row.key.as_dict(),
+                "opponent_action": row.opponent_action,
+                "terminal_sha256": row.terminal_sha256,
+                "terminal_value": row.terminal_value,
+                "value_source": "exact_terminal",
+            }
+        )
         for row in rows
     ]
     return hashlib.sha256(canonical_json(manifest)).hexdigest()
@@ -514,11 +599,16 @@ def build_uniform_leaf_document(
     """
 
     ordered = [rows[key] for key in sorted(rows)]
-    ordinals = [ordinal_for_key(row.key) for row in ordered]
+    native_rows = [row for row in ordered if row.state is not None]
+    if not native_rows:
+        raise UniformLeafWriterError(
+            "canonical leaf-state corpus has no nonterminal leaves to attest the native uniform pricer"
+        )
+    ordinals = [ordinal_for_key(row.key) for row in native_rows]
     if len(set(ordinals)) != len(ordinals):
         raise UniformLeafWriterError("canonical leaf-key hash collision; refusing shared rollout streams")
     report, extension_sha256 = price(
-        [row.state for row in ordered],
+        [row.state for row in native_rows],
         ordinals,
         rollouts=rollouts,
         max_plies=max_plies,
@@ -545,7 +635,7 @@ def build_uniform_leaf_document(
                 f"native row pricer returned {field}={report.get(field)!r}, expected {expected!r}"
             )
     values = report.get("values")
-    if not isinstance(values, list) or len(values) != len(ordered):
+    if not isinstance(values, list) or len(values) != len(native_rows):
         raise UniformLeafWriterError("native row pricer returned the wrong number of leaf values")
     ledger_fields = (
         "leaves_priced", "rollouts_run", "rollout_plies", "rollout_terminal_hits",
@@ -554,7 +644,10 @@ def build_uniform_leaf_document(
     )
     if any(field not in report for field in ledger_fields):
         raise UniformLeafWriterError("native row pricer omitted terminal/fallback ledger fields")
-    if report["leaves_priced"] != len(ordered) or report["rollouts_run"] != len(ordered) * rollouts:
+    if (
+        report["leaves_priced"] != len(native_rows)
+        or report["rollouts_run"] != len(native_rows) * rollouts
+    ):
         raise UniformLeafWriterError("native row pricer ledger does not account for every requested rollout")
     # `rollout_once` has a deliberately visible HP-fraction fallback for the
     # search arm: a cap or an engine dead end must not turn a whole game into
@@ -574,16 +667,36 @@ def build_uniform_leaf_document(
             "native row pricer had nonterminal rollouts; cap/dead-end HP-fraction fallbacks "
             "cannot answer the uniform terminal-continuation estimand"
         )
-    leaves = [
-        {
-            **row.key.as_dict(),
-            "uniform_value": _probability(value, field=f"native values[{index}]"),
-            "opponent_action": row.opponent_action,
-            "state_sha256": row.state_sha256,
-            "ordinal": ordinal,
-        }
-        for index, (row, ordinal, value) in enumerate(zip(ordered, ordinals, values, strict=True))
-    ]
+    native_values = {
+        row.key: (_probability(value, field=f"native values[{index}]"), ordinal)
+        for index, (row, ordinal, value) in enumerate(zip(native_rows, ordinals, values))
+    }
+    leaves: list[dict[str, Any]] = []
+    for row in ordered:
+        if row.state is not None:
+            value, ordinal = native_values[row.key]
+            leaves.append(
+                {
+                    **row.key.as_dict(),
+                    "uniform_value": value,
+                    "opponent_action": row.opponent_action,
+                    "state_sha256": row.state_sha256,
+                    "ordinal": ordinal,
+                    "value_source": "native_uniform_rollout",
+                }
+            )
+            continue
+        if row.terminal_value is None or row.terminal_sha256 is None:
+            raise UniformLeafWriterError("terminal leaf lost its exact successor evidence")
+        leaves.append(
+            {
+                **row.key.as_dict(),
+                "uniform_value": row.terminal_value,
+                "opponent_action": row.opponent_action,
+                "terminal_sha256": row.terminal_sha256,
+                "value_source": "exact_terminal",
+            }
+        )
     return {
         "schema": OUTPUT_SCHEMA,
         "provenance": {
@@ -594,6 +707,8 @@ def build_uniform_leaf_document(
             "rollout_seed": seed,
             "rollout_threads": threads,
             "rollout_branch_on_damage": branch_on_damage,
+            "native_priced_leaves": len(native_rows),
+            "terminal_successor_leaves": len(ordered) - len(native_rows),
             "bank_sha256": bank_sha256,
             "state_corpus_sha256": state_corpus_sha256,
             "state_manifest_sha256": _state_manifest_sha256(ordered),
@@ -609,7 +724,12 @@ def build_uniform_leaf_document(
                 validator_sha256, field="deploy validator sha256", length=64
             ),
         },
-        "rollout_ledger": {field: report[field] for field in ledger_fields},
+        "rollout_ledger": {
+            **{field: report[field] for field in ledger_fields},
+            "native_priced_leaves": len(native_rows),
+            "terminal_successor_leaves": len(ordered) - len(native_rows),
+            "total_leaves": len(ordered),
+        },
         "leaves": leaves,
     }
 
