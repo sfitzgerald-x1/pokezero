@@ -1,9 +1,9 @@
 {
   "_README": "Recorded by scripts/mutate_rollout_leaf_witness.py. NEVER edit by hand to make the gate pass -- tests/test_rollout_leaf_witness_mutation_battery.py holds this file to the harness that produced it, including the harness's own sha256.",
-  "applied": 61,
+  "applied": 66,
   "controls": [
     {
-      "detail": "126 passed",
+      "detail": "132 passed",
       "family": "control",
       "killers": [],
       "name": "_control_null",
@@ -11,7 +11,7 @@
       "status": "SURVIVED"
     },
     {
-      "detail": "2 failed, 125 passed",
+      "detail": "2 failed, 131 passed",
       "family": "control",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessCarriesTheCratesOwnLedgerTest::test_the_witness_reproduces_the_crates_own_fallback_fraction",
@@ -46,7 +46,7 @@
       "status": "NOT APPLIED"
     },
     {
-      "detail": "2 failed, 126 passed",
+      "detail": "2 failed, 132 passed",
       "family": "control",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_the_migration_refuses_an_ABSENT_precondition_rather_than_reading_zero"
@@ -66,15 +66,15 @@
   ],
   "did_not_run": 0,
   "expected_equivalent": {},
-  "harness_sha256": "a3e23625572591d51dc4826b1c667ce525f37ff85bedece755b9a7310f2995b3",
-  "killed": 61,
+  "harness_sha256": "4789562a339df06d4a4d4c54a1541837454f927c954792110b4b0063ec9cdc67",
+  "killed": 66,
   "killers": [
     "tests/test_rollout_model_priors.py",
     "tests/test_mcts_acceptance_report.py"
   ],
   "mutants": [
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "A1 last hop",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_emitter_actually_carries_policy_stats_to_the_shard"
@@ -83,7 +83,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "A1 last hop",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_engine_policy_stats_returns_the_searchers_own_telemetry"
@@ -92,7 +92,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "A1 last hop",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_emitter_actually_carries_policy_stats_to_the_shard"
@@ -101,7 +101,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 124 passed",
+      "detail": "2 failed, 130 passed",
       "family": "A1 last hop",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_boundary_write_calls_the_guard",
@@ -111,7 +111,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "5 failed, 121 passed",
+      "detail": "5 failed, 127 passed",
       "family": "A1 last hop",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_boundary_write_calls_the_guard",
@@ -124,7 +124,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "A1 last hop",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_write_refuses_a_block_with_the_key_deleted"
@@ -133,7 +133,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "A1 last hop",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_guard_reaches_a_block_nested_under_an_arm"
@@ -142,7 +142,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "6 failed, 123 passed",
+      "detail": "6 failed, 129 passed",
       "family": "A1 last hop",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_an_ALL_WORLDS_FAILED_arm_run_is_still_bankable",
@@ -154,7 +154,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "5 failed, 124 passed",
+      "detail": "5 failed, 130 passed",
       "family": "A1 last hop",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_an_ALL_WORLDS_FAILED_arm_run_is_still_bankable",
@@ -165,7 +165,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "A1 last hop",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_write_refuses_a_raw_row_carrying_arm_telemetry"
@@ -174,7 +174,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "4 failed, 123 passed",
+      "detail": "4 failed, 129 passed",
       "family": "A2 encode skip",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessCarriesTheCratesOwnLedgerTest::test_the_witness_reproduces_the_crates_own_fallback_fraction",
@@ -186,7 +186,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 124 passed",
+      "detail": "2 failed, 130 passed",
       "family": "A2 encode skip",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessGuardTest::test_a_witness_without_the_encode_skip_count_refuses",
@@ -196,7 +196,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "A2 encode skip",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessTravelsOnTheModelPathTest::test_the_encode_skip_count_reaches_the_decision_and_the_shard"
@@ -205,7 +205,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 125 passed",
+      "detail": "2 failed, 131 passed",
       "family": "A2 encode skip",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessCarriesTheCratesOwnLedgerTest::test_the_witness_reproduces_the_crates_own_fallback_fraction",
@@ -215,7 +215,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "A2 encode skip",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessGuardTest::test_an_encode_skip_count_above_the_leaves_priced_refuses"
@@ -224,7 +224,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 124 passed",
+      "detail": "2 failed, 130 passed",
       "family": "A4 instrumentation",
       "killers": [
         "tests/test_mcts_acceptance_report.py::ModelPathDepthInstrumentationTest::test_every_registered_leaf_eval_path_accumulates_reached_depth_once",
@@ -234,7 +234,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 124 passed",
+      "detail": "2 failed, 130 passed",
       "family": "A4 instrumentation",
       "killers": [
         "tests/test_mcts_acceptance_report.py::ModelPathDepthInstrumentationTest::test_REGISTER_AND_STARVE_is_refused_rather_than_silently_substituted",
@@ -244,7 +244,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "4 failed, 123 passed",
+      "detail": "4 failed, 129 passed",
       "family": "A4 instrumentation",
       "killers": [
         "tests/test_mcts_acceptance_report.py::ModelPathDepthInstrumentationTest::test_an_unregistered_path_is_the_hole_and_registering_it_closes_it",
@@ -255,7 +255,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "4 failed, 123 passed",
+      "detail": "4 failed, 129 passed",
       "family": "A4 instrumentation",
       "killers": [
         "tests/test_mcts_acceptance_report.py::ModelPathDepthInstrumentationTest::test_an_unregistered_path_is_the_hole_and_registering_it_closes_it",
@@ -266,7 +266,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 124 passed",
+      "detail": "2 failed, 130 passed",
       "family": "A5 retraction",
       "killers": [
         "tests/test_rollout_model_priors.py::TheRetractedCostRatioStaysRetractedTest::test_no_unverifiable_point_ratio_is_asserted_as_the_arms_cost",
@@ -276,7 +276,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 124 passed",
+      "detail": "2 failed, 130 passed",
       "family": "A5 retraction",
       "killers": [
         "tests/test_rollout_model_priors.py::TheRetractedCostRatioStaysRetractedTest::test_no_unverifiable_point_ratio_is_asserted_as_the_arms_cost",
@@ -286,7 +286,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 124 passed",
+      "detail": "2 failed, 130 passed",
       "family": "A5 retraction",
       "killers": [
         "tests/test_rollout_model_priors.py::TheRetractedCostRatioStaysRetractedTest::test_no_unverifiable_point_ratio_is_asserted_as_the_arms_cost",
@@ -296,7 +296,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "20 failed, 118 passed",
+      "detail": "20 failed, 124 passed",
       "family": "A6 schema",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_a_dropped_column_refuses_rather_than_reading_as_zero",
@@ -313,7 +313,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "25 failed, 113 passed",
+      "detail": "25 failed, 119 passed",
       "family": "A6 schema",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_a_dropped_column_refuses_rather_than_reading_as_zero",
@@ -335,7 +335,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "3 failed, 123 passed",
+      "detail": "3 failed, 129 passed",
       "family": "A6 schema",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_READ_path_refuses_what_a_deleted_writer_guard_would_have_banked",
@@ -346,16 +346,17 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "2 failed, 130 passed",
       "family": "A6 schema",
       "killers": [
-        "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_an_unstamped_v2_shaped_shard_refuses"
+        "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_an_unstamped_v2_shaped_shard_refuses",
+        "tests/test_rollout_model_priors.py::TheUnstampedBlockAndTheDeadEndTermTest::test_an_UNSTAMPED_rollout_block_is_found_by_its_OWN_columns"
       ],
       "name": "a6_reader_accepts_an_unstamped_shard",
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "A6 schema",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_the_migration_refuses_a_collapsed_shard"
@@ -364,7 +365,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "A6 schema",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_the_migration_refuses_a_nonzero_dead_end_count"
@@ -373,7 +374,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "A6 schema",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_the_shard_fallback_numerator_is_the_whole_partition"
@@ -382,7 +383,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 124 passed",
+      "detail": "2 failed, 130 passed",
       "family": "A6 schema",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_a_flag_off_shard_carries_no_rollout_keys_and_is_accepted",
@@ -392,7 +393,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "3 failed, 123 passed",
+      "detail": "3 failed, 129 passed",
       "family": "A6 schema",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_an_unbalanced_partition_refuses",
@@ -403,7 +404,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 125 passed",
+      "detail": "2 failed, 131 passed",
       "family": "A6 schema",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_BOTH_world_counters_are_accumulated_BY_WEIGHT_at_the_writer",
@@ -413,7 +414,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "10 failed, 124 passed",
+      "detail": "10 failed, 130 passed",
       "family": "prior rounds",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessTravelsOnTheModelPathTest::test_a_missing_witness_refuses_the_run",
@@ -424,7 +425,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "15 failed, 119 passed",
+      "detail": "16 failed, 124 passed",
       "family": "prior rounds",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessCarriesTheCratesOwnLedgerTest::test_the_witness_reproduces_the_crates_own_fallback_fraction",
@@ -434,13 +435,14 @@
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessTravelsOnTheModelPathTest::test_an_arm_decision_carries_the_witness",
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessTravelsOnTheModelPathTest::test_the_encode_skip_count_reaches_the_decision_and_the_shard",
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessTravelsOnTheModelPathTest::test_the_fallback_fraction_is_available_where_the_arm_runs",
-        "tests/test_rollout_model_priors.py::RolloutLeafWitnessTravelsOnTheModelPathTest::test_the_witness_accumulates_over_every_world"
+        "tests/test_rollout_model_priors.py::RolloutLeafWitnessTravelsOnTheModelPathTest::test_the_witness_accumulates_over_every_world",
+        "tests/test_rollout_model_priors.py::TheUnstampedBlockAndTheDeadEndTermTest::test_the_PER_DECISION_fallback_numerator_counts_DEAD_ENDS"
       ],
       "name": "prior_witness_builder_returns_none",
       "status": "KILLED"
     },
     {
-      "detail": "9 failed, 117 passed",
+      "detail": "9 failed, 123 passed",
       "family": "prior rounds",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessCarriesTheCratesOwnLedgerTest::test_the_witness_reproduces_the_crates_own_fallback_fraction",
@@ -457,7 +459,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 124 passed",
+      "detail": "2 failed, 130 passed",
       "family": "prior rounds",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessGuardTest::test_an_unbalanced_partition_refuses",
@@ -467,7 +469,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "3 failed, 123 passed",
+      "detail": "3 failed, 129 passed",
       "family": "prior rounds",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessGuardTest::test_a_fabricated_fallback_fraction_refuses",
@@ -478,7 +480,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "prior rounds",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessGuardTest::test_a_zeroed_ledger_refuses"
@@ -487,7 +489,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "3 failed, 123 passed",
+      "detail": "3 failed, 129 passed",
       "family": "B1 independent guards",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_BOTH_stdout_writers_render_through_the_guarded_funnel",
@@ -498,7 +500,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 124 passed",
+      "detail": "2 failed, 130 passed",
       "family": "B1 independent guards",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_boundary_write_calls_the_guard",
@@ -508,7 +510,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "4 failed, 122 passed",
+      "detail": "4 failed, 128 passed",
       "family": "B1 independent guards",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_BOTH_stdout_writers_render_through_the_guarded_funnel",
@@ -520,7 +522,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 126 passed",
+      "detail": "1 failed, 132 passed",
       "family": "B1 independent guards",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_BOTH_reader_call_sites_exist_where_the_shard_is_loaded"
@@ -529,7 +531,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 126 passed",
+      "detail": "1 failed, 132 passed",
       "family": "B1 independent guards",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_BOTH_reader_call_sites_exist_where_the_shard_is_loaded"
@@ -538,7 +540,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "6 failed, 122 passed",
+      "detail": "6 failed, 128 passed",
       "family": "B1 independent guards",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_BOTH_reader_call_sites_exist_where_the_shard_is_loaded",
@@ -551,7 +553,52 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 126 passed",
+      "detail": "1 failed, 131 passed",
+      "family": "B1b the four free deletions",
+      "killers": [
+        "tests/test_rollout_model_priors.py::EverySeventhWriterIsPinnedTest::test_the_document_funnel_REFUSES_BEFORE_IT_WRITES"
+      ],
+      "name": "b1b_the_document_funnel_drops_its_refusal",
+      "status": "KILLED"
+    },
+    {
+      "detail": "1 failed, 131 passed",
+      "family": "B1b the four free deletions",
+      "killers": [
+        "tests/test_rollout_model_priors.py::EverySeventhWriterIsPinnedTest::test_the_STDOUT_arm_of_the_engine_search_CLI_is_guarded_TOO"
+      ],
+      "name": "b1b_the_engine_CLI_stdout_arm_loses_its_guard",
+      "status": "KILLED"
+    },
+    {
+      "detail": "1 failed, 132 passed",
+      "family": "B1b the four free deletions",
+      "killers": [
+        "tests/test_rollout_model_priors.py::EverySeventhWriterIsPinnedTest::test_EVERY_document_writer_writes_THROUGH_the_funnel"
+      ],
+      "name": "b1b_the_h2h_writer_bypasses_the_funnel",
+      "status": "KILLED"
+    },
+    {
+      "detail": "1 failed, 132 passed",
+      "family": "B1b the four free deletions",
+      "killers": [
+        "tests/test_rollout_model_priors.py::EverySeventhWriterIsPinnedTest::test_EVERY_document_writer_writes_THROUGH_the_funnel"
+      ],
+      "name": "b1b_the_depth_grid_writer_bypasses_the_funnel",
+      "status": "KILLED"
+    },
+    {
+      "detail": "1 failed, 132 passed",
+      "family": "B1b the four free deletions",
+      "killers": [
+        "tests/test_rollout_model_priors.py::EverySeventhWriterIsPinnedTest::test_EVERY_document_writer_writes_THROUGH_the_funnel"
+      ],
+      "name": "b1b_the_paired_eval_WRITER_bypasses_the_funnel",
+      "status": "KILLED"
+    },
+    {
+      "detail": "1 failed, 132 passed",
       "family": "B1 independent guards",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_BOTH_stdout_writers_render_through_the_guarded_funnel"
@@ -560,33 +607,37 @@
       "status": "KILLED"
     },
     {
-      "detail": "9 failed, 122 passed",
+      "detail": "11 failed, 126 passed",
       "family": "B1 independent guards",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_BOTH_stdout_writers_render_through_the_guarded_funnel",
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_READ_path_refuses_what_a_deleted_writer_guard_would_have_banked",
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_reader_finds_the_block_under_EVERY_writers_spelling",
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_two_boundary_GUARDS_ARE_INDEPENDENTLY_DELETABLE",
-        "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_write_refuses_a_v1_schemaed_policy_stats"
+        "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_write_refuses_a_v1_schemaed_policy_stats",
+        "tests/test_rollout_model_priors.py::EverySeventhWriterIsPinnedTest::test_the_document_funnel_REFUSES_BEFORE_IT_WRITES",
+        "tests/test_rollout_model_priors.py::TheUnstampedBlockAndTheDeadEndTermTest::test_an_UNSTAMPED_rollout_block_is_found_by_its_OWN_columns"
       ],
       "name": "b1_block_finder_only_looks_at_the_top_level",
       "status": "KILLED"
     },
     {
-      "detail": "9 failed, 122 passed",
+      "detail": "11 failed, 126 passed",
       "family": "B1 independent guards",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_BOTH_stdout_writers_render_through_the_guarded_funnel",
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_READ_path_refuses_what_a_deleted_writer_guard_would_have_banked",
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_reader_finds_the_block_under_EVERY_writers_spelling",
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_two_boundary_GUARDS_ARE_INDEPENDENTLY_DELETABLE",
-        "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_write_refuses_a_v1_schemaed_policy_stats"
+        "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_write_refuses_a_v1_schemaed_policy_stats",
+        "tests/test_rollout_model_priors.py::EverySeventhWriterIsPinnedTest::test_the_document_funnel_REFUSES_BEFORE_IT_WRITES",
+        "tests/test_rollout_model_priors.py::TheUnstampedBlockAndTheDeadEndTermTest::test_an_UNSTAMPED_rollout_block_is_found_by_its_OWN_columns"
       ],
       "name": "b1_block_finder_finds_nothing",
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "B4 new survivors",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_the_schema_VERSION_LITERAL_is_pinned"
@@ -595,7 +646,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "B4 new survivors",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_the_migrations_trailing_SELF_CHECK_is_not_deletable"
@@ -604,7 +655,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 126 passed",
+      "detail": "1 failed, 132 passed",
       "family": "B4 new survivors",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_BOTH_world_counters_are_accumulated_BY_WEIGHT_at_the_writer"
@@ -613,7 +664,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "B4 new survivors",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessTravelsOnTheModelPathTest::test_a_collapsed_draw_counts_the_worlds_it_represents"
@@ -622,7 +673,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "B4 new survivors",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_the_WEIGHTED_pricer_tally_must_sum_to_the_world_count"
@@ -631,7 +682,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "B4 new survivors",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessGuardTest::test_the_witnesss_WEIGHTED_tally_must_sum_to_its_world_count"
@@ -640,7 +691,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "B4 new survivors",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafWitnessGuardTest::test_the_DEAD_END_term_of_the_fallback_numerator_is_pinned"
@@ -649,7 +700,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 126 passed",
+      "detail": "2 failed, 132 passed",
       "family": "B5 narrower items",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_the_migration_refuses_an_ABSENT_precondition_rather_than_reading_zero"
@@ -658,7 +709,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "3 failed, 126 passed",
+      "detail": "3 failed, 132 passed",
       "family": "B5 narrower items",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_the_migration_does_not_OVERWRITE_a_banked_quotient"
@@ -667,7 +718,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "4 failed, 125 passed",
+      "detail": "4 failed, 131 passed",
       "family": "B5 narrower items",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_the_siblings_FLAG_OFF_shard_is_refused_by_this_reader",
@@ -677,7 +728,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "3 failed, 123 passed",
+      "detail": "3 failed, 129 passed",
       "family": "B5 narrower items",
       "killers": [
         "tests/test_rollout_model_priors.py::RolloutLeafShardSchemaTest::test_an_unbalanced_partition_refuses",
@@ -688,7 +739,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "B5 narrower items",
       "killers": [
         "tests/test_mcts_acceptance_report.py::ModelPathDepthInstrumentationTest::test_REGISTER_AND_STARVE_is_refused_rather_than_silently_substituted"
@@ -697,7 +748,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "1 failed, 125 passed",
+      "detail": "1 failed, 131 passed",
       "family": "B5 narrower items",
       "killers": [
         "tests/test_mcts_acceptance_report.py::ModelPathDepthInstrumentationTest::test_REGISTER_AND_STARVE_is_refused_rather_than_silently_substituted"
@@ -706,7 +757,7 @@
       "status": "KILLED"
     },
     {
-      "detail": "3 failed, 126 passed",
+      "detail": "3 failed, 132 passed",
       "family": "B5 narrower items",
       "killers": [
         "tests/test_rollout_model_priors.py::BankedShardCarriesThePooledWitnessTest::test_the_crosscheck_refuses_a_CONTROL_MODE_shard_claiming_the_arm"
@@ -722,9 +773,11 @@
   ],
   "survived": 0,
   "targets": {
-    "engine_search.py": "a3d380daf57b3d9d3b41c702971015ec55b718b4878ed3e8c649ff1f08894ff7",
+    "engine_search.py": "6f91c6060a2a7ea2ea1232c7eba91d8241e743dc1a93732d8e6a17c069b47fad",
     "foulplay_bridge.py": "77f43c5b8556c8b032fb58174f007218402e0b191594ac44c1b738e5f76b8f1a",
-    "foulplay_paired_eval.py": "e167f6fd42755a2594714b4f62311aca9fa8bfb0c3d813f22ba2748204dced03",
-    "foulplay_power_report.py": "faa81e8f7669dfeba97fe6dfe10f6ce1fabc8cce60a2646bb4540ea1803f5bcf"
+    "foulplay_paired_eval.py": "933abbf5cff214bbcfd63379beb121fe2964287df8a571a27fbfc3b195192a9e",
+    "foulplay_power_report.py": "faa81e8f7669dfeba97fe6dfe10f6ce1fabc8cce60a2646bb4540ea1803f5bcf",
+    "hc_depth_grid.py": "fdd534de5b32d4b788b196de7fabb68073cb8ba4542851a638ee33067191b3c1",
+    "mcts_acceptance_h2h.py": "dff764e119cab64367595b92b4c7c0541262909e47a8d45f967c1777aa8c77a4"
   }
 }
