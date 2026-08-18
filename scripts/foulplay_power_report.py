@@ -55,6 +55,14 @@ import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+# The reader-side schema refusal, on the POOLING reader. See
+# `require_rollout_leaf_document_schema`: this is the second of the two read-path
+# call sites, and it is the one that decides what gets averaged.
+from pokezero.engine_search import (  # noqa: E402
+    require_rollout_leaf_document_schema,
+)
 
 SCHEMA_VERSION = "pokezero.foulplay-power-report.v1"
 # Section 6, binding. Reported against the mean; p95 is reported, not gated.
@@ -105,6 +113,13 @@ def load_shards(paths: list[str]) -> list[dict]:
         schema = payload.get("schema_version")
         if schema != "pokezero.foulplay-paired-shard.v1":
             raise SystemExit(f"{path}: unexpected schema_version {schema!r}")
+        # THE DOCUMENT'S schema_version SAYS NOTHING ABOUT ITS ROLLOUT BLOCK. The
+        # check above pins the paired-shard envelope, which was already at v1 before
+        # the rollout columns existed and does not move when they are re-schemaed --
+        # so this pooling reader would have averaged a v1 rollout block, or a block
+        # whose world counter it reads as zero, without the envelope changing a
+        # character. Refused here, on the read, in the process that does the pooling.
+        require_rollout_leaf_document_schema(payload)
         payload["_path"] = path
         shards.append(payload)
     if not shards:

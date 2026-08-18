@@ -298,8 +298,23 @@ def main(argv: list[str] | None = None) -> int:
         }
         if depth is not None and hasattr(candidate, "stats"):
             payload["engine_stats"] = candidate.stats.to_dict()
+        # THE FOURTH WRITER, and the THIRD SPELLING of the same mapping:
+        # `engine_stats`, not `engine_mcts.policy_stats` and not a root
+        # `policy_stats`. A guard that finds blocks by their parent's key name has to
+        # learn each spelling; this one keys off the block's own columns and therefore
+        # already covers a fifth writer that picks a fifth name.
+        # THROUGH THE FUNNEL, not beside it. Review measured that the bare
+        # `require_rollout_leaf_document_schema(payload)` that used to stand here was
+        # a FREE DELETION -- zero semantic failures across the whole suite, because
+        # no test drives this `main()`. `write_guarded_document` refuses before it
+        # opens the file, so there is no spelling of "write this cell" here that
+        # skips the refusal.
+        from pokezero.engine_search import write_guarded_document  # noqa: PLC0415
+
         target = out_dir / f"{cell.replace(':', '-').replace('/', '_')}.json"
-        target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        write_guarded_document(
+            target, payload, indent=2, sort_keys=True, trailing_newline=True
+        )
         print(
             f"[{cell}] score {payload['score']:.3f} "
             f"[{low:.3f}, {high:.3f}] n={len(results)} -> {target}",

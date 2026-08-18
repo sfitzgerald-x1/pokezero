@@ -50,6 +50,16 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+# THE READER SIDE OF THE ROLLOUT-LEAF SHARD SCHEMA. Imported here, in the driver
+# that LOADS the bridge's summaries off disk, because that is what makes the
+# writer-side refusal in `foulplay_bridge._shard_json_text` independently deletable
+# rather than the only copy. See `require_rollout_leaf_document_schema`.
+from pokezero.engine_search import (  # noqa: E402
+    require_rollout_leaf_document_schema,
+    write_guarded_document,
+)
 
 SEATS = ("p1", "p2")
 SCHEMA_VERSION = "pokezero.foulplay-paired-shard.v1"
@@ -388,6 +398,18 @@ def run_seat(args: argparse.Namespace, seat: str) -> dict:
     if not summary_path.exists():
         raise SystemExit(f"bridge wrote no summary at {summary_path}")
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    # THE OTHER SIDE OF THE DISK. This shard's rollout-leaf block was refused at the
+    # write by a guard in another process; it is refused again HERE, on the read, by a
+    # call reached through a different import path -- so a shard written past a deleted
+    # writer-side guard is refused instead of pooled. That claim was made before this
+    # call existed, and it was false then: every caller of the schema refusal was on
+    # the write side, one nested inside the other.
+    #
+    # Placed before `seat_block` rather than inside it, because `seat_block` copies the
+    # whole `policy_stats` mapping through VERBATIM into the merged shard -- so a
+    # re-schemaed block that got past here would be re-published under this driver's
+    # own schema version with its columns silently renamed.
+    require_rollout_leaf_document_schema(summary)
     summary["_seat_wall_s"] = round(time.perf_counter() - started, 1)
     return summary
 
@@ -848,7 +870,17 @@ def main(argv=None) -> int:
         "rows": [row for seat in SEATS for row in rows[seat].values()],
         "wall_s": round(time.perf_counter() - started, 1),
     }
-    Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    # AND THIS DRIVER IS ITSELF A WRITER THAT REACHES DISK. `seat_block` copies each
+    # seat's whole `policy_stats` mapping through verbatim, so the merged shard carries
+    # every rollout column -- under `per_seat[seat].policy_stats`, which is NOT an
+    # `engine_mcts` block with a `decisions` field and therefore invisible to
+    # `require_banked_shard_witness`'s parent-keyed block finder.
+    # `require_rollout_leaf_document_schema` finds blocks by their OWN columns, so it
+    # sees this layout and the three others the repo writes. THROUGH THE FUNNEL, not
+    # beside it: the bare guard call that used to stand here was measured as a FREE
+    # DELETION (zero semantic failures suite-wide, because no test drives this
+    # `main()`), so the write now carries the refusal it cannot be separated from.
+    write_guarded_document(args.out, report, indent=2)
     print("\n=== SHARD COMPLETE ===")
     print(json.dumps({k: v for k, v in report.items() if k != "rows"}, indent=2))
     return 0
