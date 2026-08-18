@@ -549,12 +549,13 @@ saying they are still "open" would be false.
 
 **Four residues, each named because the discharge does not cover it:**
 
-1. **The pool half is not re-derived in CI.** `scripts/c154_unreachable_readjudication.py` requires
-   a pokemon-showdown checkout, and **zero** steps in `.github/workflows/engine-fidelity-gates.yml`
-   check one out — the single mention of `pokemon-showdown` in that file is a comment. The `pool`
-   block is therefore a committed measurement at Showdown
-   `f76228a1354b5d0f307ca2d16101294ad3a2308b`, and a `sets.json` bump that added `taunt` to a set
-   would leave the module green and the ledger wrong. Bounded and nameable.
+1. **The pool half is not re-derived in CI.** One pinned
+   `smogon/pokemon-showdown` checkout now supplies the model-path arbiter test,
+   but CI still does not run `scripts/c154_unreachable_readjudication.py` against
+   it. The `pool` block is therefore a committed measurement at Showdown
+   `f76228a1354b5d0f307ca2d16101294ad3a2308b`, and a `sets.json` bump that added
+   `taunt` to a set would leave the C154 module green and the ledger wrong.
+   Bounded and nameable.
 2. **Five judgements are human readings**, enumerated in `reports/c154_unreachable_readjudication.md`
    §5 and derived here as a count of that numbered list: R1's one-keyword-argument closure, R9's
    mechanic enumeration, R22's correctness judgement, R7's one-module absence, and the
@@ -987,7 +988,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t6.section_4_population_anchor` | reports/c138_known_gaps_ledger.md:589 |
 | `t6.verdicts_unreachable` | 26 |
 | `t6.verdicts_withdrawn` | 1 |
-| `t6.workflow_steps_checking_out_showdown` | 0 |
+| `t6.workflow_steps_checking_out_showdown` | 1 |
 
 > **Historical merge note (#1257).** That head was the MERGE of `scott/head-to-head-raw` into `main`, and
 > its stamp is neither parent's: the branch alone stamped `39761759f252a58d…` and main alone

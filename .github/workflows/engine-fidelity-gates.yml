@@ -403,6 +403,32 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # The model-path arbiter classes create a real encoded search.  They need
+      # the Gen 3 dex and the encoder tables derived from it; without a built
+      # Showdown tree, unittest SKIPs those 21 behaviour tests while reporting
+      # green.  Pin and build the same upstream source explicitly so this gate
+      # can reject a skip rather than silently dropping the production rung.
+      - name: Checkout pinned Pokemon Showdown for model-path arbiter tests
+        uses: actions/checkout@v4
+        with:
+          repository: smogon/pokemon-showdown
+          ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
+          path: .ci/pokemon-showdown
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.2"
+          cache: npm
+          cache-dependency-path: .ci/pokemon-showdown/package-lock.json
+
+      - name: Build pinned Pokemon Showdown for model-path arbiter tests
+        run: |
+          set -o pipefail
+          npm ci --prefix .ci/pokemon-showdown
+          npm run build --prefix .ci/pokemon-showdown
+          test -f .ci/pokemon-showdown/dist/sim/dex.js
+
       # uv is REQUIRED, not optional: scripts/vendor_poke_engine_src.sh and
       # scripts/setup_poke_engine.sh call `uv run ... pip download` and `uv pip
       # install` with no fallback, and uv is not on the ubuntu runner image. Without
@@ -1935,6 +1961,8 @@ jobs:
           fi
 
       - name: Rollout-leaf arbiter witnesses and mutation record run on the model wheel
+        env:
+          POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
         run: |
           set -o pipefail
           # The Phase 1 arbiter is a model-path feature. A plain maturin wheel makes

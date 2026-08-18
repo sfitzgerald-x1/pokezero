@@ -858,12 +858,18 @@ def single_seat_subkeys_in_corpus() -> list[str]:
 
 
 def workflow_showdown_checkouts() -> list[str]:
-    """Non-comment workflow lines that would obtain a pokemon-showdown checkout."""
+    """The pinned Pokemon Showdown checkout declaration(s) in the workflow.
+
+    Counting every path that names the checkout is not a step count: its cache
+    key, build command, and environment variable all name the same tree.  The
+    repository declaration is the one line that establishes a distinct source
+    checkout and carries its immutable ref beside it.
+    """
 
     return [
         line
         for line in _text(WORKFLOW).splitlines()
-        if "pokemon-showdown" in line and not line.strip().startswith("#")
+        if line.strip() == "repository: smogon/pokemon-showdown"
     ]
 
 
@@ -1197,17 +1203,19 @@ class TheDerivationsReadSomethingTests(unittest.TestCase):
         self.assertIn("RATIFIED_SWEEP_PRECONDITION", names)
         self.assertGreater(len(names), 20)
 
-    def test_the_workflow_scan_sees_the_comment_it_excludes(self) -> None:
-        # `t6.workflow_steps_checking_out_showdown` is 0 because the one mention is a
-        # comment. If the scan stopped reading the file it would also report 0.
-        mentions = [
-            line
-            for line in _text(WORKFLOW).splitlines()
-            if "pokemon-showdown" in line
-        ]
-        self.assertEqual(len(mentions), 1)
-        self.assertTrue(mentions[0].strip().startswith("#"))
-        self.assertEqual(workflow_showdown_checkouts(), [])
+    def test_the_workflow_scan_finds_exactly_the_pinned_checkout(self) -> None:
+        # `t6.workflow_steps_checking_out_showdown` is 1.  A source name occurs
+        # in its path, cache key, build command, and env var too, so scan the
+        # `repository:` declaration that defines a checkout rather than counting
+        # incidental strings.  The enclosing action makes this a checkout rather
+        # than a documentation-only source reference.
+        lines = _text(WORKFLOW).splitlines()
+        expected = "repository: smogon/pokemon-showdown"
+        indices = [i for i, line in enumerate(lines) if line.strip() == expected]
+        self.assertEqual(len(indices), 1)
+        preceding = "\n".join(lines[max(0, indices[0] - 6) : indices[0]])
+        self.assertIn("uses: actions/checkout@v4", preceding)
+        self.assertEqual(workflow_showdown_checkouts(), [lines[indices[0]]])
 
     def test_the_single_seat_subkey_scan_finds_the_unkeyed_counter(self) -> None:
         # The absence is `skip:single_seat_boundary:<reason>`. The BARE counter is present
