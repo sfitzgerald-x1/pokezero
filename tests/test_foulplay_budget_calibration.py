@@ -75,6 +75,7 @@ def shard(
     }
     think = {
         "schema_version": FOULPLAY_THINK_SCHEMA_VERSION,
+        "budget_ms_configured": budget,
         "mean_iterations_per_budget_second": 500.0,
         "iterations_measured_decisions": 100,
         "iterations_coverage": 1.0,
@@ -145,17 +146,33 @@ class FoulPlayBudgetCalibrationTest(unittest.TestCase):
             {"baseline": 1000, "reduced": 760, "cut_fraction": 0.24},
         )
         comparison = report["paired_comparison"]
-        self.assertEqual(comparison["pairs"], 4)
+        self.assertEqual(comparison["mirrored_seed_pairs"], 2)
         self.assertEqual(comparison["reduced_minus_baseline"]["point"], 1.0)
-        self.assertEqual(comparison["discordant"]["reduced_higher_score"], 4)
+        self.assertEqual(comparison["discordant"]["reduced_higher_score"], 2)
         self.assertIn("760 ms minus score at 1000 ms", comparison["estimand"])
+        self.assertEqual(
+            report["conditions"]["baseline"],
+            {"shards": 1, "mirrored_seed_pairs": 2, "seat_observations": 4, "score_rate": 0.0},
+        )
 
     def test_default_minimum_refuses_a_small_fixture_instead_of_calling_it_a_verdict(self) -> None:
-        with self.assertRaisesRegex(SystemExit, "mirrored pairs < required minimum"):
+        with self.assertRaisesRegex(SystemExit, "mirrored seed pairs < required minimum"):
             run([
                 shard("baseline", scores(0.0)),
                 shard("reduced", scores(1.0)),
             ], min_pairs=_C.MIN_PAIRS)
+
+    def test_minimum_counts_independent_seed_pairs_not_seat_observations(self) -> None:
+        with self.assertRaisesRegex(
+            SystemExit, "200 mirrored seed pairs < required minimum 400"
+        ):
+            run(
+                [
+                    shard("baseline", scores(0.0, pairs=200), pairs=200),
+                    shard("reduced", scores(1.0, pairs=200), pairs=200),
+                ],
+                min_pairs=_C.MIN_PAIRS,
+            )
 
     def test_a_wrong_budget_cannot_be_relabelled_as_the_named_cut(self) -> None:
         reduced = shard("reduced", scores(1.0))
@@ -197,3 +214,21 @@ class FoulPlayBudgetCalibrationTest(unittest.TestCase):
         reduced["per_seat"]["p2"]["foulplay_think_reading"] = {"usable": True}
         with self.assertRaisesRegex(SystemExit, "admissible FoulPlay think reading"):
             run([shard("baseline", scores(0.0)), reduced])
+
+    def test_each_seat_must_attest_the_condition_budget(self) -> None:
+        missing = shard("baseline", scores(0.0))
+        del missing["per_seat"]["p1"]["foulplay_think"]["budget_ms_configured"]
+        with self.assertRaisesRegex(SystemExit, "configured budget"):
+            run([missing, shard("reduced", scores(1.0))])
+
+        mismatched = shard("baseline", scores(0.0))
+        mismatched["per_seat"]["p1"]["foulplay_think"]["budget_ms_configured"] = 760
+        with self.assertRaisesRegex(SystemExit, "does not match the baseline condition"):
+            run([mismatched, shard("reduced", scores(1.0))])
+
+        baseline = shard("baseline", scores(0.0))
+        reduced = shard("reduced", scores(1.0))
+        baseline["per_seat"]["p1"]["foulplay_think"]["budget_ms_configured"] = 760
+        reduced["per_seat"]["p2"]["foulplay_think"]["budget_ms_configured"] = 1000
+        with self.assertRaisesRegex(SystemExit, "does not match the baseline condition"):
+            run([baseline, reduced])

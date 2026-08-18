@@ -7,7 +7,8 @@ per-battle budget cut into score units. It is intentionally not the generic
 power report:
 
 * both conditions run the same raw PokeZero checkpoint, mirrored over identical
-  ``(seed, seat)`` pairs;
+  seeds; the p1/p2 seat readings for each seed are averaged into one
+  independent paired observation;
 * the only treatment is FoulPlay's budget, exactly 1000 ms versus 760 ms;
 * every shard carries a named calibration and resource-layout identity, so a
   different opponent budget, raw checkpoint, or host allocation cannot pool;
@@ -237,6 +238,20 @@ def _condition_rows(
             header = block["foulplay_think"]
             if header.get("schema_version") != FOULPLAY_THINK_SCHEMA_VERSION:
                 raise SystemExit(f"{path}: {seat} has an unsupported FoulPlay think schema")
+            expected_budget = {
+                "baseline": FOULPLAY_BUDGET_CALIBRATION_BASELINE_MS,
+                "reduced": FOULPLAY_BUDGET_CALIBRATION_REDUCED_MS,
+            }[condition]
+            configured_budget = _exact_int(
+                header.get("budget_ms_configured"),
+                path=path,
+                field=f"{seat} FoulPlay think configured budget",
+            )
+            if configured_budget != expected_budget:
+                raise SystemExit(
+                    f"{path}: {seat} FoulPlay think configured budget "
+                    f"{configured_budget} does not match the {condition} condition"
+                )
             reading = block.get("foulplay_think_reading")
             expected_reading = foulplay_think_reading_status(header)
             if reading != expected_reading or not expected_reading["usable"]:
@@ -261,6 +276,30 @@ def _condition_rows(
     return rows, dict(shard_counts)
 
 
+def _mirrored_seed_scores(
+    seat_scores: dict[tuple[int, str], float], *, condition: str
+) -> dict[int, float]:
+    """Average the two correlated seat readings into one seed-paired score."""
+
+    by_seed: dict[int, dict[str, float]] = defaultdict(dict)
+    for (seed, seat), score in seat_scores.items():
+        by_seed[seed][seat] = score
+    missing = {
+        seed: sorted(set(SEATS) - set(scores))
+        for seed, scores in by_seed.items()
+        if set(scores) != set(SEATS)
+    }
+    if missing:
+        raise SystemExit(
+            f"{condition}: calibration rows do not contain both seats for every seed: "
+            f"{sorted(missing.items())[:3]}"
+        )
+    return {
+        seed: sum(by_seed[seed][seat] for seat in SEATS) / len(SEATS)
+        for seed in sorted(by_seed)
+    }
+
+
 def report_for(shards: list[dict], *, calibration_id: str, layout: str, min_pairs: int) -> dict:
     metadata = [_calibration_metadata(shard) for shard in shards]
     _require_uniform_run_identity(shards, metadata)
@@ -272,16 +311,22 @@ def report_for(shards: list[dict], *, calibration_id: str, layout: str, min_pair
     if actual_layout != layout:
         raise SystemExit(f"expected resource layout {layout!r}, found {actual_layout!r}")
     rows, shard_counts = _condition_rows(shards, metadata)
-    keys = sorted(rows["baseline"])
+    seed_scores = {
+        condition: _mirrored_seed_scores(scores, condition=condition)
+        for condition, scores in rows.items()
+    }
+    if set(seed_scores["baseline"]) != set(seed_scores["reduced"]):
+        raise SystemExit("baseline and reduced conditions do not cover the same seeds")
+    keys = sorted(seed_scores["baseline"])
     if len(keys) < min_pairs:
         raise SystemExit(
-            f"{len(keys)} mirrored pairs < required minimum {min_pairs}; refusing a "
+            f"{len(keys)} mirrored seed pairs < required minimum {min_pairs}; refusing a "
             "partial calibration verdict"
         )
     from pokezero.mcts_eval.scoring import bootstrap_indices, bootstrap_paired_delta
 
-    baseline = [rows["baseline"][key] for key in keys]
-    reduced = [rows["reduced"][key] for key in keys]
+    baseline = [seed_scores["baseline"][key] for key in keys]
+    reduced = [seed_scores["reduced"][key] for key in keys]
     interval = bootstrap_paired_delta(
         reduced,
         baseline,
@@ -314,15 +359,18 @@ def report_for(shards: list[dict], *, calibration_id: str, layout: str, min_pair
         "conditions": {
             condition: {
                 "shards": shard_counts[condition],
-                "pairs": len(scores),
-                "score_rate": sum(scores.values()) / len(scores),
+                "mirrored_seed_pairs": len(seed_scores[condition]),
+                "seat_observations": len(rows[condition]),
+                "score_rate": (
+                    sum(seed_scores[condition].values()) / len(seed_scores[condition])
+                ),
             }
-            for condition, scores in sorted(rows.items())
+            for condition in sorted(rows)
         },
         "paired_comparison": {
             "estimand": "raw PokeZero score at FoulPlay 760 ms minus score at 1000 ms",
             "positive_direction": "the lower FoulPlay budget raised raw PokeZero score",
-            "pairs": len(keys),
+            "mirrored_seed_pairs": len(keys),
             "reduced_minus_baseline": interval.to_payload(),
             "discordant": {
                 "reduced_higher_score": sum(delta > 0 for delta in deltas),

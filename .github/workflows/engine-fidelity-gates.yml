@@ -1998,8 +1998,8 @@ jobs:
             tests.test_foulplay_paired_eval \
             tests.test_foulplay_budget_calibration -v 2>&1 \
             | tee /tmp/rollout-leaf-arbiter.log
-          if ! grep -qE 'Ran 284 tests' /tmp/rollout-leaf-arbiter.log; then
-            echo "::error::the arbiter and calibration suite did not run all 284 tests"
+          if ! grep -qE 'Ran 286 tests' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the arbiter and calibration suite did not run all 286 tests"
             exit 1
           fi
           if grep -qE 'skipped|OK \\(skipped' /tmp/rollout-leaf-arbiter.log; then
