@@ -5346,7 +5346,143 @@ def _showdown_id(value: str) -> str:
     return "".join(ch for ch in str(value).lower() if ch.isalnum())
 
 
+class BankedShardWitnessError(RuntimeError):
+    """A shard about to be BANKED does not carry the telemetry it claims.
+
+    Deliberately raised at the WRITE, not warned about: past this point the datum
+    is on disk and there is no later stage at which it can be recovered -- the
+    policy object it came from is gone with the process.
+    """
+
+
+def _engine_mcts_blocks(payload: Any) -> "list[Mapping[str, Any]]":
+    """Every bridge-level ``engine_mcts`` block anywhere in a shard payload.
+
+    RECURSIVE because the comparison summaries nest one block per arm, and a guard
+    that only looked at the top level would pass exactly the payloads where two
+    arms are compared -- which is every payload the arbiter reads.
+    """
+
+    found: list[Mapping[str, Any]] = []
+    if isinstance(payload, Mapping):
+        block = payload.get("engine_mcts")
+        # `decisions` is what distinguishes a bridge-level block (a run summary)
+        # from a per-decision `engine_mcts` block in a policy's metadata. The
+        # membership test is on `decisions` and NOT on `policy_stats`, because a
+        # missing `policy_stats` is precisely the defect being refused -- keying the
+        # guard off the field it checks would make it unable to see its absence.
+        if isinstance(block, Mapping) and "decisions" in block:
+            found.append(block)
+        for value in payload.values():
+            found.extend(_engine_mcts_blocks(value))
+    elif isinstance(payload, (list, tuple)):
+        for value in payload:
+            found.extend(_engine_mcts_blocks(value))
+    return found
+
+
+def require_banked_shard_witness(payload: Mapping[str, Any]) -> None:
+    """Refuse to bank a shard whose engine telemetry is missing or re-schemaed.
+
+    WHY IT IS HERE AND NOT ONE FRAME IN. The pooled rollout witness travelled a
+    chain -- crate report -> `_search_model`'s absorb -> `EngineMctsStats` ->
+    `EngineMctsStats.to_dict` -> `_engine_policy_stats` -> `policy_stats` ->
+    ``"policy_stats": self.policy_stats`` -> disk -- and twelve mutants on the first
+    six hops were all killed while the SEVENTH survived: `self.policy_stats` ->
+    `None`, and `_engine_policy_stats` -> `{}`, both passed the whole suite. That is
+    the historical silent-empty bug (`"policy_stats": {}` on every acceptance
+    shard) reappearing one frame further out than the tests had followed, which is
+    the third time an extracted method moved the untested boundary outward.
+
+    So the guard is placed at the LAST FRAME IN THIS REPOSITORY THAT HOLDS THE
+    DATUM -- the single funnel through which every shard reaches disk. Walking
+    further out is not possible: the next consumer is a file, and a check that runs
+    after the write cannot prevent the bank.
+
+    Deleting THIS is not silent either, and that is deliberate rather than
+    turtles-all-the-way-down: the reader-side refusal
+    (`require_rollout_leaf_shard_schema`) fires on the same shard from the other
+    side of the disk, so a shard written past a deleted writer-side guard is
+    REFUSED ON READ instead of pooled. Both frames -- opposite sides of the
+    artifact -- would have to be deleted together for the corruption to be quiet,
+    and each ships its own failing input.
+    """
+
+    from .engine_search import require_rollout_leaf_shard_schema
+
+    for block in _engine_mcts_blocks(payload):
+        if "policy_stats" not in block:
+            raise BankedShardWitnessError(
+                "an engine-mcts shard block carries no 'policy_stats' key at all. "
+                "That block is the ONLY path by which the searcher's own telemetry "
+                "-- search_wall_per_searched_decision, the override counters and "
+                "the rollout arm's fallback fraction -- reaches an artifact, so a "
+                "shard without it is a run whose arm identity cannot be witnessed "
+                "from the shard and has to be taken from the job label instead."
+            )
+        stats = block["policy_stats"]
+        if not isinstance(stats, Mapping) or not stats:
+            raise BankedShardWitnessError(
+                f"an engine-mcts shard block carries policy_stats={stats!r}. This is "
+                "the SILENT-EMPTY shape: the failure that left every acceptance "
+                "shard with '\"policy_stats\": {}' and was invisible because an "
+                "empty block reads as a run that measured nothing rather than as a "
+                "run whose measurements were dropped on the floor. "
+                "`_engine_policy_stats` raises rather than returning {} for exactly "
+                "this reason; a None or empty block here means something downstream "
+                "of it dropped the mapping."
+            )
+        require_rollout_leaf_shard_schema(stats)
+        # THE ASKED-FOR SIDE AGAINST THE RAN SIDE, which is the cross-check the
+        # sibling branch's own docstring names and leaves unenforced: "Still only the
+        # ASKED-FOR side. Whether the seam actually engaged at runtime is a per-seat
+        # reading off `policy_stats.rollout_leaf_modes`; a shard with `rollout_leaf:
+        # true` here and no leaf modes there ran the value head."
+        #
+        # An earlier revision of this guard refused the bare BOOLEAN outright, on the
+        # grounds that `rollout_leaf` names the witness mapping in the per-decision
+        # metadata. That was over-reach, and checking the artifacts said so: the
+        # witness mapping never reaches a shard (only the pooled columns do), so in a
+        # banked shard `engine_mcts.rollout_leaf` unambiguously means the config echo,
+        # and refusing it would have refused every legitimate shard the sibling writes
+        # while forcing a rename through a reviewed reader for no artifact-level gain.
+        # The collision is source-level. What is DANGEROUS is the disagreement, and
+        # that is what is refused here instead.
+        #
+        # ABSENT IS NOT FALSE: a writer that does not echo the knob at all gets no
+        # cross-check, because "the arm was not asked for" and "this writer does not
+        # record what was asked for" are different statements.
+        if "rollout_leaf" in block:
+            claimed = bool(block["rollout_leaf"])
+            engaged = bool(stats.get("rollout_leaf_modes"))
+            if claimed and not engaged:
+                raise BankedShardWitnessError(
+                    "this shard's config says the rollout arm was asked for "
+                    f"(rollout_leaf={block['rollout_leaf']!r}) and its telemetry says "
+                    "no pricer ever ran (policy_stats.rollout_leaf_modes is "
+                    f"{stats.get('rollout_leaf_modes')!r}). The leaves were priced by "
+                    "the MODEL, so this is a raw-arm run wearing the arm's config -- "
+                    "and every rollout number read off it would be a number about a "
+                    "search that ran no rollouts."
+                )
+            if engaged and not claimed:
+                raise BankedShardWitnessError(
+                    "this shard's config says the rollout arm was NOT asked for "
+                    f"(rollout_leaf={block['rollout_leaf']!r}) and its telemetry says "
+                    f"a pricer ran ({stats.get('rollout_leaf_modes')!r}). This is the "
+                    "FALSE WITNESS shape on the pooled surface: the raw arm is the "
+                    "denominator of every paired delta, so a raw row carrying the "
+                    "arm's provenance corrupts the comparison rather than one arm of "
+                    "it. Its live instance was `--arm raw --engine-rollout-leaf`."
+                )
+
+
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    # THE PROCESS BOUNDARY. Checked here rather than in `to_dict` because `to_dict`
+    # is one frame in: the line that carries `policy_stats` out of the result object
+    # is itself deletable, and deleting it is what survived. This is the last frame
+    # that still holds the payload.
+    require_banked_shard_witness(payload)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")

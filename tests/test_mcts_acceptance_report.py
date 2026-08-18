@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,27 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REPORT = REPO_ROOT / "scripts" / "mcts_acceptance_report.py"
+
+#: The reached-depth accumulation, as it appears on every leaf-eval search path.
+_DEPTH_ACCUMULATION = r"depth_reached_histogram\[reached\] \+= "
+
+
+def _depth_accumulation_sites(source: str, method: str) -> int:
+    """How many reached-depth accumulations sit inside ``method``'s body.
+
+    A FUNCTION OF ITS INPUTS, not a method reading the tree, so the guard that uses
+    it can be shown to read False on a synthetic fourth search path. A checker that
+    can only be pointed at the real file cannot demonstrate its own failing input,
+    which is how the "a NEW leaf-eval path fails here" claim went unchecked.
+    """
+
+    marker = f"    def {method}("
+    if marker not in source:
+        return 0
+    rest = source[source.index(marker) + 1 :]
+    end = rest.find("\n    def ")
+    body = rest if end < 0 else rest[:end]
+    return len(re.findall(_DEPTH_ACCUMULATION, body))
 FINGERPRINT_A = "a" * 64
 FINGERPRINT_B = "b" * 64
 
@@ -193,8 +215,6 @@ class ModelPathDepthInstrumentationTest(unittest.TestCase):
     """
 
     def test_model_path_accumulates_reached_depth(self) -> None:
-        import re
-
         source = (REPO_ROOT / "src" / "pokezero" / "engine_search.py").read_text()
         # The two accumulation sites must both exist: the hp_fraction path and
         # the model path. Locate them by their neighbouring model-only counter.
@@ -212,40 +232,126 @@ class ModelPathDepthInstrumentationTest(unittest.TestCase):
                 f"model path does not accumulate {field}; a depth ladder run on "
                 "leaf_eval='model' would carry no reached-depth evidence",
             )
-        # ONE SITE PER LEAF-EVAL SEARCH PATH, located BY METHOD rather than counted
-        # across the file.
-        #
-        # This assertion read `== 2` ("hp_fraction and model") and the rollout-leaf
-        # seam legitimately added a third path, `_search_rollout_crate`. That is
-        # exactly the shape where the fix a reader reaches for is to bump the number
-        # -- and a bumped count is satisfied by TWO sites on one path and NONE on
-        # another, which is the defect the guard exists to catch. So the requirement
-        # is now per path: every leaf-eval search method carries its own
-        # accumulation, and a NEW leaf-eval path fails here until it is instrumented.
-        pattern = r"depth_reached_histogram\[reached\] \+= "
-        methods = ("_search_hp_fraction_crate", "_search_rollout_crate", "_search_model")
-        bodies = {}
-        for name in methods:
-            start = source.index(f"    def {name}(")
-            # Up to the next method definition at the same indentation.
-            rest = source[start + 1 :]
-            end = rest.find("\n    def ")
-            bodies[name] = rest if end < 0 else rest[:end]
+
+    def test_every_registered_leaf_eval_path_accumulates_reached_depth_once(self) -> None:
+        """ONE SITE PER REGISTERED LEAF-EVAL PATH, derived rather than counted.
+
+        The previous form read `== 2` ("hp_fraction and model"), the rollout seam
+        legitimately added a third path, and the fix was to make the requirement per
+        path -- with the path list written as a LITERAL TUPLE and the file-wide total
+        compared against `len(` that same tuple. Both halves were then
+        self-referential, and the stated claim -- "a NEW leaf-eval path fails here
+        until it is instrumented" -- was FALSE: a fourth uninstrumented search
+        method leaves the total at 3 and survived a 39-module sweep. That is
+        demonstrated below, on this test's own checker.
+
+        The expectation is now DERIVED from `LEAF_EVAL_SEARCH_METHODS`, and
+        registration there is what makes a mode selectable at all
+        (`EngineMctsConfig.__post_init__` validates against its keys). So a new
+        leaf-eval path is either unregistered -- in which case no config can reach
+        it and it is not a leaf-eval path -- or registered, in which case it appears
+        here and must carry its own accumulation.
+        """
+        from pokezero import engine_search
+
+        source = (REPO_ROOT / "src" / "pokezero" / "engine_search.py").read_text()
+        methods = engine_search.DEPTH_INSTRUMENTED_SEARCH_METHODS
+        self.assertGreaterEqual(
+            len(methods),
+            3,
+            "the registry must still name the crate-backed leaf-eval paths; an "
+            "empty derived set would make every assertion below vacuous",
+        )
         for name in methods:
             with self.subTest(path=name):
                 self.assertEqual(
-                    len(re.findall(pattern, bodies[name])),
+                    _depth_accumulation_sites(source, name),
                     1,
                     f"{name} must accumulate the reached-depth histogram exactly "
                     "once; a leaf-eval path without it carries no depth evidence, "
                     "and one with two double-counts every world",
                 )
         self.assertEqual(
-            len(re.findall(pattern, source)),
+            len(re.findall(_DEPTH_ACCUMULATION, source)),
             len(methods),
-            "the file must hold exactly one accumulation per leaf-eval search "
-            f"path ({', '.join(methods)}) and no others -- a site outside them is "
-            "unaccounted for",
+            "the file must hold exactly one accumulation per REGISTERED leaf-eval "
+            f"search path ({', '.join(methods)}) and no others -- a site outside "
+            "them is unaccounted for",
+        )
+
+    def test_the_registry_is_what_makes_a_leaf_eval_mode_selectable(self) -> None:
+        """The half of the claim that lives outside this file.
+
+        "A new leaf-eval path fails here until it is instrumented" is only true if a
+        path that skips the registry cannot run. So: every registered key must
+        construct, and an unregistered one must be refused by the config itself.
+        """
+        from pokezero.engine_search import EngineMctsConfig, LEAF_EVAL_SEARCH_METHODS
+
+        for mode in LEAF_EVAL_SEARCH_METHODS:
+            with self.subTest(mode=mode):
+                # Some modes have further required knobs (`model` needs its
+                # artifacts), so the assertion is on the MEMBERSHIP refusal
+                # specifically -- a registered mode never trips it.
+                try:
+                    EngineMctsConfig(
+                        leaf_eval=mode,
+                        search_sims=1,
+                        search_depth=1,
+                        rollout_count=1,
+                    )
+                except ValueError as error:
+                    self.assertNotIn("leaf_eval must be", str(error))
+        with self.assertRaisesRegex(ValueError, "leaf_eval must be"):
+            EngineMctsConfig(leaf_eval="fourth_pricer")
+
+    def test_an_unregistered_path_is_the_hole_and_registering_it_closes_it(self) -> None:
+        """THE DEMONSTRATED FAILING INPUT for this guard, in both directions.
+
+        Applied to this test's own checker rather than to the tree, because the
+        defect is a property of the checker: given a fourth search method with no
+        accumulation, the OLD form (a literal method list plus a total compared
+        against its length) reads True, and the derived form reads False the moment
+        the method is registered.
+        """
+        source = (REPO_ROOT / "src" / "pokezero" / "engine_search.py").read_text()
+        fourth = (
+            "\n    def _search_fourth_pricer(self, context, worlds, rng):\n"
+            '        """A leaf-eval path that reports no reached depth."""\n'
+            "        return None\n"
+        )
+        mutant = source + fourth
+
+        # The OLD shape: a hard-coded list of three, and a file-wide total compared
+        # against len(that list). Both still hold -- which is the bug.
+        legacy = ("_search_hp_fraction_crate", "_search_rollout_crate", "_search_model")
+        self.assertEqual(len(re.findall(_DEPTH_ACCUMULATION, mutant)), len(legacy))
+        for name in legacy:
+            self.assertEqual(_depth_accumulation_sites(mutant, name), 1)
+
+        # The DERIVED shape, with the fourth path registered: reads False.
+        self.assertEqual(_depth_accumulation_sites(mutant, "_search_fourth_pricer"), 0)
+        registered = legacy + ("_search_fourth_pricer",)
+        self.assertNotEqual(
+            len(re.findall(_DEPTH_ACCUMULATION, mutant)),
+            len(registered),
+            "with the fourth path registered the file-wide total must no longer "
+            "match the registry -- otherwise the derived form is no stronger than "
+            "the literal one it replaces",
+        )
+
+        # ... and instrumenting it makes the derived form pass again, so the check is
+        # discriminating rather than merely refusing anything new.
+        instrumented = source + fourth.replace(
+            "        return None\n",
+            "        self.stats.depth_reached_histogram[reached] += 1\n"
+            "        return None\n",
+        )
+        self.assertEqual(
+            _depth_accumulation_sites(instrumented, "_search_fourth_pricer"), 1
+        )
+        self.assertEqual(
+            len(re.findall(_DEPTH_ACCUMULATION, instrumented)), len(registered)
         )
 
     def test_runner_emits_the_policy_stats_payload(self) -> None:

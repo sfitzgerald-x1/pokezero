@@ -59,6 +59,7 @@ from __future__ import annotations
 import copy
 import json
 import random
+import re
 import sys
 import unittest
 from types import SimpleNamespace
@@ -76,7 +77,14 @@ from pokezero.engine_search import (
     EngineMctsPolicy,
     EngineMctsStats,
     EngineSearchWitnessError,
+    EngineShardSchemaError,
+    ROLLOUT_LEAF_REPORT_FIELDS,
+    ROLLOUT_LEAF_SHARD_FIELDS,
+    ROLLOUT_LEAF_SHARD_SCHEMA,
+    ROLLOUT_LEAF_V1_WORLD_FIELD,
     ROLLOUT_LEAF_WITNESS_FIELDS,
+    migrate_rollout_leaf_shard_v1,
+    require_rollout_leaf_shard_schema,
     require_rollout_leaf_witness,
 )
 
@@ -108,6 +116,45 @@ TIMING_FIELDS = frozenset(
 ENCODE_SKIP_WORK_FIELDS = frozenset(
     {"model_evals", "rollout_encode_skipped", "rollout_leaf_mode"}
 )
+
+#: A RATIO-SHAPED LITERAL: `1.8x`, `4.3x`, `1.25-3.98x`. The VALUE CLASS the CPU
+#: fence must not assert as the arm's cost, rather than the two specific figures
+#: someone happened to enumerate -- a third, unlisted ratio survived the enumerated
+#: form, which is the failure mode a value-class check exists to remove.
+_COST_RATIO = re.compile(r"\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?\s*x\b")
+
+#: The paragraph that is ALLOWED to name the contested figures, because its whole
+#: content is why neither may be quoted as the cost.
+_NO_POINT_RATIO = "NO POINT RATIO, because"
+
+
+def _cpu_fence_window(source: str) -> str:
+    """The `rollout_threads` CPU fence's own prose, read on its own.
+
+    Located rather than counted across the file, for the reason the sibling guard
+    records: an occurrence count over the whole module is satisfied by the guard's
+    own literal and says nothing about the fence that carried the claim.
+    """
+
+    start = source.index("HOW MUCH MORE CPU, MEASURED")
+    return source[start : start + 1400]
+
+
+def _stray_cost_ratios(source: str) -> list[str]:
+    """Every ratio-shaped literal in the CPU fence OUTSIDE the sanctioned paragraph.
+
+    A function of its input so the guard can be shown to read False on synthetic
+    attacks -- including the third shape nobody enumerated.
+    """
+
+    window = _cpu_fence_window(source)
+    start = window.index(_NO_POINT_RATIO)
+    end = window.index("\n    #\n", start)
+    return [
+        match.group(0)
+        for match in _COST_RATIO.finditer(window)
+        if not start <= match.start() < end
+    ]
 
 
 @unittest.skipUnless(_crate_ready, "crate not built with the model feature")
@@ -862,6 +909,15 @@ class RolloutSeamCallAssemblyTest(unittest.TestCase):
 # where the arm runs. At this file's own fixture config that fraction measures
 # 0.96503.
 #
+# THAT FIGURE IS THE FIXTURE'S, NOT THE ARM'S, and the distinction is load-bearing
+# because it is a claim about how honest the arm is. 0.96503 is measured at THIS
+# FILE'S 40-PLY CAP (`MAX_PLIES = 40`), which is a fixture chosen to make rollouts
+# cheap. The arm as LAUNCHED runs the default 200-ply cap, and its own banked
+# whole-game run measures `rollout_fallback_fraction = 0.018139547833834504` -- a
+# 98.2% oracle. The measured curve over the cap is 40 -> 0.965, 50 -> 0.8678,
+# 200 -> 0.0 on the search-only fixture, so `> 0.9` remains the right assertion HERE
+# and any prose saying the arm is 96.5% handcrafted is wrong.
+#
 # THE METHODOLOGICAL POINT, because a mutation-heavy round walked straight past
 # this: ABSENCE OF CODE IS NOT MUTATION-TESTABLE. A battery finds code that is
 # broken; it can never find code that was never written, so a seam that emitted
@@ -1035,9 +1091,12 @@ class RolloutLeafWitnessTravelsOnTheModelPathTest(_ShippingPathHarness, unittest
     def test_the_fallback_fraction_is_available_where_the_arm_runs(self) -> None:
         """The measurement that made this urgent.
 
-        A 96.5%-handcrafted evaluator must not be able to bank as an oracle. The
+        A mostly-handcrafted evaluator must not be able to bank as an oracle. The
         assertion is on the VALUE, not on the key's presence: a column that exists
         and reads 0 would be worse than a missing one.
+
+        0.96503 is this FIXTURE's number, at its 40-ply cap. The arm's own banked
+        whole-game run at the launched 200-ply cap reads 0.018139547833834504.
         """
         policy, decision = self._decide(arm=True)
         witness = decision.metadata["engine_mcts"]["rollout_leaf"]
@@ -1047,6 +1106,69 @@ class RolloutLeafWitnessTravelsOnTheModelPathTest(_ShippingPathHarness, unittest
         shard = policy.stats.to_dict()
         self.assertAlmostEqual(shard["rollout_fallback_fraction"], 0.96503, places=5)
         self.assertEqual(shard["rollout_leaf_modes"], {"rollout": 1})
+
+    def test_the_encode_skip_count_reaches_the_decision_and_the_shard(self) -> None:
+        """A2. `rollout_encode_skipped` was HALF-CLOSED, and this is the closure.
+
+        Its per-decision value died only under a `skipUnless(_crate_ready)` subtest,
+        so it was unguarded wherever the crate is absent -- which is most
+        environments and all of CI's non-crate jobs. This class runs with no crate,
+        so hard-zeroing the per-decision value or the shard column reads False HERE.
+
+        Asserted on the VALUE and on the SUM over worlds, not on key presence: the
+        two surviving mutants were `-> 0` and `-> {}`, both of which keep the key.
+        """
+        policy, decision = self._decide(arm=True, worlds=2)
+        witness = decision.metadata["engine_mcts"]["rollout_leaf"]
+        self.assertEqual(witness["rollout_encode_skipped"], 2 * 66)
+        shard = policy.stats.to_dict()
+        self.assertEqual(shard["rollout_encode_skipped"], 2 * 66)
+        # And the accounting identity the field exists FOR, on the shard's own
+        # numbers: forwards + skips == leaves + the root forward per world.
+        self.assertEqual(
+            shard["model_evals"] + shard["rollout_encode_skipped"],
+            shard["rollout_leaves_priced"] + 2,
+        )
+
+    def test_a_collapsed_draw_counts_the_worlds_it_represents(self) -> None:
+        """A6's accumulation rule, and the only place it is observable.
+
+        Two identical belief draws share ONE crate search (the draw cache collapses
+        them), so `+= 1` per report would record one world where two were
+        represented. `+= weight` records two. This is why v2's accumulation is the
+        more informative one -- and it is the mutant a two-distinct-world test cannot
+        kill, because every weight there is 1.
+
+        AND THE UNITS ARE NAMED, because they are not the same across the block:
+        `rollout_leaf_worlds` is per WORLD (weighted), while the cost ledger --
+        `rollouts_run`, `rollout_plies`, `leaves_priced`, `model_evals` -- is per
+        INVOCATION and is NOT weighted, because it measures compute that happened
+        once. So `rollouts_run / rollout_leaf_worlds` is not rollouts-per-world on a
+        run with collapses. Asserted here so a reader finds the asymmetry stated
+        rather than deriving a wrong ratio from it.
+        """
+        policy = self._policy(arm=True)
+        native = self._Native([self._report(rollout=True)])
+        decision = self._run(policy, native, [self._world("same"), self._world("same")])
+        self.assertEqual(len(native.calls), 1, "the draws must actually collapse")
+        self.assertEqual(policy.stats.worlds_collapsed, 1)
+        witness = decision.metadata["engine_mcts"]["rollout_leaf"]
+        self.assertEqual(witness["rollout_leaf_worlds"], 2)
+        self.assertEqual(policy.stats.to_dict()["rollout_leaf_worlds"], 2)
+        # The unweighted half of the same block, pinned as the asymmetry it is.
+        self.assertEqual(witness["rollouts_run"], 1344)
+        self.assertEqual(witness["leaves_priced"], 168)
+
+    def test_a_report_without_the_encode_skip_count_refuses_the_run(self) -> None:
+        """The report-side half: dropping the key from the crate's report must
+        refuse, not default to a zero that reads as "the skip never fired"."""
+        policy = self._policy(arm=True)
+        report = self._report(rollout=True)
+        del report["rollout_encode_skipped"]
+        native = self._Native([report])
+        with self.assertRaises(EngineSearchWitnessError) as caught:
+            self._run(policy, native, [self._world("w0")])
+        self.assertIn("rollout_encode_skipped", str(caught.exception))
 
     def test_a_missing_witness_refuses_the_run(self) -> None:
         """THE DEMONSTRATED FAILING INPUT, positive direction.
@@ -1278,11 +1400,54 @@ class RolloutLeafWitnessGuardTest(unittest.TestCase):
                 "rollout_terminal_hits",
                 "rollout_cap_hits",
                 "rollout_dead_ends",
+                "rollout_encode_skipped",
                 "rollout_fallback_fraction",
             ),
             "every name here is a field a decision must carry to be allowed to "
             "claim the rollout arm; removing one is a decision about the rule",
         )
+
+    def test_the_crate_report_field_map_is_pinned_by_literal(self) -> None:
+        """A2. The required-key list and the accumulation were TWO literals.
+
+        Dropping `rollout_encode_skipped` from the report's required-key list
+        SURVIVED, because nothing pinned the list and the sibling copy that fed the
+        accumulation was a different literal -- so neither copy's shrinkage was
+        visible from the other. They are now one mapping, pinned here, and the
+        values are the shard counters each key feeds so a rewire is visible too.
+        """
+        self.assertEqual(
+            dict(ROLLOUT_LEAF_REPORT_FIELDS),
+            {
+                "rollout_leaf_mode": None,
+                "leaves_priced": "rollout_leaves_priced",
+                "rollouts_run": "rollouts_run",
+                "rollout_plies": "rollout_plies",
+                "rollout_terminal_hits": "rollout_terminal_hits",
+                "rollout_cap_hits": "rollout_cap_hits",
+                "rollout_dead_ends": "rollout_dead_ends",
+                "rollout_encode_skipped": "rollout_encode_skipped",
+            },
+        )
+
+    def test_an_encode_skip_count_above_the_leaves_priced_refuses(self) -> None:
+        """A2, the other half: the field must be able to be WRONG.
+
+        Every skip is a leaf whose forward was not needed, so the skips are a subset
+        of the priced leaves. `> 0` would be the wrong check -- false at a depth
+        where every leaf hosts a child decision -- so the check is the range.
+        """
+        self._refuse(
+            self._witness(rollout_encode_skipped=169), expect="rollout_encode_skipped"
+        )
+        self._refuse(
+            self._witness(rollout_encode_skipped=-1), expect="rollout_encode_skipped"
+        )
+
+    def test_a_witness_without_the_encode_skip_count_refuses(self) -> None:
+        witness = self._witness()
+        del witness["rollout_encode_skipped"]
+        self._refuse(witness, expect="missing rollout_encode_skipped")
 
     def test_the_raw_arm_direction_accepts_an_absent_witness(self) -> None:
         require_rollout_leaf_witness(
@@ -1361,26 +1526,73 @@ class TheRetractedCostRatioStaysRetractedTest(unittest.TestCase):
         self.assertIn("not what the arm costs", window)
 
     def test_no_unverifiable_point_ratio_is_asserted_as_the_arms_cost(self) -> None:
-        """SCOPED BY VALUE, not by phrasing.
+        """SCOPED BY VALUE-CLASS, not by enumerated literals.
 
-        The failure mode is a number a reader cannot check, so the check is on the
-        numbers: neither contested measurement of the arm/raw wall ratio may appear
-        as a bare claim. Both need the pinned panel checkpoint and its CPU export,
-        which are not in the repository, so whichever one is written down is the one
-        a later reader believes. The retraction's load-bearing content is "single
-        digits, not thousands", which is true of both.
+        A5. The previous form enumerated the two contested measurements
+        (`"1.8x at R=8"`, `"1.25-3.98x"`) and checked each. It read False on five of
+        six attacks -- and a THIRD, unlisted ratio asserted as the arm's cost
+        SURVIVED, because a guard that names its own inputs can only refuse the
+        shapes someone already thought of. The failure mode is "a ratio a reader
+        cannot check", which is a CLASS, so the check is now on the class: every
+        ratio-shaped literal in the fence must sit inside the paragraph that
+        explains why no point ratio is quoted.
         """
         source = self._source()
-        window_start = source.index("HOW MUCH MORE CPU, MEASURED")
-        window = source[window_start : window_start + 1400]
+        stray = _stray_cost_ratios(source)
+        self.assertEqual(
+            stray,
+            [],
+            "the CPU fence quotes ratio-shaped figures outside the paragraph that "
+            f"says why no point ratio is quoted: {stray}. Both derivations need the "
+            "pinned panel checkpoint and its CPU export, which are not in the "
+            "repository, so whichever number is written down is the one a later "
+            "reader believes",
+        )
+        window = _cpu_fence_window(source)
         self.assertIn("SINGLE DIGITS", window)
-        for figure in ("1.8x at R=8", "1.25-3.98x"):
-            with self.subTest(figure=figure):
-                # Present is allowed ONLY inside the paragraph that says why no
-                # point ratio is quoted; a bare assertion is not.
-                if figure in window:
-                    self.assertIn("NO POINT RATIO", window)
-                    self.assertIn("not in the repo", window)
+        # DISCRIMINATING POWER. The regex must actually be finding the ratios that
+        # ARE there (inside the sanctioned paragraph) -- otherwise "no strays" is
+        # satisfied by a pattern that matches nothing.
+        self.assertGreaterEqual(
+            len(_COST_RATIO.findall(window)),
+            3,
+            "the value-class pattern must match the ratios the fence legitimately "
+            "quotes inside its retraction, or the emptiness above proves nothing",
+        )
+
+    def test_the_value_class_guard_reads_false_on_a_third_shape(self) -> None:
+        """THE ATTACK THAT SURVIVED, plus the two the old form already caught.
+
+        Applied to synthetic sources rather than to the tree, so all three shapes
+        can be shown against the same checker. The third is the one that matters:
+        a ratio nobody enumerated, asserted as the arm's cost, outside the
+        paragraph.
+        """
+        source = self._source()
+        window = _cpu_fence_window(source)
+        anchor = "    # NO POINT RATIO, because"
+        self.assertIn(anchor, source)
+        for label, injected in (
+            ("shape 1 -- an enumerated literal, restated as fact",
+             "    # The arm costs 1.8x at R=8 against the raw arm.\n"),
+            ("shape 2 -- the other enumerated literal",
+             "    # The arm/raw wall ratio is 1.25-3.98x.\n"),
+            ("shape 3 -- UNLISTED, and the one that survived",
+             "    # Measured: the arm costs 2.7x the raw arm on one core.\n"),
+        ):
+            with self.subTest(shape=label):
+                mutant = source.replace(anchor, injected + anchor, 1)
+                self.assertNotEqual(mutant, source, "the injection must apply")
+                self.assertNotEqual(
+                    _stray_cost_ratios(mutant),
+                    [],
+                    "a ratio asserted as the arm's cost outside the retraction's own "
+                    "paragraph must be found, whether or not anyone enumerated it",
+                )
+        # And the real fence, unmutated, is clean -- so the pattern is not simply
+        # refusing every source it is handed.
+        self.assertEqual(_stray_cost_ratios(source), [])
+        self.assertIn("1.8x at R=8", window)
 
 
 @unittest.skipUnless(_crate_ready, "crate not built with the model feature")
@@ -1462,9 +1674,578 @@ class RolloutLeafWitnessCarriesTheCratesOwnLedgerTest(
         self.assertGreater(
             witness["rollout_fallback_fraction"],
             0.9,
-            "at this fixture config the arm is a 96.5%-handcrafted blend; if this "
-            "ever reads low, re-derive it rather than assuming the arm improved",
+            "at THIS FIXTURE'S 40-ply cap the blend is 96.5% handcrafted; if this "
+            "ever reads low, re-derive it rather than assuming the arm improved. "
+            "This is not the arm's own figure: at the launched 200-ply cap the "
+            "arm's banked whole-game run measures 0.018139547833834504, a 98.2% "
+            "oracle. The cap is the variable, not the pricer",
         )
+
+
+#: The rollout block of the arm's OWN BANKED SHARD, as the sibling bridge branch
+#: wrote it (`ceiling-c3-rollout-arbiter-game-20260817/games/rollout-arm-game-seed1-*`,
+#: three runs, bit-identical on this block). Copied in as a literal so this gate runs
+#: in a bare checkout -- the artifacts live in the campaign store, not the repo.
+#:
+#: THIS IS THE v1 SCHEMA: `rollout_leaf_world_records` (accumulated `+= 1` per crate
+#: report), every key emitted unconditionally, and `rollout_fallback_fraction`
+#: computed from `rollout_cap_hits` alone.
+#:
+#: Note the value of the fallback fraction: 0.0181, a 98.2% ORACLE, at the launched
+#: 200-ply cap. It is not 0.965 -- that is this file's 40-ply fixture.
+BANKED_V1_ARM_SHARD = {
+    "worlds_collapsed": 0,
+    "worlds_searched": 65,
+    "unique_worlds_searched": 65,
+    "model_evals": 8997,
+    "rollout_leaf_modes": {"rollout": 65},
+    "rollout_leaf_world_records": 65,
+    "rollouts_run": 71832,
+    "rollout_plies": 3935252,
+    "rollout_terminal_hits": 70529,
+    "rollout_cap_hits": 1303,
+    "rollout_dead_ends": 0,
+    "rollout_leaves_priced": 8979,
+    "rollout_encode_skipped": 47,
+    "rollout_terminal_fraction": 0.9818604521661655,
+    "rollout_fallback_fraction": 0.018139547833834504,
+    "rollout_mean_plies": 54.78410736162156,
+}
+
+
+class RolloutLeafShardSchemaTest(unittest.TestCase):
+    """A6. Two sibling branches, one shard surface, two schemas.
+
+    #1272 owns `--engine-rollout-leaf` and wrote the shard above with
+    `rollout_leaf_world_records` (`+= 1`, unconditional, `None` fractions). This
+    branch renames it `rollout_leaf_worlds` (`+= weight`, conditional). Whichever
+    landed second would SILENTLY RE-SCHEMA the arbiter's own banked artifacts: a v2
+    reader on a v1 shard finds no `rollout_leaf_worlds` and reads zero engaged
+    worlds, which is a banked arm run reading as no arm at all and is the most
+    flattering possible misreading.
+
+    The resolution is not a rename. It is a VERSION STAMP that travels with the data
+    plus a refusal that fires when a shard's schema is not the reader's, because a
+    silent re-schema of banked data is worse than a crash -- the crash is the only
+    version of the event anyone finds out about.
+    """
+
+    @staticmethod
+    def _v2(**overrides) -> dict:
+        stats = EngineMctsStats()
+        stats.rollout_leaf_modes["rollout"] = 65
+        stats.rollout_leaf_worlds = 65
+        stats.rollouts_run = 71832
+        stats.rollout_plies = 3935252
+        stats.rollout_terminal_hits = 70529
+        stats.rollout_cap_hits = 1303
+        stats.rollout_dead_ends = 0
+        stats.rollout_leaves_priced = 8979
+        stats.rollout_encode_skipped = 47
+        payload = stats.to_dict()
+        payload.update(overrides)
+        return payload
+
+    def test_the_writer_stamps_the_schema_it_wrote(self) -> None:
+        """Without the stamp the two schemas are indistinguishable after the fact."""
+        payload = self._v2()
+        self.assertEqual(payload["rollout_leaf_schema"], ROLLOUT_LEAF_SHARD_SCHEMA)
+        for name in ROLLOUT_LEAF_SHARD_FIELDS:
+            with self.subTest(field=name):
+                self.assertIn(name, payload)
+        require_rollout_leaf_shard_schema(payload)
+
+    def test_a_flag_off_shard_carries_no_rollout_keys_and_is_accepted(self) -> None:
+        """The conditional emission, and why the reader keys off KEYS not config.
+
+        A shard is read without its launch command, so the predicate has to be "does
+        this block carry rollout keys". Flag-off emits none, which must be accepted
+        rather than treated as a dropped field -- otherwise every pre-seam shard in
+        the archive refuses.
+        """
+        payload = EngineMctsStats().to_dict()
+        self.assertEqual([k for k in payload if k.startswith("rollout")], [])
+        require_rollout_leaf_shard_schema(payload)
+
+    def test_the_banked_v1_shard_is_refused_and_named_as_v1(self) -> None:
+        """THE DEMONSTRATED FAILING INPUT, and it is real banked data."""
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            require_rollout_leaf_shard_schema(BANKED_V1_ARM_SHARD)
+        message = str(caught.exception)
+        self.assertIn("schema v1", message)
+        self.assertIn(ROLLOUT_LEAF_V1_WORLD_FIELD, message)
+        self.assertIn("migrate_rollout_leaf_shard_v1", message)
+
+    def test_the_v1_world_count_is_not_silently_read_as_zero(self) -> None:
+        """The precise corruption. Stated as an assertion so it cannot come back.
+
+        A reader that merely `.get`s the v2 name off a v1 shard gets None, and the
+        arithmetic downstream treats that as zero engaged worlds -- with the shard
+        sitting right there saying 65.
+        """
+        self.assertIsNone(BANKED_V1_ARM_SHARD.get("rollout_leaf_worlds"))
+        self.assertEqual(BANKED_V1_ARM_SHARD[ROLLOUT_LEAF_V1_WORLD_FIELD], 65)
+
+    def test_a_half_migrated_writer_carrying_both_spellings_refuses(self) -> None:
+        both = dict(self._v2())
+        both[ROLLOUT_LEAF_V1_WORLD_FIELD] = 64
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            require_rollout_leaf_shard_schema(both)
+        self.assertIn("BOTH", str(caught.exception))
+
+    def test_an_unstamped_v2_shaped_shard_refuses(self) -> None:
+        """A writer that emits the v2 key set and forgets the stamp is refused.
+
+        "Written before the stamp existed" and "written by a writer that dropped a
+        field" are the same artifact, so the reader cannot resolve it and must not
+        guess.
+        """
+        unstamped = dict(self._v2())
+        del unstamped["rollout_leaf_schema"]
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            require_rollout_leaf_shard_schema(unstamped)
+        self.assertIn("rollout_leaf_schema", str(caught.exception))
+
+    def test_a_future_schema_version_refuses(self) -> None:
+        with self.assertRaises(EngineShardSchemaError):
+            require_rollout_leaf_shard_schema(
+                self._v2(rollout_leaf_schema=ROLLOUT_LEAF_SHARD_SCHEMA + 1)
+            )
+
+    def test_a_dropped_column_refuses_rather_than_reading_as_zero(self) -> None:
+        """ONE FIELD PER CASE, so each drop trips its own branch."""
+        for name in ROLLOUT_LEAF_SHARD_FIELDS:
+            if name == "rollout_leaf_schema":
+                continue  # its own case above
+            with self.subTest(field=name):
+                shard = dict(self._v2())
+                del shard[name]
+                with self.assertRaises(EngineShardSchemaError) as caught:
+                    require_rollout_leaf_shard_schema(shard)
+                self.assertIn(name, str(caught.exception))
+
+    def test_an_unrecognised_rollout_column_refuses(self) -> None:
+        """A new column is a schema change. Silently pooling a shard that has one
+        with shards that do not is the same class of defect as the rename."""
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            require_rollout_leaf_shard_schema(self._v2(rollout_new_thing=1))
+        self.assertIn("rollout_new_thing", str(caught.exception))
+
+    def test_a_v1_fallback_numerator_on_a_v2_shard_refuses(self) -> None:
+        """The other divergence, and the one that is NOT a rename.
+
+        v1's numerator is `cap` alone; v2's is `cap + dead_ends`. They agree only
+        while dead_ends is zero, and v1 keeps it zero by REFUSING the world rather
+        than by arithmetic -- so the identity is a property of a writer version, not
+        of the schema. A v1 fraction on a v2-stamped shard reads False here.
+        """
+        shard = self._v2(rollout_dead_ends=7, rollout_terminal_hits=70522)
+        shard["rollout_fallback_fraction"] = 1303 / 71832  # cap only: v1's rule
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            require_rollout_leaf_shard_schema(shard)
+        self.assertIn("not the quotient", str(caught.exception))
+
+    def test_an_unbalanced_partition_refuses(self) -> None:
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            require_rollout_leaf_shard_schema(self._v2(rollout_terminal_hits=70528))
+        self.assertIn("every rollout", str(caught.exception))
+
+    def test_the_shard_fallback_numerator_is_the_whole_partition(self) -> None:
+        """The v1/v2 divergence that is NOT a rename, on the WRITER side.
+
+        Every other fixture in this file has `rollout_dead_ends == 0`, where `cap` and
+        `cap + dead` are equal -- so a mutant that drops the `dead` term survived them
+        all. This is the one case that separates the two rules, and it exists for that
+        reason: `dead == 0` is a property of the sibling writer (which refuses a
+        non-zero count upstream), not of the schema.
+        """
+        stats = EngineMctsStats()
+        stats.rollout_leaf_modes["rollout"] = 1
+        stats.rollout_leaf_worlds = 1
+        stats.rollouts_run = 100
+        stats.rollout_plies = 1000
+        stats.rollout_terminal_hits = 80
+        stats.rollout_cap_hits = 13
+        stats.rollout_dead_ends = 7
+        stats.rollout_leaves_priced = 10
+        stats.rollout_encode_skipped = 3
+        payload = stats.to_dict()
+        self.assertAlmostEqual(payload["rollout_fallback_fraction"], 0.20, places=12)
+        self.assertNotAlmostEqual(
+            payload["rollout_fallback_fraction"],
+            0.13,
+            places=12,
+            msg="cap alone is v1's numerator; dropping the dead-end term must move "
+            "this number, or the two schemas are indistinguishable here",
+        )
+        self.assertAlmostEqual(
+            payload["rollout_terminal_fraction"] + payload["rollout_fallback_fraction"],
+            1.0,
+            places=12,
+        )
+        require_rollout_leaf_shard_schema(payload)
+
+    def test_the_migration_is_value_preserving_on_the_banked_shard(self) -> None:
+        """The cost of choosing v2, paid explicitly.
+
+        The rename is sound on this shard because the shard says so: `+= 1` and
+        `+= weight` agree exactly when no draw was collapsed, and
+        `worlds_collapsed == 0` IS that condition. Measured 0 on all four banked
+        shards, so the migrated world count is the banked one and the migrated
+        fallback fraction is bit-identical to what was banked.
+        """
+        migrated = migrate_rollout_leaf_shard_v1(BANKED_V1_ARM_SHARD)
+        require_rollout_leaf_shard_schema(migrated)
+        self.assertEqual(migrated["rollout_leaf_worlds"], 65)
+        self.assertNotIn(ROLLOUT_LEAF_V1_WORLD_FIELD, migrated)
+        self.assertEqual(migrated["rollout_leaf_schema"], ROLLOUT_LEAF_SHARD_SCHEMA)
+        self.assertEqual(
+            migrated["rollout_fallback_fraction"],
+            BANKED_V1_ARM_SHARD["rollout_fallback_fraction"],
+        )
+        self.assertEqual(migrated["rollout_fallback_fraction"], 0.018139547833834504)
+        # ... which is 98.2% ORACLE at the launched 200-ply cap. The 0.965 in this
+        # file is the 40-ply FIXTURE, and conflating the two is the mislabel this
+        # revision corrects.
+        self.assertLess(migrated["rollout_fallback_fraction"], 0.02)
+
+    def test_the_migration_refuses_a_collapsed_shard(self) -> None:
+        """The DEMONSTRATED FAILING INPUT for the migration's own condition.
+
+        With a collapsed draw the v1 number counts crate REPORTS and the v2 name
+        promises WORLDS. Renaming there would publish one under the other's name,
+        which is exactly the silent re-schema this whole gate exists to prevent -- so
+        the migration refuses rather than being best-effort.
+        """
+        shard = dict(BANKED_V1_ARM_SHARD, worlds_collapsed=3)
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            migrate_rollout_leaf_shard_v1(shard)
+        self.assertIn("worlds_collapsed=3", str(caught.exception))
+
+    def test_the_migration_refuses_a_nonzero_dead_end_count(self) -> None:
+        shard = dict(
+            BANKED_V1_ARM_SHARD, rollout_dead_ends=5, rollout_terminal_hits=70524
+        )
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            migrate_rollout_leaf_shard_v1(shard)
+        self.assertIn("rollout_dead_ends=5", str(caught.exception))
+
+    def test_the_migration_drops_the_block_from_a_flag_off_v1_shard(self) -> None:
+        """v1 emitted the block unconditionally, so its flag-OFF shards carry a
+        zeroed one. v2 emits nothing there, and stamping a zeroed block as v2 would
+        assert that the arm engaged and priced nothing -- which is a refusal shape,
+        not a shard."""
+        off = {
+            "worlds_collapsed": 0,
+            "model_evals": 8185,
+            "rollout_leaf_modes": {},
+            "rollout_leaf_world_records": 0,
+            "rollouts_run": 0,
+            "rollout_terminal_fraction": None,
+            "rollout_fallback_fraction": None,
+            "rollout_mean_plies": None,
+        }
+        migrated = migrate_rollout_leaf_shard_v1(off)
+        self.assertEqual([k for k in migrated if k.startswith("rollout")], [])
+        require_rollout_leaf_shard_schema(migrated)
+
+    def test_the_migration_refuses_a_shard_that_is_not_v1(self) -> None:
+        with self.assertRaises(EngineShardSchemaError):
+            migrate_rollout_leaf_shard_v1(self._v2())
+
+
+class BankedShardCarriesThePooledWitnessTest(unittest.TestCase):
+    """A1. The witness was guarded to its last hop, and the last hop was open.
+
+    The pooled witness reaches the arbiter's paired-eval shard by exactly one path:
+
+      crate report -> `_search_model`'s absorb -> `EngineMctsStats`
+        -> `EngineMctsStats.to_dict` -> `_engine_policy_stats`
+        -> `ControlledFoulPlayBenchmarkResult.policy_stats`
+        -> `"policy_stats": self.policy_stats` -> `_write_json` -> disk
+
+    Twelve mutants on the first six hops were all killed. The SEVENTH survived:
+    `self.policy_stats` -> `None` and `_engine_policy_stats` -> `{}` both passed 435
+    tests across every module that references `policy_stats` -- the exact historical
+    silent-empty bug, one frame further out than the tests had followed. The
+    existing guards covered a DIFFERENT writer
+    (`mcts_acceptance_h2h.build_shard_report`) and hand-written fixtures on the
+    READING side, neither of which touches this line.
+
+    WHERE THE WALK STOPS, AND WHY. At `_write_json`, the single funnel through which
+    every shard reaches disk -- the last frame in this repository that still holds
+    the datum. There is no eighth hop to instrument: the next consumer is a file.
+    And the refusal there is not the only thing standing in the way of a silent
+    re-schema, which is the answer to "then delete the guard": the reader-side
+    `require_rollout_leaf_shard_schema` fires on the same shard from the other side
+    of the disk, so a shard written past a deleted writer-side guard is REFUSED ON
+    READ rather than pooled. Two frames on opposite sides of the artifact, and both
+    would have to go for the corruption to be quiet.
+    """
+
+    @staticmethod
+    def _bridge():
+        from pokezero import foulplay_bridge
+
+        return foulplay_bridge
+
+    def _payload(self, *, policy_stats, **extra) -> dict:
+        """A bridge shard payload with the block the guard reads.
+
+        Shaped rather than constructed from a real benchmark run, because the defect
+        is one key in one dict and a real run needs a Showdown checkout.
+        """
+        block = {
+            "decisions": 65,
+            "fallback_decisions": 0,
+            "fallback_rate": 0.0,
+            "search_wall_per_searched_decision": 1.25,
+            "policy_stats": policy_stats,
+        }
+        if policy_stats is _MISSING:
+            del block["policy_stats"]
+        block.update(extra)
+        return {"policy_id": "arm", "engine_mcts": block}
+
+    def test_the_emitter_actually_carries_policy_stats_to_the_shard(self) -> None:
+        """THE SURVIVING LINE, asserted on the real emitter.
+
+        `ControlledFoulPlayBenchmarkResult.to_dict()` -> the `engine_mcts` block ->
+        `policy_stats`. Reads False on `"policy_stats": None`, which is the mutant
+        that survived.
+        """
+        from pathlib import Path
+
+        bridge = self._bridge()
+        stats = {"decisions": 65, "search_wall_per_searched_decision": 1.25}
+        result = bridge.ControlledFoulPlayBenchmarkResult(
+            config=bridge.ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                policy_mode="engine-mcts",
+                engine_model_path=Path("model.pt"),
+                engine_tables_path=Path("tables.json"),
+            ),
+            policy_id="arm",
+            games=(),
+            policy_stats=stats,
+        )
+        block = result.to_dict()["engine_mcts"]
+        self.assertEqual(block["policy_stats"], stats)
+        self.assertEqual(block["search_wall_per_searched_decision"], 1.25)
+
+    def test_engine_policy_stats_returns_the_searchers_own_telemetry(self) -> None:
+        """THE OTHER SURVIVING MUTANT, and the hop before the last one.
+
+        `_engine_policy_stats` returning `{}` for an engine-mcts run is the historical
+        bug verbatim. Its own docstring says it raises rather than "quietly produce an
+        empty telemetry block ... the failure mode that left every acceptance shard
+        with `policy_stats: {}`" -- and nothing checked that it does. Asserted on
+        IDENTITY with the policy's own `to_dict()`, so a stub cannot satisfy it.
+        """
+        bridge = self._bridge()
+        policy = SimpleNamespace(stats=EngineMctsStats())
+        stats = bridge._engine_policy_stats(policy, "engine-mcts")
+        self.assertTrue(stats, "an engine-mcts run's telemetry block must not be empty")
+        self.assertEqual(stats, policy.stats.to_dict())
+        self.assertGreater(len(stats), 20)
+        # None -- not `{}` -- outside engine-mcts, which is the honest answer there:
+        # there is no engine searcher, so there is nothing to report.
+        self.assertIsNone(bridge._engine_policy_stats(policy, "root-puct"))
+
+    def test_the_write_refuses_a_none_policy_stats(self) -> None:
+        """The exact surviving mutant, at the boundary it escaped through."""
+        bridge = self._bridge()
+        with self.assertRaises(bridge.BankedShardWitnessError) as caught:
+            bridge.require_banked_shard_witness(self._payload(policy_stats=None))
+        self.assertIn("SILENT-EMPTY", str(caught.exception))
+
+    def test_the_write_refuses_an_empty_policy_stats(self) -> None:
+        """`_engine_policy_stats` -> `{}`: the historical bug verbatim."""
+        bridge = self._bridge()
+        with self.assertRaises(bridge.BankedShardWitnessError):
+            bridge.require_banked_shard_witness(self._payload(policy_stats={}))
+
+    def test_the_write_refuses_a_block_with_the_key_deleted(self) -> None:
+        """The mutation one step further: delete the line rather than blank it."""
+        bridge = self._bridge()
+        with self.assertRaises(bridge.BankedShardWitnessError) as caught:
+            bridge.require_banked_shard_witness(self._payload(policy_stats=_MISSING))
+        self.assertIn("no 'policy_stats' key", str(caught.exception))
+
+    def test_the_guard_reaches_a_block_nested_under_an_arm(self) -> None:
+        """The comparison summaries nest one block per arm. A top-level-only guard
+        would pass exactly the payloads where two arms are compared."""
+        bridge = self._bridge()
+        nested = {
+            "comparison": {"arms": [self._payload(policy_stats=None)]},
+        }
+        with self.assertRaises(bridge.BankedShardWitnessError):
+            bridge.require_banked_shard_witness(nested)
+
+    def test_a_populated_block_is_accepted(self) -> None:
+        """Discriminating power: without this every refusal above is satisfied by a
+        guard that refuses everything."""
+        bridge = self._bridge()
+        bridge.require_banked_shard_witness(
+            self._payload(policy_stats={"decisions": 65})
+        )
+
+    def test_a_non_engine_payload_is_untouched(self) -> None:
+        """`_write_json` writes more than engine shards; the guard must not fire on
+        a payload that has no engine block, and `engine_mcts: None` is what a
+        non-engine-mcts run legitimately emits."""
+        bridge = self._bridge()
+        bridge.require_banked_shard_witness({"engine_mcts": None, "root_puct": {}})
+        bridge.require_banked_shard_witness({"comparison": {"sample_size": {}}})
+
+    def test_the_write_refuses_a_v1_schemaed_policy_stats(self) -> None:
+        """A6's refusal, reached through the WRITE path -- so a writer that still
+        emits v1 cannot bank alongside v2 shards."""
+        bridge = self._bridge()
+        with self.assertRaises(Exception) as caught:
+            bridge.require_banked_shard_witness(
+                self._payload(policy_stats=dict(BANKED_V1_ARM_SHARD))
+            )
+        self.assertIn("schema v1", str(caught.exception))
+
+    def test_the_write_refuses_an_arm_claim_with_no_pricer(self) -> None:
+        """THE ASKED-FOR SIDE AGAINST THE RAN SIDE.
+
+        The sibling branch's own docstring names this hazard and leaves it
+        unenforced -- "a shard with `rollout_leaf: true` here and no leaf modes there
+        ran the value head". Enforced here, at the write, because a shard is what a
+        campaign sorts cells on.
+        """
+        bridge = self._bridge()
+        # The v2 writer's own flag-off shape: conditional emission, so an arm run that
+        # never engaged the seam carries NO rollout columns at all.
+        with self.assertRaises(bridge.BankedShardWitnessError) as caught:
+            bridge.require_banked_shard_witness(
+                self._payload(policy_stats={"decisions": 65}, rollout_leaf=True)
+            )
+        self.assertIn("no pricer ever ran", str(caught.exception))
+        # And the sibling writer's shape: emitted unconditionally, so the columns are
+        # PRESENT and zeroed with an empty mode map. Present keys are not engagement,
+        # which is the same distinction `require_rollout_leaf_witness` makes per
+        # decision -- so both writers' flag-off shards reach this branch.
+        with self.assertRaises(bridge.BankedShardWitnessError) as caught:
+            bridge.require_banked_shard_witness(
+                self._payload(
+                    policy_stats=dict(self._zeroed_v2_stats(), decisions=65),
+                    rollout_leaf=True,
+                )
+            )
+        self.assertIn("no pricer ever ran", str(caught.exception))
+
+    def test_the_write_refuses_a_raw_row_carrying_arm_telemetry(self) -> None:
+        """The inverse, and the one that corrupts the DENOMINATOR.
+
+        `--arm raw --engine-rollout-leaf` was the live instance. A raw row wearing
+        the arm's provenance does not corrupt one arm of the comparison; it corrupts
+        the comparison.
+        """
+        bridge = self._bridge()
+        stats = dict(self._v2_stats(), decisions=65)
+        with self.assertRaises(bridge.BankedShardWitnessError) as caught:
+            bridge.require_banked_shard_witness(
+                self._payload(policy_stats=stats, rollout_leaf=False)
+            )
+        self.assertIn("FALSE WITNESS", str(caught.exception))
+
+    def test_both_agreeing_directions_are_accepted(self) -> None:
+        """Discriminating power for the cross-check, and the compatibility statement.
+
+        `rollout_leaf` ABSENT gets no cross-check at all: a writer that does not echo
+        the knob is not saying the arm was off. That is what lets this branch (which
+        emits no bridge-level flag) and the sibling (which does) both pass.
+        """
+        bridge = self._bridge()
+        engaged = dict(self._v2_stats(), decisions=65)
+        bridge.require_banked_shard_witness(
+            self._payload(policy_stats=engaged, rollout_leaf=True)
+        )
+        bridge.require_banked_shard_witness(
+            self._payload(policy_stats={"decisions": 57}, rollout_leaf=False)
+        )
+        bridge.require_banked_shard_witness(
+            self._payload(
+                policy_stats=dict(self._zeroed_v2_stats(), decisions=57),
+                rollout_leaf=False,
+            )
+        )
+        # Absent: no cross-check, either way.
+        bridge.require_banked_shard_witness(self._payload(policy_stats=engaged))
+        bridge.require_banked_shard_witness(
+            self._payload(policy_stats={"decisions": 57})
+        )
+
+    @staticmethod
+    def _zeroed_v2_stats() -> dict:
+        """The SIBLING writer's flag-off shape, in v2 spelling.
+
+        #1272 emits the block unconditionally, so its flag-off shards carry every
+        column zeroed with an empty mode map rather than carrying nothing. Stamped,
+        because it adopts the schema -- so it is a well-formed v2 block that says the
+        seam never engaged, which is exactly what the cross-check has to read.
+        """
+        return {
+            "rollout_leaf_schema": ROLLOUT_LEAF_SHARD_SCHEMA,
+            "rollout_leaf_modes": {},
+            "rollout_leaf_worlds": 0,
+            "rollout_leaves_priced": 0,
+            "rollouts_run": 0,
+            "rollout_plies": 0,
+            "rollout_terminal_hits": 0,
+            "rollout_cap_hits": 0,
+            "rollout_dead_ends": 0,
+            "rollout_encode_skipped": 0,
+            "rollout_terminal_fraction": None,
+            "rollout_fallback_fraction": None,
+            "rollout_mean_plies": None,
+        }
+
+    @staticmethod
+    def _v2_stats() -> dict:
+        """A v2-schema policy_stats block whose seam engaged, from the real writer."""
+        stats = EngineMctsStats()
+        stats.rollout_leaf_modes["rollout"] = 65
+        stats.rollout_leaf_worlds = 65
+        stats.rollouts_run = 71832
+        stats.rollout_plies = 3935252
+        stats.rollout_terminal_hits = 70529
+        stats.rollout_cap_hits = 1303
+        stats.rollout_dead_ends = 0
+        stats.rollout_leaves_priced = 8979
+        stats.rollout_encode_skipped = 47
+        return stats.to_dict()
+
+    def test_the_boundary_write_calls_the_guard(self) -> None:
+        """The guard has to be ON the write, not merely importable.
+
+        Asserted by driving `_write_json` at a temp path with the offending payload:
+        a guard that exists and is not called is the shape this whole finding is.
+        """
+        import tempfile
+        from pathlib import Path
+
+        bridge = self._bridge()
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "shard.json"
+            with self.assertRaises(bridge.BankedShardWitnessError):
+                bridge._write_json(target, self._payload(policy_stats=None))
+            self.assertFalse(
+                target.exists(),
+                "the refusal must happen BEFORE the bytes land; a shard that is "
+                "written and then complained about is a banked shard",
+            )
+            bridge._write_json(target, self._payload(policy_stats={"decisions": 1}))
+            self.assertTrue(target.exists())
+
+
+#: Sentinel for "the key is absent", distinct from `None` -- the two are different
+#: mutants (`-> None` versus deleting the line) and each must be refused on its own.
+_MISSING = object()
 
 
 if __name__ == "__main__":  # pragma: no cover
