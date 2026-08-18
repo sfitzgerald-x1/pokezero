@@ -774,9 +774,9 @@
   "survived": 0,
   "targets": {
     "engine_search.py": "6f91c6060a2a7ea2ea1232c7eba91d8241e743dc1a93732d8e6a17c069b47fad",
-    "foulplay_bridge.py": "77f43c5b8556c8b032fb58174f007218402e0b191594ac44c1b738e5f76b8f1a",
-    "foulplay_paired_eval.py": "933abbf5cff214bbcfd63379beb121fe2964287df8a571a27fbfc3b195192a9e",
-    "foulplay_power_report.py": "faa81e8f7669dfeba97fe6dfe10f6ce1fabc8cce60a2646bb4540ea1803f5bcf",
+    "foulplay_bridge.py": "ee7f9ee93a0e1cfd6e867a2a6945fd98096b1726fdd58fe73698fcf251aa5106",
+    "foulplay_paired_eval.py": "63b6de3122369a0822b1dea91e8c36d65a62cd35fac10eb80018f3a5846d0b43",
+    "foulplay_power_report.py": "8a24784085320c5e0c36769f41276ea67ae8eef554bf4157a7d16966beaa41c5",
     "hc_depth_grid.py": "fdd534de5b32d4b788b196de7fabb68073cb8ba4542851a638ee33067191b3c1",
     "mcts_acceptance_h2h.py": "dff764e119cab64367595b92b4c7c0541262909e47a8d45f967c1777aa8c77a4"
   }

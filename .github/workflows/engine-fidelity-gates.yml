@@ -291,6 +291,23 @@ jobs:
             # touches nothing else -- so without this line the gate that would object
             # is not even a trigger.
             tests/test_roll_enumeration_scope.py
+            # Phase 1 instrument 2 — rollout-leaf arbiter. The witness and schema
+            # travel through six files; the recorded mutation battery must be rerun
+            # whenever any one of them or either killer suite moves. A source-only
+            # filter misses four writer/readers under scripts/, while a pin-only
+            # filter lets a weakened battery go green without running its consumers.
+            src/pokezero/engine_search.py
+            src/pokezero/foulplay_bridge.py
+            scripts/foulplay_paired_eval.py
+            scripts/foulplay_power_report.py
+            scripts/hc_depth_grid.py
+            scripts/mcts_acceptance_h2h.py
+            scripts/mutate_rollout_leaf_witness.py
+            reports/artifacts/rollout_leaf_witness_mutation_battery.json
+            tests/test_rollout_model_priors.py
+            tests/test_mcts_acceptance_report.py
+            tests/test_rollout_leaf_arbiter.py
+            tests/test_rollout_leaf_witness_mutation_battery.py
             # The schema-default gate and everything it depends on. 332 of its 390 rows live
             # outside src/ (288 tests/, 43 scripts/, 1 docs/).
             #
@@ -1907,6 +1924,38 @@ jobs:
           # the moment this step was added. That gate is the reason this line is a literal.
           if ! grep -qE 'Ran 13 tests' /tmp/protectread.log; then
             echo "::error::the production-read pin did not run all 13 tests"
+            exit 1
+          fi
+
+      - name: Rollout-leaf arbiter witnesses and mutation record run on the model wheel
+        run: |
+          set -o pipefail
+          # The Phase 1 arbiter is a model-path feature. A plain maturin wheel makes
+          # its behavioral tests skip, which is no CI coverage at all. Build a wheel
+          # with the same libtorch environment as the feature-gated crate rung above,
+          # then execute every writer, reader, fidelity, and mutation-record pin.
+          rollout_leaf_torch_lib="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')"
+          export LD_LIBRARY_PATH="${rollout_leaf_torch_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          LIBTORCH_USE_PYTORCH=1 LIBTORCH_BYPASS_VERSION_CHECK=1 maturin build \
+            --release --features model --manifest-path rust/pokezero-search/Cargo.toml \
+            --out /tmp/rollout-leaf-wheels
+          python -m pip install --quiet --force-reinstall --no-deps /tmp/rollout-leaf-wheels/*.whl
+          python -c "import pokezero_search; print('model wheel ok')"
+          python -m unittest tests.test_rollout_model_priors \
+            tests.test_mcts_acceptance_report \
+            tests.test_rollout_leaf_arbiter \
+            tests.test_rollout_leaf_witness_mutation_battery -v 2>&1 \
+            | tee /tmp/rollout-leaf-arbiter.log
+          if ! grep -qE 'Ran 165 tests' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the rollout-leaf arbiter suite did not run all 165 tests"
+            exit 1
+          fi
+          if grep -qE 'skipped|OK \\(skipped' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::a rollout-leaf arbiter pin SKIPPED; the model wheel was not exercised"
+            exit 1
+          fi
+          if ! grep -qE '^OK$' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the rollout-leaf arbiter suite did not report a clean OK"
             exit 1
           fi
 
