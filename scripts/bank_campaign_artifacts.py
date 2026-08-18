@@ -1283,10 +1283,11 @@ def _read_relative_file_no_follow(directory_fd: int, relative: str) -> bytes:
         return handle.read()
 
 
-def _relative_regular_files_no_follow(directory_fd: int, *, prefix: str = "") -> set[str]:
+def _relative_regular_files_no_follow(directory_fd: int, *, prefix: str = "") -> tuple[set[str], bool]:
     """List the artifact tree from directory descriptors, never traversing a link."""
 
     files: set[str] = set()
+    has_non_regular_entry = False
     for name in os.listdir(directory_fd):
         info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
         relative = f"{prefix}{name}"
@@ -1295,14 +1296,19 @@ def _relative_regular_files_no_follow(directory_fd: int, *, prefix: str = "") ->
         elif stat.S_ISDIR(info.st_mode):
             child_fd = _open_directory_no_follow(Path(name), parent_fd=directory_fd)
             try:
-                files.update(_relative_regular_files_no_follow(child_fd, prefix=f"{relative}/"))
+                child_files, child_has_non_regular_entry = _relative_regular_files_no_follow(
+                    child_fd, prefix=f"{relative}/"
+                )
+                files.update(child_files)
+                has_non_regular_entry = has_non_regular_entry or child_has_non_regular_entry
             finally:
                 os.close(child_fd)
         else:
-            # A link, device or FIFO is not part of a banked artifact. Returning a marker makes
-            # the exact-file-set comparison fail without ever dereferencing it.
-            files.add(f"<non-regular:{relative}>")
-    return files
+            # A link, device or FIFO is not part of a banked artifact. This is a BOOLEAN rather
+            # than a made-up path string: artifact paths are user-controlled and could otherwise
+            # collide with the marker and make the exact-file-set check pass.
+            has_non_regular_entry = True
+    return files, has_non_regular_entry
 
 
 def _sha256_relative_file_no_follow(directory_fd: int, relative: str) -> str:
@@ -1363,7 +1369,8 @@ def _existing_matches(
         if actual_sums != sha256sums:
             return False
         declared = {str(record["file"]) for record in provenance[files_field]}
-        if _relative_regular_files_no_follow(directory_fd) != declared | {
+        actual_files, has_non_regular_entry = _relative_regular_files_no_follow(directory_fd)
+        if has_non_regular_entry or actual_files != declared | {
             PROVENANCE_FILENAME, SHA256SUMS_FILENAME,
         }:
             return False

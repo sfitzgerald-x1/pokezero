@@ -613,6 +613,25 @@ class DestinationGuardTests(_FixtureCase):
         ])
         self.assertEqual(calls[0][1], calls[1][1])
 
+    def test_a_nonregular_entry_cannot_collide_with_a_declared_path_name(self) -> None:
+        """A marker string is not safe when artifact paths are themselves user controlled."""
+        fixture = _Fixture(Path(self._tmp.name) / "marker-collision", shard_count=3)
+        declared = fixture.source_dir / "<non-regular:poison>"
+        original = fixture.source_dir / "results" / "shard2.json"
+        original.rename(declared)
+        fixture.stamp["shards"][2]["file"] = declared.name
+        fixture.stamp["shards"][2]["sha256"] = bank.sha256_file(declared)
+        fixture.stamp["shards"][2]["bytes"] = declared.stat().st_size
+        fixture.bank()
+        external = fixture.root / "external-file"
+        external.write_text("not part of this artifact", encoding="utf-8")
+        (fixture.out_dir / "poison").symlink_to(external)
+
+        with self.assertRaises(bank.BankRefusal) as caught:
+            fixture.bank()
+
+        self.assertIn(bank.DESTINATION_HOLDS_DIFFERENT_ARTIFACT, caught.exception.codes)
+
     def test_a_destination_holding_a_differing_artifact_is_refused(self) -> None:
         self.fixture.bank()
         self.fixture.stamp["sims"] = 4096  # same campaign id, different run
