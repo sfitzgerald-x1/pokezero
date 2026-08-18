@@ -1462,7 +1462,7 @@ class EngineMctsStats:
     #: reads `cap_hits / rollouts_run` -- the quantity it always actually computed.
     #: A non-zero reading is not a measurement of leaf quality; it means a vendored
     #: dependency regressed and the decision's leaf values are untrustworthy, so
-    #: `_absorb_rollout_report` REFUSES it rather than diluting an honest fraction
+    #: `_refuse_rollout_dead_ends` REFUSES it rather than diluting an honest fraction
     #: with it.
     rollout_dead_ends: int = 0
     rollout_leaves_priced: int = 0
@@ -1844,59 +1844,30 @@ class EngineMctsStats:
             "unmapped_choices": dict(self.unmapped_choices),
             "choices_unmapped_causes": dict(self.choices_unmapped_causes),
             "model_evals": self.model_evals,
-            # THE ARM'S RUNTIME WITNESS. `rollout_leaf_modes` is what says the
-            # seam was engaged; the counters say how much work it did.
-            # THE SCHEMA STAMP, first, because it is what makes every key below
-            # readable. An unstamped block is unresolvable after the fact: "written
-            # before the rename" and "written by a writer that dropped a field" are the
-            # same artifact. The version and its reader
-            # (`require_rollout_leaf_shard_schema`) are #1271's; the merge keeps ONE
-            # definition of the constant.
-            "rollout_leaf_schema": ROLLOUT_LEAF_SHARD_SCHEMA,
-            "rollout_leaf_modes": dict(self.rollout_leaf_modes),
-            "rollout_leaf_worlds": self.rollout_leaf_worlds,
-            "rollouts_run": self.rollouts_run,
-            "rollout_plies": self.rollout_plies,
-            "rollout_terminal_hits": self.rollout_terminal_hits,
-            "rollout_cap_hits": self.rollout_cap_hits,
-            "rollout_dead_ends": self.rollout_dead_ends,
-            "rollout_leaves_priced": self.rollout_leaves_priced,
-            "rollout_encode_skipped": self.rollout_encode_skipped,
-            # THE ESTIMAND LEDGER, and the reason these are `None` rather than
-            # 0.0 when no rollout ran. `rollout_fallback_fraction == 0.0` is the
-            # strongest claim this arm can make -- every rollout reached a
-            # terminal, so the leaf is a real oracle rather than a blend of an
-            # oracle and a handcrafted cap value. A shard that ran NO rollouts at
-            # all would render exactly that number from `0/0` guarded to zero,
-            # i.e. an un-engaged seam would advertise a perfect oracle. None
-            # instead: absent is not zero.
-            "rollout_terminal_fraction": (
-                self.rollout_terminal_hits / self.rollouts_run
-                if self.rollouts_run
-                else None
-            ),
-            # THE WHOLE PARTITION, `cap + dead_ends`, to match the canonical schema
-            # (v2, #1271).
+            # THE SHARD-LEVEL ROLLOUT BLOCK IS #1271'S, AND IT IS EMITTED THERE.
             #
-            # This read CAP ALONE, on the argument that `rollout_dead_ends` is zero by
-            # construction and four mutants on the term survived the suite -- "a term
-            # that cannot read non-zero is not a measurement". The objection was sound
-            # and its conclusion was not: zero-by-construction is a property of THIS
-            # WRITER (which refuses a non-zero count in `_absorb_rollout_report`), not
-            # of the schema, so a reader cannot check a cap-only fraction against the
-            # counts printed beside it. #1271 makes the term testable at the writer
-            # instead, with a stats-level fixture that sets dead_ends non-zero and so
-            # never passes through the absorb refusal. On every shard this writer can
-            # produce the two rules give the same number, because dead_ends is refused
-            # upstream -- so this is a schema alignment, not a value change.
-            "rollout_fallback_fraction": (
-                (self.rollout_cap_hits + self.rollout_dead_ends) / self.rollouts_run
-                if self.rollouts_run
-                else None
-            ),
-            "rollout_mean_plies": (
-                self.rollout_plies / self.rollouts_run if self.rollouts_run else None
-            ),
+            # This branch used to write thirteen rollout keys UNCONDITIONALLY -- and,
+            # since it had adopted #1271's constant, stamped them `rollout_leaf_schema:
+            # 2`. On a FLAG-OFF shard that produced a v2-stamped block with zeroed
+            # counts and `None` quotients, which is v1's shape wearing v2's stamp: a
+            # pooling reader averages the `None` as a measurement, and an absent
+            # `rollout_leaf_worlds` reads as "the arm engaged zero worlds" rather than
+            # as an absence.
+            #
+            # Deleted rather than made conditional here, because #1271 already writes
+            # this block from ITS absorb, CONDITIONALLY (`if self.rollout_leaf_modes:`)
+            # and with the quotients omitted at zero rollouts. Two writers of one
+            # surface is the defect both branches spent a round on; keeping both would
+            # emit each key twice into one dict literal and silently take whichever
+            # assignment came second.
+            #
+            # THE MERGE ORDER THIS DEPENDS ON: #1271 lands FIRST. It owns
+            # `ROLLOUT_LEAF_SHARD_SCHEMA`, the conditional emission and the readers
+            # (`require_rollout_leaf_shard_schema`,
+            # `require_rollout_leaf_document_schema`). This branch must not land alone
+            # or first: without #1271 there is no shard-level rollout telemetry at all,
+            # which is honest, whereas the block deleted here stamped a version no
+            # reader in the tree could check.
             "encode_wall_seconds": self.encode_wall_seconds,
             "model_wall_seconds": self.model_wall_seconds,
             "tree_wall_seconds": self.tree_wall_seconds,
@@ -3288,7 +3259,7 @@ class EngineMctsPolicy:
                         ),
                     )
                 )
-                # REFUSED, symmetrically with `_absorb_rollout_report` on the model
+                # REFUSED, symmetrically with `_refuse_rollout_dead_ends` on the model
                 # path -- see the long note there. Two search paths reading one crate
                 # counter by two rules is the drift this campaign keeps paying for,
                 # and a dead end means the same thing on either: the engine could not
@@ -3316,7 +3287,7 @@ class EngineMctsPolicy:
                         "empty option vector is impossible (rollout.rs's "
                         "get_all_options_never_yields_an_empty_option_vector); the "
                         "empty instruction branch list is unproved -- see the note in "
-                        "`_absorb_rollout_report`. Refused rather than priced."
+                        "`_refuse_rollout_dead_ends`. Refused rather than priced."
                     )
             except Exception as error:  # noqa: BLE001 — count, keep the other worlds
                 detail = (
@@ -4182,7 +4153,7 @@ class EngineMctsPolicy:
         """ONE world: assemble the native call, run it, absorb what came back.
 
         A BOUND METHOD rather than the closure this used to be, extracted for
-        exactly the reason `_absorb_rollout_report` and `_rollout_metadata_fields`
+        exactly the reason `_refuse_rollout_dead_ends` and `_rollout_metadata_fields`
         were before it -- one level further out, because that is where the untested
         boundary had moved. Review round 2 showed that pinning the absorption CALL
         by its AST proves the call is WRITTEN, not that it RUNS ON REAL DATA: four
@@ -4197,7 +4168,7 @@ class EngineMctsPolicy:
           * `report` stripped of its `rollout*` keys, which reproduces the original
             symptom EXACTLY -- `rollout_leaf: true` with `rollout_leaf_modes {}`
             and `rollouts_run 0` while tens of thousands of rollouts ran.
-          * `self._absorb_rollout_report` shadowed by an instance attribute.
+          * `self._refuse_rollout_dead_ends` shadowed by an instance attribute.
 
         `report` is a plain local, so a re-bind is an ordinary refactor accident
         and precisely the class the witness needs protecting from. None of the four
@@ -4364,12 +4335,18 @@ class EngineMctsPolicy:
         # here keeps that guard measuring what it was written to measure
         # instead of measuring this block's comment length.
         #
-        # `weight=weight`: the world counters are weighted by the collapse
-        # multiplicity (the canonical v2 shard schema), the cost ledger is not.
+        # THE ABSORB IS GONE FROM THIS BRANCH; ONLY THE REFUSAL REMAINS.
+        #
+        # `self._absorb_rollout_report(report, weight=weight)` accumulated the whole
+        # rollout ledger into `self.stats`. #1271 absorbs the same report into the same
+        # counters on the same path, so keeping both would double every rollout counter
+        # on every arm shard. Deleted here, and #1271 LANDS FIRST -- it owns the absorb,
+        # the CONDITIONAL shard emission and the readers. This branch keeps the config
+        # plumbing, the per-decision metadata, the crate-only path and this refusal.
         #
         # AND IT IS HANDLED HERE, because on THIS path the refusal is not
-        # fail-closed on its own. `_absorb_rollout_report` raises on a non-zero
-        # `rollout_dead_ends`, and its own comment claimed that "costs a COUNTED
+        # fail-closed on its own. `_refuse_rollout_dead_ends` raises on a non-zero
+        # `rollout_dead_ends`, and an earlier comment claimed that "costs a COUNTED
         # world failure and a fallback decision". That is true of
         # `_search_rollout_crate`, whose refusal sits inside its world loop's
         # `try`. It was FALSE here: this method's `try` closes at the native call,
@@ -4385,7 +4362,7 @@ class EngineMctsPolicy:
         # call's own aborts a few lines up, and returning None like them, so the
         # other worlds survive and `world_failures` shows what happened.
         try:
-            self._absorb_rollout_report(report, weight=weight)
+            self._refuse_rollout_dead_ends(report)
         except ValueError as error:
             self.stats.world_failure_reasons[
                 f"crate_search: {_bounded_reason_detail(str(error).splitlines()[0])}"
@@ -4792,81 +4769,57 @@ class EngineMctsPolicy:
             },
         )
 
-    def _absorb_rollout_report(
-        self, report: Mapping[str, Any], *, weight: int = 1
-    ) -> bool:
-        """Absorb ONE world's rollout-leaf telemetry into the shard stats.
+    def _refuse_rollout_dead_ends(self, report: Mapping[str, Any]) -> None:
+        """Refuse a crate report whose rollouts hit a dead end. NOT AN ABSORBER.
 
-        A NAMED METHOD rather than an inline block inside `_search_model`'s world
-        loop, and extracted for one reason: as an inline block it could not be
-        reached by any test that did not run a full model search, so review
-        demonstrated that deleting it wholesale -- `leaf_mode = None`, i.e. the
-        shard-level witness never populating -- passed the entire suite. The
-        witness is this change's headline claim, so it has to be callable.
+        WHAT WAS DELETED HERE AND WHY. This method used to be
+        `_absorb_rollout_report`: it refused dead ends AND accumulated the whole
+        rollout ledger into `self.stats`. The accumulation is gone, because #1271
+        absorbs the same report into the same counters on the same path, and two
+        writers of one surface is the defect both branches spent a round on -- kept
+        together they would double every rollout counter on every arm shard, which is
+        loud only if someone reads the merged file. #1271 lands FIRST and owns the
+        absorb, the conditional emission and the readers.
 
-        Keyed off the REPORT rather than `config.rollout_leaf_eval`: the config
-        says what was asked for, the report says what the crate did, and the whole
-        point is to catch those two disagreeing (an extension that predates the
-        seam ignores positionals it does not recognise, so the arm can be
-        configured and not run). Returns whether the seam was seen, so a caller
-        can assert on it.
+        THE REFUSAL STAYS, because it is not #1271's. A dead end means the engine
+        handed a rollout a position with no legal continuation it did not call over, so
+        every leaf value behind the decision was priced from a state the engine could
+        not step. Summing it into `rollout_fallback_fraction` was the fail-open
+        handling: it hid that state inside a number that reads as an estimand. #1271's
+        witness guard refuses an UNBALANCED partition and a fraction that is not its
+        own quotient; neither is the same statement as "dead ends must be zero", and
+        the shard schema's `cap + dead` numerator is defined precisely so a non-zero
+        count is REPORTED rather than refused. So dropping this with the absorber would
+        have lost a refusal nothing else makes.
 
-        THE WORLD COUNTERS ARE WEIGHTED, the cost ledger is not. `rollout_leaf_modes`
-        and `rollout_leaf_worlds` count WORLDS (`+= weight`), so two identical belief
-        draws served by one search count two; `rollouts_run` and the rest count
-        INVOCATION work, which happened once. Both units are named in the field
-        comments, because `rollouts_run / rollout_leaf_worlds` is not
-        rollouts-per-world on a run with collapses.
+        WHAT "ZERO BY CONSTRUCTION" COVERS, narrowed to what is actually proved.
+        `rollout.rs` increments this counter at TWO sites, not one:
+          * an empty OPTION VECTOR from `State::get_all_options` -- proved impossible,
+            machine-checked by
+            `rollout.rs::get_all_options_never_yields_an_empty_option_vector` over five
+            state shapes, which fails when the pokezero fidelity patch that backfills
+            the last two exits is removed;
+          * an empty BRANCH LIST from `generate_instructions_from_move_pair` -- NOT
+            proved. gen3's `generate_instructions.rs` carries no `len() == 0` backfill,
+            and non-emptiness there rests on `handle_both_moves` always pushing; the
+            crate test only samples that branch.
+        So a non-zero reading is a vendored-dependency regression on the first branch
+        (it has happened: the same empty vector panicked `Node::expand` out of a whole
+        search) and an unproved-invariant violation on the second. Either way the leaf
+        values are untrustworthy, so the handling is the same -- but the CLAIM is one
+        branch narrower than "impossible".
+
+        THE RAISE IS NOT FAIL-CLOSED BY ITSELF, and an earlier revision of this
+        comment said it was ("costs a COUNTED world failure and a fallback decision").
+        That is true of `_search_rollout_crate`, whose refusal sits inside its world
+        loop's `try`. On the model path the raise landed outside every handler and went
+        straight out of `decide()`. `_run_world_report` catches it, counts a weighted
+        `crate_search:` world failure and drops the world -- so the sentence is true
+        again, and it is true because of code rather than because of this comment.
         """
-        leaf_mode = report.get("rollout_leaf_mode")
-        if leaf_mode is None:
-            return False
-        # REFUSED BEFORE ANYTHING IS ABSORBED, which is the ordering and not a
-        # stylistic preference. The refusal used to sit six accumulations down, so a
-        # refused report left a TORN WRITE in the shard: `rollouts_run`,
-        # `rollout_terminal_hits`, `rollout_cap_hits`, the mode counter and the world
-        # record were already incremented while `rollout_dead_ends`,
-        # `rollout_leaves_priced` and `rollout_encode_skipped` were not. The partition
-        # `terminal + cap + dead == run` then failed, and `rollout_fallback_fraction`
-        # -- whose whole purpose is to stop a blend reading as an oracle -- was
-        # DILUTED by the refused world's rollouts, which is precisely the fail-open
-        # behaviour the refusal exists to remove. Harmless only while the raise
-        # crashed the process; the moment the caller began counting the failure and
-        # continuing (which is what makes it fail-CLOSED) the torn stats became
-        # publishable. Found by running the path, not by reading it.
-        #
-        # A dead end means the engine handed
-        # a rollout a position with no legal continuation that it did not call over,
-        # so every leaf value behind this decision was priced from a state the
-        # engine could not step. Summing it into `rollout_fallback_fraction` was the
-        # fail-open handling: it hid that state inside a number that reads as an
-        # estimand.
-        #
-        # WHAT "ZERO BY CONSTRUCTION" COVERS, narrowed to what is actually proved.
-        # `rollout.rs` increments this counter at TWO sites, not one:
-        #   * an empty OPTION VECTOR from `State::get_all_options` -- proved
-        #     impossible, machine-checked by
-        #     `rollout.rs::get_all_options_never_yields_an_empty_option_vector`
-        #     over five state shapes, which fails when the pokezero fidelity patch
-        #     that backfills the last two exits is removed;
-        #   * an empty BRANCH LIST from `generate_instructions_from_move_pair` --
-        #     NOT proved. gen3's `generate_instructions.rs` carries no `len() == 0`
-        #     backfill, and non-emptiness there rests on `handle_both_moves` always
-        #     pushing; the crate test only samples that branch.
-        # So a non-zero reading is a vendored-dependency regression on the first
-        # branch (it has happened: the same empty vector panicked `Node::expand` out
-        # of a whole search) and an unproved-invariant violation on the second.
-        # Either way the leaf values are untrustworthy, so the handling is the same
-        # -- but the CLAIM is one branch narrower than "impossible".
-        #
-        # THE RAISE IS NOT FAIL-CLOSED BY ITSELF, and an earlier revision of this
-        # comment said it was ("costs a COUNTED world failure and a fallback
-        # decision"). That is true of `_search_rollout_crate`, whose refusal sits
-        # inside its world loop's `try`. On the model path this raise landed outside
-        # every handler and went straight out of `decide()`. `_run_world_report` now
-        # catches it, counts a weighted `crate_search:` world failure and drops the
-        # world -- so the sentence is true again, and it is true because of code
-        # rather than because of this comment.
+
+        if report.get("rollout_leaf_mode") is None:
+            return
         dead_ends = int(report.get("rollout_dead_ends") or 0)
         if dead_ends:
             raise ValueError(
@@ -4878,18 +4831,6 @@ class EngineMctsPolicy:
                 "this decision's leaf values came from a state the engine could not "
                 "step."
             )
-        self.stats.rollout_leaf_modes[str(leaf_mode)] += weight
-        self.stats.rollout_leaf_worlds += weight
-        self.stats.rollouts_run += int(report.get("rollouts_run") or 0)
-        self.stats.rollout_plies += int(report.get("rollout_plies") or 0)
-        self.stats.rollout_terminal_hits += int(report.get("rollout_terminal_hits") or 0)
-        self.stats.rollout_cap_hits += int(report.get("rollout_cap_hits") or 0)
-        self.stats.rollout_dead_ends += dead_ends
-        self.stats.rollout_leaves_priced += int(report.get("leaves_priced") or 0)
-        self.stats.rollout_encode_skipped += int(
-            report.get("rollout_encode_skipped") or 0
-        )
-        return True
 
     @classmethod
     def _rollout_metadata_fields(
@@ -4980,7 +4921,7 @@ class EngineMctsPolicy:
         rollouts_run = sum(int(r.get("rollouts_run") or 0) for r in rows)
         cap = sum(int(r.get("rollout_cap_hits") or 0) for r in rows)
         # THE THIRD READER of `rollout_dead_ends`, named as such. Two refuse a
-        # non-zero reading (`_absorb_rollout_report` and `_search_rollout_crate`);
+        # non-zero reading (`_refuse_rollout_dead_ends` and `_search_rollout_crate`);
         # this one sums it and refuses nothing. Safe, and safe for a stated reason
         # rather than by luck: it runs over the FINAL world records, and a record
         # only becomes final on a path that already passed one of the two refusals,

@@ -1022,38 +1022,6 @@ class RuntimeWitnessTest(unittest.TestCase):
     fields are how a run answers that question about itself.
     """
 
-    def test_absent_is_not_zero_on_the_fallback_fraction(self) -> None:
-        """`0.0` is the ORACLE claim, so an un-engaged seam must not render it.
-
-        `rollout_fallback_fraction == 0.0` means every rollout reached a terminal,
-        i.e. the leaf is a real oracle rather than a blend of an oracle and a
-        handcrafted cap value. A shard that ran no rollouts at all would produce
-        exactly that number from a guarded `0/0`.
-
-        FAILING INPUT: the second half. With rollouts recorded, a genuine 0.0 must
-        still be reportable -- so this is not a test that the field is always None.
-        """
-        from pokezero.engine_search import EngineMctsStats
-
-        idle = EngineMctsStats().to_dict()
-        self.assertIsNone(idle["rollout_fallback_fraction"])
-        self.assertIsNone(idle["rollout_terminal_fraction"])
-        self.assertIsNone(idle["rollout_mean_plies"])
-        self.assertEqual(idle["rollout_leaf_modes"], {})
-
-        oracle = EngineMctsStats()
-        oracle.rollouts_run = 800
-        oracle.rollout_terminal_hits = 800
-        oracle.rollout_leaf_modes = Counter({"rollout": 1})
-        payload = oracle.to_dict()
-        self.assertEqual(payload["rollout_fallback_fraction"], 0.0)
-        self.assertEqual(payload["rollout_terminal_fraction"], 1.0)
-
-        blend = EngineMctsStats()
-        blend.rollouts_run = 1000
-        blend.rollout_terminal_hits = 900
-        blend.rollout_cap_hits = 100
-        self.assertEqual(blend.to_dict()["rollout_fallback_fraction"], 0.1)
 
     def test_the_per_decision_row_reads_the_report_not_the_record(self) -> None:
         """THE REGRESSION GUARD, and it is a regression that actually happened.
@@ -1099,7 +1067,7 @@ class RuntimeWitnessTest(unittest.TestCase):
     def _policy_shell() -> Any:
         """An `EngineMctsPolicy` with only `.stats`, for the absorption tests.
 
-        `_absorb_rollout_report` touches nothing else, and constructing a real
+        `_refuse_rollout_dead_ends` touches nothing else, and constructing a real
         policy needs a dex, a candidate-set source and a TorchScript artifact --
         none of which the absorption reads.
         """
@@ -1109,118 +1077,48 @@ class RuntimeWitnessTest(unittest.TestCase):
         shell.stats = EngineMctsStats()
         return shell
 
-    def test_the_shard_absorption_reads_the_report_and_populates_the_witness(self) -> None:
-        """The shard-level witness, which is this change's headline claim.
 
-        FAILING INPUT: a report with NO `rollout_leaf_mode` must leave every
-        counter at zero and the mode set empty, while a report with one must
-        populate all of them -- so neither an absorption that never fires nor one
-        that fires unconditionally passes.
-        """
-        shell = self._policy_shell()
-        self.assertFalse(
-            shell._absorb_rollout_report({"model_evals": 7}),
-            "a pre-seam report must not register as an engaged seam",
-        )
-        self.assertEqual(shell.stats.rollout_leaf_modes, Counter())
-        self.assertEqual(shell.stats.rollouts_run, 0)
-
-        self.assertTrue(shell._absorb_rollout_report({
-            "rollout_leaf_mode": "rollout",
-            "rollouts_run": 64,
-            "rollout_plies": 1280,
-            "rollout_terminal_hits": 60,
-            "rollout_cap_hits": 4,
-            "rollout_dead_ends": 0,
-            "leaves_priced": 8,
-            "rollout_encode_skipped": 3,
-        }))
-        s = shell.stats
-        self.assertEqual(s.rollout_leaf_modes, Counter({"rollout": 1}))
-        self.assertEqual(s.rollout_leaf_worlds, 1)
-        # Each counter asserted individually and at a DISTINCT value, so a
-        # copy-paste that read the wrong report key cannot pass.
-        self.assertEqual(s.rollouts_run, 64)
-        self.assertEqual(s.rollout_plies, 1280)
-        self.assertEqual(s.rollout_terminal_hits, 60)
-        self.assertEqual(s.rollout_cap_hits, 4)
-        self.assertEqual(s.rollout_dead_ends, 0)
-        self.assertEqual(s.rollout_leaves_priced, 8)
-        self.assertEqual(s.rollout_encode_skipped, 3)
-
-        # ... and it ACCUMULATES per invocation, which is the documented unit.
-        shell._absorb_rollout_report({
-            "rollout_leaf_mode": "rollout", "rollouts_run": 64,
-            "rollout_terminal_hits": 64,
-        })
-        self.assertEqual(shell.stats.rollouts_run, 128)
-        self.assertEqual(shell.stats.rollout_leaf_worlds, 2)
-
-    def test_every_absorbed_counter_survives_to_dict(self) -> None:
-        """The payload must carry what was absorbed.
-
-        FAILING INPUT: every value below is distinct and non-zero, so a hardcoded
-        constant or a duplicated key fails on at least one.
-        """
-        shell = self._policy_shell()
-        shell._absorb_rollout_report({
-            "rollout_leaf_mode": "rollout",
-            "rollouts_run": 100,
-            "rollout_plies": 5500,
-            "rollout_terminal_hits": 91,
-            "rollout_cap_hits": 9,
-            "rollout_dead_ends": 0,
-            "leaves_priced": 12,
-            "rollout_encode_skipped": 5,
-        })
-        payload = shell.stats.to_dict()
-        self.assertEqual(payload["rollout_leaf_modes"], {"rollout": 1})
-        self.assertEqual(payload["rollout_leaf_worlds"], 1)
-        self.assertEqual(payload["rollouts_run"], 100)
-        self.assertEqual(payload["rollout_plies"], 5500)
-        self.assertEqual(payload["rollout_terminal_hits"], 91)
-        self.assertEqual(payload["rollout_cap_hits"], 9)
-        self.assertEqual(payload["rollout_dead_ends"], 0)
-        self.assertEqual(payload["rollout_leaves_priced"], 12)
-        self.assertEqual(payload["rollout_encode_skipped"], 5)
-        self.assertAlmostEqual(payload["rollout_fallback_fraction"], 0.09)
-        self.assertAlmostEqual(payload["rollout_terminal_fraction"], 0.91)
-        self.assertAlmostEqual(payload["rollout_mean_plies"], 55.0)
 
     def test_a_dead_end_is_refused_and_is_not_a_term_in_the_fallback_fraction(self) -> None:
         """`rollout_dead_ends`, which review found pinned to zero by construction.
 
-        It was a second term in `rollout_fallback_fraction`, and four mutants on
-        that term survived the whole suite -- because the term cannot read non-zero.
-        The reason is now machine-checked crate-side
+        The reason is machine-checked crate-side
         (`rollout.rs::get_all_options_never_yields_an_empty_option_vector`, which
         fails when the pokezero fidelity patch to gen3's `get_all_options` is
-        removed): every exit from that function backfills an empty option vector,
-        so the engine cannot present a position with no legal continuation that it
-        did not call over.
+        removed): every exit from that function backfills an empty option vector, so
+        the engine cannot present a position with no legal continuation that it did
+        not call over. So the field is not a term to be summed; it is an assertion,
+        and this is the test that it can read non-zero and does something when it does.
 
-        So the field is no longer a term. It is an assertion, and this is the test
-        that it can read non-zero and does something when it does.
+        RETARGETED FROM `_absorb_rollout_report`, WHICH THIS BRANCH NO LONGER HAS.
+        The absorber accumulated the whole rollout ledger into the shard stats, and
+        #1271 absorbs the same report into the same counters on the same path -- two
+        writers of one surface, which would double every rollout counter on every arm
+        shard. The ACCUMULATION is deleted here and #1271 lands first; the REFUSAL is
+        not #1271's and stays, as `_refuse_rollout_dead_ends`. #1271's witness guard
+        refuses an unbalanced partition and a fraction that is not its own quotient,
+        and neither is the same statement as "dead ends must be zero" -- its shard
+        schema's `cap + dead` numerator exists precisely so a non-zero count is
+        REPORTED rather than refused. Dropping this with the absorber would have lost
+        a refusal nothing else in either tree makes.
 
-        FAILING INPUTS, both halves asserted here:
-          * `rollout_dead_ends=1` -> refused, and nothing is absorbed
-          * `rollout_dead_ends=0` -> absorbed, and the fraction is cap/run exactly
+        FAILING INPUTS, both halves:
+          * `rollout_dead_ends=1` -> refused, by value and with the cause named;
+          * `rollout_dead_ends=0` -> accepted, so the refusal is not refusing
+            every report it is handed.
         """
         shell = self._policy_shell()
         with self.assertRaises(ValueError) as caught:
-            shell._absorb_rollout_report({
+            shell._refuse_rollout_dead_ends({
                 "rollout_leaf_mode": "rollout", "rollouts_run": 10,
                 "rollout_terminal_hits": 8, "rollout_cap_hits": 1,
                 "rollout_dead_ends": 1, "leaves_priced": 2,
             })
         self.assertIn("rollout_dead_ends=1", str(caught.exception))
         self.assertIn("could not step", str(caught.exception))
-        # "and nothing is absorbed" -- ASSERTED, not merely claimed above. The
-        # refusal used to sit six accumulations down, so a refused report left
-        # `rollouts_run`/`rollout_terminal_hits`/`rollout_cap_hits` and the mode
-        # counter incremented while `rollout_dead_ends` was not: the partition broke
-        # and the fallback fraction was diluted by the refused world's rollouts.
-        # FAILING INPUT: any accumulation moved back above the check lands here.
+        # AND IT ABSORBS NOTHING -- which is now a property of the method's whole
+        # body rather than of where the check sits inside it. FAILING INPUT: any
+        # accumulation re-added here lands on one of these.
         self.assertEqual(dict(shell.stats.rollout_leaf_modes), {})
         self.assertEqual(shell.stats.rollout_leaf_worlds, 0)
         self.assertEqual(shell.stats.rollouts_run, 0)
@@ -1228,27 +1126,61 @@ class RuntimeWitnessTest(unittest.TestCase):
         self.assertEqual(shell.stats.rollout_cap_hits, 0)
         self.assertEqual(shell.stats.rollout_leaves_priced, 0)
 
-        # The fraction is cap/run -- NOT (cap + dead)/run, and not terminal-derived.
-        # 3/12 = 0.25 is distinct from every other ratio these numbers can form
-        # (terminal 9/12 = 0.75, (cap+dead)/run would be 0.25 too if dead were
-        # absorbed, which is why dead is 0 here and the refusal above carries that
-        # half of the assertion).
         clean = self._policy_shell()
-        self.assertTrue(clean._absorb_rollout_report({
+        clean._refuse_rollout_dead_ends({
             "rollout_leaf_mode": "rollout", "rollouts_run": 12,
             "rollout_terminal_hits": 9, "rollout_cap_hits": 3,
             "rollout_dead_ends": 0, "leaves_priced": 4,
-        }))
-        payload = clean.stats.to_dict()
-        self.assertEqual(payload["rollout_dead_ends"], 0)
-        self.assertAlmostEqual(payload["rollout_fallback_fraction"], 0.25)
-        self.assertAlmostEqual(payload["rollout_terminal_fraction"], 0.75)
+        })
+        self.assertEqual(clean.stats.rollouts_run, 0)
+        # A PRE-SEAM REPORT IS NOT REFUSED EITHER, so the guard keyed off the REPORT
+        # (not off `config.rollout_leaf_eval`) still tolerates an older wheel.
+        clean._refuse_rollout_dead_ends({"model_evals": 7, "rollout_dead_ends": 3})
+
+    def test_this_branch_emits_NO_shard_level_rollout_block(self) -> None:
+        """B2. The merge order, asserted in the tree rather than described in a body.
+
+        This branch's `EngineMctsStats.to_dict` used to emit thirteen rollout keys
+        UNCONDITIONALLY and -- having adopted #1271's constant -- stamp them
+        `rollout_leaf_schema: 2`. On a FLAG-OFF shard that is v1's shape wearing v2's
+        stamp: zeroed counts, `None` quotients, and an absent world count that a v2
+        reader reads as "the arm engaged zero worlds" rather than as an absence. It
+        also stamped a version NO READER IN THIS TREE can check, because both readers
+        (`require_rollout_leaf_shard_schema`,
+        `require_rollout_leaf_document_schema`) are #1271's.
+
+        So the block is deleted here and #1271 LANDS FIRST. The consequence is stated
+        rather than hidden: on this branch alone there is no shard-level rollout
+        telemetry at all. That is honest -- an absent block is an absence -- whereas
+        the deleted one asserted a schema nothing could read.
+        """
+        from pokezero.engine_search import EngineMctsStats
+
+        stats = EngineMctsStats()
+        stats.rollout_leaf_modes["rollout"] = 4
+        stats.rollout_leaf_worlds = 4
+        stats.rollouts_run = 64
+        payload = stats.to_dict()
+        emitted = sorted(k for k in payload if str(k).startswith("rollout"))
+        self.assertEqual(
+            emitted,
+            [],
+            "this branch must not write the shard-level rollout block; #1271 owns it "
+            f"and emits it CONDITIONALLY. Found: {emitted}",
+        )
+        self.assertNotIn("rollout_leaf_schema", payload)
+        # AND THE FLAG-OFF PAYLOAD IS THE PRE-SEAM ONE, which is the contract the
+        # unconditional writer could not satisfy by construction.
+        self.assertEqual(
+            sorted(k for k in EngineMctsStats().to_dict() if str(k).startswith("rollout")),
+            [],
+        )
 
     def test_the_crate_only_path_refuses_a_dead_end_FAIL_CLOSED(self) -> None:
         """The second search path, and the placement that makes its refusal safe.
 
         `_search_rollout_crate` is the sequential crate-only driver;
-        `_absorb_rollout_report` never runs on it, so a dead-end refusal on the
+        `_refuse_rollout_dead_ends` never runs on it, so a dead-end refusal on the
         model path alone would leave two search paths reading one crate counter by
         two rules. Both refuse now.
 
@@ -1309,83 +1241,6 @@ class RuntimeWitnessTest(unittest.TestCase):
         self.assertIn("crate_search_rollout", handler_source)
         self.assertIn("world_failure_reasons", handler_source)
 
-    def test_the_fallback_fraction_reads_its_whole_partition(self) -> None:
-        """REVERSED, and the reversal is the cross-PR schema resolution.
-
-        This assertion previously required the numerator NOT to read
-        `rollout_dead_ends`, on the argument that the counter is refused upstream and
-        therefore provably zero, so the term "cannot read non-zero" and four mutants
-        on it survived. The premise was right and the conclusion was wrong in a way
-        that matters:
-
-        * zero-by-construction is a property of THIS WRITER, not of the schema. A
-          reader holding a banked shard cannot check a `cap`-only fraction against the
-          counts printed beside it, and "the writer refuses the other case" is a claim
-          about a version of the writer;
-        * #1271's per-decision guard already requires `(cap + dead) / run` and refuses
-          a fraction that is not its own partition's quotient. Two surfaces of one
-          number under two rules is the exact defect this module has been burned by
-          before (`root_q_gap_sum` versus its histogram);
-        * the term's untestability was a property of the FIXTURES, not of the term.
-          #1271 kills the mutant with a stats-level fixture that sets `dead_ends`
-          non-zero and so never passes through the absorb refusal.
-
-        So the shard schema is v2 (`rollout_leaf_schema == 2`) and the numerator is the
-        whole partition. On every shard this writer can produce the two rules give the
-        same number, because the dead-end case is still refused upstream -- this is a
-        schema alignment, not a value change, and the test below asserts exactly that.
-
-        FAILING INPUT: dropping the term, or swapping cap for terminal, both land here.
-        """
-        import ast  # noqa: PLC0415
-        import inspect  # noqa: PLC0415
-        import textwrap  # noqa: PLC0415
-
-        from pokezero.engine_search import EngineMctsStats
-
-        tree = ast.parse(textwrap.dedent(inspect.getsource(EngineMctsStats.to_dict)))
-        fraction = None
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Dict):
-                for key, value in zip(node.keys, node.values):
-                    if (
-                        isinstance(key, ast.Constant)
-                        and key.value == "rollout_fallback_fraction"
-                    ):
-                        fraction = value
-        self.assertIsNotNone(fraction, "the fallback fraction must be in `to_dict`")
-        read = {
-            node.attr for node in ast.walk(fraction) if isinstance(node, ast.Attribute)
-        }
-        self.assertIn("rollout_cap_hits", read)
-        self.assertIn("rollouts_run", read)
-        self.assertIn(
-            "rollout_dead_ends", read,
-            "the fallback fraction must be the quotient of its OWN partition "
-            "(cap + dead_ends) / rollouts_run, so a reader can check it against the "
-            "counts printed beside it; a cap-only numerator is checkable only against "
-            "a claim about the writer",
-        )
-        # AND THE VALUE IS UNCHANGED ON ANYTHING THIS WRITER CAN PRODUCE, which is what
-        # makes this an alignment rather than a re-measurement: the dead-end case is
-        # still refused in `_absorb_rollout_report`, so `dead == 0` on every shard and
-        # the two numerators coincide. Asserted rather than argued.
-        from pokezero.engine_search import ROLLOUT_LEAF_SHARD_SCHEMA
-
-        stats = EngineMctsStats()
-        stats.rollout_leaf_modes["rollout"] = 65
-        stats.rollout_leaf_worlds = 65
-        stats.rollouts_run = 71832
-        stats.rollout_terminal_hits = 70529
-        stats.rollout_cap_hits = 1303
-        stats.rollout_dead_ends = 0
-        payload = stats.to_dict()
-        self.assertEqual(payload["rollout_leaf_schema"], ROLLOUT_LEAF_SHARD_SCHEMA)
-        # The arm's own banked whole-game figure, at the launched 200-ply cap: a 98.2%
-        # ORACLE. Reproduced here to the last digit under the v2 numerator.
-        self.assertEqual(
-            payload["rollout_fallback_fraction"], 0.018139547833834504
-        )
 
     def test_the_decision_row_fraction_is_cap_over_run_too(self) -> None:
         """The per-decision copy must agree with the shard copy.
@@ -1403,180 +1258,6 @@ class RuntimeWitnessTest(unittest.TestCase):
         self.assertAlmostEqual(row["rollout_fallback_fraction"], 0.15)
         self.assertEqual(row["rollout_dead_ends"], 0)
 
-    def test_the_absorption_is_CALLED_on_the_world_report_path(self) -> None:
-        """THE CALL'S SHAPE. The SECONDARY half, and this docstring says so.
-
-        The primary gate is now behavioural --
-        `WorldReportPathBehaviourTest.test_running_the_path_populates_the_witness_from_the_report`
-        runs the world-report path against a stub crate and reads the counters. This
-        test is kept because a shape defect is cheaper to diagnose from a shape
-        assertion, and because it kills the deleted-call mutants at the exact line.
-        It is NOT the guard the witness rests on, for a reason worth stating: it
-        asserts about the source and the source is not the behaviour. Four inert
-        placements satisfied every condition below and survived the whole suite
-        (`return report` hoisted above the call, `report = {}`, `report` stripped of
-        its `rollout*` keys, and an instance-attribute shadow of the absorber), one
-        of which reproduces the original symptom exactly.
-
-        Re-aimed at `_run_world_report`: the closure it used to live in became a
-        bound method so the path could be RUN. The `model_evals` anchor still finds
-        the right body -- and if it stops, this test says so rather than passing
-        vacuously.
-
-        The three cheap closures review suggested are asserted as well, so the
-        shape half at least refuses the shapes it can see: no `Return` before the
-        call, no rebind of `report` between the `model_evals` absorption and the
-        call, and no assignment to the absorber's own name.
-
-        FAILING INPUTS, all demonstrated:
-          * the call replaced with `pass`                 -> no such Call node
-          * the call deleted outright                     -> no such Call node
-          * the call wrapped in `if False:`               -> not statement-level
-          * the call handed something other than `report` -> argument mismatch
-          * `return report` hoisted above the call        -> Return-before-call
-          * `report = {}` / `report` stripped             -> rebind between the two
-          * `self._absorb_rollout_report = ...`           -> absorber reassigned
-        """
-        import ast  # noqa: PLC0415
-        import inspect  # noqa: PLC0415
-        import textwrap  # noqa: PLC0415
-
-        tree = ast.parse(
-            textwrap.dedent(inspect.getsource(EngineMctsPolicy._run_world_report))
-        )
-        def owned(function: ast.AST):
-            """Nodes belonging to `function` itself, not to a function nested in it.
-
-            `ast.walk` crosses function boundaries, so an unqualified walk would
-            report an enclosing function as an absorber merely because the absorber
-            is defined inside it -- and the guard would then be aimed one level too
-            high, where the call is not. Kept now that the absorber is a top-level
-            method, because the aiming rule is the load-bearing part.
-            """
-            stack = list(ast.iter_child_nodes(function))
-            while stack:
-                node = stack.pop()
-                yield node
-                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                         ast.Lambda, ast.ClassDef)):
-                    stack.extend(ast.iter_child_nodes(node))
-
-        absorbers = [
-            node for node in ast.walk(tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and any(
-                isinstance(inner, ast.AugAssign)
-                and isinstance(inner.target, ast.Attribute)
-                and inner.target.attr == "model_evals"
-                for inner in owned(node)
-            )
-        ]
-        self.assertEqual(
-            len(absorbers), 1,
-            "one world-report absorber is assumed; if `model_evals` moved, this "
-            "guard is pointing at the wrong function and must be re-aimed",
-        )
-        # THE STRAIGHT-LINE PATH from the `model_evals` absorption to the call: the
-        # absorber's own body, and -- where the call sits inside one -- the body of a
-        # `try` that is itself a statement there. The `try` is legitimate and
-        # required: the refusal the absorption can raise must cost a COUNTED world
-        # failure rather than crash the decision. A conditional is what must NOT be
-        # accepted, and a statement in an `except` handler is not on this path at all
-        # (it is a different branch), which is why the handler's own `return None` is
-        # correctly ignored below.
-        body = absorbers[0].body
-        containing = None
-        for statement in body:
-            if isinstance(statement, ast.Try) and any(
-                isinstance(inner, ast.Expr)
-                and isinstance(inner.value, ast.Call)
-                and isinstance(inner.value.func, ast.Attribute)
-                and inner.value.func.attr == "_absorb_rollout_report"
-                for inner in statement.body
-            ):
-                containing = statement
-        straight_line = list(body)
-        if containing is not None:
-            straight_line = (
-                body[: body.index(containing) + 1] + list(containing.body)
-            )
-        statement_calls = [
-            node.value for node in straight_line
-            if isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Attribute)
-            and node.value.func.attr == "_absorb_rollout_report"
-        ]
-        self.assertEqual(
-            len(statement_calls), 1,
-            "the world-report absorber must call self._absorb_rollout_report(report) "
-            "unconditionally -- replacing it with `pass`, deleting it, or guarding it "
-            "behind a conditional all land here",
-        )
-        call = statement_calls[0]
-        self.assertEqual(
-            [ast.unparse(argument) for argument in call.args], ["report"],
-            "the crate's REPORT must be what is absorbed -- not the config, which "
-            "says only what was asked for, and not the record, whose top level does "
-            "not carry the rollout keys",
-        )
-        self.assertEqual(ast.unparse(call.func), "self._absorb_rollout_report")
-
-        # CLOSURE 1: no `Return` on the straight-line path before the call. Dead
-        # code after a return is invisible to every check this repo runs (ruff is a
-        # parse check here, not a linter), and it was the reviewer's zero-collateral
-        # survivor.
-        call_statement = next(
-            index for index, node in enumerate(straight_line)
-            if isinstance(node, ast.Expr) and node.value is call
-        )
-        before = straight_line[:call_statement]
-        self.assertEqual(
-            [ast.unparse(node) for node in before if isinstance(node, ast.Return)], [],
-            "a `return` before the absorption makes the call dead code while leaving "
-            "its shape intact",
-        )
-
-        # CLOSURE 2: `report` is not re-bound between the `model_evals` absorption
-        # and the call. `report` is a plain local, so a re-bind is an ordinary
-        # refactor accident -- and stripping its `rollout*` keys reproduces the
-        # original symptom exactly.
-        model_evals_at = next(
-            index for index, node in enumerate(straight_line)
-            if any(
-                isinstance(inner, ast.AugAssign)
-                and isinstance(inner.target, ast.Attribute)
-                and inner.target.attr == "model_evals"
-                for inner in ast.walk(node)
-            )
-        )
-        window = straight_line[model_evals_at + 1:call_statement]
-        rebinds = [
-            ast.unparse(node) for node in window
-            for target in (
-                node.targets if isinstance(node, ast.Assign)
-                else [node.target] if isinstance(node, (ast.AugAssign, ast.AnnAssign))
-                else []
-            )
-            if isinstance(target, ast.Name) and target.id == "report"
-        ]
-        self.assertEqual(
-            rebinds, [],
-            "`report` must reach the absorption as the crate handed it over; a "
-            "re-bind in between is the survivor that reproduced the original symptom",
-        )
-
-        # CLOSURE 3: the absorber's own name is never assigned. An instance
-        # attribute shadows the method for the rest of the object's life.
-        shadows = [
-            ast.unparse(node) for node in ast.walk(absorbers[0])
-            for target in (node.targets if isinstance(node, ast.Assign) else [])
-            if isinstance(target, ast.Attribute)
-            and target.attr == "_absorb_rollout_report"
-        ]
-        self.assertEqual(
-            shadows, [], "the absorber must not be shadowed by an assignment"
-        )
 
     def test_the_metadata_fields_helper_is_what_the_decision_splats(self) -> None:
         """The attachment, isolated so it is reachable at all.
@@ -1721,104 +1402,8 @@ class AgreedShardWitnessShapeTest(unittest.TestCase):
     def _declared() -> tuple:
         return tuple(_DRIVER.ROLLOUT_WITNESS_KEYS)
 
-    def test_the_witness_is_emitted_UNCONDITIONALLY(self) -> None:
-        """A run that never engaged the arm still carries every witness key.
 
-        FAILING INPUT: #1271's `if self.rollout_leaf_modes:` guard around the block.
-        Under it a fresh stats object emits NONE of these keys -- so this test is
-        precisely the assertion that the two presence rules cannot both land.
-        """
-        from pokezero.engine_search import EngineMctsStats  # noqa: PLC0415
 
-        payload = EngineMctsStats().to_dict()
-        for key in self._declared():
-            self.assertIn(
-                key, payload,
-                f"{key} must be present with the arm OFF -- absent is not false, and "
-                "the arm-off readings are {}, 0 and null",
-            )
-        # ... and the arm-off readings are the explicit ones. In particular the
-        # estimand columns are None, never a fabricated 0.0: a
-        # `rollout_fallback_fraction` of 0.0 is the ORACLE claim, and an un-engaged
-        # seam must not be able to make it out of a guarded 0/0.
-        self.assertEqual(payload["rollout_leaf_modes"], {})
-        self.assertEqual(payload["rollout_leaf_worlds"], 0)
-        self.assertIsNone(payload["rollout_fallback_fraction"])
-        self.assertIsNone(payload["rollout_terminal_fraction"])
-        self.assertIsNone(payload["rollout_mean_plies"])
-
-    def test_the_block_carries_its_own_SCHEMA_STAMP(self) -> None:
-        """The stamp is what makes the block resolvable after the fact.
-
-        Present unconditionally too, and for the same reason as everything else
-        here: a stamp that appears only when the arm ran cannot distinguish an
-        arm-off shard from one written before the stamp existed.
-
-        FAILING INPUT: dropping the stamp, or hardcoding a literal beside the
-        constant so the two can disagree.
-        """
-        from pokezero.engine_search import (  # noqa: PLC0415
-            ROLLOUT_LEAF_SHARD_SCHEMA,
-            EngineMctsStats,
-        )
-
-        payload = EngineMctsStats().to_dict()
-        self.assertEqual(payload["rollout_leaf_schema"], ROLLOUT_LEAF_SHARD_SCHEMA)
-        self.assertEqual(ROLLOUT_LEAF_SHARD_SCHEMA, 2)
-        self.assertEqual(
-            _DRIVER.current_witness_schema(), ROLLOUT_LEAF_SHARD_SCHEMA,
-            "the reader's notion of the current schema must be the writer's own "
-            "constant, not a copy of its value",
-        )
-        # ... and it must be READ, not cached at import behind a literal fallback.
-        # FAILING INPUT: `except Exception: ROLLOUT_WITNESS_SCHEMA = 2` -- which an
-        # earlier revision of this had, a hardcoded duplicate of a derived value
-        # sitting in the stamp's own reader -- reads 2 here where the writer says 99.
-        with mock.patch(
-            "pokezero.engine_search.ROLLOUT_LEAF_SHARD_SCHEMA", 99
-        ):
-            self.assertEqual(_DRIVER.current_witness_schema(), 99)
-        # THE STAMP MUST *DERIVE* FROM THE CONSTANT, not merely equal it today.
-        # Asserting the two are equal is satisfied by a hardcoded `2` beside the
-        # constant -- measured: that mutant SURVIVED until this block existed. A
-        # hardcoded duplicate of a derived value is two records of one fact that can
-        # disagree, which is the whole reason the stamp exists. So the constant is
-        # moved and the payload must follow it.
-        #
-        # FAILING INPUT: `"rollout_leaf_schema": 2` written as a literal reads 2 here
-        # where the patched constant says 99.
-        with mock.patch(
-            "pokezero.engine_search.ROLLOUT_LEAF_SHARD_SCHEMA", 99
-        ):
-            self.assertEqual(
-                EngineMctsStats().to_dict()["rollout_leaf_schema"], 99,
-                "the stamp must be read from ROLLOUT_LEAF_SHARD_SCHEMA, not copied "
-                "as a literal that happens to match it",
-            )
-
-    def test_the_declared_key_set_is_exactly_what_the_writer_EMITS(self) -> None:
-        """The reader's requirement is a literal tuple; it must not drift.
-
-        `load_shards` requires every declared key on every witnessed seat, so a key
-        added to the payload and not to the tuple would be unenforced, and a key in
-        the tuple the writer stopped emitting would refuse this branch's own shards.
-        Both directions asserted.
-
-        FAILING INPUT: adding a `rollout_*` key to `to_dict` without declaring it.
-        """
-        from pokezero.engine_search import EngineMctsStats  # noqa: PLC0415
-
-        emitted = {
-            key for key in EngineMctsStats().to_dict() if key.startswith("rollout")
-        }
-        # The stamp is checked separately (it is the block's version, not one of the
-        # versioned fields), so it is excluded here rather than duplicated into the
-        # data tuple -- but it is required to be present, so name it explicitly rather
-        # than filtering by a pattern that would also swallow a new key.
-        self.assertEqual(
-            emitted - {_DRIVER.ROLLOUT_WITNESS_STAMP}, set(self._declared())
-        )
-        self.assertIn(_DRIVER.ROLLOUT_WITNESS_STAMP, emitted)
 
     def test_the_SUPERSEDED_field_name_is_not_emitted(self) -> None:
         """`rollout_leaf_world_records` was this branch's name and lost.
@@ -1840,64 +1425,7 @@ class AgreedShardWitnessShapeTest(unittest.TestCase):
                 "exist here, or a merge can silently republish it",
             )
 
-    def test_the_world_counter_is_PER_WORLD_and_the_ledger_is_not(self) -> None:
-        """The unit, as behaviour rather than as a comment.
 
-        FAILING INPUT: `+= 1` -- this branch's original unit -- reads 2 here, not 5.
-        The cost ledger is asserted in the same call at its own unit, so a mutant
-        that weighted everything fails on `rollouts_run` instead.
-        """
-        from pokezero.engine_search import EngineMctsStats  # noqa: PLC0415
-
-        shell = EngineMctsPolicy.__new__(EngineMctsPolicy)
-        shell.stats = EngineMctsStats()
-        shell._absorb_rollout_report(
-            {"rollout_leaf_mode": "rollout", "rollouts_run": 10}, weight=3
-        )
-        shell._absorb_rollout_report(
-            {"rollout_leaf_mode": "rollout", "rollouts_run": 10}, weight=2
-        )
-        self.assertEqual(shell.stats.rollout_leaf_worlds, 5)
-        self.assertEqual(dict(shell.stats.rollout_leaf_modes), {"rollout": 5})
-        self.assertEqual(shell.stats.rollouts_run, 20)
-
-    def test_every_fallback_fraction_writer_uses_ONE_rule(self) -> None:
-        """FOUR surfaces publish `rollout_fallback_fraction`; all four must agree.
-
-        The v2 change moved the shard aggregate and the crate to the whole partition
-        `(cap + dead) / run` and LEFT BEHIND the two per-decision writers, which kept
-        `cap / run` -- so for one commit this codebase published one field name by two
-        rules, which is the exact defect the v2 change was made to remove. Measured,
-        not inferred: the two rows below were on the old numerator.
-
-        `dead` is 0 on everything this writer can produce, so no published figure
-        moves and the two rules cannot be told apart by value -- which is why this is
-        asserted on an input with `dead != 0`, reaching the row builders directly
-        rather than through the absorption that refuses it.
-
-        FAILING INPUT: either per-decision writer reverted to `cap / run` reads
-        0.1 here instead of 0.3.
-        """
-        row = EngineMctsPolicy._rollout_decision_row([
-            {"report": {"rollout_leaf_mode": "rollout", "rollouts_run": 10,
-                        "rollout_terminal_hits": 7, "rollout_cap_hits": 1,
-                        "rollout_dead_ends": 2, "leaves_priced": 4}}
-        ])
-        assert row is not None
-        self.assertAlmostEqual(row["rollout_fallback_fraction"], 0.3)
-
-        from pokezero.engine_search import EngineMctsStats  # noqa: PLC0415
-
-        stats = EngineMctsStats()
-        stats.rollouts_run = 10
-        stats.rollout_cap_hits = 1
-        stats.rollout_dead_ends = 2
-        stats.rollout_terminal_hits = 7
-        self.assertAlmostEqual(
-            stats.to_dict()["rollout_fallback_fraction"], 0.3,
-            "the shard aggregate and the per-decision row must publish one field "
-            "name by one rule",
-        )
 
     def test_the_crate_only_paths_fraction_reads_both_counters_STRUCTURALLY(
         self,
@@ -1950,22 +1478,37 @@ class WorldReportPathBehaviourTest(unittest.TestCase):
     """THE WITNESS AS A DATUM. A structural assertion about code is not an
     assertion about behaviour, and this class is the behavioural half.
 
-    Review round 2 established the gap by measurement. The AST pin in
-    `RuntimeWitnessTest.test_the_absorption_is_CALLED_on_the_world_report_path`
-    requires an unconditional statement-level `self._absorb_rollout_report(report)`
-    in the same body that absorbs `model_evals`, taking `report`. It kills five
-    mutants -- and FOUR inert placements satisfy it and survived the whole suite:
+    Review round 2 established the gap by measurement, and the AST pin it was about
+    IS GONE FROM THIS BRANCH -- deleted with the absorber it pinned. Recorded here
+    rather than quietly dropped, because the finding generalises past the code that
+    occasioned it.
+
+    The pin required an unconditional statement-level
+    `self._absorb_rollout_report(report)` in the same body that absorbs `model_evals`,
+    taking `report`. It killed five mutants -- and FOUR inert placements satisfied it
+    and survived the whole suite:
 
       * `return report` hoisted above the call;
       * `report = {}` rebound before the call;
       * `report` stripped of its `rollout*` keys -- which reproduces the original
         symptom exactly, `rollout_leaf: true` with `rollout_leaf_modes {}` and
         `rollouts_run 0` while tens of thousands of rollouts ran;
-      * `self._absorb_rollout_report` shadowed by an instance attribute.
+      * the absorber shadowed by an instance attribute.
 
-    So the pin proves the call is WRITTEN, not that it RUNS ON REAL DATA. Nothing
-    in CI covers the class either: ruff runs only as `python-floor-syntax`, a
-    target-version parse check, so not even an unreachable-code rule is in effect.
+    So the pin proved the call was WRITTEN, not that it RAN ON REAL DATA. Reversing to
+    a behavioural test was the right call, and the FOLLOW-THROUGH WAS INCOMPLETE: the
+    reversal's own justification -- "#1271 makes the term testable at the writer
+    instead" -- held at TWO of the three sites that carry the `cap + dead` rule. The
+    shard reader and the shard writer each had a non-zero-dead fixture; the
+    per-decision witness guard did not, so `expected = (cap + dead) -> cap` survived
+    there. #1271 now carries that third fixture
+    (`test_the_DEAD_END_term_of_the_fallback_numerator_is_pinned`), which is what makes
+    the sentence true at all three.
+
+    Nothing in CI covers the class either: ruff runs only as `python-floor-syntax`, a
+    target-version parse check, so not even an unreachable-code rule is in effect. And
+    NO TEST FILE ON EITHER BRANCH IS NAMED IN ANY WORKFLOW -- see the CI note in the
+    PR body.
 
     What closes it is running the path and reading the counters. That became
     possible when the world-report closure became `_run_world_report`, a bound
@@ -2035,112 +1578,13 @@ class WorldReportPathBehaviourTest(unittest.TestCase):
         )
         return policy, native, returned
 
-    def test_running_the_path_populates_the_witness_from_the_report(self) -> None:
-        """The headline claim, observed rather than parsed.
 
-        FAILING INPUTS -- all four inert placements land here, and each on a
-        different assertion:
-          * `return report` above the call, `report = {}`, and the absorber
-            shadowed -> every rollout counter stays 0;
-          * `report` stripped of its `rollout*` keys -> the rollout counters stay 0
-            while `model_evals` still absorbs, which is why BOTH are asserted.
-        """
-        policy, native, returned = self._run(self.ROLLOUT_REPORT)
-        stats = policy.stats
 
-        # The seam ran at all.
-        self.assertEqual(len(native.calls), 1, "the native seam must be called once")
-
-        # THE WITNESS. Non-trivially present: every counter at its own distinct
-        # value, not merely non-zero.
-        self.assertEqual(dict(stats.rollout_leaf_modes), {"rollout": 1})
-        self.assertEqual(stats.rollout_leaf_worlds, 1)
-        self.assertEqual(stats.rollouts_run, 71832)
-        self.assertEqual(stats.rollout_plies, 3935252)
-        self.assertEqual(stats.rollout_terminal_hits, 70529)
-        self.assertEqual(stats.rollout_cap_hits, 1303)
-        self.assertEqual(stats.rollout_dead_ends, 0)
-        self.assertEqual(stats.rollout_leaves_priced, 8979)
-        self.assertEqual(stats.rollout_encode_skipped, 47)
-
-        # ... and the NON-rollout absorption, so a mutant that breaks everything is
-        # distinguishable from one that strips only the rollout keys.
-        self.assertEqual(stats.model_evals, 8997)
-        self.assertEqual(stats.total_iterations, 4160)
-
-        # The estimand ledger the shard actually publishes, end to end.
-        payload = stats.to_dict()
-        self.assertEqual(payload["rollout_leaf_modes"], {"rollout": 1})
-        self.assertAlmostEqual(
-            payload["rollout_fallback_fraction"], 0.018139547833834504
-        )
-
-        # The report handed BACK is the crate's, whole. A rebind that stripped or
-        # emptied it fails here even if it somehow absorbed first.
-        assert returned is not None
-        self.assertEqual(returned["rollouts_run"], 71832)
-        self.assertEqual(returned["rollout_leaf_mode"], "rollout")
-
-    def test_a_pre_seam_report_leaves_the_witness_EMPTY(self) -> None:
-        """The half that makes the test above mean something.
-
-        The config asks for the arm and the report carries no rollout keys -- the
-        stale-wheel case, which is why the witness is absorbed from the report and
-        never from the config. The witness must read EMPTY while the rest of the
-        absorption still works.
-
-        FAILING INPUT: an absorption that fired unconditionally, or one keyed off
-        `config.rollout_leaf_eval`, populates the modes here and fails.
-        """
-        policy, _native, returned = self._run(self.PRE_SEAM_REPORT)
-        stats = policy.stats
-        self.assertEqual(dict(stats.rollout_leaf_modes), {})
-        self.assertEqual(stats.rollout_leaf_worlds, 0)
-        self.assertEqual(stats.rollouts_run, 0)
-        # The search still happened and is still counted.
-        self.assertEqual(stats.model_evals, 8185)
-        assert returned is not None
-        self.assertNotIn("rollout_leaf_mode", returned)
-        # And the estimand ledger says `None`, never 0.0.
-        self.assertIsNone(stats.to_dict()["rollout_fallback_fraction"])
-
-    def test_the_two_units_reach_the_stats_through_the_REAL_path(self) -> None:
-        """THE UNIT SPLIT, and this is the test that makes it a measurement.
-
-        The v2 shard schema puts the world counters on WORLDS (`+= weight`, so a
-        collapsed draw served by one search counts every world it stood for) and the
-        cost ledger on INVOCATIONS (unweighted, because the compute happened once).
-        Both units are documented in the field comments; documented is not measured,
-        and the two are only distinguishable on a call where `weight != 1`.
-
-        FAILING INPUTS, and this is why `weight=3` and two calls:
-          * the world counters left unweighted (`+= 1`) read 2, not 6;
-          * the cost ledger weighted along with them reads `71832 * 6`, not
-            `71832 * 2`;
-          * `weight` dropped from the delegation entirely collapses both to the
-            unweighted reading.
-        No single number here is reachable by more than one of those rules.
-        """
-        policy = self._policy()
-        native = self._StubNative(self.ROLLOUT_REPORT)
-        config = EngineMctsConfig(**_MODEL_CONFIG, rollout_leaf_eval=True,
-                                  rollout_count=8)
-        for _ in range(2):
-            policy._run_world_report(
-                dict(self.RECORD), 0, weight=3,
-                config=config, native=native, root_inputs="root", rust_fold=FOLD,
-            )
-        # WORLDS: two invocations, each standing for three collapsed draws.
-        self.assertEqual(policy.stats.rollout_leaf_worlds, 6)
-        self.assertEqual(dict(policy.stats.rollout_leaf_modes), {"rollout": 6})
-        # INVOCATION work: two searches' worth, unweighted.
-        self.assertEqual(policy.stats.rollouts_run, 71832 * 2)
-        self.assertEqual(policy.stats.rollout_cap_hits, 1303 * 2)
 
     def test_a_dead_end_COSTS_A_COUNTED_WORLD_FAILURE_not_a_crash(self) -> None:
         """The model path's refusal, and the placement claim about it.
 
-        `_absorb_rollout_report` raises on a non-zero `rollout_dead_ends`, and the
+        `_refuse_rollout_dead_ends` raises on a non-zero `rollout_dead_ends`, and the
         comment beside that raise used to say it "costs a COUNTED world failure and
         a fallback decision". On `_search_rollout_crate` that is true -- the refusal
         is inside the world loop's `try`. On THIS path it was false: the absorption
