@@ -788,9 +788,17 @@ class ControlledFoulPlayConfig:
             # the native search's leaf evaluator, so under 'raw' or 'root-puct' the
             # flag reaches nothing -- and the shard body would still echo
             # `rollout_leaf: true` for the cell, which is a false witness on the
-            # only record of what ran. Reachable today from the paired driver as
-            # `--arm raw --engine-rollout-leaf`, which rendered `raw@k0` with
-            # `"rollout_leaf": true` in the shard.
+            # only record of what ran.
+            #
+            # NOT reachable from the paired driver, and this text used to say it was.
+            # `--arm raw --engine-rollout-leaf` rendered `raw@k0` with
+            # `"rollout_leaf": true` in the shard body -- but it never reached THIS
+            # refusal, because the driver forwards the whole rollout block inside
+            # `if args.arm != "raw"`, so the child was sent `--policy-mode raw` and
+            # none of the seam's seven flags. That route is closed at
+            # `config_id_for` and generically by `rollout_body_fields`. This refusal
+            # is the LIBRARY-level one: it fires for a caller that constructs the
+            # config directly, which the driver is not.
             raise ValueError(
                 "engine_rollout_leaf requires policy_mode='engine-mcts' "
                 f"(got {self.policy_mode!r}); the rollout seam is the native "

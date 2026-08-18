@@ -127,14 +127,18 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`4651509ba82eb97e…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`4ae81e5e86e479d1…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
 legitimate, and it has now happened **once per row of the table below** — DE-NUMBERED on purpose,
 see the warning under it. Restricting `git log 7fcd9e19..HEAD` to **all** of
 the fingerprint's inputs — the 74 gen3 patches, `poke-engine-gen3-patches.txt`,
-`poke-engine-base-source.json`, the 11 crate sources, and the `Cargo.toml` / `Cargo.lock` /
+`poke-engine-base-source.json`, the **12** crate sources — `crate_sources()` globs
+`rust/pokezero-search/src/**/*.rs` and the twelfth is `rollout.rs`, the file this branch added and
+the one this row's whole fingerprint story turns on; the count read **11** here from merge-base
+until round 4, which handed a reviewer the wrong input set for the re-derivation this very
+sentence prescribes — and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
 a SUPERSET of those rows, for the reason recorded below. ⚠ **The `input` column is DERIVED, and the third row was wrong on
 first write** — it carried `+403 −74`, which was neither this file's numstat nor any other
@@ -169,10 +173,11 @@ above.
 | C158 (prelude active-slot guard) | `rust/pokezero-search/src/events.rs`, +359 −7 | `bd9f7d407dc3c9a9…` |
 | C1 Stage 1 (closeout) | `rust/pokezero-search/src/encoder.rs` (131 constant column/offset lookups resolved once at table load) | `b79d83e3e08d838e…` |
 | #1219 completed on #1249 | `rust/pokezero-search/src/encoder.rs` (all 8 per-leaf `format!` md keys → `md_key!`, which derives both spellings from one suffix token) | `ad64440abbfca493…` |
-| (this head, merge of #1257) | `rust/pokezero-search/src/tree.rs` — per-depth OCCUPANCY counter, merged with main's `encoder.rs` md-key change | `65092feac14da111…` |
+| merge of #1257 (still `main`'s value) | `rust/pokezero-search/src/tree.rs` — per-depth OCCUPANCY counter, merged with main's `encoder.rs` md-key change | `65092feac14da111…` |
 | #1271 | `rust/pokezero-search/src/rollout.rs` **+1052 −0** (new file — the oracle-leaf batching seam), `src/model.rs` **+339 −23**, `src/lib.rs` **+2 −0** | `bddc3ce2644ae228…` |
-| #1272 review round 3 (this head) | `rust/pokezero-search/src/rollout.rs` **+143 −1** (the `get_all_options` option-invariant test — the machine-checked reason `rollout_dead_ends` is zero by construction — plus a note on the fallback fraction's two layers) | `25abc1c9380ab96d…` |
-| #1272 review round 3, `dead_ends` field doc | `rust/pokezero-search/src/rollout.rs` (doc comment only — the field's own statement of why it is zero by construction) | `4651509ba82eb97e…` |
+| #1272 review round 3 (SUPERSEDED) | `rust/pokezero-search/src/rollout.rs` **+143 −1** (the `get_all_options` option-invariant test — the machine-checked reason `rollout_dead_ends` is zero by construction — plus a note on the fallback fraction's two layers) | `25abc1c9380ab96d…` |
+| #1272 review round 3, `dead_ends` field doc (SUPERSEDED) | `rust/pokezero-search/src/rollout.rs` (doc comment only — the field's own statement of why it is zero by construction) | `4651509ba82eb97e…` |
+| #1272 review round 4 — **THIS HEAD** | `rust/pokezero-search/src/rollout.rs` (comment only: the `dead_ends` field doc narrowed to the ONE of its two increment sites that is actually proved, the two sites labelled in `rollout_once`, and the fallback-fraction note rewritten now that both layers compute `(cap + dead)/run`) | `4ae81e5e86e479d1…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -535,7 +540,9 @@ defect did not exist on either of their trees.** A typed `25` would have shipped
 Where CI gates on the merge, **local green and CI green are different measurements**; §6 declares
 that coupling and the assertion carries the fix in its own failure message.
 
-**Every measurement behind T2–T6 predates the head build**, and none is at `4651509ba82eb97e` —
+**Every measurement behind T2–T6 predates the head build**, and none is at `4ae81e5e86e479d1` —
+nor at `4651509ba82eb97e` (round 3's final head, and the value this row pinned until round 4's
+comment-only narrowing of the `dead_ends` field doc moved it again),
 nor at `25abc1c9380ab96d` (round 3's first head, before the `dead_ends` field doc landed),
 nor at `bddc3ce2644ae228` (this branch's round-2 head, and the value this row pinned until
 round 3's `rollout.rs` invariant test moved it again),
@@ -765,7 +772,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.head_fingerprint` | 4651509ba82eb97e |
+| `t1.head_fingerprint` | 4ae81e5e86e479d1 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

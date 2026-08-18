@@ -54,7 +54,98 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 SEATS = ("p1", "p2")
+
+# --- the rollout-leaf witness schema, and why the READER now refuses ----------
+#
+# ONE SURFACE MUST HAVE ONE SHAPE. This file and #1271
+# (`phase1/rollout-model-priors`) were both widening `per_seat[*].policy_stats`
+# with a rollout-leaf witness, in FOUR incompatible ways at once, under a
+# byte-identical `schema_version`:
+#
+#   |          | this branch, originally      | #1271                        |
+#   | name     | `rollout_leaf_world_records` | `rollout_leaf_worlds`        |
+#   | unit     | `+= 1` (per invocation)      | `+= weight` (per world)      |
+#   | presence | UNCONDITIONAL                | conditional (absent if off)  |
+#   | modes    | `+= 1`                       | `+= weight`                  |
+#
+# No metric was wrong, because nothing read the witness. It is worse in kind than a
+# wrong number: whichever landed second would silently re-schema the arbiter's own
+# banked shards, and `load_shards` validated only `schema_version` -- the one thing
+# both branches left identical -- so a shard of either shape read clean and a reader
+# had no way to tell which they held. Same defect the deploy repo fixed in `b30c30e`
+# ("one schema string was naming two disjoint shapes"), one layer down.
+#
+# THE NAME, THE UNITS AND THE STAMP ARE #1271'S, adopted here rather than defended:
+# `engine_search.ROLLOUT_LEAF_SHARD_SCHEMA == 2` is stamped into the block as
+# `rollout_leaf_schema`, and #1271 owns both the constant's reader
+# (`require_rollout_leaf_shard_schema`) and the migration
+# (`migrate_rollout_leaf_shard_v1`). Whichever lands first defines it; this is the
+# adoption, so there is exactly one writer of the surface.
+#
+# PRESENCE is the axis that adoption did NOT settle, and this file's reader settles
+# it: the block is emitted UNCONDITIONALLY, every key present, with `{}` / `0` /
+# `null` as the arm-off readings. A conditional witness encodes "the arm was off" as
+# an ABSENT key, and this campaign has refusals built on the opposite premise -- see
+# `rollout_leaf_of`'s absent-vs-false split in `foulplay_power_report`, and
+# `test_absent_is_not_zero_on_the_fallback_fraction`. Under a conditional writer an
+# arm-off run and a shard written before the arm existed are the same artifact.
+#
+# WHY NO SECOND VERSION STRING. The obvious move is to bump `SCHEMA_VERSION` too,
+# and it is the wrong one: the witness block already carries `rollout_leaf_schema`,
+# so a second stamp for the same fact would be two records that can disagree --
+# which is the defect class this campaign keeps paying for, and the one
+# `rollout_body_fields` exists to refuse fifteen lines down. Distinguishability is
+# what was required, and the block-level stamp provides it; `schema_version`
+# continues to describe the SHARD envelope, which the witness did not change. It
+# stays v1 so every pre-arm campaign on disk stays readable.
 SCHEMA_VERSION = "pokezero.foulplay-paired-shard.v1"
+
+#: The witness schema the READER understands, mirrored from the writer's own
+#: constant at import time rather than copied as a literal -- a hardcoded duplicate
+#: of a derived value is exactly what the stamp exists to prevent.
+def _current_witness_schema() -> int:
+    from pokezero.engine_search import (  # noqa: PLC0415 — lazy: heavy module
+        ROLLOUT_LEAF_SHARD_SCHEMA,
+    )
+
+    return int(ROLLOUT_LEAF_SHARD_SCHEMA)
+
+
+try:
+    ROLLOUT_WITNESS_SCHEMA = _current_witness_schema()
+except Exception:  # noqa: BLE001 — the CLI must import without the package on path
+    ROLLOUT_WITNESS_SCHEMA = 2
+
+#: THE WITNESS, key by key. A literal tuple rather than "whatever the writer put
+#: there", for the reason `ROLLOUT_LEAF_WITNESS_FIELDS` is one in `engine_search`: a
+#: guard that iterates the thing it checks cannot read False when a key is dropped.
+#: Every one of these is present in EVERY witnessed seat, arm on or off.
+ROLLOUT_WITNESS_KEYS = (
+    "rollout_leaf_modes",
+    "rollout_leaf_worlds",
+    "rollouts_run",
+    "rollout_plies",
+    "rollout_terminal_hits",
+    "rollout_cap_hits",
+    "rollout_dead_ends",
+    "rollout_leaves_priced",
+    "rollout_encode_skipped",
+    "rollout_terminal_fraction",
+    "rollout_fallback_fraction",
+    "rollout_mean_plies",
+)
+
+#: The key that says the block was stamped at all. Its ABSENCE beside a witness is
+#: the pre-adoption shape -- either branch's, since neither stamped -- and is exactly
+#: what cannot be resolved after the fact.
+ROLLOUT_WITNESS_STAMP = "rollout_leaf_schema"
+
+#: This branch's SUPERSEDED name for the world counter. A shard carrying it was
+#: written before the adoption, by a writer whose unit was `+= 1` rather than
+#: `+= weight`. Named, and REFUSED -- never renamed on the fly, because the two are
+#: different quantities the moment a duplicate belief draw collapses, and coercing
+#: one into the other is the silent re-schema this whole block exists to stop.
+ROLLOUT_WITNESS_SUPERSEDED_KEYS = ("rollout_leaf_world_records",)
 
 # FoulPlay's own budget is part of the OPPONENT DEFINITION, not a tuning knob:
 # every arm and every cell must face the same opponent strength or the paired
@@ -405,6 +496,19 @@ def rollout_body_fields(
     Still only the ASKED-FOR side. Whether the seam actually engaged at runtime is
     a per-seat reading off `policy_stats.rollout_leaf_modes`; a shard with
     `rollout_leaf: true` here and no leaf modes there ran the value head.
+
+    TWO COHERENCE RULES OVER ONE KEY SET, and they are deliberately different --
+    review flagged the pair as consistent-today-only, so the difference is stated
+    rather than left to be inferred. This function writes all five siblings
+    UNCONDITIONALLY into every shard body, flag off included, for the same
+    absent-is-not-false reason the witness block is unconditional: a reader must
+    never have to infer a value from a missing key. `rollout_leaf_of` (the
+    CAMPAIGN-CELL reader in `foulplay_power_report`) instead treats
+    siblings-without-the-flag as incoherent, because a hand-written campaign cell is
+    edited by people and a dropped flag there resolves to the value-head control's
+    id -- a real shard. Writer: always emit. Reader of a hand-edited surface: refuse
+    a partial set. The two only agree today because this writer always emits the
+    flag, which is exactly why that is asserted rather than assumed.
     """
     body_says_on = bool(args.engine_rollout_leaf)
     id_says_on = _ROLLOUT_FRAGMENT.search(config_id) is not None

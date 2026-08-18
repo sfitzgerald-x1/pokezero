@@ -168,17 +168,44 @@ pub(crate) struct RolloutStats {
     /// reading as over. Also priced by the fallback, counted separately
     /// because it means something different from a cap hit.
     ///
-    /// **ZERO BY CONSTRUCTION, and a defect signal rather than an estimand
-    /// term.** gen3's `State::get_all_options` backfills every exit, so it cannot
-    /// hand back an empty option vector;
-    /// `get_all_options_never_yields_an_empty_option_vector` pins that over five
-    /// state shapes and fails if the pokezero fidelity patch that closed the last
-    /// two exits is lost. So a non-zero reading means a vendored dependency
-    /// regressed, not that the leaf blended -- which is why the Python layer
-    /// REFUSES it instead of summing it into `rollout_fallback_fraction`. This
-    /// layer still adds it to its own fraction, where
-    /// `terminal + cap + dead == run` is a true partition; see the note at that
-    /// formula for why the two definitions agree on every reachable input.
+    /// **A DEFECT SIGNAL, NOT AN ESTIMAND TERM** -- which is why the Python layer
+    /// REFUSES a non-zero reading instead of summing it into
+    /// `rollout_fallback_fraction`.
+    ///
+    /// **"Zero by construction" is established for ONE of this counter's two
+    /// increment sites, and the scope is stated here because the claim was written
+    /// broader than the proof.** The two sites are a few lines apart in
+    /// `rollout_once`:
+    ///
+    /// * an **empty option vector** from `State::get_all_options` -- PROVED
+    ///   impossible. Every one of that function's seven exits backfills, either
+    ///   through `Side::add_switches` or through the pokezero fidelity patch's
+    ///   `is_empty()` guards on the two `force_switch` early returns.
+    ///   `get_all_options_never_yields_an_empty_option_vector` pins it over five
+    ///   state shapes against the real vendored engine, and FAILS when that patch
+    ///   is removed.
+    /// * an **empty branch list** from `generate_instructions_from_move_pair` --
+    ///   NOT proved. gen3's `generate_instructions.rs` carries no `len() == 0`
+    ///   backfill, so non-emptiness there rests on `handle_both_moves` always
+    ///   pushing, which nothing in this crate asserts; the invariant test only
+    ///   SAMPLES that branch by running rollouts.
+    ///
+    /// So a non-zero reading is a regressed vendored dependency on the first branch
+    /// and a violated-but-unproved invariant on the second. The handling is
+    /// identical either way -- refuse, fail closed -- so the design does not depend
+    /// on the distinction; the CLAIM does, and the claim is one branch narrower
+    /// than "impossible".
+    ///
+    /// **ONE FIELD NAME, ONE EXPRESSION, on both sides of the FFI boundary --
+    /// which was NOT true until the v2 shard schema landed.** Review found this
+    /// layer publishing `rollout_fallback_fraction` as `(cap + dead) / run` while
+    /// `EngineMctsStats.to_dict` published the same field name as `cap / run`: two
+    /// expressions for one published quantity, safe only because the Python layer
+    /// refuses a non-zero `dead_ends`. The Python side now computes the whole
+    /// partition too, so the two agree by construction rather than by coincidence,
+    /// and `terminal_fraction + fallback_fraction == 1.0` -- which two tests here
+    /// assert -- is now a property of BOTH layers. Recorded because the divergence
+    /// existed and the reason it was closed is the reason it must not come back.
     pub dead_ends: u64,
 }
 
@@ -229,18 +256,18 @@ impl RolloutStats {
             self.cap_hits,
             self.dead_ends,
             self.terminal_hits as f64 / denom,
-            // `cap + dead` HERE, `cap` alone in `EngineMctsStats.to_dict`, and the
-            // two agree on every input the Python layer accepts -- not by accident.
-            // This layer partitions its own three counters, so
-            // `terminal_fraction + fallback_fraction == 1.0` is a true identity here
-            // and two tests assert it. The Python layer drops `dead` because it is
-            // zero by construction (see
-            // `get_all_options_never_yields_an_empty_option_vector`) and a term that
-            // cannot read non-zero is not a measurement, and it REFUSES a non-zero
-            // reading outright -- so the only reports it ever prices have
-            // `dead_ends == 0`, where the two formulas are the same number. Stated
-            // because two layers computing one published field by different
-            // expressions is precisely the drift this campaign keeps paying for.
+            // `cap + dead` HERE AND IN `EngineMctsStats.to_dict` -- the SAME
+            // expression under the same published field name, since the v2 shard
+            // schema. This comment used to explain why the two layers could safely
+            // differ (Python read `cap` alone and refuses a non-zero `dead`, so the
+            // two agreed on every input it accepts). Review's objection to that was
+            // right: one published field name computed two ways is the drift this
+            // campaign keeps paying for, and "the writer refuses the other case" is a
+            // claim about a version of the writer, not something a reader holding a
+            // banked shard can check against the counts printed beside it. Both sides
+            // now partition their own three counters, so
+            // `terminal_fraction + fallback_fraction == 1.0` -- which two tests here
+            // assert -- holds at both layers by construction.
             (self.cap_hits + self.dead_ends) as f64 / denom,
             self.plies_stepped as f64 / denom,
         )
@@ -302,6 +329,10 @@ fn rollout_once(
             break;
         }
         let (s1_options, s2_options) = state.get_all_options();
+        // DEAD-END SITE 1 of 2, and the one that is PROVED unreachable:
+        // `get_all_options_never_yields_an_empty_option_vector` pins every exit of
+        // `get_all_options` over five state shapes and fails when the pokezero
+        // fidelity patch is removed.
         if s1_options.is_empty() || s2_options.is_empty() {
             stats.dead_ends += 1;
             break;
@@ -310,6 +341,11 @@ fn rollout_once(
         let s2 = pick(cfg.policy, rng, &s2_options);
         let branches =
             generate_instructions_from_move_pair(state, &s1, &s2, cfg.branch_on_damage);
+        // DEAD-END SITE 2 of 2, and the one that is NOT proved. gen3's
+        // `generate_instructions.rs` has no `len() == 0` backfill, so non-emptiness
+        // rests on `handle_both_moves` always pushing -- unasserted, and only
+        // SAMPLED by the invariant test's rollouts. "Zero by construction" does not
+        // cover this branch; see `RolloutStats::dead_ends`.
         if branches.is_empty() {
             stats.dead_ends += 1;
             break;

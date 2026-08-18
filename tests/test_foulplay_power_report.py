@@ -869,6 +869,243 @@ class ArmWitnessTest(unittest.TestCase):
 
 
 
+#: A stamped seat's rollout witness, arm ON. Every key present, which IS the rule.
+WITNESS_ON = {
+    "rollout_leaf_schema": 2,
+    "rollout_leaf_modes": {"rollout": 65},
+    "rollout_leaf_worlds": 65,
+    "rollouts_run": 71832,
+    "rollout_plies": 3935252,
+    "rollout_terminal_hits": 70529,
+    "rollout_cap_hits": 1303,
+    "rollout_dead_ends": 0,
+    "rollout_leaves_priced": 8979,
+    "rollout_encode_skipped": 47,
+    "rollout_terminal_fraction": 0.9818604521661655,
+    "rollout_fallback_fraction": 0.018139547833834504,
+    "rollout_mean_plies": 54.78,
+}
+#: The same seat with the arm OFF -- and this is the whole point of the presence
+#: rule: every key is STILL THERE, reading `{}` / `0` / `null`. The value-head twin
+#: of the banked game is byte-for-byte this shape.
+WITNESS_OFF = {
+    "rollout_leaf_schema": 2,
+    "rollout_leaf_modes": {},
+    "rollout_leaf_worlds": 0,
+    "rollouts_run": 0,
+    "rollout_plies": 0,
+    "rollout_terminal_hits": 0,
+    "rollout_cap_hits": 0,
+    "rollout_dead_ends": 0,
+    "rollout_leaves_priced": 0,
+    "rollout_encode_skipped": 0,
+    "rollout_terminal_fraction": None,
+    "rollout_fallback_fraction": None,
+    "rollout_mean_plies": None,
+}
+
+
+def witnessed(sh, witness, *, rollout_leaf=None, **stat_overrides):
+    """Give both seats a `policy_stats` rollout witness."""
+    sh = json.loads(json.dumps(sh))
+    if rollout_leaf is not None:
+        sh["rollout_leaf"] = rollout_leaf
+    for seat in sh["per_seat"].values():
+        stats = dict(witness)
+        for key, value in stat_overrides.items():
+            if value is _DROP:
+                stats.pop(key, None)
+            else:
+                stats[key] = value
+        seat["policy_stats"] = stats
+    return sh
+
+
+class _Drop:
+    pass
+
+
+_DROP = _Drop()
+
+
+class ShardWitnessSchemaRefusalTest(unittest.TestCase):
+    """`load_shards` must REFUSE a witness whose schema it did not write.
+
+    `schema_version` was the one thing this reader validated and the one thing that
+    could not tell two shapes apart: this branch and `phase1/rollout-model-priors`
+    both widened `per_seat[*].policy_stats` with a rollout-leaf witness -- different
+    key NAME, different UNIT, different PRESENCE rule, and a different unit again for
+    the mode tally -- under a byte-identical envelope string. Nothing read the
+    witness, so no metric was wrong; it is worse in kind, because whichever landed
+    second would silently re-schema the four shards this arm has already banked.
+
+    The name, units and stamp were settled by adopting #1271's schema. What was still
+    missing was the READER: a shard of the other shape still loaded clean. These are
+    the refusals, each with a demonstrated failing input, and every one a `SystemExit`
+    -- a silent re-schema of banked data is worse than a crash.
+    """
+
+    def _pair(self, *shards):
+        raw = shard("raw@k0", "raw", "/c/k0.pt", {(0, "p1"): 0.0}, gate=None)
+        return run([*shards, raw])
+
+    def test_a_pre_arm_shard_with_no_witness_still_loads(self) -> None:
+        """THE CONTROL. Every pre-arm campaign on disk has no witness at all, and
+        refusing those would make the whole banked corpus unreadable.
+
+        FAILING INPUT: a reader that required the stamp unconditionally lands here.
+        """
+        report = self._pair(
+            shard("d4-s64-b16-w1@k0", "search", "/c/k0.pt", {(0, "p1"): 1.0})
+        )
+        self.assertIn("d4-s64-b16-w1@k0", report["cells"])
+        # ... and the absent `rollout_leaf` reads False as a CONCLUSION from the
+        # absent witness, not as a default.
+        self.assertFalse(report["cells"]["d4-s64-b16-w1@k0"]["rollout_leaf"])
+
+    def test_a_stamped_witness_loads_on_both_arm_states(self) -> None:
+        """The other control: the shape this writer writes must be readable.
+
+        Both arm states, because PRESENCE is the claim under test -- the arm-OFF seat
+        carries every key too, at `{}` / `0` / `null`.
+        """
+        for label, witness, flag, cid in (
+            ("arm on", WITNESS_ON, True, "d4-s64-b16-w1+rollout8p200@k0"),
+            ("arm off", WITNESS_OFF, False, "d4-s64-b16-w1@k0"),
+        ):
+            with self.subTest(label):
+                report = self._pair(witnessed(
+                    shard(cid, "search", "/c/k0.pt", {(0, "p1"): 1.0}),
+                    witness, rollout_leaf=flag,
+                ))
+                self.assertEqual(report["cells"][cid]["rollout_leaf"], flag)
+
+    def test_an_unknown_ENVELOPE_version_is_refused(self) -> None:
+        """The outer `schema_version`, which is a separate axis from the stamp.
+
+        The envelope describes the shard's own shape and did not change with the
+        witness, so it stays v1 -- but an unrecognised one must still be a refusal
+        rather than a hopeful read of the fields this code happens to know.
+
+        FAILING INPUT: every other shard in this class carries the known envelope and
+        loads.
+        """
+        odd = shard("d4-s64-b16-w1@k0", "search", "/c/k0.pt", {(0, "p1"): 1.0})
+        odd["schema_version"] = "pokezero.foulplay-paired-shard.v9"
+        with self.assertRaises(SystemExit) as caught:
+            self._pair(odd)
+        self.assertIn("unexpected schema_version", str(caught.exception))
+
+    def test_an_UNSTAMPED_witness_is_refused(self) -> None:
+        """The pre-adoption shape, which BOTH branches produced.
+
+        An unstamped witness is the one case that cannot be resolved after the fact:
+        "written before the rename" and "written by a writer that dropped a field"
+        are the same artifact. Refusing it is what licenses the rest -- including
+        `rollout_leaf_of_shard`'s conclusion that no witness means no rollout run.
+
+        FAILING INPUT: the stamped controls above load, so this does not pass by
+        refusing every witness.
+        """
+        with self.assertRaises(SystemExit) as caught:
+            self._pair(witnessed(
+                shard("d4-s64-b16-w1+rollout8p200@k0", "search", "/c/k0.pt",
+                      {(0, "p1"): 1.0}),
+                WITNESS_ON, rollout_leaf=True, rollout_leaf_schema=_DROP,
+            ))
+        message = str(caught.exception)
+        self.assertIn("no 'rollout_leaf_schema'", message)
+        self.assertIn("unresolvable after the fact", message)
+
+    def test_a_witness_stamped_at_an_UNKNOWN_schema_is_refused(self) -> None:
+        """A future v3 must be a refusal, not a hopeful read of the fields it knows.
+
+        FAILING INPUT: a check that only tested for the stamp's PRESENCE accepts this.
+        """
+        with self.assertRaises(SystemExit) as caught:
+            self._pair(witnessed(
+                shard("d4-s64-b16-w1+rollout8p200@k0", "search", "/c/k0.pt",
+                      {(0, "p1"): 1.0}),
+                WITNESS_ON, rollout_leaf=True, rollout_leaf_schema=3,
+            ))
+        self.assertIn("this reader implements", str(caught.exception))
+
+    def test_the_SUPERSEDED_field_name_is_refused_not_renamed(self) -> None:
+        """`rollout_leaf_world_records` was this branch's name for the counter.
+
+        Renaming it on the way in is the coercion the whole check exists to stop: it
+        was accumulated `+= 1` per crate report where the current one is `+= weight`
+        per world, so the two are different quantities the moment a duplicate belief
+        draw collapses, and a reader that silently accepted either would average two
+        units together.
+
+        FAILING INPUT: the same shard spelled the current way loads (the control
+        above).
+        """
+        with self.assertRaises(SystemExit) as caught:
+            self._pair(witnessed(
+                shard("d4-s64-b16-w1+rollout8p200@k0", "search", "/c/k0.pt",
+                      {(0, "p1"): 1.0}),
+                WITNESS_ON, rollout_leaf=True, rollout_leaf_world_records=65,
+            ))
+        message = str(caught.exception)
+        self.assertIn("rollout_leaf_world_records", message)
+        self.assertIn("SUPERSEDED", message)
+        self.assertIn("migrate_rollout_leaf_shard_v1", message)
+
+    def test_a_PARTIAL_witness_is_refused_not_read_as_arm_off(self) -> None:
+        """The conditional-presence writer, i.e. the fourth axis of the conflict.
+
+        A stamped seat missing witness keys was written by a builder that emits them
+        only when the arm engaged. Refused rather than read as "arm off", because
+        those two are exactly what must stay distinguishable -- and this module's
+        absent-is-not-false reasoning depends on it.
+
+        FAILING INPUT: the arm-OFF control carries every key at `{}` / `0` / `null`
+        and loads, so this is not a refusal of arm-off shards.
+        """
+        with self.assertRaises(SystemExit) as caught:
+            self._pair(witnessed(
+                shard("d4-s64-b16-w1@k0", "search", "/c/k0.pt", {(0, "p1"): 1.0}),
+                WITNESS_OFF, rollout_leaf=False,
+                rollout_mean_plies=_DROP, rollout_encode_skipped=_DROP,
+            ))
+        message = str(caught.exception)
+        self.assertIn("UNCONDITIONALLY", message)
+        self.assertIn("rollout_encode_skipped", message)
+
+    def test_an_absent_rollout_leaf_beside_a_witness_is_refused(self) -> None:
+        """The shard-level instance of ABSENT IS NOT FALSE.
+
+        `bool(shard.get("rollout_leaf", False))` was written twice here -- literally
+        the construct the comment on the CAMPAIGN-CELL version condemns, 300 lines
+        apart. Beside a witness the flag is always emitted, so an absent one is a
+        dropped field; read as False it files the arm under its own value-head
+        control, which manufactures the null rather than blurring it.
+
+        FAILING INPUTS: an explicit `false` loads (the arm-off control), and a
+        pre-arm shard with no flag and no witness loads (the first control) -- so this
+        refuses the one case where absence is unexplained, not absence in general.
+        """
+        missing = witnessed(
+            shard("d4-s64-b16-w1@k0", "search", "/c/k0.pt", {(0, "p1"): 1.0}),
+            WITNESS_OFF,
+        )
+        missing.pop("rollout_leaf", None)
+        with self.assertRaises(SystemExit) as caught:
+            self._pair(missing)
+        self.assertIn("no `rollout_leaf`", str(caught.exception))
+
+        # ... and a non-boolean, because `bool("false")` is True.
+        stringly = witnessed(
+            shard("d4-s64-b16-w1@k0", "search", "/c/k0.pt", {(0, "p1"): 1.0}),
+            WITNESS_OFF, rollout_leaf="false",
+        )
+        with self.assertRaises(SystemExit) as caught:
+            self._pair(stringly)
+        self.assertIn("not a boolean", str(caught.exception))
+
+
 class OpponentHealthGateTest(unittest.TestCase):
     """A head-to-head cell is only as clean as its OPPONENT seat.
 

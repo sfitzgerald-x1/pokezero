@@ -32,6 +32,7 @@ Shared boundaries (both modes):
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import logging
@@ -3300,16 +3301,22 @@ class EngineMctsPolicy:
                 # `except` would crash the whole decision. A first revision of this put
                 # it below and asserted in its own comment that it was inside -- the
                 # comment was the only thing making it look safe, which is the defect
-                # class this whole round is about.
+                # class this whole round is about. It is now asserted by RUNNING this
+                # loop against a stub crate and reading `world_failure_reasons` --
+                # `test_the_crate_only_path_COUNTS_a_dead_end_and_falls_back` -- because
+                # the AST version of this pin was satisfied by
+                # `if False and int(report.get("rollout_dead_ends") or 0)`, which
+                # survived: a short-circuited `and` has the pinned shape and can never
+                # fire.
                 if int(report.get("rollout_dead_ends") or 0):
                     raise ValueError(
                         "crate reported rollout_dead_ends="
                         f"{int(report['rollout_dead_ends'])}: the engine offered no "
-                        "legal continuation from a position it did not call over, "
-                        "which the gen3 option invariant makes unreachable (see "
-                        "rollout.rs's "
-                        "get_all_options_never_yields_an_empty_option_vector). "
-                        "Refused rather than priced."
+                        "legal continuation from a position it did not call over. The "
+                        "empty option vector is impossible (rollout.rs's "
+                        "get_all_options_never_yields_an_empty_option_vector); the "
+                        "empty instruction branch list is unproved -- see the note in "
+                        "`_absorb_rollout_report`. Refused rather than priced."
                     )
             except Exception as error:  # noqa: BLE001 — count, keep the other worlds
                 detail = (
@@ -3383,10 +3390,14 @@ class EngineMctsPolicy:
                     # The honesty columns. A high fallback fraction means the
                     # "oracle" was mostly the handcrafted evaluator.
                     "rollout_terminal_fraction": round(terminal_hits / denom, 6),
-                    # Cap hits alone; `dead_ends` is an invariant witness rather
-                    # than a term. Same reason as the shard-level copy in
-                    # `EngineMctsStats.to_dict` -- see the field comment there.
-                    "rollout_fallback_fraction": round(cap_hits / denom, 6),
+                    # THE WHOLE PARTITION, agreeing with the shard-level copy, the
+                    # per-decision row on the model path, and the crate. Read `cap`
+                    # alone until the v2 schema, and left behind by it -- same fix and
+                    # same reason as the model path's row. `dead_ends` is refused above
+                    # in this very loop, so it is 0 here and no number moves.
+                    "rollout_fallback_fraction": round(
+                        (cap_hits + dead_ends) / denom, 6
+                    ),
                     "rollout_cap_hits": cap_hits,
                     "rollout_dead_ends": dead_ends,
                     "rollout_mean_plies": round(rollout_plies / denom, 3),
@@ -4155,6 +4166,233 @@ class EngineMctsPolicy:
         return decision
 
 
+    def _run_world_report(
+        self,
+        record: Mapping[str, Any],
+        early_stop_min_sims: int,
+        sims: int | None = None,
+        weight: int = 1,
+        depth: int | None = None,
+        *,
+        config: Any,
+        native: Any,
+        root_inputs: Any,
+        rust_fold: Any,
+    ) -> Optional[dict]:
+        """ONE world: assemble the native call, run it, absorb what came back.
+
+        A BOUND METHOD rather than the closure this used to be, extracted for
+        exactly the reason `_absorb_rollout_report` and `_rollout_metadata_fields`
+        were before it -- one level further out, because that is where the untested
+        boundary had moved. Review round 2 showed that pinning the absorption CALL
+        by its AST proves the call is WRITTEN, not that it RUNS ON REAL DATA: four
+        inert placements between the native call and the absorption satisfy that pin
+        and survived the whole suite --
+
+          * `return report` hoisted above the call. Dead code after a return, and
+            no CI job catches it: ruff runs here only as the `python-floor-syntax`
+            parse check, never as a linter, so no unreachable-code rule is in
+            effect.
+          * `report = {}` rebound before the call.
+          * `report` stripped of its `rollout*` keys, which reproduces the original
+            symptom EXACTLY -- `rollout_leaf: true` with `rollout_leaf_modes {}`
+            and `rollouts_run 0` while tens of thousands of rollouts ran.
+          * `self._absorb_rollout_report` shadowed by an instance attribute.
+
+        `report` is a plain local, so a re-bind is an ordinary refactor accident
+        and precisely the class the witness needs protecting from. None of the four
+        is a SHAPE defect, so no structural assertion can see them; only running
+        this path and reading the counters afterwards can. As a closure it could
+        not be run without a dex, a candidate-set source, a TorchScript artifact
+        and a live battle. As a method it takes a stub `native`, and the witness
+        becomes a datum a test asserts on -- `WorldReportPathBehaviourTest`.
+
+        The captured state is keyword-only so no caller can supply it positionally
+        by accident; `_search_model` binds it once with `functools.partial`, which
+        FORWARDS the positional arguments rather than re-listing them (a
+        hand-written forwarder can silently drop one).
+
+        Returns the crate's report, or None when the world aborted -- unchanged
+        from the closure, which every caller already relies on.
+        """
+        try:
+            search_args = native_search_args(
+                config,
+                record,
+                tables_json=self._tables_json,
+                root_inputs=root_inputs,
+                rust_fold=rust_fold,
+                early_stop_min_sims=early_stop_min_sims,
+                sims=sims,
+                depth=depth,
+            )
+            report = json.loads(
+                native.search_batched_multi_encoded(*search_args)
+            )
+        except Exception as error:  # noqa: BLE001 — count, keep the other worlds
+            detail = (
+                _bounded_reason_detail(str(error).splitlines()[0])
+                if str(error)
+                else type(error).__name__
+            )
+            reason = (
+                f"native_early_stop_unsupported: {detail}"
+                if early_stop_min_sims and isinstance(error, TypeError)
+                # The telemetry flag appends a positional, so a stale image
+                # rejects the call outright -- as a TypeError, from the same
+                # arity mismatch the early-stop flag hit. Named, because
+                # "every world failed" against a rebuilt-Python/old-image pod
+                # is otherwise indistinguishable from a search defect.
+                else f"native_override_telemetry_unsupported: {detail}"
+                if config.override_telemetry and isinstance(error, TypeError)
+                else detail
+            )
+            # Unsafe renderer branches abort the native world before a
+            # chance outcome can be silently omitted from its expectation.
+            # The native report is unavailable on that error path, so
+            # retain the same observability counter at the fallback seam.
+            if "attribution-unsafe renderer branch rejected before" in reason:
+                self.stats.attribution_unsafe_renders += weight
+            # RECORD THE FAILURE REASON FIRST. `_absorb_aborted_lossy_subcases` is
+            # written to swallow everything a malformed payload can throw, and its
+            # own docstring says an escape would propagate out of `decide()` -- but
+            # "written to" is not "proven to", and the ordering costs nothing. With
+            # the absorb first, any escape loses this world's `world_failure_reasons`
+            # entry, and those keys are a measurement contract compared across eras:
+            # the fallback would be undercounted rather than merely undiagnosed, so
+            # the failure mode would be a wrong number instead of a missing one.
+            # Reason first, diagnostics second, is strictly fail-safer.
+            #
+            # WEIGHTED by the collapse multiplicity, for the same reason the depth
+            # samples below are, and to keep the measurement contract this comment
+            # invokes: this is a per-WORLD event whose denominators --
+            # `worlds_attempted` and `worlds_constructed` -- are still counted per
+            # DRAW. A refusal is deterministic in the state, so EVERY draw of an
+            # aborting completion aborts; counting the abort once per SEARCH would
+            # deflate these keys by the duplicate multiplicity while their
+            # denominators kept the old unit, silently shifting
+            # `world_search_abort_rate` and every cross-era ranking the
+            # fallback-burndown campaign builds on them.
+            self.stats.world_failure_reasons[f"crate_search: {reason}"] += weight
+            # ... and everything ELSE the world observed before it aborted, which
+            # this seam used to discard wholesale.
+            self._absorb_aborted_lossy_subcases(error)
+            return None
+        # Invocation-level counters reflect actual compute. A stopped
+        # world that is conservatively replayed at full budget counts both
+        # invocations; worlds_searched is updated only for final records.
+        self.stats.total_iterations += int(report["iterations"])
+        self.stats.model_evals += int(report["model_evals"])
+        # Reached depth, same accumulation the hp_fraction path already does.
+        # Without this the model path -- the one every strength campaign runs
+        # -- reports nothing about whether the depth CAP was ever binding, so
+        # a flat depth ladder cannot be distinguished from a ladder whose
+        # rungs all built the same undersized tree. Per WORLD, like the
+        # hp_fraction path: depth_reached_samples counts worlds, not decisions.
+        reached = report.get("max_depth_reached")
+        if reached is not None:
+            reached = int(reached)
+            self.stats.depth_reached_samples += weight
+            self.stats.depth_reached_sum += reached * weight
+            self.stats.depth_reached_histogram[reached] += weight
+            self.stats.depth_reached_max = max(self.stats.depth_reached_max, reached)
+        # OCCUPANCY, which is a different question from the max above and the one the
+        # saturation gate actually needs. `max_depth_reached` is satisfied by a single
+        # deep line, so a ceiling share computed from it means "the ceiling was
+        # REACHABLE", not "the depth is filled" -- measured on this campaign at a gate
+        # that fired on only 14-16% of turns. `depth_occupancy[d]` counts traversals
+        # that opened a decision node at depth d, so ONE search at the cap yields the
+        # whole profile and the saturating depth is a read rather than a scan.
+        occ = report.get("depth_occupancy")
+        if isinstance(occ, list) and occ:
+            for depth, count in enumerate(occ):
+                if count:
+                    self.stats.depth_occupancy[depth] += int(count) * weight
+            record["_depth_occupancy"] = [int(c) for c in occ]
+        # Crate-measured phase walls are per-INVOCATION compute, exactly like
+        # iterations/model_evals above: a conservatively replayed world spent
+        # that encode/model/tree time twice and must report it.
+        self.stats.encode_wall_seconds += float(report.get("encode_s") or 0.0)
+        self.stats.model_wall_seconds += float(report.get("model_s") or 0.0)
+        self.stats.tree_wall_seconds += float(report.get("tree_s") or 0.0)
+        self.stats.fold_clone_wall_seconds += float(report.get("fold_clone_s") or 0.0)
+        self.stats.render_wall_seconds += float(report.get("render_s") or 0.0)
+        self.stats.fold_advance_wall_seconds += float(report.get("fold_advance_s") or 0.0)
+        self.stats.tensor_wall_seconds += float(report.get("tensor_s") or 0.0)
+        self.stats.action_map_wall_seconds += float(report.get("action_map_s") or 0.0)
+        self.stats.row_input_wall_seconds += float(report.get("row_input_s") or 0.0)
+        self.stats.products_wall_seconds += float(report.get("products_s") or 0.0)
+        self.stats.row_write_wall_seconds += float(report.get("row_write_s") or 0.0)
+        self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
+        self._absorb_lossy_subcases(report)
+        self.stats.attribution_unsafe_renders += int(
+            report.get("attribution_unsafe_renders") or 0
+        )
+        self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
+        # Per-INVOCATION like the phase walls above: a conservatively
+        # replayed world collided that many times twice and must report it.
+        # `.get(...) or 0` keeps a pre-collision-counter wheel readable.
+        for field_name in (
+            "collision_rounds",
+            "collision_pending_rounds",
+            "collision_selections",
+            "collision_joint_repeats",
+            "collision_self_repeats",
+            "collision_opponent_repeats",
+            "collision_traversals",
+            "collision_leaf_repeats",
+        ):
+            setattr(
+                self.stats,
+                field_name,
+                getattr(self.stats, field_name) + int(report.get(field_name) or 0),
+            )
+        # THE ROLLOUT SEAM'S RUNTIME WITNESS, on the same per-invocation
+        # footing as `model_evals` and the phase walls above. Keyed off the
+        # REPORT rather than off `config.rollout_leaf_eval` on purpose: the
+        # config says what was asked for and the report says what the crate
+        # did, and the failure this block exists to catch is exactly those two
+        # disagreeing -- an extension module that predates the seam ignores
+        # positionals it does not know, so the arm can be configured and not
+        # run. `.get(...)` throughout, so a pre-seam report stays readable and
+        # simply contributes nothing.
+        #
+        # Placed at the END of the absorption deliberately: the depth block
+        # above is pinned by a SOURCE-PROXIMITY test
+        # (test_mcts_acceptance_report.ModelPathDepthInstrumentationTest reads
+        # the 900 characters following the `model_evals` line), so inserting
+        # here keeps that guard measuring what it was written to measure
+        # instead of measuring this block's comment length.
+        #
+        # `weight=weight`: the world counters are weighted by the collapse
+        # multiplicity (the canonical v2 shard schema), the cost ledger is not.
+        #
+        # AND IT IS HANDLED HERE, because on THIS path the refusal is not
+        # fail-closed on its own. `_absorb_rollout_report` raises on a non-zero
+        # `rollout_dead_ends`, and its own comment claimed that "costs a COUNTED
+        # world failure and a fallback decision". That is true of
+        # `_search_rollout_crate`, whose refusal sits inside its world loop's
+        # `try`. It was FALSE here: this method's `try` closes at the native call,
+        # so the raise landed outside every handler -- and there is no outer try
+        # around `_search_model` (see `_absorb_aborted_lossy_subcases`, which
+        # records that such an escape goes "straight out of `decide()`"). So the
+        # model path crashed the whole decision, and the comment was again the only
+        # thing making it look safe. Measured by driving this method with a stub
+        # native, which is the thing that became possible when it stopped being a
+        # closure; no structural assertion could have seen it.
+        #
+        # Counted in the SAME taxonomy and with the same weight as the native
+        # call's own aborts a few lines up, and returning None like them, so the
+        # other worlds survive and `world_failures` shows what happened.
+        try:
+            self._absorb_rollout_report(report, weight=weight)
+        except ValueError as error:
+            self.stats.world_failure_reasons[
+                f"crate_search: {_bounded_reason_detail(str(error).splitlines()[0])}"
+            ] += weight
+            return None
+        return report
+
     def _search_model(
         self,
         context: PolicyContext,
@@ -4214,163 +4452,19 @@ class EngineMctsPolicy:
         duplicates: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
         search_started = time.perf_counter()
 
-        def run_world(
-            record: Mapping[str, Any],
-            early_stop_min_sims: int,
-            sims: int | None = None,
-            weight: int = 1,
-            depth: int | None = None,
-        ) -> Optional[dict]:
-            try:
-                search_args = native_search_args(
-                    config,
-                    record,
-                    tables_json=self._tables_json,
-                    root_inputs=root_inputs,
-                    rust_fold=rust_fold,
-                    early_stop_min_sims=early_stop_min_sims,
-                    sims=sims,
-                    depth=depth,
-                )
-                report = json.loads(
-                    native.search_batched_multi_encoded(*search_args)
-                )
-            except Exception as error:  # noqa: BLE001 — count, keep the other worlds
-                detail = (
-                    _bounded_reason_detail(str(error).splitlines()[0])
-                    if str(error)
-                    else type(error).__name__
-                )
-                reason = (
-                    f"native_early_stop_unsupported: {detail}"
-                    if early_stop_min_sims and isinstance(error, TypeError)
-                    # The telemetry flag appends a positional, so a stale image
-                    # rejects the call outright -- as a TypeError, from the same
-                    # arity mismatch the early-stop flag hit. Named, because
-                    # "every world failed" against a rebuilt-Python/old-image pod
-                    # is otherwise indistinguishable from a search defect.
-                    else f"native_override_telemetry_unsupported: {detail}"
-                    if config.override_telemetry and isinstance(error, TypeError)
-                    else detail
-                )
-                # Unsafe renderer branches abort the native world before a
-                # chance outcome can be silently omitted from its expectation.
-                # The native report is unavailable on that error path, so
-                # retain the same observability counter at the fallback seam.
-                if "attribution-unsafe renderer branch rejected before" in reason:
-                    self.stats.attribution_unsafe_renders += weight
-                # RECORD THE FAILURE REASON FIRST. `_absorb_aborted_lossy_subcases` is
-                # written to swallow everything a malformed payload can throw, and its
-                # own docstring says an escape would propagate out of `decide()` -- but
-                # "written to" is not "proven to", and the ordering costs nothing. With
-                # the absorb first, any escape loses this world's `world_failure_reasons`
-                # entry, and those keys are a measurement contract compared across eras:
-                # the fallback would be undercounted rather than merely undiagnosed, so
-                # the failure mode would be a wrong number instead of a missing one.
-                # Reason first, diagnostics second, is strictly fail-safer.
-                #
-                # WEIGHTED by the collapse multiplicity, for the same reason the depth
-                # samples below are, and to keep the measurement contract this comment
-                # invokes: this is a per-WORLD event whose denominators --
-                # `worlds_attempted` and `worlds_constructed` -- are still counted per
-                # DRAW. A refusal is deterministic in the state, so EVERY draw of an
-                # aborting completion aborts; counting the abort once per SEARCH would
-                # deflate these keys by the duplicate multiplicity while their
-                # denominators kept the old unit, silently shifting
-                # `world_search_abort_rate` and every cross-era ranking the
-                # fallback-burndown campaign builds on them.
-                self.stats.world_failure_reasons[f"crate_search: {reason}"] += weight
-                # ... and everything ELSE the world observed before it aborted, which
-                # this seam used to discard wholesale.
-                self._absorb_aborted_lossy_subcases(error)
-                return None
-            # Invocation-level counters reflect actual compute. A stopped
-            # world that is conservatively replayed at full budget counts both
-            # invocations; worlds_searched is updated only for final records.
-            self.stats.total_iterations += int(report["iterations"])
-            self.stats.model_evals += int(report["model_evals"])
-            # Reached depth, same accumulation the hp_fraction path already does.
-            # Without this the model path -- the one every strength campaign runs
-            # -- reports nothing about whether the depth CAP was ever binding, so
-            # a flat depth ladder cannot be distinguished from a ladder whose
-            # rungs all built the same undersized tree. Per WORLD, like the
-            # hp_fraction path: depth_reached_samples counts worlds, not decisions.
-            reached = report.get("max_depth_reached")
-            if reached is not None:
-                reached = int(reached)
-                self.stats.depth_reached_samples += weight
-                self.stats.depth_reached_sum += reached * weight
-                self.stats.depth_reached_histogram[reached] += weight
-                self.stats.depth_reached_max = max(self.stats.depth_reached_max, reached)
-            # OCCUPANCY, which is a different question from the max above and the one the
-            # saturation gate actually needs. `max_depth_reached` is satisfied by a single
-            # deep line, so a ceiling share computed from it means "the ceiling was
-            # REACHABLE", not "the depth is filled" -- measured on this campaign at a gate
-            # that fired on only 14-16% of turns. `depth_occupancy[d]` counts traversals
-            # that opened a decision node at depth d, so ONE search at the cap yields the
-            # whole profile and the saturating depth is a read rather than a scan.
-            occ = report.get("depth_occupancy")
-            if isinstance(occ, list) and occ:
-                for depth, count in enumerate(occ):
-                    if count:
-                        self.stats.depth_occupancy[depth] += int(count) * weight
-                record["_depth_occupancy"] = [int(c) for c in occ]
-            # Crate-measured phase walls are per-INVOCATION compute, exactly like
-            # iterations/model_evals above: a conservatively replayed world spent
-            # that encode/model/tree time twice and must report it.
-            self.stats.encode_wall_seconds += float(report.get("encode_s") or 0.0)
-            self.stats.model_wall_seconds += float(report.get("model_s") or 0.0)
-            self.stats.tree_wall_seconds += float(report.get("tree_s") or 0.0)
-            self.stats.fold_clone_wall_seconds += float(report.get("fold_clone_s") or 0.0)
-            self.stats.render_wall_seconds += float(report.get("render_s") or 0.0)
-            self.stats.fold_advance_wall_seconds += float(report.get("fold_advance_s") or 0.0)
-            self.stats.tensor_wall_seconds += float(report.get("tensor_s") or 0.0)
-            self.stats.action_map_wall_seconds += float(report.get("action_map_s") or 0.0)
-            self.stats.row_input_wall_seconds += float(report.get("row_input_s") or 0.0)
-            self.stats.products_wall_seconds += float(report.get("products_s") or 0.0)
-            self.stats.row_write_wall_seconds += float(report.get("row_write_s") or 0.0)
-            self.stats.lossy_renders += int(report.get("lossy_renders") or 0)
-            self._absorb_lossy_subcases(report)
-            self.stats.attribution_unsafe_renders += int(
-                report.get("attribution_unsafe_renders") or 0
-            )
-            self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
-            # Per-INVOCATION like the phase walls above: a conservatively
-            # replayed world collided that many times twice and must report it.
-            # `.get(...) or 0` keeps a pre-collision-counter wheel readable.
-            for field_name in (
-                "collision_rounds",
-                "collision_pending_rounds",
-                "collision_selections",
-                "collision_joint_repeats",
-                "collision_self_repeats",
-                "collision_opponent_repeats",
-                "collision_traversals",
-                "collision_leaf_repeats",
-            ):
-                setattr(
-                    self.stats,
-                    field_name,
-                    getattr(self.stats, field_name) + int(report.get(field_name) or 0),
-                )
-            # THE ROLLOUT SEAM'S RUNTIME WITNESS, on the same per-invocation
-            # footing as `model_evals` and the phase walls above. Keyed off the
-            # REPORT rather than off `config.rollout_leaf_eval` on purpose: the
-            # config says what was asked for and the report says what the crate
-            # did, and the failure this block exists to catch is exactly those two
-            # disagreeing -- an extension module that predates the seam ignores
-            # positionals it does not know, so the arm can be configured and not
-            # run. `.get(...)` throughout, so a pre-seam report stays readable and
-            # simply contributes nothing.
-            #
-            # Placed at the END of the absorption deliberately: the depth block
-            # above is pinned by a SOURCE-PROXIMITY test
-            # (test_mcts_acceptance_report.ModelPathDepthInstrumentationTest reads
-            # the 900 characters following the `model_evals` line), so inserting
-            # here keeps that guard measuring what it was written to measure
-            # instead of measuring this block's comment length.
-            self._absorb_rollout_report(report, weight=weight)
-            return report
+        # The world-report path is `_run_world_report`, a bound METHOD: see its
+        # docstring for why it is no longer the closure it was. An AST pin on the
+        # absorption call proved the call was written and not that it ran, and four
+        # inert placements survived it; a method can be RUN in a test.
+        # `functools.partial` forwards the positional arguments rather than
+        # re-listing them, so this binding cannot silently drop one.
+        run_world = functools.partial(
+            self._run_world_report,
+            config=config,
+            native=native,
+            root_inputs=root_inputs,
+            rust_fold=rust_fold,
+        )
 
         for world, state in worlds:
             ctx_json = json.dumps(
@@ -4727,32 +4821,69 @@ class EngineMctsPolicy:
         leaf_mode = report.get("rollout_leaf_mode")
         if leaf_mode is None:
             return False
+        # REFUSED BEFORE ANYTHING IS ABSORBED, which is the ordering and not a
+        # stylistic preference. The refusal used to sit six accumulations down, so a
+        # refused report left a TORN WRITE in the shard: `rollouts_run`,
+        # `rollout_terminal_hits`, `rollout_cap_hits`, the mode counter and the world
+        # record were already incremented while `rollout_dead_ends`,
+        # `rollout_leaves_priced` and `rollout_encode_skipped` were not. The partition
+        # `terminal + cap + dead == run` then failed, and `rollout_fallback_fraction`
+        # -- whose whole purpose is to stop a blend reading as an oracle -- was
+        # DILUTED by the refused world's rollouts, which is precisely the fail-open
+        # behaviour the refusal exists to remove. Harmless only while the raise
+        # crashed the process; the moment the caller began counting the failure and
+        # continuing (which is what makes it fail-CLOSED) the torn stats became
+        # publishable. Found by running the path, not by reading it.
+        #
+        # A dead end means the engine handed
+        # a rollout a position with no legal continuation that it did not call over,
+        # so every leaf value behind this decision was priced from a state the
+        # engine could not step. Summing it into `rollout_fallback_fraction` was the
+        # fail-open handling: it hid that state inside a number that reads as an
+        # estimand.
+        #
+        # WHAT "ZERO BY CONSTRUCTION" COVERS, narrowed to what is actually proved.
+        # `rollout.rs` increments this counter at TWO sites, not one:
+        #   * an empty OPTION VECTOR from `State::get_all_options` -- proved
+        #     impossible, machine-checked by
+        #     `rollout.rs::get_all_options_never_yields_an_empty_option_vector`
+        #     over five state shapes, which fails when the pokezero fidelity patch
+        #     that backfills the last two exits is removed;
+        #   * an empty BRANCH LIST from `generate_instructions_from_move_pair` --
+        #     NOT proved. gen3's `generate_instructions.rs` carries no `len() == 0`
+        #     backfill, and non-emptiness there rests on `handle_both_moves` always
+        #     pushing; the crate test only samples that branch.
+        # So a non-zero reading is a vendored-dependency regression on the first
+        # branch (it has happened: the same empty vector panicked `Node::expand` out
+        # of a whole search) and an unproved-invariant violation on the second.
+        # Either way the leaf values are untrustworthy, so the handling is the same
+        # -- but the CLAIM is one branch narrower than "impossible".
+        #
+        # THE RAISE IS NOT FAIL-CLOSED BY ITSELF, and an earlier revision of this
+        # comment said it was ("costs a COUNTED world failure and a fallback
+        # decision"). That is true of `_search_rollout_crate`, whose refusal sits
+        # inside its world loop's `try`. On the model path this raise landed outside
+        # every handler and went straight out of `decide()`. `_run_world_report` now
+        # catches it, counts a weighted `crate_search:` world failure and drops the
+        # world -- so the sentence is true again, and it is true because of code
+        # rather than because of this comment.
+        dead_ends = int(report.get("rollout_dead_ends") or 0)
+        if dead_ends:
+            raise ValueError(
+                f"crate reported rollout_dead_ends={dead_ends}: the engine offered no "
+                "legal continuation from a position it did not call over. The empty "
+                "option vector is impossible (rollout.rs's "
+                "get_all_options_never_yields_an_empty_option_vector); the empty "
+                "instruction branch list is unproved. Refused rather than priced: "
+                "this decision's leaf values came from a state the engine could not "
+                "step."
+            )
         self.stats.rollout_leaf_modes[str(leaf_mode)] += weight
         self.stats.rollout_leaf_worlds += weight
         self.stats.rollouts_run += int(report.get("rollouts_run") or 0)
         self.stats.rollout_plies += int(report.get("rollout_plies") or 0)
         self.stats.rollout_terminal_hits += int(report.get("rollout_terminal_hits") or 0)
         self.stats.rollout_cap_hits += int(report.get("rollout_cap_hits") or 0)
-        # REFUSED, not absorbed into a fraction. A dead end means the engine handed
-        # a rollout a position with no legal continuation that it did not call over,
-        # which the gen3 option invariant makes impossible -- so a non-zero reading
-        # is a regression in a re-fetched vendored dependency (it has happened: the
-        # same empty vector panicked `Node::expand` out of a whole search), and
-        # every leaf value behind this decision was priced from a position the
-        # engine could not step. Raising here costs a COUNTED world failure and a
-        # fallback decision, which is the fail-closed handling; summing it into
-        # `rollout_fallback_fraction` was the fail-open one, and it hid the state
-        # inside a number that reads as an estimand.
-        dead_ends = int(report.get("rollout_dead_ends") or 0)
-        if dead_ends:
-            raise ValueError(
-                f"crate reported rollout_dead_ends={dead_ends}: the engine offered no "
-                "legal continuation from a position it did not call over, which the "
-                "gen3 option invariant makes unreachable (see rollout.rs's "
-                "get_all_options_never_yields_an_empty_option_vector). Refused rather "
-                "than priced: this decision's leaf values came from a state the engine "
-                "could not step."
-            )
         self.stats.rollout_dead_ends += dead_ends
         self.stats.rollout_leaves_priced += int(report.get("leaves_priced") or 0)
         self.stats.rollout_encode_skipped += int(
@@ -4848,6 +4979,16 @@ class EngineMctsPolicy:
             return None
         rollouts_run = sum(int(r.get("rollouts_run") or 0) for r in rows)
         cap = sum(int(r.get("rollout_cap_hits") or 0) for r in rows)
+        # THE THIRD READER of `rollout_dead_ends`, named as such. Two refuse a
+        # non-zero reading (`_absorb_rollout_report` and `_search_rollout_crate`);
+        # this one sums it and refuses nothing. Safe, and safe for a stated reason
+        # rather than by luck: it runs over the FINAL world records, and a record
+        # only becomes final on a path that already passed one of the two refusals,
+        # so every value reaching here is 0. It is reported as a WITNESS field
+        # below, never as a term in the fraction -- which is why summing is the right
+        # thing to do here and refusing would be redundant. Recorded because "three
+        # readers, one counter" is the shape this campaign keeps paying for, and the
+        # third one should not have to be rediscovered.
         dead = sum(int(r.get("rollout_dead_ends") or 0) for r in rows)
         return {
             # The two fields that say the seam was ENGAGED at runtime. Both come
@@ -4875,10 +5016,18 @@ class EngineMctsPolicy:
             # None rather than 0.0 with no rollouts, for the reason spelled out on
             # the shard-level copy in `to_dict`: 0.0 is the oracle claim, and an
             # un-engaged seam must not be able to make it.
-            # Cap hits alone, like the shard-level copy: `dead` is an invariant
-            # witness, is zero by construction, and is refused rather than summed.
+            #
+            # THE WHOLE PARTITION, `(cap + dead) / run`, agreeing with the shard-level
+            # copy and with the crate. It read `cap` alone until now, and it was LEFT
+            # BEHIND when the v2 schema moved the shard-level copy to the partition --
+            # so for one commit this decision row published one field name by a
+            # different rule from the aggregate it is supposed to reconcile against,
+            # which is the "two surfaces of one number" defect the v2 change was made
+            # to remove, reintroduced by the same change. `dead` is 0 on every row
+            # (see the third-reader note above), so no published figure moves; the
+            # RULE is what had to match.
             "rollout_fallback_fraction": (
-                cap / rollouts_run if rollouts_run else None
+                (cap + dead) / rollouts_run if rollouts_run else None
             ),
         }
 

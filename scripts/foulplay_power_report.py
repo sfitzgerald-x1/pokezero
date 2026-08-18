@@ -91,12 +91,114 @@ def mcnemar(deltas: list[float]) -> dict:
 
 
 def load_shards(paths: list[str]) -> list[dict]:
+    """Read the shards, REFUSING any whose witness schema this reader did not write.
+
+    The check used to be `schema_version != "...v1"` and nothing else, which made the
+    one string it validated the one thing that could not distinguish two shapes: this
+    branch and `phase1/rollout-model-priors` were both widening
+    `per_seat[*].policy_stats` with a rollout-leaf witness -- different key NAME,
+    different UNIT, different PRESENCE rule, and a different unit again for the mode
+    tally -- under a byte-identical `schema_version`. See the long note at
+    `foulplay_paired_eval.SCHEMA_VERSION` for the shape that was agreed and why the
+    version stamp lives inside the witness block rather than in a second envelope
+    string.
+
+    Four refusals, and NONE of them coerces:
+
+    * an UNKNOWN envelope version. Named individually so a future v2 envelope is a
+      refusal here and not a hopeful read of a shape this code cannot interpret.
+    * a witness with NO `rollout_leaf_schema` stamp. That is the pre-adoption shape --
+      either branch's, since neither stamped -- and it is the one case that cannot be
+      resolved after the fact, because "written before the rename" and "written by a
+      writer that dropped a field" are otherwise the same artifact.
+    * a witness stamped at a schema this reader does not implement.
+    * a witness carrying `rollout_leaf_world_records`, this branch's superseded name
+      for the world counter. Renaming it on the way in would be the coercion the whole
+      check exists to stop: `+= 1` and `+= weight` are different quantities the moment
+      a duplicate belief draw collapses.
+
+    ... and one positive requirement, which is what makes the PRESENCE rule real: a
+    witnessed seat must carry EVERY key in `ROLLOUT_WITNESS_KEYS`. The arm-off
+    readings are `{}`, `0` and `null`, all present. A seat missing them was written by
+    a conditional-presence writer, under which an arm-off run and a pre-arm shard are
+    indistinguishable -- and this module's own absent-is-not-false reasoning
+    (`rollout_leaf_of_shard`) rests on being able to tell those apart.
+
+    A silent re-schema of banked data is worse than a crash, so every one of these is
+    `SystemExit` and none is a warning.
+    """
+    from foulplay_paired_eval import (  # noqa: PLC0415 — sibling script, lazy like `search_config_id`
+        ROLLOUT_WITNESS_KEYS,
+        ROLLOUT_WITNESS_SCHEMA,
+        ROLLOUT_WITNESS_STAMP,
+        ROLLOUT_WITNESS_SUPERSEDED_KEYS,
+        SCHEMA_VERSION as SHARD_SCHEMA_VERSION,
+    )
+
     shards = []
     for path in paths:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         schema = payload.get("schema_version")
-        if schema != "pokezero.foulplay-paired-shard.v1":
-            raise SystemExit(f"{path}: unexpected schema_version {schema!r}")
+        if schema != SHARD_SCHEMA_VERSION:
+            raise SystemExit(
+                f"{path}: unexpected schema_version {schema!r}; this reader writes and "
+                f"reads {SHARD_SCHEMA_VERSION!r}. Refusing rather than guessing: a "
+                "shard whose envelope is unknown cannot be merged, and coercing it "
+                "would re-schema banked data silently."
+            )
+        for seat, block in sorted((payload.get("per_seat") or {}).items()):
+            stats = (block or {}).get("policy_stats")
+            if not isinstance(stats, dict):
+                # A raw-arm seat has no engine at all. Nothing to check, and the arm
+                # is already witnessed by `arm` and `config_id`.
+                continue
+            superseded = [k for k in ROLLOUT_WITNESS_SUPERSEDED_KEYS if k in stats]
+            if superseded:
+                raise SystemExit(
+                    f"{path}: seat {seat} carries {', '.join(superseded)}, the "
+                    "SUPERSEDED name for the rollout world counter. That writer "
+                    "accumulated `+= 1` per crate report; the current one accumulates "
+                    "`+= weight` per world, and the two differ whenever a duplicate "
+                    "belief draw collapsed. Refused rather than renamed -- coercing "
+                    "one into the other is the silent re-schema this check exists to "
+                    "stop. Migrate it (#1271 ships `migrate_rollout_leaf_shard_v1`, "
+                    "which refuses unless `worlds_collapsed == 0` and "
+                    "`rollout_dead_ends == 0`, the conditions under which the two "
+                    "rules provably agree), then re-bank."
+                )
+            witness = [key for key in ROLLOUT_WITNESS_KEYS if key in stats]
+            if not witness:
+                # Not a rollout-era writer at all: a seat from before the arm existed.
+                # Nothing to validate, and `rollout_leaf_of_shard` relies on exactly
+                # this case being distinguishable from an arm-off one.
+                continue
+            stamp = stats.get(ROLLOUT_WITNESS_STAMP)
+            if stamp is None:
+                raise SystemExit(
+                    f"{path}: seat {seat} carries a rollout witness "
+                    f"({', '.join(witness)}) with no {ROLLOUT_WITNESS_STAMP!r}. An "
+                    "unstamped block is unresolvable after the fact -- 'written before "
+                    "the rename' and 'written by a writer that dropped a field' are the "
+                    "same artifact. Both pre-adoption writers produced this shape."
+                )
+            if stamp != ROLLOUT_WITNESS_SCHEMA:
+                raise SystemExit(
+                    f"{path}: seat {seat} is stamped "
+                    f"{ROLLOUT_WITNESS_STAMP}={stamp!r}; this reader implements "
+                    f"{ROLLOUT_WITNESS_SCHEMA!r}. Refused rather than read on the "
+                    "assumption that the fields it knows mean what they used to."
+                )
+            missing = [key for key in ROLLOUT_WITNESS_KEYS if key not in stats]
+            if missing:
+                raise SystemExit(
+                    f"{path}: seat {seat} is a stamped rollout witness missing "
+                    f"{', '.join(missing)}. The witness is emitted "
+                    "UNCONDITIONALLY -- the arm-off readings are `{}`, `0` and `null`, "
+                    "all present -- so a missing key is not an arm-off cell, it is a "
+                    "writer that encodes 'off' as absence. Absent is not false, and "
+                    "this campaign already refuses that elsewhere; refusing it here "
+                    "too rather than defaulting."
+                )
         payload["_path"] = path
         shards.append(payload)
     if not shards:
@@ -120,12 +222,76 @@ def assert_single_build(shards: list[dict], expect: str | None) -> str:
     return fingerprint
 
 
+def rollout_leaf_of_shard(shard: dict) -> bool:
+    """A shard's rollout-leaf flag, with absence resolved rather than defaulted.
+
+    This was `bool(shard.get("rollout_leaf", False))`, written twice -- literally
+    the construct the comment on `rollout_leaf_of` (the CAMPAIGN-CELL version, 300
+    lines down) condemns: "ABSENT IS NOT FALSE, and `bool(cell.get(...))` made it
+    False". The fix landed for cells and not for shards.
+
+    It is resolved here rather than merely renamed, and the resolution is the
+    WITNESS, not a default. Stated as narrowly as it is enforced:
+
+    * a shard whose seats carry no rollout witness at all was written before the arm
+      existed, so an absent flag cannot be hiding a rollout game -- which is the only
+      thing absent-is-false could get wrong here. False is a conclusion from the
+      witness, not a default. `load_shards` is what makes that reliable: it refuses a
+      witness that is unstamped, superseded, or partial, so "no witness" really does
+      mean "no rollout run" rather than "a witness this reader failed to recognise".
+    * a shard whose seats DO carry the witness was written by `rollout_body_fields`,
+      which emits the flag unconditionally and refuses a body disagreeing with the
+      cell id. So the key is present, and its absence is a dropped field -- refused,
+      not defaulted, because reading it as False files the arm under its own
+      value-head control and manufactures the null.
+    * a non-boolean is refused either way, because `bool("false")` is True and would
+      file the value-head control under the arm.
+    """
+    from foulplay_paired_eval import (  # noqa: PLC0415
+        ROLLOUT_WITNESS_KEYS,
+        ROLLOUT_WITNESS_STAMP,
+    )
+
+    if "rollout_leaf" not in shard:
+        witnessed = any(
+            ROLLOUT_WITNESS_STAMP in ((block or {}).get("policy_stats") or {})
+            or any(
+                key in ((block or {}).get("policy_stats") or {})
+                for key in ROLLOUT_WITNESS_KEYS
+            )
+            for block in (shard.get("per_seat") or {}).values()
+        )
+        if not witnessed:
+            return False
+        raise SystemExit(
+            f"{shard.get('_path')}: no `rollout_leaf` in a shard whose seats carry the "
+            "rollout witness. Every writer that emits the witness also emits this flag "
+            "unconditionally (`rollout_body_fields`), so absence is a dropped field "
+            "rather than an arm-off cell -- and reading it as False files the arm "
+            "under its own value-head control, which manufactures the null."
+        )
+    value = shard["rollout_leaf"]
+    if not isinstance(value, bool):
+        raise SystemExit(
+            f"{shard.get('_path')}: rollout_leaf={value!r} is not a boolean. Every "
+            "non-empty string is truthy, so a string here would file a value-head "
+            "shard under the arm."
+        )
+    return value
+
+
 def collect_rows(shards: list[dict]) -> tuple[dict, dict]:
     """(config_id -> {(seed, seat): score}), and config_id -> shard metadata."""
     rows: dict[str, dict[tuple[int, str], float]] = defaultdict(dict)
     meta: dict[str, dict] = {}
     for shard in shards:
         cid = shard["config_id"]
+        # RESOLVED ONCE per shard, and read twice from that one value. It used to be
+        # `bool(shard.get("rollout_leaf", False))` written out at both sites, which
+        # is two readers of one key -- and the second refusing first made the first
+        # one's coercion unobservable, i.e. a mutant that reverted only the recorded
+        # value survived the suite as an equivalent. One reader, one rule.
+        rollout_leaf = rollout_leaf_of_shard(shard)
         meta.setdefault(cid, {"arm": shard["arm"], "shards": [], "per_seat": [],
                               "checkpoint": shard.get("checkpoint"),
                               "opponent_priors": shard.get("opponent_priors", False),
@@ -138,7 +304,7 @@ def collect_rows(shards: list[dict]) -> tuple[dict, dict]:
                               # be recomputed wrongly and the witness cannot -- and
                               # because the merged report otherwise never states
                               # which cells priced their leaves by rollout.
-                              "rollout_leaf": bool(shard.get("rollout_leaf", False)),
+                              "rollout_leaf": rollout_leaf,
                               # config_id deliberately does NOT carry this one --
                               # it is observational, so telemetry-on and
                               # telemetry-off are the same search and pool into one
@@ -155,7 +321,7 @@ def collect_rows(shards: list[dict]) -> tuple[dict, dict]:
                 f"({shard['_path']}). config_id must carry +oracle-belief -- an "
                 "older driver wrote one of these shards."
             )
-        if bool(shard.get("rollout_leaf", False)) != meta[cid]["rollout_leaf"]:
+        if rollout_leaf != meta[cid]["rollout_leaf"]:
             # Not a warning either, and for a strictly stronger reason than the
             # oracle split above: the arbiter arm's ENTIRE reading is rollout-leaf
             # against the same config with the leaf off. Pooled, the centerpiece
