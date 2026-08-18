@@ -618,9 +618,17 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 42 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure. The workflow holds **34** lines containing the unittest
-invocation, of which **one is a comment**, so there are **33 executable** invocation sites at this
-head; the scan resolves **33** of them and leaves **none** unresolved.
+rather than inherited from #1205's figure. The workflow holds **35** lines containing the unittest
+invocation, of which **one is a comment**, so there are **34 executable** invocation sites at this
+head; the scan resolves **34** of them and leaves **none** unresolved.
+
+(Was 34/1/33. #1278 added a `tests.test_schema_container_census_wiring` step to the
+`schema-container-census` job — a new module that ran nowhere until it had its own step, which is
+this workflow's standing hazard and #1212's precedent. Re-derived on this tree by running the scan
+itself, not by adding one: the same pass also reports 34 sites and 34 resolved, so the new step's
+`Ran N tests` guard is reachable by the pairing rule rather than merely present. The comment count
+stays at one — the new step's prose deliberately omits the `python` prefix so it is not a second,
+because that count is this control's own anti-vacuity premise.)
 
 (Was 33/1/32. CI caught the drift rather than a human: GitHub gates on `refs/pull/<n>/merge`, so it
 measures the MERGED workflow while a branch measures only its own — the guard's own failure message

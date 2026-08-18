@@ -1,5 +1,5 @@
 # Every container of schema names in src/ and scripts/, classified. Enumerated by
-# scripts/schema_container_census.py; `--check` aborts the drill on any container missing from here.
+# scripts/schema_container_census.py, which aborts the drill on any container missing from here.
 #
 # WHY THIS FILE EXISTS. NINE separate structures keyed by schema went unregistered, one at a time,
 # and each time the drill charged the resulting failures to the codebase instead of to itself:
@@ -22,8 +22,9 @@
 # person, so nothing ran it: it went red at e496e9b8, when the v4 rotation moved a container's line,
 # and stayed red across EIGHT consecutive commits on main -- through SEVEN subsequent PR merges --
 # until #1276 re-keyed the row. No check reported it once. `schema-container-census` in
-# .github/workflows/engine-fidelity-gates.yml now runs `--check` unconditionally on every PR, with a
-# kill-confirm ahead of it, and `gate-status` demands its success.
+# .github/workflows/engine-fidelity-gates.yml now runs the census unconditionally on every PR, with a
+# kill-confirm ahead of it, `gate-status` demands its success, and
+# tests/test_schema_container_census_wiring.py -- run by that same job -- pins all three properties.
 #
 # KNOWN GAPS, enumerated because the alternative is that they are enumerated by nothing:
 #
@@ -85,7 +86,7 @@
 #     so it is the cheapest way to add an unregistered schema container to src/ with a green gate.
 #
 # Format:  REGISTER|PARTIAL|MIRRORED  <file>  <members>  <variable name or <inline:LINE>>
-# Keyed on file + members + VARIABLE NAME. Every container needs its OWN row: `--check` aborts if the
+# Keyed on file + members + VARIABLE NAME. Every container needs its OWN row: the census aborts if the
 # counts differ, because a shared row means one container is classified by another's decision, which
 # is how a new table got registered for free twice. An unnamed container is keyed <inline:LINE>; that
 # does reintroduce line sensitivity for those, deliberately -- a drifting line is a loud reclassify,

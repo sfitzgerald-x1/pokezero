@@ -45,7 +45,7 @@ SPEC = REPO / "tests" / "data" / "schema_drill_schema_containers.txt"
 SHORT = {"v2", "v2.1", "v2.2", "v3", "v4"}
 FULL = {f"pokezero.observation.{s}" for s in SHORT}
 
-# THE CLASS IS THE FIELD `--check` COULD NOT SEE. Matching is on (file, members, variable name);
+# THE CLASS IS THE FIELD THE CENSUS COULD NOT SEE. Matching is on (file, members, variable name);
 # the CLASS was read out of the spec and never checked against anything, so flipping a row from
 # REGISTER to PARTIAL was exit 0 -- measured, for one row and for all ten -- while the drill's
 # registration list silently shrank, because the drill appends only `REGISTER` rows to
@@ -287,12 +287,15 @@ def classification() -> dict[tuple[str, tuple[str, ...], str], str]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--list", action="store_true", help="print every container and its class")
-    ap.add_argument(
-        "--check", action="store_true",
-        help="kept for the drill's invocation and for readability at the call site; every abort "
-             "applies with or without it. It widens the LISTING to every container, not just the "
-             "unclassified ones",
-    )
+    # THERE IS DELIBERATELY NO `--check`. There was one, and it was a complete no-op: `args.check`
+    # was read nowhere, output was byte-identical with and without it (diffed, not reasoned about),
+    # and its `--help` text told the reader it "widens the LISTING to every container, not just the
+    # unclassified ones" -- which is what `--list` does. A flag whose help claims a behaviour it
+    # does not have is the same defect this whole file exists to catch, moved up into the user
+    # interface, so it is REMOVED rather than documented as vestigial: a no-op accepted for
+    # compatibility still has to be explained to every future reader, and the explanation is the
+    # cost. Every abort below applies unconditionally; `--list` only decides how loud the listing
+    # is on the way to the same verdict, which is why there is nothing for a second flag to mean.
     args = ap.parse_args()
 
     found, matched_nodes = containers()
@@ -334,7 +337,7 @@ def main() -> int:
         for path, members, var in unused:
             print(f"    {path}  {var}  {list(members)}")
 
-    # G6: `--check` printed "19 containers / 18 classified" and then "every container is classified",
+    # G6: the census printed "19 containers / 18 classified" and then "every container is classified",
     # exit 0 -- a contradiction it stated and ignored. Every container must have its OWN row, so the
     # counts must be equal; a shared row is a free-rider, which is how G3/G4 hid.
     if len(found) != len(spec):
@@ -344,11 +347,12 @@ def main() -> int:
               "is how a new table gets registered for free.")
         return 15
 
-    # EVERY abort now applies whatever the flags, and `--check` only decides how loud the listing
-    # is. It used to gate the three aborts below, so `--list` -- the thing a human reaches for when
-    # diagnosing -- printed the stale rows and the unclassified containers of the exact e496e9b8
-    # shape and then exited 0. A diagnostic that shows a contradiction and reports success is the
-    # same defect as a gate that states a contradiction and ignores it, which is what G6 was.
+    # EVERY abort now applies whatever the flags, and `--list` only decides how loud the listing
+    # is. A `--check` flag used to gate the three aborts below, so `--list` -- the thing a human
+    # reaches for when diagnosing -- printed the stale rows and the unclassified containers of the
+    # exact e496e9b8 shape and then exited 0. A diagnostic that shows a contradiction and reports
+    # success is the same defect as a gate that states a contradiction and ignores it, which is
+    # what G6 was. That flag is gone entirely; see the argparse block above for why.
     if unclassified:
         print()
         print(f"ABORT: {len(unclassified)} schema-name container(s) are not classified. The drill "

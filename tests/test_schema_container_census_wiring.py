@@ -18,10 +18,32 @@ place:
   3. BEHAVIOUR -- the census still aborts on each thing it claims to catch. Structure and
      consumption are both satisfied by a census that returns 0 unconditionally.
 
+...AND A FOURTH, WHICH THIS FILE ITSELF FAILED AT 8d32dcb2, in the same shape as its subject. This
+module executed NOWHERE. `grep -rn test_schema_container_census_wiring .github/ scripts/` returned
+zero hits at that commit; the workflow names test modules ONE BY ONE (34 executable `-m unittest`
+invocation sites once this one is added, derived by test_unreachable_readjudication's scan, with no
+`unittest discover` and no pytest step in .github/), so a new module is invisible to CI by default
+and all three pins above were local-only. A job-level
+`if: false`, a `continue-on-error`, removal from `gate-status`'s `needs:`, an `exit 1` flipped to
+`exit 0`, an emptied pin table and `fetch-depth: 2` -> `1` would each have landed on main GREEN --
+a correct guard nothing invokes, which is precisely what this file exists to forbid.
+
+  4. EXECUTION -- the `The census wiring pins` step of that same job runs THIS module, with exact
+     `Ran N tests` and `^OK$` guards, and `test_the_workflow_test_count_guard_matches_this_module`
+     derives N from the loader so the guard cannot go stale without a LOCAL failure. That
+     self-check is what makes the omission impossible for this module rather than merely fixed
+     once; tests/test_harness_digest_provenance.py, the precedent this file is modelled on, has
+     carried it since #1163 and copying the pins without it is how the property went missing.
+
 The behavioural half runs against MINIMAL synthetic trees rather than the repo, so each assertion
 has a known answer that does not move when a container is added to src/. The class pin is
 substituted per fixture for the same reason -- these tests are about the mechanism, not about the
 current contents of the spec file.
+
+Assertions about a STEP read `_step_block`, not the whole job. Two of them were satisfiable by a
+sibling step before that helper existed -- `assertIn('rc=$?', block)` was satisfied by the
+kill-confirm's own `rc=$?`, so deleting the verdict step's went uncaught (measured green at
+8d32dcb2) -- which is the `fetch-depth`-matched-its-own-comment defect at a different granularity.
 """
 
 from __future__ import annotations
@@ -40,6 +62,9 @@ WORKFLOW = REPO / ".github" / "workflows" / "engine-fidelity-gates.yml"
 CENSUS = REPO / "scripts" / "schema_container_census.py"
 SPEC = REPO / "tests" / "data" / "schema_drill_schema_containers.txt"
 JOB = "schema-container-census"
+VERDICT_STEP = "Schema-container census"
+KILL_CONFIRM_STEP = "The census reddens on known-bad input"
+WIRING_STEP = "The census wiring pins"
 
 _PIN_NAME = "EXPECTED_CLASS_COUNTS_BY_FILE"
 _TIMEOUT = 120
@@ -86,6 +111,49 @@ def _has_key_line(block: str, key: str, value: str) -> bool:
     """True when some line IS exactly `key: value`, rather than merely mentioning it."""
 
     return any(line.strip() == f"{key}: {value}" for line in block.splitlines())
+
+
+def _has_line(block: str, text: str) -> bool:
+    """True when some line IS exactly `text` once stripped, rather than merely containing it.
+
+    The `_has_key_line` remedy generalized, and it is needed for the same reason at a different
+    granularity. `assertIn('rc=$?', block)` over the whole job was satisfied by a DIFFERENT
+    occurrence: the kill-confirm step's `expect()` has its own `rc=$?`, so deleting the census
+    step's -- which is what makes the exit code the verdict -- left the test green. Found by
+    mutation, like the `fetch-depth` case. Whole-line matching alone does not fix that one, because
+    both occurrences strip to the same text; it has to be combined with `_step_block` so the
+    assertion reads only the step whose property is being pinned.
+    """
+
+    return any(line.strip() == text for line in block.splitlines())
+
+
+def _step_block(job: str, step_name: str) -> str:
+    """The YAML text of ONE named step of a job, comments removed.
+
+    Assertions about a step's body must not be satisfiable by a sibling step's body. Two of this
+    file's assertions were, before this helper existed: see `_has_line`.
+    """
+
+    lines = _job_block(job).splitlines()
+    want = f"- name: {step_name}"
+    start = indent = None
+    for index, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith("- ") and stripped == want:
+            start, indent = index, len(line) - len(stripped)
+            break
+    if start is None:
+        raise AssertionError(f"no step named {step_name!r} in job {job!r}")
+    body = [lines[start]]
+    for line in lines[start + 1 :]:
+        stripped = line.lstrip()
+        # The next step at the SAME indentation ends this one. A deeper `- ` is a list item inside
+        # this step's body (or inside a `run:` script) and must not terminate it.
+        if stripped.startswith("- ") and line and (len(line) - len(stripped)) <= indent:
+            break
+        body.append(line)
+    return "\n".join(line for line in body if not line.strip().startswith("#"))
 
 
 def _guard_body(block: str, needle: str) -> str:
@@ -149,25 +217,37 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
         self.assertIn("run", keys, "anti-vacuity: the step-body key scan found nothing")
 
     def test_the_job_actually_runs_the_census(self) -> None:
-        block = _job_code(JOB)
-        self.assertIn(
-            "python scripts/schema_container_census.py --check",
-            block,
-            "the job no longer invokes the census; everything else here asserts nothing",
+        step = _step_block(JOB, VERDICT_STEP)
+        self.assertTrue(
+            _has_line(step, "python scripts/schema_container_census.py"),
+            "the verdict step no longer invokes the census on the checked-out tree; everything "
+            "else here asserts nothing. Note this is a WHOLE-LINE match: the census must be the "
+            "command, not a substring of a longer pipeline whose exit code belongs to something "
+            "else, and the flag list is pinned too -- `--check` was removed for being a no-op "
+            "whose --help claimed a behaviour, so passing it here would be an argparse exit 2",
         )
 
     def test_the_verdict_is_the_exit_code_not_a_grep_of_its_own_output(self) -> None:
         """34 of `mass-gate`'s 44 steps assert on a log their own step wrote via `tee`, a shape
-        held together only by `set -o pipefail` under `bash -e`. This job must not join them: a
-        success-line grep can be satisfied by an `echo`, whereas an exit code cannot.
+        held together only by `set -o pipefail` under `bash -e`. The VERDICT step must not join
+        them: a success-line grep can be satisfied by an `echo`, whereas an exit code cannot.
+
+        Scoped to that one step, not to the job. The job now also runs this module and greps its
+        `Ran N tests` / `^OK$` log, which is a different thing -- that log is written by a separate
+        process whose invocation is pinned below -- and a job-wide `assertNotIn("tee ")` would have
+        forbidden it. Scoping is also what makes the `rc=$?` assertion mean anything: over the whole
+        job it was satisfied by the KILL-CONFIRM step's own `rc=$?`, so deleting the one here was
+        not caught. Found by mutation, same family as the `fetch-depth` comment match.
         """
 
-        block = _job_code(JOB)
-        self.assertNotIn("tee ", block, "a step now tees its output, inviting a self-grep verdict")
-        self.assertIn(
-            'rc=$?',
-            block,
-            "the census's exit code is no longer captured, so it cannot be the verdict",
+        step = _step_block(JOB, VERDICT_STEP)
+        self.assertNotIn(
+            "tee ", step, "the verdict step now tees its output, inviting a self-grep verdict"
+        )
+        self.assertTrue(
+            _has_line(step, "rc=$?"),
+            "the census's exit code is no longer captured in the verdict step, so it cannot be "
+            "the verdict",
         )
 
     def test_any_nonzero_census_exit_fails_the_step(self) -> None:
@@ -178,37 +258,70 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
         "the gate could not run" reading the floor gate's `exit 2` arm exists to forbid.
         """
 
-        block = _job_code(JOB)
+        step = _step_block(JOB, VERDICT_STEP)
         for needle in ('[ "${rc}" -eq 15 ]', '[ "${rc}" -ne 0 ]'):
             with self.subTest(arm=needle):
                 self.assertIn(
                     "exit 1",
-                    _guard_body(block, needle),
+                    _guard_body(step, needle),
                     f"the {needle} arm no longer fails the step",
                 )
 
     def test_the_kill_confirm_demands_the_census_can_still_fail(self) -> None:
-        """And that it covers each abort, not just one.
+        """And that it covers each abort, not just one, and names WHICH abort it expects.
 
         An earlier revision perturbed only an unclassified container, which trips the PRE-EXISTING
         count-equality abort -- so the aborts added alongside this job were confirmed by nothing.
         The negative control is listed too: without it, four reddening cases prove only that
         SOMETHING reddens.
+
+        And the exit code alone does not identify the abort: FOUR distinct aborts return 15, so an
+        edit that broke case 2's KEY rather than its CLASS would still exit 15 and still pass while
+        no longer exercising the per-file pin. Each case therefore also names a substring the census
+        ITSELF must print. Grepping that is not the self-grep the verdict step refuses -- the log is
+        written by the subject process, not by the asserting step -- and this test pins the pairing
+        so a needle cannot quietly be dropped back to a bare code check.
         """
 
-        block = _job_code(JOB)
-        for case in (
-            "unclassified container",
-            "REGISTER demoted to PARTIAL",
-            "conflicting duplicate row",
-            "two containers collapsed onto one line",
-            "unperturbed copy (negative control)",
+        step = _step_block(JOB, KILL_CONFIRM_STEP)
+        for case, rc, needle in (
+            ("unclassified container", 15, "needs its own row"),
+            ("REGISTER demoted to PARTIAL", 15, "per-file classification counts do not match"),
+            ("conflicting duplicate row", 1, "CONFLICTING rows for"),
+            ("two containers collapsed onto one line", 15, "container node(s) collapsed into"),
+            (
+                "unperturbed copy (negative control)",
+                0,
+                "every schema-name container is classified",
+            ),
         ):
             with self.subTest(case=case):
-                self.assertIn(f'expect "{case}"', block, "kill-confirm case is gone")
+                self.assertIn(f'expect "{case}"', step, "kill-confirm case is gone")
+                self.assertIn(
+                    f'{rc} "{needle}"',
+                    step,
+                    f"case '{case}' no longer pins both its exit code and the abort text the "
+                    "census must print; four aborts return 15, so the code alone does not say "
+                    "which one fired",
+                )
+                # ...and the needle must be text the census can actually print. Without this the
+                # pairing above is satisfied by a typo, and `expect` would then fail every run --
+                # loudly, but for the wrong reason and only after a push.
+                self.assertIn(
+                    needle,
+                    CENSUS.read_text(encoding="utf-8"),
+                    f"the kill-confirm expects the census to print {needle!r} for case '{case}', "
+                    "but no such text exists in the census",
+                )
+        # The verdict has to be read from the census's log, not from its code alone.
+        self.assertIn(
+            'grep -qF "$3"',
+            step,
+            "the kill-confirm no longer checks WHICH abort fired, only that something did",
+        )
         self.assertIn(
             "exit 1",
-            _guard_body(block, '[ "${fail}" -ne 0 ]'),
+            _guard_body(step, '[ "${fail}" -ne 0 ]'),
             "a failed kill-confirm no longer fails the step, so the real run is untrusted",
         )
 
@@ -229,6 +342,24 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
             _has_key_line(block, "fetch-depth", "2"),
             "no literal `fetch-depth: 2` key; the merge parent would be grafted away and the "
             "HEAD^2 arm would redden every PR, as it did on this job's first CI run",
+        )
+        # BELT, structurally, over the runtime braces above: no `ref:` on this job's checkout at
+        # all. The two shell arms catch every wrong ref this job can be given, but only once a run
+        # has started and only on `pull_request`; a reviewer reading the YAML should see the
+        # prohibition stated where the mistake would be made. The scan skips comments, so the
+        # step's own prose telling a maintainer to "remove the `ref:`" cannot satisfy it -- the
+        # `fetch-depth` lesson applied before it has to be relearned.
+        keys = [
+            line.strip().removeprefix("- ").split(":")[0].strip().strip("\"'")
+            for line in _job_code(JOB).splitlines()
+            if ":" in line.strip()
+        ]
+        self.assertIn("fetch-depth", keys, "anti-vacuity: the checkout `with:` scan found nothing")
+        self.assertNotIn(
+            "ref",
+            keys,
+            "this job's checkout now pins a `ref:`, which is how the census comes to count a tree "
+            "that is not the one that would land",
         )
         self.assertIn(
             "exit 1",
@@ -260,6 +391,67 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
             _guard_body(block, '[ "${CENSUS}" != "success" ]'),
             "the census branch of gate-status no longer exits nonzero",
         )
+
+    def test_a_job_actually_runs_this_module(self) -> None:
+        """THE PIN THAT MAKES EVERY OTHER PIN IN THIS FILE MEAN ANYTHING.
+
+        At 8d32dcb2 this module executed NOWHERE. `grep -rn test_schema_container_census_wiring
+        .github/ scripts/` returned zero hits, and this workflow names test modules one by one --
+        35 explicit `python -m unittest tests.<module>` invocations, no `unittest discover`, no
+        pytest anywhere in .github/ -- so a new module is invisible to CI by default. Every
+        assertion here was therefore local-only: a job-level `if: false`, a `continue-on-error`,
+        removal from `gate-status`'s `needs:`, an `exit 1` flipped to `exit 0` or an emptied pin
+        table would each have landed on main green, which is the exact defect this PR exists to
+        close, reproduced one level up.
+
+        The `Ran N tests` and `^OK$` guards read a LOG, and a log can be forged: replacing the
+        `run:` body with `echo 'Ran N tests'; echo OK` satisfies both greps. Pinning the invocation
+        is what makes them mean anything.
+        """
+
+        step = _step_block(JOB, WIRING_STEP)
+        self.assertIn(
+            "python -m unittest tests.test_schema_container_census_wiring",
+            step,
+            "the job no longer runs this module; every pin in this file is inert again",
+        )
+        # Both log guards must exit nonzero, for the same reason gate-status's branch must: `exit 1`
+        # -> `exit 0` leaves the grep, the message and the whole shape of the guard intact while the
+        # step passes over a shrunk, failing or forged suite.
+        for needle in ("Ran ", "'^OK$'"):
+            with self.subTest(guard=needle):
+                self.assertIn(
+                    "exit 1",
+                    _guard_body(step, needle),
+                    f"the {needle} guard no longer exits nonzero",
+                )
+
+    def test_the_workflow_test_count_guard_matches_this_module(self) -> None:
+        """THE SELF-CHECK, and the property this module was missing while its precedent had it.
+
+        `tests/test_harness_digest_provenance.py` asserts that the workflow's exact `Ran 28 tests`
+        guard matches its own loader count, which is what makes forgetting that guard a LOCAL
+        failure rather than a red CI run after the push. The guard lives in YAML, so no local
+        `unittest` or `pytest` run can otherwise see it, and a module that grows without its count
+        following is how an approved PR has reddened CI in this repo before.
+
+        Read from `_job_code`, not `_job_block`, which is stricter than the precedent: a comment in
+        the job that happened to quote the right number must not satisfy this. That is the same
+        comment-matches-its-own-prose defect `_job_code` exists for.
+        """
+
+        count = unittest.defaultTestLoader.loadTestsFromModule(
+            sys.modules[__name__]
+        ).countTestCases()
+        self.assertIn(
+            f"Ran {count} tests",
+            _job_code(JOB),
+            f"this module now has {count} tests; the workflow's exact grep guard for {JOB} still "
+            "names a different number, so CI would go red on a green suite",
+        )
+        # Anti-vacuity: a loader that found nothing would make the assertion above pass against a
+        # `Ran 0 tests` guard nobody would notice was wrong.
+        self.assertGreater(count, 1, "anti-vacuity: the loader found no tests in this module")
 
 
 class TheCensusStillAbortsOnWhatItClaimsToCatchTests(unittest.TestCase):
@@ -314,14 +506,14 @@ class TheCensusStillAbortsOnWhatItClaimsToCatchTests(unittest.TestCase):
     def test_a_classified_tree_is_green(self) -> None:
         """Anti-vacuity for every red fixture below: this exact shape must pass."""
 
-        result = self._run(self._tree(self.ONE, self.ONE_ROW, self.ONE_PIN), "--check")
+        result = self._run(self._tree(self.ONE, self.ONE_ROW, self.ONE_PIN))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_an_unclassified_container_aborts(self) -> None:
         root = self._tree(
             {**self.ONE, "two.py": 'OTHER = {"v2", "v2.1"}\n'}, self.ONE_ROW, self.ONE_PIN
         )
-        self.assertEqual(self._run(root, "--check").returncode, 15)
+        self.assertEqual(self._run(root).returncode, 15)
 
     def test_a_stale_row_aborts(self) -> None:
         root = self._tree(
@@ -329,7 +521,7 @@ class TheCensusStillAbortsOnWhatItClaimsToCatchTests(unittest.TestCase):
             self.ONE_ROW + "REGISTER  src/gone.py  v3,v4  VANISHED\n",
             self.ONE_PIN,
         )
-        self.assertEqual(self._run(root, "--check").returncode, 15)
+        self.assertEqual(self._run(root).returncode, 15)
 
     def test_a_class_flip_aborts_even_though_the_row_still_exists(self) -> None:
         """THE HOLE THIS PIN CLOSES. Counts stay equal, every container has a row, and the class
@@ -338,7 +530,7 @@ class TheCensusStillAbortsOnWhatItClaimsToCatchTests(unittest.TestCase):
         """
 
         root = self._tree(self.ONE, "PARTIAL   src/one.py  v3,v4  TABLE\n", self.ONE_PIN)
-        result = self._run(root, "--check")
+        result = self._run(root)
         self.assertEqual(result.returncode, 15, result.stdout)
         self.assertIn("per-file classification counts", result.stdout)
 
@@ -351,12 +543,12 @@ class TheCensusStillAbortsOnWhatItClaimsToCatchTests(unittest.TestCase):
         sources = {"one.py": 'TABLE = {"v3", "v4"}\n', "two.py": 'OTHER = {"v2", "v2.1"}\n'}
         pin = {"src/one.py": {"REGISTER": 1}, "src/two.py": {"MIRRORED": 1}}
         swapped = "MIRRORED  src/one.py  v3,v4  TABLE\nREGISTER  src/two.py  v2,v2.1  OTHER\n"
-        result = self._run(self._tree(sources, swapped, pin), "--check")
+        result = self._run(self._tree(sources, swapped, pin))
         self.assertEqual(result.returncode, 15, result.stdout)
         # Anti-vacuity: the unswapped spec, same tree and same pin, must be green -- otherwise
         # this fixture could be passing on an unrelated abort.
         straight = "REGISTER  src/one.py  v3,v4  TABLE\nMIRRORED  src/two.py  v2,v2.1  OTHER\n"
-        self.assertEqual(self._run(self._tree(sources, straight, pin), "--check").returncode, 0)
+        self.assertEqual(self._run(self._tree(sources, straight, pin)).returncode, 0)
 
     def test_conflicting_rows_for_one_container_abort(self) -> None:
         """Exit 1, not 15: the spec cannot be read, rather than the tree being wrong.
@@ -369,7 +561,7 @@ class TheCensusStillAbortsOnWhatItClaimsToCatchTests(unittest.TestCase):
         root = self._tree(
             self.ONE, self.ONE_ROW + "PARTIAL   src/one.py  v3,v4  TABLE\n", self.ONE_PIN
         )
-        result = self._run(root, "--check")
+        result = self._run(root)
         self.assertEqual(result.returncode, 1)
         self.assertIn("CONFLICTING", result.stdout + result.stderr)
 
@@ -381,7 +573,7 @@ class TheCensusStillAbortsOnWhatItClaimsToCatchTests(unittest.TestCase):
             "PARTIAL   src/one.py  v3,v4  <inline:2>\n",
             {"src/one.py": {"PARTIAL": 1}},
         )
-        result = self._run(root, "--check")
+        result = self._run(root)
         self.assertEqual(result.returncode, 15, result.stdout)
         self.assertIn("collapsed", result.stdout)
 
@@ -394,13 +586,18 @@ class TheCensusStillAbortsOnWhatItClaimsToCatchTests(unittest.TestCase):
             "PARTIAL   src/one.py  v3,v4  <inline:2>\nPARTIAL   src/one.py  v3,v4  <inline:3>\n",
             {"src/one.py": {"PARTIAL": 2}},
         )
-        result = self._run(root, "--check")
+        result = self._run(root)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_every_abort_applies_without_the_check_flag(self) -> None:
+    def test_every_abort_applies_whatever_the_flags(self) -> None:
         """`--list` used to print the stale rows and the unclassified containers of the exact
         e496e9b8 shape and then exit 0 -- a diagnostic that shows a contradiction and reports
         success, which is the same defect as a gate that states one and ignores it.
+
+        `--list` is now the ONLY flag. The `--check` this test used to be named for was a complete
+        no-op: `args.check` was read nowhere, the two outputs were byte-identical, and its `--help`
+        described what `--list` does. It is removed, so the argument surface is one flag and the
+        list of flags to sweep here is exhaustive rather than a sample.
         """
 
         root = self._tree(
@@ -410,13 +607,35 @@ class TheCensusStillAbortsOnWhatItClaimsToCatchTests(unittest.TestCase):
             with self.subTest(args=args):
                 self.assertEqual(self._run(root, *args).returncode, 15)
 
+    def test_the_removed_check_flag_is_rejected_rather_than_silently_accepted(self) -> None:
+        """And that the sweep above really is exhaustive.
+
+        A no-op flag is worse than a missing one, because `--help` then has to describe it and the
+        description was false. This asserts the removal is real -- argparse exit 2 with the flag
+        named -- and, so the claim in `--help` cannot come back, that no help text mentions it.
+        """
+
+        root = self._tree(self.ONE, self.ONE_ROW, self.ONE_PIN)
+        stale = self._run(root, "--check")
+        self.assertEqual(stale.returncode, 2, stale.stdout + stale.stderr)
+        self.assertIn("--check", stale.stderr, "argparse did not name the unrecognized flag")
+        helped = self._run(root, "--help")
+        self.assertEqual(helped.returncode, 0, helped.stderr)
+        self.assertNotIn(
+            "--check",
+            helped.stdout,
+            "`--help` still advertises `--check`; its text claimed the flag widens the listing, "
+            "which is what `--list` does, and `args.check` was read nowhere",
+        )
+        self.assertIn("--list", helped.stdout, "anti-vacuity: no flags in --help at all")
+
 
 class TheCommittedSpecMatchesTheCommittedPinTests(unittest.TestCase):
     """The repo's own tree, so a drift on main is a test failure and not only a CI failure."""
 
     def test_the_census_passes_on_this_tree(self) -> None:
         result = subprocess.run(
-            [sys.executable, str(CENSUS), "--check"],
+            [sys.executable, str(CENSUS)],
             cwd=str(REPO), capture_output=True, text=True, timeout=_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

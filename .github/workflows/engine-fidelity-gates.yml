@@ -2245,6 +2245,13 @@ jobs:
   # narrow direction restores exactly the hole this job closes. The census is stdlib-only (`ast`,
   # `pathlib`, `argparse`) -- no wheel, no `pip install`, no torch -- and runs in well under a
   # second, so running it on every PR is cheaper than the reasoning needed to trust a filter.
+  #
+  # SIX STEPS, and the last one is the reason this job is not itself an instance of its own header.
+  # `tests/test_schema_container_census_wiring.py` pins that this job exists, is unconditional, and
+  # is consumed by `gate-status` -- and for one revision of this PR that module ran nowhere, so
+  # every one of those pins was as inert as the census had been. It runs here, in the same
+  # unconditional wheel-free job, because a pin on this job that lives in a skippable one is the
+  # same defect at one remove.
   schema-container-census:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2332,6 +2339,18 @@ jobs:
         # Expected codes are exact, not "non-zero": 15 is the census's verdict and 1 is
         # "the spec cannot be read". A case that returns the OTHER red is a real change in meaning
         # and must not be waved through.
+        #
+        # AND THE CODE ALONE IS NOT ENOUGH, which review caught: FOUR distinct aborts return 15, so
+        # an edit that broke case 2's KEY instead of its CLASS -- say by mistyping the path in the
+        # perl expression, leaving a stale row plus an unclassified container -- would still exit 15
+        # and still pass, while no longer exercising the per-file pin at all. Each case therefore
+        # names the abort it means, and the copied census's OWN output is grepped for it.
+        #
+        # That grep is not the self-grep the verdict step below refuses to do, and the distinction
+        # is which process wrote the line: here the log is written by the SUBJECT (the copied
+        # census, a separate process whose behaviour is what this step is measuring), whereas a
+        # self-grep reads a log the asserting step wrote itself and can therefore forge with an
+        # `echo`. This step cannot forge the census's abort text without editing the census.
         run: |
           set -euo pipefail
           spec=tests/data/schema_drill_schema_containers.txt
@@ -2346,38 +2365,49 @@ jobs:
           }
 
           expect() {
-            # expect <name> <wanted rc>
+            # expect <name> <wanted rc> <substring the census itself must print>
             set +e
-            python "${scratch}/scripts/schema_container_census.py" --check >/dev/null 2>&1
+            python "${scratch}/scripts/schema_container_census.py" > "${scratch}/census.log" 2>&1
             rc=$?
             set -e
             if [ "${rc}" -ne "$2" ]; then
               echo "::error::kill-confirm case '$1' returned ${rc}, wanted $2"
+              sed 's/^/    | /' "${scratch}/census.log"
+              fail=1
+            elif ! grep -qF "$3" "${scratch}/census.log"; then
+              echo "::error::kill-confirm case '$1' returned $2 but NOT via the abort it names:"
+              echo "::error::the census never printed '$3'. Four aborts return 15, so the code"
+              echo "::error::alone does not identify which one fired -- this case is no longer"
+              echo "::error::exercising the check it was written for."
+              sed 's/^/    | /' "${scratch}/census.log"
               fail=1
             else
-              echo "  kill-confirm '$1': exit ${rc} as expected"
+              echo "  kill-confirm '$1': exit ${rc} via '$3', as expected"
             fi
           }
 
-          # 1. An unclassified container -> the count-equality abort.
+          # 1. An unclassified container -> the count-equality abort. 20 containers against 19
+          #    rows, so the count arm fires BEFORE the `unclassified` arm and its text is the one
+          #    asserted; naming the wrong arm's text here would fail this case, which is the point.
           build unclassified
           printf 'KILL_CONFIRM_TABLE = {"v3", "v4"}\n' \
             > "${scratch}/src/pokezero/zz_census_kill_confirm.py"
-          expect "unclassified container" 15
+          expect "unclassified container" 15 "needs its own row"
 
           # 2. A REGISTER row demoted to PARTIAL -> the per-file class pin. Counts stay 19/19 and
-          #    every container still has a row, so ONLY the pin can see this.
+          #    every container still has a row, so ONLY the pin can see this -- which is exactly
+          #    why this case must prove the PIN's abort fired and not some other 15.
           build classflip
           perl -0pi -e 's/^REGISTER(\s+src\/pokezero\/rollout_cli\.py)/PARTIAL $1/m' \
             "${scratch}/tests/data/schema_drill_schema_containers.txt"
-          expect "REGISTER demoted to PARTIAL" 15
+          expect "REGISTER demoted to PARTIAL" 15 "per-file classification counts do not match"
 
           # 3. Two contradictory rows for one container -> exit 1, and note the arithmetic this
           #    catches: the duplicate SHRINKS len(spec), so the count check reads 19 == 19.
           build conflict
           grep -m1 '^REGISTER' "${spec}" | sed 's/^REGISTER/PARTIAL /' \
             >> "${scratch}/tests/data/schema_drill_schema_containers.txt"
-          expect "conflicting duplicate row" 1
+          expect "conflicting duplicate row" 1 "CONFLICTING rows for"
 
           # 4. Two unnamed containers on ONE physical line, with a row -> the collapse abort.
           build collapse
@@ -2385,13 +2415,14 @@ jobs:
             > "${scratch}/src/pokezero/zz_census_collapse.py"
           printf 'PARTIAL   src/pokezero/zz_census_collapse.py  v3,v4  <inline:2>\n' \
             >> "${scratch}/tests/data/schema_drill_schema_containers.txt"
-          expect "two containers collapsed onto one line" 15
+          expect "two containers collapsed onto one line" 15 "container node(s) collapsed into"
 
           # 5. THE NEGATIVE CONTROL, without which the four above prove only that SOMETHING
           #    reddens: an unperturbed copy must be green. If this is red, the cases above are
-          #    passing on a broken scratch tree rather than on their own perturbation.
+          #    passing on a broken scratch tree rather than on their own perturbation. Its needle
+          #    is the census's success line, so "exit 0 because it did nothing" is not a pass.
           build clean
-          expect "unperturbed copy (negative control)" 0
+          expect "unperturbed copy (negative control)" 0 "every schema-name container is classified"
 
           if [ "${fail}" -ne 0 ]; then
             echo "::error::the census failed its own kill-confirm, so the run below cannot be"
@@ -2402,10 +2433,19 @@ jobs:
       - name: Schema-container census
         # THE VERDICT IS THIS STEP'S EXIT CODE. Deliberately no `tee` and no grep of output this
         # step itself wrote. Counted on this file rather than quoted: 34 of `mass-gate`'s 44 steps
-        # assert on a log their own step produced (39 of the workflow's 65 steps in total, 0 of
-        # this job's 5), a shape held together only by `set -o pipefail` under `bash -e`. There is
-        # nothing for a success-line grep to add here anyway: `--check` returns 15 from every abort
-        # it can reach and 0 only after its final print, so the code already IS the verdict.
+        # assert on a log their own step produced, a shape held together only by `set -o pipefail`
+        # under `bash -e`. There is nothing for a success-line grep to add here anyway: the census
+        # returns 15 from every abort it can reach and 0 only after its final print, so the code
+        # already IS the verdict.
+        #
+        # THIS STEP, not the job. An earlier form of this comment claimed "0 of this job's 5 steps"
+        # asserts on its own log, and the wiring-test step added below makes that stale in BOTH the
+        # count and the property -- so it is restated at the granularity where it is true rather
+        # than left to age. That step does grep a `Ran N tests` / `^OK$` log, and the honest reading
+        # is that the log belongs to the SUITE it ran, not to the step's own verdict: the suite is a
+        # separate process, the step cannot decide its own result, and the invocation is pinned by
+        # the suite itself so an `echo`-forged log fails a test. What must never happen is what this
+        # step refuses: taking a success LINE as the verdict when an exit CODE is available.
         #
         # ANY non-zero is red, not only 15. `classification()` raises `SystemExit(str)` -- exit 1 --
         # for a spec row that is malformed, duplicated or self-contradictory, and an interpreter
@@ -2415,7 +2455,7 @@ jobs:
         run: |
           set -o pipefail
           set +e
-          python scripts/schema_container_census.py --check
+          python scripts/schema_container_census.py
           rc=$?
           set -e
           echo "census exit code: ${rc}"
@@ -2438,6 +2478,48 @@ jobs:
             echo "::error::the schema-container census could not run (exit ${rc}) -- not treated"
             echo "::error::as green. A malformed, duplicated or conflicting classification row"
             echo "::error::exits 1 here, as does a crash."
+            exit 1
+          fi
+
+      # A GATE NO JOB RUNS IS NOT A GATE, and this step exists because the review of this very PR
+      # found that sentence being violated by the PR that quotes it. `tests/test_schema_container_
+      # census_wiring.py` pins the structure, the consumption and the behaviour of everything above
+      # -- and executed NOWHERE. `grep -rn test_schema_container_census_wiring .github/ scripts/`
+      # returned zero hits, so the whole battery was local-only: a job-level `if: false`, a
+      # `continue-on-error`, removal from `gate-status`'s `needs:`, an `exit 1` flipped to `exit 0`,
+      # an emptied pin table and `fetch-depth: 2` -> `1` would each have landed on main GREEN.
+      #
+      # This workflow names test modules ONE BY ONE -- 34 executable `-m unittest` invocation sites
+      # counting THIS one, derived by the scan in tests/test_unreachable_readjudication.py rather
+      # than by eye, with no `unittest discover` and no pytest step in .github/ -- so a NEW module
+      # is invisible to CI by default. #1212 had to add its own step for exactly this reason, and so
+      # does this one. Running it here rather than in `mass-gate` keeps it in the same unconditional
+      # wheel-free job as the census it describes: ~2 s, stdlib only, and it cannot be skipped.
+      #
+      # The invocation is deliberately NOT spelled with its `python` prefix in this comment: two
+      # repo-wide pins (test_unreachable_readjudication, test_terminal_disposition_register) assert
+      # the workflow carries that string inside EXACTLY ONE comment, as their own anti-vacuity
+      # control for telling comments from executable steps. Adding a second reddens both, which is
+      # how this note came to be written -- the control worked.
+      - name: The census wiring pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_schema_container_census_wiring -v 2>&1 \
+            | tee /tmp/censuswiring.log
+          # EXACT, not a floor -- a floor is the one fail-open shape this repo's mutation batteries
+          # have caught before. This guard lives in YAML where no local `unittest` run can see it,
+          # which is how an approved PR has reddened CI here; the module therefore asserts on this
+          # very line itself (test_the_workflow_test_count_guard_matches_this_module), deriving the
+          # number from the loader so a module that grows without this count following is a LOCAL
+          # failure. That self-check is the property the module was missing at 8d32dcb2.
+          if ! grep -qE 'Ran 22 tests' /tmp/censuswiring.log; then
+            echo "::error::expected 22 census-wiring pins; the suite shrank or grew. Update this"
+            echo "::error::count and the module's own guard assertion in the same commit."
+            exit 1
+          fi
+          # A clean OK with no skips or errors. `Ran N tests` alone passes over N failures.
+          if ! grep -qE '^OK$' /tmp/censuswiring.log; then
+            echo "::error::the census wiring pins did not report a clean OK (skip or failure)"
             exit 1
           fi
 
