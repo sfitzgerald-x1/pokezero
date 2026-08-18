@@ -549,12 +549,13 @@ saying they are still "open" would be false.
 
 **Four residues, each named because the discharge does not cover it:**
 
-1. **The pool half is not re-derived in CI.** `scripts/c154_unreachable_readjudication.py` requires
-   a pokemon-showdown checkout, and **zero** steps in `.github/workflows/engine-fidelity-gates.yml`
-   check one out — the single mention of `pokemon-showdown` in that file is a comment. The `pool`
-   block is therefore a committed measurement at Showdown
-   `f76228a1354b5d0f307ca2d16101294ad3a2308b`, and a `sets.json` bump that added `taunt` to a set
-   would leave the module green and the ledger wrong. Bounded and nameable.
+1. **The pool half is not re-derived in CI.** One pinned
+   `smogon/pokemon-showdown` checkout now supplies the model-path arbiter test,
+   but CI still does not run `scripts/c154_unreachable_readjudication.py` against
+   it. The `pool` block is therefore a committed measurement at Showdown
+   `f76228a1354b5d0f307ca2d16101294ad3a2308b`, and a `sets.json` bump that added
+   `taunt` to a set would leave the C154 module green and the ledger wrong.
+   Bounded and nameable.
 2. **Five judgements are human readings**, enumerated in `reports/c154_unreachable_readjudication.md`
    §5 and derived here as a count of that numbered list: R1's one-keyword-argument closure, R9's
    mechanic enumeration, R22's correctness judgement, R7's one-module absence, and the
@@ -774,9 +775,12 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 53 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure. The workflow holds **35** lines containing the unittest
-invocation, of which **one is a comment**, so there are **34 executable** invocation sites at this
-head; the scan resolves **34** of them and leaves **none** unresolved.
+rather than inherited from #1205's figure. The workflow holds **36** lines containing the unittest
+invocation, of which **one is a comment**, so there are **35 executable** invocation sites at this
+head; the scan resolves **35** of them and leaves **none** unresolved.
+
+(Was 35/1/34. #1282 added the guarded rollout-leaf arbiter invocation. Re-derived from the merged
+workflow and scanner rather than incremented.)
 
 (Was 34/1/33. #1278 added the guarded `tests.test_schema_container_census_wiring` step, so the
 workflow and the scanner each gained one reachable site. Re-derived on this merge tree rather than
@@ -984,7 +988,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t6.section_4_population_anchor` | reports/c138_known_gaps_ledger.md:589 |
 | `t6.verdicts_unreachable` | 26 |
 | `t6.verdicts_withdrawn` | 1 |
-| `t6.workflow_steps_checking_out_showdown` | 0 |
+| `t6.workflow_steps_checking_out_showdown` | 1 |
 
 > **Historical merge note (#1257).** That head was the MERGE of `scott/head-to-head-raw` into `main`, and
 > its stamp is neither parent's: the branch alone stamped `39761759f252a58d…` and main alone

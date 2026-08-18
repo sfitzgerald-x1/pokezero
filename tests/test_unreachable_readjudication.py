@@ -1474,8 +1474,8 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
         counts `test*` methods declared directly in a class body. That equals the printed
         count only while:
 
-          (a) **no scanned class inherits its test methods from a base declared in the same
-              module** -- those are collected once per subclass and counted once;
+          (a) **no scanned class inherits a `test*` method from a base declared in the
+              same module** -- those are collected once per subclass and counted once;
           (b) **no non-`TestCase` class carries `test*` methods** -- those are counted here
               and never collected;
           (c) **no class SKIPS AT `setUpClass`** -- a class-level skip contributes ZERO to
@@ -1487,8 +1487,11 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
         bumped the guard, and this module stayed GREEN. It is now the positive form -- a
         class with `test*` methods must name a `TestCase` base -- which is exactly as
         strong as the sentence above rather than a subset of it. Measured across the
-        scanned modules: all 110 such classes name `unittest.TestCase` and nothing else, so
-        the positive form costs no exemption.
+        scanned modules: every class with `test*` methods names `unittest.TestCase`, and
+        the only same-module base is a helper-only mixin with no `test*` method. A blanket
+        ban on helper mixins would reject a suite whose AST count still exactly matches
+        `unittest`'s count, so the assertion is scoped to the inheritance that changes the
+        arithmetic rather than to inheritance itself.
 
         ⚠ (c) IS NOT PINNED AND IS NOT PINNABLE HERE, and it has a live counterexample in
         this very tree. `python -m unittest tests.test_spread_gate_provenance` prints
@@ -1516,7 +1519,31 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
                 path = os.path.join(REPO, module.replace(".", "/") + ".py")
                 with open(path, encoding="utf-8") as handle:
                     tree = ast.parse(handle.read())
-                local = {n.name for n in tree.body if isinstance(n, ast.ClassDef)}
+                local = {
+                    n.name: n for n in tree.body if isinstance(n, ast.ClassDef)
+                }
+
+                def local_base_carries_test_method(
+                    name: str, seen: frozenset[str] = frozenset()
+                ) -> bool:
+                    """Whether a local base supplies a method `_methods` cannot count safely."""
+
+                    if name in seen:
+                        return False
+                    candidate = local[name]
+                    if any(
+                        isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and member.name.startswith("test")
+                        for member in candidate.body
+                    ):
+                        return True
+                    return any(
+                        isinstance(base, ast.Name)
+                        and base.id in local
+                        and local_base_carries_test_method(base.id, seen | {name})
+                        for base in candidate.bases
+                    )
+
                 for node in tree.body:
                     if not isinstance(node, ast.ClassDef):
                         continue
@@ -1527,10 +1554,13 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
                         and b.name.startswith("test")
                     ]
                     self.assertFalse(
-                        bases & local,
-                        f"{module}.{node.name} inherits from a class declared in the same "
-                        "module, so `_methods`' per-class count no longer equals what "
-                        "`unittest` prints for it",
+                        any(
+                            local_base_carries_test_method(base)
+                            for base in bases & set(local)
+                        ),
+                        f"{module}.{node.name} inherits a `test*` method from a class "
+                        "declared in the same module, so `_methods`' per-class count no "
+                        "longer equals what `unittest` prints for it",
                     )
                     # THE POSITIVE FORM. The previous predicate was
                     # `methods and not (attributed & {"TestCase"}) and not bases`, whose

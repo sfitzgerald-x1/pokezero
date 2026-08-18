@@ -291,6 +291,30 @@ jobs:
             # touches nothing else -- so without this line the gate that would object
             # is not even a trigger.
             tests/test_roll_enumeration_scope.py
+            # Phase 1 instrument 2 — rollout-leaf arbiter. The witness and schema
+            # travel through six files; the recorded mutation battery must be rerun
+            # whenever any one of them or either killer suite moves. A source-only
+            # filter misses four writer/readers under scripts/, while a pin-only
+            # filter lets a weakened battery go green without running its consumers.
+            src/pokezero/engine_search.py
+            src/pokezero/foulplay_bridge.py
+            scripts/foulplay_paired_eval.py
+            scripts/foulplay_power_report.py
+            scripts/hc_depth_grid.py
+            scripts/mcts_acceptance_h2h.py
+            scripts/mutate_rollout_leaf_witness.py
+            reports/artifacts/rollout_leaf_witness_mutation_battery.json
+            # `test_rollout_model_priors` imports the encoded native fixture from this
+            # sibling, while the mutation runner imports the repository pytest setup.
+            # They are both part of the arbiter pin's execution closure: changing either
+            # one must start the model-wheel gate rather than letting a test-only edit
+            # weaken or skip it under a green status.
+            tests/test_model_priors_search.py
+            tests/conftest.py
+            tests/test_rollout_model_priors.py
+            tests/test_mcts_acceptance_report.py
+            tests/test_rollout_leaf_arbiter.py
+            tests/test_rollout_leaf_witness_mutation_battery.py
             # The schema-default gate and everything it depends on. 332 of its 390 rows live
             # outside src/ (288 tests/, 43 scripts/, 1 docs/).
             #
@@ -378,6 +402,32 @@ jobs:
           python-version: "3.12"
 
       - uses: dtolnay/rust-toolchain@stable
+
+      # The model-path arbiter classes create a real encoded search.  They need
+      # the Gen 3 dex and the encoder tables derived from it; without a built
+      # Showdown tree, unittest SKIPs those 21 behaviour tests while reporting
+      # green.  Pin and build the same upstream source explicitly so this gate
+      # can reject a skip rather than silently dropping the production rung.
+      - name: Checkout pinned Pokemon Showdown for model-path arbiter tests
+        uses: actions/checkout@v4
+        with:
+          repository: smogon/pokemon-showdown
+          ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
+          path: .ci/pokemon-showdown
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.2"
+          cache: npm
+          cache-dependency-path: .ci/pokemon-showdown/package-lock.json
+
+      - name: Build pinned Pokemon Showdown for model-path arbiter tests
+        run: |
+          set -o pipefail
+          npm ci --prefix .ci/pokemon-showdown
+          npm run build --prefix .ci/pokemon-showdown
+          test -f .ci/pokemon-showdown/dist/sim/dex.js
 
       # uv is REQUIRED, not optional: scripts/vendor_poke_engine_src.sh and
       # scripts/setup_poke_engine.sh call `uv run ... pip download` and `uv pip
@@ -1909,6 +1959,53 @@ jobs:
             echo "::error::the production-read pin did not run all 13 tests"
             exit 1
           fi
+
+      - name: Rollout-leaf arbiter witnesses and mutation record run on the model wheel
+        env:
+          POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+        run: |
+          set -o pipefail
+          # The Phase 1 arbiter is a model-path feature. A plain maturin wheel makes
+          # its behavioral tests skip, which is no CI coverage at all. Build a wheel
+          # with the same libtorch environment as the feature-gated crate rung above,
+          # then execute every writer, reader, fidelity, and mutation-record pin.
+          #
+          # Keep auditwheel out of this build.  Its repair phase copies PyTorch's
+          # shared libraries into the wheel, which loads a second libtorch beside the
+          # runtime Python already imported and can SIGSEGV during the extension
+          # import.  The supported model-wheel recipe deliberately links the venv's
+          # PyTorch runtime instead; see scripts/build_search_crate_model.sh.
+          rollout_leaf_torch_lib="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')"
+          export LD_LIBRARY_PATH="${rollout_leaf_torch_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          LIBTORCH_USE_PYTORCH=1 LIBTORCH_BYPASS_VERSION_CHECK=1 python -m maturin build \
+            --release --features model --manifest-path rust/pokezero-search/Cargo.toml \
+            --skip-auditwheel -i "$(command -v python)" --out /tmp/rollout-leaf-wheels
+          python -m pip install --quiet --force-reinstall --no-deps /tmp/rollout-leaf-wheels/*.whl
+          python -c "import pokezero_search; print('model wheel ok')"
+          python -m unittest tests.test_rollout_model_priors \
+            tests.test_mcts_acceptance_report \
+            tests.test_rollout_leaf_arbiter \
+            tests.test_rollout_leaf_witness_mutation_battery -v 2>&1 \
+            | tee /tmp/rollout-leaf-arbiter.log
+          if ! grep -qE 'Ran 165 tests' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the rollout-leaf arbiter suite did not run all 165 tests"
+            exit 1
+          fi
+          if grep -qE 'skipped|OK \\(skipped' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::a rollout-leaf arbiter pin SKIPPED; the model wheel was not exercised"
+            exit 1
+          fi
+          if ! grep -qE '^OK$' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the rollout-leaf arbiter suite did not report a clean OK"
+            exit 1
+          fi
+          # `build_search_crate_engine.sh` attests the engine and its plain
+          # search wheel.  This step then deliberately replaces that second
+          # consumer with the model-feature wheel it just exercised.  Re-attest
+          # only after all no-skip/count/OK guards above pass: at this point both
+          # installed consumers are current, and the final workflow check below
+          # verifies this new artifact identity rather than the superseded wheel.
+          python scripts/engine_build_fingerprint.py --write --after-two-consumer-rebuild
 
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check
