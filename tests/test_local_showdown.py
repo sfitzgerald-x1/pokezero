@@ -367,39 +367,6 @@ class LocalShowdownRequestTest(unittest.TestCase):
 
         self.assertEqual(len(calls), 3)
 
-    def test_boundary_reader_ignores_an_empty_ready_during_showdown_settlement(self) -> None:
-        env = LocalShowdownEnv(LocalShowdownConfig(read_timeout_seconds=1.0))
-        env._latest_requests = {
-            "p1": request_payload("p1", wait=True),
-            "p2": request_payload("p2", wait=True),
-        }
-        events = iter(
-            [
-                {"type": "ready", "requested": []},
-                {
-                    "type": "stream",
-                    "stream": "p1",
-                    "lines": ['|request|{"side":{"id":"p1"},"active":[{"moves":[{"id":"tackle","pp":35}]}]}'],
-                },
-                {
-                    "type": "stream",
-                    "stream": "p2",
-                    "lines": ['|request|{"side":{"id":"p2"},"active":[{"moves":[{"id":"tackle","pp":35}]}]}'],
-                },
-                {"type": "ready", "requested": ["p1", "p2"]},
-            ]
-        )
-        calls = []
-
-        def read_event(*, timeout: float):
-            calls.append(timeout)
-            return next(events)
-
-        env._read_event = read_event  # type: ignore[method-assign]
-        env._read_until_boundary()
-        self.assertEqual(len(calls), 4)
-        self.assertEqual(env.requested_players(), ("p1", "p2"))
-
     def test_drain_threads_tolerate_closed_streams(self) -> None:
         stdout_stream = io.StringIO("first\n")
         stderr_stream = io.StringIO("warning\n")

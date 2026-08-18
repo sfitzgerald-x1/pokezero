@@ -118,7 +118,11 @@ function recordBoundaryLines(battle, stream, lines) {
     }
   }
   if (battle.boundaryRequests.p1 && battle.boundaryRequests.p2) {
-    scheduleReady(battle);
+    const requested = actionableRequestedPlayers(battle);
+    // Showdown can first emit a pair of wait-only requests while it finishes
+    // an interrupted turn. Do not consume the one readiness latch for that
+    // non-boundary: a later actionable request must still schedule ready.
+    if (requested.length) scheduleReady(battle, requested);
   }
 }
 
@@ -133,7 +137,12 @@ function elapsedNodeProcMs(startedAt) {
   return Number(process.hrtime.bigint() - startedAt) / 1e6;
 }
 
-function scheduleReady(battle) {
+function actionableRequestedPlayers(battle) {
+  return ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player]));
+}
+
+function scheduleReady(battle, requested = actionableRequestedPlayers(battle)) {
+  if (!requested.length) return;
   if (battle.readyScheduled || battle.terminalScheduled) return;
   battle.readyScheduled = true;
   const procMs = nodeProcMs(battle);
@@ -141,7 +150,7 @@ function scheduleReady(battle) {
     emit({
       type: "ready",
       battleId: battle.battleId,
-      requested: ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player])),
+      requested,
       nodeProcMs: procMs,
     });
   });
