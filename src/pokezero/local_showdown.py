@@ -1595,7 +1595,11 @@ class LocalShowdownEnv:
         if event_type == "error":
             raise LocalShowdownError(str(event.get("message") or "Bridge error."))
         if event_type == "ready":
-            return True
+            # The bridge can observe a pair of non-actionable wait requests
+            # while Showdown is still resolving an interrupted turn. That is
+            # not a decision boundary: keep reading until an actionable
+            # request or terminal event arrives.
+            return bool(self.requested_players())
         if event_type == "terminal":
             if self._terminal is None:
                 self._terminal = TerminalState(winner=None, turn_count=self._latest_turn)
