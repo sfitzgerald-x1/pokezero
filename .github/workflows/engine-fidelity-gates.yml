@@ -2011,7 +2011,10 @@ jobs:
             exit 1
           fi
           rollout_leaf_skip_status=0
-          grep -qE 'skipped|OK \(skipped' /tmp/rollout-leaf-arbiter.log \
+          # Inspect only unittest's summary form.  The verbose output is
+          # deliberately full of test names and assertions about skipped
+          # work, so a bare `grep skipped` would reject a clean run.
+          grep -qE '^OK \(.*skipped=[1-9][0-9]*.*\)$' /tmp/rollout-leaf-arbiter.log \
             || rollout_leaf_skip_status=$?
           if [ "$rollout_leaf_skip_status" -eq 0 ]; then
             echo "::error::an arbiter or calibration pin SKIPPED; the model wheel was not exercised"
