@@ -1,8 +1,8 @@
 """Rollout leaves composed with MODEL PRIORS, and the fidelity gate re-run on
 the model driver.
 
-Search-ceiling program (`docs/search-ceiling-program-20260816.md`) Phase 1
-instrument 2 -- the arbiter. `tests/test_rollout_leaf_arbiter.py` already
+Search-ceiling program Phase 1 instrument 2 -- the arbiter.
+`tests/test_rollout_leaf_arbiter.py` already
 certifies the seam on the SEQUENTIAL `puct_search_multi` path. That path is
 uniform-priors, and the campaign's surviving search configuration is priors ON,
 which lives only on the model path (`_search_ladder` ->
