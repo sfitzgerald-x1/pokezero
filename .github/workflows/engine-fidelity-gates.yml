@@ -304,6 +304,13 @@ jobs:
             scripts/mcts_acceptance_h2h.py
             scripts/mutate_rollout_leaf_witness.py
             reports/artifacts/rollout_leaf_witness_mutation_battery.json
+            # `test_rollout_model_priors` imports the encoded native fixture from this
+            # sibling, while the mutation runner imports the repository pytest setup.
+            # They are both part of the arbiter pin's execution closure: changing either
+            # one must start the model-wheel gate rather than letting a test-only edit
+            # weaken or skip it under a green status.
+            tests/test_model_priors_search.py
+            tests/conftest.py
             tests/test_rollout_model_priors.py
             tests/test_mcts_acceptance_report.py
             tests/test_rollout_leaf_arbiter.py

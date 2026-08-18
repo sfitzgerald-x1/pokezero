@@ -774,9 +774,12 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 53 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure. The workflow holds **35** lines containing the unittest
-invocation, of which **one is a comment**, so there are **34 executable** invocation sites at this
-head; the scan resolves **34** of them and leaves **none** unresolved.
+rather than inherited from #1205's figure. The workflow holds **36** lines containing the unittest
+invocation, of which **one is a comment**, so there are **35 executable** invocation sites at this
+head; the scan resolves **35** of them and leaves **none** unresolved.
+
+(Was 35/1/34. #1282 added the guarded rollout-leaf arbiter invocation. Re-derived from the merged
+workflow and scanner rather than incremented.)
 
 (Was 34/1/33. #1278 added the guarded `tests.test_schema_container_census_wiring` step, so the
 workflow and the scanner each gained one reachable site. Re-derived on this merge tree rather than
