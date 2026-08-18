@@ -354,6 +354,74 @@ class ModelPathDepthInstrumentationTest(unittest.TestCase):
             len(re.findall(_DEPTH_ACCUMULATION, instrumented)), len(registered)
         )
 
+    def test_REGISTER_AND_STARVE_is_refused_rather_than_silently_substituted(
+        self,
+    ) -> None:
+        """B5. A4's claim had a third horn, and it produced ZERO new failures.
+
+        "A new leaf-eval path is either unregistered and unreachable, or registered
+        and required to carry its own reached-depth accumulation." The `None` sentinel
+        is a third state that satisfies neither: `DEPTH_INSTRUMENTED_SEARCH_METHODS`
+        filters the `None`s out, so the instrumentation guard skips the mode;
+        `__post_init__` accepts it, because membership is all it checks; and
+        `_search`'s dispatch had no final branch, so control fell into the in-process
+        `hp_fraction` tree. The mode was SELECTABLE, ran another path's leaf
+        evaluator, and every artifact recorded its own name -- a row whose provenance
+        field names a pricer that never ran, which is the false-witness class reached
+        from the registry side.
+
+        Both halves are asserted: the refusal fires on a registered-but-undispatched
+        mode, and it does NOT fire on the one mode whose implementation legitimately
+        IS the fall-through.
+        """
+        from pokezero.engine_search import (
+            EngineMctsConfig,
+            EngineSearchWitnessError,
+            LEAF_EVAL_IN_PROCESS_MODE,
+            LEAF_EVAL_SEARCH_METHODS,
+            require_leaf_eval_dispatched,
+        )
+
+        # The fall-through's own mode passes, or the guard refuses production.
+        require_leaf_eval_dispatched(LEAF_EVAL_IN_PROCESS_MODE)
+        self.assertIn(LEAF_EVAL_IN_PROCESS_MODE, LEAF_EVAL_SEARCH_METHODS)
+        self.assertIsNone(LEAF_EVAL_SEARCH_METHODS[LEAF_EVAL_IN_PROCESS_MODE])
+
+        # THE ATTACK: registered with the `None` sentinel, hence exempt from the
+        # instrumentation guard, hence starved of a dispatch branch.
+        starved = "fourth_pricer"
+        self.assertNotIn(starved, LEAF_EVAL_SEARCH_METHODS)
+        with self.assertRaises(EngineSearchWitnessError) as caught:
+            require_leaf_eval_dispatched(starved)
+        message = str(caught.exception)
+        self.assertIn(starved, message)
+        self.assertIn(LEAF_EVAL_IN_PROCESS_MODE, message)
+        self.assertIn("does not give it a search", message)
+
+        # And EVERY registered mode is either dispatched by a branch in `_search` or
+        # is the fall-through -- derived from the registry, so adding an entry to it is
+        # what makes this read False.
+        source = (REPO_ROOT / "src" / "pokezero" / "engine_search.py").read_text()
+        dispatch = source[
+            source.index("        self.stats.world_search_attempts += len(worlds)") :
+            source.index("        require_leaf_eval_dispatched(")
+        ]
+        for mode in LEAF_EVAL_SEARCH_METHODS:
+            with self.subTest(mode=mode):
+                if mode == LEAF_EVAL_IN_PROCESS_MODE:
+                    continue
+                self.assertIn(
+                    f'self._config.leaf_eval == "{mode}"',
+                    dispatch,
+                    f"{mode!r} is registered and selectable but has no dispatch "
+                    "branch, so it would be priced by another path's leaf evaluator",
+                )
+        # The registry-derived form reads False on the synthetic fourth mode, which is
+        # what makes it stronger than an enumeration.
+        self.assertNotIn(f'self._config.leaf_eval == "{starved}"', dispatch)
+        with self.assertRaisesRegex(ValueError, "leaf_eval must be"):
+            EngineMctsConfig(leaf_eval=starved)
+
     def test_runner_emits_the_policy_stats_payload(self) -> None:
         source = (REPO_ROOT / "scripts" / "mcts_acceptance_h2h.py").read_text()
         self.assertIn("policy_stats", source)

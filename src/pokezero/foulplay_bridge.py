@@ -5401,14 +5401,23 @@ def require_banked_shard_witness(payload: Mapping[str, Any]) -> None:
 
     Deleting THIS is not silent either, and that is deliberate rather than
     turtles-all-the-way-down: the reader-side refusal
-    (`require_rollout_leaf_shard_schema`) fires on the same shard from the other
-    side of the disk, so a shard written past a deleted writer-side guard is
-    REFUSED ON READ instead of pooled. Both frames -- opposite sides of the
-    artifact -- would have to be deleted together for the corruption to be quiet,
-    and each ships its own failing input.
-    """
+    (`require_rollout_leaf_document_schema`) fires on the same shard from the other
+    side of the disk, in a different process reached by a different import path --
+    `scripts/foulplay_paired_eval.py` on the summary it loads, and
+    `scripts/foulplay_power_report.py` on every merged shard it pools. So a shard
+    written past a deleted writer-side guard is REFUSED ON READ instead of pooled.
 
-    from .engine_search import require_rollout_leaf_shard_schema
+    AND THAT SENTENCE USED TO BE FALSE, which is why it now names its call sites.
+    An earlier revision made the same claim while `require_rollout_leaf_shard_schema`
+    had NO read-path caller at all: its only two non-test callers were THIS function
+    and `migrate_rollout_leaf_shard_v1`, both on the write side, and this one NESTED
+    the schema check inside itself. So "both frames would have to be deleted
+    together" described a topology the code did not have -- deleting the single line
+    `require_banked_shard_witness(payload)` in `_write_json` removed BOTH refusals.
+    The schema check has therefore been LIFTED OUT of this function and is called as
+    its own statement beside it, so the two are independently deletable and the
+    battery proves each deletion is caught alone and together.
+    """
 
     for block in _engine_mcts_blocks(payload):
         if "policy_stats" not in block:
@@ -5432,7 +5441,6 @@ def require_banked_shard_witness(payload: Mapping[str, Any]) -> None:
                 "this reason; a None or empty block here means something downstream "
                 "of it dropped the mapping."
             )
-        require_rollout_leaf_shard_schema(stats)
         # THE ASKED-FOR SIDE AGAINST THE RAN SIDE, which is the cross-check the
         # sibling branch's own docstring names and leaves unenforced: "Still only the
         # ASKED-FOR side. Whether the seam actually engaged at runtime is a per-seat
@@ -5453,17 +5461,48 @@ def require_banked_shard_witness(payload: Mapping[str, Any]) -> None:
         # cross-check, because "the arm was not asked for" and "this writer does not
         # record what was asked for" are different statements.
         if "rollout_leaf" in block:
+            from .engine_search import ROLLOUT_LEAF_SHIPPED_MODE
+
             claimed = bool(block["rollout_leaf"])
-            engaged = bool(stats.get("rollout_leaf_modes"))
-            if claimed and not engaged:
+            modes = stats.get("rollout_leaf_modes")
+            named = set(modes) if isinstance(modes, Mapping) else set()
+            # ENGAGED MEANS THE ARM'S PRICER RAN, not "the mapping is non-empty".
+            #
+            # `bool(modes)` was under-broad in exactly the way this guard's own error
+            # text describes. `{"model_value": 9}` is the CONTROL mode -- it routes
+            # leaf values through the arm's deferred-row plumbing while keeping
+            # PRODUCTION'S LEAF VALUE -- so a shard with `rollout_leaf: true` and that
+            # mapping is a run whose "leaves were priced by the MODEL", which is the
+            # sentence below, and it passed. It was caught only one frame in, by
+            # `require_rollout_leaf_witness`'s per-decision check, which never runs on
+            # a loaded artifact. Checked by VALUE here, against the one mode a config
+            # can actually ask for.
+            engaged = ROLLOUT_LEAF_SHIPPED_MODE in named
+            # AND THE ARM-ON DIRECTION HAS ONE HONEST EXEMPTION, which the first
+            # revision refused and thereby made a legitimate run unbankable. If EVERY
+            # world failed, no crate report was ever absorbed, so `rollout_leaf_modes`
+            # is empty for a run that really did ask for the arm and really did run it
+            # -- `worlds_searched == 0` with worlds constructed is the shard saying so
+            # in its own counters, and `world_failure_reasons` says why. Refusing that
+            # would push a total-failure run to be relabelled as a raw-arm run, which
+            # is the corruption this guard exists to prevent, arrived at from the
+            # other side.
+            searched = int(stats.get("worlds_searched") or 0)
+            every_world_failed = searched == 0 and bool(
+                stats.get("world_failure_reasons")
+            )
+            if claimed and not engaged and not every_world_failed:
                 raise BankedShardWitnessError(
                     "this shard's config says the rollout arm was asked for "
-                    f"(rollout_leaf={block['rollout_leaf']!r}) and its telemetry says "
-                    "no pricer ever ran (policy_stats.rollout_leaf_modes is "
-                    f"{stats.get('rollout_leaf_modes')!r}). The leaves were priced by "
-                    "the MODEL, so this is a raw-arm run wearing the arm's config -- "
-                    "and every rollout number read off it would be a number about a "
-                    "search that ran no rollouts."
+                    f"(rollout_leaf={block['rollout_leaf']!r}) and its telemetry names "
+                    f"no {ROLLOUT_LEAF_SHIPPED_MODE!r} pricer, so no pricer ever ran "
+                    f"(policy_stats.rollout_leaf_modes is {modes!r}). The leaves were "
+                    "priced by the MODEL, so this is a raw-arm run wearing the arm's "
+                    "config -- and every rollout number read off it would be a number "
+                    "about a search that ran no rollouts. "
+                    f"worlds_searched={searched} with "
+                    f"{len(stats.get('world_failure_reasons') or {})} failure reasons, "
+                    "so this is not the all-worlds-failed case either."
                 )
             if engaged and not claimed:
                 raise BankedShardWitnessError(
@@ -5477,15 +5516,41 @@ def require_banked_shard_witness(payload: Mapping[str, Any]) -> None:
                 )
 
 
+def _shard_json_text(payload: Mapping[str, Any]) -> str:
+    """Serialize a shard, refusing it first. THE ONE PLACE A SHARD BECOMES BYTES.
+
+    `_write_json` was described as "the single funnel through which every shard
+    reaches disk". It was not. `async_main` and `async_comparison_main` each also
+    `print(json.dumps(payload, indent=2, sort_keys=True))` under `--json`, which is
+    BYTE-IDENTICAL to what `_write_json` writes (same object, same arguments; the
+    only difference is that `print` supplies the trailing newline `_write_json`
+    concatenates), and with `--json` and a shell redirect but no `--summary-out`
+    that text reaches disk having passed no guard at all. Both now render through
+    here, so "every serialization of a shard is refused first" is a property of the
+    call graph rather than of a comment.
+
+    TWO STATEMENTS, NOT ONE NESTED IN THE OTHER. The schema refusal used to be
+    called from inside `require_banked_shard_witness`, so deleting the single
+    witness call removed both. They are separate lines now, and the battery deletes
+    each alone and both together.
+    """
+
+    from .engine_search import require_rollout_leaf_document_schema
+
+    require_banked_shard_witness(payload)
+    require_rollout_leaf_document_schema(payload)
+    return json.dumps(payload, indent=2, sort_keys=True)
+
+
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     # THE PROCESS BOUNDARY. Checked here rather than in `to_dict` because `to_dict`
     # is one frame in: the line that carries `policy_stats` out of the result object
     # is itself deletable, and deleting it is what survived. This is the last frame
     # that still holds the payload.
-    require_banked_shard_witness(payload)
+    text = _shard_json_text(payload)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    tmp.write_text(text + "\n")
     tmp.replace(path)
 
 
@@ -6121,7 +6186,10 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         _write_json(args.summary_out, payload)
         print(f"controlled_foulplay_summary: {args.summary_out}", file=sys.stderr)
     if args.json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        # THROUGH THE GUARDED FUNNEL, because this text is byte-identical to what
+        # `_write_json` writes and with `--json` alone plus a shell redirect it is the
+        # ONLY copy that reaches disk. It was unguarded.
+        print(_shard_json_text(payload))
     else:
         print(
             f"RESULT: {result.policy_id} won {result.wins}/{result.completed_games} "
@@ -6169,7 +6237,10 @@ async def async_comparison_main(argv: Sequence[str] | None = None) -> int:
         _write_json(args.summary_out, payload)
         print(f"controlled_foulplay_comparison_summary: {args.summary_out}", file=sys.stderr)
     if args.json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        # THROUGH THE GUARDED FUNNEL, because this text is byte-identical to what
+        # `_write_json` writes and with `--json` alone plus a shell redirect it is the
+        # ONLY copy that reaches disk. It was unguarded.
+        print(_shard_json_text(payload))
     else:
         comparison = payload["comparison"]
         paired = comparison["paired_by_seed"] if isinstance(comparison, Mapping) else {}

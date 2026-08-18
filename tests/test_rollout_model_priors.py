@@ -78,8 +78,10 @@ from pokezero.engine_search import (
     EngineMctsStats,
     EngineSearchWitnessError,
     EngineShardSchemaError,
+    ROLLOUT_LEAF_QUOTIENT_FIELDS,
     ROLLOUT_LEAF_REPORT_FIELDS,
     ROLLOUT_LEAF_SHARD_FIELDS,
+    ROLLOUT_LEAF_SHARD_MARKERS,
     ROLLOUT_LEAF_SHARD_SCHEMA,
     ROLLOUT_LEAF_V1_WORLD_FIELD,
     ROLLOUT_LEAF_WITNESS_FIELDS,
@@ -121,11 +123,43 @@ ENCODE_SKIP_WORK_FIELDS = frozenset(
 #: fence must not assert as the arm's cost, rather than the two specific figures
 #: someone happened to enumerate -- a third, unlisted ratio survived the enumerated
 #: form, which is the failure mode a value-class check exists to remove.
-_COST_RATIO = re.compile(r"\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?\s*x\b")
+#:
+#: B5. THE CHARACTER CLASS WAS THE HOLE, and it was the hole in the direction that
+#: matters: the previous pattern was `...\s*x\b`, ASCII lowercase `x` only, while the
+#: headline figure this guard exists to protect is written `7.7x-16.9x` WITH U+00D7
+#: MULTIPLICATION SIGNS in the PR body it was copied from. So `7.7<U+00D7>`, `7.7X`,
+#: `7.7-fold` and `a factor of 7.7` all evaded a guard built to catch exactly that
+#: number. Four spellings, one value class:
+#:
+#:   * `x` / `X` / U+00D7 (MULTIPLICATION SIGN) / U+2715 (MULTIPLICATION X);
+#:   * `-fold` and `fold` after a space;
+#:   * the prose form `a factor of N`.
+#:
+#: `\b` is dropped after the symbol class because U+00D7 is not a word character, so
+#: `\b` after it asserts the opposite boundary and never matched.
+_COST_RATIO = re.compile(
+    r"(?:(?:a|an)\s+factor\s+of\s+)?"
+    r"\d+(?:\.\d+)?(?:\s*[-‐-―−]\s*\d+(?:\.\d+)?)?"
+    r"(?:\s*(?:[xX×✕](?![a-zA-Z0-9_])|[-‐-―−]?fold\b))"
+    r"|(?:a|an)\s+factor\s+of\s+\d+(?:\.\d+)?"
+)
 
 #: The paragraph that is ALLOWED to name the contested figures, because its whole
 #: content is why neither may be quoted as the cost.
 _NO_POINT_RATIO = "NO POINT RATIO, because"
+
+#: EVERY file in scope, not the twenty-one lines of one of them.
+#:
+#: B5. The previous scope was `_cpu_fence_window(engine_search.py)` -- a 1400-character
+#: slice, twenty-one lines, of a single `.py` file, and NO DOCS AT ALL. The figure it
+#: protects is a prose figure: it was published in a PR body, it is restated in
+#: `docs/`, and a retraction that only holds inside one comment block in one module is
+#: not a retraction of anything a reader is likely to find. The tracked prose that
+#: discusses this arm's CPU cost is in scope too.
+_RETRACTION_SCOPE_DOCS = (
+    "docs/mcts_value_gap_findings_20260812.md",
+    "docs/selfplay_mcts_roadmap.md",
+)
 
 
 def _cpu_fence_window(source: str) -> str:
@@ -140,16 +174,54 @@ def _cpu_fence_window(source: str) -> str:
     return source[start : start + 1400]
 
 
+def _paired_eval_module():
+    """`scripts/foulplay_paired_eval.py`, imported as a module.
+
+    B1's READER. `scripts/` is not a package, so the driver is loaded by path -- and
+    loaded rather than re-implemented, because the whole point is that the refusal is
+    reached from the code that actually reads the shard off disk.
+    """
+
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "foulplay_paired_eval.py"
+    spec = importlib.util.spec_from_file_location("_paired_eval_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _power_report_module():
+    """`scripts/foulplay_power_report.py`, imported as a module. B1's POOLING reader."""
+
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "foulplay_power_report.py"
+    spec = importlib.util.spec_from_file_location("_power_report_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _sanctioned_span(window: str) -> tuple[int, int]:
+    """The one paragraph allowed to quote the contested figures."""
+
+    start = window.index(_NO_POINT_RATIO)
+    return start, window.index("\n    #\n", start)
+
+
 def _stray_cost_ratios(source: str) -> list[str]:
     """Every ratio-shaped literal in the CPU fence OUTSIDE the sanctioned paragraph.
 
     A function of its input so the guard can be shown to read False on synthetic
-    attacks -- including the third shape nobody enumerated.
+    attacks -- including the third shape nobody enumerated, and the four spellings
+    that evaded the ASCII-only character class.
     """
 
     window = _cpu_fence_window(source)
-    start = window.index(_NO_POINT_RATIO)
-    end = window.index("\n    #\n", start)
+    start, end = _sanctioned_span(window)
     return [
         match.group(0)
         for match in _COST_RATIO.finditer(window)
@@ -1315,6 +1387,75 @@ class RolloutLeafWitnessGuardTest(unittest.TestCase):
             rollout_leaf_eval=True,
         )
 
+    def test_the_DEAD_END_term_of_the_fallback_numerator_is_pinned(self) -> None:
+        """B4. `expected = (cap + dead) -> cap` SURVIVED in this guard.
+
+        Not because the check is wrong but because every fixture in the file had
+        `rollout_dead_ends == 0`, where the two rules give the same number -- so the
+        `dead` term was asserted by nothing. That is the same "a term that cannot read
+        non-zero is not a measurement" objection the sibling branch raised against its
+        own cap-only fraction, and its resolution was "#1271 makes the term testable at
+        the writer instead". That resolution HOLDS AT TWO OF THREE SITES: the shard
+        reader and the shard writer both have a non-zero-dead fixture. This is the
+        third -- the per-decision witness guard -- and it did not.
+
+        The fixture sets `dead > 0` and keeps the partition balanced, so the ONLY thing
+        that can fail is the numerator rule. A cap-only expectation reads False here.
+        """
+        # dead > 0, partition balanced, fraction computed over the WHOLE fallback.
+        run, terminal, cap, dead = 1344, 40, 1297, 7
+        self.assertEqual(terminal + cap + dead, run)
+        honest = self._witness(
+            rollouts_run=run,
+            rollout_terminal_hits=terminal,
+            rollout_cap_hits=cap,
+            rollout_dead_ends=dead,
+            rollout_terminal_fraction=terminal / run,
+            rollout_fallback_fraction=(cap + dead) / run,
+        )
+        require_rollout_leaf_witness(
+            {"engine_mcts": {"leaf_eval": "model", "rollout_leaf": honest}},
+            rollout_leaf_eval=True,
+        )
+        # THE v1 NUMERATOR on the same counts: `cap` alone. This is what a shard
+        # written by the cap-only rule carries, and it must read False.
+        self.assertNotAlmostEqual(cap / run, (cap + dead) / run, places=9)
+        self._refuse(
+            self._witness(
+                rollouts_run=run,
+                rollout_terminal_hits=terminal,
+                rollout_cap_hits=cap,
+                rollout_dead_ends=dead,
+                rollout_terminal_fraction=terminal / run,
+                rollout_fallback_fraction=cap / run,
+            ),
+            expect="is not the quotient of its own partition",
+        )
+
+    def test_the_witnesss_WEIGHTED_tally_must_sum_to_its_world_count(self) -> None:
+        """B4, the per-decision half of the `+= weight` invariant.
+
+        `rollout_modes[mode] += weight` and `rollout_ledger["worlds"] += weight` are
+        one datum written twice on one line pair, so their sum is an identity. Without
+        it, unweighting the Counter is invisible on BOTH surfaces at once, because the
+        modes mapping is otherwise read only for its keys.
+        """
+        require_rollout_leaf_witness(
+            {
+                "engine_mcts": {
+                    "leaf_eval": "model",
+                    "rollout_leaf": self._witness(
+                        rollout_leaf_modes={"rollout": 2}, rollout_leaf_worlds=2
+                    ),
+                }
+            },
+            rollout_leaf_eval=True,
+        )
+        self._refuse(
+            self._witness(rollout_leaf_modes={"rollout": 1}, rollout_leaf_worlds=2),
+            expect="does not sum to its world count",
+        )
+
     def test_an_absent_witness_refuses(self) -> None:
         with self.assertRaises(EngineSearchWitnessError):
             require_rollout_leaf_witness(
@@ -1579,6 +1720,19 @@ class TheRetractedCostRatioStaysRetractedTest(unittest.TestCase):
              "    # The arm/raw wall ratio is 1.25-3.98x.\n"),
             ("shape 3 -- UNLISTED, and the one that survived",
              "    # Measured: the arm costs 2.7x the raw arm on one core.\n"),
+            # B5. THE FOUR SPELLINGS THAT EVADED THE ASCII-ONLY CHARACTER CLASS. The
+            # first of them is not hypothetical: it is how the headline this guard
+            # exists to protect is actually written in the PR body the figure came
+            # from -- `7.7<U+00D7>-16.9<U+00D7>` with MULTIPLICATION SIGNS. A guard
+            # that matches `x` and not `×` protected nothing it was built for.
+            ("shape 4 -- U+00D7 MULTIPLICATION SIGN, the headline's own spelling",
+             "    # The arm costs 7.7× the raw arm at R=8.\n"),
+            ("shape 5 -- uppercase X",
+             "    # The arm costs 7.7X the raw arm at R=8.\n"),
+            ("shape 6 -- the word form",
+             "    # The arm's cost is 7.7-fold the raw arm's at R=8.\n"),
+            ("shape 7 -- the prose form, no symbol at all",
+             "    # The arm costs a factor of 7.7 more than the raw arm.\n"),
         ):
             with self.subTest(shape=label):
                 mutant = source.replace(anchor, injected + anchor, 1)
@@ -1593,6 +1747,69 @@ class TheRetractedCostRatioStaysRetractedTest(unittest.TestCase):
         # refusing every source it is handed.
         self.assertEqual(_stray_cost_ratios(source), [])
         self.assertIn("1.8x at R=8", window)
+
+    def test_the_character_class_is_not_ASCII_x_only(self) -> None:
+        """B5, applied to the CHECKER rather than to the tree.
+
+        The evasions above are shown against the real fence by injection. This shows
+        them against the pattern directly, together with the negatives -- because a
+        pattern widened until it matches everything refuses every source and proves
+        nothing. `x86`, a hex literal and the word `matrix` must all stay clean.
+        """
+        for spelling in ("7.7x", "7.7X", "7.7×", "7.7✕", "7.7-fold",
+                         "7.7 fold", "a factor of 7.7", "1.25-3.98x",
+                         "7.7×–16.9×"):
+            with self.subTest(matches=spelling):
+                self.assertTrue(
+                    _COST_RATIO.search(spelling),
+                    f"{spelling!r} is a ratio-shaped literal and must be found",
+                )
+        for benign in ("x86_64", "0x1f", "matrix", "4 examples", "exit code 1",
+                       "xfail", "index"):
+            with self.subTest(clean=benign):
+                self.assertIsNone(
+                    _COST_RATIO.search(benign),
+                    f"{benign!r} is not a ratio and must not be flagged",
+                )
+
+    def test_the_retraction_scope_is_not_one_comment_block(self) -> None:
+        """B5. Twenty-one lines of one `.py` file, and no docs at all.
+
+        `_cpu_fence_window` slices 1400 characters out of `engine_search.py`. The
+        retracted figure is PROSE -- it was published in a PR body and it is restated
+        in `docs/` -- so a guard scoped to one comment block cannot see the places a
+        reader is most likely to find it. The tracked prose that discusses this arm's
+        CPU cost is now in scope, and the retraction's own wording is required to be
+        present in the module so "the scope is wider" is not satisfied by widening it
+        to files that say nothing.
+        """
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        window = _cpu_fence_window(self._source())
+        self.assertLess(
+            len(window.splitlines()),
+            40,
+            "the fence window is deliberately small; the point is that it is not the "
+            "whole scope",
+        )
+        checked = 0
+        for relative in _RETRACTION_SCOPE_DOCS:
+            path = root / relative
+            if not path.exists():
+                continue
+            checked += 1
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn(
+                "orders of magnitude",
+                text,
+                f"{relative} restates a figure `engine_search.py` retracts BY "
+                "MEASUREMENT; the retraction has to hold in the prose a reader "
+                "actually reads, not only inside one comment block",
+            )
+        self.assertGreater(
+            checked, 0, "the doc scope must name at least one file that exists"
+        )
 
 
 @unittest.skipUnless(_crate_ready, "crate not built with the model feature")
@@ -1754,6 +1971,254 @@ class RolloutLeafShardSchemaTest(unittest.TestCase):
             with self.subTest(field=name):
                 self.assertIn(name, payload)
         require_rollout_leaf_shard_schema(payload)
+
+    def test_the_schema_VERSION_LITERAL_is_pinned(self) -> None:
+        """B4. `ROLLOUT_LEAF_SHARD_SCHEMA = 2 -> = 1` SURVIVED.
+
+        Every assertion about the stamp was self-referential: the writer stamps
+        `ROLLOUT_LEAF_SHARD_SCHEMA`, the reader compares against
+        `ROLLOUT_LEAF_SHARD_SCHEMA`, and the test above asserts the two are equal --
+        so setting the constant to 1 kept the whole file internally consistent while
+        every shard on disk got stamped as the schema this reader exists to REFUSE.
+        That is the exact defect the constant's own docstring warns about one field
+        over ("a reader that derives its expectation from the shard it is reading
+        cannot detect a re-schema of that shard"), applied to the version itself.
+
+        Pinned by LITERAL, and pinned to the number the four banked shards would be
+        migrated INTO. Bumping the schema is meant to be a decision that shows up in a
+        diff of this line.
+        """
+        self.assertEqual(ROLLOUT_LEAF_SHARD_SCHEMA, 2)
+        # AND v1 IS STILL REFUSED BY NAME at that value, so the pin is not satisfied by
+        # a constant that happens to equal 2 while the reader accepts anything.
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            require_rollout_leaf_shard_schema(self._v2(rollout_leaf_schema=1))
+        self.assertIn("schema v1", str(caught.exception))
+        self.assertIn("expects v2", str(caught.exception))
+
+    def test_the_WEIGHTED_pricer_tally_must_sum_to_the_world_count(self) -> None:
+        """B4. `rollout_leaf_modes[mode] += weight -> += 1` SURVIVED.
+
+        Its sibling scalar `rollout_leaf_worlds += weight` was killed, because the
+        world count is asserted. The Counter beside it was read only for its KEYS
+        anywhere in the tree, so its VALUES were emitted and unverifiable -- and
+        `+= weight` versus `+= 1` is precisely the accumulation difference that
+        distinguishes v2 from v1 and is the whole stated reason for choosing v2.
+
+        This is the SEVENTH instance of the drift this module's own docstring
+        catalogues: `LADDER_PER_DECISION_CLAIM_HISTOGRAMS` calls
+        `root_q_gap_histogram` versus `root_q_gap_sum` the SIXTH, and it is the same
+        shape -- a Counter and a scalar incremented from one datum on one line pair,
+        with a check on the scalar only.
+
+        The fix is the invariant, not another assertion on one number:
+        `sum(rollout_leaf_modes.values()) == rollout_leaf_worlds` is an identity
+        because both are `+= weight` in the same pass, so any unweighting of either
+        breaks it.
+        """
+        # THE COLLAPSED DRAW, which is the case the two rules disagree on. Two
+        # identical belief draws share one search, so one crate report carries
+        # weight 2.
+        weighted = self._v2()
+        weighted["rollout_leaf_modes"] = {"rollout": 130}
+        weighted["rollout_leaf_worlds"] = 130
+        require_rollout_leaf_shard_schema(weighted)
+        # `+= 1` on the Counter alone: 65 reports, 130 worlds.
+        unweighted_counter = self._v2()
+        unweighted_counter["rollout_leaf_modes"] = {"rollout": 65}
+        unweighted_counter["rollout_leaf_worlds"] = 130
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            require_rollout_leaf_shard_schema(unweighted_counter)
+        self.assertIn("does not sum to its world count", str(caught.exception))
+        self.assertIn("seven times", str(caught.exception))
+        # And the other direction, so the invariant is not one-sided.
+        unweighted_scalar = self._v2()
+        unweighted_scalar["rollout_leaf_modes"] = {"rollout": 130}
+        unweighted_scalar["rollout_leaf_worlds"] = 65
+        with self.assertRaises(EngineShardSchemaError):
+            require_rollout_leaf_shard_schema(unweighted_scalar)
+        # Two pricers summing correctly is accepted -- the invariant is on the SUM, not
+        # on a single-entry mapping.
+        split = self._v2()
+        split["rollout_leaf_modes"] = {"model_value": 20, "rollout": 45}
+        split["rollout_leaf_worlds"] = 65
+        require_rollout_leaf_shard_schema(split)
+
+    def test_BOTH_world_counters_are_accumulated_BY_WEIGHT_at_the_writer(self) -> None:
+        """B4. The invariant catches a DISAGREEING shard; this catches the writer.
+
+        `b4_unweight_the_shard_pricer_counter` -- `self.stats.rollout_leaf_modes[mode]
+        += weight` -> `+= 1` -- SURVIVED the invariant above, and the reason is worth
+        stating rather than patching around: `sum(modes) == worlds` fires on a shard
+        where the two DISAGREE, and the only shard that can disagree is one written
+        from a COLLAPSED draw. Every fixture in this file, and every search the crate
+        gate runs, has weight 1 -- two identical belief draws from the same state,
+        context and seat -- so the mutant produces a byte-identical shard and nothing
+        can see it.
+
+        Reaching it behaviourally needs a model search that actually collapses a draw,
+        which this file's fixture cannot produce. So the pair is pinned at the writer,
+        SCOPED BY VALUE: both members accumulate the operand `weight`, and the
+        assertion is derived from the counter names rather than from a copied source
+        line. A third world counter added to the pair is required to join it.
+
+        Stated as the limitation it is: this is a structural pin, and the invariant is
+        the behavioural half. Together they say "the writer weights both" and "a shard
+        where they disagree is refused"; neither alone says both.
+        """
+        import ast
+        from pathlib import Path
+
+        source = (
+            Path(__file__).resolve().parents[1] / "src" / "pokezero" / "engine_search.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        def _is_shard_world_counter(target: ast.AST) -> bool:
+            # `self.stats.rollout_leaf_worlds` or `self.stats.rollout_leaf_modes[...]`
+            node = target.value if isinstance(target, ast.Subscript) else target
+            return (
+                isinstance(node, ast.Attribute)
+                and node.attr in ("rollout_leaf_worlds", "rollout_leaf_modes")
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "stats"
+            )
+
+        found: dict[str, list[str]] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AugAssign) and _is_shard_world_counter(node.target):
+                name = (
+                    node.target.value.attr
+                    if isinstance(node.target, ast.Subscript)
+                    else node.target.attr
+                )
+                found.setdefault(name, []).append(ast.unparse(node.value))
+        self.assertEqual(
+            sorted(found),
+            ["rollout_leaf_modes", "rollout_leaf_worlds"],
+            "both shard-level world counters must be accumulated somewhere; a missing "
+            f"one is a surface that stopped being written. Found: {found}",
+        )
+        for name, operands in sorted(found.items()):
+            with self.subTest(counter=name):
+                self.assertEqual(
+                    operands,
+                    ["weight"],
+                    f"`self.stats.{name}` must be accumulated `+= weight` exactly "
+                    "once. `+= 1` records ONE world where a collapsed draw "
+                    "represented two, which is the whole stated reason v2 was chosen "
+                    f"over v1. Found: {operands}",
+                )
+
+    def test_zero_rollouts_does_not_SHORT_CIRCUIT_the_partition_checks(self) -> None:
+        """B5. `rollouts_run == 0` returned before every remaining check.
+
+        Two things got through it, and the second is exactly what the sibling bridge
+        branch writes on a FLAG-OFF shard:
+
+          * `rollouts_run: 0` beside `rollout_cap_hits: 5` -- a partition that does not
+            balance. The identity is not undefined at zero, it is TRIVIAL at zero, and
+            a non-trivial reading is a counter wired to the wrong population.
+          * `rollouts_run: 0` beside `rollout_terminal_fraction: None` -- v1's
+            unconditional-emission shape, stamped v2. A pooling reader averages a
+            `None` as though it were a measurement, and the block asserts the arm
+            engaged and priced nothing, which is a refusal shape rather than a shard.
+        """
+        zero = self._v2()
+        for name in (
+            "rollouts_run",
+            "rollout_plies",
+            "rollout_terminal_hits",
+            "rollout_cap_hits",
+            "rollout_dead_ends",
+        ):
+            zero[name] = 0
+        for name in ROLLOUT_LEAF_QUOTIENT_FIELDS:
+            zero.pop(name, None)
+        # The legitimate zero-rollout v2 block: counts present, quotients omitted.
+        require_rollout_leaf_shard_schema(zero)
+
+        torn = dict(zero)
+        torn["rollout_cap_hits"] = 5
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            require_rollout_leaf_shard_schema(torn)
+        self.assertIn("does not account for every rollout", str(caught.exception))
+
+        for name in ROLLOUT_LEAF_QUOTIENT_FIELDS:
+            with self.subTest(v1_shape=name):
+                v1_shape = dict(zero)
+                v1_shape[name] = None
+                with self.assertRaises(EngineShardSchemaError) as caught:
+                    require_rollout_leaf_shard_schema(v1_shape)
+                self.assertIn(name, str(caught.exception))
+                self.assertIn("wearing this schema's stamp", str(caught.exception))
+
+    def test_the_siblings_FLAG_OFF_shard_is_refused_by_this_reader(self) -> None:
+        """B2. What #1272 writes if it lands without its emission block deleted.
+
+        Its `to_dict` emits the whole rollout block UNCONDITIONALLY: thirteen rollout
+        keys on a shard whose seam never engaged, zeroed counts, `None` fractions, and
+        -- since it has adopted this branch's constant -- STAMPED v2. That document
+        passed the first revision of this reader, because `rollouts_run == 0`
+        short-circuited every check that would have looked at it.
+
+        Reconstructed here as the literal key set that writer emits, so the refusal is
+        pinned to the artifact and not to a description of it.
+        """
+        sibling_flag_off = {
+            "worlds_collapsed": 0,
+            "model_evals": 8185,
+            "rollout_leaf_schema": ROLLOUT_LEAF_SHARD_SCHEMA,
+            "rollout_leaf_modes": {},
+            "rollout_leaf_worlds": 0,
+            "rollouts_run": 0,
+            "rollout_plies": 0,
+            "rollout_terminal_hits": 0,
+            "rollout_cap_hits": 0,
+            "rollout_dead_ends": 0,
+            "rollout_leaves_priced": 0,
+            "rollout_encode_skipped": 0,
+            "rollout_terminal_fraction": None,
+            "rollout_fallback_fraction": None,
+            "rollout_mean_plies": None,
+        }
+        self.assertEqual(
+            len([k for k in sibling_flag_off if str(k).startswith("rollout")]),
+            13,
+            "thirteen rollout keys on a flag-off shard is the shape being refused",
+        )
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            require_rollout_leaf_shard_schema(sibling_flag_off)
+        self.assertIn("rollout_terminal_fraction", str(caught.exception))
+
+    def test_the_writer_PINS_its_rollout_key_set_so_a_rename_fails_there(self) -> None:
+        """B5. The reader cannot see a FULL rename, and this is where that is closed.
+
+        The accept case (`if not present: return`) survives the stated attack -- all
+        twelve keys have to go, not one. But the predicate is
+        `startswith("rollout")`, so a writer that renamed every column to a
+        NON-`rollout`-prefixed name produces a block this reader accepts as flag-off
+        while `worlds_collapsed: 7` sits beside it saying a search ran. That residual
+        is REAL and it is not closable at the reader: an artifact does not carry its
+        launch command, and the reader has no closed set of legitimate non-rollout
+        `policy_stats` columns to diff against.
+
+        It IS closable at the writer, where the key set is pinned by literal. This
+        asserts the emitted rollout key set is EXACTLY `ROLLOUT_LEAF_SHARD_FIELDS`, so
+        a rename in `to_dict` fails here rather than sailing past the reader. The
+        residual that remains -- a DIFFERENT writer renaming the columns of an
+        artifact this repo did not produce -- is stated rather than papered over.
+        """
+        emitted = {k for k in self._v2() if str(k).startswith("rollout")}
+        self.assertEqual(
+            emitted,
+            set(ROLLOUT_LEAF_SHARD_FIELDS),
+            "the writer's rollout key set must be exactly the pinned literal; a "
+            "rename either fails here or is invisible to every reader",
+        )
+        # And the pin is on a LITERAL tuple, not on the writer's own output.
+        self.assertEqual(len(ROLLOUT_LEAF_SHARD_FIELDS), 13)
+        self.assertEqual(len(set(ROLLOUT_LEAF_SHARD_FIELDS)), 13)
 
     def test_a_flag_off_shard_carries_no_rollout_keys_and_is_accepted(self) -> None:
         """The conditional emission, and why the reader keys off KEYS not config.
@@ -1941,6 +2406,13 @@ class RolloutLeafShardSchemaTest(unittest.TestCase):
             "rollout_leaf_modes": {},
             "rollout_leaf_world_records": 0,
             "rollouts_run": 0,
+            # v1 emitted EVERY key unconditionally, `rollout_dead_ends` included. The
+            # first version of this fixture omitted it and still passed, because the
+            # migration read `shard.get("rollout_dead_ends") or 0` -- absent as zero, in
+            # a module that carries an "ABSENT IS NOT FALSE" paragraph. Both conditions
+            # the migration's value-preservation proof rests on are now required to be
+            # PRESENT, so the fixture has to be what v1 actually writes.
+            "rollout_dead_ends": 0,
             "rollout_terminal_fraction": None,
             "rollout_fallback_fraction": None,
             "rollout_mean_plies": None,
@@ -1948,6 +2420,106 @@ class RolloutLeafShardSchemaTest(unittest.TestCase):
         migrated = migrate_rollout_leaf_shard_v1(off)
         self.assertEqual([k for k in migrated if k.startswith("rollout")], [])
         require_rollout_leaf_shard_schema(migrated)
+
+    def test_the_migration_refuses_an_ABSENT_precondition_rather_than_reading_zero(
+        self,
+    ) -> None:
+        """B5. ABSENT IS NOT ZERO, on the two fields the proof rests on.
+
+        `worlds_collapsed == 0` and `rollout_dead_ends == 0` are the ENTIRE conditions
+        under which this migration claims to be value-preserving. Read through
+        `int(shard.get(name) or 0)`, a shard that never recorded the field passed the
+        check -- so the premise of the proof was being read off a field that was not
+        measured, and "no collapses happened" and "this writer does not count
+        collapses" became the same artifact. One field dropped per subtest, so the
+        first check cannot short-circuit the second.
+        """
+        for name in ("worlds_collapsed", "rollout_dead_ends"):
+            with self.subTest(absent=name):
+                shard = dict(BANKED_V1_ARM_SHARD)
+                self.assertIn(name, shard, "the fixture must carry it to drop it")
+                del shard[name]
+                with self.assertRaises(EngineShardSchemaError) as caught:
+                    migrate_rollout_leaf_shard_v1(shard)
+                self.assertIn(name, str(caught.exception))
+                self.assertIn("ABSENT IS NOT ZERO", str(caught.exception))
+        # And the unmutated fixture migrates, so the refusal is not simply refusing
+        # everything.
+        migrate_rollout_leaf_shard_v1(dict(BANKED_V1_ARM_SHARD))
+
+    def test_the_migration_does_not_OVERWRITE_a_banked_quotient(self) -> None:
+        """B5. "Provably value-preserving" was a claim the code contradicted.
+
+        All three quotients were assigned UNCONDITIONALLY from the shard's counts, so
+        a v1 shard carrying `rollout_terminal_fraction: 0.99` and
+        `rollout_mean_plies: 999.0` came out the other side as this shard's real 0.8
+        and 20.0 with nothing recording that anything had changed -- under a docstring
+        calling the rename value-preserving. Only `rollout_fallback_fraction` is a
+        DEFINED re-derivation (v1's numerator was `cap`, v2's is `cap + dead_ends`),
+        and `dead == 0` is enforced upstream, so even that one cannot legitimately
+        move. A disagreement is now named and refused.
+
+        One field perturbed per subtest: a fixture that moves two at once pins
+        neither, because the first refusal short-circuits the second.
+        """
+        for name, forged in (
+            ("rollout_terminal_fraction", 0.99),
+            ("rollout_mean_plies", 999.0),
+            ("rollout_fallback_fraction", 0.5),
+        ):
+            with self.subTest(overwritten=name):
+                shard = dict(BANKED_V1_ARM_SHARD)
+                honest = migrate_rollout_leaf_shard_v1(dict(shard))[name]
+                self.assertNotAlmostEqual(honest, forged, places=6)
+                shard[name] = forged
+                with self.assertRaises(EngineShardSchemaError) as caught:
+                    migrate_rollout_leaf_shard_v1(shard)
+                message = str(caught.exception)
+                self.assertIn(name, message)
+                self.assertIn(repr(forged), message)
+                self.assertIn(repr(honest), message)
+        # A shard whose banked quotient AGREES is migrated, unchanged.
+        agreeing = dict(BANKED_V1_ARM_SHARD)
+        expected = migrate_rollout_leaf_shard_v1(dict(agreeing))
+        agreeing["rollout_terminal_fraction"] = expected["rollout_terminal_fraction"]
+        self.assertEqual(
+            migrate_rollout_leaf_shard_v1(agreeing)["rollout_terminal_fraction"],
+            expected["rollout_terminal_fraction"],
+        )
+
+    def test_the_migrations_trailing_SELF_CHECK_is_not_deletable(self) -> None:
+        """B4. The last line of the migration was a free deletion.
+
+        `require_rollout_leaf_shard_schema(migrated)` closes the loop: the migration
+        may only emit a document its own reader accepts. Nothing exercised it, because
+        every migration fixture happened to produce a valid v2 block -- so deleting
+        the line changed no observable behaviour. Two inputs that pass every
+        PRECONDITION and produce an INVALID v2 block:
+
+          * a v1 shard carrying a column v2 does not recognise, which the rename
+            copies straight through into a v2-stamped block;
+          * a v1 shard whose partition does not balance, which the rename cannot fix
+            and must not publish.
+
+        Both are refused by the trailing check and by nothing else in the function.
+        """
+        unknown = dict(BANKED_V1_ARM_SHARD)
+        unknown["rollout_new_column"] = 3
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            migrate_rollout_leaf_shard_v1(unknown)
+        self.assertIn("rollout_new_column", str(caught.exception))
+        self.assertIn("unrecognised", str(caught.exception))
+
+        torn = dict(BANKED_V1_ARM_SHARD)
+        torn["rollout_terminal_hits"] = int(torn["rollout_terminal_hits"]) + 1
+        # The quotient stays consistent with the counts under BOTH rules, so the
+        # overwrite refusal above cannot be what catches this one.
+        torn["rollout_terminal_fraction"] = (
+            int(torn["rollout_terminal_hits"]) / int(torn["rollouts_run"])
+        )
+        with self.assertRaises(EngineShardSchemaError) as caught:
+            migrate_rollout_leaf_shard_v1(torn)
+        self.assertIn("does not account for every rollout", str(caught.exception))
 
     def test_the_migration_refuses_a_shard_that_is_not_v1(self) -> None:
         with self.assertRaises(EngineShardSchemaError):
@@ -2101,13 +2673,285 @@ class BankedShardCarriesThePooledWitnessTest(unittest.TestCase):
 
     def test_the_write_refuses_a_v1_schemaed_policy_stats(self) -> None:
         """A6's refusal, reached through the WRITE path -- so a writer that still
-        emits v1 cannot bank alongside v2 shards."""
+        emits v1 cannot bank alongside v2 shards.
+
+        B1. THROUGH `_shard_json_text`, not through `require_banked_shard_witness`.
+        The schema refusal used to be called from INSIDE the witness guard, and this
+        test asserted it there -- which is what made the two look like one check and
+        hid the fact that deleting the witness call removed both. They are separate
+        statements at the boundary now, so the boundary is what is tested.
+        """
         bridge = self._bridge()
         with self.assertRaises(Exception) as caught:
-            bridge.require_banked_shard_witness(
+            bridge._shard_json_text(
                 self._payload(policy_stats=dict(BANKED_V1_ARM_SHARD))
             )
         self.assertIn("schema v1", str(caught.exception))
+        # AND NOT through the witness guard, which no longer owns it. If this ever
+        # raises again the two guards have been re-nested and the independence claim
+        # below is false.
+        bridge.require_banked_shard_witness(
+            self._payload(policy_stats=dict(BANKED_V1_ARM_SHARD))
+        )
+
+    def test_the_two_boundary_GUARDS_ARE_INDEPENDENTLY_DELETABLE(self) -> None:
+        """B1. The pair claim, made honest.
+
+        The earlier revision claimed a shard written past a deleted writer-side guard
+        would be "REFUSED ON READ instead of pooled. Both frames -- opposite sides of
+        the artifact -- would have to be deleted together". That was FALSE:
+        `require_rollout_leaf_shard_schema` had NO read-path caller, its only two
+        non-test callers were both write-side, and one NESTED the other -- so deleting
+        the single line `require_banked_shard_witness(payload)` removed BOTH refusals.
+
+        What the topology has to be for the claim to hold, asserted by construction:
+
+          * the witness refusal and the schema refusal are two statements at the
+            boundary, so each catches an input the other does not;
+          * the schema refusal is also reached from a READ-path caller in a different
+            module that does not import `foulplay_bridge`.
+        """
+        import inspect
+
+        from pokezero import engine_search
+
+        bridge = self._bridge()
+        source = inspect.getsource(bridge._shard_json_text)
+        self.assertIn("require_banked_shard_witness(payload)", source)
+        self.assertIn("require_rollout_leaf_document_schema(payload)", source)
+        # NEITHER GUARD IS INSIDE THE OTHER. Checked on the CALL GRAPH and not on the
+        # source text: the witness guard's docstring now NAMES the schema refusal in
+        # order to explain the correction, so a substring test reads False on the
+        # documentation of the fix. `ast` distinguishes a mention from a call.
+        import ast
+        import textwrap
+
+        witness_ast = ast.parse(
+            textwrap.dedent(inspect.getsource(bridge.require_banked_shard_witness))
+        )
+        called = {
+            node.func.id
+            for node in ast.walk(witness_ast)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        } | {
+            node.func.attr
+            for node in ast.walk(witness_ast)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        for nested in (
+            "require_rollout_leaf_shard_schema",
+            "require_rollout_leaf_document_schema",
+        ):
+            self.assertNotIn(
+                nested,
+                called,
+                "the schema refusal must not be CALLED from inside the witness "
+                "refusal again; nesting is what made one deletion remove two checks",
+            )
+        # EACH CATCHES AN INPUT THE OTHER DOES NOT. A v1-schemaed block whose witness
+        # is otherwise perfect, and a silent-empty block carrying no rollout keys at
+        # all.
+        v1_only = self._payload(policy_stats=dict(BANKED_V1_ARM_SHARD))
+        bridge.require_banked_shard_witness(v1_only)  # witness guard: passes
+        with self.assertRaises(engine_search.EngineShardSchemaError):
+            engine_search.require_rollout_leaf_document_schema(v1_only)
+        empty_only = self._payload(policy_stats={})
+        engine_search.require_rollout_leaf_document_schema(empty_only)  # schema: passes
+        with self.assertRaises(bridge.BankedShardWitnessError):
+            bridge.require_banked_shard_witness(empty_only)
+
+    def test_the_READ_path_refuses_what_a_deleted_writer_guard_would_have_banked(
+        self,
+    ) -> None:
+        """B1. The read side, driven through the real reader on a real file.
+
+        This is the call that did not exist. The shard is written to disk WITHOUT
+        going through the bridge -- i.e. exactly the state the tree is in if every
+        writer-side guard is deleted -- and the paired-eval driver's own loader is
+        asked to read it.
+        """
+        import json
+        import tempfile
+        from pathlib import Path
+
+        paired = _paired_eval_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "shard-p1.json"
+            target.write_text(
+                json.dumps(
+                    {
+                        "policy_id": "arm",
+                        "engine_mcts": {
+                            "decisions": 65,
+                            "policy_stats": dict(BANKED_V1_ARM_SHARD),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            document = json.loads(target.read_text(encoding="utf-8"))
+            with self.assertRaises(Exception) as caught:
+                paired.require_rollout_leaf_document_schema(document)
+            self.assertIn("schema v1", str(caught.exception))
+        # And the reader is reached from a module that does NOT import the bridge, so
+        # the two deletions are in two files and two processes.
+        import inspect
+
+        self.assertNotIn("foulplay_bridge", inspect.getsource(paired.run_seat))
+
+    def test_BOTH_reader_call_sites_exist_where_the_shard_is_loaded(self) -> None:
+        """B1. The two read-path deletions, each caught on its own.
+
+        The test above proves the refusal WORKS on a document read off disk. It does
+        not prove it is CALLED, and the battery said so: `b1_delete_the_paired_eval_
+        READER_call` and `b1_delete_the_power_report_READER_call` both SURVIVED,
+        because a test that calls the function itself cannot see the call site
+        disappear. That is the same "absence of code is not mutation-testable" shape
+        the witness guard exists for, one layer out -- so it is asserted on the call
+        graph.
+
+        Driving `run_seat` end to end would need a Showdown checkout and a subprocess
+        bridge invocation, so the assertion is structural AND it is pinned to the frame
+        that matters: the call must sit in the function that LOADS the file, after the
+        parse and before the value is returned to be pooled.
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        paired = _paired_eval_module()
+        power = _power_report_module()
+        for label, function, loader in (
+            ("scripts/foulplay_paired_eval.py::run_seat", paired.run_seat, "json.loads"),
+            (
+                "scripts/foulplay_power_report.py::load_shards",
+                power.load_shards,
+                "json.loads",
+            ),
+        ):
+            with self.subTest(reader=label):
+                source = textwrap.dedent(inspect.getsource(function))
+                self.assertIn(loader, source, "this must be the frame that parses")
+                calls = [
+                    node
+                    for node in ast.walk(ast.parse(source))
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "require_rollout_leaf_document_schema"
+                ]
+                self.assertEqual(
+                    len(calls),
+                    1,
+                    f"{label} must call the reader-side refusal exactly once on the "
+                    "document it just parsed; without it the writer-side guard is the "
+                    "only copy and deleting one line removes every refusal",
+                )
+                # ON THE PARSED DOCUMENT, not on some other name -- a call on the wrong
+                # argument satisfies a bare occurrence count and checks nothing.
+                (call,) = calls
+                self.assertEqual(len(call.args), 1)
+                self.assertIsInstance(call.args[0], ast.Name)
+                self.assertIn(call.args[0].id, ("summary", "payload"))
+
+    def test_BOTH_stdout_writers_render_through_the_guarded_funnel(self) -> None:
+        """B1. `_write_json` was not the only funnel, and the print sites were open.
+
+        `b1_stdout_writer_bypasses_the_funnel` SURVIVED: reverting one `print` to
+        `json.dumps(payload, indent=2, sort_keys=True)` changed nothing observable,
+        because nothing asserted the stdout path is guarded. The text is
+        BYTE-IDENTICAL to what `_write_json` writes -- same object, same arguments --
+        so with `--json` and a shell redirect but no `--summary-out` it is the only
+        copy that reaches disk, and it passed no guard.
+
+        Asserted two ways: the funnel refuses a bad payload (behaviour), and neither
+        CLI serializes a shard except through it (call graph, both sites).
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        bridge = self._bridge()
+        # BEHAVIOUR: the funnel refuses, and returns the same bytes it always did.
+        good = self._payload(policy_stats={"decisions": 65})
+        self.assertEqual(
+            bridge._shard_json_text(good),
+            json.dumps(good, indent=2, sort_keys=True),
+            "the funnel must not change the bytes -- only refuse them",
+        )
+        with self.assertRaises(Exception):
+            bridge._shard_json_text(
+                self._payload(policy_stats=dict(BANKED_V1_ARM_SHARD))
+            )
+        # CALL GRAPH: no `json.dumps(payload, ...)` survives in either CLI.
+        for entry in (bridge.async_main, bridge.async_comparison_main):
+            with self.subTest(cli=entry.__name__):
+                source = textwrap.dedent(inspect.getsource(entry))
+                dumps_on_payload = [
+                    node
+                    for node in ast.walk(ast.parse(source))
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "dumps"
+                    and node.args
+                    and isinstance(node.args[0], ast.Name)
+                    and node.args[0].id == "payload"
+                ]
+                self.assertEqual(
+                    dumps_on_payload,
+                    [],
+                    "a shard payload must not be serialized outside "
+                    "`_shard_json_text`; this is the stdout writer that reached disk "
+                    "unguarded",
+                )
+                self.assertIn("_shard_json_text(payload)", source)
+
+    def test_the_reader_finds_the_block_under_EVERY_writers_spelling(self) -> None:
+        """B1. `_write_json` was not the only funnel, and `engine_mcts` was not the
+        only spelling.
+
+        Four writers put this mapping on disk under four different parent keys, and
+        `require_banked_shard_witness` finds blocks by the PARENT's name -- so it
+        walks past three of the four vacuously. The column-keyed walk finds all four,
+        and would find a fifth writer's fifth name without being told about it.
+        """
+        from pokezero import engine_search
+
+        v1 = dict(BANKED_V1_ARM_SHARD)
+        layouts = {
+            "engine_mcts.policy_stats (foulplay_bridge._write_json)": {
+                "engine_mcts": {"decisions": 65, "policy_stats": v1}
+            },
+            "per_seat[seat].policy_stats (scripts/foulplay_paired_eval.py)": {
+                "per_seat": {"p1": {"policy_stats": v1}}
+            },
+            "root policy_stats (scripts/mcts_acceptance_h2h.py)": {"policy_stats": v1},
+            "engine_stats (scripts/hc_depth_grid.py)": {"engine_stats": v1},
+            "a list of arms (the comparison summaries)": {"arms": [{"policy_stats": v1}]},
+        }
+        for label, document in layouts.items():
+            with self.subTest(layout=label):
+                self.assertEqual(
+                    len(engine_search.iter_rollout_leaf_shard_blocks(document)),
+                    1,
+                    "the block must be found by its own columns, not by its parent",
+                )
+                with self.assertRaises(engine_search.EngineShardSchemaError):
+                    engine_search.require_rollout_leaf_document_schema(document)
+        # AND IT DOES NOT FIRE ON THE CONFIG ECHO. The bridge's `engine_mcts` block and
+        # the per-decision metadata both carry rollout-PREFIXED knobs; a
+        # `startswith("rollout")` walk would refuse every legitimate payload as an
+        # unstamped shard.
+        echo = {
+            "engine_mcts": {
+                "decisions": 65,
+                "rollout_leaf": True,
+                "rollout_count": 8,
+                "rollout_max_plies": 200,
+                "policy_stats": {"decisions": 65},
+            }
+        }
+        self.assertEqual(engine_search.iter_rollout_leaf_shard_blocks(echo), [])
+        engine_search.require_rollout_leaf_document_schema(echo)
 
     def test_the_write_refuses_an_arm_claim_with_no_pricer(self) -> None:
         """THE ASKED-FOR SIDE AGAINST THE RAN SIDE.
@@ -2125,6 +2969,108 @@ class BankedShardCarriesThePooledWitnessTest(unittest.TestCase):
                 self._payload(policy_stats={"decisions": 65}, rollout_leaf=True)
             )
         self.assertIn("no pricer ever ran", str(caught.exception))
+
+    def test_the_crosscheck_refuses_a_CONTROL_MODE_shard_claiming_the_arm(self) -> None:
+        """The cross-check was UNDER-BROAD, in the case its own error text names.
+
+        `engaged = bool(stats.get("rollout_leaf_modes"))` reads True on
+        `{"model_value": 9}`. But `model_value` is the CONTROL mode: it routes leaf
+        values through the arm's deferred-row plumbing while keeping PRODUCTION'S LEAF
+        VALUE. So a shard with `rollout_leaf: true` and that mapping is a run whose
+        "leaves were priced by the MODEL" -- the exact sentence the refusal prints --
+        and it passed. It was caught only ONE FRAME IN, by
+        `require_rollout_leaf_witness`'s per-decision `wrong` check, which never runs
+        on a loaded artifact and therefore cannot see a banked shard at all.
+
+        Checked by VALUE now: engaged means the ARM'S pricer is named.
+        """
+        bridge = self._bridge()
+        for label, modes in (
+            ("the control mode", {"model_value": 9}),
+            ("a crate gate fixture", {"hp_fraction": 9}),
+            ("control and gate together, no arm", {"model_value": 4, "hp_fraction": 5}),
+        ):
+            with self.subTest(modes=label):
+                with self.assertRaises(bridge.BankedShardWitnessError) as caught:
+                    bridge.require_banked_shard_witness(
+                        self._payload(
+                            policy_stats={
+                                "decisions": 65,
+                                "worlds_searched": 65,
+                                "rollout_leaf_modes": modes,
+                            },
+                            rollout_leaf=True,
+                        )
+                    )
+                self.assertIn("no pricer ever ran", str(caught.exception))
+        # And a mapping that DOES name the arm passes, so the check is not refusing
+        # every non-empty mapping.
+        bridge.require_banked_shard_witness(
+            self._payload(
+                policy_stats={
+                    "decisions": 65,
+                    "worlds_searched": 65,
+                    "rollout_leaf_modes": {"rollout": 65},
+                },
+                rollout_leaf=True,
+            )
+        )
+
+    def test_an_ALL_WORLDS_FAILED_arm_run_is_still_bankable(self) -> None:
+        """And the cross-check was narrowly OVER-BROAD, in the other direction.
+
+        If every world failed, no crate report was ever absorbed, so
+        `rollout_leaf_modes` is empty for a run that genuinely asked for the arm and
+        genuinely ran it. Refusing that made a total-failure run UNBANKABLE, which
+        pushes it to be relabelled as a raw-arm run -- the same corruption this guard
+        exists to prevent, arrived at from the other side.
+
+        The exemption is scoped to what the shard says in its own counters:
+        `worlds_searched == 0` WITH recorded failure reasons. A zero-searched shard
+        that records no reason is still refused, so the exemption is not a hole.
+        """
+        bridge = self._bridge()
+        bridge.require_banked_shard_witness(
+            self._payload(
+                policy_stats={
+                    "decisions": 65,
+                    "worlds_searched": 0,
+                    "worlds_constructed": 260,
+                    "world_failure_reasons": {"crate_search: rollout dead end": 260},
+                    "rollout_leaf_modes": {},
+                },
+                rollout_leaf=True,
+            )
+        )
+        # No reason recorded -> still refused. "Nothing was searched" without a cause
+        # is the silent shape, not the honest one.
+        with self.assertRaises(bridge.BankedShardWitnessError):
+            bridge.require_banked_shard_witness(
+                self._payload(
+                    policy_stats={
+                        "decisions": 65,
+                        "worlds_searched": 0,
+                        "worlds_constructed": 260,
+                        "world_failure_reasons": {},
+                        "rollout_leaf_modes": {},
+                    },
+                    rollout_leaf=True,
+                )
+            )
+        # And a shard that DID search worlds is still refused, so the exemption is
+        # keyed on the failure and not on the empty mapping.
+        with self.assertRaises(bridge.BankedShardWitnessError):
+            bridge.require_banked_shard_witness(
+                self._payload(
+                    policy_stats={
+                        "decisions": 65,
+                        "worlds_searched": 65,
+                        "world_failure_reasons": {"crate_search: something": 1},
+                        "rollout_leaf_modes": {},
+                    },
+                    rollout_leaf=True,
+                )
+            )
         # And the sibling writer's shape: emitted unconditionally, so the columns are
         # PRESENT and zeroed with an empty mode map. Present keys are not engagement,
         # which is the same distinction `require_rollout_leaf_witness` makes per

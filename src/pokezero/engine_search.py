@@ -516,6 +516,50 @@ DEPTH_INSTRUMENTED_SEARCH_METHODS: tuple[str, ...] = tuple(
     name for name in LEAF_EVAL_SEARCH_METHODS.values() if name is not None
 )
 
+#: The ONE mode whose implementation is the in-process fall-through at the end of
+#: `_search`'s dispatch rather than a named method. Every other registered mode must
+#: have a dispatch branch, and the dispatch raises rather than substituting this
+#: one's leaf value -- see `require_leaf_eval_dispatched`, and A4's
+#: register-and-starve.
+LEAF_EVAL_IN_PROCESS_MODE = "hp_fraction"
+
+
+def require_leaf_eval_dispatched(leaf_eval: str) -> None:
+    """Refuse a registered mode that reached the end of `_search`'s dispatch.
+
+    A4'S REGISTER-AND-STARVE, and the reason it produced ZERO new failures. The
+    claim was that "a new leaf-eval path is either unregistered and unreachable, or
+    registered and required to carry its own reached-depth accumulation". Adding
+    ``"anything": None`` to `LEAF_EVAL_SEARCH_METHODS` satisfies neither horn: the
+    `None` sentinel exempts it from `DEPTH_INSTRUMENTED_SEARCH_METHODS` (which
+    filters the `None`s out), `EngineMctsConfig.__post_init__` accepts it because
+    membership is all it checks, and `_search`'s dispatch had NO final branch -- so
+    the config was accepted, no branch matched, and control fell into the in-process
+    tree. The leaves were then priced by `hp_fraction` while every shard, decision
+    row and cell id recorded the new mode's NAME. That is the false-witness class
+    arrived at from the registry side.
+
+    A NAMED FUNCTION rather than an inline `else: raise`, for the reason this module
+    already records for `_rollout_leaf_witness`: a named call is a mutation a battery
+    can delete and kill, and it can be driven directly with a synthetic mode instead
+    of only through a full search.
+
+    Scoped by VALUE. The `None` sentinel is a recorded decision not to instrument a
+    path that EXISTS; it is not a licence to have no path at all, and exactly one
+    mode's implementation is the fall-through.
+    """
+
+    if leaf_eval != LEAF_EVAL_IN_PROCESS_MODE:
+        raise EngineSearchWitnessError(
+            f"leaf_eval={leaf_eval!r} is REGISTERED in LEAF_EVAL_SEARCH_METHODS and "
+            "reached the end of `_search`'s dispatch without a branch, so its leaves "
+            f"would have been priced by {LEAF_EVAL_IN_PROCESS_MODE!r}'s in-process "
+            "tree while every shard, decision row and cell id recorded its own name. "
+            "Registration makes a mode SELECTABLE; it does not give it a search. Add "
+            "the dispatch branch, or remove the registry entry so the config refuses "
+            "the mode instead of silently substituting another path's leaf value."
+        )
+
 
 @dataclass(frozen=True)
 class EngineMctsConfig:
@@ -2434,6 +2478,22 @@ def require_rollout_leaf_witness(
             "arm and a report that priced with production's leaf value is the arm "
             "silently not running -- the exact defect this witness exists to catch."
         )
+    # THE SAME IDENTITY AS THE SHARD'S, on the per-decision surface. `rollout_modes`
+    # and `rollout_ledger["worlds"]` are incremented `+= weight` from one datum on one
+    # line pair, so their sum is an identity. Checked here because the modes mapping is
+    # otherwise read only for its KEYS -- which is what let the weighted accumulation
+    # go unfalsifiable on both surfaces at once.
+    if "rollout_leaf_worlds" in witness:
+        worlds = int(witness["rollout_leaf_worlds"])
+        tallied = sum(int(count) for count in modes.values())
+        if tallied != worlds:
+            raise EngineSearchWitnessError(
+                f"the witness's pricer tally does not sum to its world count: "
+                f"sum(rollout_leaf_modes)={tallied} != rollout_leaf_worlds={worlds}. "
+                "Both are accumulated `+= weight` from the same report in the same "
+                "pass, so a disagreement means one of the two is unweighted and a "
+                "collapsed draw is being counted once where it represents two worlds."
+            )
     rollouts_run = int(witness["rollouts_run"])
     leaves_priced = int(witness["leaves_priced"])
     if rollouts_run <= 0 or leaves_priced <= 0:
@@ -2555,6 +2615,91 @@ ROLLOUT_LEAF_SHARD_FIELDS = (
 #: holding a v1 shard" and points at the migration.
 ROLLOUT_LEAF_V1_WORLD_FIELD = "rollout_leaf_world_records"
 
+#: The three columns that are QUOTIENTS of the partition and therefore have no
+#: value at all when no rollout ran. v2 OMITS them in that case; v1 rendered them
+#: `None`. Named once because two checks read the same set from opposite sides --
+#: "these may be absent" and "these must be absent".
+ROLLOUT_LEAF_QUOTIENT_FIELDS = (
+    "rollout_terminal_fraction",
+    "rollout_fallback_fraction",
+    "rollout_mean_plies",
+)
+
+#: The key names by which a rollout-leaf telemetry block is IDENTIFIED, wherever a
+#: writer happened to file it.
+#:
+#: WHY A MARKER SET AND NOT A PARENT-KEY NAME. `require_banked_shard_witness` finds
+#: blocks by looking under the key `engine_mcts`, and that is correct for the
+#: witness it checks. It is NOT sufficient for the schema, because the rollout
+#: columns reach disk under FOUR different parent spellings, written by four
+#: writers:
+#:
+#:   * `engine_mcts.policy_stats`  -- `foulplay_bridge._write_json`;
+#:   * `per_seat[seat].policy_stats` -- `scripts/foulplay_paired_eval.py`'s merged
+#:     shard, which copies the whole mapping through verbatim;
+#:   * a ROOT-LEVEL `policy_stats` -- `scripts/mcts_acceptance_h2h.py`;
+#:   * `engine_stats` -- `scripts/hc_depth_grid.py`.
+#:
+#: Only the first is under an `engine_mcts` key with a `decisions` field, so a
+#: parent-keyed walk passes the other three vacuously. Keying off the block's OWN
+#: columns finds all four and does not have to be updated when a fifth writer picks
+#: a fifth spelling.
+#:
+#: DELIBERATELY NOT `startswith("rollout")`: the bridge's `engine_mcts` block and
+#: the per-decision witness both carry rollout-prefixed CONFIG echoes and knobs
+#: (`rollout_leaf`, `rollout_count`, `rollout_max_plies`), and treating those as an
+#: unstamped shard block would refuse every legitimate payload.
+ROLLOUT_LEAF_SHARD_MARKERS: frozenset[str] = frozenset(ROLLOUT_LEAF_SHARD_FIELDS) | {
+    ROLLOUT_LEAF_V1_WORLD_FIELD
+}
+
+
+def iter_rollout_leaf_shard_blocks(document: Any) -> "list[Mapping[str, Any]]":
+    """Every rollout-leaf telemetry block anywhere in a LOADED document.
+
+    Recursive for the same reason `_engine_mcts_blocks` is -- the comparison and
+    paired shards nest one block per arm, and the arbiter reads exactly those --
+    but keyed on the block's own columns rather than on its parent's name, because
+    four writers file the same mapping under four different names.
+    """
+
+    found: list[Mapping[str, Any]] = []
+    if isinstance(document, Mapping):
+        if ROLLOUT_LEAF_SHARD_MARKERS & {str(key) for key in document}:
+            found.append(document)
+        for value in document.values():
+            found.extend(iter_rollout_leaf_shard_blocks(value))
+    elif isinstance(document, (list, tuple)) and not isinstance(document, (str, bytes)):
+        for value in document:
+            found.extend(iter_rollout_leaf_shard_blocks(value))
+    return found
+
+
+def require_rollout_leaf_document_schema(document: Any) -> None:
+    """THE READER-SIDE REFUSAL, on the other side of the disk.
+
+    WHY THIS FUNCTION EXISTS, stated as the correction it is. An earlier revision
+    of `require_banked_shard_witness` claimed that "a shard written past a deleted
+    writer-side guard is REFUSED ON READ instead of pooled. Both frames -- opposite
+    sides of the artifact -- would have to be deleted together". That was FALSE.
+    `require_rollout_leaf_shard_schema` had NO read-path call site: its only two
+    non-test callers were `require_banked_shard_witness` (write side) and
+    `migrate_rollout_leaf_shard_v1` (write side), and the first NESTED the second,
+    so deleting the ONE line `require_banked_shard_witness(payload)` removed BOTH
+    refusals at once. The "both frames must go" defence described a topology the
+    code did not have.
+
+    So the reader side is now real, and it is reached by a different call chain
+    from a different process: `scripts/foulplay_paired_eval.py` calls it on the
+    bridge summary it loads off disk, and `scripts/foulplay_power_report.py` calls
+    it on every merged shard it pools. Neither import path passes through
+    `foulplay_bridge`, which is what makes the two deletions independent -- and the
+    battery proves it by deleting each alone and both together.
+    """
+
+    for block in iter_rollout_leaf_shard_blocks(document):
+        require_rollout_leaf_shard_schema(block)
+
 
 def require_rollout_leaf_shard_schema(shard: Mapping[str, Any]) -> None:
     """Refuse a shard whose rollout-leaf block is not this reader's schema.
@@ -2630,17 +2775,34 @@ def require_rollout_leaf_shard_schema(shard: Mapping[str, Any]) -> None:
     # `rollouts_run == 0` is the one legitimately partial block: the arm engaged and
     # no rollout launched, so the three quotients have no denominator. The COUNTS are
     # still required -- their absence is a dropped field, not an undefined ratio.
+    #
+    # AND THE EXEMPTION IS SYMMETRIC, which the first revision got wrong in the
+    # flattering direction. Making the quotients merely OPTIONAL at zero accepted a
+    # block that carried them anyway with the value `None` -- which is exactly the v1
+    # shape (`rollout_terminal_fraction: None` when the seam never ran, emitted
+    # unconditionally), and exactly what the sibling bridge branch writes on a
+    # FLAG-OFF shard: thirteen rollout keys, zeroed counts, `None` fractions, stamped
+    # v2. Under v2 that block does not exist at all -- `to_dict` emits nothing when
+    # `rollout_leaf_modes` is empty and omits the quotients when `rollouts_run` is 0,
+    # and the migration pops them -- so a v2-stamped block carrying a quotient at
+    # zero rollouts is a v1 writer wearing a v2 stamp. Refused BY NAME rather than
+    # accepted as "partial".
     if int(shard.get("rollouts_run") or 0) == 0:
-        missing = [
-            name
-            for name in missing
-            if name
-            not in (
-                "rollout_terminal_fraction",
-                "rollout_fallback_fraction",
-                "rollout_mean_plies",
+        missing = [name for name in missing if name not in ROLLOUT_LEAF_QUOTIENT_FIELDS]
+        undefined = [name for name in ROLLOUT_LEAF_QUOTIENT_FIELDS if name in shard]
+        if undefined:
+            raise EngineShardSchemaError(
+                f"this shard reports rollouts_run={shard.get('rollouts_run')!r} and "
+                f"still carries {', '.join(undefined)} "
+                f"({', '.join(f'{name}={shard[name]!r}' for name in undefined)}). A "
+                "quotient of an empty partition has no value: v1 rendered it `None` "
+                f"and emitted the block unconditionally, so a v{ROLLOUT_LEAF_SHARD_SCHEMA}"
+                "-stamped block carrying one is a v1 writer wearing this schema's "
+                "stamp. v2 OMITS these three at zero rollouts -- see "
+                "`EngineMctsStats.to_dict` and `migrate_rollout_leaf_shard_v1`, which "
+                "pops them -- and `None` is the value a pooling reader averages as "
+                "though it were a measurement."
             )
-        ]
     if missing:
         raise EngineShardSchemaError(
             f"a v{ROLLOUT_LEAF_SHARD_SCHEMA} rollout-leaf shard block is missing "
@@ -2658,17 +2820,51 @@ def require_rollout_leaf_shard_schema(shard: Mapping[str, Any]) -> None:
             "had the same columns as the rest."
         )
     rollouts_run = int(shard["rollouts_run"])
-    if rollouts_run == 0:
-        return
     terminal = int(shard["rollout_terminal_hits"])
     cap = int(shard["rollout_cap_hits"])
     dead = int(shard["rollout_dead_ends"])
+    # THE PARTITION IS CHECKED AT ZERO TOO. The first revision returned early on
+    # `rollouts_run == 0`, which short-circuited every remaining check -- so a block
+    # reporting `rollouts_run=0` alongside `rollout_cap_hits=5` was accepted, and
+    # `rollouts_run=0` is precisely what a flag-off unconditional writer emits. The
+    # identity is not undefined at zero, it is TRIVIAL at zero (0 + 0 + 0 == 0), and a
+    # non-trivial reading is a counter wired to the wrong population. Only the
+    # QUOTIENTS need a non-zero denominator, and only they are gated below.
     if terminal + cap + dead != rollouts_run:
         raise EngineShardSchemaError(
             f"the shard's rollout partition does not account for every rollout: "
             f"terminal={terminal} + cap={cap} + dead_ends={dead} != "
             f"rollouts_run={rollouts_run}."
         )
+    # THE WORLD COUNTER AGAINST THE PRICER TALLY. `rollout_leaf_modes` and
+    # `rollout_leaf_worlds` are two surfaces of ONE datum written in one pass
+    # (`+= weight` into both), so their sum is an identity rather than a coincidence
+    # -- and it is the identity that makes the WEIGHTED accumulation falsifiable.
+    # Without it, `rollout_leaf_modes[mode] += weight -> += 1` is invisible from any
+    # artifact: the modes mapping is only ever read for its KEYS, so the seventh
+    # instance of the Counter drift this module's own docstring catalogues had no
+    # value-level check anywhere. `sum(modes) == worlds` is that check.
+    modes = shard["rollout_leaf_modes"]
+    if not isinstance(modes, Mapping):
+        raise EngineShardSchemaError(
+            f"the shard's rollout_leaf_modes is {modes!r}, not a mapping of pricer "
+            "name to world count."
+        )
+    worlds = int(shard["rollout_leaf_worlds"])
+    tallied = sum(int(count) for count in modes.values())
+    if tallied != worlds:
+        raise EngineShardSchemaError(
+            f"the shard's pricer tally does not sum to its world count: "
+            f"sum(rollout_leaf_modes)={tallied} != rollout_leaf_worlds={worlds}. Both "
+            "are accumulated `+= weight` from the same datum in the same pass, so "
+            "they are one number written twice -- a disagreement means one of the two "
+            "accumulations is unweighted, which UNDER-COUNTS a collapsed draw (two "
+            "identical belief draws share one search, so `+= 1` records one world "
+            "where two were represented) and is the drift this module has now seen "
+            "seven times on seven surfaces."
+        )
+    if rollouts_run == 0:
+        return
     expected = (cap + dead) / rollouts_run
     if abs(float(shard["rollout_fallback_fraction"]) - expected) > 1e-9:
         raise EngineShardSchemaError(
@@ -2709,7 +2905,26 @@ def migrate_rollout_leaf_shard_v1(shard: Mapping[str, Any]) -> dict[str, Any]:
         raise EngineShardSchemaError(
             f"not a v1 rollout-leaf shard block: no {ROLLOUT_LEAF_V1_WORLD_FIELD!r}."
         )
-    collapsed = int(shard.get("worlds_collapsed") or 0)
+    # ABSENT IS NOT ZERO, and this module says so three hundred lines up before doing
+    # the opposite here. `int(shard.get("worlds_collapsed") or 0)` read a shard that
+    # never recorded the field as a shard that recorded no collapses -- and
+    # `worlds_collapsed == 0` is the ENTIRE condition under which this migration
+    # claims to be value-preserving, so reading its absence as a pass is reading the
+    # premise of the proof off a field that was not measured. Both conditions are now
+    # required to be PRESENT; a writer that does not report them cannot be migrated,
+    # because "no collapses happened" and "this writer does not count collapses" are
+    # different statements and only the first licenses the rename.
+    for name in ("worlds_collapsed", "rollout_dead_ends"):
+        if name not in shard:
+            raise EngineShardSchemaError(
+                f"refusing to migrate a shard that carries no {name!r}. The rename is "
+                "value-preserving only while worlds_collapsed == 0 and "
+                "rollout_dead_ends == 0, so a shard that does not report one of them "
+                "does not carry the evidence the migration's own proof rests on. "
+                "ABSENT IS NOT ZERO: reading a missing count as a passing count is "
+                "how a report tally gets published under a world count's name."
+            )
+    collapsed = int(shard["worlds_collapsed"] or 0)
     if collapsed != 0:
         raise EngineShardSchemaError(
             f"refusing to migrate a shard with worlds_collapsed={collapsed}. v1's "
@@ -2718,7 +2933,7 @@ def migrate_rollout_leaf_shard_v1(shard: Mapping[str, Any]) -> dict[str, Any]:
             "number only when no draw was collapsed. Renaming here would publish a "
             "report count under a world count's name."
         )
-    dead = int(shard.get("rollout_dead_ends") or 0)
+    dead = int(shard["rollout_dead_ends"] or 0)
     if dead != 0:
         raise EngineShardSchemaError(
             f"refusing to migrate a shard with rollout_dead_ends={dead}. v1's "
@@ -2745,17 +2960,53 @@ def migrate_rollout_leaf_shard_v1(shard: Mapping[str, Any]) -> dict[str, Any]:
     rollouts_run = int(shard.get("rollouts_run") or 0)
     if rollouts_run:
         cap = int(shard["rollout_cap_hits"])
-        migrated["rollout_terminal_fraction"] = (
-            int(shard["rollout_terminal_hits"]) / rollouts_run
-        )
-        migrated["rollout_fallback_fraction"] = (cap + dead) / rollouts_run
-        migrated["rollout_mean_plies"] = int(shard["rollout_plies"]) / rollouts_run
+        recomputed = {
+            "rollout_terminal_fraction": int(shard["rollout_terminal_hits"])
+            / rollouts_run,
+            "rollout_fallback_fraction": (cap + dead) / rollouts_run,
+            "rollout_mean_plies": int(shard["rollout_plies"]) / rollouts_run,
+        }
+        # AND IT DOES NOT OVERWRITE A BANKED VALUE IN SILENCE. The first revision
+        # assigned all three unconditionally while the docstring called the migration
+        # "provably value-preserving", and the two statements were not compatible: a v1
+        # shard carrying `rollout_terminal_fraction: 0.99` and `rollout_mean_plies:
+        # 999.0` came out the other side as 0.8 and 20.0 with nothing recording that
+        # anything had changed. Only `rollout_fallback_fraction` is a DEFINED
+        # re-derivation here (v1's numerator was `cap`, v2's is `cap + dead`, and `dead
+        # == 0` is enforced above, so the two rules give the same number); the other
+        # two have the same definition under both schemas, so a disagreement is not a
+        # schema difference -- it is a shard whose printed quotient does not follow
+        # from its own counts, and re-deriving it would launder that.
+        #
+        # So: absent -> filled in (v1 rendered these `None` when nothing ran, and the
+        # `None` is dropped by the same rule). Present and equal -> left alone. Present
+        # and DIFFERENT -> refused, with both values named. That is what makes
+        # "value-preserving" a checked property rather than a description of intent.
+        for name, value in recomputed.items():
+            banked = migrated.get(name)
+            if banked is None:
+                migrated[name] = value
+                continue
+            if abs(float(banked) - value) > 1e-9:
+                raise EngineShardSchemaError(
+                    f"refusing to migrate a shard whose banked {name} "
+                    f"({banked!r}) does not equal the value its own counts imply "
+                    f"({value!r}). "
+                    + (
+                        "v1's fallback numerator was `cap` and v2's is `cap + "
+                        "dead_ends`, but `rollout_dead_ends == 0` is enforced above, so "
+                        "the two rules agree here and a difference cannot be the "
+                        "schema change."
+                        if name == "rollout_fallback_fraction"
+                        else "This column has the SAME definition under v1 and v2, so "
+                        "the migration has no licence to change it."
+                    )
+                    + " Overwriting it would publish a different number under a "
+                    "'provably value-preserving' rename."
+                )
+            migrated[name] = value
     else:
-        for name in (
-            "rollout_terminal_fraction",
-            "rollout_fallback_fraction",
-            "rollout_mean_plies",
-        ):
+        for name in ROLLOUT_LEAF_QUOTIENT_FIELDS:
             migrated.pop(name, None)
     require_rollout_leaf_shard_schema(migrated)
     return migrated
@@ -3543,6 +3794,25 @@ class EngineMctsPolicy:
             return self._search_hp_fraction_crate(context, worlds, rng)
         if self._config.leaf_eval == "rollout_crate":
             return self._search_rollout_crate(context, worlds, rng)
+        # THE ELSE-RAISE, and the attack it closes. A4's claim was that "a new
+        # leaf-eval path is either unregistered and unreachable, or registered and
+        # required to carry its own reached-depth accumulation". REGISTER-AND-STARVE
+        # broke it, and the review that found it measured ZERO new failures: adding
+        # `"anything": None` to `LEAF_EVAL_SEARCH_METHODS` makes the mode SELECTABLE
+        # (`__post_init__` validates membership) and exempt from the instrumentation
+        # guard (`DEPTH_INSTRUMENTED_SEARCH_METHODS` skips the `None`s), and this
+        # dispatch had no final branch -- so the config was accepted, no dispatch
+        # matched, and control fell into the block below. The leaves were then priced
+        # by `hp_fraction` while every artifact recorded the new mode's NAME. That is
+        # the same class as the false witness: a row whose provenance field names a
+        # pricer that never ran.
+        #
+        # Scoped by VALUE, not by "is it in the registry": the fall-through block
+        # below IS `hp_fraction`'s implementation and nothing else's, so the only
+        # `leaf_eval` that may reach it is that one. A registry entry mapped to `None`
+        # is a recorded decision NOT to instrument a path that exists; it is not a
+        # licence to have no path at all.
+        require_leaf_eval_dispatched(self._config.leaf_eval)
 
         aggregated: Counter = Counter()
         search_started = time.perf_counter()
@@ -6306,6 +6576,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
     print(json.dumps(printable, indent=2))
     if args.out:
+        # THE FIFTH WRITER, this module's own CLI. Its `engine_mcts` block is
+        # `stats.to_dict()` DIRECTLY -- so it has a `decisions` field and no nested
+        # `policy_stats`, i.e. exactly the shape `require_banked_shard_witness` refuses
+        # -- and it never went near `_write_json`. Refused on the column-keyed walk
+        # instead, which is the check that is actually about this payload.
+        require_rollout_leaf_document_schema(report)
         with open(args.out, "w") as handle:
             json.dump(report, handle, indent=2)
     fallback_count = policy.stats.fallback_decisions

@@ -298,6 +298,16 @@ def main(argv: list[str] | None = None) -> int:
         }
         if depth is not None and hasattr(candidate, "stats"):
             payload["engine_stats"] = candidate.stats.to_dict()
+        # THE FOURTH WRITER, and the THIRD SPELLING of the same mapping:
+        # `engine_stats`, not `engine_mcts.policy_stats` and not a root
+        # `policy_stats`. A guard that finds blocks by their parent's key name has to
+        # learn each spelling; this one keys off the block's own columns and therefore
+        # already covers a fifth writer that picks a fifth name.
+        from pokezero.engine_search import (  # noqa: PLC0415
+            require_rollout_leaf_document_schema,
+        )
+
+        require_rollout_leaf_document_schema(payload)
         target = out_dir / f"{cell.replace(':', '-').replace('/', '_')}.json"
         target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
         print(

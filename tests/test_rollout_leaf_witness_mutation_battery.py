@@ -20,8 +20,11 @@ below are the ones that make the pair checkable:
   * survivors are exactly the declared equivalences, each with a written argument;
   * every kill names a test that exists;
   * every mutant family is represented, so the battery cannot narrow to one finding;
-  * the CONTROLS produced their required verdicts -- including the three that must
-    read DID NOT RUN and never KILLED;
+  * the CONTROLS produced their required verdicts -- all SEVEN of them, including the
+    three that must read DID NOT RUN and never KILLED, the one that must read NOT
+    APPLIED, and the one whose only failures are SUBTEST failures and must still read
+    KILLED (requiring a bare `FAILED <nodeid>` line scored three real kills as DID NOT
+    RUN);
   * the totals are recomputed from the mutant list rather than read off the header.
 """
 
@@ -71,9 +74,22 @@ class RolloutLeafWitnessMutationBatteryTest(unittest.TestCase):
     def test_the_mutated_files_have_not_changed_since_the_recorded_run(self) -> None:
         """The counts are about a TREE. A recorded sweep over a tree that has since
         moved says nothing about this one."""
+        # TARGETS ARE NO LONGER ALL IN ONE DIRECTORY. B1's independent-deletion
+        # mutants edit `scripts/foulplay_paired_eval.py` and
+        # `scripts/foulplay_power_report.py` -- the two READ-path call sites, which are
+        # the whole point of that family -- so a hardcoded `src/pokezero/` prefix
+        # reported them as "no longer exists". Resolved against the harness's own
+        # target list rather than by adding a second hardcoded directory, so a third
+        # location does not silently drop out of the pin.
+        by_name = {path.name: path for path in harness.ALL_TARGETS}
+        self.assertEqual(
+            sorted(by_name),
+            sorted(self.doc["targets"]),
+            "the recorded targets must be exactly the harness's targets",
+        )
         for name, digest in self.doc["targets"].items():
             with self.subTest(target=name):
-                path = ROOT / "src" / "pokezero" / name
+                path = by_name[name]
                 self.assertTrue(path.exists(), f"{name} no longer exists")
                 self.assertEqual(_sha256(path), digest)
 
@@ -143,6 +159,12 @@ class RolloutLeafWitnessMutationBatteryTest(unittest.TestCase):
             "A4 instrumentation",
             "A5 retraction",
             "A6 schema",
+            # Round 4's three families, required for the same reason the others are:
+            # a battery that quietly narrows to the previous round's findings is a
+            # battery about the code that was already fixed.
+            "B1 independent guards",
+            "B4 new survivors",
+            "B5 narrower items",
             "prior rounds",
         ):
             with self.subTest(family=required):
@@ -153,12 +175,33 @@ class RolloutLeafWitnessMutationBatteryTest(unittest.TestCase):
 
         A syntax error, a hang and a deleted killer module must each read DID NOT
         RUN and never KILLED; a null edit must read SURVIVED; a known break must
-        read KILLED. Without all five, the battery is a number about a runner nobody
-        validated.
+        read KILLED; an anchor that cannot match must read NOT APPLIED; a break whose
+        only failures are SUBTEST failures must read KILLED. Without all SEVEN, the
+        battery is a number about a runner nobody validated.
+
+        The sixth was missing, and NOT APPLIED is not a cosmetic verdict: it already
+        caught four ambiguous anchors in pass 1. A classifier that defaulted an
+        unapplied mutant to SURVIVED would score a hole as a finding; one that
+        defaulted it to KILLED would score a hole as a kill. Only a control says which.
         """
         controls = {e["name"]: e for e in self.doc["controls"]}
         required = {name: verdict for name, verdict, _edits in harness.CONTROLS}
         self.assertEqual(sorted(controls), sorted(required))
+        # ALL SIX MODES THE CLASSIFIER CAN EMIT are represented, so no verdict is
+        # asserted about a state nothing was ever driven into.
+        self.assertEqual(
+            {"SURVIVED", "KILLED", "DID NOT RUN", "NOT APPLIED"},
+            set(required.values()),
+            "every verdict the classifier can emit needs a control that produces it",
+        )
+        self.assertEqual(len(required), 7)
+        # THE SEVENTH: a mutant whose only failures are `SUBFAILED(...)` lines. The
+        # classifier required a `FAILED <nodeid>` line and therefore read THREE GENUINE
+        # KILLS as DID NOT RUN -- flattering, because a DID NOT RUN is excluded from the
+        # kill denominator and reads as an instrument problem rather than as a covered
+        # defect. The three were all asserted `subTest`-per-field, which is itself
+        # deliberate (a fixture that perturbs two things at once pins neither).
+        self.assertEqual(controls["_control_subtest_only"]["status"], "KILLED")
         for name, verdict in required.items():
             with self.subTest(control=name):
                 self.assertEqual(controls[name]["status"], verdict)
@@ -166,20 +209,63 @@ class RolloutLeafWitnessMutationBatteryTest(unittest.TestCase):
             with self.subTest(control=name):
                 self.assertEqual(required[name], "DID NOT RUN")
                 self.assertNotEqual(controls[name]["status"], "KILLED")
+        # THE SIXTH: it must be NOT APPLIED and must not be scored as either of the
+        # two verdicts that would flatter the count.
+        self.assertEqual(controls["_control_not_applied"]["status"], "NOT APPLIED")
+        self.assertNotIn(
+            controls["_control_not_applied"]["status"], ("SURVIVED", "KILLED")
+        )
+        self.assertIn("anchor matched 0 times", controls["_control_not_applied"]["detail"])
 
     def test_the_run_imported_this_tree(self) -> None:
         """`tests/conftest.py` MOVES its own `src` to the front of `sys.path`, so a
         PYTHONPATH-supplied mutant is overridden and appears to survive without ever
-        loading. The harness prints the resolved module path from inside the run."""
+        loading. The harness prints the resolved module path from inside the run.
+
+        B3. PATH-INDEPENDENT, and it was not. The recorded strings were ABSOLUTE
+        (`/Users/.../seltune-b1b2/src/pokezero/...`) while `ROOT` is derived from
+        `__file__`, so both `assertIn`s failed in every checkout except the one
+        directory that recorded the run -- this gate was RED IN ANY CLONE, which is the
+        "works only in the single clone that happens to hold it" class the
+        rejected-experiment provenance note in `tests/data/` already documents.
+
+        The property is "the run imported THIS TREE, not a sibling reachable on
+        PYTHONPATH". A repo-RELATIVE path states that and says nothing about which
+        directory the repo is in. The sha256 pins were never the problem: they are
+        content-addressed and relocate for free.
+        """
         resolved = set(self.doc["resolved_modules"])
-        self.assertIn(
-            f"RESOLVED_ENGINE={ROOT / 'src' / 'pokezero' / 'engine_search.py'}", resolved
-        )
-        self.assertIn(
-            f"RESOLVED_BRIDGE={ROOT / 'src' / 'pokezero' / 'foulplay_bridge.py'}",
-            resolved,
-        )
+        self.assertIn("RESOLVED_ENGINE=src/pokezero/engine_search.py", resolved)
+        self.assertIn("RESOLVED_BRIDGE=src/pokezero/foulplay_bridge.py", resolved)
         self.assertEqual(len(resolved), 2, f"a run imported something else: {resolved}")
+        # NO ABSOLUTE PATH SURVIVES ANYWHERE IN THE ARTIFACT. Scoped by VALUE over the
+        # whole document rather than by re-checking the two keys just asserted: the
+        # defect was one field, and the class is "this artifact only reads correctly in
+        # the directory that wrote it".
+        def _strings(node):
+            if isinstance(node, str):
+                yield node
+            elif isinstance(node, dict):
+                for value in node.values():
+                    yield from _strings(value)
+            elif isinstance(node, list):
+                for value in node:
+                    yield from _strings(value)
+
+        absolute = sorted(
+            {s for s in _strings(self.doc) if s.startswith("/") or ":\\" in s}
+        )
+        self.assertEqual(
+            absolute,
+            [],
+            "the recorded run must be readable in any checkout; these strings pin it "
+            f"to one directory: {absolute}",
+        )
+        # And the walker is discriminating: it finds an absolute path when there is one.
+        self.assertEqual(
+            sorted(_strings({"a": {"b": ["/abs/path", "rel/path"]}})),
+            ["/abs/path", "rel/path"],
+        )
 
     def test_the_totals_are_derived_and_not_transcribed(self) -> None:
         mutants = self.doc["mutants"]

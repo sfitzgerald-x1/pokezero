@@ -18,13 +18,23 @@ mutants that never ran reports as a clean sweep. Three controls therefore have t
   * `_control_deleted_killer` -- the killer test module removed;
   * `_control_hang`          -- an unbounded sleep at import (subprocess timeout).
 
-Two more prove the classifier can produce its other verdicts at all:
+Three more prove the classifier can produce its other verdicts at all, so all SIX
+modes it can emit are exercised before any mutant count is trusted:
 
-  * `_control_null`     -- no edit. Must read SURVIVED.
-  * `_control_positive` -- a one-line break with a known killer. Must read KILLED.
+  * `_control_null`        -- no edit. Must read SURVIVED.
+  * `_control_positive`    -- a one-line break with a known killer. Must read KILLED.
+  * `_control_not_applied` -- an anchor that matches ZERO times. Must read NOT APPLIED,
+    and must NOT read SURVIVED. This is the sixth mode and it was the one control the
+    battery did not have, even though NOT APPLIED is the verdict that already caught
+    four ambiguous anchors in pass 1: an unapplied mutant whose verdict defaulted to
+    SURVIVED would be a hole scored as a finding, and one whose verdict defaulted to
+    KILLED would be a hole scored as a kill. Both directions are wrong and only a
+    control says which one the classifier does.
 
 KILLED requires, together: a non-zero return code, at least one reported test FAILURE,
-`errors == 0`, and at least one `FAILED <nodeid>` line naming the test that died. A
+`errors == 0`, and at least one `FAILED <nodeid>` or `SUBFAILED(...) <nodeid>` line
+naming the test that died -- the second spelling is how pytest reports a SUBTEST
+failure, and requiring only the first scored three genuine kills as DID NOT RUN. A
 run that exits non-zero with zero failures is a DID NOT RUN, not a kill.
 
 MUTANTS ARE WRITTEN INTO THE TREE, not supplied by `PYTHONPATH`. `tests/conftest.py`
@@ -72,6 +82,38 @@ RESOLVED_PROBE = (
     "print('RESOLVED_ENGINE=' + _es.__file__); "
     "print('RESOLVED_BRIDGE=' + _fb.__file__)"
 )
+
+
+def _resolved_relative(line: str) -> str:
+    """``RESOLVED_ENGINE=<abs>`` -> ``RESOLVED_ENGINE=src/pokezero/engine_search.py``.
+
+    B3. THE RECORDED FORM HAS TO RELOCATE, and the first version did not. The probe
+    prints `module.__file__`, which is absolute, and the artifact persisted those
+    strings verbatim -- so `reports/artifacts/rollout_leaf_witness_mutation_battery.json`
+    carried `/Users/.../seltune-b1b2/src/pokezero/...` and
+    `test_the_run_imported_this_tree` compared them against a `ROOT` derived from
+    `__file__`. The battery's own gate was therefore RED IN EVERY CHECKOUT except the
+    one directory that happened to record it -- the same "single-clone-only" class as
+    the rejected-experiment provenance note in `tests/data/`.
+
+    The property being proved is "the run imported THIS TREE, not a sibling copy
+    reachable on PYTHONPATH". A path relative to `ROOT` states exactly that and states
+    nothing about which directory `ROOT` is. The harness's LIVE check stays absolute,
+    because there both sides are derived from `ROOT` in the same process; only the
+    persisted form is relativised.
+
+    A path outside the tree has no relative form and is returned unchanged, so it
+    still trips the `unexpected` refusal rather than being silently normalised into
+    looking local.
+    """
+
+    marker, sep, raw = line.partition("=")
+    if not sep:
+        return line
+    try:
+        return f"{marker}={Path(raw).resolve().relative_to(ROOT).as_posix()}"
+    except ValueError:
+        return line
 
 
 class InstrumentFailure(RuntimeError):
@@ -145,11 +187,11 @@ PARTITION_CHECK_OFF = (
     "    if False:\n"
 )
 SHARD_PARTITION_CHECK = (
-    '    dead = int(shard["rollout_dead_ends"])\n'
+    "    # QUOTIENTS need a non-zero denominator, and only they are gated below.\n"
     "    if terminal + cap + dead != rollouts_run:\n"
 )
 SHARD_PARTITION_CHECK_OFF = (
-    '    dead = int(shard["rollout_dead_ends"])\n'
+    "    # QUOTIENTS need a non-zero denominator, and only they are gated below.\n"
     "    if False:\n"
 )
 QUOTIENT_CHECK = "    if abs(fallback - expected) > 1e-9:\n"
@@ -157,13 +199,82 @@ DEGENERATE_CHECK = "    if rollouts_run <= 0 or leaves_priced <= 0:\n"
 EMPTY_STATS_BRANCH = "        if not isinstance(stats, Mapping) or not stats:\n"
 MISSING_STATS_BRANCH = '        if "policy_stats" not in block:\n'
 ARM_CLAIM_CROSSCHECK = '        if "rollout_leaf" in block:\n'
-ARM_CLAIMED_NOT_ENGAGED = "            if claimed and not engaged:\n"
+ARM_CLAIMED_NOT_ENGAGED = (
+    "            if claimed and not engaged and not every_world_failed:\n"
+)
 ARM_ENGAGED_NOT_CLAIMED = "            if engaged and not claimed:\n"
 RECURSE_INTO_VALUES = (
     "        for value in payload.values():\n"
     "            found.extend(_engine_mcts_blocks(value))\n"
 )
 NO_POINT_RATIO_ANCHOR = "    # NO POINT RATIO, because the two measurements of it disagree"
+
+# ---- B1: the two boundary guards, and the reader on the other side of the disk --
+# The witness call and the schema call are SEPARATE STATEMENTS now. Deleting either
+# alone, and deleting both together, are three distinct mutants -- which is the whole
+# point: the previous topology had the schema check NESTED inside the witness guard,
+# so one deletion removed both and the "both frames must go" defence did not exist.
+BOUNDARY_SCHEMA_CALL = "    require_rollout_leaf_document_schema(payload)\n"
+READER_PAIRED_EVAL_CALL = "    require_rollout_leaf_document_schema(summary)\n"
+READER_POWER_REPORT_CALL = "        require_rollout_leaf_document_schema(payload)\n"
+# The two stdout writers are TEXTUALLY IDENTICAL, so each is anchored by the unique
+# stderr line above it. `_apply` refuses an anchor that matches twice, which is why
+# NOT APPLIED exists as a separate verdict -- and why it is better to disambiguate.
+PRINT_THROUGH_THE_FUNNEL = (
+    '        print(f"controlled_foulplay_summary: {args.summary_out}", file=sys.stderr)\n'
+    "    if args.json:\n"
+    "        # THROUGH THE GUARDED FUNNEL, because this text is byte-identical to what\n"
+    "        # `_write_json` writes and with `--json` alone plus a shell redirect it is the\n"
+    "        # ONLY copy that reaches disk. It was unguarded.\n"
+    "        print(_shard_json_text(payload))\n"
+)
+PRINT_UNGUARDED_AGAIN = (
+    '        print(f"controlled_foulplay_summary: {args.summary_out}", file=sys.stderr)\n'
+    "    if args.json:\n"
+    "        print(json.dumps(payload, indent=2, sort_keys=True))\n"
+)
+BLOCK_FINDER_MARKERS = (
+    "        if ROLLOUT_LEAF_SHARD_MARKERS & {str(key) for key in document}:\n"
+)
+BLOCK_FINDER_RECURSION = (
+    "        for value in document.values():\n"
+    "            found.extend(iter_rollout_leaf_shard_blocks(value))\n"
+)
+
+# ---- B4: the four survivors ------------------------------------------------------
+SCHEMA_VERSION_LITERAL = "ROLLOUT_LEAF_SHARD_SCHEMA = 2\n"
+MIGRATION_SELF_CHECK = "    require_rollout_leaf_shard_schema(migrated)\n"
+MODES_WEIGHT_LINE = "                self.stats.rollout_leaf_modes[mode] += weight\n"
+DECISION_MODES_WEIGHT_LINE = "                rollout_modes[mode] += weight\n"
+WITNESS_FALLBACK_NUMERATOR = (
+    '    fallback = float(witness["rollout_fallback_fraction"])\n'
+    "    expected = (cap + dead) / rollouts_run\n"
+)
+WITNESS_FALLBACK_NUMERATOR_CAP_ONLY = (
+    '    fallback = float(witness["rollout_fallback_fraction"])\n'
+    "    expected = cap / rollouts_run\n"
+)
+MODES_TALLY_CHECK = (
+    "    tallied = sum(int(count) for count in modes.values())\n"
+    "    if tallied != worlds:\n"
+)
+MODES_TALLY_CHECK_OFF = (
+    "    tallied = sum(int(count) for count in modes.values())\n"
+    "    if False:\n"
+)
+WITNESS_TALLY_CHECK = "        if tallied != worlds:\n"
+
+# ---- B5: the narrower items ------------------------------------------------------
+MIGRATION_ABSENT_LOOP = (
+    '    for name in ("worlds_collapsed", "rollout_dead_ends"):\n'
+)
+MIGRATION_OVERWRITE_REFUSAL = "            if abs(float(banked) - value) > 1e-9:\n"
+ZERO_ROLLOUT_QUOTIENT_REFUSAL = "        if undefined:\n"
+DISPATCH_ELSE_RAISE = "        require_leaf_eval_dispatched(self._config.leaf_eval)\n"
+IN_PROCESS_MODE_CHECK = "    if leaf_eval != LEAF_EVAL_IN_PROCESS_MODE:\n"
+CROSSCHECK_ENGAGED_BY_VALUE = (
+    "            engaged = ROLLOUT_LEAF_SHIPPED_MODE in named\n"
+)
 # The `_search_model` site is the only textually UNIQUE one: it accumulates
 # `+= weight` (per world, weighted by the collapse multiplicity) while the two
 # sequential paths share `+= 1` verbatim. Anchoring on the shared text matched
@@ -434,7 +545,160 @@ MUTANTS: list[tuple[str, str, list[tuple[Path, str, str]]]] = [
         "prior rounds",
         [(ENGINE, DEGENERATE_CHECK, "    if False:\n")],
     ),
+    # ---- B1: independent deletion of each boundary guard, and of both -----------
+    (
+        "b1_delete_the_writer_side_SCHEMA_call_only",
+        "B1 independent guards",
+        [(BRIDGE, BOUNDARY_SCHEMA_CALL, "")],
+    ),
+    (
+        "b1_delete_the_writer_side_WITNESS_call_only",
+        "B1 independent guards",
+        [(BRIDGE, BOUNDARY_CALL, "")],
+    ),
+    (
+        "b1_delete_BOTH_writer_side_calls",
+        "B1 independent guards",
+        [(BRIDGE, BOUNDARY_CALL, ""), (BRIDGE, BOUNDARY_SCHEMA_CALL, "")],
+    ),
+    (
+        "b1_delete_the_paired_eval_READER_call",
+        "B1 independent guards",
+        [(ROOT / "scripts" / "foulplay_paired_eval.py", READER_PAIRED_EVAL_CALL, "")],
+    ),
+    (
+        "b1_delete_the_power_report_READER_call",
+        "B1 independent guards",
+        [(ROOT / "scripts" / "foulplay_power_report.py", READER_POWER_REPORT_CALL, "")],
+    ),
+    (
+        "b1_delete_EVERY_guard_writer_and_reader",
+        "B1 independent guards",
+        [
+            (BRIDGE, BOUNDARY_CALL, ""),
+            (BRIDGE, BOUNDARY_SCHEMA_CALL, ""),
+            (ROOT / "scripts" / "foulplay_paired_eval.py", READER_PAIRED_EVAL_CALL, ""),
+            (
+                ROOT / "scripts" / "foulplay_power_report.py",
+                READER_POWER_REPORT_CALL,
+                "",
+            ),
+        ],
+    ),
+    (
+        "b1_stdout_writer_bypasses_the_funnel",
+        "B1 independent guards",
+        [
+            (
+                BRIDGE,
+                PRINT_THROUGH_THE_FUNNEL,
+                PRINT_UNGUARDED_AGAIN,
+            )
+        ],
+    ),
+    (
+        "b1_block_finder_only_looks_at_the_top_level",
+        "B1 independent guards",
+        [(ENGINE, BLOCK_FINDER_RECURSION, "")],
+    ),
+    (
+        "b1_block_finder_finds_nothing",
+        "B1 independent guards",
+        [(ENGINE, BLOCK_FINDER_MARKERS, "        if False:\n")],
+    ),
+    # ---- B4: the four survivors round 3 found ----------------------------------
+    (
+        "b4_schema_version_literal_to_v1",
+        "B4 new survivors",
+        [(ENGINE, SCHEMA_VERSION_LITERAL, "ROLLOUT_LEAF_SHARD_SCHEMA = 1\n")],
+    ),
+    (
+        "b4_delete_the_migrations_trailing_self_check",
+        "B4 new survivors",
+        [(ENGINE, MIGRATION_SELF_CHECK, "")],
+    ),
+    (
+        "b4_unweight_the_shard_pricer_counter",
+        "B4 new survivors",
+        [
+            (
+                ENGINE,
+                MODES_WEIGHT_LINE,
+                "                self.stats.rollout_leaf_modes[mode] += 1\n",
+            )
+        ],
+    ),
+    (
+        "b4_unweight_the_per_decision_pricer_counter",
+        "B4 new survivors",
+        [(ENGINE, DECISION_MODES_WEIGHT_LINE, "                rollout_modes[mode] += 1\n")],
+    ),
+    (
+        "b4_delete_the_shard_tally_invariant",
+        "B4 new survivors",
+        [(ENGINE, MODES_TALLY_CHECK, MODES_TALLY_CHECK_OFF)],
+    ),
+    (
+        "b4_delete_the_witness_tally_invariant",
+        "B4 new survivors",
+        [(ENGINE, WITNESS_TALLY_CHECK, "        if False:\n")],
+    ),
+    (
+        "b4_witness_fallback_numerator_drops_dead_ends",
+        "B4 new survivors",
+        [(ENGINE, WITNESS_FALLBACK_NUMERATOR, WITNESS_FALLBACK_NUMERATOR_CAP_ONLY)],
+    ),
+    # ---- B5: the narrower items --------------------------------------------------
+    (
+        "b5_migration_reads_absent_as_zero_again",
+        "B5 narrower items",
+        [(ENGINE, MIGRATION_ABSENT_LOOP, "    for name in ():\n")],
+    ),
+    (
+        "b5_migration_overwrites_a_banked_quotient",
+        "B5 narrower items",
+        [(ENGINE, MIGRATION_OVERWRITE_REFUSAL, "            if False:\n")],
+    ),
+    (
+        "b5_zero_rollouts_accepts_a_v1_quotient_again",
+        "B5 narrower items",
+        [(ENGINE, ZERO_ROLLOUT_QUOTIENT_REFUSAL, "        if False:\n")],
+    ),
+    (
+        "b5_zero_rollouts_short_circuits_the_partition_again",
+        "B5 narrower items",
+        [(ENGINE, SHARD_PARTITION_CHECK, SHARD_PARTITION_CHECK_OFF)],
+    ),
+    (
+        "b5_delete_the_register_and_starve_refusal",
+        "B5 narrower items",
+        [(ENGINE, DISPATCH_ELSE_RAISE, "")],
+    ),
+    (
+        "b5_dispatch_guard_accepts_every_mode",
+        "B5 narrower items",
+        [(ENGINE, IN_PROCESS_MODE_CHECK, "    if False:\n")],
+    ),
+    (
+        "b5_crosscheck_engaged_reads_truthiness_again",
+        "B5 narrower items",
+        [
+            (
+                BRIDGE,
+                CROSSCHECK_ENGAGED_BY_VALUE,
+                "            engaged = bool(modes)\n",
+            )
+        ],
+    ),
 ]
+
+#: EVERY file the table above edits, hoisted to module scope so the gate test can
+#: resolve a target NAME back to its PATH. B1's independent-deletion family edits two
+#: files under `scripts/` -- the two READ-path call sites -- and the gate test used to
+#: rebuild each path as `src/pokezero/<name>`, which reported them as "no longer
+#: exists". Derived from the table, so a third location cannot silently drop out.
+ALL_TARGETS: tuple[Path, ...] = ()  # populated below, after CONTROLS is defined
+
 
 #: Mutants whose SURVIVAL is expected, each with a written equivalence argument.
 #: Empty is not a boast: if one appears, its argument goes here and the gate test
@@ -459,6 +723,21 @@ CONTROLS: list[tuple[str, str, list[tuple[Path, str, str]]]] = [
     ),
     ("_control_deleted_killer", "DID NOT RUN", []),
     (
+        # THE SIXTH MODE. An anchor that cannot match: `_apply` must report it, the
+        # verdict must be NOT APPLIED, and the run must not be scored at all.
+        "_control_not_applied",
+        "NOT APPLIED",
+        [(ENGINE, "def a_function_that_is_not_in_this_module(\n", "")],
+    ),
+    (
+        # THE SUBTEST-ONLY KILL. Its only failures are `SUBFAILED(...)` lines, so it is
+        # the state in which the previous `FAILED `-only extraction read a real kill as
+        # DID NOT RUN. Must read KILLED.
+        "_control_subtest_only",
+        "KILLED",
+        [(ENGINE, MIGRATION_ABSENT_LOOP, "    for name in ():\n")],
+    ),
+    (
         "_control_hang",
         "DID NOT RUN",
         [
@@ -471,6 +750,10 @@ CONTROLS: list[tuple[str, str, list[tuple[Path, str, str]]]] = [
         ],
     ),
 ]
+
+ALL_TARGETS = tuple(
+    sorted({path for _, _, edits in MUTANTS + CONTROLS for path, _, _ in edits})
+)
 
 _SUMMARY = re.compile(
     r"(?:(?P<failed>\d+) failed)|(?:(?P<errors>\d+) error)|(?:(?P<passed>\d+) passed)"
@@ -518,11 +801,23 @@ def _classify(
             errors = max(errors, int(match.group("errors")))
         if match.group("passed"):
             passed = max(passed, int(match.group("passed")))
+    # `FAILED <nodeid>` AND `SUBFAILED(<params>) <nodeid>`. A subtest failure is
+    # reported under the second spelling, and requiring only the first read THREE
+    # GENUINE KILLS AS "DID NOT RUN" -- flattering in the direction that matters,
+    # because a mutant scored DID NOT RUN is excluded from the kill denominator and
+    # looks like an instrument problem rather than a covered defect. The three were
+    # the migration's absent-precondition refusal, its overwrite refusal and the
+    # cross-check's engaged-by-value fix, all of which are asserted `subTest`-per-field
+    # precisely because a fixture that perturbs two things at once pins neither.
+    #
+    # `_control_subtest_only` drives the classifier into exactly this state and
+    # requires KILLED, so the fix has its own control rather than being taken on trust.
     named = sorted(
         {
-            line.split()[1]
+            line.split()[-1]
             for line in blob.splitlines()
-            if line.startswith("FAILED ") and len(line.split()) > 1
+            if (line.startswith("FAILED ") or line.startswith("SUBFAILED"))
+            and len(line.split()) > 1
         }
     )
     if errors:
@@ -544,7 +839,7 @@ def _classify(
     if not named:
         return (
             "DID NOT RUN",
-            f"{failed} failure(s) reported but no FAILED nodeid named",
+            f"{failed} failure(s) reported but no FAILED/SUBFAILED nodeid named",
             [],
         )
     return "KILLED", f"{failed} failed, {passed} passed", named
@@ -563,6 +858,17 @@ def _run_killers(python: str, timeout: int) -> tuple[str, str, str, object, bool
     # still be this tree's -- and the classifier refuses the run if it is not.
     env["PYTHONPATH"] = str(ROOT / "src")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # STALE BYTECODE IS A TRAP THAT FLATTERS. A `__pycache__` written by an earlier
+    # process (or by an earlier revision of this tree, in a worktree that has been
+    # reused) can be loaded while `__file__` still names the `.py`, so the run scores a
+    # verdict about code it did not execute. Purged rather than relied on: the default
+    # source-mtime+size invalidation does not cover a same-length edit within one mtime
+    # tick, which `ROLLOUT_LEAF_SHARD_SCHEMA = 2 -> = 1` is exactly.
+    for cache in list((ROOT / "src").rglob("__pycache__")) + list(
+        (ROOT / "tests").rglob("__pycache__")
+    ) + list((ROOT / "scripts").rglob("__pycache__")):
+        for entry in cache.glob("*.pyc"):
+            entry.unlink(missing_ok=True)
     # ONE PROCESS, and a real script file rather than `-c`. Two reasons, in order:
     # importing `foulplay_bridge` drags in torch, so a separate probe process doubled
     # the wall clock of every mutant; and Python echoes the failing source line of a
@@ -574,9 +880,32 @@ def _run_killers(python: str, timeout: int) -> tuple[str, str, str, object, bool
         "import sys\n"
         f"sys.path.insert(0, {str(ROOT / 'src')!r})\n"
         f"sys.path.insert(0, {str(ROOT / 'tests')!r})\n"
+        # THE BYTES, not just the path. A resolved path proves which FILE was
+        # imported; it does not prove the interpreter compiled THOSE BYTES, because a
+        # stale `__pycache__` entry is loaded while `__file__` still names the `.py`.
+        # `PYTHONDONTWRITEBYTECODE=1` stops the run WRITING one and says nothing about
+        # READING one, and a same-length edit (`= 2` -> `= 1`) does not change the size
+        # half of the default source-mtime invalidation. So the digest is computed in
+        # the subprocess and compared against the mutant the harness just wrote, and
+        # every `__pycache__` under the tree is purged before each run.
+        "import hashlib\n"
         "import pokezero.engine_search as _es, pokezero.foulplay_bridge as _fb\n"
         "print('RESOLVED_ENGINE=' + _es.__file__)\n"
         "print('RESOLVED_BRIDGE=' + _fb.__file__)\n"
+        "print('LOADED_ENGINE_SHA256=' + hashlib.sha256("
+        "open(_es.__file__, 'rb').read()).hexdigest())\n"
+        "print('LOADED_BRIDGE_SHA256=' + hashlib.sha256("
+        "open(_fb.__file__, 'rb').read()).hexdigest())\n"
+        # `__cached__` is set on every file-backed module whether or not a cache was
+        # USED, so its presence proves nothing. What proves something is that the cache
+        # file does not EXIST: the harness purges every `.pyc` before the run and
+        # `PYTHONDONTWRITEBYTECODE=1` stops this run creating one, so an existing cache
+        # here means a stale artifact was available to be loaded instead of the mutant.
+        "import os.path as _op\n"
+        "print('CACHED_ENGINE_EXISTS=' + str("
+        "_op.exists(getattr(_es, '__cached__', '') or '')))\n"
+        "print('CACHED_BRIDGE_EXISTS=' + str("
+        "_op.exists(getattr(_fb, '__cached__', '') or '')))\n"
         "sys.stdout.flush()\n"
         "import pytest\n"
         f"raise SystemExit(pytest.main({[*KILLERS, '-q', '--tb=no', '-p', 'no:cacheprovider']!r}))\n"
@@ -596,7 +925,9 @@ def _run_killers(python: str, timeout: int) -> tuple[str, str, str, object, bool
     finally:
         probe_script.unlink(missing_ok=True)
     resolved = "\n".join(
-        line for line in completed.stdout.splitlines() if line.startswith("RESOLVED_")
+        line
+        for line in completed.stdout.splitlines()
+        if line.startswith(("RESOLVED_", "LOADED_", "CACHED_"))
     )
     imported = "RESOLVED_ENGINE=" in resolved
     return completed.stdout, completed.stderr, resolved, completed, imported
@@ -640,6 +971,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.check_anchors:
         bad: list[str] = []
         for name, _family, edits in MUTANTS + CONTROLS:
+            # `_control_not_applied` exists precisely to have an anchor that matches
+            # zero times, so it is the one entry this check must not flag.
+            if name == "_control_not_applied":
+                continue
             for path, old, _new in edits:
                 count = path.read_text().count(old)
                 if count != 1:
@@ -649,7 +984,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ambiguous_or_missing_anchors": len(bad)}))
         return 1 if bad else 0
 
-    targets = sorted({path for _, _, edits in MUTANTS + CONTROLS for path, _, _ in edits})
+    targets = list(ALL_TARGETS)
     originals = {path: path.read_text() for path in targets}
     before = {path: _sha256(path) for path in targets}
     killer_paths = [ROOT / name for name in KILLERS]
@@ -672,27 +1007,72 @@ def main(argv: list[str] | None = None) -> int:
                     path.write_text(text)
                 reason = _apply(edits, originals)
                 if reason is not None:
-                    sink.append(
-                        {
-                            "name": name,
-                            "family": entry[1] if not is_control else "control",
-                            "status": "NOT APPLIED",
-                            "detail": reason,
-                            "killers": [],
-                        }
+                    unapplied = {
+                        "name": name,
+                        "family": entry[1] if not is_control else "control",
+                        "status": "NOT APPLIED",
+                        "detail": reason,
+                        "killers": [],
+                    }
+                    # A CONTROL CARRIES ITS REQUIRED VERDICT ON EVERY PATH. The
+                    # NOT-APPLIED branch omitted it, so `_control_not_applied` -- the
+                    # one control that is SUPPOSED to reach this branch -- produced a
+                    # record the summary could not read. An instrument that crashes on
+                    # its own control is not reporting a verdict about the tree.
+                    if is_control:
+                        unapplied["required"] = entry[1]
+                    sink.append(unapplied)
+                    print(
+                        f"{'NOT APPLIED':12s} {name}  ({reason})",
+                        file=sys.stderr,
+                        flush=True,
                     )
                     continue
                 if name == "_control_deleted_killer":
                     (ROOT / KILLERS[0]).unlink()
+                # The digests of what is ON DISK right now, i.e. of the mutant.
+                mutated = {path: _sha256(path) for path in targets}
                 stdout, stderr, resolved, completed, imported = _run_killers(
                     args.venv_python, args.timeout
                 )
                 status, detail, killers = _classify(
                     completed, stdout, stderr, imported=imported
                 )
+                markers = {}
                 for line in resolved.splitlines():
                     if line.startswith("RESOLVED_"):
                         resolved_seen.add(line.strip())
+                    key, _sep, value = line.strip().partition("=")
+                    markers[key] = value
+                # THE LOADED BYTES MUST BE THE MUTATED BYTES, checked before any
+                # verdict is recorded and enforced hardest on SURVIVED -- a survivor is
+                # a claim that the guard tolerated a change, and if the change was
+                # never loaded the claim is about nothing. A DID NOT RUN legitimately
+                # has no markers (the tree did not import, which is the point).
+                if imported:
+                    for marker, path in (
+                        ("LOADED_ENGINE_SHA256", ENGINE),
+                        ("LOADED_BRIDGE_SHA256", BRIDGE),
+                    ):
+                        loaded = markers.get(marker)
+                        if loaded is None:
+                            raise InstrumentFailure(
+                                f"{name}: the run imported the tree but reported no "
+                                f"{marker}; cannot prove which bytes were compiled"
+                            )
+                        if loaded != mutated[path]:
+                            raise InstrumentFailure(
+                                f"{name}: {path.name} was loaded as {loaded} but the "
+                                f"mutant on disk is {mutated[path]} -- the verdict "
+                                "would be about code that did not run"
+                            )
+                    for marker in ("CACHED_ENGINE_EXISTS", "CACHED_BRIDGE_EXISTS"):
+                        if markers.get(marker) != "False":
+                            raise InstrumentFailure(
+                                f"{name}: {marker}={markers.get(marker)!r} -- a "
+                                "bytecode cache was present during the run, so the "
+                                "verdict may be about code the mutant did not change"
+                            )
                 record = {
                     "name": name,
                     "family": "control" if is_control else entry[1],
@@ -763,7 +1143,10 @@ def main(argv: list[str] | None = None) -> int:
         "expected_equivalent": dict(EXPECTED_EQUIVALENT),
         "mutants": results,
         "controls": control_results,
-        "resolved_modules": sorted(resolved_seen),
+        # RELATIVE TO THE REPO ROOT, so the artifact is readable in any checkout. See
+        # `_resolved_relative`: the absolute form made this gate red everywhere but the
+        # one directory that recorded it.
+        "resolved_modules": sorted(_resolved_relative(line) for line in resolved_seen),
     }
     if args.json and not args.only:
         args.json.parent.mkdir(parents=True, exist_ok=True)

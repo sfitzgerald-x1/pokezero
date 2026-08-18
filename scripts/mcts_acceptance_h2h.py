@@ -492,6 +492,16 @@ def main(argv=None) -> int:
         results=results,
         per_game=per_game,
     )
+    # THE THIRD WRITER THAT REACHES DISK WITH THIS BLOCK, and the second one the
+    # parent-keyed block finder cannot see: `build_shard_report` files
+    # `stats.to_dict()` at the DOCUMENT ROOT under `policy_stats`, not inside an
+    # `engine_mcts` block, so `require_banked_shard_witness` walks straight past it.
+    # `require_rollout_leaf_document_schema` keys off the block's own columns.
+    from pokezero.engine_search import (  # noqa: PLC0415
+        require_rollout_leaf_document_schema,
+    )
+
+    require_rollout_leaf_document_schema(report)
     Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
     print("\n=== SHARD COMPLETE ===")
     print(json.dumps(
