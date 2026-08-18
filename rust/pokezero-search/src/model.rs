@@ -771,6 +771,74 @@ impl Drop for PhaseTimer<'_> {
 /// `crate::abort_telemetry`. The caller keeps it alive across the
 /// error boundary and attaches it to the aborting exception
 /// (`crate::abort_telemetry`).
+/// Which value function prices a leaf on the ENCODED (model-priors) path.
+///
+/// The search-ceiling program's arbiter arm needs the campaign's surviving
+/// search config, and that config is priors ON — which lives here, not on the
+/// sequential `puct_search_multi` path where `rollout.rs`'s own driver and its
+/// own fidelity gate live. The plan's requirement travels with the arm: "same
+/// search, same everything" must be **re-established on this path, not
+/// inherited** from the sequential one.
+///
+/// So the leaf pricer is a parameter here too, and `ModelValue` is not dead
+/// code — it is the fidelity gate's CONTROL. It routes leaf values through the
+/// identical new deferred-row plumbing the arm uses while keeping production's
+/// leaf value, which is what lets the gate assert that the plumbing changed
+/// nothing. See `rollout_model_value_matches_production_report`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EncodedLeafMode {
+    /// Production: the checkpoint's value head, seat-reflected.
+    ModelValue,
+    /// R terminal rollouts, side-one-absolute and NOT seat-reflected. The
+    /// arbiter arm. Skips the model forward on leaves that cannot host a child
+    /// decision node, because under rollout leaves nothing reads their tensor.
+    Rollout,
+    /// GATE FIXTURE. `Rollout` values with the encode skip DISABLED: every leaf
+    /// is encoded exactly as production encodes it. This is the reference the
+    /// skip is measured against — same rollout ordinals, same rollout seeds,
+    /// same leaves, so the trees are identical and the comparison is a sharp
+    /// equality rather than a tolerance.
+    RolloutEncodeAll,
+    /// GATE FIXTURE — THE MUTANT, and the reason the gate above is not true by
+    /// construction. `Rollout` values with the encode skipped for EVERY leaf,
+    /// including the ones whose prior map needs the forward. That is precisely
+    /// the defect `Rollout` would have if its skip predicate drifted away from
+    /// the map block's guard, and it is what
+    /// `the_encode_skip_gate_reads_false_on_a_skip_everything_mutant`
+    /// demonstrates the gate catching. Per the program's rule, a check that
+    /// cannot read False certifies nothing — so the input it reads False on
+    /// ships here rather than living in a reviewer's imagination.
+    ///
+    /// Unreachable from `EngineMctsConfig`: the Python layer accepts only
+    /// `"rollout"`, and `tests/test_rollout_model_priors.py` pins that.
+    RolloutSkipAll,
+}
+
+impl EncodedLeafMode {
+    fn prices_by_rollout(self) -> bool {
+        !matches!(self, Self::ModelValue)
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::ModelValue => "model_value",
+            Self::Rollout => "rollout",
+            Self::RolloutEncodeAll => "rollout_encode_all",
+            Self::RolloutSkipAll => "rollout_skip_all",
+        }
+    }
+}
+
+/// The rollout seam on the encoded path. `None` is production: with it absent
+/// there is NO new code on the search's path at all, which is a stronger
+/// flag-off argument than a recomputation (the same argument `arm_priors`
+/// makes one slot out).
+pub(crate) struct EncodedRolloutSeam<'a> {
+    pub mode: EncodedLeafMode,
+    pub cfg: &'a crate::rollout::RolloutConfig,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn multiply_batched_encoded_core<E: BatchLeafEval>(
     state_str: &str,
     iterations: usize,
@@ -790,6 +858,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     early_stop_side_one: bool,
     fpu_reduction: Option<f32>,
     arm_priors: bool,
+    rollout_seam: Option<EncodedRolloutSeam<'_>>,
     lossy_subcases: &mut crate::abort_telemetry::LossySubcaseLedger,
 ) -> PyResult<String> {
     let mut state = parse_state(state_str)?;
@@ -812,6 +881,33 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     // zero by construction and the counter would only add a field that can
     // never move.
     let mut collisions = crate::tree::CollisionLedger::default();
+    // The rollout seam's own accounting, and the two facts a reader of this
+    // function needs up front.
+    //
+    // 1. WHICH ROW INDEX `LeafPrice::Deferred` CARRIES. On the production path
+    //    every leaf is encoded, so the model batch row and the deferred value
+    //    row are the same integer and the distinction never had to be made.
+    //    Under `Rollout` they are DIFFERENT index spaces: `pending` holds only
+    //    the leaves that need a model forward (the ones with a prior map),
+    //    while every leaf gets a rollout row. `Deferred` must therefore carry
+    //    the ROLLOUT row, and `pending_maps` keeps carrying the model row it
+    //    always carried. Conflating them silently prices leaves with each
+    //    other's values, which is why they are separate variables and not one
+    //    counter reused.
+    // 2. WHY THE ENCODE IS SKIPPED, AND ONLY THE ENCODE. Under `Rollout` the
+    //    model's VALUE is unused, so a leaf that cannot host a child decision
+    //    node (`seam.depth + 1 == max_depth`) needs no forward and no tensor at
+    //    all. What is NOT skipped is the fold clone, the branch-event render,
+    //    the attribution-unsafe gate, the fold advance, or the order/meta
+    //    evolution: `reject_attribution_unsafe` ABORTS the world, so skipping
+    //    the render would make worlds survive here that production kills, and
+    //    that is a search difference, not an optimisation.
+    let mut rollout_stats = crate::rollout::RolloutStats::default();
+    let mut rollout_ordinal_next: u64 = 0;
+    // Leaves whose model forward was skipped because no prior map needed it.
+    let mut encode_skipped = 0usize;
+    let rollout_mode = rollout_seam.as_ref().map(|seam| seam.mode);
+    let prices_by_rollout = rollout_mode.is_some_and(EncodedLeafMode::prices_by_rollout);
     let mut rng = StdRng::seed_from_u64(seed);
     let mut completed = 0usize;
     let mut rounds = 0usize;
@@ -918,6 +1014,10 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         let traversal_budget = batch_size.min(iterations - completed);
         let mut traversals: Vec<Traversal> = Vec::with_capacity(traversal_budget);
         let mut pending: Vec<crate::encoder::EncodedArrays> = Vec::new();
+        // Rollout rows for this round, parallel with `rollout_ordinals`. Empty
+        // and untouched on the production path.
+        let mut rollout_rows: Vec<State> = Vec::new();
+        let mut rollout_ordinals: Vec<u64> = Vec::new();
         // Per-round prior work: (branch key, batch row, option→action map)
         // for every priced branch whose child decision node can exist.
         let mut pending_maps: Vec<((usize, usize), usize, Vec<Option<usize>>)> = Vec::new();
@@ -929,7 +1029,19 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         let mut leaf_error: Option<PyErr> = None;
         let traverse_started = Instant::now();
         let encode_before_traverse = encode_nanos;
-        while traversals.len() < traversal_budget && pending.len() < batch_size {
+        // The round's row budget counts LEAVES, and under the rollout seam
+        // `pending` is no longer one-per-leaf, so it stops being the right
+        // counter. Under `ModelValue` the two are equal by construction (every
+        // leaf is encoded and every leaf takes a rollout row), which is what
+        // keeps the fidelity control's round structure identical to
+        // production's rather than merely similar.
+        while traversals.len() < traversal_budget
+            && (if rollout_mode.is_some() {
+                rollout_rows.len()
+            } else {
+                pending.len()
+            }) < batch_size
+        {
             let traversal = traverse(
                 &mut tree,
                 &mut state,
@@ -1032,29 +1144,78 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         leaf_ctx.meta_ctx(),
                         &rendered.active_status_transitions,
                     );
-                    let tensor_started = Instant::now();
-                    let encoded_result = leaf_ctx.encode_leaf(
-                        leaf,
-                        &fold,
-                        turn,
-                        Some(&self_order),
-                        Some(&meta),
-                        // Interior node: the interior option surface is correct here.
-                        false,
-                    );
-                    tensor_nanos += tensor_started.elapsed().as_nanos();
-                    let encoded = match encoded_result {
-                        Ok(encoded) => encoded,
-                        Err(error) => {
-                            leaf_error = Some(error);
-                            return LeafPrice::Ready(0.5);
+                    // Does this leaf need a model forward at all?
+                    //
+                    // Production and the `ModelValue` control: always, because
+                    // the forward IS the leaf value.
+                    //
+                    // Under `Rollout` the value comes from rollouts, so the
+                    // only remaining consumer of the forward is the PRIOR map
+                    // for a future child decision node — and this predicate is
+                    // deliberately the SAME expression that guards the map
+                    // block below, so the two cannot drift apart into a leaf
+                    // that is encoded but never read, or read but never
+                    // encoded. It is evaluated here, in the existing statement
+                    // order, rather than by hoisting the map block above the
+                    // encode: hoisting would swap which of two simultaneous
+                    // errors is reported, and the control's byte-identity is
+                    // worth more than the handful of wasted forwards on leaves
+                    // whose acting seat turns out to have no real choice.
+                    let needs_forward = match rollout_mode {
+                        // Production and the fidelity control: the forward IS
+                        // the leaf value.
+                        None | Some(EncodedLeafMode::ModelValue) => true,
+                        // The reference: rollout values, no skip.
+                        Some(EncodedLeafMode::RolloutEncodeAll) => true,
+                        // The mutant: skip unconditionally, which drops the
+                        // prior maps' rows and is exactly what the gate catches.
+                        Some(EncodedLeafMode::RolloutSkipAll) => false,
+                        Some(EncodedLeafMode::Rollout) => {
+                            model_priors && seam.depth + 1 < cfg.max_depth
                         }
                     };
-                    let row = pending.len();
+                    let mut row = usize::MAX;
+                    if needs_forward {
+                        let tensor_started = Instant::now();
+                        let encoded_result = leaf_ctx.encode_leaf(
+                            leaf,
+                            &fold,
+                            turn,
+                            Some(&self_order),
+                            Some(&meta),
+                            // Interior node: the interior option surface is correct here.
+                            false,
+                        );
+                        tensor_nanos += tensor_started.elapsed().as_nanos();
+                        let encoded = match encoded_result {
+                            Ok(encoded) => encoded,
+                            Err(error) => {
+                                leaf_error = Some(error);
+                                return LeafPrice::Ready(0.5);
+                            }
+                        };
+                        row = pending.len();
+                        pending.push(encoded);
+                    } else {
+                        encode_skipped += 1;
+                    }
                     // Prior map for this branch's future child decision node
                     // — only where a child can exist (depth cap) and the
                     // acting seat has a real choice.
-                    if model_priors && seam.depth + 1 < cfg.max_depth {
+                    //
+                    // `&& needs_forward` is a SAFETY COUPLING, not a second
+                    // policy: a map's `row` indexes the model batch, so pushing
+                    // one for a leaf whose forward was skipped would index a
+                    // row that does not exist. On production, the control, and
+                    // `RolloutEncodeAll` this conjunct is always true and the
+                    // guard is unchanged. On `Rollout` it is exactly equal to
+                    // the rest of the condition, so it changes nothing there
+                    // either. It is what makes the `RolloutSkipAll` mutant lose
+                    // its priors SILENTLY -- a wrong number the gate can see --
+                    // instead of panicking across the FFI boundary, where a
+                    // `PanicException` would escape the caller's `except
+                    // Exception` and kill the shard.
+                    if model_priors && seam.depth + 1 < cfg.max_depth && needs_forward {
                         // Both seats' lists from one selection, so neither
                         // `if self_side_one { .. }` nor a `!self_side_one`
                         // appears in this scope. Same reason as `root_seats`.
@@ -1120,8 +1281,20 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             meta,
                         },
                     );
-                    pending.push(encoded);
-                    LeafPrice::Deferred(row)
+                    // Which index the tree gets back. Under the seam it is the
+                    // ROLLOUT row (one per leaf, always defined); on production
+                    // it is the model batch row. Under `ModelValue` the two
+                    // integers are equal, because both vectors gained exactly
+                    // one element for this leaf.
+                    if rollout_mode.is_some() {
+                        let value_row = rollout_rows.len();
+                        rollout_rows.push(leaf.clone());
+                        rollout_ordinals.push(rollout_ordinal_next);
+                        rollout_ordinal_next += 1;
+                        LeafPrice::Deferred(value_row)
+                    } else {
+                        LeafPrice::Deferred(row)
+                    }
                 },
             );
             traversals.push(traversal);
@@ -1143,8 +1316,18 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         for traversal in &traversals {
             collisions.record(traversal);
         }
-        collisions.end_round(pending.len());
-        let row_values = if pending.is_empty() {
+        // A "pending round" means the round had rows to price. Under the seam
+        // `pending` is the MODEL batch, which the encode skip deliberately
+        // shrinks -- so passing it here would make a skipped round look like a
+        // round with no leaves and move a collision statistic for a reason that
+        // has nothing to do with collisions. The leaf-row count is the quantity
+        // this counter has always meant.
+        collisions.end_round(if rollout_mode.is_some() {
+            rollout_rows.len()
+        } else {
+            pending.len()
+        });
+        let model_values = if pending.is_empty() {
             Vec::new()
         } else {
             let encode_started = Instant::now();
@@ -1193,6 +1376,31 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             } else {
                 output.values01.iter().map(|v| 1.0 - v).collect()
             }
+        };
+        // THE SEAT BOUNDARY IS THE WHOLE POINT OF THIS SPLIT. `model_values` has
+        // already been reflected above when the searching seat is side two,
+        // because the checkpoint's value is SELF-relative. Rollout values are
+        // side-one-absolute already (`battle_is_over`, and the HP-fraction cap
+        // fallback), which is the frame `finalize` and the tree's own terminal
+        // branches use. So they must NOT pass through that reflection — feeding
+        // them through it would invert every leaf on p2 decisions and leave p1
+        // correct, a defect that is invisible in half of all games.
+        // `rollout_values_are_not_seat_reflected` is the gate.
+        let row_values = if prices_by_rollout {
+            let seam = rollout_seam
+                .as_ref()
+                .expect("prices_by_rollout implies the seam is present");
+            // `?` on purpose: `price_rows` refuses an unpriced `(row, trial)`
+            // slot rather than averaging a NaN into a leaf value (the review
+            // fix that replaced a `debug_assert!` compiled out of every shipped
+            // release wheel). A lost rollout must abort the world, not
+            // propagate silently into a win-rate number.
+            let (values, round_stats) =
+                crate::rollout::price_rows(&rollout_rows, &rollout_ordinals, seam.cfg)?;
+            rollout_stats.merge(&round_stats);
+            values
+        } else {
+            model_values
         };
         let finalize_started = Instant::now();
         for traversal in &traversals {
@@ -1307,6 +1515,32 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         collisions.traversals,
         collisions.leaf_repeats,
     );
+    // The seam's columns are APPENDED, and only when the seam is engaged, so a
+    // production report is byte-identical to the one this function produced
+    // before the seam existed -- not "identical after dropping some new
+    // fields", which is the weaker property a reader could mistake for it. The
+    // fidelity control is `ModelValue`: it engages the plumbing, so it DOES
+    // carry these columns, and the gate compares production against it on
+    // every field production has.
+    let extra = match &rollout_seam {
+        None => extra,
+        Some(seam) => format!(
+            "{extra},\"rollout_leaf_mode\":\"{}\",\"rollout_encode_skipped\":{},{}",
+            seam.mode.name(),
+            encode_skipped,
+            // `to_rollout_only_json_fields`, NOT `to_json_fields`. This commit
+            // added that split precisely so the encoded core would stop
+            // emitting a second `"rounds"` key beside the one it has reported
+            // since before this seam existed -- and then called the un-split
+            // helper anyway, so the duplicate shipped. Measured on the report
+            // string: `key "rounds" occurrences=2`. Harmless today only because
+            // the two values coincide and `json.loads` keeps the last, which is
+            // exactly why no assertion could see it. `rollout_report_has_no_duplicate_keys`
+            // is the gate, and it parses the raw string rather than the dict --
+            // a dict cannot represent the defect.
+            rollout_stats.to_rollout_only_json_fields(seam.cfg),
+        ),
+    };
     Ok(multiply_report_json(
         &outcome,
         completed,
@@ -1670,6 +1904,27 @@ impl NativeLeafModel {
         // search reads, so flag-off is byte-identical for a reason stronger than
         // a recomputation -- there is no new code on the search's path at all.
         arm_priors = false,
+        // THE ROLLOUT SEAM, and it obeys the same positional rule one slot
+        // further out again: appended AFTER `arm_priors`, so the entire
+        // pre-seam contract keeps its exact shape and a stale image cannot be
+        // broken by updating Python alone. `None` is production -- and here
+        // "flag-off changes nothing" is the strong version of the claim, the
+        // same one `arm_priors` makes: with this None there is no new code on
+        // the search's path at all.
+        //
+        // Search-ceiling program Phase 1 instrument 2 (the arbiter). The
+        // sequential `puct_search_multi_rollout` already carries this seam and
+        // its own fidelity gate, but that path is UNIFORM-priors, and the
+        // campaign's surviving search config is priors ON -- which is this
+        // function. The plan's requirement is explicit that the gate must be
+        // re-established here rather than inherited from there.
+        rollout_leaf_mode = None,
+        rollouts = 32,
+        rollout_max_plies = 200,
+        rollout_policy = "uniform",
+        rollout_seed = 0,
+        rollout_threads = 1,
+        rollout_branch_on_damage = false,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -1692,6 +1947,13 @@ impl NativeLeafModel {
         use_opponent_priors: bool,
         fpu_reduction: Option<f32>,
         arm_priors: bool,
+        rollout_leaf_mode: Option<&str>,
+        rollouts: u32,
+        rollout_max_plies: u32,
+        rollout_policy: &str,
+        rollout_seed: u64,
+        rollout_threads: usize,
+        rollout_branch_on_damage: bool,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -1707,6 +1969,54 @@ impl NativeLeafModel {
             ));
         }
         let fpu_reduction = crate::tree::validate_fpu_reduction(fpu_reduction)?;
+        // The seam's boundary. Every rejection here has a demonstrated failing
+        // input in `tests/test_rollout_model_priors.py`, per the program rule
+        // that a check which cannot read False certifies nothing.
+        let rollout_mode = match rollout_leaf_mode {
+            None => None,
+            Some("model_value") => Some(EncodedLeafMode::ModelValue),
+            Some("rollout") => Some(EncodedLeafMode::Rollout),
+            // Gate fixtures. Named, documented on `EncodedLeafMode`, and not
+            // reachable from `EngineMctsConfig`.
+            Some("rollout_encode_all") => Some(EncodedLeafMode::RolloutEncodeAll),
+            Some("rollout_skip_all") => Some(EncodedLeafMode::RolloutSkipAll),
+            Some(other) => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown rollout_leaf_mode {other:?}; supported: 'model_value' (the \
+                     fidelity control), 'rollout' (the arbiter arm), or None (production)"
+                )))
+            }
+        };
+        let rollout_cfg = match rollout_mode {
+            None => None,
+            Some(_) => {
+                // A zero-rollout "Monte-Carlo" leaf is not a cheap one: it is
+                // the HP-fraction fallback wearing the oracle's name in the
+                // report. Rejected on BOTH modes, not just `Rollout`, so a
+                // control run cannot be configured into a state its arm would
+                // refuse.
+                if rollouts == 0 {
+                    return Err(PyValueError::new_err(
+                        "rollouts must be > 0 (a zero-rollout leaf would silently be the \
+                         fallback evaluator)",
+                    ));
+                }
+                if rollout_max_plies == 0 {
+                    return Err(PyValueError::new_err("rollout_max_plies must be > 0"));
+                }
+                if rollout_threads == 0 {
+                    return Err(PyValueError::new_err("rollout_threads must be > 0"));
+                }
+                Some(crate::rollout::RolloutConfig {
+                    rollouts,
+                    max_plies: rollout_max_plies,
+                    policy: crate::rollout::RolloutPolicy::parse(rollout_policy)?,
+                    branch_on_damage: rollout_branch_on_damage,
+                    seed: rollout_seed,
+                    threads: rollout_threads,
+                })
+            }
+        };
         let root_state = parse_state(state_str)?;
         let leaf_ctx =
             crate::leaf::LeafContext::new(tables_json, root_inputs_json, ctx_json, &root_state)?;
@@ -1767,6 +2077,12 @@ impl NativeLeafModel {
                     early_stop_side_one,
                     fpu_reduction,
                     arm_priors,
+                    rollout_mode.map(|mode| EncodedRolloutSeam {
+                        mode,
+                        cfg: rollout_cfg
+                            .as_ref()
+                            .expect("a mode implies a validated config"),
+                    }),
                     lossy_subcases,
                 )
             })
