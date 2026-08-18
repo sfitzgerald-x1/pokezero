@@ -453,6 +453,7 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(puct_search, m)?)?;
     m.add_function(wrap_pyfunction!(tree::puct_search_multi, m)?)?;
     m.add_function(wrap_pyfunction!(rollout::puct_search_multi_rollout, m)?)?;
+    m.add_function(wrap_pyfunction!(rollout::price_uniform_rollout_rows, m)?)?;
     m.add_function(wrap_pyfunction!(events::branch_events, m)?)?;
     m.add_function(wrap_pyfunction!(encoder::encode_decision, m)?)?;
     m.add_function(wrap_pyfunction!(envstep::env_options, m)?)?;

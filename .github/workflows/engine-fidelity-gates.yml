@@ -303,6 +303,12 @@ jobs:
             scripts/foulplay_power_report.py
             scripts/hc_depth_grid.py
             scripts/mcts_acceptance_h2h.py
+            # The canonical uniform-leaf writer consumes externally materialised
+            # successor states, calls the direct native row pricer, and invokes
+            # the deploy-side estimand gate.  Its own state/provenance pins must
+            # run if either the writer or the pin moves; `rust/**` above covers
+            # the native surface it calls.
+            scripts/price_uniform_rollout_leaves.py
             scripts/mutate_rollout_leaf_witness.py
             reports/artifacts/rollout_leaf_witness_mutation_battery.json
             # `test_rollout_model_priors` imports the encoded native fixture from this
@@ -316,6 +322,7 @@ jobs:
             tests/test_mcts_acceptance_report.py
             tests/test_rollout_leaf_arbiter.py
             tests/test_rollout_leaf_witness_mutation_battery.py
+            tests/test_price_uniform_rollout_leaves.py
             # The FoulPlay throughput calibration is a distinct paired-data
             # contract.  Its reader refuses mixed 1000/760-ms conditions and
             # forged think telemetry, while the paired driver owns the named
@@ -1995,11 +2002,12 @@ jobs:
             tests.test_mcts_acceptance_report \
             tests.test_rollout_leaf_arbiter \
             tests.test_rollout_leaf_witness_mutation_battery \
+            tests.test_price_uniform_rollout_leaves \
             tests.test_foulplay_paired_eval \
             tests.test_foulplay_budget_calibration -v 2>&1 \
             | tee /tmp/rollout-leaf-arbiter.log
-          if ! grep -qE 'Ran 286 tests' /tmp/rollout-leaf-arbiter.log; then
-            echo "::error::the arbiter and calibration suite did not run all 286 tests"
+          if ! grep -qE 'Ran 308 tests' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the arbiter and calibration suite did not run all 308 tests"
             exit 1
           fi
           if grep -qE 'skipped|OK \\(skipped' /tmp/rollout-leaf-arbiter.log; then

@@ -61,6 +61,7 @@
 //! a per-call cost worth amortising (a GPU forward, a Python callback) and is
 //! a measured fidelity LOSS — the fidelity gate demonstrates exactly that.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pyo3::exceptions::PyValueError;
@@ -494,6 +495,116 @@ pub(crate) fn price_rows(
     // has to obey it.
     let values = reduce_trials(&trials, n, r).map_err(PyValueError::new_err)?;
     Ok((values, stats))
+}
+
+/// Price externally materialised successor states under the uniform rollout
+/// policy, without entering the PUCT tree.
+///
+/// This is intentionally a *row* surface, not a convenient search report.
+/// The rollout-leaf estimand gate compares one uniform-continuation value for
+/// each already-chosen A/B successor with the canonical policy-continuation
+/// label for that exact successor. Sending those states through
+/// [`puct_search_multi_rollout`] would instead introduce tree selection,
+/// expansion, and a variable set of leaves -- a different estimand that can
+/// look plausible while answering the wrong question.
+///
+/// `ordinals` are part of the reproducibility contract: rollout RNGs derive
+/// from `(rollout_seed, ordinal, trial)`, so every row needs a unique, stable
+/// ordinal. Refusing a duplicate is preferable to silently correlating two
+/// different canonical leaves. The public writer derives ordinals from the
+/// canonical leaf keys rather than its input order.
+///
+/// Returned `values` and all terminal/fallback accounting are
+/// **side-one-absolute**, exactly like [`price_rows`]. In particular, callers
+/// must not reflect p2 rows as they would a self-relative model value.
+#[pyfunction]
+#[pyo3(signature = (
+    state_strs,
+    ordinals,
+    rollouts = 64,
+    rollout_max_plies = 200,
+    rollout_seed = 0,
+    rollout_threads = 1,
+    rollout_branch_on_damage = false,
+))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn price_uniform_rollout_rows(
+    state_strs: Vec<String>,
+    ordinals: Vec<u64>,
+    rollouts: u32,
+    rollout_max_plies: u32,
+    rollout_seed: u64,
+    rollout_threads: usize,
+    rollout_branch_on_damage: bool,
+) -> PyResult<String> {
+    if state_strs.is_empty() {
+        return Err(PyValueError::new_err("state_strs must be non-empty"));
+    }
+    if state_strs.len() != ordinals.len() {
+        return Err(PyValueError::new_err(format!(
+            "state_strs has {} rows but ordinals has {}; every state needs one stable ordinal",
+            state_strs.len(),
+            ordinals.len(),
+        )));
+    }
+    if rollouts == 0 {
+        return Err(PyValueError::new_err(
+            "rollouts must be > 0 (a zero-rollout row would silently be the fallback evaluator)",
+        ));
+    }
+    if rollout_max_plies == 0 {
+        return Err(PyValueError::new_err(
+            "rollout_max_plies must be > 0 (every rollout would fall back at ply zero)",
+        ));
+    }
+    if rollout_threads == 0 {
+        return Err(PyValueError::new_err("rollout_threads must be > 0"));
+    }
+    let mut seen_ordinals = HashSet::with_capacity(ordinals.len());
+    for ordinal in &ordinals {
+        if !seen_ordinals.insert(*ordinal) {
+            return Err(PyValueError::new_err(format!(
+                "ordinals contains duplicate {ordinal}; every row needs an independent rollout stream",
+            )));
+        }
+    }
+    let rows = state_strs
+        .iter()
+        .enumerate()
+        .map(|(index, state_str)| {
+            parse_state(state_str).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "state_strs[{index}] is not a valid poke-engine state string"
+                ))
+            })
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    let cfg = RolloutConfig {
+        rollouts,
+        max_plies: rollout_max_plies,
+        policy: RolloutPolicy::Uniform,
+        branch_on_damage: rollout_branch_on_damage,
+        seed: rollout_seed,
+        threads: rollout_threads,
+    };
+    let (values, stats) = crate::panic_guard::catch_native_panic(|| {
+        price_rows(&rows, &ordinals, &cfg)
+    })?;
+    if values.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
+        return Err(PyValueError::new_err(
+            "uniform rollout row pricer produced a non-finite or out-of-range value",
+        ));
+    }
+    let values_json = serde_json::to_string(&values).map_err(|error| {
+        PyValueError::new_err(format!("could not serialise uniform rollout values: {error}"))
+    })?;
+    Ok(format!(
+        "{{\"schema\":\"pokezero.uniform-rollout-row-prices.v1\",\
+         \"value_frame\":\"side_one_absolute\",\"rollout_branch_on_damage\":{},\
+         \"values\":{values_json},{} }}",
+        rollout_branch_on_damage,
+        stats.to_rollout_only_json_fields(&cfg),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1048,5 +1159,58 @@ mod tests {
             "guaranteed KO priced at {q} under rollout leaves (must stay exactly 1.0 — \
              terminal branches never reach the rollout pricer)"
         );
+    }
+
+    /// The public writer's direct surface must price exactly its supplied
+    /// rows, not enter the PUCT tree and discover a different leaf set.
+    #[test]
+    fn direct_uniform_row_pricer_returns_one_value_per_state_and_a_full_ledger() {
+        let report = price_uniform_rollout_rows(
+            vec![MINIMAL.trim().to_owned(), MINIMAL.trim().to_owned()],
+            vec![17, 29],
+            4,
+            60,
+            1234,
+            1,
+            false,
+        )
+        .expect("direct row pricing runs");
+        let value: serde_json::Value = serde_json::from_str(&report).expect("valid JSON report");
+        assert_eq!(value["schema"], "pokezero.uniform-rollout-row-prices.v1");
+        assert_eq!(value["value_frame"], "side_one_absolute");
+        assert_eq!(value["rollout_policy"], "uniform");
+        assert_eq!(value["leaves_priced"], 2);
+        assert_eq!(value["rollouts_run"], 8);
+        let values = value["values"].as_array().expect("one value per supplied row");
+        assert_eq!(values.len(), 2);
+        assert!(values.iter().all(|entry| {
+            entry
+                .as_f64()
+                .is_some_and(|number| (0.0..=1.0).contains(&number))
+        }));
+        assert_eq!(
+            value["rollout_terminal_hits"].as_u64().unwrap()
+                + value["rollout_cap_hits"].as_u64().unwrap()
+                + value["rollout_dead_ends"].as_u64().unwrap(),
+            8,
+            "every requested rollout must be terminal or visibly fall back"
+        );
+    }
+
+    /// A duplicate ordinal would reuse the same rollout RNG stream for two
+    /// different canonical leaves. The writer cannot repair that downstream,
+    /// so reject it at the native boundary.
+    #[test]
+    fn direct_uniform_row_pricer_refuses_duplicate_ordinals_and_degenerate_config() {
+        let states = vec![MINIMAL.trim().to_owned(), MINIMAL.trim().to_owned()];
+        assert!(price_uniform_rollout_rows(states.clone(), vec![17, 17], 4, 60, 0, 1, false)
+            .is_err());
+        assert!(price_uniform_rollout_rows(states.clone(), vec![17], 4, 60, 0, 1, false)
+            .is_err());
+        assert!(price_uniform_rollout_rows(states.clone(), vec![17, 29], 0, 60, 0, 1, false)
+            .is_err());
+        assert!(price_uniform_rollout_rows(states.clone(), vec![17, 29], 4, 0, 0, 1, false)
+            .is_err());
+        assert!(price_uniform_rollout_rows(states, vec![17, 29], 4, 60, 0, 0, false).is_err());
     }
 }
