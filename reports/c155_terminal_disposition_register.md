@@ -134,7 +134,7 @@ the head value at all**. The move is
 legitimate, and it has now happened **once per row of the table below** — DE-NUMBERED on purpose,
 see the warning under it. Restricting `git log 7fcd9e19..HEAD` to **all** of
 the fingerprint's inputs — the 74 gen3 patches, `poke-engine-gen3-patches.txt`,
-`poke-engine-base-source.json`, the 11 crate sources, and the `Cargo.toml` / `Cargo.lock` /
+`poke-engine-base-source.json`, the 12 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
 a SUPERSET of those rows, for the reason recorded below. ⚠ **The `input` column is DERIVED, and the third row was wrong on
 first write** — it carried `+403 −74`, which was neither this file's numstat nor any other
@@ -154,6 +154,160 @@ The column is NOT pinned by
 filed as the follow-up rather than done here because it would also newly pin the two rows
 above.
 
+⚠ **AND THE PIN ON `t1.head_fingerprint` WAS ONE LINE FROM BEING A TAUTOLOGY.** Appendix A's row is
+compared against `head_fingerprint()`, and until now nothing asserted that
+`head_fingerprint()` *reads the tree*. Re-pointing it at Appendix A's own cell —
+`return register_facts()["t1.head_fingerprint"] + "0" * 48`, one line — left the whole module at a
+clean `OK` **on a tree with an edited `rust/pokezero-search/src/tree.rs`**, which is precisely the
+event this row exists to redden; the CI step's `Ran N tests` and `^OK$` guards passed too, because
+the method count never moved. Measured, not hypothesised, and recorded as **B54**, the first
+mutation in this battery to survive: blocks A and B target the DOCUMENT and the TREE, and neither
+targets the DERIVATION. `TheFingerprintDerivationReadsTheTreeTests` closes it.
+
+⚠ **AND IT TOOK THREE ROUNDS, because the first two fixes were the same mistake.** Two independent
+review rounds returned **twenty** further surviving mutants (`B55`–`B67`, `B70`–`B76`) and I found **two** more
+myself by testing my own fixes (`B68`, `B69`) — **twenty-two** in all, over five rounds. ⚠ A first
+revision of this sentence said "thirteen … a fourteenth", which does not add up to the range beside
+it; the arithmetic is stated because getting it wrong here is the same defect as everywhere else in
+this document. The
+pattern is worth more than any one of them: *each fix pinned the seam the last mutant used, and the
+next mutant simply moved one frame outward.* Round 1 pinned `head_fingerprint`; the tautology moved
+to `derive()`. Round 2 pinned `derive()` and the comparison loop and published "the row reaches CI
+through **three** seams"; the tautology moved to `register_facts()`, which every document-side
+assertion funnels through — **including both of round 2's "independent" ones** — and then to
+`_text()` one frame past that. Incrementing "three" to "four" would have been the fourth instance.
+A guard chain has to **terminate at primary bytes**, and one assertion now does: it reads the
+document with `Path.read_bytes` and a regex in its own body and the tree with `compute_fingerprint`,
+sharing no helper with this module. The `_text()` mutant is killed by that assertion **and by
+nothing else** — `FAILED (failures=1)` — which is the clearest evidence in this file that the
+termination is what was missing rather than more coverage.
+
+The second defect was an **unscoped negative inside the guard against unscoped negatives**. Round 1
+claimed "sensitivity to each hashed input class" while probing **two of five**. Round 2 made the
+sensitivity exhaustive but floored the input set at `> 5` `.rs` against 11 actual, `> 50` `.patch`
+against 74 and `> 70` total against 91 — about twenty files of slack, a margin wider than the defect
+— so a hasher that skipped `tree.rs`, or took `crate_sources()[:6]`, or `patch_files()[:60]`, or
+dropped `Cargo.lock`, stayed green. The exhaustive loop **cannot** catch those by construction: it
+derives its probe set from the hasher, so a hasher that reads less is probed less.
+
+⚠ **AND THE THIRD FIX MADE THE ENUMERATOR A SINGLE POINT OF FAILURE — the same defect a FOURTH
+frame out, recorded as B68 and found by re-reading the third fix rather than by review.**
+`_tree_side_hashed_inputs` had become both the sandbox's source and the set-equality's expected side,
+so a hasher and an enumerator that shrink **in the same direction agree with each other**: both
+skipping `tree.rs`, reseated, was a clean `Ran 51 tests, OK` (the module's count at that revision).
+The answer is not a fifth code-side
+pin. **It is to stop terminating in code at all**: Appendix A now records `t1.hashed_input_files`
+(**92**) and `t1.hashed_crate_sources` (**12**), so a shrunken enumerator disagrees with the
+DOCUMENT even when the hasher shrinks with it, and all four variants die on the appendix comparison.
+A declared coupling, and a free one — anything that changes this inventory moves the fingerprint too,
+so Appendix A is already being edited in the same change.
+
+⚠ **AND THERE WAS A FIFTH FRAME, exactly as that paragraph predicted — B69.** The inventory rows stop
+a hasher and an enumerator colluding, but not an author who reseats the inventory rows too. Measured:
+both skipping `tree.rs`, with `t1.head_fingerprint`, `t1.hashed_input_files` **and**
+`t1.hashed_crate_sources` all updated to the mutant's own values — every number the failure messages
+name — was a clean `Ran 51 tests, OK` (the count at that revision). **Neither the module nor this
+document knew that 11 was the
+right number.** `git ls-files` does, and it is a third anchor outside both; against it the collusion
+is red however many rows are reseated, killed by that one assertion alone. Scope, because an unscoped
+anchor is this register's signature defect: git pins the **globbed** classes exactly — the crate
+sources and the four build files — and **not** the patch class, since `third_party/` tracks **77**
+`.patch` files while the manifest lists **74** and not hashing the other three is correct. There, what
+is pinned is that every patch the manifest names is tracked, so it cannot name a phantom.
+
+⚠ **AND THERE WAS A SIXTH FRAME — B70, THE PATH — found by review immediately after I claimed the
+chain terminated.** The helper-free assertion's own claim to share "no helper" was false: it shares
+`REPO`, `REGISTER`, the module-level `re` and `compute_fingerprint`. Re-point `REGISTER` **and** the
+literal beside it at a doctored copy and it reads the doctored file while the published register stays
+stale — and the drift check *approved* that, because requiring two literals to agree forces them to
+move together and pins neither to the file CI publishes. "Primary bytes" and "the document" were one
+anchor, not two. Closed by anchoring the path outside this module: to the workflow's `changes` paths
+filter — the thing that decides whether `mass-gate` runs on this document at all — and to git's index,
+so a doctored copy must be committed to exist in a CI checkout, at which point the filter names the
+wrong one. And **B71**: `_tracked` filtered through `crate_sources()` in three lines, which is B67's
+sentence landing on the anchor added one round earlier; closed by naming six core crate sources as
+literals.
+
+⚠ **AND ROUND 4 FOUND A SEVENTH FRAME — TWICE — inside the fixes for the sixth.** `B72`: the six
+named crate sources were **six of eleven**, so substituting `priors.rs` walked straight through, and
+with that landed a live edit to `priors.rs` was invisible — a file this row's own commit table cites
+as having moved the fingerprint. `B73`: `_perturb` only ever **appends**, so a hasher reading
+`st_size` instead of the bytes satisfied the exhaustive loop, the transposition probe *and* the rename
+probe at once, and an `f32`→`f64` edit was invisible. **A size passed for a hash.** `B74`: the filter
+anchor was a line grep — defeated by a decoy indented in a `run:` body while the real entry was
+deleted, and false-tripped twice.
+
+**Every one of those three was a hand-maintained artefact standing where a derivation belonged: a
+tuple of names, an append-only perturbation, a text grep.** All three fixes **remove** a literal —
+the module set now comes from `lib.rs`'s own `mod` declarations, the perturbation swaps two adjacent
+differing bytes, and the `FILTERS` block is extracted by indentation. That is the generalisable
+finding of this whole row, and it is worth more than any individual mutant: **when a guard needs a
+list, derive the list, because a hand-written one is a floor and every floor in this battery has been
+walked through.**
+
+⚠ **AND ROUND 5 FOUND AN EIGHTH FRAME, ALSO TWICE, AND ONE OF THEM IS THE WORST ERROR IN THIS ROW.**
+`B75`: the `FILTERS` parser **normalised where the shell does not** — it stripped `#` comments and
+whitespace; the workflow skips a pattern only when its *first* character is `#` and otherwise passes
+the line verbatim to `case`. So a trailing comment on the register's entry, or two extra spaces of
+indentation, leave this module green while `mass-gate` **never runs on a register-only PR** — verbatim
+the outcome the assertion's own error message names. Round 4 asked for the trailing-comment case to
+stay *green* and I implemented that and recorded it as a verified property: **the previous round
+requested the wrong behaviour and the fix advertised the hole.** `B76`: every content probe in the
+class perturbed a file's **head or its tail**, never its middle, so `sha256(blob[:512] + st_size)`
+survived all eleven tests reseated and hid an `f32`→`f64` at byte 3010 of `tree.rs` — `B73`'s own
+sentence one frame out, with "region" substituted for "length".
+
+⚠ **AND ROUND 6 FOUND A NINTH FRAME — `B77` — which is `B76`'s own sentence one frame out for the
+THIRD consecutive round.** `B76`'s fix swapped two *adjacent* bytes, and an adjacent swap disturbs
+**both byte parities at once**, so it cannot isolate a digest that reads only one of them; every other
+probe changes length or path, so a residue-class digest moved under those too. One line —
+`path.read_bytes()[::2]` — survived all 53 tests reseated and hid a **real semantic edit**
+(`DAMAGE_BRANCH_DEPTH: u8 = 2 → 3` in `tree.rs`) with the fingerprint byte-identical. Closed by
+flipping a **single byte** at **both parities** in each of three regions. `[::2]`, `[1::2]` and `[::3]`
+are now all red, each by that probe alone.
+
+**Read the three together, because the shape is the finding:** `B73` was *"every probe changes
+LENGTH, so a size proxy is invisible"*; `B76` was *"every probe touches one REGION"*; `B77` is
+*"every probe disturbs both PARITIES"*. Three rounds, one defect — **a probe family that shares a
+blind spot** — and every time the family looked exhaustive from the inside. An exhaustive loop over
+*inputs* is not an exhaustive loop over *ways of reading an input*.
+
+**Six rounds, twenty-three surviving mutants, and the two lessons that generalise past this row:**
+
+1. **Terminate outside the artefact being checked.** Four times the fix was to move the termination
+   further out of code — primary bytes (`B64`), the document (`B68`), the tree's own index (`B69`),
+   the path's external anchors (`B70`).
+2. **Derive the list; never write it.** A hand-written list is a floor, and every floor in this
+   battery has been walked through — six names of eleven (`B72`), one perturbation shape (`B73`,
+   `B76`), one text grep (`B74`, `B75`). Each fix **removed** a literal.
+
+Every round I believed the previous one had closed it and said so; every round was wrong. The claim
+made here is therefore deliberately weak: there are four mutually independent anchors, the failure
+messages name which one fired, and **a ninth frame should be assumed to exist rather than argued
+away.** What this row records is not a closed hole — it is a defect whose shape is *"the guard's own
+reader can be re-pointed, its own lists can be short, and its own probes can all be blind in the same
+place"*.
+
+⚠ **AND ONE MUTATION IS GREEN AND PUBLISHED AS SUCH.** The battery carries a **DISCLOSED SURVIVORS**
+section (`S1`) rather than reading 77-of-77 while a reviewer finds a survivor in one line — that
+credibility failure is the thing this document exists to prevent. `S1` is a redundancy, not a hole,
+and the bookkeeping around it went wrong in an instructive way: I disclosed it, a review round told me
+it was killed, **I edited the claim without re-running it**, and the next round caught that. The rule
+it earns: *never edit a measured claim because someone says it is wrong — re-measure it.*
+
+What the class asserts now: the helper-free comparison above; a second comparison routing through
+neither `derive()` nor the loop; `derive()` required to part company with the document on an edited
+crate source; **EXHAUSTIVE** sensitivity — every file the hasher reads, derived from `build_inputs()`
+plus the manifest, so a class added later is covered the day it lands — over an input set pinned by
+**exact set equality** against a re-derivation that shares no code with the hasher; a transposition
+probe, so the identity cannot decay from a set of (path, bytes) pairs into a bag of bytes; and
+specificity against unhashed
+neighbours, per shape (an over-capturing hasher would redden this row on every Python-only PR, and a
+gate that reddens on everything gets bypassed); and a negative control that the probe sandbox
+reproduces the real fingerprint exactly, without which the sensitivity would be unearned. This row
+is a churn pin by design — every crate-touching commit moves it — so it is exactly the row an author
+is tempted to soften, which is why the derivation is now pinned rather than trusted.
+
 | commit | input | fingerprint after |
 |---|---|---|
 | `21f484d4` (#1197) | `rust/pokezero-search/src/leaf.rs`, +31 lines | `9517aab98d56a9ba…` |
@@ -169,8 +323,8 @@ above.
 | C158 (prelude active-slot guard) | `rust/pokezero-search/src/events.rs`, +359 −7 | `bd9f7d407dc3c9a9…` |
 | C1 Stage 1 (closeout) | `rust/pokezero-search/src/encoder.rs` (131 constant column/offset lookups resolved once at table load) | `b79d83e3e08d838e…` |
 | #1219 completed on #1249 | `rust/pokezero-search/src/encoder.rs` (all 8 per-leaf `format!` md keys → `md_key!`, which derives both spellings from one suffix token) | `ad64440abbfca493…` |
-| (this head, merge of #1257) | `rust/pokezero-search/src/tree.rs` — per-depth OCCUPANCY counter, merged with main's `encoder.rs` md-key change | `65092feac14da111…` |
-| #1271 (this head) | `rust/pokezero-search/src/rollout.rs` **+1052 −0** (new file — the oracle-leaf batching seam), `src/model.rs` **+339 −23**, `src/lib.rs` **+2 −0** | `bddc3ce2644ae228…` |
+| #1257 merge baseline | `rust/pokezero-search/src/tree.rs` — per-depth OCCUPANCY counter, merged with main's `encoder.rs` md-key change | `65092feac14da111…` |
+| current merged tree | 92-file, 12-source fingerprint input set | `bddc3ce2644ae228…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -534,9 +688,8 @@ Where CI gates on the merge, **local green and CI green are different measuremen
 that coupling and the assertion carries the fix in its own failure message.
 
 **Every measurement behind T2–T6 predates the head build**, and none is at `bddc3ce2644ae228` —
-nor at `65092feac14da111` (the head this branch was cut from), nor at `76b3b3a7ff29aba5`, `5ab0010b7da31708`
-or `40e8f330ce1046ee` (this branch's own earlier heads, moved by `rollout.rs` and `model.rs`),
-nor at `ad64440abbfca493`, nor at `39761759f252a58d` (the two parents of the #1257 merge), nor at `083375c215978d4c`, `a1359396e3de3731`, `b79d83e3e08d838e`, `236d1cac8a784898`, `bd9f7d407dc3c9a9`,
+nor at `65092feac14da111`, `ad64440abbfca493`, `39761759f252a58d` (the two parents of the #1257
+merge baseline), `083375c215978d4c`, `a1359396e3de3731`, `b79d83e3e08d838e`, `236d1cac8a784898`, `bd9f7d407dc3c9a9`,
 nor at `39ced82cb3b8009e`, `32b0c3e3c09d23d1`, `8926a6bc2beaf9a2`, `e9d4ac708d6efe69`, `0975c5f29bdf8253`, `ec4ff0349eab7fdd`,
 `44dcfca90130ed91`, `2ec5bfd1c7292ed6`, `028a4c52a4ad9fe7` or `9517aab98d56a9ba`, the builds
 this document was reconciled against at the four preceding merges plus this branch's own earlier heads. Read the
@@ -618,20 +771,16 @@ the merge. The register documents that class; it now has a first-party instance,
 failure message names the cause and the fix (merge `origin/main`, do not rebase, re-derive) rather
 than leaving the next author to rediscover it.
 
-**The `Ran N tests` guard.** The step carries an exact `Ran 42 tests`, re-derived from the module's
+**The `Ran N tests` guard.** The step carries an exact `Ran 53 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
 rather than inherited from #1205's figure. The workflow holds **35** lines containing the unittest
 invocation, of which **one is a comment**, so there are **34 executable** invocation sites at this
 head; the scan resolves **34** of them and leaves **none** unresolved.
 
-(Was 34/1/33. #1278 added a `tests.test_schema_container_census_wiring` step to the
-`schema-container-census` job — a new module that ran nowhere until it had its own step, which is
-this workflow's standing hazard and #1212's precedent. Re-derived on this tree by running the scan
-itself, not by adding one: the same pass also reports 34 sites and 34 resolved, so the new step's
-`Ran N tests` guard is reachable by the pairing rule rather than merely present. The comment count
-stays at one — the new step's prose deliberately omits the `python` prefix so it is not a second,
-because that count is this control's own anti-vacuity premise.)
+(Was 34/1/33. #1278 added the guarded `tests.test_schema_container_census_wiring` step, so the
+workflow and the scanner each gained one reachable site. Re-derived on this merge tree rather than
+incremented.)
 
 (Was 33/1/32. CI caught the drift rather than a human: GitHub gates on `refs/pull/<n>/merge`, so it
 measures the MERGED workflow while a branch measures only its own — the guard's own failure message
@@ -639,7 +788,7 @@ predicts exactly this and says to merge `origin/main` and re-derive. `origin/mai
 `tests.test_render_dropped_move_line_crate` invocation while this branch was open. Re-derived on the
 merged tree with `grep -c 'python -m unittest'`, not adjusted by one.) **This step is among the
 resolved ones** — the number is not restated here, because a fourth copy of it is a fourth thing to
-go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 42 from the module's AST
+go stale — and `EveryWorkflowTestCountGuardMatchesItsModuleTests` derives 53 from the module's AST
 and matches the guard. All three numbers are **re-derived by the pin** rather than typed.
 
 ⚠ **#1205 IS CLOSED (C156), AND THE SENTENCE ABOVE IS WHAT ITS CLOSURE LOOKS LIKE.** This register
@@ -686,12 +835,12 @@ does not exist on either tree. Resolved by merging `origin/main` into the branch
 rebase) and re-deriving all four trees; the assertion now carries that diagnosis in its own failure
 message.
 
-**Mutation evidence.** **53 mutations applied, 53 caught**, plus **1 negative control** verified green, enumerated in the module's docstring and
-partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B53** edit **only the tree
+**Mutation evidence.** **79 mutations applied, 79 caught**, plus **1 negative control** verified green **and 1 DISCLOSED SURVIVOR (`S1`) that is deliberately not counted as caught**, enumerated in the module's docstring and
+partitioned by *what is mutated*: **A1–A37** edit this document, **B38–B79** edit **only the tree
 and never this document**. That second number is the one that matters, because a pin reading a
 document against a hard-coded copy of itself passes every document-side mutation — and ⚠ **a first
 revision put it at ten and two of those ten edited the register**, which is the property being
-claimed, mis-stated. Sixteen is the measured figure: a patch line shift, the tie-refusal arm deleted,
+claimed, mis-stated. Forty-two is the measured figure: a patch line shift, the tie-refusal arm deleted,
 a damage push made to consult the truncation flag (G33c *fixed*), a sub-keyed single-seat counter
 added to a committed sweep, a freeze constant added to the differential, a real Showdown checkout
 added to the workflow, the head fingerprint written into an artifact, an `hp`-ceiling context line
@@ -718,18 +867,39 @@ And the id list is justified by the mutation that actually needs it: **B52**, a 
 marker and adds one to G1, holding the count at **9** while the membership changes — red on the ids,
 green on the count, and the only mutation in the battery a count cannot catch.
 
-**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 42
+**Test evidence.** `python -m unittest tests.test_terminal_disposition_register -v` → **Ran 53
 tests, OK**. The gated family together: ledger uniformity **19**, never-fired **22**, wide-seed
-**36**, C154 re-adjudication **34**, seed registry **41**, single-seat coverage **3** — all OK.
+**36**, C154 re-adjudication **38**, seed registry **41**, single-seat coverage **3** — all OK.
+(⚠ C154 re-adjudication was stated as **34** and is **38** — re-derived here with
+`python -m unittest tests.test_unreachable_readjudication`, which is also what the workflow's own
+`Ran 38 tests` guard demands, so the document was the only copy that had gone stale. Found by
+independent review, not by a pin — and **none of these six figures is machine-checked**, which is the
+finding rather than the one wrong digit. All six were re-derived with the same command shape and the
+other five agreed; only the one that was wrong is quoted with its command, because claiming the
+sentence now sources all six would overstate what was done. Pinning them is the standing follow-up.)
 `tests/test_final_holdout_guard.py` and `tests/test_boundary_verdict_partition.py` cannot import
 without a built engine in this environment and are unchanged by this branch. Full suite, with the
 flag that is required rather than stylistic:
-`pytest tests/ -q -p no:randomly --continue-on-collection-errors` — **165 failed at base, 165 failed
-at head**, 4,420 → 4,462 passed (**+42**, exactly this module), 33 errors both sides, and the
-`FAILED` id lists are **identical in both directions**. Re-measured against the merge-base after
-each of the two `origin/main` merges rather than carried: at `6ef682bf` the pair read 164 / 4,416,
-and #1203 brought one more engine-dependent module. The absolute figure is a property of the machine; the
-delta is that this branch adds zero failures.
+`pytest tests/ -q -p no:randomly --continue-on-collection-errors` — the `FAILED` id lists are
+**identical in both directions**, and that is the whole claim: this branch adds no failures.
+
+⚠ **THE ABSOLUTE PASS/ERROR FIGURES ARE DE-NUMBERED HERE, not re-pointed, and the first attempt at
+this repair was half done.** They read "4,420 → 4,462 passed (**+42**, exactly this module), 33
+errors both sides". The parenthetical was a SEVENTH copy of this module's test count — the only one
+no pin polices, so it went stale green while the other six were updated — and removing it left the
+PAIR, which is equally stale: the head figure is by construction base plus this module's method
+count, and the module has grown since. Review round 3 caught the half-repair. **The pair has NOT
+been re-measured** (the suite needs a built engine, and most of its failures are pre-existing), so it
+is removed rather than replaced by a figure nobody ran.
+
+⚠ **AND THAT REPAIR WAS ITSELF HALF DONE — TWICE, which is why the rule below is now absolute.**
+Round 3 removed the parenthetical and left the pass pair. Round 5 then found the FAILURE pair
+(`165 failed at base, 165 failed at head`) and a historical `164 / 4,416` still standing **three
+lines above the new rule forbidding exactly that**. All of them are gone now. THE RULE: do not write
+an absolute suite figure in this document without re-running the suite and naming the commit and the
+machine that produced it. What survives is the only claim that does not churn — the `FAILED` id lists
+are identical at base and at head, so this branch adds zero failures — and that claim is a SET
+comparison, not a count, which is why it is the one worth keeping.
 
 ---
 
@@ -746,7 +916,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.roll_window_holdout_fraction` | 0.899 % |
 | `bar.support_gated_dev` | 8.689 % |
 | `bar.support_gated_holdout` | 9.185 % |
-| `base.expected_counter_artifacts` | 404 |
+| `base.expected_counter_artifacts` | 406 |
 | `base.expected_sweep_artifacts` | 115 |
 | `base.patch_stack` | 74 |
 | `base.section3_rows` | 82 |
@@ -768,6 +938,8 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
+| `t1.hashed_crate_sources` | 12 |
+| `t1.hashed_input_files` | 92 |
 | `t1.head_fingerprint` | bddc3ce2644ae228 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
@@ -814,7 +986,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t6.verdicts_withdrawn` | 1 |
 | `t6.workflow_steps_checking_out_showdown` | 0 |
 
-> **Merge note (#1257).** This head is the MERGE of `scott/head-to-head-raw` into `main`, and
+> **Historical merge note (#1257).** That head was the MERGE of `scott/head-to-head-raw` into `main`, and
 > its stamp is neither parent's: the branch alone stamped `39761759f252a58d…` and main alone
 > `ad64440abbfca493…`, while the merged tree — carrying the branch's `tree.rs` occupancy counter
 > AND main's `encoder.rs` md-key change, both fingerprint inputs — stamps

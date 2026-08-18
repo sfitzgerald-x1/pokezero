@@ -214,7 +214,10 @@ _CORPUS_TREES = ("reports", "docs")
 # the addition, so its numeric fields (`applied`, `killed`, `survived`,
 # `did_not_run`, `not_applied`) do not sit under a dotted path containing a counter
 # name. Its own gate is `tests/test_rollout_leaf_witness_mutation_battery.py`.
-_EXPECTED_COUNTER_ARTIFACTS = 404
+# 404 -> 406: the OI-1 ordering instrument adds its independently banked report and failing-input
+# demonstration. Re-derived on the merge tree; both paths stay inside this corpus so the never-fired
+# counter census reads the same JSON set as the terminal-disposition register.
+_EXPECTED_COUNTER_ARTIFACTS = 406
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's
