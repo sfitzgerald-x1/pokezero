@@ -583,6 +583,36 @@ class DestinationGuardTests(_FixtureCase):
         self.assertTrue(self.fixture.out_dir.is_symlink())
         self.assertEqual((elsewhere / bank.PROVENANCE_FILENAME).read_bytes(), elsewhere_before)
 
+    def test_an_unchanged_read_stays_on_its_open_directory_after_a_symlink_swap(self) -> None:
+        """The no-op reader is descriptor-bound, not a sequence of link-following Path reads."""
+        elsewhere = self.fixture.root / "elsewhere" / CAMPAIGN_ID
+        bank.bank_artifact(self.fixture.stamp, self.fixture.source_dir, elsewhere)
+        self.fixture.bank()
+        displaced = self.fixture.out_dir.with_name(f"{CAMPAIGN_ID}.before-mid-read-swap")
+        real_read = bank._read_relative_file_no_follow
+        calls: list[tuple[str, int]] = []
+
+        def swap_after_provenance(directory_fd: int, relative: str) -> bytes:
+            calls.append((relative, os.fstat(directory_fd).st_ino))
+            result = real_read(directory_fd, relative)
+            if relative == bank.PROVENANCE_FILENAME:
+                self.fixture.out_dir.rename(displaced)
+                self.fixture.out_dir.symlink_to(elsewhere, target_is_directory=True)
+            return result
+
+        with patch.object(bank, "_read_relative_file_no_follow", swap_after_provenance):
+            refusal = self.refuse()
+
+        self.assertIn(bank.DESTINATION_NOT_A_DIRECTORY, refusal.codes)
+        self.assertTrue(self.fixture.out_dir.is_symlink())
+        # The SHA256SUMS read followed the provenance read through the same already-open
+        # directory, even after the pathname was swapped. A Path-based reader would now follow
+        # the external symlink instead.
+        self.assertEqual([name for name, _ in calls[:2]], [
+            bank.PROVENANCE_FILENAME, bank.SHA256SUMS_FILENAME,
+        ])
+        self.assertEqual(calls[0][1], calls[1][1])
+
     def test_a_destination_holding_a_differing_artifact_is_refused(self) -> None:
         self.fixture.bank()
         self.fixture.stamp["sims"] = 4096  # same campaign id, different run

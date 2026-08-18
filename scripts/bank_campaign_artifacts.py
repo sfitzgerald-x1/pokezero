@@ -112,6 +112,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import unicodedata
@@ -1227,51 +1228,153 @@ def _comparable(provenance: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in provenance.items() if key not in ("banked_at_utc",)}
 
 
-def _relative_files(root: Path) -> set[str]:
-    return {
-        str(path.relative_to(root))
-        for path in root.rglob("*")
-        if path.is_file() or path.is_symlink()
-    }
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+
+
+def _open_directory_no_follow(path: Path, *, parent_fd: int | None = None) -> int:
+    """Open a real directory without ever resolving a symlink in its final component."""
+
+    if not _O_NOFOLLOW:
+        raise OSError("this platform has no O_NOFOLLOW; cannot safely inspect a bank directory")
+    flags = os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW
+    fd = os.open(str(path) if parent_fd is None else path.name, flags, dir_fd=parent_fd)
+    try:
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise NotADirectoryError(f"{path} is not a directory")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _open_relative_file_no_follow(directory_fd: int, relative: str) -> int:
+    """Open a declared regular file, refusing symlinks in every path component."""
+
+    parts = tuple(Path(relative).parts)
+    if not parts or Path(relative).is_absolute() or any(part in {"", ".", ".."} for part in parts):
+        raise OSError(f"unsafe relative artifact path {relative!r}")
+    current_fd = os.dup(directory_fd)
+    try:
+        for part in parts[:-1]:
+            next_fd = _open_directory_no_follow(Path(part), parent_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        file_fd = os.open(parts[-1], os.O_RDONLY | _O_NOFOLLOW, dir_fd=current_fd)
+    finally:
+        os.close(current_fd)
+    if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+        os.close(file_fd)
+        raise OSError(f"{relative!r} is not a regular file")
+    return file_fd
+
+
+def _read_relative_file_no_follow(directory_fd: int, relative: str) -> bytes:
+    file_fd = _open_relative_file_no_follow(directory_fd, relative)
+    try:
+        handle = os.fdopen(file_fd, "rb")
+    except BaseException:
+        try:
+            os.close(file_fd)
+        except OSError:
+            pass
+        raise
+    with handle:
+        return handle.read()
+
+
+def _relative_regular_files_no_follow(directory_fd: int, *, prefix: str = "") -> set[str]:
+    """List the artifact tree from directory descriptors, never traversing a link."""
+
+    files: set[str] = set()
+    for name in os.listdir(directory_fd):
+        info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        relative = f"{prefix}{name}"
+        if stat.S_ISREG(info.st_mode):
+            files.add(relative)
+        elif stat.S_ISDIR(info.st_mode):
+            child_fd = _open_directory_no_follow(Path(name), parent_fd=directory_fd)
+            try:
+                files.update(_relative_regular_files_no_follow(child_fd, prefix=f"{relative}/"))
+            finally:
+                os.close(child_fd)
+        else:
+            # A link, device or FIFO is not part of a banked artifact. Returning a marker makes
+            # the exact-file-set comparison fail without ever dereferencing it.
+            files.add(f"<non-regular:{relative}>")
+    return files
+
+
+def _sha256_relative_file_no_follow(directory_fd: int, relative: str) -> str:
+    digest = hashlib.sha256()
+    file_fd = _open_relative_file_no_follow(directory_fd, relative)
+    try:
+        handle = os.fdopen(file_fd, "rb")
+    except BaseException:
+        try:
+            os.close(file_fd)
+        except OSError:
+            pass
+        raise
+    with handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _path_still_names_directory(path: Path, directory_fd: int) -> bool:
+    """Reject a swap observed after the descriptor-bound artifact check finished."""
+
+    try:
+        current = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    return stat.S_ISDIR(current.st_mode) and os.path.samestat(current, os.fstat(directory_fd))
 
 
 def _existing_matches(
     out_dir: Path, provenance: Mapping[str, Any], sha256sums: str, files_field: str
 ) -> bool:
-    """True only if the destination is byte-for-byte the artifact we would write.
+    """True only if the descriptor-bound destination is byte-for-byte what we would write.
 
-    "Everything declared is present" is not enough: a dumped file sitting beside a banked
-    artifact would then be reported as a clean no-op. The file SETS must match exactly.
+    A no-op is evidence: it must not read a matching artifact through a symlink that a concurrent
+    writer inserted after validation. The directory is therefore opened with ``O_NOFOLLOW`` and
+    every descendant is read relative to that descriptor with the same rule. If the path changes
+    while those reads run, we either keep reading the original opened directory or observe the
+    replacement before returning; we never dereference the replacement.
     """
 
-    # This is deliberately repeated after validation: the no-op path reads the destination
-    # after provenance is built, so a writer can replace a real directory with a matching
-    # symlink in that interval. A no-op must never read through a link.
-    if not _destination_is_a_real_directory(out_dir):
-        return False
-
-    stamp_path = out_dir / PROVENANCE_FILENAME
-    sums_path = out_dir / SHA256SUMS_FILENAME
-    if not stamp_path.is_file() or not sums_path.is_file():
+    try:
+        directory_fd = _open_directory_no_follow(out_dir)
+    except OSError:
         return False
     try:
-        existing = json.loads(stamp_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    if not isinstance(existing, Mapping):
-        return False
-    if _comparable(existing) != _comparable(provenance):
-        return False
-    if sums_path.read_text(encoding="utf-8") != sha256sums:
-        return False
-    declared = {str(record["file"]) for record in provenance[files_field]}
-    if _relative_files(out_dir) != declared | {PROVENANCE_FILENAME, SHA256SUMS_FILENAME}:
-        return False
-    for record in provenance[files_field]:
-        banked = out_dir / str(record["file"])
-        if not banked.is_file() or sha256_file(banked) != record["sha256"]:
+        try:
+            existing = json.loads(
+                _read_relative_file_no_follow(directory_fd, PROVENANCE_FILENAME).decode("utf-8")
+            )
+            actual_sums = _read_relative_file_no_follow(directory_fd, SHA256SUMS_FILENAME).decode(
+                "utf-8"
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return False
-    return True
+        if not isinstance(existing, Mapping) or _comparable(existing) != _comparable(provenance):
+            return False
+        if actual_sums != sha256sums:
+            return False
+        declared = {str(record["file"]) for record in provenance[files_field]}
+        if _relative_regular_files_no_follow(directory_fd) != declared | {
+            PROVENANCE_FILENAME, SHA256SUMS_FILENAME,
+        }:
+            return False
+        for record in provenance[files_field]:
+            if _sha256_relative_file_no_follow(directory_fd, str(record["file"])) != record["sha256"]:
+                return False
+        return _path_still_names_directory(out_dir, directory_fd)
+    except OSError:
+        return False
+    finally:
+        os.close(directory_fd)
 
 
 def _fsync_dir(path: Path) -> None:
@@ -1485,12 +1588,15 @@ def bank_artifact(
                         stale_staging=stale,
                     )
             if not overwrite and not reasons:
-                reasons.append(Refusal(
-                    DESTINATION_HOLDS_DIFFERENT_ARTIFACT,
-                    f"{destination} already holds an artifact that differs from the one being "
-                    f"banked. Silently replacing banked evidence destroys the record the store "
-                    f"exists to keep: pass overwrite=True (--overwrite) if that is intended.",
-                ))
+                if not _destination_is_a_real_directory(destination):
+                    reasons.append(_destination_not_a_directory_refusal(destination))
+                else:
+                    reasons.append(Refusal(
+                        DESTINATION_HOLDS_DIFFERENT_ARTIFACT,
+                        f"{destination} already holds an artifact that differs from the one being "
+                        f"banked. Silently replacing banked evidence destroys the record the store "
+                        f"exists to keep: pass overwrite=True (--overwrite) if that is intended.",
+                    ))
 
     if reasons:
         raise BankRefusal(reasons)
