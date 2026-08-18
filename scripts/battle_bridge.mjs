@@ -67,6 +67,7 @@ function newBattleState(battleId) {
     streams: null,
     boundaryRequests: {},
     readyScheduled: false,
+    readyEpoch: 0,
     terminalScheduled: false,
   };
 }
@@ -145,12 +146,22 @@ function scheduleReady(battle, requested = actionableRequestedPlayers(battle)) {
   if (!requested.length) return;
   if (battle.readyScheduled || battle.terminalScheduled) return;
   battle.readyScheduled = true;
+  const readyEpoch = battle.readyEpoch;
   const procMs = nodeProcMs(battle);
   setImmediate(() => {
+    // Streams can advance again before this callback runs. Do not advertise
+    // the earlier request list after both sides have moved to wait; release
+    // the latch so the next actionable request can schedule a real boundary.
+    if (battle.readyEpoch !== readyEpoch || battle.terminalScheduled) return;
+    const currentRequested = actionableRequestedPlayers(battle);
+    if (!currentRequested.length) {
+      battle.readyScheduled = false;
+      return;
+    }
     emit({
       type: "ready",
       battleId: battle.battleId,
-      requested,
+      requested: currentRequested,
       nodeProcMs: procMs,
     });
   });
@@ -158,9 +169,12 @@ function scheduleReady(battle, requested = actionableRequestedPlayers(battle)) {
 
 function scheduleTerminal(battle) {
   if (battle.terminalScheduled) return;
+  battle.readyEpoch += 1;
+  const terminalEpoch = battle.readyEpoch;
   battle.terminalScheduled = true;
   const procMs = nodeProcMs(battle);
   setImmediate(() => {
+    if (battle.readyEpoch !== terminalEpoch || !battle.terminalScheduled) return;
     emit({ type: "terminal", battleId: battle.battleId, nodeProcMs: procMs });
   });
 }
@@ -288,6 +302,7 @@ function restoreSerializedBattle(battle, snapshot, { cloneSnapshot = false } = {
         : snapshot.boundaryRequests
       : {};
   battle.readyScheduled = false;
+  battle.readyEpoch += 1;
   battle.terminalScheduled = Boolean(snapshot.terminalScheduled);
   battle.tRecv = null;
 }
@@ -392,6 +407,7 @@ function materializeBattle(command) {
   restoreDeferredOpponentActions(battle.battleStream.battle, publicState);
   battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
   battle.readyScheduled = false;
+  battle.readyEpoch += 1;
   battle.terminalScheduled = false;
   battle.tRecv = null;
   emit({
@@ -427,6 +443,7 @@ function materializeScenarioBattle(command) {
   battle.battleStream.battle.restart(send);
   battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
   battle.readyScheduled = false;
+  battle.readyEpoch += 1;
   battle.terminalScheduled = false;
   battle.tRecv = null;
   emit({
@@ -1611,6 +1628,7 @@ async function submitChoices(battle, choices, receivedAt) {
   }
   battle.boundaryRequests = {};
   battle.readyScheduled = false;
+  battle.readyEpoch += 1;
   battle.terminalScheduled = false;
   battle.tRecv = receivedAt;
   for (const player of ["p1", "p2"]) {
