@@ -1040,6 +1040,24 @@ def provenance(path: Path) -> dict:
             "bytes": len(data)}
 
 
+def json_safe(value: Any) -> Any:
+    """Convert unavailable floating-point calculations to JSON ``null`` recursively.
+
+    ``NaN`` is a Python extension, not JSON. The MDE is unavailable when there are no
+    discordances, and that honest absence must survive in a standard parser rather than make the
+    entire report syntactically invalid. ``allow_nan=False`` at the writer below keeps a future
+    non-finite field from silently restoring the extension.
+    """
+
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, Mapping):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    return value
+
+
 def _fmt(row: dict) -> str:
     mde = row["mde_delta_c_at_80pct_power"]
     half = row["discordant_half_swings_tie_transitions"]
@@ -1250,7 +1268,9 @@ def main() -> int:
               f"{result['demo_summary']['gaming_or_corruption_inputs_that_PASSED'] or 'none'}")
 
     if args.json:
-        Path(args.json).write_text(json.dumps(result, indent=1, sort_keys=True))
+        Path(args.json).write_text(
+            json.dumps(json_safe(result), allow_nan=False, indent=1, sort_keys=True)
+        )
         print(f"\nwrote {Path(args.json).name}")
     return 0
 

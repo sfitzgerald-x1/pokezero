@@ -1636,6 +1636,41 @@ def test_the_cli_writes_an_artifact_with_no_absolute_paths_in_it(tmp_path, monke
     assert doc["cells"]["arm"][str(oi.TAU_PRIMARY)]["delta_c"] == 0.0
 
 
+def _strict_json(text: str):
+    def nonstandard_constant(value: str):
+        raise ValueError(f"non-standard JSON constant {value}")
+
+    return json.loads(text, parse_constant=nonstandard_constant)
+
+
+def test_the_cli_serializes_an_unavailable_mde_as_json_null(tmp_path, monkeypatch):
+    """No discordances means no MDE -- an absence, never Python's invalid `NaN` token."""
+    rows = make_pairs(n=200, seed=4)
+    (tmp_path / "base.json").write_text(json.dumps({"pairs": rows}))
+    (tmp_path / "same.json").write_text(json.dumps({"pairs": rows}))
+    out = tmp_path / "board.json"
+    monkeypatch.setattr("sys.argv", [
+        "value_head_ordering_auc.py",
+        "--ref", f"base={tmp_path / 'base.json'}",
+        "--cell", f"same={tmp_path / 'same.json'}",
+        "--bootstrap-reps", "10", "--json", str(out),
+    ])
+
+    assert oi.main() == 0
+
+    text = out.read_text()
+    doc = _strict_json(text)
+    self_same = doc["cells"]["same"]
+    assert all(self_same[str(t)]["mde_delta_c_at_80pct_power"] is None
+               for t in (oi.TAU_PRIMARY, *oi.TAU_CHECKS))
+    assert "NaN" not in text
+
+
+def test_the_committed_oi1_reports_are_strict_json():
+    for name in ("oi1_ordering_instrument_20260816.json", "oi1_failing_input_demos_20260816.json"):
+        _strict_json((REPO / "reports" / name).read_text())
+
+
 def test_the_cli_states_its_three_standing_caveats_in_the_artifact(tmp_path, monkeypatch):
     rows = make_pairs(n=200, seed=4)
     (tmp_path / "base.json").write_text(json.dumps({"pairs": rows}))
