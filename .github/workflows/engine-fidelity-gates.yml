@@ -2596,8 +2596,8 @@ jobs:
           # loader, and that assertion is scoped to THIS STEP -- job-scoping it was a live hole,
           # because `Ran 22 tests` is not unique in this file and a sibling step's guard satisfied
           # it while this one was weakened to a floor.
-          if ! grep -qE '^Ran 31 tests in ' <<<"${summary}"; then
-            echo "::error::expected 31 census-wiring pins as the runner's own summary line; the"
+          if ! grep -qE '^Ran 32 tests in ' <<<"${summary}"; then
+            echo "::error::expected 32 census-wiring pins as the runner's own summary line; the"
             echo "::error::suite shrank, grew, or that line is not the runner's. Update this count"
             echo "::error::and the module's own guard assertion in the same commit. Saw: ${summary}"
             exit 1

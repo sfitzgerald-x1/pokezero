@@ -392,6 +392,53 @@ class TheCensusJobIsWiredAndCannotBeMadeAdvisoryTests(unittest.TestCase):
         self.assertIn("name", keys, "anti-vacuity: the step-level key scan found nothing")
         self.assertIn("run", keys, "anti-vacuity: the step-body key scan found nothing")
 
+    def test_required_gate_status_cannot_hide_a_red_census(self) -> None:
+        """The required reporter must run, and its reporting step must not be made advisory.
+
+        The census job's own guard is insufficient: branch protection reads `gate-status`, so a
+        job-level `continue-on-error`, a non-`always()` job condition, or either key on the sole
+        reporting step can make a red census look green. `if: always()` is intentionally required
+        at the job level -- it keeps the reporter alive to report failed dependencies -- so this
+        test distinguishes that one allowed `if` from the forbidden bypasses rather than applying
+        the census job's blanket prohibition.
+        """
+
+        gate_code = _job_code(GATE_JOB)
+        job_lines = [
+            line for line in gate_code.splitlines()
+            if len(line) - len(line.lstrip()) == 4
+        ]
+        job_keys = _keys("\n".join(job_lines))
+        always_lines = [
+            line for line in job_lines
+            if re.fullmatch(r"\s*(?:['\"]?if['\"]?)\s*:\s*always\(\)\s*", line)
+        ]
+
+        self.assertEqual(
+            1,
+            len(always_lines),
+            "gate-status must have exactly the job-level `if: always()` that reports failed needs",
+        )
+        self.assertNotIn(
+            "continue-on-error",
+            job_keys,
+            "job-level continue-on-error would make the required gate-status context green",
+        )
+        self.assertIn("needs", job_keys, "anti-vacuity: no gate-status job-level keys were found")
+
+        step_keys = _keys(_step_block(GATE_JOB, GATE_STEP))
+        self.assertNotIn(
+            "if",
+            step_keys,
+            "the sole gate-status reporting step became skippable, so a red census could be hidden",
+        )
+        self.assertNotIn(
+            "continue-on-error",
+            step_keys,
+            "the sole gate-status reporting step may not turn a red census into a green context",
+        )
+        self.assertIn("run", step_keys, "anti-vacuity: no report-step keys were found")
+
     def test_the_job_actually_runs_the_census(self) -> None:
         step = _step_block(JOB, VERDICT_STEP)
         self.assertTrue(
