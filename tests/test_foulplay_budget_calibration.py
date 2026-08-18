@@ -32,7 +32,7 @@ _SPEC.loader.exec_module(_C)
 
 CALIBRATION_ID = "ceiling-24pct"
 LAYOUT = "cpu1-c3"
-CHECKPOINT = "/shared/checkpoints/k0.pt"
+CHECKPOINT = "/tmp/pokezero-fixture-k0.pt"
 CHECKPOINT_TAG = "k0"
 
 
