@@ -129,6 +129,7 @@ def load_shards(paths: list[str]) -> list[dict]:
     """
     from foulplay_paired_eval import (  # noqa: PLC0415 — sibling script, lazy like `search_config_id`
         ROLLOUT_WITNESS_KEYS,
+        ROLLOUT_WITNESS_QUOTIENT_KEYS,
         ROLLOUT_WITNESS_STAMP,
         ROLLOUT_WITNESS_SUPERSEDED_KEYS,
         SCHEMA_VERSION as SHARD_SCHEMA_VERSION,
@@ -191,15 +192,46 @@ def load_shards(paths: list[str]) -> list[dict]:
                     "assumption that the fields it knows mean what they used to."
                 )
             missing = [key for key in ROLLOUT_WITNESS_KEYS if key not in stats]
+            # THE ONE LEGITIMATELY PARTIAL BLOCK, and the reason this exemption is
+            # here rather than argued about at merge time.
+            #
+            # This reader REFUSED A #1271 SHARD. Measured, not predicted: with the arm
+            # engaged and `rollouts_run == 0`, #1271's writer OMITS the three
+            # quotients, because a quotient of an empty partition has no value -- and
+            # this loop then reported them as "a writer that encodes 'off' as
+            # absence" and exited. The two branches disagreed on the presence axis and
+            # the disagreement survived deleting this branch's WRITER, because what
+            # collides here is this branch's READER.
+            #
+            # Resolved in #1271's favour, which is also the direction the campaign's
+            # own reasoning points once the cases are separated:
+            #   * ARM OFF -> the whole block is absent, and that is caught above by
+            #     `if not witness: continue` -- an arm-off seat is already
+            #     distinguishable from a pre-arm one by `rollout_leaf_of_shard`, which
+            #     reads the CONFIG echo rather than guessing from telemetry. "Absent is
+            #     not false" is about that echo, and it still holds.
+            #   * ARM ON, NO ROLLOUT LAUNCHED -> every COUNT is present and required;
+            #     only the three QUOTIENTS are absent, because there is no denominator.
+            #     `null` is worse than absent here, not better: a pooling reader
+            #     averages a `null` as though it were a measurement, and v1's
+            #     unconditional writer emitted exactly that.
+            # So the counts are still required unconditionally and the exemption is
+            # scoped by VALUE to `rollouts_run == 0`, matching
+            # `require_rollout_leaf_shard_schema` key for key -- and #1271 additionally
+            # REFUSES a quotient that is present at zero rollouts, so the two readers
+            # cannot drift into disagreeing about this block again.
+            if int(stats.get("rollouts_run") or 0) == 0:
+                missing = [
+                    key for key in missing if key not in ROLLOUT_WITNESS_QUOTIENT_KEYS
+                ]
             if missing:
                 raise SystemExit(
                     f"{path}: seat {seat} is a stamped rollout witness missing "
-                    f"{', '.join(missing)}. The witness is emitted "
-                    "UNCONDITIONALLY -- the arm-off readings are `{}`, `0` and `null`, "
-                    "all present -- so a missing key is not an arm-off cell, it is a "
-                    "writer that encodes 'off' as absence. Absent is not false, and "
-                    "this campaign already refuses that elsewhere; refusing it here "
-                    "too rather than defaulting."
+                    f"{', '.join(missing)}. Every COUNT is emitted whenever the arm "
+                    "engaged, so a missing one is not an arm-off cell -- an arm-off "
+                    "cell has no block at all and is handled above -- it is a writer "
+                    "that dropped a field. The three QUOTIENTS are exempt only when "
+                    "`rollouts_run == 0`, where they have no denominator."
                 )
         payload["_path"] = path
         shards.append(payload)
@@ -251,6 +283,7 @@ def rollout_leaf_of_shard(shard: dict) -> bool:
     """
     from foulplay_paired_eval import (  # noqa: PLC0415
         ROLLOUT_WITNESS_KEYS,
+        ROLLOUT_WITNESS_QUOTIENT_KEYS,
         ROLLOUT_WITNESS_STAMP,
     )
 

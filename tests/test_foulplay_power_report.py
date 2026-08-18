@@ -869,6 +869,12 @@ class ArmWitnessTest(unittest.TestCase):
 
 
 
+#: The exempt-at-zero key set, imported from the DRIVER rather than retyped -- a
+#: hand-copied tuple is the defect `current_witness_schema` was rewritten to remove.
+from foulplay_paired_eval import (  # noqa: E402
+    ROLLOUT_WITNESS_QUOTIENT_KEYS,
+)
+
 #: A stamped seat's rollout witness, arm ON. Every key present, which IS the rule.
 WITNESS_ON = {
     "rollout_leaf_schema": 2,
@@ -980,6 +986,81 @@ class ShardWitnessSchemaRefusalTest(unittest.TestCase):
                 ))
                 self.assertEqual(report["cells"][cid]["rollout_leaf"], flag)
 
+    def test_a_CONDITIONALLY_emitted_zero_rollout_witness_LOADS(self) -> None:
+        """B2, MEASURED. This reader REFUSED a #1271 shard, and the deletions on this
+        branch did not fix it, because what collides here is this branch's READER.
+
+        With the arm engaged and `rollouts_run == 0`, #1271's writer OMITS the three
+        quotients -- a quotient of an empty partition has no value, and `null` is worse
+        than absent because a pooling reader averages a `null` as though it were a
+        measurement, which is exactly what the pre-adoption unconditional writer
+        produced. This loop reported those three as "a writer that encodes 'off' as
+        absence" and exited, so a legitimate arm cell would have been unpoolable.
+
+        Resolved in #1271's favour and scoped by VALUE to `rollouts_run == 0`, matching
+        `require_rollout_leaf_shard_schema` key for key. "Absent is not false" is
+        untouched and still holds where it belongs -- on the CONFIG ECHO, which
+        `rollout_leaf_of_shard` reads -- and an ARM-OFF seat has no block at all,
+        handled by the `if not witness: continue` branch above.
+
+        Four directions asserted, because an exemption that swallows a real dropped
+        field is worse than the refusal it replaces.
+        """
+        conditional = {k: v for k, v in WITNESS_OFF.items()
+                       if k not in ROLLOUT_WITNESS_QUOTIENT_KEYS}
+        conditional["rollout_leaf_modes"] = {"rollout": 4}
+        conditional["rollout_leaf_worlds"] = 4
+        cid = "d4-s64-b16-w1+rollout8p200@k0"
+        # 1. arm on, rollouts_run == 0, quotients omitted -> LOADS.
+        report = self._pair(witnessed(
+            shard(cid, "search", "/c/k0.pt", {(0, "p1"): 1.0}),
+            conditional, rollout_leaf=True,
+        ))
+        self.assertTrue(report["cells"][cid]["rollout_leaf"])
+        # 2. a genuinely dropped QUOTIENT at rollouts_run > 0 -> still REFUSED.
+        for key in ROLLOUT_WITNESS_QUOTIENT_KEYS:
+            with self.subTest(dropped_quotient=key):
+                with self.assertRaises(SystemExit) as caught:
+                    self._pair(witnessed(
+                        shard(cid, "search", "/c/k0.pt", {(0, "p1"): 1.0}),
+                        WITNESS_ON, rollout_leaf=True, **{key: _DROP},
+                    ))
+                self.assertIn(key, str(caught.exception))
+        # 3. a dropped COUNT at rollouts_run == 0 -> still REFUSED. The exemption is
+        #    for the three quotients and nothing else.
+        for key in ("rollout_cap_hits", "rollout_leaf_worlds", "rollout_encode_skipped"):
+            with self.subTest(dropped_count=key):
+                partial = dict(conditional)
+                partial.pop(key)
+                with self.assertRaises(SystemExit) as caught:
+                    self._pair(witnessed(
+                        shard(cid, "search", "/c/k0.pt", {(0, "p1"): 1.0}),
+                        partial, rollout_leaf=True,
+                    ))
+                self.assertIn(key, str(caught.exception))
+        # 4. THE TWO READERS AGREE ON THE EXEMPT KEY SET -- checked against #1271's own
+        #    constant once #1271 has landed, and not before. `ROLLOUT_LEAF_QUOTIENT_
+        #    FIELDS` arrives WITH #1271 (which lands first), so on this branch alone it
+        #    is legitimately absent and the check is skipped rather than faked. It is
+        #    written this way instead of retyping the three names, because a hand-copied
+        #    duplicate of a derived value is the exact defect `current_witness_schema`
+        #    was rewritten to remove.
+        try:
+            from pokezero.engine_search import (  # noqa: PLC0415
+                ROLLOUT_LEAF_QUOTIENT_FIELDS,
+            )
+        except ImportError:
+            self.skipTest(
+                "ROLLOUT_LEAF_QUOTIENT_FIELDS lands with #1271; this branch's copy of "
+                "the exemption is asserted above, and the two are reconciled at merge"
+            )
+        self.assertEqual(
+            sorted(ROLLOUT_WITNESS_QUOTIENT_KEYS),
+            sorted(ROLLOUT_LEAF_QUOTIENT_FIELDS),
+            "the driver's exemption and #1271's must be the same three keys, or the "
+            "two readers drift back into disagreeing about this block",
+        )
+
     def test_an_unknown_ENVELOPE_version_is_refused(self) -> None:
         """The outer `schema_version`, which is a separate axis from the stamp.
 
@@ -1056,23 +1137,38 @@ class ShardWitnessSchemaRefusalTest(unittest.TestCase):
     def test_a_PARTIAL_witness_is_refused_not_read_as_arm_off(self) -> None:
         """The conditional-presence writer, i.e. the fourth axis of the conflict.
 
-        A stamped seat missing witness keys was written by a builder that emits them
-        only when the arm engaged. Refused rather than read as "arm off", because
-        those two are exactly what must stay distinguishable -- and this module's
+        A stamped seat missing a COUNT was written by a builder that emits it only
+        when the arm engaged. Refused rather than read as "arm off", because those two
+        are exactly what must stay distinguishable -- and this module's
         absent-is-not-false reasoning depends on it.
 
-        FAILING INPUT: the arm-OFF control carries every key at `{}` / `0` / `null`
-        and loads, so this is not a refusal of arm-off shards.
+        NARROWED to the counts, and the narrowing is measured rather than conceded:
+        this check refused a legitimate #1271 shard, whose writer omits the three
+        QUOTIENTS at `rollouts_run == 0` because a quotient of an empty partition has
+        no value. See `test_a_CONDITIONALLY_emitted_zero_rollout_witness_LOADS`. So the
+        dropped field here is a COUNT (`rollout_encode_skipped`), which is required
+        whatever `rollouts_run` reads -- and the dropped quotient is left out of this
+        fixture rather than mixed in, because perturbing two fields at once would let
+        the first refusal short-circuit the second and pin neither.
+
+        FAILING INPUT: the arm-OFF control has no block at all in #1271's writer and
+        every key in this branch's; both load, so this is not a refusal of arm-off
+        shards.
         """
         with self.assertRaises(SystemExit) as caught:
             self._pair(witnessed(
                 shard("d4-s64-b16-w1@k0", "search", "/c/k0.pt", {(0, "p1"): 1.0}),
                 WITNESS_OFF, rollout_leaf=False,
-                rollout_mean_plies=_DROP, rollout_encode_skipped=_DROP,
+                rollout_encode_skipped=_DROP,
             ))
         message = str(caught.exception)
-        self.assertIn("UNCONDITIONALLY", message)
+        self.assertIn("dropped a field", message)
         self.assertIn("rollout_encode_skipped", message)
+        # And a dropped QUOTIENT at `rollouts_run == 0` is NOT this case: it loads.
+        self._pair(witnessed(
+            shard("d4-s64-b16-w1@k0", "search", "/c/k0.pt", {(0, "p1"): 1.0}),
+            WITNESS_OFF, rollout_leaf=False, rollout_mean_plies=_DROP,
+        ))
 
     def test_an_absent_rollout_leaf_beside_a_witness_is_refused(self) -> None:
         """The shard-level instance of ABSENT IS NOT FALSE.

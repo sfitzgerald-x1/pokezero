@@ -138,6 +138,23 @@ ROLLOUT_WITNESS_KEYS = (
     "rollout_mean_plies",
 )
 
+#: The three keys that are QUOTIENTS of the rollout partition, and therefore have no
+#: value at all when no rollout ran. Named separately because the presence rule differs
+#: for them and only for them: every COUNT is emitted whenever the arm engaged, while
+#: these three are OMITTED at `rollouts_run == 0` because there is no denominator.
+#:
+#: This split is the one #1271's `require_rollout_leaf_shard_schema` makes, and it is
+#: named here because the reader in `foulplay_power_report` did NOT make it and
+#: therefore refused a legitimate #1271 shard -- measured, not predicted. `null` is
+#: worse than absent for a quotient, not better: a pooling reader averages a `null` as
+#: though it were a measurement, which is exactly what the pre-adoption unconditional
+#: writer produced.
+ROLLOUT_WITNESS_QUOTIENT_KEYS = (
+    "rollout_terminal_fraction",
+    "rollout_fallback_fraction",
+    "rollout_mean_plies",
+)
+
 #: The key that says the block was stamped at all. Its ABSENCE beside a witness is
 #: the pre-adoption shape -- either branch's, since neither stamped -- and is exactly
 #: what cannot be resolved after the fact.
