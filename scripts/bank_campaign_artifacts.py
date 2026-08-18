@@ -1087,11 +1087,14 @@ def _validate(
             "campaign_id",
         ))
 
-    if out_dir.exists() and not out_dir.is_dir():
+    # Path.is_dir() follows links, which would let an otherwise matching artifact outside the
+    # store be reported as an in-place no-op.  The campaign-id path itself is the address of
+    # the evidence, so it must be a real directory (and a dangling link is a refusal too).
+    if out_dir.is_symlink() or (out_dir.exists() and not out_dir.is_dir()):
         reasons.append(Refusal(
             DESTINATION_NOT_A_DIRECTORY,
-            f"{out_dir} exists and is not a directory. A banked campaign IS a directory; a file "
-            f"or a link sitting at the campaign id's path is a refusal, not something to write "
+            f"{out_dir} is a link or is not a directory. A banked campaign IS a directory; a file "
+            f"or link sitting at the campaign id's path is a refusal, not something to write "
             f"through -- and reaching `iterdir()` on it raised a bare OSError instead.",
         ))
 

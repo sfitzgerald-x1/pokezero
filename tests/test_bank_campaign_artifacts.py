@@ -549,6 +549,19 @@ class EstimandGuardTests(_FixtureCase):
 # Destination, kind and checkpoint guards
 # ----------------------------------------------------------------------------------------------
 class DestinationGuardTests(_FixtureCase):
+    def test_a_matching_artifact_reached_through_a_destination_symlink_is_refused(self) -> None:
+        """A symlink must not turn a different store's evidence into our unchanged result."""
+        elsewhere = self.fixture.root / "elsewhere" / CAMPAIGN_ID
+        bank.bank_artifact(self.fixture.stamp, self.fixture.source_dir, elsewhere)
+        before = (elsewhere / bank.PROVENANCE_FILENAME).read_bytes()
+        self.fixture.out_dir.symlink_to(elsewhere, target_is_directory=True)
+
+        refusal = self.refuse()
+
+        self.assertIn(bank.DESTINATION_NOT_A_DIRECTORY, refusal.codes)
+        self.assertTrue(self.fixture.out_dir.is_symlink())
+        self.assertEqual((elsewhere / bank.PROVENANCE_FILENAME).read_bytes(), before)
+
     def test_a_destination_holding_a_differing_artifact_is_refused(self) -> None:
         self.fixture.bank()
         self.fixture.stamp["sims"] = 4096  # same campaign id, different run
