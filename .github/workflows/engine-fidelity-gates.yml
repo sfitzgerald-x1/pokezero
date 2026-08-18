@@ -1999,6 +1999,13 @@ jobs:
             echo "::error::the rollout-leaf arbiter suite did not report a clean OK"
             exit 1
           fi
+          # `build_search_crate_engine.sh` attests the engine and its plain
+          # search wheel.  This step then deliberately replaces that second
+          # consumer with the model-feature wheel it just exercised.  Re-attest
+          # only after all no-skip/count/OK guards above pass: at this point both
+          # installed consumers are current, and the final workflow check below
+          # verifies this new artifact identity rather than the superseded wheel.
+          python scripts/engine_build_fingerprint.py --write --after-two-consumer-rebuild
 
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check
