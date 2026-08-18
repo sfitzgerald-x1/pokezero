@@ -34,6 +34,9 @@ except ImportError:  # pragma: no cover
 HAS_ROLLOUT = pokezero_search is not None and hasattr(
     pokezero_search, "puct_search_multi_rollout"
 )
+HAS_UNIFORM_ROW_PRICER = pokezero_search is not None and hasattr(
+    pokezero_search, "price_uniform_rollout_rows"
+)
 
 #: Fields allowed to differ between the two drivers on the same search: wall
 #: clock, the evaluator label, and the rollout-only accounting.
@@ -300,6 +303,72 @@ class RolloutBoundaryGuardTests(unittest.TestCase):
     def test_unknown_leaf_mode_refused(self) -> None:
         with self.assertRaisesRegex(ValueError, "unknown leaf_mode"):
             self._call(leaf_mode="oracle")
+
+
+@unittest.skipUnless(
+    HAS_UNIFORM_ROW_PRICER,
+    "pokezero_search crate with the direct uniform row pricer not built",
+)
+class UniformRowPricerTests(unittest.TestCase):
+    """The public writer's native seam, separate from tree traversal.
+
+    This is not a small variation on ``puct_search_multi_rollout``: it must
+    price exactly the supplied successor states, return their one-for-one
+    values, and expose the terminal/fallback ledger used by the artifact.
+    """
+
+    @staticmethod
+    def _price(*, threads: int = 1, **overrides):
+        kwargs = dict(
+            rollouts=4,
+            rollout_max_plies=60,
+            rollout_seed=1234,
+            rollout_threads=threads,
+            rollout_branch_on_damage=False,
+        )
+        kwargs.update(overrides)
+        return json.loads(
+            pokezero_search.price_uniform_rollout_rows(
+                [_state(), _state()], [17, 29], **kwargs
+            )
+        )
+
+    def test_prices_only_the_supplied_rows_and_reports_the_complete_ledger(self) -> None:
+        report = self._price()
+
+        self.assertEqual(report["schema"], "pokezero.uniform-rollout-row-prices.v1")
+        self.assertEqual(report["value_frame"], "side_one_absolute")
+        self.assertEqual(report["rollout_policy"], "uniform")
+        self.assertEqual(report["leaves_priced"], 2)
+        self.assertEqual(report["rollouts_run"], 8)
+        self.assertEqual(len(report["values"]), 2)
+        self.assertTrue(all(0.0 <= value <= 1.0 for value in report["values"]))
+        self.assertEqual(
+            report["rollout_terminal_hits"]
+            + report["rollout_cap_hits"]
+            + report["rollout_dead_ends"],
+            report["rollouts_run"],
+        )
+
+    def test_thread_count_does_not_change_direct_row_values(self) -> None:
+        one = self._price(threads=1)
+        many = self._price(threads=6)
+        one.pop("rollout_threads")
+        many.pop("rollout_threads")
+        self.assertEqual(one, many)
+
+    def test_refuses_wrong_length_duplicate_ordinals_and_degenerate_config(self) -> None:
+        state = _state()
+        with self.assertRaisesRegex(ValueError, "every state needs one stable ordinal"):
+            pokezero_search.price_uniform_rollout_rows([state], [1, 2])
+        with self.assertRaisesRegex(ValueError, "duplicate 17"):
+            pokezero_search.price_uniform_rollout_rows([state, state], [17, 17])
+        with self.assertRaisesRegex(ValueError, "rollouts must be > 0"):
+            pokezero_search.price_uniform_rollout_rows([state], [17], rollouts=0)
+        with self.assertRaisesRegex(ValueError, "rollout_max_plies must be > 0"):
+            pokezero_search.price_uniform_rollout_rows([state], [17], rollout_max_plies=0)
+        with self.assertRaisesRegex(ValueError, "rollout_threads must be > 0"):
+            pokezero_search.price_uniform_rollout_rows([state], [17], rollout_threads=0)
 
 
 class RolloutConfigGuardTests(unittest.TestCase):
