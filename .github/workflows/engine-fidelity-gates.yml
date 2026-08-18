@@ -2441,11 +2441,23 @@ jobs:
         # THIS STEP, not the job. An earlier form of this comment claimed "0 of this job's 5 steps"
         # asserts on its own log, and the wiring-test step added below makes that stale in BOTH the
         # count and the property -- so it is restated at the granularity where it is true rather
-        # than left to age. That step does grep a `Ran N tests` / `^OK$` log, and the honest reading
-        # is that the log belongs to the SUITE it ran, not to the step's own verdict: the suite is a
-        # separate process, the step cannot decide its own result, and the invocation is pinned by
-        # the suite itself so an `echo`-forged log fails a test. What must never happen is what this
-        # step refuses: taking a success LINE as the verdict when an exit CODE is available.
+        # than left to age. That step reads a `Ran N tests` / `OK` tail, and the honest reading is
+        # that the tail belongs to the SUITE it ran, not to the step's own verdict: the suite is a
+        # separate process and the step cannot decide its own result. An earlier form of this
+        # comment went further and said the invocation is pinned "so an `echo`-forged log fails a
+        # test". THAT WAS TRUE ONLY OF FORGES THAT REPLACE THE INVOCATION. Review measured two that
+        # KEEP it -- `|| true` plus an appended summary, and an env-gated wrapper around the whole
+        # body -- and both exited 0 over a suite whose own log said `FAILED (failures=1)`. The step
+        # below is rewritten so the runner's STATUS is its verdict; see its comment.
+        #
+        # THE CAPTURE IS PART OF THE INVOCATION, and that is the whole point of the line below.
+        # A standalone `rc=$?` on its own line pins nothing about WHOSE status it captures: review
+        # inserted one ordinary diagnostic `echo` between the two lines and measured `STEP EXIT=0`
+        # on a tree where the census exited 15, with all 22 wiring pins green. `cmd || rc=$?`
+        # cannot be orphaned that way because there is no second statement to displace, and
+        # tests/test_schema_container_census_wiring.py EXECUTES this step's own `run:` body against
+        # a stubbed census to assert the step's status tracks it -- a pin no textual match can be
+        # talked past.
         #
         # ANY non-zero is red, not only 15. `classification()` raises `SystemExit(str)` -- exit 1 --
         # for a spec row that is malformed, duplicated or self-contradictory, and an interpreter
@@ -2454,10 +2466,8 @@ jobs:
         # left to `-e`.
         run: |
           set -o pipefail
-          set +e
-          python scripts/schema_container_census.py
-          rc=$?
-          set -e
+          rc=0
+          python scripts/schema_container_census.py || rc=$?
           echo "census exit code: ${rc}"
           if [ "${rc}" -eq 15 ]; then
             echo "::error::the schema-container census aborted. A container of schema names in"
@@ -2501,25 +2511,71 @@ jobs:
       # the workflow carries that string inside EXACTLY ONE comment, as their own anti-vacuity
       # control for telling comments from executable steps. Adding a second reddens both, which is
       # how this note came to be written -- the control worked.
+      #
+      # ⚠ THE RUNNER'S STATUS IS THIS STEP'S VERDICT, and the first revision of this step got that
+      # wrong in a way review measured rather than argued. It ran the suite through `tee` into
+      # /tmp/censuswiring.log and then grepped that FILE. Two forges keep the real invocation and
+      # still land green:
+      #
+      #   * `|| true` on the invocation, then `printf 'Ran N tests\nOK\n' >> ` the same log. The log
+      #     ends `FAILED (failures=1)` followed by the appended pair; both greps match; the step
+      #     exits 0. Measured with a real weakening riding along (`gate-status`'s census arm flipped
+      #     to `exit 0`): suite red, step green. Spelled without a literal count in the forge it
+      #     reddens nothing else in the repository either.
+      #   * an env-gated `if [ "${RUN_...:-0}" = "1" ]; then ... fi` around the WHOLE body. Nothing
+      #     runs, no log is written, the step exits 0, and every textual pin on it still holds --
+      #     the invocation string is present, both guards still `exit 1`.
+      #
+      # A file is extensible by any later command, so a guard reading one can never be the verdict.
+      # So: the status is captured IN the invocation (`|| rc=$?`, which nothing can displace), the
+      # output is captured into a SHELL VARIABLE rather than a file, and the summary is required to
+      # be the runner's own last three lines rather than merely present somewhere. All three are
+      # executed -- not pattern-matched -- by
+      # tests/test_schema_container_census_wiring.py, which runs this step's `run:` body against a
+      # stub that chooses the status and the tail independently.
       - name: The census wiring pins
         run: |
           set -o pipefail
-          python -m unittest tests.test_schema_container_census_wiring -v 2>&1 \
-            | tee /tmp/censuswiring.log
-          # EXACT, not a floor -- a floor is the one fail-open shape this repo's mutation batteries
-          # have caught before. This guard lives in YAML where no local `unittest` run can see it,
-          # which is how an approved PR has reddened CI here; the module therefore asserts on this
-          # very line itself (test_the_workflow_test_count_guard_matches_this_module), deriving the
-          # number from the loader so a module that grows without this count following is a LOCAL
-          # failure. That self-check is the property the module was missing at 8d32dcb2.
-          if ! grep -qE 'Ran 22 tests' /tmp/censuswiring.log; then
-            echo "::error::expected 22 census-wiring pins; the suite shrank or grew. Update this"
-            echo "::error::count and the module's own guard assertion in the same commit."
+          rc=0
+          log=$(python -m unittest tests.test_schema_container_census_wiring -v 2>&1) || rc=$?
+          printf '%s\n' "${log}"
+          # THE VERDICT. A non-zero runner is red whatever its output says, which is what the two
+          # forges above defeated: neither can survive this arm without also editing the capture
+          # line, and the capture line is a whole-line pin AND executed.
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::the census wiring pins did not pass (the runner exited ${rc}). Every"
+            echo "::error::structural, consumption and behavioural pin on the schema-container"
+            echo "::error::census job is asserted by that module and by nothing else."
             exit 1
           fi
-          # A clean OK with no skips or errors. `Ran N tests` alone passes over N failures.
-          if ! grep -qE '^OK$' /tmp/censuswiring.log; then
-            echo "::error::the census wiring pins did not report a clean OK (skip or failure)"
+          # The runner's own tail, read with parameter expansion rather than `tail`/`head`: a
+          # pipeline whose reader exits early can return 141 under `set -o pipefail`, and a SIGPIPE
+          # misread as a verdict is the same defect this whole job is about.
+          last=${log##*$'\n'}
+          without_last=${log%$'\n'*}
+          without_two=${without_last%$'\n'*}
+          summary=${without_two##*$'\n'}
+          # A clean OK, read as the runner's LAST line. `unittest` prints the summary last, so a
+          # tail-anchored check cannot be satisfied by text appended after a failure -- and a plain
+          # `grep -qE '^OK$'` could.
+          if [ "${last}" != "OK" ]; then
+            echo "::error::the census wiring pins did not END in a clean OK (skip, failure, or"
+            echo "::error::output written after the runner finished). Last line: ${last}"
+            exit 1
+          fi
+          # EXACT, not a floor -- a floor is the one fail-open shape this repo's mutation batteries
+          # have caught before. Anchored to the runner's own summary line (third from last, `Ran N
+          # tests in <time>`) rather than matched anywhere in the log, for the reason above. This
+          # guard lives in YAML where no local `unittest` run can see it, which is how an approved
+          # PR has reddened CI here; the module therefore asserts on this very line itself
+          # (test_the_workflow_test_count_guard_matches_this_module), deriving the number from the
+          # loader, and that assertion is scoped to THIS STEP -- job-scoping it was a live hole,
+          # because `Ran 22 tests` is not unique in this file and a sibling step's guard satisfied
+          # it while this one was weakened to a floor.
+          if ! grep -qE '^Ran 26 tests in ' <<<"${summary}"; then
+            echo "::error::expected 26 census-wiring pins as the runner's own summary line; the"
+            echo "::error::suite shrank, grew, or that line is not the runner's. Update this count"
+            echo "::error::and the module's own guard assertion in the same commit. Saw: ${summary}"
             exit 1
           fi
 
