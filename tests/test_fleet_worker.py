@@ -11,6 +11,7 @@ import json
 import errno
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import time
@@ -3051,12 +3052,37 @@ class FanInSharedFilesystemFleetTests(FanInFixture):
         return codes
 
     def _terminal_log_lines(self) -> list[str]:
-        lines = []
+        """Every TERMINAL line AND the traceback underneath it.
+
+        THE TRACEBACK WAS BEING DROPPED, which is why this test has failed five times in CI
+        across several branches without once producing a diagnosis. `_assert_fleet_drained`
+        says "the log line that caused it is the whole diagnosis -- report it", but a
+        `TERMINAL`-substring filter keeps only the header. Two of the three terminal exits in
+        `fleet_worker.py` put the actual cause on FOLLOWING lines:
+
+            :4738  ... selected inventory corruption ...: {exc}      <- cause on the same line
+            :4743  ... commit failure ...: \\n{traceback.format_exc()}  <- cause on the NEXT lines
+
+        and it is the second one that fires. So every report of this failure has read
+        "TERMINAL fan-in commit failure for i1-s6.env; preserving claim:" and stopped exactly
+        where the exception type would have been. A test that detects a race and discards the
+        evidence turns a diagnosable bug into a recurring flake -- which is what happened.
+
+        Continuation lines are taken until the next timestamped worker line, so an indented
+        traceback and its `During handling...` chains come through whole.
+        """
+        stamped = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ ")
+        lines: list[str] = []
         for log in sorted((self.root / "worker-logs").glob("*.log")):
-            lines += [
-                line for line in log.read_text(encoding="utf-8").splitlines()
-                if "TERMINAL" in line
-            ]
+            collecting = False
+            for line in log.read_text(encoding="utf-8").splitlines():
+                if "TERMINAL" in line:
+                    collecting = True
+                    lines.append(line)
+                elif collecting and not stamped.match(line):
+                    lines.append(line)
+                else:
+                    collecting = False
         return lines
 
     def _assert_fleet_drained(self, codes: list[int]) -> None:

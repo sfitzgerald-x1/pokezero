@@ -313,20 +313,59 @@ class NativeCallContractTest(unittest.TestCase):
             inspect.signature(native.search_batched_multi_encoded).parameters
         )
         params = [p for p in params if p not in ("self", "/")]
-        self.assertEqual(params[-1], "arm_priors")
+        # The contract is the ORDERED PREFIX, asserted whole.
+        #
+        # This used to read `params[-1] == "arm_priors"` — "arm_priors is last,
+        # so nothing was inserted in front of it". That proxy fails the moment a
+        # new slot is legitimately APPENDED behind it, which is exactly what the
+        # positional rule in `engine_search._encoded_search_args` tells a future
+        # author to do. Worse, it fails in the flattering direction: the fix a
+        # reader reaches for is to bump the `-1`, which silently re-admits the
+        # insertion the guard existed to refuse. Pinning the prefix by value is
+        # strictly stronger and is stable under appends.
         self.assertEqual(
-            params[-5:-1],
+            params[:17],
             [
+                "state_str",
+                "iterations",
+                "batch_size",
+                "tables_json",
+                "root_inputs_json",
+                "ctx_json",
+                "root_fold",
+                "max_depth",
+                "c_puct",
+                "seed",
+                "deep_ko_split",
+                "model_priors",
                 "early_stop_min_sims",
                 "early_stop_side_one",
                 "use_opponent_priors",
                 "fpu_reduction",
+                "arm_priors",
             ],
         )
         # Index check against the assembly above: 12 leading positionals.
         self.assertEqual(params.index("use_opponent_priors"), 14)
         self.assertEqual(params.index("fpu_reduction"), 15)
         self.assertEqual(params.index("arm_priors"), 16)
+        # The rollout seam (search-ceiling Phase 1 instrument 2) sits BEHIND the
+        # whole pre-seam contract, in this order. Pinned so that its own slots
+        # cannot be reordered either: `rollout_leaf_mode` defaults to None and
+        # every knob behind it is inert until it is set, so a float or bool
+        # landing one slot early would silently engage the seam.
+        self.assertEqual(
+            params[17:],
+            [
+                "rollout_leaf_mode",
+                "rollouts",
+                "rollout_max_plies",
+                "rollout_policy",
+                "rollout_seed",
+                "rollout_threads",
+                "rollout_branch_on_damage",
+            ],
+        )
 
 
 class OverrideTelemetryIsObservationalTest(unittest.TestCase):

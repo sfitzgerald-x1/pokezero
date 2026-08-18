@@ -495,7 +495,7 @@ for _raw in open(_census):
 # DEDUPED on (file, members). The substitution below is FILE-WIDE -- it rewrites every occurrence of
 # the anchor literal in one pass -- so running it once per ROW double-inserted when two containers in
 # one file share a member set. Live, not hypothetical: neural_cli.py has two argparse tuples with the
-# same choices (train at :467, iterate at :1951) and each ended up with `"v5-drill", "v5-drill"`.
+# same choices (train at :467, iterate at :1952) and each ended up with `"v5-drill", "v5-drill"`.
 # Caught by review; my own check missed it because `grep -c` counts LINES, and both insertions were on
 # the same line.
 _seen_reg = set()
@@ -639,7 +639,7 @@ for _path, _members in _reg_targets:
         raise SystemExit(
             f"drill: could not find the literal {_last!r} in {_path} to anchor the synthetic "
             "schema after. The census says this container must be registered; if its spelling "
-            "changed, re-run scripts/schema_container_census.py --check and reclassify."
+            "changed, re-run scripts/schema_container_census.py and reclassify."
         )
     _txt = _pat.sub(lambda m: f'{m.group(0)}, "{_new}"', _txt)
     open(_f, "w").write(_txt)
@@ -664,7 +664,12 @@ python3 "$INJ" "$WT" || { echo "FAILED to inject the drill schema"; exit 3; }
 # converge: after each fix the instrument still had no way to say what it had missed, so a clean run
 # only proved that the tables I had thought of were registered. This enumerates them instead, and an
 # unclassified container aborts BEFORE anything is scored.
-"$VENV" "$REPO/scripts/schema_container_census.py" --check || {
+# No flag. The `--check` this line used to pass was a no-op whose `--help` claimed it widened the
+# listing, and it has been removed; every abort applies unconditionally. Note what that removal
+# costs if a call site is missed: argparse exits 2 on an unrecognized flag, and this `||` block
+# would then report "a container is unclassified" for what is actually a stale command line. Both
+# call sites in this file were updated in the same commit for that reason.
+"$VENV" "$REPO/scripts/schema_container_census.py" || {
   echo "ABORT: a schema-name container is unclassified, so the drill cannot know whether to"
   echo "       register its synthetic schema in it. An unregistered container makes its consumers"
   echo "       fail on the drill's own omission, which reads as a surviving defect."
