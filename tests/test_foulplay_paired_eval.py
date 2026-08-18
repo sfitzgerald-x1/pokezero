@@ -1296,6 +1296,166 @@ class OpponentHealthIsLiftedTest(unittest.TestCase):
         block = self._seat_block({"completed_games": 5, "engine_mcts": {"fallback_rate": 0.0}})
         self.assertIsNone(block.get("opponent_engine_mcts"))
 
+    def test_the_contention_reading_reaches_the_merged_shard(self) -> None:
+        """The CPU-contention control is compared BETWEEN arms, so it must be merged.
+
+        foul-play is time-budgeted and searches concurrently with us; if the arm that
+        spends more CPU per decision starves it, its win comes from a weaker opponent.
+        `mean_iterations_per_budget_second` is the realized-work reading that makes that
+        falsifiable, and it is useless if it stops at the per-seat bridge summary.
+        """
+
+        block = self._seat_block({
+            "completed_games": 5,
+            "engine_mcts": {"fallback_rate": 0.0},
+            "foulplay_think": {
+                "mean_iterations_per_budget_second": 30000.0,
+                "mean_wait_seconds": 2.1,
+                "miss_decisions": 0,
+                "record_failures": 0,
+            },
+        })
+        self.assertIsNotNone(
+            block.get("foulplay_think"),
+            "the opponent's realized work must survive the merge",
+        )
+        self.assertAlmostEqual(
+            block["foulplay_think"]["mean_iterations_per_budget_second"], 30000.0
+        )
+
+    def test_a_summary_with_no_contention_reading_lifts_None(self) -> None:
+        """A producer too old to measure it must not read as "no contention"."""
+
+        block = self._seat_block({"completed_games": 5, "engine_mcts": {"fallback_rate": 0.0}})
+        self.assertIsNone(block.get("foulplay_think"))
+        # And the ABSENCE is named rather than left as a missing key, because a consumer
+        # that finds no reading and no refusal has nothing to distinguish "too old to
+        # measure" from "measured, no contention".
+        self.assertFalse(block["foulplay_think_reading"]["usable"])
+        self.assertEqual(block["foulplay_think_reading"]["reasons"], ["think_block_absent"])
+
+    def test_a_present_but_empty_reading_is_refused_not_read_as_flat(self) -> None:
+        """The case the absent-block test does NOT cover, and the dangerous one.
+
+        A block that is present with `mean_iterations_per_budget_second: null` on both arms
+        IS "flat between arms" -- the documented no-contention reading -- to any consumer
+        that does not hand-check the misses. The merged shard has to carry the refusal.
+        """
+
+        block = self._seat_block({
+            "completed_games": 5,
+            "engine_mcts": {"fallback_rate": 0.0},
+            "foulplay_think": {
+                "mean_iterations_per_budget_second": None,
+                "iterations_measured_decisions": 0,
+                "iterations_coverage": 0.0,
+                "miss_decisions": 240,
+                "miss_reasons": {"iterations_line_absent": 240},
+                "record_failures": 0,
+            },
+        })
+
+        self.assertIsNotNone(block.get("foulplay_think"))
+        self.assertFalse(block["foulplay_think_reading"]["usable"])
+        self.assertIn("no_rate_measured", block["foulplay_think_reading"]["reasons"])
+        self.assertIn("zero_measured_decisions", block["foulplay_think_reading"]["reasons"])
+
+    def _comparison(self, first, second):
+        import importlib.util as u
+        from pathlib import Path
+        sp = u.spec_from_file_location(
+            "pe2", Path(__file__).resolve().parents[1] / "scripts" / "foulplay_paired_eval.py")
+        m = u.module_from_spec(sp); sp.loader.exec_module(m)
+        return m.foulplay_think_comparison(first, second)
+
+    def test_the_merged_shard_runs_the_contention_gate(self) -> None:
+        """The gate's cross-side refusals must reach an artifact, not wait for a human.
+
+        Failing input: two seats with a null reading. Before this the merged shard carried no
+        cross-side verdict at all, so nothing in any produced file said the comparison was
+        unusable.
+        """
+
+        empty = {
+            "mean_iterations_per_budget_second": None,
+            "iterations_measured_decisions": 0,
+            "iterations_coverage": 0.0,
+            "by_stratum": {},
+            "miss_decisions": 240,
+        }
+
+        verdict = self._comparison(empty, empty)
+
+        self.assertEqual(verdict["status"], "refused")
+        self.assertIn("p1:no_rate_measured", verdict["refusal_reasons"])
+        self.assertIn("p2:zero_measured_decisions", verdict["refusal_reasons"])
+
+    def test_the_verdict_reaches_the_produced_report(self) -> None:
+        """Running the gate is worthless if its verdict does not land in the artifact.
+
+        Pinned on the driver source because the report dict is assembled inside `main()`
+        behind two subprocess calls. Failing input: deleting either the call or the key
+        reddens this, which the wrapper tests above cannot see -- they exercise the function,
+        not its arrival in the shard.
+        """
+
+        driver = (REPO_ROOT / "scripts" / "foulplay_paired_eval.py").read_text()
+        self.assertIn("think_seat_comparison = foulplay_think_comparison(", driver)
+        self.assertIn('"foulplay_think_seat_comparison": think_seat_comparison,', driver)
+        # Fed from the per-seat bridge summaries, not from the already-lifted seat blocks.
+        self.assertIn('summaries["p1"].get("foulplay_think")', driver)
+        self.assertIn('summaries["p2"].get("foulplay_think")', driver)
+
+    def test_the_gate_accepts_two_comparable_seats(self) -> None:
+        seat = {
+            "mean_iterations_per_budget_second": 450000.0,
+            "iterations_measured_decisions": 100,
+            "iterations_coverage": 1.0,
+            "by_stratum": {
+                "2x1000ms": {
+                    "iterations_measured_decisions": 100,
+                    "mean_iterations_per_budget_second": 450000.0,
+                }
+            },
+            "iterations_observable": True,
+            "record_failures": 0,
+        }
+
+        verdict = self._comparison(seat, seat)
+
+        self.assertEqual(verdict["status"], "ok")
+        self.assertAlmostEqual(verdict["by_stratum"]["2x1000ms"]["ratio"], 1.0)
+
+    def test_the_stratified_form_and_coverage_reach_the_merged_shard(self) -> None:
+        """The unstratified mean moves 2x on foul-play's own schedule with no contention.
+
+        So `by_stratum` and `iterations_coverage` have to arrive here too -- this is the one
+        place the comparison is run, and it is the place it could not be stratified.
+        """
+
+        block = self._seat_block({
+            "completed_games": 5,
+            "engine_mcts": {"fallback_rate": 0.0},
+            "foulplay_think": {
+                "mean_iterations_per_budget_second": 180000.0,
+                "iterations_measured_decisions": 100,
+                "iterations_coverage": 0.98,
+                "by_stratum": {
+                    "8x500ms": {"mean_iterations_per_budget_second": 120000.0},
+                    "2x1000ms": {"mean_iterations_per_budget_second": 240000.0},
+                },
+                "miss_decisions": 2,
+                "record_failures": 0,
+            },
+        })
+
+        lifted = block["foulplay_think"]
+        self.assertEqual(
+            lifted["by_stratum"]["8x500ms"]["mean_iterations_per_budget_second"], 120000.0
+        )
+        self.assertEqual(lifted["iterations_coverage"], 0.98)
+        self.assertTrue(block["foulplay_think_reading"]["usable"])
+
 
 if __name__ == "__main__":
     unittest.main()

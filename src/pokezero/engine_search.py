@@ -41,6 +41,7 @@ import time
 import warnings
 from collections import Counter
 from dataclasses import dataclass, field, fields
+from types import MappingProxyType
 from typing import Any, Mapping, Optional, Sequence
 
 from .dex import ShowdownDex, normalize_id
@@ -86,6 +87,30 @@ class EngineSearchFallbackWarning(UserWarning):
 
 class EngineSearchFallbackError(RuntimeError):
     """Raised instead of falling back when ``strict_fallbacks`` is set."""
+
+
+class EngineSearchWitnessError(RuntimeError):
+    """A decision's metadata does not match the ARM that produced it.
+
+    Not a fallback and deliberately not warning-shaped: a fallback is a decision
+    that could not be measured, whereas this is a decision that WAS measured and
+    then described wrongly. The run refuses rather than banking it, because a
+    banked row is the artifact every downstream reading is built from and there is
+    no later stage at which a missing witness becomes recoverable -- the
+    measurement is gone once the search returns.
+
+    Raised in both directions, because both have been observed:
+
+    * a decision claiming the rollout arm that carries no rollout witness -- the
+      shape that let a mostly-handcrafted evaluator bank as an "oracle" with no
+      fallback column at all. Measured 0.96503 fallback at the gate's 40-PLY FIXTURE
+      cap; the arm as launched runs a 200-ply cap and its own banked whole-game run
+      measures 0.018139547833834504, so the fixture figure is a statement about the
+      cap and not about the arm;
+    * a decision NOT running the arm that carries one anyway -- the false witness,
+      whose live instance was ``--arm raw --engine-rollout-leaf`` writing
+      ``"rollout_leaf": true`` onto a raw-arm row.
+    """
 
 
 class EngineSearchFoldMismatchWarning(UserWarning):
@@ -452,6 +477,90 @@ def _fence_calibration_seam(payload: Mapping[str, Any], where: str) -> None:
     )
 
 
+#: EVERY ``leaf_eval`` mode the config accepts, mapped to the search method that
+#: runs it -- or ``None`` for the in-process module tree, which talks to no crate
+#: and reports no crate telemetry at all.
+#:
+#: A REGISTRY rather than a chain of literals, because a guard that has to say
+#: something about "the leaf-eval paths that exist" cannot derive that from a
+#: hand-written tuple. `ModelPathDepthInstrumentationTest` claimed that "a NEW
+#: leaf-eval path fails here until it is instrumented"; that was FALSE -- its
+#: method list was a literal and its file-wide total was compared against the
+#: length of that same literal, so a fourth uninstrumented search method left the
+#: total at 3 and survived a 39-module sweep. Both halves of the check were
+#: self-referential.
+#:
+#: Registration is what makes a mode SELECTABLE (``__post_init__`` validates
+#: against these keys), so an unregistered method cannot be reached by any config
+#: and is not a leaf-eval path; a registered one is required by the guard to carry
+#: its own reached-depth accumulation. That is what makes the claim true rather
+#: than aspirational.
+LEAF_EVAL_SEARCH_METHODS: "Mapping[str, Optional[str]]" = MappingProxyType(
+    {
+        # The in-process `monte_carlo_tree_search` tree. No crate report, hence no
+        # reached-depth histogram to accumulate -- stated as None rather than
+        # omitted, so "not instrumented" is a recorded decision and not an absence.
+        "hp_fraction": None,
+        "hp_fraction_crate": "_search_hp_fraction_crate",
+        "rollout_crate": "_search_rollout_crate",
+        # `model` dispatches to `_search_ladder`, which calls `_search_model` once
+        # per rung. The crate report -- and therefore the instrumentation -- lives
+        # on `_search_model`, so that is the method registered here.
+        "model": "_search_model",
+    }
+)
+
+#: The leaf-eval search methods that MUST each accumulate the reached-depth
+#: histogram exactly once, DERIVED from the registry above rather than enumerated.
+DEPTH_INSTRUMENTED_SEARCH_METHODS: tuple[str, ...] = tuple(
+    name for name in LEAF_EVAL_SEARCH_METHODS.values() if name is not None
+)
+
+#: The ONE mode whose implementation is the in-process fall-through at the end of
+#: `_search`'s dispatch rather than a named method. Every other registered mode must
+#: have a dispatch branch, and the dispatch raises rather than substituting this
+#: one's leaf value -- see `require_leaf_eval_dispatched`, and A4's
+#: register-and-starve.
+LEAF_EVAL_IN_PROCESS_MODE = "hp_fraction"
+
+
+def require_leaf_eval_dispatched(leaf_eval: str) -> None:
+    """Refuse a registered mode that reached the end of `_search`'s dispatch.
+
+    A4'S REGISTER-AND-STARVE, and the reason it produced ZERO new failures. The
+    claim was that "a new leaf-eval path is either unregistered and unreachable, or
+    registered and required to carry its own reached-depth accumulation". Adding
+    ``"anything": None`` to `LEAF_EVAL_SEARCH_METHODS` satisfies neither horn: the
+    `None` sentinel exempts it from `DEPTH_INSTRUMENTED_SEARCH_METHODS` (which
+    filters the `None`s out), `EngineMctsConfig.__post_init__` accepts it because
+    membership is all it checks, and `_search`'s dispatch had NO final branch -- so
+    the config was accepted, no branch matched, and control fell into the in-process
+    tree. The leaves were then priced by `hp_fraction` while every shard, decision
+    row and cell id recorded the new mode's NAME. That is the false-witness class
+    arrived at from the registry side.
+
+    A NAMED FUNCTION rather than an inline `else: raise`, for the reason this module
+    already records for `_rollout_leaf_witness`: a named call is a mutation a battery
+    can delete and kill, and it can be driven directly with a synthetic mode instead
+    of only through a full search.
+
+    Scoped by VALUE. The `None` sentinel is a recorded decision not to instrument a
+    path that EXISTS; it is not a licence to have no path at all, and exactly one
+    mode's implementation is the fall-through.
+    """
+
+    if leaf_eval != LEAF_EVAL_IN_PROCESS_MODE:
+        raise EngineSearchWitnessError(
+            f"leaf_eval={leaf_eval!r} is REGISTERED in LEAF_EVAL_SEARCH_METHODS and "
+            "reached the end of `_search`'s dispatch without a branch, so its leaves "
+            f"would have been priced by {LEAF_EVAL_IN_PROCESS_MODE!r}'s in-process "
+            "tree while every shard, decision row and cell id recorded its own name. "
+            "Registration makes a mode SELECTABLE; it does not give it a search. Add "
+            "the dispatch branch, or remove the registry entry so the config refuses "
+            "the mode instead of silently substituting another path's leaf value."
+        )
+
+
 @dataclass(frozen=True)
 class EngineMctsConfig:
     worlds: int = 4
@@ -497,7 +606,142 @@ class EngineMctsConfig:
     # decision/chance node shape, identical depth and c_puct semantics — and
     # swaps only the leaf value function, which is what separates "the defect is
     # in the tree" from "the defect is in the learned value".
+    # "rollout_crate": the SAME crate tree as "hp_fraction_crate" with leaf
+    # values replaced by R terminal rollouts (search-ceiling program Phase 1
+    # instrument 2 -- the arbiter). It exists to separate "the sensor is the
+    # bottleneck" from "the mechanism is broken", so it must differ from the
+    # production crate search in leaf valuation and NOTHING else; the crate's
+    # `rollout_batch1_matches_sequential_report` gate is what discharges that,
+    # and `fidelity_gate_reads_false_on_batch_and_on_pricer` is its
+    # demonstrated failing input.
+    #
+    # ESTIMAND WARNING, to be quoted wherever a number from this path is:
+    # rollout_policy="uniform" prices P(side one wins | both seats play
+    # uniformly at random from here). That is NOT the vhprobe shards' `true_*`
+    # (terminal win probability under POLICY continuation). A null on this arm
+    # is confounded with rollout-policy bias and does not by itself convict the
+    # search mechanism.
     leaf_eval: str = "hp_fraction"
+    # --- rollout_crate knobs (inert on every other leaf_eval) ---
+    # R per leaf. Per-leaf label SE near 0.5 is 0.5/sqrt(R); a root arm's Q
+    # pools over its distinct-leaf count, so the quantity that must sit under
+    # the sibling gaps is 0.5/sqrt(R * distinct_leaves_per_arm), not 0.5/sqrt(R).
+    rollout_count: int = 32
+    # Ply cap per rollout. A capped rollout is NOT a terminal observation: it
+    # falls back to the handcrafted leaf, and the per-decision metadata carries
+    # `rollout_fallback_fraction` so a blend can never be reported as an oracle.
+    rollout_max_plies: int = 200
+    rollout_policy: str = "uniform"
+    # Rollout RNG root. Disjoint from the search RNG by construction: rollouts
+    # never draw from the stream `traverse` uses to sample chance branches.
+    #
+    # What that does and does not buy, stated exactly because the looser version
+    # of this sentence was measurably false. It buys: at a FIXED leaf-value
+    # vector the selection sequence is bit-identical to production's. It does
+    # NOT buy invariance of the tree to this knob -- moving it reprices the
+    # leaves, repriced leaves change selection, and changed selection samples
+    # different chance branches. Measured, search seed held, this knob 1 -> 2:
+    # chance_nodes 344 -> 348, decision_nodes 139 -> 149. That is the
+    # instrument working; it is not a leak between the streams.
+    rollout_seed: int = 0
+    # Throughput only -- priced values are thread-count invariant (crate test
+    # `thread_count_does_not_change_values`).
+    #
+    # THE TIMING HAZARD, and why this defaults to 1 behind an acknowledgement
+    # flag rather than to the core count. In the paired-eval harness the
+    # reference opponent is TIME-budgeted (`FoulPlayConfig.search_time_ms`,
+    # default 1000 ms, two sampled battles per decision) and its search
+    # OVERLAPS ours on the same pod: the bridge forwards foul-play's request
+    # before running our search in a worker thread, so foul-play's clock is
+    # already ticking while we think. Nothing in the shard schema records the
+    # work foul-play actually accomplished -- only the budget it was given --
+    # so CPU stolen from it shows up as a weaker opponent and reads as a
+    # strength gain for whichever arm spends more CPU. That is a confound in
+    # the flattering direction, on an arm whose whole purpose is to arbitrate
+    # a disputed effect.
+    #
+    # HOW MUCH MORE CPU, MEASURED -- because an earlier revision of this comment
+    # asserted "3-4 orders of magnitude" and that is not what the arm costs. At
+    # the priors-on panel's own per-world budget (d4, b64, s4096) on one core, arm
+    # wall against the same search with model leaves lands in the SINGLE DIGITS,
+    # not the thousands. That is the whole content of the retraction and it is the
+    # only part quoted here.
+    #
+    # NO POINT RATIO, because the two measurements of it disagree and neither is
+    # reproducible from a checkout: a single-seed smoke read 1.8x at R=8 / 4.3x at
+    # R=32, and an independent re-derivation on two seeds read 1.25-3.98x. Both
+    # need the pinned panel checkpoint and its CPU export, which live in
+    # `staged-models/` and are not in the repo -- so a number written here cannot
+    # be checked by anyone reading the file, which is how the retracted figure
+    # survived as long as it did.
+    #
+    # The correction cuts both ways and neither way is comfortable. It makes the
+    # arm far cheaper than advertised -- but it also means the contention
+    # confound cannot be dismissed as "swamped by our own cost", and the ratio is
+    # DEPLOYMENT-DEPENDENT: this baseline runs the model's forwards on the same
+    # CPU, so on a pod where the raw arm's forwards go to a GPU the raw arm gets
+    # faster and the ratio grows. The number is not a property of this config.
+    #
+    # The control is therefore unchanged: keep the arm's CORE footprint identical
+    # to the raw arm's (one core) and pay the cost in wall-clock instead, where
+    # it cannot reach the opponent. Raising this number is a legitimate
+    # throughput choice ONLY when the arm has cores that no opponent process is
+    # contending for, which is a property of the deployment, not of this config
+    # -- so it must be asserted explicitly. And the standing instruction is to
+    # MEASURE the contention rather than fence it: time the opponent's think and
+    # parse its realized iteration count, so "our CPU did not weaken it" is a
+    # reading rather than an argument.
+    rollout_threads: int = 1
+    #: Acknowledge that `rollout_threads > 1` has been checked against the
+    #: shard concurrency of the run it is used in. Required, so the hazard
+    #: above cannot be walked into by editing one number.
+    rollout_threads_cpu_budget_ack: bool = False
+    #: Compose the rollout leaf with MODEL PRIORS: run `leaf_eval="model"`'s
+    #: `_search_ladder` -> `search_batched_multi_encoded` path with leaf values
+    #: replaced by R rollouts. This -- not `leaf_eval="rollout_crate"` -- is the
+    #: search-ceiling program's arbiter arm, because the campaign's surviving
+    #: config is priors ON and priors live only on the model path. The knobs
+    #: above (`rollout_count`, `rollout_max_plies`, `rollout_policy`,
+    #: `rollout_seed`, `rollout_threads` and its ack) are shared by both paths.
+    #:
+    #: The estimand warning on `leaf_eval` applies here UNCHANGED, and so does
+    #: the CPU-contention hazard: the opponent is time-budgeted and thinks
+    #: concurrently with this search, so `rollout_threads > 1` still needs the
+    #: acknowledgement.
+    #:
+    #: The fidelity claim on this path is NOT inherited from the sequential
+    #: one. `tests/test_rollout_model_priors.py` re-establishes it against the
+    #: model driver: `rollout_leaf_mode="model_value"` reproduces production
+    #: field for field, and the gate reads False on the rollout pricer and on a
+    #: changed batch.
+    rollout_leaf_eval: bool = False
+    #: Damage-roll branching INSIDE rollouts. Independent of the search's own
+    #: `branch_on_damage`: a rollout samples one outcome either way, so this only
+    #: refines the sampled damage distribution.
+    rollout_branch_on_damage: bool = False
+    # Rows priced per round. On THIS (sequential) path 1 is the production
+    # regime and the only value the fidelity gate certifies; >1 is a measured
+    # fidelity LOSS, not an approximation.
+    #
+    # THE GATE WAS ON THE WRONG KNOB. `rollout_threads` -- proven value-invariant
+    # by `thread_count_does_not_change_values` -- required an acknowledgement,
+    # while this one, the only uncertified regime the arm has, was accepted
+    # silently with no warning. Measured magnitude on `symmetric.state`:
+    # root_value 0.518034 at 1, 0.505411 at 8, 0.435800 at 64 -- 8.2 pp on the
+    # reported quantity, which is LARGER than the ~0.6 pp vs ~13 pp contrast this
+    # arm exists to resolve. So an unacknowledged batch could swamp the arbiter's
+    # own signal.
+    leaf_batch: int = 1
+    #: Acknowledge that `leaf_batch > 1` trades selection fidelity for pricer
+    #: amortisation on the sequential path, and that the fidelity gate does not
+    #: cover the chosen value. Required, so the arm's one uncertified regime
+    #: cannot be entered by editing a number.
+    #:
+    #: Scope note: this is a SEQUENTIAL-path fence. On the model-priors path the
+    #: campaign's production configuration is itself batched (the panel ran
+    #: b64), so there `search_batch > 1` IS production and the control
+    #: reproduces production at the panel's own batch -- no ack applies.
+    leaf_batch_fidelity_loss_ack: bool = False
     # TorchScript artifact (scripts/export_model.py; per-device trace — a CPU
     # artifact must run on cpu) and the encoder tables JSON
     # (scripts/export_encoder_tables.py), plus the source checkpoint whose
@@ -595,16 +839,159 @@ class EngineMctsConfig:
     def __post_init__(self) -> None:
         if self.worlds <= 0 or self.search_time_ms <= 0 or self.threads <= 0:
             raise ValueError("worlds, search_time_ms, and threads must be positive.")
-        if self.leaf_eval not in ("hp_fraction", "hp_fraction_crate", "model"):
+        # AGAINST THE REGISTRY, not against a second copy of the same literals. A
+        # leaf-eval mode is selectable if and only if it is registered in
+        # `LEAF_EVAL_SEARCH_METHODS`, which is what lets the instrumentation guard
+        # derive "every leaf-eval path" instead of restating a list that can go
+        # stale in the flattering direction.
+        if self.leaf_eval not in LEAF_EVAL_SEARCH_METHODS:
             raise ValueError(
-                "leaf_eval must be 'hp_fraction', 'hp_fraction_crate' or 'model', "
-                f"got {self.leaf_eval!r}."
+                "leaf_eval must be one of "
+                f"{', '.join(repr(name) for name in LEAF_EVAL_SEARCH_METHODS)}, "
+                f"got {self.leaf_eval!r}. A new leaf-eval path is registered in "
+                "LEAF_EVAL_SEARCH_METHODS -- which is also what requires it to "
+                "carry its own reached-depth accumulation."
             )
-        if self.leaf_eval == "hp_fraction_crate":
+        if self.leaf_eval in ("hp_fraction_crate", "rollout_crate"):
             if self.search_sims <= 0 or self.search_depth <= 0:
                 raise ValueError(
                     "search_sims and search_depth must be positive for "
-                    "leaf_eval='hp_fraction_crate'."
+                    f"leaf_eval={self.leaf_eval!r}."
+                )
+        if self.leaf_eval == "rollout_crate":
+            if self.rollout_count <= 0:
+                # A zero-rollout "Monte-Carlo" leaf is the handcrafted fallback
+                # wearing the oracle's name in the report.
+                raise ValueError(
+                    "rollout_count must be > 0 for leaf_eval='rollout_crate' "
+                    f"(got {self.rollout_count})."
+                )
+            if self.rollout_max_plies <= 0:
+                raise ValueError(
+                    "rollout_max_plies must be > 0 for leaf_eval='rollout_crate' "
+                    f"(got {self.rollout_max_plies})."
+                )
+            if self.rollout_threads <= 0:
+                raise ValueError(
+                    "rollout_threads must be > 0 for leaf_eval='rollout_crate' "
+                    f"(got {self.rollout_threads})."
+                )
+            if self.rollout_threads > 1 and not self.rollout_threads_cpu_budget_ack:
+                # See the field comment: the reference opponent is time-budgeted
+                # and its search overlaps ours on the same pod, so extra cores
+                # here weaken the opponent specifically -- in the direction that
+                # flatters this arm -- and nothing in the shard schema would
+                # record it.
+                raise ValueError(
+                    f"rollout_threads={self.rollout_threads} > 1 requires "
+                    "rollout_threads_cpu_budget_ack=True. The paired-eval opponent is "
+                    "TIME-budgeted and thinks concurrently with this search on the same "
+                    "host, and its realized work is not recorded anywhere, so cores taken "
+                    "here weaken the opponent in the direction that flatters this arm. Set "
+                    "the ack only after checking cores against the run's shard concurrency."
+                )
+            if self.leaf_batch <= 0:
+                raise ValueError(
+                    "leaf_batch must be > 0 for leaf_eval='rollout_crate' "
+                    f"(got {self.leaf_batch})."
+                )
+            if self.leaf_batch > 1 and not self.leaf_batch_fidelity_loss_ack:
+                raise ValueError(
+                    f"leaf_batch={self.leaf_batch} > 1 requires "
+                    "leaf_batch_fidelity_loss_ack=True. leaf_batch=1 is the only value "
+                    "the fidelity gate certifies on the sequential path, and batching is "
+                    "a measured fidelity LOSS rather than an approximation: root_value "
+                    "moved 0.518034 -> 0.505411 -> 0.435800 at leaf_batch 1 -> 8 -> 64 on "
+                    "one fixture, i.e. 8.2 pp on the reported quantity -- larger than the "
+                    "effect contrast this arm exists to resolve. Set the ack only if the "
+                    "amortisation is worth an uncertified selection regime."
+                )
+            if self.rollout_policy != "uniform":
+                raise ValueError(
+                    "rollout_policy must be 'uniform' (the only in-crate policy "
+                    f"implemented), got {self.rollout_policy!r}."
+                )
+        if self.rollout_leaf_eval:
+            # The seam only exists on the model path. Silently ignoring the flag
+            # on any other `leaf_eval` is how a cell gets banked as "oracle-leaf
+            # with model priors" having actually run the handcrafted leaf -- the
+            # exact class of failure this program lost two artifacts to, where an
+            # input was ABSENT rather than wrong. Refuse.
+            if self.leaf_eval != "model":
+                raise ValueError(
+                    "rollout_leaf_eval=True requires leaf_eval='model': the rollout "
+                    "seam with MODEL PRIORS lives on the encoded search path "
+                    "(_search_ladder -> search_batched_multi_encoded), and the "
+                    f"campaign's surviving config is priors ON. Got leaf_eval="
+                    f"{self.leaf_eval!r}. For the uniform-priors sequential arm use "
+                    "leaf_eval='rollout_crate' instead."
+                )
+            if not self.model_priors:
+                # The WHOLE REASON this composition exists. The sequential
+                # `leaf_eval="rollout_crate"` seam already prices rollout leaves
+                # at UNIFORM priors; this path was built because the campaign's
+                # surviving config is priors ON (plan section 7), and an arm that
+                # arbitrates the priors-on panel has to run priors. Accepting
+                # `model_priors=False` here silently produces the sequential
+                # path's estimand while carrying this path's name into the
+                # report -- and it would also make the encode skip cover every
+                # leaf, since no leaf needs a prior map, so the arm would run
+                # with no model forward at all.
+                raise ValueError(
+                    "rollout_leaf_eval=True requires model_priors=True: this path exists "
+                    "because the campaign's surviving search config is priors ON, and an "
+                    "arm that arbitrates the priors-on panel must run the panel's priors. "
+                    "For the uniform-priors estimand use leaf_eval='rollout_crate', which "
+                    "is that arm and says so."
+                )
+            if self.rollout_count <= 0:
+                raise ValueError(
+                    "rollout_count must be > 0 for rollout_leaf_eval=True "
+                    f"(got {self.rollout_count})."
+                )
+            if self.rollout_max_plies <= 0:
+                raise ValueError(
+                    "rollout_max_plies must be > 0 for rollout_leaf_eval=True "
+                    f"(got {self.rollout_max_plies})."
+                )
+            if self.rollout_threads <= 0:
+                raise ValueError(
+                    "rollout_threads must be > 0 for rollout_leaf_eval=True "
+                    f"(got {self.rollout_threads})."
+                )
+            if self.rollout_policy != "uniform":
+                raise ValueError(
+                    "rollout_policy must be 'uniform' (the only in-crate policy "
+                    f"implemented), got {self.rollout_policy!r}."
+                )
+            if self.rollout_threads > 1 and not self.rollout_threads_cpu_budget_ack:
+                # Identical hazard, identical fence, and it must be repeated on
+                # THIS path rather than inherited: the paired-eval opponent is
+                # time-budgeted and thinks concurrently with this search on the
+                # same host, its realized work is recorded nowhere, and this arm
+                # spends more CPU per decision than the raw arm it is paired
+                # against. Cores taken here weaken the opponent in the direction
+                # that flatters this arm.
+                #
+                # NO RATIO IS QUOTED HERE, deliberately. This comment used to state
+                # a cost magnitude that the sibling fence on `rollout_threads`
+                # RETRACTS by measurement -- so the file asserted a figure and called
+                # the same figure wrong three hundred lines apart, and a reader
+                # landing on either had no way to tell which was live. The
+                # measurement, its two disagreeing derivations and the reason neither
+                # is checkable from a checkout live in ONE place, at that fence; read
+                # it there. Nothing is restated here, because a second copy is a
+                # second thing to go stale and this fence's argument does not need
+                # the magnitude: cores taken from a time-budgeted opponent whose
+                # realized work is recorded nowhere flatter this arm at any ratio
+                # above one.
+                raise ValueError(
+                    f"rollout_threads={self.rollout_threads} > 1 requires "
+                    "rollout_threads_cpu_budget_ack=True. The paired-eval opponent is "
+                    "TIME-budgeted and thinks concurrently with this search on the same "
+                    "host, and its realized work is not recorded anywhere, so cores taken "
+                    "here weaken the opponent in the direction that flatters this arm. Set "
+                    "the ack only after checking cores against the run's shard concurrency."
                 )
         if self.leaf_eval == "model":
             if not self.model_path or not self.checkpoint_path or not self.tables_path:
@@ -1191,6 +1578,39 @@ class EngineMctsStats:
     collision_opponent_repeats: int = 0
     collision_traversals: int = 0
     collision_leaf_repeats: int = 0
+    # THE ROLLOUT ARM'S WITNESS, ON THE PATH THAT ACTUALLY SHIPS.
+    #
+    # `_search_rollout_crate` -- the SEQUENTIAL, uniform-priors seam -- read the
+    # crate's whole rollout ledger and put it in its decision metadata. The model
+    # path, which is the one the arbiter runs (priors ON, `search_batched_multi_encoded`),
+    # read NONE of it: the crate emitted all sixteen rollout keys and the Python
+    # boundary dropped every one, so an arm decision banked as `leaf_eval: "model"`
+    # with no rollout column at all and was indistinguishable from the raw arm's.
+    # The consequence is not cosmetic. `rollout_fallback_fraction` is the field
+    # that says how much of the "oracle" was actually the handcrafted HP-fraction
+    # evaluator, and it was unavailable exactly where the arm runs -- so an arm
+    # whose leaves were mostly fallback would have been banked as an oracle with
+    # nothing in the artifact to contradict it.
+    #
+    # WORK counters, not per-decision claims: charged once per INVOCATION exactly
+    # like `model_evals` and the phase walls above, so a conservatively replayed
+    # world that priced its leaves twice reports both. That classification is why
+    # none of these belongs in `LADDER_PER_DECISION_CLAIMS`, and why none is named
+    # `*_decisions` (a name that guard refuses to leave unclassified).
+    #
+    # `rollout_leaf_modes` counts WORLDS per pricer name. It is a Counter rather
+    # than a scalar because "which pricer priced the leaves" is the question the
+    # witness exists to answer, and a run that somehow mixed pricers must be able
+    # to say so instead of reporting the last one it saw.
+    rollout_leaf_modes: Counter = field(default_factory=Counter)
+    rollout_leaf_worlds: int = 0
+    rollout_leaves_priced: int = 0
+    rollouts_run: int = 0
+    rollout_plies: int = 0
+    rollout_terminal_hits: int = 0
+    rollout_cap_hits: int = 0
+    rollout_dead_ends: int = 0
+    rollout_encode_skipped: int = 0
     early_stop_triggered_worlds: int = 0
     early_stop_accepted_decisions: int = 0
     early_stop_full_budget_replays: int = 0
@@ -1587,6 +2007,46 @@ class EngineMctsStats:
             payload["depth_reached_mean"] = (
                 self.depth_reached_sum / self.depth_reached_samples
             )
+        if self.rollout_leaf_modes:
+            # ADDITIVE AND CONDITIONAL, exactly like the crate's own seam columns:
+            # a run that never engaged the rollout pricer emits this shard payload
+            # byte-identically to the one it emitted before the seam existed. The
+            # predicate is `rollout_leaf_modes` and not `rollouts_run` on purpose --
+            # a run whose every rollout somehow failed to launch still ENGAGED the
+            # arm, and that is the case a reader most needs to see.
+            # THE SCHEMA STAMP, first, because it is what makes every key below
+            # readable. Two sibling branches invented DIVERGENT schemas for this one
+            # surface (#1272 wrote the already-banked shards with
+            # `rollout_leaf_world_records`, `+= 1`, unconditional, `None` fractions;
+            # this branch writes `rollout_leaf_worlds`, `+= weight`, conditional),
+            # and whichever landed second would have silently re-schemaed the
+            # arbiter's own banked artifacts. An unstamped shard is unresolvable
+            # after the fact -- the reader cannot tell "written before the rename"
+            # from "written by a writer that dropped the field" -- so the version
+            # travels WITH the data and `require_rollout_leaf_shard_schema` refuses
+            # anything it cannot place.
+            payload["rollout_leaf_schema"] = ROLLOUT_LEAF_SHARD_SCHEMA
+            payload["rollout_leaf_modes"] = dict(sorted(self.rollout_leaf_modes.items()))
+            payload["rollout_leaf_worlds"] = self.rollout_leaf_worlds
+            payload["rollout_leaves_priced"] = self.rollout_leaves_priced
+            payload["rollouts_run"] = self.rollouts_run
+            payload["rollout_plies"] = self.rollout_plies
+            payload["rollout_terminal_hits"] = self.rollout_terminal_hits
+            payload["rollout_cap_hits"] = self.rollout_cap_hits
+            payload["rollout_dead_ends"] = self.rollout_dead_ends
+            payload["rollout_encode_skipped"] = self.rollout_encode_skipped
+            if self.rollouts_run:
+                # THE HONESTY COLUMNS, on the arm's own path. `terminal` and
+                # `fallback` partition every rollout the run launched, so a reader
+                # can say what share of the "oracle" was the handcrafted evaluator
+                # instead of taking the word "oracle" on trust.
+                payload["rollout_terminal_fraction"] = (
+                    self.rollout_terminal_hits / self.rollouts_run
+                )
+                payload["rollout_fallback_fraction"] = (
+                    self.rollout_cap_hits + self.rollout_dead_ends
+                ) / self.rollouts_run
+                payload["rollout_mean_plies"] = self.rollout_plies / self.rollouts_run
         if self.collision_selections:
             # Per-selection repeat rates. The self/opponent pair is the whole
             # point: the deferred-leaf theory says the placeholder is
@@ -1815,24 +2275,794 @@ def native_search_args(
     ]
     fpu_reduction = getattr(config, "fpu_reduction", None)
     override_telemetry = bool(getattr(config, "override_telemetry", False))
+    # The rollout seam is the OUTERMOST slot, so it joins every widening
+    # condition below -- not just its own. Omitting it from even one of them puts
+    # `"rollout"` into that slot instead: into `early_stop_min_sims` (truncating
+    # the search budget), into `use_opponent_priors` (a non-empty string is
+    # truthy, turning the opponent head on by accident), or into `fpu_reduction`.
+    # This is the same cascade `use_opponent_priors` and `fpu_reduction` are
+    # written as, and the reason it is a widening chain rather than four
+    # independent `if`s.
+    rollout_leaf_eval = bool(getattr(config, "rollout_leaf_eval", False))
     if (
         early_stop_min_sims
         or config.use_opponent_priors
         or fpu_reduction is not None
         or override_telemetry
+        or rollout_leaf_eval
     ):
         search_args.extend([early_stop_min_sims, record["side_key"] == "side_one"])
-    if config.use_opponent_priors or fpu_reduction is not None or override_telemetry:
+    if (
+        config.use_opponent_priors
+        or fpu_reduction is not None
+        or override_telemetry
+        or rollout_leaf_eval
+    ):
         search_args.append(bool(config.use_opponent_priors))
-    if fpu_reduction is not None or override_telemetry:
+    if fpu_reduction is not None or override_telemetry or rollout_leaf_eval:
         # `None` is the crate's own default for this slot, so materializing it to
         # reach the slot behind it changes nothing -- unlike the two booleans
         # above, whose default is False and whose materialized value is the
         # config's.
         search_args.append(None if fpu_reduction is None else float(fpu_reduction))
-    if override_telemetry:
-        search_args.append(True)
+    if override_telemetry or rollout_leaf_eval:
+        # `arm_priors` is pure telemetry, so materializing it to reach the slot
+        # behind it must pass the config's OWN value, never an unconditional
+        # True: writing True here would silently switch the arm-name column on
+        # for every rollout cell and change the report a shard is compared
+        # against.
+        search_args.append(override_telemetry)
+    # THE ROLLOUT SEAM, one slot further out again and under the same rule: it
+    # is appended LAST, so with `rollout_leaf_eval` off every earlier slot keeps
+    # the value it has without it and the pre-seam call is byte for byte what it
+    # always was. Asking for the seam must materialize all four earlier
+    # conditional slots, or `"rollout"` lands in `fpu_reduction` -- a string the
+    # crate's validator rejects, so that one fails loudly rather than silently,
+    # but the cascade is written as a widening condition anyway because the NEXT
+    # knob appended here may not be so lucky.
+    #
+    # Search-ceiling program Phase 1 instrument 2. The campaign's surviving
+    # search config is priors ON, which is this call; the sequential
+    # `leaf_eval="rollout_crate"` path is uniform-priors and cannot answer the
+    # question the arbiter is for.
+    if rollout_leaf_eval:
+        search_args.extend(
+            [
+                "rollout",
+                int(config.rollout_count),
+                int(config.rollout_max_plies),
+                str(config.rollout_policy),
+                int(config.rollout_seed),
+                int(config.rollout_threads),
+                bool(getattr(config, "rollout_branch_on_damage", False)),
+            ]
+        )
     return search_args
+
+
+#: The pricer name the Python layer is allowed to ask for. `EngineMctsConfig`
+#: accepts only `rollout_leaf_eval=True`, which `native_search_args` renders as the
+#: literal `"rollout"`; `model_value`, `rollout_encode_all` and `rollout_skip_all`
+#: are GATE FIXTURES reachable only from the crate's own test surface. So a shipped
+#: decision whose report names any other pricer is a decision that did not run the
+#: arm, whatever its config said.
+ROLLOUT_LEAF_SHIPPED_MODE = "rollout"
+
+#: EVERY field a decision must carry to be allowed to claim the rollout arm.
+#:
+#: The list is a literal rather than "whatever the builder happened to put there",
+#: for the same reason `LADDER_PER_DECISION_CLAIMS` is: a self-referential guard
+#: that iterates the thing it checks cannot read False when a field is dropped.
+#: Deleting the plumbing for any one of these must fail HERE.
+ROLLOUT_LEAF_WITNESS_FIELDS = (
+    # WHICH PRICER. The one field whose absence made the whole class invisible:
+    # without it an arm decision and a raw-arm decision are the same row.
+    "rollout_leaf_modes",
+    # HOW MUCH was priced, so a cost figure is (rate) x (count) with both factors
+    # in the artifact rather than reconstructed.
+    "leaves_priced",
+    "rollouts_run",
+    # THE PARTITION. Every rollout ended in exactly one of these three, and the
+    # last two are the handcrafted fallback.
+    "rollout_terminal_hits",
+    "rollout_cap_hits",
+    "rollout_dead_ends",
+    # HOW MANY LEAF FORWARDS THE SKIP REMOVED. Emitted since the seam existed and
+    # for one revision verifiable nowhere: dropping it from the report's required
+    # keys SURVIVED, hard-zeroing its shard column SURVIVED, and the per-decision
+    # value died only under a crate-gated subtest -- i.e. it was unguarded wherever
+    # the crate is absent, which is most environments. An emitted-but-unverifiable
+    # field is one that cannot be WRONG, so it is either required here or removed;
+    # this is the "required" half, and the range check below is the other.
+    "rollout_encode_skipped",
+    # THE HONESTY COLUMN. The share of the "oracle" that was the HP-fraction
+    # evaluator. At the gate's own 40-ply fixture config this reads 0.96503, so a
+    # decision banked without it is a decision banked on a claim the data
+    # contradicts. NOT the arm's own figure: the arm's banked whole-game run at the
+    # launched 200-ply cap measures 0.018139547833834504, a 98.2% oracle.
+    "rollout_fallback_fraction",
+)
+
+#: EVERY key the crate's report must carry when the seam is engaged, mapped to the
+#: SHARD-level counter it accumulates into (``None`` for the pricer NAME, which is
+#: not a counter and is absorbed into `rollout_leaf_modes`).
+#:
+#: ONE SOURCE for the required-key refusal and for the accumulation loop, which
+#: were two hand-written lists over the same field set. That is why dropping
+#: `rollout_encode_skipped` from the refusal list survived: the list was not pinned
+#: by anything, and the copy that fed the accumulation was a different literal, so
+#: neither copy's shrinkage was visible from the other. Shrinking this mapping now
+#: fails at the literal pin AND stops a value from ever reaching the shard.
+ROLLOUT_LEAF_REPORT_FIELDS: "Mapping[str, Optional[str]]" = MappingProxyType(
+    {
+        "rollout_leaf_mode": None,
+        "leaves_priced": "rollout_leaves_priced",
+        "rollouts_run": "rollouts_run",
+        "rollout_plies": "rollout_plies",
+        "rollout_terminal_hits": "rollout_terminal_hits",
+        "rollout_cap_hits": "rollout_cap_hits",
+        "rollout_dead_ends": "rollout_dead_ends",
+        "rollout_encode_skipped": "rollout_encode_skipped",
+    }
+)
+
+
+def require_rollout_leaf_witness(
+    metadata: Mapping[str, Any], *, rollout_leaf_eval: bool
+) -> None:
+    """Refuse a decision whose metadata does not match the arm that produced it.
+
+    ABSENCE OF CODE IS NOT MUTATION-TESTABLE, which is why this exists as a
+    positive requirement rather than as a test of the plumbing. A mutation battery
+    finds broken code; it can never find code that was never written, so the seam
+    that emitted no witness at all survived a mutation-heavy round untouched. The
+    generalisation is to ask of every claim "is there code that would have to exist
+    for this to be true, and does it exist on the path that runs?" -- and then to
+    make the answer enforced at runtime, where a deletion cannot hide.
+
+    Both directions refuse, and neither is hypothetical:
+
+    * arm ON, witness missing/degenerate -> the shipped shape, which would have
+      banked a mostly-fallback evaluator as an oracle with no fallback column;
+    * arm OFF, witness present -> the false witness, i.e. a raw-arm row carrying an
+      arm's provenance.
+
+    The positive direction is not satisfied by the mere PRESENCE of keys. A stub
+    that wrote zeros, or a fallback fraction inconsistent with the partition it is
+    supposedly computed from, is a witness that witnesses nothing -- so the
+    partition must account for every rollout and the fraction must be that
+    partition's own quotient.
+    """
+
+    engine = metadata.get("engine_mcts")
+    witness = engine.get("rollout_leaf") if isinstance(engine, Mapping) else None
+    if not rollout_leaf_eval:
+        if witness is not None:
+            raise EngineSearchWitnessError(
+                "a decision that did not run the rollout arm carries a rollout "
+                f"witness ({sorted(witness) if isinstance(witness, Mapping) else witness!r}). "
+                "This is the FALSE WITNESS shape: the raw arm is the denominator of "
+                "every paired delta, and a raw row wearing the arm's provenance "
+                "corrupts the comparison rather than one arm of it."
+            )
+        return
+    if not isinstance(witness, Mapping):
+        raise EngineSearchWitnessError(
+            "a decision claiming the rollout arm carries NO rollout witness "
+            f"(metadata['engine_mcts']['rollout_leaf'] is {witness!r}). The arm's "
+            "leaf values came from the rollout pricer, so the decision must say so "
+            "and must carry the fallback fraction; without it an arm decision is "
+            "indistinguishable from the raw arm's and a handcrafted evaluator banks "
+            "as an oracle. Fields required: "
+            f"{', '.join(ROLLOUT_LEAF_WITNESS_FIELDS)}."
+        )
+    missing = [name for name in ROLLOUT_LEAF_WITNESS_FIELDS if name not in witness]
+    if missing:
+        raise EngineSearchWitnessError(
+            f"the rollout witness is incomplete: missing {', '.join(missing)}. "
+            "Every field in ROLLOUT_LEAF_WITNESS_FIELDS is required; a partial "
+            "witness is the shape a reader trusts and cannot check."
+        )
+    modes = witness["rollout_leaf_modes"]
+    if not modes:
+        raise EngineSearchWitnessError(
+            "the rollout witness names no pricer at all, so it cannot say the "
+            "rollout pricer ran. `rollout_leaf_modes` is empty."
+        )
+    wrong = sorted(set(modes) - {ROLLOUT_LEAF_SHIPPED_MODE})
+    if wrong:
+        raise EngineSearchWitnessError(
+            f"a decision claiming the rollout arm priced leaves with {wrong!r}. "
+            f"Only {ROLLOUT_LEAF_SHIPPED_MODE!r} is reachable from EngineMctsConfig; "
+            "the other modes are crate gate fixtures. A config that asked for the "
+            "arm and a report that priced with production's leaf value is the arm "
+            "silently not running -- the exact defect this witness exists to catch."
+        )
+    # THE SAME IDENTITY AS THE SHARD'S, on the per-decision surface. `rollout_modes`
+    # and `rollout_ledger["worlds"]` are incremented `+= weight` from one datum on one
+    # line pair, so their sum is an identity. Checked here because the modes mapping is
+    # otherwise read only for its KEYS -- which is what let the weighted accumulation
+    # go unfalsifiable on both surfaces at once.
+    if "rollout_leaf_worlds" in witness:
+        worlds = int(witness["rollout_leaf_worlds"])
+        tallied = sum(int(count) for count in modes.values())
+        if tallied != worlds:
+            raise EngineSearchWitnessError(
+                f"the witness's pricer tally does not sum to its world count: "
+                f"sum(rollout_leaf_modes)={tallied} != rollout_leaf_worlds={worlds}. "
+                "Both are accumulated `+= weight` from the same report in the same "
+                "pass, so a disagreement means one of the two is unweighted and a "
+                "collapsed draw is being counted once where it represents two worlds."
+            )
+    rollouts_run = int(witness["rollouts_run"])
+    leaves_priced = int(witness["leaves_priced"])
+    if rollouts_run <= 0 or leaves_priced <= 0:
+        raise EngineSearchWitnessError(
+            "the rollout witness is degenerate: "
+            f"rollouts_run={rollouts_run} leaves_priced={leaves_priced}. A witness "
+            "of zero work does not witness the arm; it witnesses that nothing was "
+            "priced, which is a refusal, not a decision."
+        )
+    # THE SKIP COUNTER, RANGE-CHECKED against the population it is a subset of.
+    # Every skip is a leaf whose forward was not needed, so the count cannot exceed
+    # the leaves that were priced and cannot be negative. This is the weakest true
+    # statement about the field -- `> 0` would be false at a depth where every leaf
+    # hosts a child decision -- and it is the difference between a field that is
+    # merely emitted and a field that can be wrong.
+    encode_skipped = int(witness["rollout_encode_skipped"])
+    if not 0 <= encode_skipped <= leaves_priced:
+        raise EngineSearchWitnessError(
+            f"the rollout witness reports rollout_encode_skipped={encode_skipped} "
+            f"against leaves_priced={leaves_priced}. A skip is a leaf whose model "
+            "forward was not needed, so the skips are a SUBSET of the priced "
+            "leaves; a count outside [0, leaves_priced] is a counter wired to the "
+            "wrong population, and the encode-skip accounting identity "
+            "(forwards + skips == leaves + root forwards) is read off it."
+        )
+    terminal = int(witness["rollout_terminal_hits"])
+    cap = int(witness["rollout_cap_hits"])
+    dead = int(witness["rollout_dead_ends"])
+    if terminal + cap + dead != rollouts_run:
+        raise EngineSearchWitnessError(
+            "the rollout witness does not account for every rollout: "
+            f"terminal={terminal} + cap={cap} + dead_ends={dead} "
+            f"!= rollouts_run={rollouts_run}. The three outcomes PARTITION the "
+            "rollouts, so an unbalanced ledger means the fallback share is being "
+            "read off a denominator that is not the population."
+        )
+    fallback = float(witness["rollout_fallback_fraction"])
+    expected = (cap + dead) / rollouts_run
+    if abs(fallback - expected) > 1e-9:
+        raise EngineSearchWitnessError(
+            f"the reported rollout_fallback_fraction {fallback!r} is not the "
+            f"quotient of its own partition ({cap} + {dead}) / {rollouts_run} = "
+            f"{expected!r}. A fallback column that does not follow from the counts "
+            "beside it is worse than no column: it is checkable and wrong."
+        )
+
+
+class EngineShardSchemaError(RuntimeError):
+    """A banked shard's rollout-leaf block is not the schema the reader expects.
+
+    A SEPARATE class from `EngineSearchWitnessError` because the failure is on the
+    other side of the disk: the witness error refuses to WRITE a row that describes
+    itself wrongly, this one refuses to READ a row whose schema the reader cannot
+    place. Both are refusals rather than warnings, for the same reason -- a silent
+    re-schema of banked data is worse than a crash, because the crash is the only
+    version of the event a reader ever finds out about.
+    """
+
+
+#: The CURRENT rollout-leaf shard schema version, stamped into every shard that
+#: engages the arm (`EngineMctsStats.to_dict`).
+#:
+#: v1 (UNSTAMPED) is the schema of the already-banked arbiter shards, written by the
+#: sibling bridge branch: `rollout_leaf_world_records` accumulated `+= 1` per crate
+#: report, every key emitted unconditionally, fractions rendered `None` when the
+#: seam never ran, and `rollout_fallback_fraction` computed from `rollout_cap_hits`
+#: alone.
+#:
+#: v2 (THIS ONE) is canonical: `rollout_leaf_worlds` accumulated `+= weight` so a
+#: conservatively replayed collapsed draw counts the worlds it represents, the whole
+#: block emitted CONDITIONALLY so a flag-off shard is byte-identical to a pre-seam
+#: one, and `rollout_fallback_fraction` computed over the full partition
+#: (`cap + dead_ends`) so it is the quotient of the counts printed beside it.
+#:
+#: THE UNITS ARE MIXED INSIDE THIS BLOCK, and that is stated rather than left for a
+#: reader to trip over: `rollout_leaf_worlds` is per WORLD (weighted by the collapse
+#: multiplicity), while the cost ledger -- `rollouts_run`, `rollout_plies`,
+#: `rollout_leaves_priced`, `rollout_encode_skipped` -- is per INVOCATION and
+#: UNWEIGHTED, because it measures compute that happened once no matter how many
+#: draws the search served. So `rollouts_run / rollout_leaf_worlds` is not
+#: rollouts-per-world on a run with any collapses; use `unique_worlds_searched` for
+#: that denominator.
+#:
+#: WHY v2 AND NOT v1: `+= weight` is the more informative accumulation (it cannot
+#: silently under-count a collapsed draw, and its denominator agrees with
+#: `worlds_constructed`, which is already counted per draw), the conditional
+#: emission is the only form in which "flag-off is byte-identical" is a fact rather
+#: than a claim, and `cap + dead` is the only numerator that is the quotient of its
+#: own partition -- v1's cap-only numerator is equal to it only while
+#: `rollout_dead_ends == 0`, which v1 enforces by refusing the world rather than by
+#: arithmetic. The cost of choosing v2 is that the banked shards need migrating, and
+#: that cost is paid explicitly by `migrate_rollout_leaf_shard_v1` rather than by
+#: letting a v2 reader quietly read 0 where v1 wrote a count.
+ROLLOUT_LEAF_SHARD_SCHEMA = 2
+
+#: The EXACT key set a v2 rollout-leaf shard block carries when the seam engaged and
+#: at least one rollout ran. Pinned as a literal for the same reason
+#: `ROLLOUT_LEAF_WITNESS_FIELDS` is: a reader that derives its expectation from the
+#: shard it is reading cannot detect a re-schema of that shard.
+ROLLOUT_LEAF_SHARD_FIELDS = (
+    "rollout_leaf_schema",
+    "rollout_leaf_modes",
+    "rollout_leaf_worlds",
+    "rollout_leaves_priced",
+    "rollouts_run",
+    "rollout_plies",
+    "rollout_terminal_hits",
+    "rollout_cap_hits",
+    "rollout_dead_ends",
+    "rollout_encode_skipped",
+    "rollout_terminal_fraction",
+    "rollout_fallback_fraction",
+    "rollout_mean_plies",
+)
+
+#: v1's world counter, kept as a literal so the refusal can NAME the schema it
+#: found instead of reporting a generic mismatch. A reader that only knew "this key
+#: is missing" would send someone looking for a deleted field; this says "you are
+#: holding a v1 shard" and points at the migration.
+ROLLOUT_LEAF_V1_WORLD_FIELD = "rollout_leaf_world_records"
+
+#: The three columns that are QUOTIENTS of the partition and therefore have no
+#: value at all when no rollout ran. v2 OMITS them in that case; v1 rendered them
+#: `None`. Named once because two checks read the same set from opposite sides --
+#: "these may be absent" and "these must be absent".
+ROLLOUT_LEAF_QUOTIENT_FIELDS = (
+    "rollout_terminal_fraction",
+    "rollout_fallback_fraction",
+    "rollout_mean_plies",
+)
+
+#: The key names by which a rollout-leaf telemetry block is IDENTIFIED, wherever a
+#: writer happened to file it.
+#:
+#: WHY A MARKER SET AND NOT A PARENT-KEY NAME. `require_banked_shard_witness` finds
+#: blocks by looking under the key `engine_mcts`, and that is correct for the
+#: witness it checks. It is NOT sufficient for the schema, because the rollout
+#: columns reach disk under FOUR different parent spellings, written by four
+#: writers:
+#:
+#:   * `engine_mcts.policy_stats`  -- `foulplay_bridge._write_json`;
+#:   * `per_seat[seat].policy_stats` -- `scripts/foulplay_paired_eval.py`'s merged
+#:     shard, which copies the whole mapping through verbatim;
+#:   * a ROOT-LEVEL `policy_stats` -- `scripts/mcts_acceptance_h2h.py`;
+#:   * `engine_stats` -- `scripts/hc_depth_grid.py`.
+#:
+#: Only the first is under an `engine_mcts` key with a `decisions` field, so a
+#: parent-keyed walk passes the other three vacuously. Keying off the block's OWN
+#: columns finds all four and does not have to be updated when a fifth writer picks
+#: a fifth spelling.
+#:
+#: DELIBERATELY NOT `startswith("rollout")`: the bridge's `engine_mcts` block and
+#: the per-decision witness both carry rollout-prefixed CONFIG echoes and knobs
+#: (`rollout_leaf`, `rollout_count`, `rollout_max_plies`), and treating those as an
+#: unstamped shard block would refuse every legitimate payload.
+ROLLOUT_LEAF_SHARD_MARKERS: frozenset[str] = frozenset(ROLLOUT_LEAF_SHARD_FIELDS) | {
+    ROLLOUT_LEAF_V1_WORLD_FIELD
+}
+
+
+def iter_rollout_leaf_shard_blocks(document: Any) -> "list[Mapping[str, Any]]":
+    """Every rollout-leaf telemetry block anywhere in a LOADED document.
+
+    Recursive for the same reason `_engine_mcts_blocks` is -- the comparison and
+    paired shards nest one block per arm, and the arbiter reads exactly those --
+    but keyed on the block's own columns rather than on its parent's name, because
+    four writers file the same mapping under four different names.
+    """
+
+    found: list[Mapping[str, Any]] = []
+    if isinstance(document, Mapping):
+        if ROLLOUT_LEAF_SHARD_MARKERS & {str(key) for key in document}:
+            found.append(document)
+        for value in document.values():
+            found.extend(iter_rollout_leaf_shard_blocks(value))
+    elif isinstance(document, (list, tuple)) and not isinstance(document, (str, bytes)):
+        for value in document:
+            found.extend(iter_rollout_leaf_shard_blocks(value))
+    return found
+
+
+def require_rollout_leaf_document_schema(document: Any) -> None:
+    """THE READER-SIDE REFUSAL, on the other side of the disk.
+
+    WHY THIS FUNCTION EXISTS, stated as the correction it is. An earlier revision
+    of `require_banked_shard_witness` claimed that "a shard written past a deleted
+    writer-side guard is REFUSED ON READ instead of pooled. Both frames -- opposite
+    sides of the artifact -- would have to be deleted together". That was FALSE.
+    `require_rollout_leaf_shard_schema` had NO read-path call site: its only two
+    non-test callers were `require_banked_shard_witness` (write side) and
+    `migrate_rollout_leaf_shard_v1` (write side), and the first NESTED the second,
+    so deleting the ONE line `require_banked_shard_witness(payload)` removed BOTH
+    refusals at once. The "both frames must go" defence described a topology the
+    code did not have.
+
+    So the reader side is now real, and it is reached by a different call chain
+    from a different process: `scripts/foulplay_paired_eval.py` calls it on the
+    bridge summary it loads off disk, and `scripts/foulplay_power_report.py` calls
+    it on every merged shard it pools. Neither import path passes through
+    `foulplay_bridge`, which is what makes the two deletions independent -- and the
+    battery proves it by deleting each alone and both together.
+    """
+
+    for block in iter_rollout_leaf_shard_blocks(document):
+        require_rollout_leaf_shard_schema(block)
+
+
+def guarded_document_text(
+    document: Any, *, indent: int = 2, sort_keys: bool = False
+) -> str:
+    """Render a document to JSON, refusing it FIRST. THE ONE PLACE A DOCUMENT
+    BECOMES BYTES outside `foulplay_bridge._shard_json_text`.
+
+    WHY A FUNNEL AND NOT A GUARD CALL PER WRITER, stated as the correction it is.
+    Review measured that FOUR of the seven `require_rollout_leaf_document_schema`
+    call sites were FREE DELETIONS: deleting the calls at
+    `scripts/foulplay_paired_eval.py`, `scripts/mcts_acceptance_h2h.py`,
+    `scripts/hc_depth_grid.py` and this module's own CLI -- individually and all
+    four together -- produced ZERO semantic failures across the whole suite. The
+    only red was a sha256 content pin, which is a pin on the bytes and not on the
+    behaviour. All four sites are the same shape: a `main()` body no test drives,
+    where the guard is one deletable statement standing beside the write it is
+    supposed to dominate.
+
+    Routing the write THROUGH the refusal makes the guard non-deletable by
+    construction rather than by discipline: there is no longer a spelling of "write
+    the shard" at those sites that does not refuse it first, so the only remaining
+    mutation is deleting the refusal in HERE -- one site, directly unit-testable,
+    and killed by `test_the_document_funnel_REFUSES_BEFORE_IT_WRITES`. This is the
+    same argument `_shard_json_text` already makes for the bridge's two writers,
+    applied to the four the enumeration missed.
+    """
+
+    require_rollout_leaf_document_schema(document)
+    return json.dumps(document, indent=indent, sort_keys=sort_keys)
+
+
+def write_guarded_document(
+    path: Any,
+    document: Any,
+    *,
+    indent: int = 2,
+    sort_keys: bool = False,
+    trailing_newline: bool = False,
+) -> None:
+    """Write a document to `path`, refusing it first.
+
+    The refusal happens BEFORE the file is opened, so a refused document leaves no
+    partial artifact behind -- a half-written shard is worse than no shard, because
+    it is the one a pooling reader might still parse.
+    """
+
+    from pathlib import Path  # noqa: PLC0415 — stdlib, imported at the use site
+
+    text = guarded_document_text(document, indent=indent, sort_keys=sort_keys)
+    if trailing_newline:
+        text += "\n"
+    Path(path).write_text(text, encoding="utf-8")
+
+
+def require_rollout_leaf_shard_schema(shard: Mapping[str, Any]) -> None:
+    """Refuse a shard whose rollout-leaf block is not this reader's schema.
+
+    THE FAILURE THIS EXISTS FOR is not a crash, it is the absence of one. Two
+    sibling branches wrote the same shard surface under two schemas; whichever
+    landed second would have left every reader silently reading a key the writer no
+    longer emits -- `rollout_leaf_worlds` absent reads as "the arm engaged zero
+    worlds", which is the most flattering possible misreading of a banked arm run
+    and is indistinguishable from a real zero.
+
+    Three shapes refuse, and each one is a schema statement rather than a value
+    statement:
+
+    * a block carrying rollout keys with NO version stamp -- either a v1 shard or a
+      writer mid-rename, and the reader cannot tell which;
+    * a block carrying v1's `rollout_leaf_world_records`, named as v1 with the
+      migration pointed at;
+    * a block carrying BOTH spellings -- a half-migrated writer, the state in which
+      two numbers that are supposed to be one disagree silently.
+
+    A shard with no rollout keys at all is ACCEPTED and is not a defect: flag-off
+    emits the pre-seam payload byte-identically, which is the whole point of the
+    conditional emission. That is why the predicate is "any rollout key" rather
+    than "the arm was configured": this function reads artifacts, and an artifact
+    does not carry the launch command.
+    """
+
+    if not isinstance(shard, Mapping):
+        raise EngineShardSchemaError(
+            f"a rollout-leaf shard block must be a mapping, got {type(shard).__name__}."
+        )
+    present = sorted(key for key in shard if str(key).startswith("rollout"))
+    if not present:
+        return
+    if ROLLOUT_LEAF_V1_WORLD_FIELD in shard and "rollout_leaf_worlds" in shard:
+        raise EngineShardSchemaError(
+            f"this shard carries BOTH {ROLLOUT_LEAF_V1_WORLD_FIELD!r} and "
+            "'rollout_leaf_worlds'. That is a half-migrated writer: the two are the "
+            "same quantity under two accumulation rules (`+= 1` per crate report "
+            "versus `+= weight` per world), so a shard carrying both is a shard on "
+            "which they can disagree with nothing to say which is the arm's world "
+            "count. Emit exactly one."
+        )
+    if ROLLOUT_LEAF_V1_WORLD_FIELD in shard:
+        raise EngineShardSchemaError(
+            f"this shard is rollout-leaf schema v1: it carries "
+            f"{ROLLOUT_LEAF_V1_WORLD_FIELD!r} rather than 'rollout_leaf_worlds', so "
+            "its world count was accumulated `+= 1` per crate report and its "
+            "fallback fraction over `rollout_cap_hits` alone. A v"
+            f"{ROLLOUT_LEAF_SHARD_SCHEMA} reader would read the missing key as ZERO "
+            "engaged worlds, which is a banked arm run reading as no arm at all. "
+            "Migrate it with `migrate_rollout_leaf_shard_v1` -- which refuses unless "
+            "the rename is provably value-preserving on this shard -- rather than "
+            "pooling it as it stands."
+        )
+    version = shard.get("rollout_leaf_schema")
+    if version is None:
+        raise EngineShardSchemaError(
+            f"this shard carries rollout-leaf keys ({', '.join(present)}) and NO "
+            "'rollout_leaf_schema' stamp. An unstamped block is unresolvable after "
+            "the fact: 'written before the stamp existed' and 'written by a writer "
+            "that dropped a field' are the same artifact. Refusing rather than "
+            "guessing which."
+        )
+    if int(version) != ROLLOUT_LEAF_SHARD_SCHEMA:
+        raise EngineShardSchemaError(
+            f"this shard is rollout-leaf schema v{int(version)}; this reader "
+            f"expects v{ROLLOUT_LEAF_SHARD_SCHEMA}. Refusing rather than reading a "
+            "key set it cannot place."
+        )
+    missing = [name for name in ROLLOUT_LEAF_SHARD_FIELDS if name not in shard]
+    # `rollouts_run == 0` is the one legitimately partial block: the arm engaged and
+    # no rollout launched, so the three quotients have no denominator. The COUNTS are
+    # still required -- their absence is a dropped field, not an undefined ratio.
+    #
+    # AND THE EXEMPTION IS SYMMETRIC, which the first revision got wrong in the
+    # flattering direction. Making the quotients merely OPTIONAL at zero accepted a
+    # block that carried them anyway with the value `None` -- which is exactly the v1
+    # shape (`rollout_terminal_fraction: None` when the seam never ran, emitted
+    # unconditionally), and exactly what the sibling bridge branch writes on a
+    # FLAG-OFF shard: thirteen rollout keys, zeroed counts, `None` fractions, stamped
+    # v2. Under v2 that block does not exist at all -- `to_dict` emits nothing when
+    # `rollout_leaf_modes` is empty and omits the quotients when `rollouts_run` is 0,
+    # and the migration pops them -- so a v2-stamped block carrying a quotient at
+    # zero rollouts is a v1 writer wearing a v2 stamp. Refused BY NAME rather than
+    # accepted as "partial".
+    if int(shard.get("rollouts_run") or 0) == 0:
+        missing = [name for name in missing if name not in ROLLOUT_LEAF_QUOTIENT_FIELDS]
+        undefined = [name for name in ROLLOUT_LEAF_QUOTIENT_FIELDS if name in shard]
+        if undefined:
+            raise EngineShardSchemaError(
+                f"this shard reports rollouts_run={shard.get('rollouts_run')!r} and "
+                f"still carries {', '.join(undefined)} "
+                f"({', '.join(f'{name}={shard[name]!r}' for name in undefined)}). A "
+                "quotient of an empty partition has no value: v1 rendered it `None` "
+                f"and emitted the block unconditionally, so a v{ROLLOUT_LEAF_SHARD_SCHEMA}"
+                "-stamped block carrying one is a v1 writer wearing this schema's "
+                "stamp. v2 OMITS these three at zero rollouts -- see "
+                "`EngineMctsStats.to_dict` and `migrate_rollout_leaf_shard_v1`, which "
+                "pops them -- and `None` is the value a pooling reader averages as "
+                "though it were a measurement."
+            )
+    if missing:
+        raise EngineShardSchemaError(
+            f"a v{ROLLOUT_LEAF_SHARD_SCHEMA} rollout-leaf shard block is missing "
+            f"{', '.join(missing)}. Every name in ROLLOUT_LEAF_SHARD_FIELDS is a "
+            "field a reader of this schema will look for, and an absent one reads as "
+            "a zero rather than as an absence."
+        )
+    unknown = sorted(set(present) - set(ROLLOUT_LEAF_SHARD_FIELDS))
+    if unknown:
+        raise EngineShardSchemaError(
+            f"a v{ROLLOUT_LEAF_SHARD_SCHEMA} rollout-leaf shard block carries "
+            f"unrecognised rollout keys {unknown}. A new column is a schema change "
+            "and needs a version bump, because a reader pooling stamped-v"
+            f"{ROLLOUT_LEAF_SHARD_SCHEMA} shards will treat this one as though it "
+            "had the same columns as the rest."
+        )
+    rollouts_run = int(shard["rollouts_run"])
+    terminal = int(shard["rollout_terminal_hits"])
+    cap = int(shard["rollout_cap_hits"])
+    dead = int(shard["rollout_dead_ends"])
+    # THE PARTITION IS CHECKED AT ZERO TOO. The first revision returned early on
+    # `rollouts_run == 0`, which short-circuited every remaining check -- so a block
+    # reporting `rollouts_run=0` alongside `rollout_cap_hits=5` was accepted, and
+    # `rollouts_run=0` is precisely what a flag-off unconditional writer emits. The
+    # identity is not undefined at zero, it is TRIVIAL at zero (0 + 0 + 0 == 0), and a
+    # non-trivial reading is a counter wired to the wrong population. Only the
+    # QUOTIENTS need a non-zero denominator, and only they are gated below.
+    if terminal + cap + dead != rollouts_run:
+        raise EngineShardSchemaError(
+            f"the shard's rollout partition does not account for every rollout: "
+            f"terminal={terminal} + cap={cap} + dead_ends={dead} != "
+            f"rollouts_run={rollouts_run}."
+        )
+    # THE WORLD COUNTER AGAINST THE PRICER TALLY. `rollout_leaf_modes` and
+    # `rollout_leaf_worlds` are two surfaces of ONE datum written in one pass
+    # (`+= weight` into both), so their sum is an identity rather than a coincidence
+    # -- and it is the identity that makes the WEIGHTED accumulation falsifiable.
+    # Without it, `rollout_leaf_modes[mode] += weight -> += 1` is invisible from any
+    # artifact: the modes mapping is only ever read for its KEYS, so the seventh
+    # instance of the Counter drift this module's own docstring catalogues had no
+    # value-level check anywhere. `sum(modes) == worlds` is that check.
+    modes = shard["rollout_leaf_modes"]
+    if not isinstance(modes, Mapping):
+        raise EngineShardSchemaError(
+            f"the shard's rollout_leaf_modes is {modes!r}, not a mapping of pricer "
+            "name to world count."
+        )
+    worlds = int(shard["rollout_leaf_worlds"])
+    tallied = sum(int(count) for count in modes.values())
+    if tallied != worlds:
+        raise EngineShardSchemaError(
+            f"the shard's pricer tally does not sum to its world count: "
+            f"sum(rollout_leaf_modes)={tallied} != rollout_leaf_worlds={worlds}. Both "
+            "are accumulated `+= weight` from the same datum in the same pass, so "
+            "they are one number written twice -- a disagreement means one of the two "
+            "accumulations is unweighted, which UNDER-COUNTS a collapsed draw (two "
+            "identical belief draws share one search, so `+= 1` records one world "
+            "where two were represented) and is the drift this module has now seen "
+            "seven times on seven surfaces."
+        )
+    if rollouts_run == 0:
+        return
+    expected = (cap + dead) / rollouts_run
+    if abs(float(shard["rollout_fallback_fraction"]) - expected) > 1e-9:
+        raise EngineShardSchemaError(
+            f"the shard's rollout_fallback_fraction "
+            f"{shard['rollout_fallback_fraction']!r} is not the quotient of its own "
+            f"partition ({cap} + {dead}) / {rollouts_run} = {expected!r}. Under v1 "
+            "the numerator was `cap` alone; a v1 fraction on a v"
+            f"{ROLLOUT_LEAF_SHARD_SCHEMA}-stamped shard reads False here, which is "
+            "the point -- the two agree only while dead_ends is zero."
+        )
+
+
+def migrate_rollout_leaf_shard_v1(shard: Mapping[str, Any]) -> dict[str, Any]:
+    """Rename a v1 rollout-leaf shard block to v2, or refuse.
+
+    THE MIGRATION IS CONDITIONAL, and the condition is what makes it a migration
+    rather than a relabel. v1 counted `+= 1` per crate report; v2 counts
+    `+= weight`, the collapse multiplicity of the draw that report served. The two
+    numbers are equal if and only if NO draw was collapsed -- and the shard says so
+    itself: `worlds_collapsed` is `sum(multiplicity - 1)`, so `worlds_collapsed == 0`
+    is exactly "every weight was 1". Where it is non-zero the v1 number is a count
+    of reports being relabelled as a count of worlds, and this refuses rather than
+    banking the difference.
+
+    The second condition is the fallback numerator. v1's is `cap` alone and v2's is
+    `cap + dead_ends`, so the migrated fraction is the v1 fraction if and only if
+    `rollout_dead_ends == 0`. v1 refuses a non-zero dead-end count upstream, so this
+    holds on every shard v1 could have written -- asserted rather than assumed,
+    because "the writer refuses it" is a claim about a version of the writer.
+
+    Measured on the four banked arbiter shards
+    (`ceiling-c3-rollout-arbiter-game-20260817`): `worlds_collapsed == 0` and
+    `rollout_dead_ends == 0` on all four, so the rename is provably value-preserving
+    there and the migration is a rename plus the three quotients v1 rendered `None`.
+    """
+
+    if ROLLOUT_LEAF_V1_WORLD_FIELD not in shard:
+        raise EngineShardSchemaError(
+            f"not a v1 rollout-leaf shard block: no {ROLLOUT_LEAF_V1_WORLD_FIELD!r}."
+        )
+    # ABSENT IS NOT ZERO, and this module says so three hundred lines up before doing
+    # the opposite here. `int(shard.get("worlds_collapsed") or 0)` read a shard that
+    # never recorded the field as a shard that recorded no collapses -- and
+    # `worlds_collapsed == 0` is the ENTIRE condition under which this migration
+    # claims to be value-preserving, so reading its absence as a pass is reading the
+    # premise of the proof off a field that was not measured. Both conditions are now
+    # required to be PRESENT; a writer that does not report them cannot be migrated,
+    # because "no collapses happened" and "this writer does not count collapses" are
+    # different statements and only the first licenses the rename.
+    for name in ("worlds_collapsed", "rollout_dead_ends"):
+        if name not in shard:
+            raise EngineShardSchemaError(
+                f"refusing to migrate a shard that carries no {name!r}. The rename is "
+                "value-preserving only while worlds_collapsed == 0 and "
+                "rollout_dead_ends == 0, so a shard that does not report one of them "
+                "does not carry the evidence the migration's own proof rests on. "
+                "ABSENT IS NOT ZERO: reading a missing count as a passing count is "
+                "how a report tally gets published under a world count's name."
+            )
+    collapsed = int(shard["worlds_collapsed"] or 0)
+    if collapsed != 0:
+        raise EngineShardSchemaError(
+            f"refusing to migrate a shard with worlds_collapsed={collapsed}. v1's "
+            f"{ROLLOUT_LEAF_V1_WORLD_FIELD!r} counted crate REPORTS (`+= 1`) and v2's "
+            "'rollout_leaf_worlds' counts WORLDS (`+= weight`); they are the same "
+            "number only when no draw was collapsed. Renaming here would publish a "
+            "report count under a world count's name."
+        )
+    dead = int(shard["rollout_dead_ends"] or 0)
+    if dead != 0:
+        raise EngineShardSchemaError(
+            f"refusing to migrate a shard with rollout_dead_ends={dead}. v1's "
+            "rollout_fallback_fraction has numerator `cap` and v2's has "
+            "`cap + dead_ends`, so the migrated fraction would differ from the "
+            "banked one without the shard saying so."
+        )
+    migrated = {
+        key: value for key, value in shard.items() if key != ROLLOUT_LEAF_V1_WORLD_FIELD
+    }
+    worlds = int(shard[ROLLOUT_LEAF_V1_WORLD_FIELD])
+    if worlds == 0:
+        # v1 emitted the whole block unconditionally, so a flag-OFF v1 shard carries
+        # zeros and `None` fractions for a seam that never ran. v2 emits nothing at
+        # all in that case, so the migration DROPS the block rather than stamping a
+        # zeroed one as though the arm had engaged.
+        return {
+            key: value
+            for key, value in migrated.items()
+            if not str(key).startswith("rollout")
+        }
+    migrated["rollout_leaf_schema"] = ROLLOUT_LEAF_SHARD_SCHEMA
+    migrated["rollout_leaf_worlds"] = worlds
+    rollouts_run = int(shard.get("rollouts_run") or 0)
+    if rollouts_run:
+        cap = int(shard["rollout_cap_hits"])
+        recomputed = {
+            "rollout_terminal_fraction": int(shard["rollout_terminal_hits"])
+            / rollouts_run,
+            "rollout_fallback_fraction": (cap + dead) / rollouts_run,
+            "rollout_mean_plies": int(shard["rollout_plies"]) / rollouts_run,
+        }
+        # AND IT DOES NOT OVERWRITE A BANKED VALUE IN SILENCE. The first revision
+        # assigned all three unconditionally while the docstring called the migration
+        # "provably value-preserving", and the two statements were not compatible: a v1
+        # shard carrying `rollout_terminal_fraction: 0.99` and `rollout_mean_plies:
+        # 999.0` came out the other side as 0.8 and 20.0 with nothing recording that
+        # anything had changed. Only `rollout_fallback_fraction` is a DEFINED
+        # re-derivation here (v1's numerator was `cap`, v2's is `cap + dead`, and `dead
+        # == 0` is enforced above, so the two rules give the same number); the other
+        # two have the same definition under both schemas, so a disagreement is not a
+        # schema difference -- it is a shard whose printed quotient does not follow
+        # from its own counts, and re-deriving it would launder that.
+        #
+        # So: absent -> filled in (v1 rendered these `None` when nothing ran, and the
+        # `None` is dropped by the same rule). Present and equal -> left alone. Present
+        # and DIFFERENT -> refused, with both values named. That is what makes
+        # "value-preserving" a checked property rather than a description of intent.
+        for name, value in recomputed.items():
+            banked = migrated.get(name)
+            if banked is None:
+                migrated[name] = value
+                continue
+            if abs(float(banked) - value) > 1e-9:
+                raise EngineShardSchemaError(
+                    f"refusing to migrate a shard whose banked {name} "
+                    f"({banked!r}) does not equal the value its own counts imply "
+                    f"({value!r}). "
+                    + (
+                        "v1's fallback numerator was `cap` and v2's is `cap + "
+                        "dead_ends`, but `rollout_dead_ends == 0` is enforced above, so "
+                        "the two rules agree here and a difference cannot be the "
+                        "schema change."
+                        if name == "rollout_fallback_fraction"
+                        else "This column has the SAME definition under v1 and v2, so "
+                        "the migration has no licence to change it."
+                    )
+                    + " Overwriting it would publish a different number under a "
+                    "'provably value-preserving' rename."
+                )
+            migrated[name] = value
+    else:
+        for name in ROLLOUT_LEAF_QUOTIENT_FIELDS:
+            migrated.pop(name, None)
+    require_rollout_leaf_shard_schema(migrated)
+    return migrated
 
 
 #: EVERY counter that is a CLAIM ABOUT ONE DECISION rather than a measure of work
@@ -2615,6 +3845,27 @@ class EngineMctsPolicy:
             return self._search_ladder(context, worlds, live_fold, rng)
         if self._config.leaf_eval == "hp_fraction_crate":
             return self._search_hp_fraction_crate(context, worlds, rng)
+        if self._config.leaf_eval == "rollout_crate":
+            return self._search_rollout_crate(context, worlds, rng)
+        # THE ELSE-RAISE, and the attack it closes. A4's claim was that "a new
+        # leaf-eval path is either unregistered and unreachable, or registered and
+        # required to carry its own reached-depth accumulation". REGISTER-AND-STARVE
+        # broke it, and the review that found it measured ZERO new failures: adding
+        # `"anything": None` to `LEAF_EVAL_SEARCH_METHODS` makes the mode SELECTABLE
+        # (`__post_init__` validates membership) and exempt from the instrumentation
+        # guard (`DEPTH_INSTRUMENTED_SEARCH_METHODS` skips the `None`s), and this
+        # dispatch had no final branch -- so the config was accepted, no dispatch
+        # matched, and control fell into the block below. The leaves were then priced
+        # by `hp_fraction` while every artifact recorded the new mode's NAME. That is
+        # the same class as the false witness: a row whose provenance field names a
+        # pricer that never ran.
+        #
+        # Scoped by VALUE, not by "is it in the registry": the fall-through block
+        # below IS `hp_fraction`'s implementation and nothing else's, so the only
+        # `leaf_eval` that may reach it is that one. A registry entry mapped to `None`
+        # is a recorded decision NOT to instrument a path that exists; it is not a
+        # licence to have no path at all.
+        require_leaf_eval_dispatched(self._config.leaf_eval)
 
         aggregated: Counter = Counter()
         search_started = time.perf_counter()
@@ -2763,6 +4014,168 @@ class EngineMctsPolicy:
                     "aggregated_choices": {
                         choice: round(weight, 4) for choice, weight in aggregated.most_common()
                     },
+                }
+            },
+        )
+
+    def _search_rollout_crate(
+        self,
+        context: PolicyContext,
+        worlds: list[tuple[EngineWorld, Any]],
+        rng: random.Random,
+    ) -> PolicyDecision:
+        """Crate PUCT tree, R-rollout Monte-Carlo leaves (the arbiter arm).
+
+        Deliberately a NEAR-COPY of ``_search_hp_fraction_crate`` rather than a
+        shared generic loop. The requirement on this arm is that it cannot
+        affect production paths, and a copy discharges that by construction
+        while a refactor would put new code inside the depth study's
+        instrument. The two bodies differ only in the crate entry point called
+        and the extra rollout accounting carried out; if they ever need to
+        diverge in the world loop itself, that is a finding, not a merge.
+
+        What "same search" means here, and what proves it: the crate call
+        threads the identical ``max_depth``/``c_puct``/``deep_ko_split``/
+        ``fpu_reduction`` into the identical ``MultiPlyConfig``, reaching the
+        identical ``traverse``/``finalize``. The crate gate
+        ``rollout_batch1_matches_sequential_report`` asserts that at
+        ``leaf_batch=1`` this driver reproduces ``puct_search_multi``'s report
+        field for field once leaf VALUES are held at HP-fraction, and
+        ``fidelity_gate_reads_false_on_batch_and_on_pricer`` shows that gate
+        reading False on two mutations. So the arm's only degree of freedom
+        versus production is the leaf value.
+
+        ESTIMAND, restated because it governs how a result may be read: with
+        ``rollout_policy="uniform"`` a leaf is priced at
+        ``P(side one wins | uniform-random play from here)``. That is not the
+        vhprobe shards' policy-continuation ``true_*``. The per-decision
+        metadata carries ``rollout_fallback_fraction`` (share of rollouts that
+        hit the ply cap and were priced by the handcrafted evaluator instead of
+        reaching a terminal) precisely so a blend is never read as an oracle.
+        """
+
+        import pokezero_search  # noqa: PLC0415 — optional native dependency
+
+        config = self._config
+        aggregated: Counter[str] = Counter()
+        depths_reached: list[int] = []
+        worlds_searched_here = 0
+        rollouts_run = 0
+        rollout_plies = 0
+        terminal_hits = 0
+        cap_hits = 0
+        dead_ends = 0
+        leaves_priced = 0
+        search_started = time.perf_counter()
+        for world_index, (world, state) in enumerate(worlds):
+            side_key = (
+                "side_one"
+                if world.slot_sides[context.player_id] == "side_one"
+                else "side_two"
+            )
+            try:
+                report = json.loads(
+                    pokezero_search.puct_search_multi_rollout(
+                        state.to_string(),
+                        config.search_sims,
+                        max_depth=config.search_depth,
+                        c_puct=config.c_puct,
+                        seed=rng.getrandbits(63),
+                        deep_ko_split=config.deep_ko_split,
+                        rollouts=config.rollout_count,
+                        rollout_max_plies=config.rollout_max_plies,
+                        rollout_policy=config.rollout_policy,
+                        # Per-world rollout stream, drawn from the same decision
+                        # RNG as the search seed so a replayed decision replays
+                        # its rollouts too -- but a SEPARATE draw, so the two
+                        # streams cannot alias.
+                        rollout_seed=rng.getrandbits(63),
+                        rollout_threads=config.rollout_threads,
+                        leaf_batch=config.leaf_batch,
+                        leaf_mode="rollout",
+                        **(
+                            {"fpu_reduction": config.fpu_reduction}
+                            if config.fpu_reduction is not None
+                            else {}
+                        ),
+                    )
+                )
+            except Exception as error:  # noqa: BLE001 — count, keep the other worlds
+                detail = (
+                    _bounded_reason_detail(str(error).splitlines()[0])
+                    if str(error)
+                    else type(error).__name__
+                )
+                self.stats.world_failure_reasons[f"crate_search_rollout: {detail}"] += 1
+                continue
+            del world_index
+            entries = report[side_key]
+            total = max(sum(entry["visits"] for entry in entries), 1)
+            for entry in entries:
+                aggregated[entry["move"]] += entry["visits"] / total
+            reached = int(report["max_depth_reached"])
+            depths_reached.append(reached)
+            self.stats.depth_reached_samples += 1
+            self.stats.depth_reached_sum += reached
+            self.stats.depth_reached_max = max(self.stats.depth_reached_max, reached)
+            self.stats.depth_reached_histogram[reached] += 1
+            self.stats.total_iterations += int(report["iterations"])
+            self.stats.worlds_searched += 1
+            worlds_searched_here += 1
+            rollouts_run += int(report["rollouts_run"])
+            rollout_plies += int(report["rollout_plies"])
+            terminal_hits += int(report["rollout_terminal_hits"])
+            cap_hits += int(report["rollout_cap_hits"])
+            dead_ends += int(report["rollout_dead_ends"])
+            leaves_priced += int(report["leaves_priced"])
+        elapsed = time.perf_counter() - search_started
+        self.stats.search_wall_seconds += elapsed
+
+        if not worlds_searched_here:
+            return self._fallback(context, rng, "crate_search_failed")
+
+        action_index = self._map_choices(context, aggregated)
+        if action_index is None:
+            return self._fallback(context, rng, "choices_unmapped")
+
+        self.stats.searched_decisions += 1
+        denom = max(rollouts_run, 1)
+        return PolicyDecision(
+            action_index=action_index,
+            policy_id=self.policy_id,
+            metadata={
+                "engine_mcts": {
+                    "leaf_eval": "rollout_crate",
+                    "worlds_searched": worlds_searched_here,
+                    "worlds_constructed": len(worlds),
+                    "max_depth_reached": max(depths_reached),
+                    "depths_reached": tuple(depths_reached),
+                    "aggregated_choices": {
+                        choice: round(weight, 4) for choice, weight in aggregated.most_common()
+                    },
+                    # The cost ledger, per decision, so every estimate quoted
+                    # downstream is (measured rate) x (count) with both factors
+                    # present in the artifact rather than reconstructed.
+                    "rollout_count": config.rollout_count,
+                    "rollout_max_plies": config.rollout_max_plies,
+                    "rollout_policy": config.rollout_policy,
+                    "leaf_batch": config.leaf_batch,
+                    "rollout_threads": config.rollout_threads,
+                    "leaves_priced": leaves_priced,
+                    "rollouts_run": rollouts_run,
+                    "rollout_plies": rollout_plies,
+                    "decision_wall_seconds": round(elapsed, 6),
+                    "rollouts_per_second": round(rollouts_run / elapsed, 2)
+                    if elapsed > 0
+                    else None,
+                    "seconds_per_rollout": round(elapsed / denom, 8),
+                    # The honesty columns. A high fallback fraction means the
+                    # "oracle" was mostly the handcrafted evaluator.
+                    "rollout_terminal_fraction": round(terminal_hits / denom, 6),
+                    "rollout_fallback_fraction": round((cap_hits + dead_ends) / denom, 6),
+                    "rollout_cap_hits": cap_hits,
+                    "rollout_dead_ends": dead_ends,
+                    "rollout_mean_plies": round(rollout_plies / denom, 3),
                 }
             },
         )
@@ -3586,6 +4999,15 @@ class EngineMctsPolicy:
         # identity. Never shared across turns.
         duplicates: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
         search_started = time.perf_counter()
+        # THIS DECISION'S ROLLOUT LEDGER, accumulated per INVOCATION so a
+        # conservatively replayed world that priced its leaves twice reports both --
+        # the same unit as `model_evals` and the phase walls, and the unit a cost
+        # figure needs. `rollout_modes` counts WORLDS per pricer name, because "which
+        # pricer priced the leaves" is the question the witness exists to answer and
+        # the answer must survive a run that somehow mixed two.
+        rollout_leaf_eval = bool(getattr(config, "rollout_leaf_eval", False))
+        rollout_ledger: Counter[str] = Counter()
+        rollout_modes: Counter[str] = Counter()
 
         def run_world(
             record: Mapping[str, Any],
@@ -3726,6 +5148,55 @@ class EngineMctsPolicy:
                     field_name,
                     getattr(self.stats, field_name) + int(report.get(field_name) or 0),
                 )
+            # THE ROLLOUT WITNESS, absorbed here rather than nowhere. Every field
+            # below was already in the report and was already being read on the
+            # SEQUENTIAL path; on this one -- the path the arbiter runs, and the only
+            # path where priors are on -- the whole ledger was dropped on the floor.
+            #
+            # `report[...]` and not `.get(..., 0)`: a missing key here is a crate that
+            # engaged the seam and did not report what it did, which must refuse
+            # rather than default to a zero that reads as "no fallbacks". This is the
+            # opposite of the `.get(...) or 0` used for the collision family above,
+            # and deliberately so -- those tolerate an OLDER wheel, whereas the seam's
+            # own columns are emitted by the very code that priced the leaves, so
+            # their absence cannot be a version skew.
+            if rollout_leaf_eval:
+                # ONE SOURCE for the refusal and the accumulation below. These were
+                # two hand-written literals over the same field set, and neither was
+                # pinned -- which is why dropping `rollout_encode_skipped` from the
+                # refusal list survived a mutation round: the sibling copy kept
+                # accumulating it, so nothing observable changed.
+                missing = [
+                    key for key in ROLLOUT_LEAF_REPORT_FIELDS if key not in report
+                ]
+                if missing:
+                    raise EngineSearchWitnessError(
+                        "the config asked for the rollout arm and the native report "
+                        f"carries no {', '.join(missing)}. Either the seam did not "
+                        "engage -- in which case these leaves were priced by the "
+                        "MODEL and the decision is a raw-arm decision wearing the "
+                        "arm's config -- or the wheel predates the seam. Both are "
+                        "refusals: a rollout number cannot be read off a search that "
+                        "ran no rollouts."
+                    )
+                mode = str(report["rollout_leaf_mode"])
+                rollout_modes[mode] += weight
+                rollout_ledger["worlds"] += weight
+                # The SHARD-level ledger, in the same pass and the same unit. Two
+                # surfaces from one datum, which this module has been burned by
+                # before (`root_q_gap_sum` vs its histogram) -- so they are written
+                # together rather than in two places that can drift.
+                self.stats.rollout_leaf_modes[mode] += weight
+                self.stats.rollout_leaf_worlds += weight
+                for source, stat_name in ROLLOUT_LEAF_REPORT_FIELDS.items():
+                    if stat_name is None:
+                        # The pricer NAME, absorbed above into `rollout_leaf_modes`.
+                        continue
+                    value = int(report[source])
+                    rollout_ledger[source] += value
+                    setattr(
+                        self.stats, stat_name, getattr(self.stats, stat_name) + value
+                    )
             return report
 
         for world, state in worlds:
@@ -4004,47 +5475,115 @@ class EngineMctsPolicy:
             if config.override_telemetry
             else None
         )
+        # THE WITNESS TRAVELS WITH THE DECISION, and the run-level ledger with the
+        # shard. Both, not either: the per-decision row is what a turn-level reading
+        # joins on, and the shard aggregate is where `rollout_fallback_fraction`
+        # becomes a column a campaign can sort by. Built here, one level up from
+        # `run_world`, because the unit is the DECISION -- the same reason
+        # `aggregated_choices` is built here.
+        rollout_witness = (
+            self._rollout_leaf_witness(rollout_modes, rollout_ledger)
+            if rollout_leaf_eval
+            else None
+        )
+        metadata = {
+            "engine_mcts": {
+                "leaf_eval": "model",
+                "worlds_searched": worlds_searched_here,
+                # Per-decision denominator. A decision that searched 1 of 4
+                # constructed worlds is NOT a fallback and so is invisible in
+                # `fallback_rate`, but its belief aggregate rests on a
+                # quarter of the sampled hypotheses. Carrying the
+                # denominator per decision is what lets a shard tell a
+                # healthy decision from a barely-survived one.
+                "worlds_constructed": len(worlds),
+                "aggregated_choices": {
+                    choice: round(weight, 4) for choice, weight in aggregated.most_common()
+                },
+                "aggregated_choices_basis": (
+                    "stopped_prefix" if locked_choice is not None else "full_budget"
+                ),
+                "early_stop": {
+                    "enabled": config.early_stop,
+                    # WORLDS, not searches: full_budget_replays counts
+                    # records, so counting searches here put the two on
+                    # different denominators for the same event.
+                    "worlds_stopped": sum(
+                        int(r.get("_collapse_multiplicity", 1)) for r in stopped_runs
+                    ),
+                    "aggregate_locked": locked_choice is not None,
+                    "locked_choice": locked_choice,
+                    "full_budget_replays": full_budget_replays,
+                    "simulations_saved": simulations_saved,
+                },
+                # Present only with the flag on, so a flag-off decision's
+                # metadata is exactly what it has always been. The shard's
+                # aggregate lives in `policy_stats`; this is the per-decision
+                # row, which is what the fork probe forks on.
+                **({"override": override} if override is not None else {}),
+                # Same rule, and the same reason the crate's own seam columns are
+                # appended rather than always emitted: with the arm off there is
+                # no `rollout_leaf` key, so a production decision's metadata is
+                # exactly what it was before this seam existed. `is not None`,
+                # never truthiness -- see the guard, which refuses an empty
+                # witness rather than letting it be omitted as falsey.
+                **({"rollout_leaf": rollout_witness} if rollout_witness is not None else {}),
+            }
+        }
+        # AND THE RUN REFUSES IF THE TWO DISAGREE. This call is what makes a missing
+        # witness LOUD instead of silent, and it is placed after the metadata is
+        # complete and before the decision escapes -- there is no later stage at
+        # which the measurement could be recovered, because `run_world`'s reports go
+        # out of scope with this frame.
+        require_rollout_leaf_witness(metadata, rollout_leaf_eval=rollout_leaf_eval)
         return PolicyDecision(
             action_index=action_index,
             policy_id=self.policy_id,
-            metadata={
-                "engine_mcts": {
-                    "leaf_eval": "model",
-                    "worlds_searched": worlds_searched_here,
-                    # Per-decision denominator. A decision that searched 1 of 4
-                    # constructed worlds is NOT a fallback and so is invisible in
-                    # `fallback_rate`, but its belief aggregate rests on a
-                    # quarter of the sampled hypotheses. Carrying the
-                    # denominator per decision is what lets a shard tell a
-                    # healthy decision from a barely-survived one.
-                    "worlds_constructed": len(worlds),
-                    "aggregated_choices": {
-                        choice: round(weight, 4) for choice, weight in aggregated.most_common()
-                    },
-                    "aggregated_choices_basis": (
-                        "stopped_prefix" if locked_choice is not None else "full_budget"
-                    ),
-                    "early_stop": {
-                        "enabled": config.early_stop,
-                        # WORLDS, not searches: full_budget_replays counts
-                        # records, so counting searches here put the two on
-                        # different denominators for the same event.
-                        "worlds_stopped": sum(
-                            int(r.get("_collapse_multiplicity", 1)) for r in stopped_runs
-                        ),
-                        "aggregate_locked": locked_choice is not None,
-                        "locked_choice": locked_choice,
-                        "full_budget_replays": full_budget_replays,
-                        "simulations_saved": simulations_saved,
-                    },
-                    # Present only with the flag on, so a flag-off decision's
-                    # metadata is exactly what it has always been. The shard's
-                    # aggregate lives in `policy_stats`; this is the per-decision
-                    # row, which is what the fork probe forks on.
-                    **({"override": override} if override is not None else {}),
-                }
-            },
+            metadata=metadata,
         )
+
+    def _rollout_leaf_witness(
+        self, modes: Mapping[str, int], ledger: Mapping[str, int]
+    ) -> dict[str, Any]:
+        """This decision's rollout provenance, in the units a reader needs.
+
+        A NAMED METHOD, not an inline dict literal, for the reason the module
+        already records for `_notify_world_observer`: deleting a named method is a
+        mutation a battery can apply and kill, while an inline block buried in a
+        400-line method is the shape that survives untouched. Given the class this
+        fixes was *absent code*, the shape that makes a deletion detectable is worth
+        the indirection.
+        """
+
+        rollouts_run = int(ledger["rollouts_run"])
+        cap = int(ledger["rollout_cap_hits"])
+        dead = int(ledger["rollout_dead_ends"])
+        denominator = max(rollouts_run, 1)
+        return {
+            # WHICH PRICER, per world. The field whose absence made an arm decision
+            # and a raw-arm decision the same row.
+            "rollout_leaf_modes": dict(sorted(modes.items())),
+            "rollout_leaf_worlds": int(ledger["worlds"]),
+            # THE COST LEDGER, so every downstream estimate is (measured rate) x
+            # (count) with both factors present in the artifact.
+            "leaves_priced": int(ledger["leaves_priced"]),
+            "rollouts_run": rollouts_run,
+            "rollout_plies": int(ledger["rollout_plies"]),
+            "rollout_encode_skipped": int(ledger["rollout_encode_skipped"]),
+            # THE PARTITION, then its quotients. A rollout ends in exactly one of
+            # these three, and the last two ARE the handcrafted HP-fraction leaf.
+            "rollout_terminal_hits": int(ledger["rollout_terminal_hits"]),
+            "rollout_cap_hits": cap,
+            "rollout_dead_ends": dead,
+            # THE HONESTY COLUMNS. `fallback` is the share of this decision's
+            # "oracle" that was the handcrafted evaluator; a high value means the arm
+            # is a blend and must be read as one. NOT rounded -- the guard checks the
+            # fraction against its own partition, and rounding to 6 places would make
+            # that identity hold only approximately for no benefit a reader gets.
+            "rollout_terminal_fraction": int(ledger["rollout_terminal_hits"]) / denominator,
+            "rollout_fallback_fraction": (cap + dead) / denominator,
+            "rollout_mean_plies": int(ledger["rollout_plies"]) / denominator,
+        }
 
     def _record_root_telemetry(
         self,
@@ -5083,6 +6622,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"argmax compare: {agreements}/{len(compare_records)} agree, "
             f"{len(illegal)} illegal decisions (must be 0; agreement not required)"
         )
+    # THE FIFTH **AND SEVENTH** WRITERS, both this module's own CLI, and the refusal
+    # now dominates BOTH of them.
+    #
+    # THE SEVENTH WRITER, and why the enumeration said "six". The
+    # `print(json.dumps(printable, ...))` below is an UNCONDITIONAL top-level
+    # statement of `main`: with a shell redirect and no `--out` it reaches disk
+    # having passed no guard at all. The refusal used to sit nine lines down INSIDE
+    # `if args.out:`, so it covered the `--out` arm and not the stdout arm -- which
+    # is verbatim the shape `_shard_json_text`'s own docstring names ("`--json` and
+    # a shell redirect but no `--summary-out`"), reproduced in the module that
+    # documents it. Latent rather than live -- no `add_argument` exposes the rollout
+    # arm here -- so it was a MISCOUNT of the writer surface rather than a live
+    # corruption path, and it is fixed as a miscount: the guard is hoisted above
+    # both emissions, and the count is seven.
+    #
+    # `report` rather than `printable`: `printable` is a derived subset, so guarding
+    # the full document covers both the subset that is printed and the whole that is
+    # written, and there is no arm on which the refusal is skipped.
+    require_rollout_leaf_document_schema(report)
     printable = {k: v for k, v in report.items() if k != "games"}
     if "argmax_compare" in printable:
         printable["argmax_compare"] = {
@@ -5090,8 +6648,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
     print(json.dumps(printable, indent=2))
     if args.out:
-        with open(args.out, "w") as handle:
-            json.dump(report, handle, indent=2)
+        # THE FIFTH WRITER. Its `engine_mcts` block is `stats.to_dict()` DIRECTLY --
+        # so it has a `decisions` field and no nested `policy_stats`, i.e. exactly
+        # the shape `require_banked_shard_witness` refuses -- and it never went near
+        # `_write_json`. Refused on the column-keyed walk instead, which is the check
+        # that is actually about this payload. Written THROUGH the funnel so the
+        # refusal is not a deletable statement standing beside the write.
+        write_guarded_document(args.out, report)
     fallback_count = policy.stats.fallback_decisions
     if fallback_count:
         import sys as _sys

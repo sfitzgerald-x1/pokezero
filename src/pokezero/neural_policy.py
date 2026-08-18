@@ -717,8 +717,19 @@ class TransformerTrainingConfig:
             raise ValueError("objective must be 'behavior-cloning', 'reward-weighted', 'ppo', or 'value-only'.")
         if self.ppo_target_mode not in {"returns", "gae"}:
             raise ValueError("ppo_target_mode must be 'returns' or 'gae'.")
-        if self.objective != "ppo" and self.ppo_target_mode != "returns":
-            raise ValueError("ppo_target_mode='gae' requires objective='ppo'.")
+        # 'value-only' joins 'ppo' here because ppo_target_mode is also a property of the
+        # DATA, not only of the loss: it is stamped into the training cache's dataset config
+        # and the reader rejects any mismatch. A value-only fine-tune reads caches collected
+        # by a PPO run, so it has to be able to name the mode those caches were collected
+        # with. It does not consume GAE targets -- but that is TRUE ONLY BECAUSE
+        # `_value_targets` is gated on the objective. An earlier revision of this comment
+        # asserted the invariant while the gate did not exist: `_value_targets` took no
+        # objective and preferred `ppo_value_targets` wherever the mask was set, so widening
+        # this guard silently let a value-only fine-tune train toward GAE bootstrap targets
+        # while `evaluate_value_calibration` selected the epoch on `returns`. If you remove
+        # that gate, this comment becomes false again and nothing else will catch it.
+        if self.objective not in ("ppo", "value-only") and self.ppo_target_mode != "returns":
+            raise ValueError("ppo_target_mode='gae' requires objective='ppo' or 'value-only'.")
         if not 0.0 <= self.gae_lambda <= 1.0:
             raise ValueError("gae_lambda must be between 0 and 1.")
         if self.objective == "value-only" and not self.freeze_non_value_parameters:
@@ -2284,7 +2295,7 @@ def _distributed_value_loss(
 
     torch_module = require_torch()
     values = output.value
-    targets = _value_targets(tensors)
+    targets = _value_targets(tensors, config.objective)
     training_weights = _training_sample_weights(tensors)
     if not active:
         training_weights = training_weights * 0.0
@@ -3345,7 +3356,7 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
     functional = torch_module.nn.functional
     masked_policy_logits = output.policy_logits.masked_fill(~tensors["legal_action_mask"], -1e9)
     policy_correct = int((masked_policy_logits.argmax(dim=1) == tensors["action_indices"]).sum().item())
-    value_targets = _value_targets(tensors)
+    value_targets = _value_targets(tensors, config.objective)
     training_weights = _training_sample_weights(tensors)
     value_loss, ppo_value_clip_eligible_examples, ppo_value_clip_count = _value_loss_terms(
         output.value,
@@ -3487,8 +3498,24 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
     }
 
 
-def _value_targets(tensors: Mapping[str, Any]):
+def _value_targets(tensors: Mapping[str, Any], objective: str = "ppo"):
+    """The value head's regression target.
+
+    OBJECTIVE-GATED, and that gate is load-bearing. `ppo_value_targets` holds GAE bootstrap
+    targets anchored to the collecting checkpoint's own value estimates; `returns` holds the
+    outcome return. Only the PPO objective wants the former.
+
+    Review caught this after the objective guard was widened to admit
+    `value-only` + `ppo_target_mode='gae'`: this function took no objective, so a value-only
+    fine-tune pointed at a GAE-collected cache would TRAIN toward bootstrap targets while
+    `evaluate_value_calibration` -- which reads `returns` only -- selected the epoch and
+    reported calibration. Training against one target and selecting on another is silent, and
+    it moves the loss (measured: 0.4948 vs 1.0000 on a rollout whose outcome is a loss and
+    whose recorded estimates are 0.9). A value-only run is scored against `returns`.
+    """
     torch_module = require_torch()
+    if objective != "ppo":
+        return tensors["returns"]
     if "ppo_value_target_mask" not in tensors or "ppo_value_targets" not in tensors:
         return tensors["returns"]
     return torch_module.where(

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import unittest
 
 from pokezero.collection import RolloutRecord, write_rollout_record
+from pokezero.dataset import TrajectoryDatasetConfig, write_training_cache_from_rollouts
 from pokezero.env import TerminalState
 from pokezero.neural_cli import print_value_calibration_report
 from pokezero.neural_policy import (
@@ -15,7 +16,7 @@ from pokezero.neural_policy import (
     require_torch,
     torch_available,
 )
-from pokezero.observation import PokeZeroObservationV0
+from pokezero.observation import ObservationSpec, PokeZeroObservationV0
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 from pokezero.value_calibration import (
     ValueCalibrationReport,
@@ -38,6 +39,85 @@ def _observation() -> PokeZeroObservationV0:
         attention_mask=(),
         legal_action_mask=(True, False, False, False, False, False, False, False, False),
     )
+
+
+_CACHEABLE_MASK = (True, True, False, False, False, False, False, False, False)
+
+
+def _cacheable_observation(value: int) -> PokeZeroObservationV0:
+    """An observation with real feature rows, which a training cache requires."""
+    spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1)
+    return PokeZeroObservationV0(
+        categorical_ids=tuple((value,) for _ in range(spec.token_count)),
+        numeric_features=tuple((float(value),) for _ in range(spec.token_count)),
+        token_type_ids=tuple(0 for _ in range(spec.token_count)),
+        attention_mask=tuple(True for _ in range(spec.token_count)),
+        legal_action_mask=_CACHEABLE_MASK,
+    )
+
+
+def _cacheable_rollout_record() -> RolloutRecord:
+    """A p1 win with recorded value estimates, so GAE-mode collection is well defined."""
+    trajectory = BattleTrajectory(battle_id="cache", format_id="gen3randombattle", seed=9)
+    for turn_index, value_estimate in ((0, 0.2), (1, 0.5)):
+        trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=turn_index,
+                observation=_cacheable_observation(turn_index + 1),
+                legal_action_mask=_CACHEABLE_MASK,
+                action_index=0,
+                value_estimate=value_estimate,
+            )
+        )
+    trajectory.record_terminal(TerminalState(winner="p1", turn_count=2))
+    return RolloutRecord(
+        battle_id=trajectory.battle_id,
+        seed=trajectory.seed,
+        format_id=trajectory.format_id,
+        policy_ids={"p1": "fixture"},
+        decision_round_count=2,
+        elapsed_seconds=0.1,
+        terminal=trajectory.terminal,
+        trajectory=trajectory,
+    )
+
+
+def _cache_calibration_report(
+    *,
+    model: object,
+    cache_config: TrajectoryDatasetConfig,
+    objective: str,
+    ppo_target_mode: str,
+    gae_lambda: float,
+    freeze_non_value_parameters: bool = False,
+) -> ValueCalibrationReport:
+    """Collect one rollout into a training cache and calibrate a head against it."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        jsonl = root / "rollouts.jsonl"
+        with jsonl.open("w", encoding="utf-8") as handle:
+            write_rollout_record(handle, _cacheable_rollout_record())
+        cache = root / "cache"
+        write_training_cache_from_rollouts(jsonl, cache, config=cache_config)
+        training_result = TransformerTrainingResult(
+            model_config=SimpleNamespace(),
+            training_config=TransformerTrainingConfig(
+                window_size=1,
+                objective=objective,
+                freeze_non_value_parameters=freeze_non_value_parameters,
+                ppo_target_mode=ppo_target_mode,
+                gae_lambda=gae_lambda,
+            ),
+            epochs=(),
+        )
+        return evaluate_value_calibration(
+            model=model,
+            training_result=training_result,
+            paths=cache,
+            batch_size=2,
+            bins=4,
+        )
 
 
 class ValueCalibrationTest(unittest.TestCase):
@@ -200,7 +280,7 @@ class ValueCalibrationTest(unittest.TestCase):
 
         self.assertEqual(transform.points, ((0.2, 0.0), (0.8, 1.0)))
 
-    def test_calibration_dataset_config_matches_training_return_target_config(self) -> None:
+    def test_calibration_dataset_config_matches_training_dataset_config(self) -> None:
         training_config = TransformerTrainingConfig(
             window_size=3,
             discount=0.75,
@@ -229,8 +309,12 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertEqual(dataset_config.faint_delta_return_weight, 0.3)
         self.assertEqual(dataset_config.turn_penalty_after, 20)
         self.assertEqual(dataset_config.turn_penalty, 0.01)
-        self.assertEqual(dataset_config.ppo_target_mode, "returns")
-        self.assertEqual(dataset_config.gae_lambda, 0.95)
+        # ppo_target_mode/gae_lambda are part of a training cache's stamped identity, and the
+        # cache reader refuses any field mismatch -- so calibration must request the same two
+        # values the run trained with or it cannot open the cache at all. This does NOT change
+        # the calibration target: GAE lands in ppo_value_targets, never in `returns`.
+        self.assertEqual(dataset_config.ppo_target_mode, "gae")
+        self.assertEqual(dataset_config.gae_lambda, 0.8)
 
     def test_evaluate_value_calibration_runs_model_over_rollout_batches(self) -> None:
         if not torch_available():
@@ -642,6 +726,147 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertIn("return:zero", output)
         self.assertIn("corr", output)
         self.assertIn("n/a", output)
+
+    def test_value_calibration_reads_a_gae_collected_training_cache(self) -> None:
+        """--value-calibration-data against a GAE-collected cache used to be unreachable.
+
+        A training cache stamps its dataset config and `iter_training_cache_batches` refuses
+        any field mismatch. Calibration built its request config without ppo_target_mode or
+        gae_lambda, so every cache collected with ppo_target_mode='gae' -- i.e. every cache a
+        PPO run produces -- raised "training cache dataset config does not match requested
+        training config." and the report could not be produced at all.
+
+        The second half of the assertion is the part that makes the fix safe: reading the GAE
+        cache must return the SAME report as reading the same rollouts cached in returns mode,
+        because `returns` is the outcome return in either mode and GAE targets live in
+        separate columns calibration never reads.
+        """
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        torch = require_torch()
+
+        class ZeroValueModel:
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, **kwargs):
+                return SimpleNamespace(value=torch.zeros(int(kwargs["history_mask"].shape[0])))
+
+        gae_report = _cache_calibration_report(
+            model=ZeroValueModel(),
+            cache_config=TrajectoryDatasetConfig(window_size=1, ppo_target_mode="gae", gae_lambda=0.8),
+            objective="ppo",
+            ppo_target_mode="gae",
+            gae_lambda=0.8,
+        )
+        returns_report = _cache_calibration_report(
+            model=ZeroValueModel(),
+            cache_config=TrajectoryDatasetConfig(window_size=1),
+            objective="ppo",
+            ppo_target_mode="returns",
+            gae_lambda=0.95,
+        )
+
+        self.assertEqual(gae_report.examples, 2)
+        self.assertEqual(gae_report.examples, returns_report.examples)
+        self.assertAlmostEqual(gae_report.mae, returns_report.mae)
+        self.assertAlmostEqual(gae_report.bias, returns_report.bias)
+        self.assertAlmostEqual(gae_report.mse, returns_report.mse)
+        # A zero-valued head against a p1 win: the target read is the outcome return, not a
+        # bootstrapped GAE target built from the recorded value estimates (0.2, 0.5).
+        self.assertAlmostEqual(gae_report.mae, 1.0)
+        self.assertAlmostEqual(gae_report.bias, -1.0)
+
+    def test_value_only_is_scored_against_returns_not_gae_targets(self) -> None:
+        """The objective gate on `_value_targets`, pinned by the loss it changes.
+
+        Widening the ppo_target_mode guard to admit `value-only` made this configuration
+        constructible for the first time. Without the gate, a value-only run on a GAE cache
+        trains toward `ppo_value_targets` (bootstrap targets anchored to the collecting
+        checkpoint's own estimates) while `evaluate_value_calibration` selects the epoch on
+        `returns`. Training on one target and selecting on another is silent, so it is pinned
+        here on the VALUE OF THE LOSS -- asserting the returned tensor alone would pass against
+        an implementation that ignored the objective for the ranking-loss path.
+        """
+        from pokezero import neural_policy as np_mod
+
+        torch = __import__("torch")
+        tensors = {
+            "returns": torch.tensor([-1.0, -1.0, -1.0]),
+            "ppo_value_targets": torch.tensor([-0.316, -0.620, -1.0]),
+            "ppo_value_target_mask": torch.tensor([True, True, True]),
+        }
+        returns = tensors["returns"]
+
+        value_only = np_mod._value_targets(tensors, "value-only")
+        self.assertTrue(
+            torch.equal(value_only, returns),
+            f"value-only must be scored against outcome returns, got {value_only.tolist()}",
+        )
+        for other in ("behavior-cloning", "reward-weighted"):
+            self.assertTrue(
+                torch.equal(np_mod._value_targets(tensors, other), returns),
+                f"{other} must be scored against outcome returns",
+            )
+
+        ppo = np_mod._value_targets(tensors, "ppo")
+        self.assertTrue(
+            torch.equal(ppo, tensors["ppo_value_targets"]),
+            "ppo must still consume GAE targets -- a gate that starves PPO is not a fix",
+        )
+        # The two must actually DIFFER on this fixture, or the assertions above are vacuous:
+        # a gate could be missing entirely and every equality would still hold.
+        self.assertFalse(
+            torch.equal(ppo, returns),
+            "fixture is inert: GAE targets equal returns here, so the gate is untested",
+        )
+
+    def test_value_only_fine_tune_reads_the_gae_cache_it_is_pointed_at(self) -> None:
+        """The value-tune shape of the same defect, isolated to the objective guard.
+
+        `foundation-value-tune-run` fine-tunes with objective='value-only' on caches a PPO run
+        collected. Naming the mode those caches were stamped with was rejected outright, so the
+        request that reads them could not even be constructed -- a separate failure from the
+        dropped fields above, and the one that fires first for value-tune.
+        """
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        torch = require_torch()
+
+        class ZeroValueModel:
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, **kwargs):
+                return SimpleNamespace(value=torch.zeros(int(kwargs["history_mask"].shape[0])))
+
+        report = _cache_calibration_report(
+            model=ZeroValueModel(),
+            cache_config=TrajectoryDatasetConfig(window_size=1, ppo_target_mode="gae", gae_lambda=0.8),
+            objective="value-only",
+            ppo_target_mode="gae",
+            gae_lambda=0.8,
+            freeze_non_value_parameters=True,
+        )
+
+        self.assertEqual(report.examples, 2)
+        self.assertAlmostEqual(report.mae, 1.0)
+
+    def test_value_only_objective_can_name_the_mode_its_cache_was_collected_with(self) -> None:
+        config = TransformerTrainingConfig(
+            window_size=1,
+            objective="value-only",
+            freeze_non_value_parameters=True,
+            ppo_target_mode="gae",
+            gae_lambda=0.8,
+        )
+
+        self.assertEqual(config.ppo_target_mode, "gae")
+        self.assertEqual(config.gae_lambda, 0.8)
+        # The guard still holds for every objective that cannot read such a cache.
+        for objective in ("behavior-cloning", "reward-weighted"):
+            with self.assertRaisesRegex(ValueError, "requires objective='ppo'"):
+                TransformerTrainingConfig(window_size=1, objective=objective, ppo_target_mode="gae")
 
 
 if __name__ == "__main__":

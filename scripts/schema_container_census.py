@@ -47,8 +47,26 @@ def _assigned_names(tree: ast.AST) -> dict[int, str]:
     alone let a NEW routing tuple whose member set duplicated an existing row be classified for free
     and then checked by nothing -- which is drill defect #1 (an unregistered routing tuple) reopening
     through the very file added to prevent it. A container with no assignment target (an inline set in
-    an `if x not in {...}`) gets "<inline>", which is still distinguishing: two inline containers in
-    the same file with the same members are genuinely the same classification question.
+    an `if x not in {...}`) gets "<inline:LINE>" -- see the caller at the `var =` line below, which
+    supplies the line number this function cannot see.
+
+    An earlier form of this docstring said such a container gets a bare "<inline>" and that "two
+    inline containers in the same file with the same members are genuinely the same classification
+    question". BOTH halves were false, and in the direction that invites a maintainer to delete the
+    line qualification: the bare key collided neural_cli.py's train tuple with its iterate tuple and
+    let a third container be classified for free, which is why the line was added. Two unnamed
+    containers with the same members in the same file are NOT the same question -- they are the
+    free-rider case this key exists to separate.
+
+    KNOWN GAP, since this docstring is the place a reader looks for the key's guarantees: distinctness
+    is per (file, lineno, members, name), so two unnamed containers on the SAME physical line still
+    collapse into one entry and one spec row covers both -- measured, exit 0 while printing "20
+    containers / 20 rows" on a tree holding 21.
+
+    A stable per-(file, members) ordinal -- `<inline#1>`, `<inline#2>` -- is the candidate fix, and it
+    is a PREDICTION, not a measured result: nobody has built it. What IS measured is the negative that
+    motivates it -- simply dropping the line qualification is exit 0 for a newly added unregistered
+    container, so line-insensitivity alone is not the answer.
     """
     out: dict[int, str] = {}
     for node in ast.walk(tree):
@@ -123,7 +141,7 @@ def containers() -> list[tuple[str, int, tuple[str, ...], str]]:
                 # ordinary comparison, and a mixed container is not a schema table.
                 rel = str(path.relative_to(REPO))
                 # LINE-QUALIFIED when there is no assignment target. A bare "<inline>" collided two genuinely
-                # different argparse tuples in neural_cli.py (train at :467, iterate at :1951) into ONE
+                # different argparse tuples in neural_cli.py (train at :467, iterate at :1952) into ONE
                 # classification row -- so a third was classified for free, and the injection, which runs
                 # once per row, inserted the synthetic schema TWICE into each. Also resolve through call
                 # wrappers: `frozenset({...})` / `tuple([...])` put the container inside a Call, so
@@ -136,11 +154,20 @@ def containers() -> list[tuple[str, int, tuple[str, ...], str]]:
     return sorted(found)
 
 
-def classification() -> dict[tuple[str, tuple[str, ...]], str]:
-    """Committed classification, keyed on (file, members) -- NOT on line, which drifts."""
+def classification() -> dict[tuple[str, tuple[str, ...], str], str]:
+    """Committed classification, keyed on (file, members, variable name).
+
+    The variable name is in the key on purpose; keying on (file, members) alone let a NEW routing
+    tuple whose member set duplicated an existing row be classified for free. For a container with
+    no assignment target that name is `<inline:LINE>`, so those rows -- and ONLY those -- are line
+    sensitive, which the spec file's header states as a deliberate trade: "a drifting line is a loud
+    reclassify, whereas a silent collision is a free pass." An earlier form of this docstring said
+    the key was "NOT on line, which drifts", which described neither the key nor the intent and
+    invited reading the resulting abort as a census bug rather than as the reclassify prompt it is.
+    """
     if not SPEC.is_file():
         raise SystemExit(f"census: no classification file at {SPEC}")
-    out: dict[tuple[str, tuple[str, ...]], str] = {}
+    out: dict[tuple[str, tuple[str, ...], str], str] = {}
     for raw in SPEC.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
