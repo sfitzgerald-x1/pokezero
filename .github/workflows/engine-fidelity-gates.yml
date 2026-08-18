@@ -2227,6 +2227,383 @@ jobs:
           fi
 
 
+  # A CORRECT GATE THAT NOTHING RAN. `scripts/schema_container_census.py` enumerates every literal
+  # container of schema NAMES in src/ and scripts/ and aborts on any that is unclassified. It was
+  # not "a check that cannot fail" -- it failed exactly as designed, and no workflow, no test and no
+  # human ever invoked it: its only caller was `scripts/schema_rotation_drill.sh:667`, and that
+  # script's only caller is a person with 17-70 minutes to spend.
+  #
+  # Measured consequence, re-derived here by `git archive` extract per commit rather than taken from
+  # a report: the census went RED at e496e9b8 (the v4 default rotation moved a container's line, so
+  # one row went stale and one container went unclassified while the COUNT stayed 19/19), and stayed
+  # red across EIGHT consecutive first-parent commits on main -- through SEVEN subsequent PR merges
+  # -- until #1276 re-keyed the row. Nothing reported it once. That is worse than a gate that cannot
+  # fail, because the file reads as though the property is guarded.
+  #
+  # UNCONDITIONAL, with no `if:` and no entry in the `changes` filter above. The census's scan roots
+  # are src/ AND scripts/, so any filter would have to cover both, and a filter that is wrong in the
+  # narrow direction restores exactly the hole this job closes. The census is stdlib-only (`ast`,
+  # `pathlib`, `argparse`) -- no wheel, no `pip install`, no torch -- and runs in well under a
+  # second, so running it on every PR is cheaper than the reasoning needed to trust a filter.
+  #
+  # SIX STEPS, and the last one is the reason this job is not itself an instance of its own header.
+  # `tests/test_schema_container_census_wiring.py` pins that this job exists, is unconditional, and
+  # is consumed by `gate-status` -- and for one revision of this PR that module ran nowhere, so
+  # every one of those pins was as inert as the census had been. It runs here, in the same
+  # unconditional wheel-free job, because a pin on this job that lives in a skippable one is the
+  # same defect at one remove.
+  schema-container-census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Depth 2, so the merge commit's two PARENTS exist locally. The default is depth 1,
+          # which checks out the right tree but GRAFTS the parents away -- and the first CI run of
+          # this job proved it the loud way: `git rev-list --parents -n 1 HEAD` reported zero
+          # parents, `HEAD^2` did not resolve, and the assertion below failed the job on a
+          # perfectly good tree. A false red on the required check, caught on the first run rather
+          # than by reasoning, which is the reason the assertion was written as an assertion.
+          fetch-depth: 2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: The tree censused is the MERGE result, not the branch tip
+        # The prior finding in this repo that whole-file counts must derive from the MERGE ref
+        # rather than the branch. This job has no path filter and computes no diff, so the only
+        # count that could be taken from the wrong tree is the census's own container count -- and
+        # that comes from whatever `actions/checkout` left in the working directory. On
+        # `pull_request`, actions/checkout@v4 checks out `refs/pull/N/merge` by default, so the
+        # count already derives from the merge result. That default is load-bearing and INVISIBLE:
+        # a future `ref: ${{ github.event.pull_request.head.sha }}` line, which looks like a
+        # tightening, would silently census a tree that is not the one that would land. Asserted,
+        # not assumed -- the same reason the filter job above fails closed.
+        #
+        # ⚠ ALL THREE ARMS ARE EXECUTED, not pattern-matched. This body's `exit 1`s were pinned by a
+        # regex over bare `exit N` lines (arms 1 and 2) and by nothing at all (arm 3), and six ways
+        # of spelling "exit 0" that the regex cannot see -- a trailing comment, `true && exit 0`, a
+        # trailing semicolon, an EXIT trap, a call to a function that exits, and wrapping the
+        # `exit 1` in `if false; then ... fi` -- were each measured GREEN on the whole wiring suite.
+        # tests/test_schema_container_census_wiring.py now builds a throwaway repo with a real merge
+        # commit and RUNS this script against four checkouts, one per arm plus the merge result.
+        #
+        # AND THE THREE ARMS MASK EACH OTHER, which is why each case there also asserts that no
+        # OTHER arm spoke: a branch tip has no `HEAD^2` either, so arm 2 covers for a dead arm 1;
+        # and a failed `HEAD^2` leaves `second_parent` empty, so arm 3 covers for a dead arm 2. Both
+        # were live misses until the assertion moved from "the step exited 1" to "this arm decided".
+        # Keep each arm's `::error::` text distinct -- that is what makes the arm identifiable.
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          head_commit=$(git rev-parse HEAD)
+          echo "censusing ${head_commit}; PR head is ${HEAD_SHA}"
+
+          # THE LOAD-BEARING HALF, and deliberately the one that needs no history: if the checked
+          # out commit IS the PR head, this job is censusing the branch tip. That is what a `ref:`
+          # line would cause, and it is decidable from one `rev-parse` at any clone depth.
+          if [ "${head_commit}" = "${HEAD_SHA}" ]; then
+            echo "::error::HEAD is the PR head itself, so the census is counting the BRANCH TIP"
+            echo "::error::rather than the merge result. Remove the \`ref:\` from this job's"
+            echo "::error::checkout; whole-file counts must derive from the merge ref."
+            exit 1
+          fi
+
+          # THE POSITIVE CONFIRMATION, and it is a hard failure when the parent is missing. An
+          # earlier revision of this step made a missing `HEAD^2` a green `note:`, on the reasoning
+          # that failing closed there only reddens the check over clone depth. That was FAIL-OPEN
+          # for the case the step exists to catch: `ref: main` or `ref: ${{ github.base_ref }}`
+          # checks out a SINGLE-parent base tip, so the check above passes (HEAD is not the PR
+          # head), `HEAD^2` does not resolve, and the step would have gone green while the census
+          # counted the base tree. `fetch-depth: 2` above is what makes demanding the parent safe;
+          # the tolerant arm was compensating for a depth this job no longer uses.
+          if ! second_parent=$(git rev-parse --verify --quiet 'HEAD^2'); then
+            echo "::error::HEAD has no second parent, so this is not a merge commit -- the census"
+            echo "::error::would count a single-parent tree (the base tip, or the PR head) rather"
+            echo "::error::than the merge result. Check \`fetch-depth\` is still at least 2 and that"
+            echo "::error::no \`ref:\` has been added to this job's checkout."
+            exit 1
+          fi
+          if [ "${second_parent}" != "${HEAD_SHA}" ]; then
+            echo "::error::HEAD^2 is ${second_parent}, not the PR head ${HEAD_SHA}; the tree"
+            echo "::error::censused is not the merge of this pull request."
+            exit 1
+          fi
+          echo "confirmed: HEAD is the merge of the base with PR head ${HEAD_SHA}"
+
+      - name: The census reddens on known-bad input
+        # Kill-confirm IN CI, before trusting the green run below -- the convention the floor gate
+        # above already sets, and the point of this whole job. Wiring in a gate without proving it
+        # can still fail reproduces the original defect one level down: the step would report green
+        # whether or not the census is capable of aborting.
+        #
+        # Run against a COPY, so the perturbation cannot reach the real run. The census resolves its
+        # repo root from `__file__`, so a copy censuses the copy; and it excludes only the RUNNING
+        # script by resolved path, so the copied census is skipped as itself rather than scanned.
+        #
+        # ONE PERTURBATION PER CASE, and every abort path this job relies on gets its own. An
+        # earlier revision perturbed only an unclassified container, which trips the PRE-EXISTING
+        # count-equality abort -- so the four aborts added alongside this job were confirmed by
+        # nothing here, which is the same "unproven where it counts" shape the job header objects
+        # to. Each case below rebuilds the scratch tree from scratch so the perturbations cannot
+        # compound and let one case pass on another's abort.
+        #
+        # Expected codes are exact, not "non-zero": 15 is the census's verdict and 1 is
+        # "the spec cannot be read". A case that returns the OTHER red is a real change in meaning
+        # and must not be waved through.
+        #
+        # AND THE CODE ALONE IS NOT ENOUGH, which review caught: FOUR distinct aborts return 15, so
+        # an edit that broke case 2's KEY instead of its CLASS -- say by mistyping the path in the
+        # perl expression, leaving a stale row plus an unclassified container -- would still exit 15
+        # and still pass, while no longer exercising the per-file pin at all. Each case therefore
+        # names the abort it means, and the copied census's OWN output is grepped for it.
+        #
+        # That grep is not the self-grep the verdict step below refuses to do, and the distinction
+        # is which process wrote the line: here the log is written by the SUBJECT (the copied
+        # census, a separate process whose behaviour is what this step is measuring), whereas a
+        # self-grep reads a log the asserting step wrote itself and can therefore forge with an
+        # `echo`. This step cannot forge the census's abort text without editing the census.
+        #
+        # ⚠ AND THE `fail` ARM AT THE BOTTOM IS EXECUTED. It was pinned by a regex over bare
+        # `exit N` lines, and six spellings that regex cannot see were each measured green on the
+        # whole wiring suite -- so this step could run all five cases, print `::error::` for one that
+        # returned the wrong code, and exit 0. That is worse than having no kill-confirm, because the
+        # real census run below is trusted BECAUSE this step passed. The wiring module runs this
+        # body against a `python` that answers per scratch case, spoils ONE case at a time in two
+        # ways (wrong code, and right code via the wrong abort -- the two arms of `expect`), and
+        # requires the step to redden on each. Keep the scratch directory names distinct: they are
+        # the only thing a per-case stand-in can dispatch on.
+        run: |
+          set -euo pipefail
+          spec=tests/data/schema_drill_schema_containers.txt
+          fail=0
+
+          build() {
+            scratch="${RUNNER_TEMP}/census-kill-confirm/$1"
+            rm -rf "${scratch}"
+            mkdir -p "${scratch}/tests/data"
+            cp -R src scripts "${scratch}/"
+            cp "${spec}" "${scratch}/tests/data/"
+          }
+
+          expect() {
+            # expect <name> <wanted rc> <substring the census itself must print>
+            set +e
+            python "${scratch}/scripts/schema_container_census.py" > "${scratch}/census.log" 2>&1
+            rc=$?
+            set -e
+            if [ "${rc}" -ne "$2" ]; then
+              echo "::error::kill-confirm case '$1' returned ${rc}, wanted $2"
+              sed 's/^/    | /' "${scratch}/census.log"
+              fail=1
+            elif ! grep -qF "$3" "${scratch}/census.log"; then
+              echo "::error::kill-confirm case '$1' returned $2 but NOT via the abort it names:"
+              echo "::error::the census never printed '$3'. Four aborts return 15, so the code"
+              echo "::error::alone does not identify which one fired -- this case is no longer"
+              echo "::error::exercising the check it was written for."
+              sed 's/^/    | /' "${scratch}/census.log"
+              fail=1
+            else
+              echo "  kill-confirm '$1': exit ${rc} via '$3', as expected"
+            fi
+          }
+
+          # 1. An unclassified container -> the count-equality abort. 20 containers against 19
+          #    rows, so the count arm fires BEFORE the `unclassified` arm and its text is the one
+          #    asserted; naming the wrong arm's text here would fail this case, which is the point.
+          build unclassified
+          printf 'KILL_CONFIRM_TABLE = {"v3", "v4"}\n' \
+            > "${scratch}/src/pokezero/zz_census_kill_confirm.py"
+          expect "unclassified container" 15 "needs its own row"
+
+          # 2. A REGISTER row demoted to PARTIAL -> the per-file class pin. Counts stay 19/19 and
+          #    every container still has a row, so ONLY the pin can see this -- which is exactly
+          #    why this case must prove the PIN's abort fired and not some other 15.
+          build classflip
+          perl -0pi -e 's/^REGISTER(\s+src\/pokezero\/rollout_cli\.py)/PARTIAL $1/m' \
+            "${scratch}/tests/data/schema_drill_schema_containers.txt"
+          expect "REGISTER demoted to PARTIAL" 15 "per-file classification counts do not match"
+
+          # 3. Two contradictory rows for one container -> exit 1, and note the arithmetic this
+          #    catches: the duplicate SHRINKS len(spec), so the count check reads 19 == 19.
+          build conflict
+          grep -m1 '^REGISTER' "${spec}" | sed 's/^REGISTER/PARTIAL /' \
+            >> "${scratch}/tests/data/schema_drill_schema_containers.txt"
+          expect "conflicting duplicate row" 1 "CONFLICTING rows for"
+
+          # 4. Two unnamed containers on ONE physical line, with a row -> the collapse abort.
+          build collapse
+          printf 'def f(x):\n    return x in {"v3", "v4"} or x in {"v3", "v4"}\n' \
+            > "${scratch}/src/pokezero/zz_census_collapse.py"
+          printf 'PARTIAL   src/pokezero/zz_census_collapse.py  v3,v4  <inline:2>\n' \
+            >> "${scratch}/tests/data/schema_drill_schema_containers.txt"
+          expect "two containers collapsed onto one line" 15 "container node(s) collapsed into"
+
+          # 5. THE NEGATIVE CONTROL, without which the four above prove only that SOMETHING
+          #    reddens: an unperturbed copy must be green. If this is red, the cases above are
+          #    passing on a broken scratch tree rather than on their own perturbation. Its needle
+          #    is the census's success line, so "exit 0 because it did nothing" is not a pass.
+          build clean
+          expect "unperturbed copy (negative control)" 0 "every schema-name container is classified"
+
+          if [ "${fail}" -ne 0 ]; then
+            echo "::error::the census failed its own kill-confirm, so the run below cannot be"
+            echo "::error::trusted -- it would report green without checking what it claims to."
+            exit 1
+          fi
+
+      - name: Schema-container census
+        # THE VERDICT IS THIS STEP'S EXIT CODE. Deliberately no `tee` and no grep of output this
+        # step itself wrote. Counted on this file rather than quoted: 34 of `mass-gate`'s 44 steps
+        # assert on a log their own step produced, a shape held together only by `set -o pipefail`
+        # under `bash -e`. There is nothing for a success-line grep to add here anyway: the census
+        # returns 15 from every abort it can reach and 0 only after its final print, so the code
+        # already IS the verdict.
+        #
+        # THIS STEP, not the job. An earlier form of this comment claimed "0 of this job's 5 steps"
+        # asserts on its own log, and the wiring-test step added below makes that stale in BOTH the
+        # count and the property -- so it is restated at the granularity where it is true rather
+        # than left to age. That step reads a `Ran N tests` / `OK` tail, and the honest reading is
+        # that the tail belongs to the SUITE it ran, not to the step's own verdict: the suite is a
+        # separate process and the step cannot decide its own result. An earlier form of this
+        # comment went further and said the invocation is pinned "so an `echo`-forged log fails a
+        # test". THAT WAS TRUE ONLY OF FORGES THAT REPLACE THE INVOCATION. Review measured two that
+        # KEEP it -- `|| true` plus an appended summary, and an env-gated wrapper around the whole
+        # body -- and both exited 0 over a suite whose own log said `FAILED (failures=1)`. The step
+        # below is rewritten so the runner's STATUS is its verdict; see its comment.
+        #
+        # THE CAPTURE IS PART OF THE INVOCATION, and that is the whole point of the line below.
+        # A standalone `rc=$?` on its own line pins nothing about WHOSE status it captures: review
+        # inserted one ordinary diagnostic `echo` between the two lines and measured `STEP EXIT=0`
+        # on a tree where the census exited 15, with all 22 wiring pins green. `cmd || rc=$?`
+        # cannot be orphaned that way because there is no second statement to displace, and
+        # tests/test_schema_container_census_wiring.py EXECUTES this step's own `run:` body against
+        # a stubbed census to assert the step's status tracks it -- a pin no textual match can be
+        # talked past.
+        #
+        # ANY non-zero is red, not only 15. `classification()` raises `SystemExit(str)` -- exit 1 --
+        # for a spec row that is malformed, duplicated or self-contradictory, and an interpreter
+        # error is exit 1 too. "The gate could not run" must never read as green; that is the lesson
+        # the floor gate's `exit 2` arm records, and the reason this arm is written out rather than
+        # left to `-e`.
+        run: |
+          set -o pipefail
+          rc=0
+          python scripts/schema_container_census.py || rc=$?
+          echo "census exit code: ${rc}"
+          if [ "${rc}" -eq 15 ]; then
+            echo "::error::the schema-container census aborted. A container of schema names in"
+            echo "::error::src/ or scripts/ is unclassified, a classification row matches no"
+            echo "::error::container, two containers collapsed onto one spec row, or the per-class"
+            echo "::error::counts drifted from the pin. Read the abort above and fix"
+            echo "::error::tests/data/schema_drill_schema_containers.txt -- an unregistered"
+            echo "::error::container makes its consumers fail on the drill's own omission, and"
+            echo "::error::NINE schema-keyed structures went unregistered that way, one at a time."
+            # "NINE structures" and not "nine times", because the census's own abort printed just
+            # above this says "which has happened six times" -- SIX being the number found by the
+            # run-read-a-stack-trace-add-one loop, NINE the total structures the spec file records.
+            # Both are true and they count different things; a CI reader sees both in one log, so
+            # this one names its unit.
+            exit 1
+          fi
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::the schema-container census could not run (exit ${rc}) -- not treated"
+            echo "::error::as green. A malformed, duplicated or conflicting classification row"
+            echo "::error::exits 1 here, as does a crash."
+            exit 1
+          fi
+
+      # A GATE NO JOB RUNS IS NOT A GATE, and this step exists because the review of this very PR
+      # found that sentence being violated by the PR that quotes it. `tests/test_schema_container_
+      # census_wiring.py` pins the structure, the consumption and the behaviour of everything above
+      # -- and executed NOWHERE. `grep -rn test_schema_container_census_wiring .github/ scripts/`
+      # returned zero hits, so the whole battery was local-only: a job-level `if: false`, a
+      # `continue-on-error`, removal from `gate-status`'s `needs:`, an `exit 1` flipped to `exit 0`,
+      # an emptied pin table and `fetch-depth: 2` -> `1` would each have landed on main GREEN.
+      #
+      # This workflow names test modules ONE BY ONE -- 34 executable `-m unittest` invocation sites
+      # counting THIS one, derived by the scan in tests/test_unreachable_readjudication.py rather
+      # than by eye, with no `unittest discover` and no pytest step in .github/ -- so a NEW module
+      # is invisible to CI by default. #1212 had to add its own step for exactly this reason, and so
+      # does this one. Running it here rather than in `mass-gate` keeps it in the same unconditional
+      # wheel-free job as the census it describes: ~2 s, stdlib only, and it cannot be skipped.
+      #
+      # The invocation is deliberately NOT spelled with its `python` prefix in this comment: two
+      # repo-wide pins (test_unreachable_readjudication, test_terminal_disposition_register) assert
+      # the workflow carries that string inside EXACTLY ONE comment, as their own anti-vacuity
+      # control for telling comments from executable steps. Adding a second reddens both, which is
+      # how this note came to be written -- the control worked.
+      #
+      # ⚠ THE RUNNER'S STATUS IS THIS STEP'S VERDICT, and the first revision of this step got that
+      # wrong in a way review measured rather than argued. It ran the suite through `tee` into
+      # /tmp/censuswiring.log and then grepped that FILE. Two forges keep the real invocation and
+      # still land green:
+      #
+      #   * `|| true` on the invocation, then `printf 'Ran N tests\nOK\n' >> ` the same log. The log
+      #     ends `FAILED (failures=1)` followed by the appended pair; both greps match; the step
+      #     exits 0. Measured with a real weakening riding along (`gate-status`'s census arm flipped
+      #     to `exit 0`): suite red, step green. Spelled without a literal count in the forge it
+      #     reddens nothing else in the repository either.
+      #   * an env-gated `if [ "${RUN_...:-0}" = "1" ]; then ... fi` around the WHOLE body. Nothing
+      #     runs, no log is written, the step exits 0, and every textual pin on it still holds --
+      #     the invocation string is present, both guards still `exit 1`.
+      #
+      # A file is extensible by any later command, so a guard reading one can never be the verdict.
+      # So: the status is captured IN the invocation (`|| rc=$?`, which nothing can displace), the
+      # output is captured into a SHELL VARIABLE rather than a file, and the summary is required to
+      # be the runner's own last three lines rather than merely present somewhere. All three are
+      # executed -- not pattern-matched -- by
+      # tests/test_schema_container_census_wiring.py, which runs this step's `run:` body against a
+      # stub that chooses the status and the tail independently.
+      - name: The census wiring pins
+        run: |
+          set -o pipefail
+          rc=0
+          log=$(python -m unittest tests.test_schema_container_census_wiring -v 2>&1) || rc=$?
+          printf '%s\n' "${log}"
+          # THE VERDICT. A non-zero runner is red whatever its output says, which is what the two
+          # forges above defeated: neither can survive this arm without also editing the capture
+          # line, and the capture line is a whole-line pin AND executed.
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error::the census wiring pins did not pass (the runner exited ${rc}). Every"
+            echo "::error::structural, consumption and behavioural pin on the schema-container"
+            echo "::error::census job is asserted by that module and by nothing else."
+            exit 1
+          fi
+          # The runner's own tail, read with parameter expansion rather than `tail`/`head`: a
+          # pipeline whose reader exits early can return 141 under `set -o pipefail`, and a SIGPIPE
+          # misread as a verdict is the same defect this whole job is about.
+          last=${log##*$'\n'}
+          without_last=${log%$'\n'*}
+          without_two=${without_last%$'\n'*}
+          summary=${without_two##*$'\n'}
+          # A clean OK, read as the runner's LAST line. `unittest` prints the summary last, so a
+          # tail-anchored check cannot be satisfied by text appended after a failure -- and a plain
+          # `grep -qE '^OK$'` could.
+          if [ "${last}" != "OK" ]; then
+            echo "::error::the census wiring pins did not END in a clean OK (skip, failure, or"
+            echo "::error::output written after the runner finished). Last line: ${last}"
+            exit 1
+          fi
+          # EXACT, not a floor -- a floor is the one fail-open shape this repo's mutation batteries
+          # have caught before. Anchored to the runner's own summary line (third from last, `Ran N
+          # tests in <time>`) rather than matched anywhere in the log, for the reason above. This
+          # guard lives in YAML where no local `unittest` run can see it, which is how an approved
+          # PR has reddened CI here; the module therefore asserts on this very line itself
+          # (test_the_workflow_test_count_guard_matches_this_module), deriving the number from the
+          # loader, and that assertion is scoped to THIS STEP -- job-scoping it was a live hole,
+          # because `Ran 22 tests` is not unique in this file and a sibling step's guard satisfied
+          # it while this one was weakened to a floor.
+          if ! grep -qE '^Ran 32 tests in ' <<<"${summary}"; then
+            echo "::error::expected 32 census-wiring pins as the runner's own summary line; the"
+            echo "::error::suite shrank, grew, or that line is not the runner's. Update this count"
+            echo "::error::and the module's own guard assertion in the same commit. Saw: ${summary}"
+            exit 1
+          fi
+
+
   # THE REQUIRED CHECK. Runs on every pull request, whatever it touches, so it can
   # always report. It is the only job in this workflow that should ever be marked
   # required in branch protection -- requiring `mass-gate` directly would block any
@@ -2247,7 +2624,7 @@ jobs:
   # the job executes, the guard fires, and nothing depends on the result. Any job
   # added to this workflow must be added here too, or it is advisory.
   gate-status:
-    needs: [changes, mass-gate, seed-registry, harness-provenance, python-floor-syntax]
+    needs: [changes, mass-gate, seed-registry, harness-provenance, python-floor-syntax, schema-container-census]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2260,6 +2637,7 @@ jobs:
           REGISTRY: ${{ needs.seed-registry.result }}
           HARNESS: ${{ needs.harness-provenance.result }}
           FLOOR: ${{ needs.python-floor-syntax.result }}
+          CENSUS: ${{ needs.schema-container-census.result }}
         run: |
           set -euo pipefail
           echo "changes result: ${FILTER}"
@@ -2268,6 +2646,7 @@ jobs:
           echo "seed-registry result: ${REGISTRY}"
           echo "harness-provenance result: ${HARNESS}"
           echo "python-floor-syntax result: ${FLOOR}"
+          echo "schema-container-census result: ${CENSUS}"
 
           # The seed registry, checked FIRST and with no case analysis, because there
           # is none to do: `seed-registry` carries no `if:`, depends on no other job,
@@ -2301,6 +2680,31 @@ jobs:
           # never ran leaves behind are all red.
           if [ "${FLOOR}" != "success" ]; then
             echo "::error::the declared-floor syntax gate did not pass (${FLOOR}); a tracked file uses syntax newer than requires-python declares, or the gate could not run -- either way the floor is unverified"
+            exit 1
+          fi
+
+          # The schema-container census, same shape and same reason: `schema-container-census`
+          # carries no `if:`, depends on no other job and needs no wheel, so `skipped` is not
+          # reachable for it. Listing it in `needs:` alone would NOT be enough -- this job runs
+          # `if: always()`, so without an explicit check it reports green while the census is red,
+          # and the census would be advisory: running, aborting, and changing nothing. That is
+          # precisely the observed `seed-registry pass 8s` / `gate-status pass 3s` shape recorded
+          # above, and it is the SECOND-order form of the very defect the census job exists to fix
+          # -- a correct check whose result nothing consumes is not meaningfully different from a
+          # correct check nothing runs. Demand the positive, so `failure`, `cancelled` and the
+          # empty string a job that never ran leaves behind are all red.
+          #
+          # ⚠ THIS ARM IS EXECUTED BY tests/test_schema_container_census_wiring.py, and it is the
+          # arm that most needed it: this job is the ONLY required context, so every other pin in
+          # that module is about a job whose result nothing has to read. The arm was pinned by a
+          # regex over bare `exit N` lines, and all six spellings that regex cannot see -- including
+          # `if false; then exit 1; fi`, which adds no `exit 0` anywhere -- made this step exit 0
+          # over `CENSUS=failure` with the whole wiring suite green. The module now runs THIS body
+          # with the seven `needs.*.result` names bound by hand, once per red value of each, and
+          # asserts both the status and WHICH arm printed. If a name in the `env:` block above is
+          # renamed, that module fails LOCALLY rather than this step dying on `set -u` after a push.
+          if [ "${CENSUS}" != "success" ]; then
+            echo "::error::the schema-container census did not pass (${CENSUS}); a container of schema names in src/ or scripts/ is unclassified, a classification row is stale, duplicated or self-contradictory, or the per-class counts drifted from their pin -- either way the rotation drill cannot know where to register a synthetic schema"
             exit 1
           fi
 

@@ -1,5 +1,5 @@
 # Every container of schema names in src/ and scripts/, classified. Enumerated by
-# scripts/schema_container_census.py; `--check` aborts the drill on any container missing from here.
+# scripts/schema_container_census.py, which aborts the drill on any container missing from here.
 #
 # WHY THIS FILE EXISTS. NINE separate structures keyed by schema went unregistered, one at a time,
 # and each time the drill charged the resulting failures to the codebase instead of to itself:
@@ -17,8 +17,76 @@
 #     ad-hoc set inline in a function body -- which is exactly what the exporter and the lattice have.
 # Extending it from 3 node types and 1 member shape to 4 and 2 took the count from 8 to 19.
 #
+# THIS FILE IS NOW CHECKED BY CI, which it was not for the first eight commits of its life. The
+# census's only caller was scripts/schema_rotation_drill.sh:667 and that script's only caller is a
+# person, so nothing ran it: it went red at e496e9b8, when the v4 rotation moved a container's line,
+# and stayed red across EIGHT consecutive commits on main -- through SEVEN subsequent PR merges --
+# until #1276 re-keyed the row. No check reported it once. `schema-container-census` in
+# .github/workflows/engine-fidelity-gates.yml now runs the census unconditionally on every PR, with a
+# kill-confirm ahead of it, `gate-status` demands its success, and
+# tests/test_schema_container_census_wiring.py -- run by that same job -- pins all three properties.
+#
+# KNOWN GAPS, enumerated because the alternative is that they are enumerated by nothing:
+#
+#  1. THE CLASS IS NOT VERIFIED, only pinned. Every check the census makes asks whether a row EXISTS
+#     for a container; none asks whether the row is RIGHT. Flipping REGISTER to PARTIAL was exit 0
+#     for one row and for all ten, while the drill's `_reg_targets` silently shrank -- its only guard
+#     is `if not _reg_targets`, so nine of ten flipped is still silent. BOTH UNITS, because they
+#     differ here and mixing them is how "nine" and "ten" both get quoted for the same thing: there
+#     are 10 REGISTER ROWS, which the drill dedupes on (file, members) down to 9 INJECTION TARGETS,
+#     since neural_cli.py's two argparse tuples (<inline:467>, <inline:1952>) share a member set and
+#     a file-wide substitution would otherwise insert twice. The pin below counts ROWS. No oracle
+#     independent of this
+#     file exists in the tree: "REGISTER means all five supported schemas" is refuted by NINE of the
+#     ten REGISTER rows (REGISTER means a schema added tomorrow belongs here, not that all five are
+#     here today), and "MIRRORED equals the drill's `_MIRRORED` tuple" is refuted in both directions
+#     (5 there, 8 here). The class is an INTENT, and the only true oracle is the runtime consequence
+#     -- the full 17-70 minute drill, which is how the original nine were found. So the census pins
+#     the class counts PER FILE in scripts/schema_container_census.py instead. BLAST RADIUS:
+#     silencing an abort by editing a row here now also requires editing a number in that script, so
+#     the change is loud rather than free. RESIDUAL, corrected after review found the first statement
+#     of it understated: pinning three GLOBAL totals left ANY permutation of classes free, not just
+#     the one pair originally disclosed -- REGISTER<->MIRRORED (the two large classes, and the subtle
+#     judgement) and a three-cycle R->M->P->R were both measured exit 0. Keying the counts by FILE
+#     removes every permutation that crosses a file. What is left is a swap WITHIN a single file that
+#     holds more than one class, and today exactly one file does: showdown.py (3 MIRRORED +
+#     1 REGISTER). A wrong class agreed to in both files is still not detected at all. A deliberate
+#     reclassification must update the pin in the same commit.
+#
+#  2. SCAN ROOTS ARE src/ AND scripts/ ONLY. Measured by re-running the enumerator with the roots
+#     swapped: 12 real containers live under tests/ (in test_engine_env.py, test_observation.py,
+#     test_observation_spec_v3.py x2, test_observation_spec_v4.py, test_online_client.py,
+#     test_schema_property_membership.py x2, test_spread_gate_provenance.py x3,
+#     test_validate_rust_encoder.py) and 1 under docs/ (docs/token-format/extract_turn16.py:572).
+#     None is classified here and none is enumerated by anything else. SCOPED OUT deliberately, not
+#     overlooked: widening the roots means making 13 REGISTER/PARTIAL judgements, each of which
+#     changes what the drill injects, and that is a decision about the drill rather than about CI
+#     wiring. BLAST RADIUS: a schema-keyed table added to tests/ or docs/ is invisible to this gate,
+#     so the drill will not register its synthetic schema there and the resulting failure is charged
+#     to the codebase -- the exact loop this file exists to end, still open for two of four roots.
+#
+#  3. TWO UNNAMED CONTAINERS ON ONE PHYSICAL LINE cannot be told apart; the key is (file, line,
+#     members, name). This no longer produces a short count silently -- the census compares matched
+#     AST nodes against distinct entries and aborts -- but the remedy it offers is "separate the
+#     lines", not "classify both". The per-(file, members) ordinal that would tell them apart is a
+#     PREDICTION; nobody has built it.
+#
+#  4. A MIXED-CONVENTION CONTAINER IS INVISIBLE, and this gap was missing from the list above until
+#     review pointed out that a list calling itself exhaustive had four members, not three. The
+#     enumerator accepts a container only when EVERY member is a schema name in ONE convention
+#     (`vals <= SHORT or vals <= FULL`), so a container spanning both is not counted, not classified
+#     and not even mentioned. Measured: adding
+#         COMPAT_MAP = {"v3": "pokezero.observation.v4", "pokezero.observation.v3": "v4"}
+#         LEGACY_ALIASES = {"v2", "pokezero.observation.v2.1", "v3"}
+#     leaves the census at exit 0, still reporting 19 containers, with the new file unnamed. The
+#     census docstring says "a mixed container is not a schema table", which is a DESIGN CLAIM about
+#     what deserves classification, not a measurement -- and a short<->full alias map is precisely
+#     the shape the drill would need to register, since it maps between the two vocabularies the
+#     drill injects into. BLAST RADIUS: the same as gap 2, but reachable inside the scanned roots,
+#     so it is the cheapest way to add an unregistered schema container to src/ with a green gate.
+#
 # Format:  REGISTER|PARTIAL|MIRRORED  <file>  <members>  <variable name or <inline:LINE>>
-# Keyed on file + members + VARIABLE NAME. Every container needs its OWN row: `--check` aborts if the
+# Keyed on file + members + VARIABLE NAME. Every container needs its OWN row: the census aborts if the
 # counts differ, because a shared row means one container is classified by another's decision, which
 # is how a new table got registered for free twice. An unnamed container is keyed <inline:LINE>; that
 # does reintroduce line sensitivity for those, deliberately -- a drifting line is a loud reclassify,
