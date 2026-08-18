@@ -147,10 +147,18 @@ function scheduleReady(battle, requested = actionableRequestedPlayers(battle)) {
   battle.readyScheduled = true;
   const procMs = nodeProcMs(battle);
   setImmediate(() => {
+    // Streams can advance again before this callback runs. Do not advertise
+    // the earlier request list after both sides have moved to wait; release
+    // the latch so the next actionable request can schedule a real boundary.
+    const currentRequested = actionableRequestedPlayers(battle);
+    if (!currentRequested.length) {
+      battle.readyScheduled = false;
+      return;
+    }
     emit({
       type: "ready",
       battleId: battle.battleId,
-      requested,
+      requested: currentRequested,
       nodeProcMs: procMs,
     });
   });
