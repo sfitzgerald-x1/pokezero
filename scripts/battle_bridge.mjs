@@ -242,6 +242,11 @@ function snapshotBattle(command) {
   if (!battle.battleStream?.battle) {
     throw new Error(`No simulator state for battleId ${battle.battleId}.`);
   }
+  // The stream-side request cache can be temporarily empty between a branch
+  // resolving and its protocol request chunks arriving. The simulator state
+  // is authoritative at snapshot time, so refresh from it before pairing the
+  // snapshot with Python's request state.
+  battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
   emit({
     type: "snapshot",
     battleId: battle.battleId,
