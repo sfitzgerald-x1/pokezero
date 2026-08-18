@@ -2010,7 +2010,7 @@ jobs:
             echo "::error::the arbiter and calibration suite did not run all 308 tests"
             exit 1
           fi
-          if grep -qE 'skipped|OK \\(skipped' /tmp/rollout-leaf-arbiter.log; then
+          if grep -qE 'skipped|OK \(skipped' /tmp/rollout-leaf-arbiter.log; then
             echo "::error::an arbiter or calibration pin SKIPPED; the model wheel was not exercised"
             exit 1
           fi
