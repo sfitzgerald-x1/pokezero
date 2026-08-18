@@ -139,7 +139,7 @@ def _terminal_successor(
             f"{label}.terminal must contain exactly winner, turn_count, and capped"
         )
     winner = terminal.get("winner")
-    if winner not in {"p1", "p2", None}:
+    if winner is not None and winner not in {"p1", "p2"}:
         raise UniformLeafWriterError(f"{label}.terminal.winner must be p1, p2, or null")
     turn_count = _int(terminal.get("turn_count"), field=f"{label}.terminal.turn_count")
     if turn_count < 0:
