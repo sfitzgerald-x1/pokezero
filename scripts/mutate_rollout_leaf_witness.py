@@ -90,7 +90,7 @@ def _resolved_relative(line: str) -> str:
     B3. THE RECORDED FORM HAS TO RELOCATE, and the first version did not. The probe
     prints `module.__file__`, which is absolute, and the artifact persisted those
     strings verbatim -- so `reports/artifacts/rollout_leaf_witness_mutation_battery.json`
-    carried `/Users/.../seltune-b1b2/src/pokezero/...` and
+    carried an ABSOLUTE path rooted in the recording clone's own checkout, and
     `test_the_run_imported_this_tree` compared them against a `ROOT` derived from
     `__file__`. The battery's own gate was therefore RED IN EVERY CHECKOUT except the
     one directory that happened to record it -- the same "single-clone-only" class as

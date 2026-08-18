@@ -223,7 +223,7 @@ class RolloutLeafWitnessMutationBatteryTest(unittest.TestCase):
         loading. The harness prints the resolved module path from inside the run.
 
         B3. PATH-INDEPENDENT, and it was not. The recorded strings were ABSOLUTE
-        (`/Users/.../seltune-b1b2/src/pokezero/...`) while `ROOT` is derived from
+        (rooted in the recording clone's own checkout) while `ROOT` is derived from
         `__file__`, so both `assertIn`s failed in every checkout except the one
         directory that recorded the run -- this gate was RED IN ANY CLONE, which is the
         "works only in the single clone that happens to hold it" class the

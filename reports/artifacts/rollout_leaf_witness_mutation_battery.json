@@ -66,7 +66,7 @@
   ],
   "did_not_run": 0,
   "expected_equivalent": {},
-  "harness_sha256": "4789562a339df06d4a4d4c54a1541837454f927c954792110b4b0063ec9cdc67",
+  "harness_sha256": "c95ea5700db85f2d28f3dba7a13c9df233536cb5e952e1a579418455b8971ba0",
   "killed": 66,
   "killers": [
     "tests/test_rollout_model_priors.py",
