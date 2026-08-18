@@ -562,6 +562,27 @@ class DestinationGuardTests(_FixtureCase):
         self.assertTrue(self.fixture.out_dir.is_symlink())
         self.assertEqual((elsewhere / bank.PROVENANCE_FILENAME).read_bytes(), before)
 
+    def test_an_unchanged_read_refuses_a_destination_replaced_by_a_symlink(self) -> None:
+        """The no-op path re-checks the address after its pre-write validation window."""
+        elsewhere = self.fixture.root / "elsewhere" / CAMPAIGN_ID
+        bank.bank_artifact(self.fixture.stamp, self.fixture.source_dir, elsewhere)
+        elsewhere_before = (elsewhere / bank.PROVENANCE_FILENAME).read_bytes()
+        self.fixture.bank()
+        displaced = self.fixture.out_dir.with_name(f"{CAMPAIGN_ID}.before-replacement")
+        real_build_provenance = bank.build_provenance
+
+        def replace_then_build(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            self.fixture.out_dir.rename(displaced)
+            self.fixture.out_dir.symlink_to(elsewhere, target_is_directory=True)
+            return real_build_provenance(*args, **kwargs)
+
+        with patch.object(bank, "build_provenance", replace_then_build):
+            refusal = self.refuse()
+
+        self.assertIn(bank.DESTINATION_NOT_A_DIRECTORY, refusal.codes)
+        self.assertTrue(self.fixture.out_dir.is_symlink())
+        self.assertEqual((elsewhere / bank.PROVENANCE_FILENAME).read_bytes(), elsewhere_before)
+
     def test_a_destination_holding_a_differing_artifact_is_refused(self) -> None:
         self.fixture.bank()
         self.fixture.stamp["sims"] = 4096  # same campaign id, different run

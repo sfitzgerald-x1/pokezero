@@ -651,6 +651,25 @@ def _copy_file(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
+def _destination_is_a_real_directory(path: Path) -> bool:
+    """Whether ``path`` is safe to read as this store's campaign directory.
+
+    ``Path.is_dir`` follows symlinks. A matching artifact behind one must not be accepted as an
+    unchanged artifact in this store, so links (including dangling ones) are always unsafe.
+    """
+
+    return not path.is_symlink() and (not path.exists() or path.is_dir())
+
+
+def _destination_not_a_directory_refusal(path: Path) -> Refusal:
+    return Refusal(
+        DESTINATION_NOT_A_DIRECTORY,
+        f"{path} is a link or is not a directory. A banked campaign IS a directory; a file "
+        f"or link sitting at the campaign id's path is a refusal, not something to write "
+        f"through -- and reaching `iterdir()` on it raised a bare OSError instead.",
+    )
+
+
 def _describe(value: Any) -> str:
     rendered = json.dumps(value, default=repr)
     return rendered if len(rendered) <= 120 else rendered[:117] + "..."
@@ -1087,16 +1106,8 @@ def _validate(
             "campaign_id",
         ))
 
-    # Path.is_dir() follows links, which would let an otherwise matching artifact outside the
-    # store be reported as an in-place no-op.  The campaign-id path itself is the address of
-    # the evidence, so it must be a real directory (and a dangling link is a refusal too).
-    if out_dir.is_symlink() or (out_dir.exists() and not out_dir.is_dir()):
-        reasons.append(Refusal(
-            DESTINATION_NOT_A_DIRECTORY,
-            f"{out_dir} is a link or is not a directory. A banked campaign IS a directory; a file "
-            f"or link sitting at the campaign id's path is a refusal, not something to write "
-            f"through -- and reaching `iterdir()` on it raised a bare OSError instead.",
-        ))
+    if not _destination_is_a_real_directory(out_dir):
+        reasons.append(_destination_not_a_directory_refusal(out_dir))
 
     if verify_checkpoint is not None:
         declared = stamp.get("checkpoint_sha256")
@@ -1232,6 +1243,12 @@ def _existing_matches(
     "Everything declared is present" is not enough: a dumped file sitting beside a banked
     artifact would then be reported as a clean no-op. The file SETS must match exactly.
     """
+
+    # This is deliberately repeated after validation: the no-op path reads the destination
+    # after provenance is built, so a writer can replace a real directory with a matching
+    # symlink in that interval. A no-op must never read through a link.
+    if not _destination_is_a_real_directory(out_dir):
+        return False
 
     stamp_path = out_dir / PROVENANCE_FILENAME
     sums_path = out_dir / SHA256SUMS_FILENAME
@@ -1444,19 +1461,30 @@ def bank_artifact(
         )
         sha256sums = render_sha256sums(files)
 
-        if destination.is_dir() and any(destination.iterdir()):
+        # Re-check after provenance construction. `_validate` checked the address before any
+        # work, but this branch is about to read it again and another writer may have replaced
+        # it with a symlink meanwhile.
+        if not _destination_is_a_real_directory(destination):
+            reasons.append(_destination_not_a_directory_refusal(destination))
+        elif destination.is_dir() and any(destination.iterdir()):
             if _existing_matches(
                 destination, provenance, sha256sums, artifact_kind.files_field
             ):
-                return BankResult(
-                    status="unchanged",
-                    out_dir=destination,
-                    provenance_path=destination / PROVENANCE_FILENAME,
-                    sha256sums_path=destination / SHA256SUMS_FILENAME,
-                    file_count=len(files),
-                    stale_staging=stale,
-                )
-            if not overwrite:
+                # `_existing_matches` checks before it reads, but its final file hash can still
+                # overlap a replacement. Re-check immediately before certifying this address as
+                # an unchanged artifact.
+                if not _destination_is_a_real_directory(destination):
+                    reasons.append(_destination_not_a_directory_refusal(destination))
+                else:
+                    return BankResult(
+                        status="unchanged",
+                        out_dir=destination,
+                        provenance_path=destination / PROVENANCE_FILENAME,
+                        sha256sums_path=destination / SHA256SUMS_FILENAME,
+                        file_count=len(files),
+                        stale_staging=stale,
+                    )
+            if not overwrite and not reasons:
                 reasons.append(Refusal(
                     DESTINATION_HOLDS_DIFFERENT_ARTIFACT,
                     f"{destination} already holds an artifact that differs from the one being "
