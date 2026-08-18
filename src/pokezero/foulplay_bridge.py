@@ -4098,12 +4098,13 @@ def cross_arm_foulplay_contention(
 
     AND THE BOUND IS IN THROUGHPUT UNITS, NOT WIN-RATE UNITS, which is the largest thing this
     function does NOT do. The decision it gates is a paired win-rate delta of a few points; a
-    passing cell may still carry a 25% reduction in the opponent's realized visits per granted
+    passing cell may still carry a 24% reduction in the opponent's realized visits per granted
     second, and NOTHING in this repo calibrates opponent visits to opponent strength (grepped:
     no visits-to-Elo or doubling-strength relation anywhere). So a pass means "the opponent's
-    realized throughput was equal between the arms to within 25%", NOT "the strength comparison
-    is clean". Converting the bound needs one measurement nobody has run -- raw against raw with
-    the opponent's per-battle budget cut 25% -- and until it exists the honest reading of a pass
+    realized throughput was equal between the arms to within 24%", NOT "the strength comparison
+    is clean". Converting the bound needs one measurement nobody has run -- the same raw PokeZero
+    policy against FoulPlay with the opponent's per-battle budget cut 24% -- and until it exists
+    the honest reading of a pass
     is that it removes the gross confound and leaves a residual of unknown size in pp.
 
     THE COMPARISON IS STRATIFIED and reuses `by_stratum` rather than recomputing it: 8x500 ms
