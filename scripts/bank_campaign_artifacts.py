@@ -58,13 +58,16 @@ THE SCHEMA IS DATA, NOT CONTROL FLOW
 ------------------------------------
 Required fields live in ``ARTIFACT_KINDS`` as declared ``FieldSpec`` tuples per artifact kind.
 Adding a required field is one edit in one place and cannot be forgotten on one of several code
-paths, because there is only one path: :func:`_validate`. Three kinds are declared:
+paths, because there is only one path: :func:`_validate`. Four kinds are declared:
 
 * ``campaign.v1`` -- a results cell: shards, seeds, search budget, per-shard exit status.
 * ``phase1.instrument2.rollout-arbiter.v1`` -- the same shape plus the arbiter arm's own
   estimand caveats as first-class REQUIRED fields, so a caller *cannot* bank a cell whose
   numbers travel without them. Both write ``schema`` = ``pokezero.campaign-store.provenance.v1``:
   the second is a strict superset of the first, not a different document.
+* ``phase1.instrument1.capture.v1`` -- the paired capture and measured decision denominator
+  consumed by the single-flip headroom instrument.  It is neither a shard campaign nor an
+  inputs-only staging cell, so it has its own schema and an exact two-document role contract.
 * ``staging.v1`` -- an INPUTS cell (staged checkpoint, exported tables, model artifacts): no
   games, no seeds, no results. Its shape is disjoint from the results shape, so it writes a
   DIFFERENT schema string, ``pokezero.campaign-store.staging.v1``. One schema string never
@@ -123,7 +126,7 @@ from pathlib import Path
 from typing import Any
 
 TOOL_NAME = "scripts/bank_campaign_artifacts.py"
-TOOL_VERSION = "2"
+TOOL_VERSION = "3"
 
 PROVENANCE_FILENAME = "PROVENANCE.json"
 SHA256SUMS_FILENAME = "SHA256SUMS"
@@ -133,6 +136,9 @@ STAGING_PREFIX = ".bank-tmp-"
 PROVENANCE_SCHEMA = "pokezero.campaign-store.provenance.v1"
 #: An INPUTS cell. Disjoint shape, therefore a different string -- see the module docstring.
 STAGING_SCHEMA = "pokezero.campaign-store.staging.v1"
+#: Phase 1 instrument 1's capture and denominator are a third shape: measured documents that
+#: feed an estimate, not a directory of independently executable shards and not staged inputs.
+PHASE1_CAPTURE_SCHEMA = "pokezero.campaign-store.phase1-capture.v1"
 
 #: Names a banked file may not take: the stamp and the checksum file are written over the top of
 #: the copied tree, so a file claiming one of these names loses its bytes and leaves the
@@ -145,6 +151,7 @@ RESERVED_FILENAMES = (PROVENANCE_FILENAME, SHA256SUMS_FILENAME)
 REFUSAL_EXIT = 3
 
 _SHA256_RE = re.compile(r"[0-9a-fA-F]{64}\Z")
+_SHA1_RE = re.compile(r"[0-9a-fA-F]{40}\Z")
 _CAMPAIGN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 # Refusal codes. Each one is a guard, and each one has a demonstrated failing input in
@@ -267,6 +274,10 @@ def _is_sha256(value: Any) -> bool:
     return isinstance(value, str) and bool(_SHA256_RE.fullmatch(value))
 
 
+def _is_sha1(value: Any) -> bool:
+    return isinstance(value, str) and bool(_SHA1_RE.fullmatch(value))
+
+
 def _is_int(value: Any) -> bool:
     # bool is an int subclass in Python; True must never satisfy an integer field.
     return isinstance(value, int) and not isinstance(value, bool)
@@ -309,6 +320,34 @@ def _is_file_list(value: Any) -> bool:
     # Emptiness is checked separately so it gets its OWN refusal code and message: "you declared
     # no files" and "you declared something that is not a list of files" are different defects.
     return isinstance(value, list)
+
+
+def _is_nonempty_mapping(value: Any) -> bool:
+    return isinstance(value, Mapping) and bool(value)
+
+
+def _is_raw_shard_list(value: Any) -> bool:
+    """The canonical replay has to name each raw shard, not merely a total count."""
+
+    if not isinstance(value, list) or not value:
+        return False
+    names: set[str] = set()
+    for record in value:
+        if not isinstance(record, Mapping):
+            return False
+        name, digest = record.get("name"), record.get("sha256")
+        if not _is_nonempty_str(name) or not _is_sha256(digest) or name in names:
+            return False
+        names.add(name)
+    return True
+
+
+def _is_true(value: Any) -> bool:
+    return value is True
+
+
+def _is_zero(value: Any) -> bool:
+    return _is_int(value) and value == 0
 
 
 # ----------------------------------------------------------------------------------------------
@@ -517,6 +556,121 @@ STAGING_REQUIRED: tuple[FieldSpec, ...] = IDENTITY_REQUIRED + (
     STAGED_FILES_SPEC,
 )
 
+#: Phase 1 instrument 1's source evidence is a coupled pair: one capture document and one
+#: measured decision denominator.  Calling either a "shard" would hide the relation readers
+#: need to audit before allowing the modeled bridge to use it; calling it staging would falsely
+#: say it contains no measurement.  The documents retain their own full JSON provenance, while
+#: this stamp binds their exact bytes, shared inputs and reconciliation note into the store.
+PHASE1_DOCUMENTS_SPEC = FieldSpec(
+    "phase1_documents", "a non-empty list containing the capture and decision-count documents",
+    "the headroom reader needs both documents from one replay; one document is not partial "
+    "evidence, it is no usable Phase-1 input",
+    _is_file_list)
+
+PHASE1_CAPTURE_REQUIRED: tuple[FieldSpec, ...] = IDENTITY_REQUIRED + (
+    FieldSpec(
+        "bank_sha256", "64 hex characters",
+        "the deterministic replay addresses only have meaning against the exact bank that "
+        "supplied their (seed, prefix) keys",
+        _is_sha256),
+    FieldSpec(
+        "source_commit", "40 hex characters",
+        "the public runtime that replayed the bank is part of the observation identity",
+        _is_sha1),
+    FieldSpec(
+        "script_sha256", "64 hex characters",
+        "the replay script can change the reconstructed state without moving the bank or "
+        "checkpoint path",
+        _is_sha256),
+    FieldSpec(
+        "raw_shards", "a non-empty, uniquely named list of {name, sha256} records",
+        "the canonical bank is an address map rather than serialized states, so every raw "
+        "shard used to recreate those addresses must travel with its digest",
+        _is_raw_shard_list),
+    FieldSpec(
+        "engine_search", "a non-empty engine-search provenance object",
+        "the capture is a d3/s2048 engine measurement, not merely a checkpoint replay",
+        _is_nonempty_mapping),
+    FieldSpec(
+        "policy_continuation_rollouts", "an integer >= 1",
+        "the true-gap labels have an R-dependent noise floor that cannot be inferred from "
+        "a document filename",
+        _int_at_least(1)),
+    FieldSpec(
+        "positions", "an integer >= 1",
+        "the paired capture's denominator must be visible before it can inform a per-decision "
+        "headroom estimate",
+        _int_at_least(1)),
+    FieldSpec(
+        "seed_count", "an integer >= 1",
+        "bootstrap clustering and the bank's non-contiguous fanout are defined by game seed",
+        _int_at_least(1)),
+    FieldSpec(
+        "paired", "the literal boolean true",
+        "a capture not paired to the canonical sibling bank cannot support this instrument's "
+        "paired-noise calculation",
+        _is_true),
+    FieldSpec(
+        "image", "a non-empty image reference (digest preferred over tag)",
+        "the runtime source pin is insufficient if its native/model environment came from a "
+        "different image",
+        _is_nonempty_str),
+    FieldSpec(
+        "job_exit_status", "the integer 0",
+        "the pair is emitted by one job; a nonzero terminal status makes both documents "
+        "incomplete evidence even if they happen to parse",
+        _is_zero),
+    FieldSpec(
+        "job_pod", "a non-empty string",
+        "the producing pod is the handle for the terminal replay log",
+        _is_nonempty_str),
+    FieldSpec(
+        "job_node", "a non-empty string",
+        "node identity makes an environment-correlated replay anomaly auditable",
+        _is_nonempty_str),
+    FieldSpec(
+        "launcher", "a non-empty string naming the launcher that ran the replay",
+        "a document alone cannot reconstruct the workload boundary that produced it",
+        _is_nonempty_str),
+    FieldSpec(
+        "launcher_flags", "a list of non-empty strings (an empty list is accepted; the key is not)",
+        "the replay flags are its reproduction recipe and must not be inferred from a later "
+        "command line",
+        _is_flag_list),
+    FieldSpec(
+        "panel_checkpoint", "a non-empty path string for the compared panel checkpoint",
+        "the probe and panel use different checkpoint iterations; hiding the latter lets a "
+        "reconciliation read as a same-checkpoint comparison",
+        _is_nonempty_str),
+    FieldSpec(
+        "panel_checkpoint_sha256", "64 hex characters",
+        "the panel checkpoint path is not an immutable identity",
+        _is_sha256),
+    FieldSpec(
+        "probe_panel_checkpoint_comparison", "a non-empty explicit comparison of the probe and panel checkpoints",
+        "the owner required the iter-2533 probe versus iter-1563 panel distinction to travel "
+        "with the captured evidence, not live only in this session",
+        _is_nonempty_str),
+    FieldSpec(
+        "capture_sha256", "64 hex characters",
+        "the reader's capture input must be a named member of this exact two-document bank",
+        _is_sha256),
+    FieldSpec(
+        "decision_count_sha256", "64 hex characters",
+        "the modeled bridge denominator must be a named member of this exact two-document bank",
+        _is_sha256),
+    PHASE1_DOCUMENTS_SPEC,
+)
+
+PHASE1_DOCUMENT_ROLES = frozenset({"capture", "decision_count"})
+PHASE1_DOCUMENT_REQUIRED: tuple[FieldSpec, ...] = STAGED_FILE_REQUIRED + (
+    FieldSpec(
+        "role", "one of 'capture' or 'decision_count'",
+        "the two documents have different roles in the instrument and cannot be identified "
+        "from an arbitrary filename",
+        lambda value: isinstance(value, str) and value in PHASE1_DOCUMENT_ROLES),
+)
+
 #: The caveat text that travels with a number produced under each rollout policy. A policy
 #: absent from this table is a REFUSAL, not an empty caveat: the tool cannot state an estimand
 #: it has never been told, and silence would read as "no caveat applies".
@@ -544,6 +698,7 @@ DERIVED_KEYS: frozenset[str] = frozenset({
     "banked_by",
     "shard_count",
     "staged_file_count",
+    "phase1_document_count",
     "per_file",
     "estimand",
     "nonzero_exit_shards_acknowledged",
@@ -571,6 +726,7 @@ class ArtifactKind:
     file_required: tuple[FieldSpec, ...] = SHARD_REQUIRED
     required_one_of: tuple[tuple[FieldSpec, ...], ...] = ()
     derives_estimand: bool = False
+    validate_complete: Callable[[Mapping[str, Any], Sequence[Mapping[str, Any]], Path], Sequence[Refusal]] | None = None
 
     def field_names(self) -> tuple[str, ...]:
         alternatives = tuple(spec.name for group in self.required_one_of for spec in group)
@@ -578,6 +734,278 @@ class ArtifactKind:
 
     def records_exit_status(self) -> bool:
         return any(spec.name == "exit_status" for spec in self.file_required)
+
+
+def _validate_phase1_capture_documents(
+    stamp: Mapping[str, Any], documents: Sequence[Mapping[str, Any]], source_dir: Path,
+) -> Sequence[Refusal]:
+    """Require and decode the capture/denominator pair before it can be called Phase-1 input.
+
+    The stamp is *not* a substitute for either document: it is a store-level witness around
+    the documents the headroom reader will later parse.  Every identity it repeats must agree
+    with the shared embedded provenance, and the two role labels must name the schema actually
+    copied.  Read the exact document bytes whose digest ``_validate_files`` just re-derived;
+    a source swap before copy is separately caught by the staged-byte rehash.
+    """
+
+    by_role: dict[str, Mapping[str, Any]] = {}
+    for document in documents:
+        role = document.get("role")
+        if isinstance(role, str) and role in PHASE1_DOCUMENT_ROLES and role not in by_role:
+            by_role[role] = document
+    reasons: list[Refusal] = []
+    if len(documents) != 2 or set(by_role) != PHASE1_DOCUMENT_ROLES:
+        reasons.append(Refusal(
+            INVALID_FIELD_VALUE,
+            "stamp: phase1_documents must contain exactly one 'capture' and one "
+            "'decision_count' document. A lone capture cannot be bridged, and duplicate roles "
+            "would let one replay document stand in for both independent inputs.",
+            "phase1_documents",
+        ))
+        return reasons
+
+    payloads: dict[str, Mapping[str, Any]] = {}
+    for role, document in by_role.items():
+        path = source_dir / str(document["file"])
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            reasons.append(Refusal(
+                SHARD_FILE_ABSENT,
+                f"stamp: cannot re-read the declared {role} document {path}: {exc}.",
+                "phase1_documents",
+            ))
+            continue
+        actual = hashlib.sha256(raw).hexdigest()
+        if actual != document["sha256"]:
+            reasons.append(Refusal(
+                SHARD_SHA256_MISMATCH,
+                f"stamp: {role} document changed after its file digest was checked "
+                f"({actual} != {document['sha256']}); refusing rather than parsing bytes the "
+                "bank will not copy.",
+                "phase1_documents",
+            ))
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            reasons.append(Refusal(
+                INVALID_FIELD_VALUE,
+                f"stamp: {role} document is not valid JSON ({exc}); a hash alone cannot make "
+                "a malformed result usable evidence.",
+                "phase1_documents",
+            ))
+            continue
+        expected_schema = (
+            "pokezero.phase1.capture.v1"
+            if role == "capture" else "pokezero.phase1.decision-count.v1"
+        )
+        if not isinstance(payload, Mapping) or payload.get("schema") != expected_schema:
+            reasons.append(Refusal(
+                INVALID_FIELD_VALUE,
+                f"stamp: {role} document must have schema {expected_schema!r}; its role label "
+                "cannot turn a different JSON document into Phase-1 evidence.",
+                "phase1_documents",
+            ))
+            continue
+        if not isinstance(payload.get("provenance"), Mapping):
+            reasons.append(Refusal(
+                INVALID_FIELD_VALUE,
+                f"stamp: {role} document has no object provenance. The capture and denominator "
+                "must carry the source identity they are about to share.",
+                "phase1_documents",
+            ))
+            continue
+        payloads[role] = payload
+
+    if reasons:
+        return reasons
+
+    capture, decision_count = payloads["capture"], payloads["decision_count"]
+    provenance = capture["provenance"]
+    if provenance != decision_count["provenance"]:
+        reasons.append(Refusal(
+            INVALID_FIELD_VALUE,
+            "stamp: capture and decision-count embedded provenance differ. The modeled bridge "
+            "must use a denominator from the exact replay that produced its capture.",
+            "phase1_documents",
+        ))
+        return reasons
+
+    for field in ("bank_sha256", "source_commit", "script_sha256", "raw_shards", "engine_search"):
+        if stamp.get(field) != provenance.get(field):
+            reasons.append(Refusal(
+                INVALID_FIELD_VALUE,
+                f"stamp: {field} does not equal the shared embedded provenance. A caller cannot "
+                "retag a valid capture as a different replay by changing only the bank stamp.",
+                field,
+            ))
+    checkpoint = provenance.get("checkpoint")
+    if (not isinstance(checkpoint, Mapping)
+            or stamp.get("checkpoint") != checkpoint.get("path")
+            or stamp.get("checkpoint_sha256") != checkpoint.get("sha256")
+            or not _is_nonempty_str(checkpoint.get("path"))
+            or not _is_sha256(checkpoint.get("sha256"))
+            or not _is_int(checkpoint.get("bytes"))
+            or checkpoint["bytes"] <= 0):
+        reasons.append(Refusal(
+            INVALID_FIELD_VALUE,
+            "stamp: checkpoint/checkpoint_sha256 must equal an embedded checkpoint identity "
+            "with non-empty path, sha256, and positive integer byte count. A path label alone "
+            "is not a replay identity.",
+            "checkpoint_sha256",
+        ))
+
+    engine_search = provenance.get("engine_search")
+    expected_engine_config = {
+        "worlds": 1,
+        "search_time_ms": 1000,
+        "threads": 1,
+        "approximate_sleep_turns": True,
+        "leaf_eval": "model",
+        "search_batch": 16,
+        "model_priors": True,
+        "depth": 3,
+        "sims": 2048,
+        "device": "cuda",
+        "max_decision_rounds": 250,
+    }
+    config = engine_search.get("config") if isinstance(engine_search, Mapping) else None
+    engine_inputs = (
+        engine_search.get("model") if isinstance(engine_search, Mapping) else None,
+        engine_search.get("encoder_tables") if isinstance(engine_search, Mapping) else None,
+    )
+    if (
+        not isinstance(config, Mapping)
+        or any(config.get(key) != value for key, value in expected_engine_config.items())
+        or any(
+            not isinstance(record, Mapping)
+            or not _is_nonempty_str(record.get("path"))
+            or not _is_sha256(record.get("sha256"))
+            or not _is_int(record.get("bytes"))
+            or record["bytes"] <= 0
+            for record in engine_inputs
+        )
+    ):
+        reasons.append(Refusal(
+            INVALID_FIELD_VALUE,
+            "embedded engine_search must be the complete canonical d3/s2048 CUDA contract: "
+            "its config fields plus model and encoder_tables {path, sha256, bytes}. A label "
+            "cannot turn arbitrary engine settings into the Phase-1 instrument.",
+            "engine_search",
+        ))
+
+    rows = capture.get("rows")
+    if not isinstance(rows, list) or not rows or not all(isinstance(row, Mapping) for row in rows):
+        reasons.append(Refusal(
+            INVALID_FIELD_VALUE,
+            "capture document has no non-empty list of row objects, so its advertised position "
+            "count cannot be checked.",
+            "phase1_documents",
+        ))
+        return reasons
+    if not all(
+        _is_int(row.get("seed")) and row["seed"] >= 0
+        and _is_int(row.get("prefix")) and row["prefix"] >= 0
+        and row.get("seat") in {"p1", "p2"}
+        for row in rows
+    ):
+        reasons.append(Refusal(
+            INVALID_FIELD_VALUE,
+            "capture rows must carry nonnegative integer seed/prefix coordinates and a p1 or "
+            "p2 seat. A schema-shaped null coordinate is not a replay position that can be "
+            "joined to the canonical bank.",
+            "phase1_documents",
+        ))
+        return reasons
+    row_keys = [(row.get("seed"), row.get("prefix"), row.get("seat")) for row in rows]
+    if len(set(row_keys)) != len(row_keys) or stamp.get("positions") != len(rows):
+        reasons.append(Refusal(
+            INVALID_FIELD_VALUE,
+            "stamp: positions does not equal the capture's unique (seed, prefix, seat) rows. "
+            "A duplicate or truncated capture cannot borrow a larger denominator from its stamp.",
+            "positions",
+        ))
+    summary = capture.get("summary")
+    pairing = summary.get("pairing") if isinstance(summary, Mapping) else None
+    if (
+        not isinstance(summary, Mapping)
+        or not _is_int(summary.get("n_rows"))
+        or summary.get("n_rows") != len(rows)
+        or not isinstance(pairing, Mapping)
+        or pairing.get("paired") is not True
+        or pairing.get("paired_with_sha256") != provenance.get("bank_sha256")
+        or stamp.get("paired") is not True
+    ):
+        reasons.append(Refusal(
+            INVALID_FIELD_VALUE,
+            "capture summary must derive n_rows and pair against the same canonical bank as its "
+            "embedded provenance, while stamp: paired must equal literal paired=true. The "
+            "Phase-1 noise calculation does not apply to an unpaired or unjoinable replay.",
+            "paired",
+        ))
+
+    per_seed = decision_count.get("per_seed")
+    if not isinstance(per_seed, list) or not per_seed or not all(isinstance(row, Mapping) for row in per_seed):
+        reasons.append(Refusal(
+            INVALID_FIELD_VALUE,
+            "decision-count document has no non-empty list of per-seed decision records.",
+            "phase1_documents",
+        ))
+        return reasons
+    seed_counts: dict[Any, int] = {}
+    for entry in per_seed:
+        seed, count = entry.get("seed"), entry.get("p1_decisions")
+        if (
+            not _is_int(seed)
+            or seed < 0
+            or seed in seed_counts
+            or not _is_int(count)
+            or count <= 0
+        ):
+            reasons.append(Refusal(
+                INVALID_FIELD_VALUE,
+                "decision-count per_seed must contain unique nonnegative integer seeds and "
+                "positive integer p1_decisions values.",
+                "phase1_documents",
+            ))
+            return reasons
+        seed_counts[seed] = count
+    capture_seeds = {row.get("seed") for row in rows}
+    total = sum(seed_counts.values())
+    mean = total / len(seed_counts)
+    observed_mean = decision_count.get("decisions_per_game_seat")
+    if (
+        capture_seeds != set(seed_counts)
+        or stamp.get("seed_count") != len(seed_counts)
+        or not _is_int(decision_count.get("n_games"))
+        or decision_count.get("n_games") != len(seed_counts)
+        or not _is_int(decision_count.get("total_p1_decisions"))
+        or decision_count.get("total_p1_decisions") != total
+        or not isinstance(observed_mean, (int, float))
+        or isinstance(observed_mean, bool)
+        or not math.isfinite(float(observed_mean))
+        or not math.isclose(float(observed_mean), mean, rel_tol=0.0, abs_tol=1e-12)
+    ):
+        reasons.append(Refusal(
+            INVALID_FIELD_VALUE,
+            "stamp: decision-count does not cover exactly the capture seeds with a consistent "
+            "per-seed total and mean; its denominator cannot be used for the modeled bridge.",
+            "seed_count",
+        ))
+    for role, stamp_field in (("capture", "capture_sha256"),
+                              ("decision_count", "decision_count_sha256")):
+        expected = stamp.get(stamp_field)
+        observed = by_role[role]["sha256"]
+        if _is_sha256(expected) and observed != str(expected).lower():
+            reasons.append(Refusal(
+                SHARD_SHA256_MISMATCH,
+                f"stamp: {stamp_field} {str(expected).lower()} does not match the declared "
+                f"{role} document bytes {observed}. The reader must not be pointed at a "
+                "different file than the store copied.",
+                stamp_field,
+            ))
+    return reasons
 
 
 ARTIFACT_KINDS: Mapping[str, ArtifactKind] = {
@@ -598,6 +1026,19 @@ ARTIFACT_KINDS: Mapping[str, ArtifactKind] = {
         required=RESULTS_REQUIRED + ROLLOUT_ARBITER_REQUIRED,
         required_one_of=(SEED_ALTERNATIVES,),
         derives_estimand=True,
+    ),
+    "phase1.instrument1.capture.v1": ArtifactKind(
+        name="phase1.instrument1.capture.v1",
+        schema=PHASE1_CAPTURE_SCHEMA,
+        description=(
+            "Phase 1 instrument 1's canonical paired capture plus its measured decision "
+            "denominator. This is source evidence for X, not a claimed headroom result."
+        ),
+        required=PHASE1_CAPTURE_REQUIRED,
+        files_field="phase1_documents",
+        count_field="phase1_document_count",
+        file_required=PHASE1_DOCUMENT_REQUIRED,
+        validate_complete=_validate_phase1_capture_documents,
     ),
     "staging.v1": ArtifactKind(
         name="staging.v1",
@@ -1096,6 +1537,9 @@ def _validate(
                 f"'{kind.files_field}' being absent.",
                 kind.files_field,
             ))
+
+    if kind.validate_complete is not None:
+        reasons.extend(kind.validate_complete(stamp, normalized, source_dir))
 
     campaign_id = stamp.get("campaign_id")
     if _is_campaign_id(campaign_id) and out_dir.name != campaign_id:

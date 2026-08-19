@@ -1567,5 +1567,299 @@ class StagingKindTests(unittest.TestCase):
         self.assertEqual(self.bank().status, "banked")
 
 
+# ----------------------------------------------------------------------------------------------
+# Phase 1 instrument 1: a coupled capture/denominator pair, not shard-shaped evidence
+# ----------------------------------------------------------------------------------------------
+PHASE1_CAPTURE_KIND = "phase1.instrument1.capture.v1"
+PHASE1_CAPTURE_CAMPAIGN_ID = "phase1-capture-test-20260819"
+
+
+class Phase1CaptureKindTests(unittest.TestCase):
+    """The bank must preserve both dependencies of the headroom bridge as named bytes."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        self.source_dir = root / "phase1-source"
+        self.out_dir = root / "campaign-store" / PHASE1_CAPTURE_CAMPAIGN_ID
+        (self.source_dir / "documents").mkdir(parents=True)
+        self.checkpoint_sha256 = _sha256_bytes(b"probe-checkpoint")
+        self.shared_provenance: dict[str, Any] = {
+            "bank_sha256": "b" * 64,
+            "source_commit": "a" * 40,
+            "script_sha256": "c" * 64,
+            "checkpoint": {
+                "path": PLACEHOLDER_CHECKPOINT,
+                "sha256": self.checkpoint_sha256,
+                "bytes": len(b"probe-checkpoint"),
+            },
+            "raw_shards": [
+                {"name": "raw-shard-0.json", "sha256": "d" * 64},
+                {"name": "raw-shard-1.json", "sha256": "e" * 64},
+            ],
+            "engine_search": {
+                "config": {
+                    "worlds": 1,
+                    "search_time_ms": 1000,
+                    "threads": 1,
+                    "approximate_sleep_turns": True,
+                    "leaf_eval": "model",
+                    "search_batch": 16,
+                    "model_priors": True,
+                    "depth": 3,
+                    "sims": 2048,
+                    "device": "cuda",
+                    "max_decision_rounds": 250,
+                },
+                "model": {"path": "/models/engine.pt", "sha256": "1" * 64, "bytes": 1},
+                "encoder_tables": {
+                    "path": "/models/encoder_tables.json", "sha256": "2" * 64, "bytes": 1,
+                },
+            },
+        }
+        capture_payload = {
+            "schema": "pokezero.phase1.capture.v1",
+            "provenance": self.shared_provenance,
+            "summary": {
+                "n_rows": 2,
+                "pairing": {
+                    "paired": True,
+                    "paired_with_sha256": self.shared_provenance["bank_sha256"],
+                },
+            },
+            "rows": [
+                {"seed": 24010000, "prefix": 0, "seat": "p1"},
+                {"seed": 24010100, "prefix": 1, "seat": "p2"},
+            ],
+        }
+        decision_payload = {
+            "schema": "pokezero.phase1.decision-count.v1",
+            "provenance": self.shared_provenance,
+            "decisions_per_game_seat": 4.0,
+            "n_games": 2,
+            "total_p1_decisions": 8,
+            "per_seed": [
+                {"seed": 24010000, "p1_decisions": 3},
+                {"seed": 24010100, "p1_decisions": 5},
+            ],
+        }
+        documents: list[dict[str, Any]] = []
+        for role, filename, payload in (
+            ("capture", "documents/capture.json", json.dumps(capture_payload).encode()),
+            ("decision_count", "documents/decision-count.json", json.dumps(decision_payload).encode()),
+        ):
+            path = self.source_dir / filename
+            path.write_bytes(payload)
+            documents.append({
+                "file": filename,
+                "sha256": _sha256_bytes(payload),
+                "role": role,
+            })
+        self.stamp: dict[str, Any] = {
+            "artifact_kind": PHASE1_CAPTURE_KIND,
+            "campaign_id": PHASE1_CAPTURE_CAMPAIGN_ID,
+            "cell": "Phase 1 instrument 1 canonical capture (placeholder)",
+            "checkpoint": PLACEHOLDER_CHECKPOINT,
+            "checkpoint_sha256": self.checkpoint_sha256,
+            "bank_sha256": self.shared_provenance["bank_sha256"],
+            "source_commit": self.shared_provenance["source_commit"],
+            "script_sha256": self.shared_provenance["script_sha256"],
+            "raw_shards": self.shared_provenance["raw_shards"],
+            "engine_search": self.shared_provenance["engine_search"],
+            "policy_continuation_rollouts": 64,
+            "positions": 2,
+            "seed_count": 2,
+            "paired": True,
+            "image": PLACEHOLDER_IMAGE,
+            "job_exit_status": 0,
+            "job_pod": "phase1-capture-pod.example.invalid",
+            "job_node": "node.example.invalid",
+            "launcher": "launchers/phase1-capture.sh",
+            "launcher_flags": ["--phase1-capture", "--canonical"],
+            "panel_checkpoint": "/checkpoints/lineage-a/iteration-1563/transformer-policy.pt",
+            "panel_checkpoint_sha256": "f" * 64,
+            "probe_panel_checkpoint_comparison": (
+                "Probe checkpoint iteration-2533 differs from the panel checkpoint iteration-1563; "
+                "the capture is an X input, not a same-checkpoint panel result."
+            ),
+            "capture_sha256": documents[0]["sha256"],
+            "decision_count_sha256": documents[1]["sha256"],
+            "phase1_documents": documents,
+        }
+
+    def bank(self, **kwargs: Any) -> Any:
+        return bank.bank_artifact(self.stamp, self.source_dir, self.out_dir, **kwargs)
+
+    def replace_document(self, role: str, payload: dict[str, Any]) -> None:
+        """Replace a source document while preserving every superficial caller-controlled hash."""
+
+        document = next(item for item in self.stamp["phase1_documents"] if item["role"] == role)
+        raw = json.dumps(payload).encode()
+        (self.source_dir / document["file"]).write_bytes(raw)
+        document["sha256"] = _sha256_bytes(raw)
+        self.stamp[f"{role}_sha256"] = document["sha256"]
+
+    def test_banks_the_coupled_documents_under_their_own_schema(self) -> None:
+        result = self.bank()
+        provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
+        self.assertEqual(provenance["schema"], bank.PHASE1_CAPTURE_SCHEMA)
+        self.assertEqual(provenance["artifact_kind"], PHASE1_CAPTURE_KIND)
+        self.assertEqual(provenance["phase1_document_count"], 2)
+        self.assertEqual(
+            {item["role"] for item in provenance["phase1_documents"]},
+            {"capture", "decision_count"},
+        )
+        self.assertEqual(provenance["capture_sha256"], self.stamp["capture_sha256"])
+        self.assertEqual(provenance["decision_count_sha256"], self.stamp["decision_count_sha256"])
+        self.assertTrue((self.out_dir / "SHA256SUMS").read_text(encoding="utf-8"))
+
+    def test_every_declared_capture_field_is_required(self) -> None:
+        for spec in bank.ARTIFACT_KINDS[PHASE1_CAPTURE_KIND].required:
+            with self.subTest(field=spec.name):
+                stamp = {key: value for key, value in self.stamp.items() if key != spec.name}
+                with self.assertRaises(bank.BankRefusal) as caught:
+                    bank.bank_artifact(stamp, self.source_dir, self.out_dir)
+                self.assertIn(bank.MISSING_REQUIRED_FIELD, caught.exception.codes)
+                self.assertIn(spec.name, caught.exception.fields_for(bank.MISSING_REQUIRED_FIELD))
+                self.assertFalse(self.out_dir.exists())
+
+    def test_duplicate_document_roles_are_refused(self) -> None:
+        self.stamp["phase1_documents"][1]["role"] = "capture"
+        with self.assertRaises(bank.BankRefusal) as caught:
+            self.bank()
+        self.assertIn(bank.INVALID_FIELD_VALUE, caught.exception.codes)
+        self.assertIn("exactly one 'capture' and one 'decision_count'",
+                      caught.exception.messages_for(bank.INVALID_FIELD_VALUE)[0])
+        self.assertFalse(self.out_dir.exists())
+
+    def test_top_level_capture_pin_must_name_the_copied_capture_bytes(self) -> None:
+        self.stamp["capture_sha256"] = "0" * 64
+        with self.assertRaises(bank.BankRefusal) as caught:
+            self.bank()
+        self.assertIn(bank.SHARD_SHA256_MISMATCH, caught.exception.codes)
+        self.assertIn("capture_sha256", caught.exception.fields_for(bank.SHARD_SHA256_MISMATCH))
+        self.assertFalse(self.out_dir.exists())
+
+    def test_role_label_cannot_bank_a_document_with_the_wrong_phase1_schema(self) -> None:
+        self.replace_document("capture", {
+            "schema": "pokezero.phase1.decision-count.v1",
+            "provenance": self.shared_provenance,
+        })
+        with self.assertRaises(bank.BankRefusal) as caught:
+            self.bank()
+        self.assertIn(bank.INVALID_FIELD_VALUE, caught.exception.codes)
+        self.assertIn("must have schema 'pokezero.phase1.capture.v1'",
+                      caught.exception.messages_for(bank.INVALID_FIELD_VALUE)[0])
+        self.assertFalse(self.out_dir.exists())
+
+    def test_capture_and_decision_cannot_claim_different_replay_provenance(self) -> None:
+        foreign = json.loads(json.dumps(self.shared_provenance))
+        foreign["source_commit"] = "f" * 40
+        self.replace_document("decision_count", {
+            "schema": "pokezero.phase1.decision-count.v1",
+            "provenance": foreign,
+            "decisions_per_game_seat": 4.0,
+            "n_games": 2,
+            "total_p1_decisions": 8,
+            "per_seed": [
+                {"seed": 24010000, "p1_decisions": 3},
+                {"seed": 24010100, "p1_decisions": 5},
+            ],
+        })
+        with self.assertRaises(bank.BankRefusal) as caught:
+            self.bank()
+        self.assertIn(bank.INVALID_FIELD_VALUE, caught.exception.codes)
+        self.assertIn("embedded provenance differ",
+                      caught.exception.messages_for(bank.INVALID_FIELD_VALUE)[0])
+        self.assertFalse(self.out_dir.exists())
+
+    def test_stamp_cannot_retag_a_valid_capture_as_a_different_source_commit(self) -> None:
+        self.stamp["source_commit"] = "f" * 40
+        with self.assertRaises(bank.BankRefusal) as caught:
+            self.bank()
+        self.assertIn(bank.INVALID_FIELD_VALUE, caught.exception.codes)
+        self.assertIn("source_commit does not equal the shared embedded provenance",
+                      caught.exception.messages_for(bank.INVALID_FIELD_VALUE)[0])
+        self.assertFalse(self.out_dir.exists())
+
+    def test_schema_shaped_null_coordinates_cannot_be_banked_as_canonical_phase1_evidence(self) -> None:
+        """The store must not turn a caller-rehashed null document into a replay capture."""
+
+        capture = {
+            "schema": "pokezero.phase1.capture.v1",
+            "provenance": self.shared_provenance,
+            "summary": {
+                "n_rows": 1,
+                "pairing": {
+                    "paired": True,
+                    "paired_with_sha256": self.shared_provenance["bank_sha256"],
+                },
+            },
+            "rows": [{"seed": None, "prefix": None, "seat": None}],
+        }
+        decision_count = {
+            "schema": "pokezero.phase1.decision-count.v1",
+            "provenance": self.shared_provenance,
+            "decisions_per_game_seat": 1.0,
+            "n_games": 1,
+            "total_p1_decisions": 1,
+            "per_seed": [{"seed": None, "p1_decisions": 1}],
+        }
+        self.replace_document("capture", capture)
+        self.replace_document("decision_count", decision_count)
+        self.stamp["positions"] = 1
+        self.stamp["seed_count"] = 1
+
+        with self.assertRaises(bank.BankRefusal) as caught:
+            self.bank()
+
+        self.assertIn(bank.INVALID_FIELD_VALUE, caught.exception.codes)
+        self.assertIn("nonnegative integer seed/prefix coordinates",
+                      caught.exception.messages_for(bank.INVALID_FIELD_VALUE)[0])
+        self.assertFalse(self.out_dir.exists())
+
+    def test_engine_search_must_carry_the_complete_canonical_contract(self) -> None:
+        bad_provenance = json.loads(json.dumps(self.shared_provenance))
+        bad_provenance["engine_search"] = {"not_an_engine": True}
+        for role in ("capture", "decision_count"):
+            payload = json.loads((self.source_dir / "documents" / (
+                "capture.json" if role == "capture" else "decision-count.json"
+            )).read_text(encoding="utf-8"))
+            payload["provenance"] = bad_provenance
+            self.replace_document(role, payload)
+        self.stamp["engine_search"] = bad_provenance["engine_search"]
+
+        with self.assertRaises(bank.BankRefusal) as caught:
+            self.bank()
+
+        self.assertIn(bank.INVALID_FIELD_VALUE, caught.exception.codes)
+        self.assertIn("complete canonical d3/s2048 CUDA contract",
+                      caught.exception.messages_for(bank.INVALID_FIELD_VALUE)[0])
+        self.assertFalse(self.out_dir.exists())
+
+    def test_checkpoint_without_a_positive_byte_identity_cannot_be_banked(self) -> None:
+        bad_provenance = json.loads(json.dumps(self.shared_provenance))
+        bad_provenance["checkpoint"].pop("bytes")
+        for role in ("capture", "decision_count"):
+            payload = json.loads((self.source_dir / "documents" / (
+                "capture.json" if role == "capture" else "decision-count.json"
+            )).read_text(encoding="utf-8"))
+            payload["provenance"] = bad_provenance
+            self.replace_document(role, payload)
+
+        with self.assertRaises(bank.BankRefusal) as caught:
+            self.bank()
+
+        self.assertIn(bank.INVALID_FIELD_VALUE, caught.exception.codes)
+        self.assertIn("positive integer byte count",
+                      caught.exception.messages_for(bank.INVALID_FIELD_VALUE)[0])
+        self.assertFalse(self.out_dir.exists())
+
+    def test_capture_schema_is_neither_campaign_results_nor_staging(self) -> None:
+        self.assertNotEqual(bank.PHASE1_CAPTURE_SCHEMA, bank.PROVENANCE_SCHEMA)
+        self.assertNotEqual(bank.PHASE1_CAPTURE_SCHEMA, bank.STAGING_SCHEMA)
+
+
 if __name__ == "__main__":
     unittest.main()
