@@ -292,6 +292,43 @@ function snapshotBattle(command) {
   });
 }
 
+async function snapshotActionableBoundary(command) {
+  const startedAt = process.hrtime.bigint();
+  const battle = requireBattle(command);
+  if (!battle.battleStream?.battle) {
+    throw new Error(`No simulator state for battleId ${battle.battleId}.`);
+  }
+  // `ready` is delivered from asynchronous protocol streams. Let their final
+  // turn settle, then bind the serialized world only to requests read directly
+  // from that same current Battle. Never manufacture a boundary from the cache.
+  await new Promise(resolve => setImmediate(resolve));
+  const boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
+  const requested = ["p1", "p2"].filter(player => isActionableRequest(boundaryRequests[player]));
+  if (!requested.length) {
+    emit({
+      type: "snapshot_actionable_boundary",
+      battleId: battle.battleId,
+      available: false,
+      requestStateType: typeof battle.battleStream.battle.requestState,
+      terminalScheduled: battle.terminalScheduled,
+      nodeProcMs: elapsedNodeProcMs(startedAt),
+    });
+    return;
+  }
+  emit({
+    type: "snapshot_actionable_boundary",
+    battleId: battle.battleId,
+    available: true,
+    requested,
+    snapshot: {
+      battle: State.serializeBattle(battle.battleStream.battle),
+      boundaryRequests,
+      terminalScheduled: battle.terminalScheduled,
+    },
+    nodeProcMs: elapsedNodeProcMs(startedAt),
+  });
+}
+
 function snapshotSearchBattle(command) {
   const startedAt = process.hrtime.bigint();
   const battle = requireBattle(command);
@@ -1724,6 +1761,9 @@ async function handleCommand(command) {
       break;
     case "snapshot":
       snapshotBattle(command);
+      break;
+    case "snapshot_actionable_boundary":
+      await snapshotActionableBoundary(command);
       break;
     case "snapshot_search":
       snapshotSearchBattle(command);
