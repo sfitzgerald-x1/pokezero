@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import readline from "node:readline";
+import { snapshotBoundaryRequests } from "./battle_bridge_boundary_requests.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -242,11 +243,15 @@ function snapshotBattle(command) {
   if (!battle.battleStream?.battle) {
     throw new Error(`No simulator state for battleId ${battle.battleId}.`);
   }
-  // The stream-side request cache can be temporarily empty between a branch
-  // resolving and its protocol request chunks arriving. The simulator state
-  // is authoritative at snapshot time, so refresh from it before pairing the
-  // snapshot with Python's request state.
-  battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
+  // A just-resolved branch can be in the opposite transient too: its stream
+  // cache already has the next actionable boundary while Showdown's direct
+  // request API has not materialized it yet. A nonempty direct result replaces
+  // the cache; an empty one must not erase that boundary before a fresh shell
+  // restores the snapshot.
+  battle.boundaryRequests = snapshotBoundaryRequests(
+    battle.boundaryRequests,
+    boundaryRequestsFromBattle(battle.battleStream.battle)
+  );
   emit({
     type: "snapshot",
     battleId: battle.battleId,
