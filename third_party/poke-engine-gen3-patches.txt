@@ -1710,3 +1710,9 @@ poke-engine-gen3-sleeptalk-damage-dealt-double-reset.patch
 #
 # Regression pins: rust/pokezero-search/tests/gen3_leechseed_residual_band_split.rs
 poke-engine-gen3-leechseed-residual-band-split.patch
+
+# Gen3 sleep is bounded at four move attempts. A FoulPlay MCTS witness retained
+# an ordinary-sleep count of five; the old hazard formula divided by zero and
+# crashed sampling with `[inf, -inf, ...]` weights. Saturate the terminal rung
+# to a forced wake and pin the exact state as a native MCTS regression.
+poke-engine-gen3-sleep-clock-bound.patch
