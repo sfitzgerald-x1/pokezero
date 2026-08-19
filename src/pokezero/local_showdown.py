@@ -903,6 +903,10 @@ class LocalShowdownEnv:
             {"type": "snapshot_actionable_boundary", "battleId": self._battle_token},
             "snapshot_actionable_boundary",
         )
+        # The bridge's bounded settling turn may have delivered protocol stream
+        # chunks while the command was in flight. Fold them before freezing the
+        # parser/belief side of this exact simulator boundary.
+        self._sync_incremental_state()
         if event.get("available") is not True:
             raise LocalShowdownError(
                 "Bridge could not bind an actionable request to the current simulator state."

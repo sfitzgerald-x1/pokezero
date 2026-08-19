@@ -113,6 +113,8 @@ class SnapshotBoundaryRequestsTest(unittest.TestCase):
 
         with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as restored:
             source.reset_with_start_override(seed=17, start_override=start_override)
+            branch = source.step({"p1": 0, "p2": 1})
+            self.assertIsNone(branch.terminal)
             snapshot = source.snapshot_actionable_boundary()
             restored.reset_with_start_override(seed=19, start_override=start_override)
             restored.restore(snapshot)
