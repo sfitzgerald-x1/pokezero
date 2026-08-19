@@ -885,6 +885,12 @@ class LocalShowdownEnv:
         snapshot = event.get("snapshot")
         if not isinstance(snapshot, Mapping):
             raise LocalShowdownError(f"Bridge emitted malformed snapshot event: {event!r}")
+        boundary_requests = snapshot.get("boundaryRequests")
+        if not self._latest_requests and isinstance(boundary_requests, Mapping):
+            self._latest_requests = _json_clone_requests(boundary_requests)
+            for player, request in self._latest_requests.items():
+                self._first_requests.setdefault(player, _json_clone_mapping(request))
+                self._request_history[player].append(_json_clone_mapping(request))
         return self._local_snapshot(bridge_snapshot=_json_clone_mapping(snapshot))
 
     def snapshot_for_search(self) -> LocalShowdownSnapshot:
