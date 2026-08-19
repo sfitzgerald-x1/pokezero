@@ -113,7 +113,7 @@ class SnapshotBoundaryRequestsTest(unittest.TestCase):
 
         with LocalShowdownEnv(config) as source, LocalShowdownEnv(config) as restored:
             source.reset_with_start_override(seed=17, start_override=start_override)
-            snapshot = source.snapshot()
+            snapshot = source.snapshot_actionable_boundary()
             restored.reset_with_start_override(seed=19, start_override=start_override)
             restored.restore(snapshot)
             self.assertEqual(restored.requested_players(), ("p1", "p2"))
