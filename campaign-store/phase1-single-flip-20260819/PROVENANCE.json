@@ -1,0 +1,122 @@
+{
+  "schema": "pokezero.campaign-store.phase1-capture.v1",
+  "artifact_kind": "phase1.instrument1.capture.v1",
+  "banked_at_utc": "2026-08-19T09:35:16Z",
+  "banked_by": "scripts/bank_campaign_artifacts.py v3",
+  "campaign_id": "phase1-single-flip-20260819",
+  "cell": "vhprobe-iter2533-engine-d3-s2048",
+  "checkpoint": "/shared/scott-experiment/v4prod-entfull-15m-20260807084357/run/iteration-2533/transformer-policy.pt",
+  "checkpoint_sha256": "0897676c295a79bac0b24c347b8f6a72e1359b98c37327bc5639fb6229005937",
+  "bank_sha256": "8f591a744e1225ecf89c26bf3beb4cebd1222121e233a38c7bd1fc3835933558",
+  "source_commit": "8c5217de74990a39299547c294074913f2bd02c8",
+  "script_sha256": "f8d9a65fd31a03b715712be72f25c3dd289094dd7f2c6a664183d41cab9ca8d9",
+  "raw_shards": [
+    {
+      "name": "shard0.json",
+      "sha256": "c016b984f28516e112f57a928746006d90efe146bf3719f731953080be178d32"
+    },
+    {
+      "name": "shard1.json",
+      "sha256": "a787cc27744a48770b7a563d1aa9458f2830b787206feadf673d7b881ffb4fbd"
+    },
+    {
+      "name": "shard2.json",
+      "sha256": "19cfac8c7acd623e45c9a82d312f37b23dd707816e4e2d5a7ff9b10de7bbfc08"
+    },
+    {
+      "name": "shard3.json",
+      "sha256": "3425973e72553a260ae88864c49ade1be19f02799adf32f63f158894501457b4"
+    },
+    {
+      "name": "shard4.json",
+      "sha256": "013330d84dac9a73f06a1276c0e638f1bbdca2537ac9cb57fa797a86e7e3d498"
+    },
+    {
+      "name": "shard5.json",
+      "sha256": "4a03470ca35579fc37a3209bc43d6206c41495d08bbedfb69ef414f1fbe71301"
+    },
+    {
+      "name": "shard6.json",
+      "sha256": "debd12c298a4056684c0474b61b3af271defdfa9cfdd487fb9a8c0c9ef474e55"
+    },
+    {
+      "name": "shard7.json",
+      "sha256": "341613770c865a95724017c96ff6776c9861c9485c6c8488a9a7c0e218d6802d"
+    }
+  ],
+  "engine_search": {
+    "config": {
+      "worlds": 1,
+      "search_time_ms": 1000,
+      "threads": 1,
+      "approximate_sleep_turns": true,
+      "leaf_eval": "model",
+      "search_batch": 16,
+      "model_priors": true,
+      "depth": 3,
+      "sims": 2048,
+      "device": "cuda",
+      "max_decision_rounds": 250
+    },
+    "model": {
+      "path": "/shared/scott-experiment/v4prod-entfull-15m-20260807084357/run/iteration-2533/.mcts-eval-artifacts-e8110838b9a036af/model_ts.pt",
+      "sha256": "8c7cf1fd5e7de89a76256bd48618104179e89e2b3a800ad28bacac828db9d256",
+      "bytes": 40094400
+    },
+    "encoder_tables": {
+      "path": "/shared/scott-experiment/v4prod-entfull-15m-20260807084357/run/iteration-2533/.mcts-eval-artifacts-e8110838b9a036af/encoder_tables.json",
+      "sha256": "08f2e4464036602b26572873b2ae6cd31629b3abb8c2d93250fd126e02a113fa",
+      "bytes": 455510
+    }
+  },
+  "policy_continuation_rollouts": 64,
+  "positions": 370,
+  "seed_count": 80,
+  "paired": true,
+  "image": "registry.eu-iceland1-a.ccr.crusoecloudcompute.com/river-ai-registry.61daf4b3/scott-experiment@sha256:c1c94c860ebbdc278afeb06d791d94234c23d0c254220eccb3e4e4e6bf792d49",
+  "job_exit_status": 0,
+  "job_pod": "phase1-single-flip-capture-20260819-mqqmm",
+  "job_node": "np-c77b5b7e-11.eu-iceland1-a.compute.internal",
+  "launcher": "mcts/phase1-single-flip-capture-20260819.sh",
+  "launcher_flags": [
+    "--shard /shared/scott-experiment/vhprobe-20260815/shard*.json",
+    "--paired-with campaign-store/vhprobe-pairs-20260815.json",
+    "--phase1-checkpoint-sha256 0897676c295a79bac0b24c347b8f6a72e1359b98c37327bc5639fb6229005937",
+    "--phase1-source-commit 8c5217de74990a39299547c294074913f2bd02c8",
+    "--engine-depth 3",
+    "--engine-sims 2048",
+    "--max-decision-rounds 250"
+  ],
+  "panel_checkpoint": "/shared/scott-experiment/v4prod-entfull-15m-20260807084357/run/iteration-1563/transformer-policy.pt",
+  "panel_checkpoint_sha256": "85ba08efdf45f1b7b1defe34a826ec3d64c25ba14e698fdc28720f1486282544",
+  "probe_panel_checkpoint_comparison": "Probe evidence is deterministic replay from the entfull iteration-2533 checkpoint; the priors-on panel comparison used entfull iteration-1563. These are different immutable checkpoint bytes and this Phase-1 result must not be read as a same-checkpoint bridge.",
+  "capture_sha256": "55acd51f25875859a7492f20c786403d8d6cc35a5b82569427a7ad53b1c7a6ca",
+  "decision_count_sha256": "3f4fb1e8c2695339c8e89530513c703e08db3b98e45645721a3692bde2032b10",
+  "phase1_document_count": 2,
+  "phase1_documents": [
+    {
+      "file": "phase1-capture.json",
+      "sha256": "55acd51f25875859a7492f20c786403d8d6cc35a5b82569427a7ad53b1c7a6ca",
+      "role": "capture",
+      "bytes": 114866
+    },
+    {
+      "file": "phase1-decision-count.json",
+      "sha256": "3f4fb1e8c2695339c8e89530513c703e08db3b98e45645721a3692bde2032b10",
+      "role": "decision_count",
+      "bytes": 10689
+    }
+  ],
+  "per_file": [
+    {
+      "file": "phase1-capture.json",
+      "sha256": "55acd51f25875859a7492f20c786403d8d6cc35a5b82569427a7ad53b1c7a6ca",
+      "bytes": 114866
+    },
+    {
+      "file": "phase1-decision-count.json",
+      "sha256": "3f4fb1e8c2695339c8e89530513c703e08db3b98e45645721a3692bde2032b10",
+      "bytes": 10689
+    }
+  ]
+}

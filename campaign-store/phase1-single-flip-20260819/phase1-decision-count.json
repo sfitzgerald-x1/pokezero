@@ -1,0 +1,559 @@
+{
+ "decisions_per_game_seat": 44.275,
+ "n_games": 80,
+ "per_seed": [
+  {
+   "decision_rounds": 140,
+   "p1_decisions": 135,
+   "p2_decisions": 137,
+   "seed": 24010000
+  },
+  {
+   "decision_rounds": 40,
+   "p1_decisions": 36,
+   "p2_decisions": 35,
+   "seed": 24010001
+  },
+  {
+   "decision_rounds": 42,
+   "p1_decisions": 38,
+   "p2_decisions": 39,
+   "seed": 24010002
+  },
+  {
+   "decision_rounds": 47,
+   "p1_decisions": 45,
+   "p2_decisions": 42,
+   "seed": 24010003
+  },
+  {
+   "decision_rounds": 37,
+   "p1_decisions": 37,
+   "p2_decisions": 32,
+   "seed": 24010004
+  },
+  {
+   "decision_rounds": 48,
+   "p1_decisions": 43,
+   "p2_decisions": 43,
+   "seed": 24010005
+  },
+  {
+   "decision_rounds": 44,
+   "p1_decisions": 42,
+   "p2_decisions": 39,
+   "seed": 24010006
+  },
+  {
+   "decision_rounds": 128,
+   "p1_decisions": 123,
+   "p2_decisions": 123,
+   "seed": 24010007
+  },
+  {
+   "decision_rounds": 50,
+   "p1_decisions": 45,
+   "p2_decisions": 47,
+   "seed": 24010008
+  },
+  {
+   "decision_rounds": 47,
+   "p1_decisions": 43,
+   "p2_decisions": 43,
+   "seed": 24010009
+  },
+  {
+   "decision_rounds": 33,
+   "p1_decisions": 28,
+   "p2_decisions": 30,
+   "seed": 24010100
+  },
+  {
+   "decision_rounds": 50,
+   "p1_decisions": 45,
+   "p2_decisions": 45,
+   "seed": 24010101
+  },
+  {
+   "decision_rounds": 63,
+   "p1_decisions": 57,
+   "p2_decisions": 60,
+   "seed": 24010102
+  },
+  {
+   "decision_rounds": 46,
+   "p1_decisions": 42,
+   "p2_decisions": 42,
+   "seed": 24010103
+  },
+  {
+   "decision_rounds": 35,
+   "p1_decisions": 28,
+   "p2_decisions": 32,
+   "seed": 24010104
+  },
+  {
+   "decision_rounds": 33,
+   "p1_decisions": 26,
+   "p2_decisions": 31,
+   "seed": 24010105
+  },
+  {
+   "decision_rounds": 56,
+   "p1_decisions": 48,
+   "p2_decisions": 53,
+   "seed": 24010106
+  },
+  {
+   "decision_rounds": 53,
+   "p1_decisions": 49,
+   "p2_decisions": 48,
+   "seed": 24010107
+  },
+  {
+   "decision_rounds": 56,
+   "p1_decisions": 53,
+   "p2_decisions": 51,
+   "seed": 24010108
+  },
+  {
+   "decision_rounds": 27,
+   "p1_decisions": 25,
+   "p2_decisions": 23,
+   "seed": 24010109
+  },
+  {
+   "decision_rounds": 45,
+   "p1_decisions": 43,
+   "p2_decisions": 41,
+   "seed": 24010200
+  },
+  {
+   "decision_rounds": 31,
+   "p1_decisions": 26,
+   "p2_decisions": 27,
+   "seed": 24010201
+  },
+  {
+   "decision_rounds": 54,
+   "p1_decisions": 51,
+   "p2_decisions": 49,
+   "seed": 24010202
+  },
+  {
+   "decision_rounds": 30,
+   "p1_decisions": 25,
+   "p2_decisions": 27,
+   "seed": 24010203
+  },
+  {
+   "decision_rounds": 63,
+   "p1_decisions": 58,
+   "p2_decisions": 60,
+   "seed": 24010204
+  },
+  {
+   "decision_rounds": 27,
+   "p1_decisions": 22,
+   "p2_decisions": 24,
+   "seed": 24010205
+  },
+  {
+   "decision_rounds": 31,
+   "p1_decisions": 26,
+   "p2_decisions": 29,
+   "seed": 24010206
+  },
+  {
+   "decision_rounds": 29,
+   "p1_decisions": 25,
+   "p2_decisions": 26,
+   "seed": 24010207
+  },
+  {
+   "decision_rounds": 43,
+   "p1_decisions": 38,
+   "p2_decisions": 40,
+   "seed": 24010208
+  },
+  {
+   "decision_rounds": 44,
+   "p1_decisions": 39,
+   "p2_decisions": 40,
+   "seed": 24010209
+  },
+  {
+   "decision_rounds": 54,
+   "p1_decisions": 49,
+   "p2_decisions": 49,
+   "seed": 24010300
+  },
+  {
+   "decision_rounds": 52,
+   "p1_decisions": 47,
+   "p2_decisions": 47,
+   "seed": 24010301
+  },
+  {
+   "decision_rounds": 50,
+   "p1_decisions": 48,
+   "p2_decisions": 46,
+   "seed": 24010302
+  },
+  {
+   "decision_rounds": 57,
+   "p1_decisions": 53,
+   "p2_decisions": 53,
+   "seed": 24010303
+  },
+  {
+   "decision_rounds": 28,
+   "p1_decisions": 23,
+   "p2_decisions": 23,
+   "seed": 24010304
+  },
+  {
+   "decision_rounds": 32,
+   "p1_decisions": 30,
+   "p2_decisions": 27,
+   "seed": 24010305
+  },
+  {
+   "decision_rounds": 32,
+   "p1_decisions": 27,
+   "p2_decisions": 30,
+   "seed": 24010306
+  },
+  {
+   "decision_rounds": 46,
+   "p1_decisions": 42,
+   "p2_decisions": 43,
+   "seed": 24010307
+  },
+  {
+   "decision_rounds": 59,
+   "p1_decisions": 54,
+   "p2_decisions": 54,
+   "seed": 24010308
+  },
+  {
+   "decision_rounds": 83,
+   "p1_decisions": 78,
+   "p2_decisions": 79,
+   "seed": 24010309
+  },
+  {
+   "decision_rounds": 43,
+   "p1_decisions": 40,
+   "p2_decisions": 38,
+   "seed": 24010400
+  },
+  {
+   "decision_rounds": 37,
+   "p1_decisions": 32,
+   "p2_decisions": 33,
+   "seed": 24010401
+  },
+  {
+   "decision_rounds": 37,
+   "p1_decisions": 35,
+   "p2_decisions": 32,
+   "seed": 24010402
+  },
+  {
+   "decision_rounds": 51,
+   "p1_decisions": 45,
+   "p2_decisions": 51,
+   "seed": 24010403
+  },
+  {
+   "decision_rounds": 72,
+   "p1_decisions": 69,
+   "p2_decisions": 66,
+   "seed": 24010404
+  },
+  {
+   "decision_rounds": 46,
+   "p1_decisions": 41,
+   "p2_decisions": 43,
+   "seed": 24010405
+  },
+  {
+   "decision_rounds": 37,
+   "p1_decisions": 33,
+   "p2_decisions": 33,
+   "seed": 24010406
+  },
+  {
+   "decision_rounds": 45,
+   "p1_decisions": 40,
+   "p2_decisions": 43,
+   "seed": 24010407
+  },
+  {
+   "decision_rounds": 88,
+   "p1_decisions": 83,
+   "p2_decisions": 85,
+   "seed": 24010408
+  },
+  {
+   "decision_rounds": 39,
+   "p1_decisions": 37,
+   "p2_decisions": 35,
+   "seed": 24010409
+  },
+  {
+   "decision_rounds": 58,
+   "p1_decisions": 53,
+   "p2_decisions": 53,
+   "seed": 24010500
+  },
+  {
+   "decision_rounds": 37,
+   "p1_decisions": 36,
+   "p2_decisions": 32,
+   "seed": 24010501
+  },
+  {
+   "decision_rounds": 44,
+   "p1_decisions": 39,
+   "p2_decisions": 42,
+   "seed": 24010502
+  },
+  {
+   "decision_rounds": 35,
+   "p1_decisions": 31,
+   "p2_decisions": 30,
+   "seed": 24010503
+  },
+  {
+   "decision_rounds": 41,
+   "p1_decisions": 36,
+   "p2_decisions": 36,
+   "seed": 24010504
+  },
+  {
+   "decision_rounds": 50,
+   "p1_decisions": 46,
+   "p2_decisions": 46,
+   "seed": 24010505
+  },
+  {
+   "decision_rounds": 37,
+   "p1_decisions": 32,
+   "p2_decisions": 33,
+   "seed": 24010506
+  },
+  {
+   "decision_rounds": 43,
+   "p1_decisions": 41,
+   "p2_decisions": 39,
+   "seed": 24010507
+  },
+  {
+   "decision_rounds": 39,
+   "p1_decisions": 34,
+   "p2_decisions": 36,
+   "seed": 24010508
+  },
+  {
+   "decision_rounds": 42,
+   "p1_decisions": 37,
+   "p2_decisions": 40,
+   "seed": 24010509
+  },
+  {
+   "decision_rounds": 54,
+   "p1_decisions": 50,
+   "p2_decisions": 49,
+   "seed": 24010600
+  },
+  {
+   "decision_rounds": 60,
+   "p1_decisions": 54,
+   "p2_decisions": 57,
+   "seed": 24010601
+  },
+  {
+   "decision_rounds": 46,
+   "p1_decisions": 43,
+   "p2_decisions": 41,
+   "seed": 24010602
+  },
+  {
+   "decision_rounds": 44,
+   "p1_decisions": 43,
+   "p2_decisions": 39,
+   "seed": 24010603
+  },
+  {
+   "decision_rounds": 83,
+   "p1_decisions": 80,
+   "p2_decisions": 79,
+   "seed": 24010604
+  },
+  {
+   "decision_rounds": 63,
+   "p1_decisions": 58,
+   "p2_decisions": 58,
+   "seed": 24010605
+  },
+  {
+   "decision_rounds": 78,
+   "p1_decisions": 72,
+   "p2_decisions": 73,
+   "seed": 24010606
+  },
+  {
+   "decision_rounds": 60,
+   "p1_decisions": 60,
+   "p2_decisions": 55,
+   "seed": 24010607
+  },
+  {
+   "decision_rounds": 40,
+   "p1_decisions": 35,
+   "p2_decisions": 38,
+   "seed": 24010608
+  },
+  {
+   "decision_rounds": 28,
+   "p1_decisions": 24,
+   "p2_decisions": 24,
+   "seed": 24010609
+  },
+  {
+   "decision_rounds": 50,
+   "p1_decisions": 45,
+   "p2_decisions": 45,
+   "seed": 24010700
+  },
+  {
+   "decision_rounds": 39,
+   "p1_decisions": 35,
+   "p2_decisions": 34,
+   "seed": 24010701
+  },
+  {
+   "decision_rounds": 38,
+   "p1_decisions": 33,
+   "p2_decisions": 33,
+   "seed": 24010702
+  },
+  {
+   "decision_rounds": 32,
+   "p1_decisions": 29,
+   "p2_decisions": 27,
+   "seed": 24010703
+  },
+  {
+   "decision_rounds": 44,
+   "p1_decisions": 42,
+   "p2_decisions": 40,
+   "seed": 24010704
+  },
+  {
+   "decision_rounds": 51,
+   "p1_decisions": 49,
+   "p2_decisions": 46,
+   "seed": 24010705
+  },
+  {
+   "decision_rounds": 30,
+   "p1_decisions": 27,
+   "p2_decisions": 26,
+   "seed": 24010706
+  },
+  {
+   "decision_rounds": 35,
+   "p1_decisions": 30,
+   "p2_decisions": 31,
+   "seed": 24010707
+  },
+  {
+   "decision_rounds": 38,
+   "p1_decisions": 37,
+   "p2_decisions": 33,
+   "seed": 24010708
+  },
+  {
+   "decision_rounds": 69,
+   "p1_decisions": 64,
+   "p2_decisions": 65,
+   "seed": 24010709
+  }
+ ],
+ "provenance": {
+  "bank_schema": "pokezero.phase0.vhprobe-pairs.v1",
+  "bank_sha256": "8f591a744e1225ecf89c26bf3beb4cebd1222121e233a38c7bd1fc3835933558",
+  "bank_source": "/shared/scott-experiment/vhprobe-20260815/shard*.json",
+  "checkpoint": {
+   "bytes": 40083798,
+   "path": "/shared/scott-experiment/v4prod-entfull-15m-20260807084357/run/iteration-2533/transformer-policy.pt",
+   "sha256": "0897676c295a79bac0b24c347b8f6a72e1359b98c37327bc5639fb6229005937"
+  },
+  "engine_search": {
+   "config": {
+    "approximate_sleep_turns": true,
+    "depth": 3,
+    "device": "cuda",
+    "leaf_eval": "model",
+    "max_decision_rounds": 250,
+    "model_priors": true,
+    "search_batch": 16,
+    "search_time_ms": 1000,
+    "sims": 2048,
+    "threads": 1,
+    "worlds": 1
+   },
+   "encoder_tables": {
+    "bytes": 455510,
+    "path": "/shared/scott-experiment/v4prod-entfull-15m-20260807084357/run/iteration-2533/.mcts-eval-artifacts-e8110838b9a036af/encoder_tables.json",
+    "sha256": "08f2e4464036602b26572873b2ae6cd31629b3abb8c2d93250fd126e02a113fa"
+   },
+   "model": {
+    "bytes": 40094400,
+    "path": "/shared/scott-experiment/v4prod-entfull-15m-20260807084357/run/iteration-2533/.mcts-eval-artifacts-e8110838b9a036af/model_ts.pt",
+    "sha256": "8c7cf1fd5e7de89a76256bd48618104179e89e2b3a800ad28bacac828db9d256"
+   }
+  },
+  "raw_shards": [
+   {
+    "name": "shard0.json",
+    "sha256": "c016b984f28516e112f57a928746006d90efe146bf3719f731953080be178d32"
+   },
+   {
+    "name": "shard1.json",
+    "sha256": "a787cc27744a48770b7a563d1aa9458f2830b787206feadf673d7b881ffb4fbd"
+   },
+   {
+    "name": "shard2.json",
+    "sha256": "19cfac8c7acd623e45c9a82d312f37b23dd707816e4e2d5a7ff9b10de7bbfc08"
+   },
+   {
+    "name": "shard3.json",
+    "sha256": "3425973e72553a260ae88864c49ade1be19f02799adf32f63f158894501457b4"
+   },
+   {
+    "name": "shard4.json",
+    "sha256": "013330d84dac9a73f06a1276c0e638f1bbdca2537ac9cb57fa797a86e7e3d498"
+   },
+   {
+    "name": "shard5.json",
+    "sha256": "4a03470ca35579fc37a3209bc43d6206c41495d08bbedfb69ef414f1fbe71301"
+   },
+   {
+    "name": "shard6.json",
+    "sha256": "debd12c298a4056684c0474b61b3af271defdfa9cfdd487fb9a8c0c9ef474e55"
+   },
+   {
+    "name": "shard7.json",
+    "sha256": "341613770c865a95724017c96ff6776c9861c9485c6c8488a9a7c0e218d6802d"
+   }
+  ],
+  "script_sha256": "f8d9a65fd31a03b715712be72f25c3dd289094dd7f2c6a664183d41cab9ca8d9",
+  "source_commit": "8c5217de74990a39299547c294074913f2bd02c8"
+ },
+ "schema": "pokezero.phase1.decision-count.v1",
+ "total_p1_decisions": 3542
+}
