@@ -5,7 +5,10 @@ import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import readline from "node:readline";
-import { snapshotBoundaryRequests } from "./battle_bridge_boundary_requests.mjs";
+import {
+  invalidatedBoundaryState,
+  snapshotBoundaryRequests,
+} from "./battle_bridge_boundary_requests.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -67,6 +70,8 @@ function newBattleState(battleId) {
     battleStream: null,
     streams: null,
     boundaryRequests: {},
+    boundaryGeneration: 0,
+    boundaryRequestGeneration: null,
     readyScheduled: false,
     readyEpoch: 0,
     terminalScheduled: false,
@@ -117,6 +122,7 @@ function recordBoundaryLines(battle, stream, lines) {
     const sideId = request?.side?.id;
     if (sideId === stream) {
       battle.boundaryRequests[stream] = request;
+      battle.boundaryRequestGeneration = battle.boundaryGeneration;
     }
   }
   if (battle.boundaryRequests.p1 && battle.boundaryRequests.p2) {
@@ -126,6 +132,21 @@ function recordBoundaryLines(battle, stream, lines) {
     // non-boundary: a later actionable request must still schedule ready.
     if (requested.length) scheduleReady(battle, requested);
   }
+}
+
+function invalidateBoundaryRequests(battle, receivedAt = null) {
+  const next = invalidatedBoundaryState(battle.boundaryGeneration);
+  battle.boundaryRequests = next.boundaryRequests;
+  battle.boundaryGeneration = next.boundaryGeneration;
+  battle.boundaryRequestGeneration = next.boundaryRequestGeneration;
+  battle.readyScheduled = false;
+  battle.readyEpoch += 1;
+  battle.terminalScheduled = false;
+  if (receivedAt != null) battle.tRecv = receivedAt;
+}
+
+function hasBoundaryRequests(requests) {
+  return requests && typeof requests === "object" && Object.keys(requests).length > 0;
 }
 
 function nodeProcMs(battle) {
@@ -248,10 +269,15 @@ function snapshotBattle(command) {
   // request API has not materialized it yet. A nonempty direct result replaces
   // the cache; an empty one must not erase that boundary before a fresh shell
   // restores the snapshot.
+  const simulatorRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
   battle.boundaryRequests = snapshotBoundaryRequests(
     battle.boundaryRequests,
-    boundaryRequestsFromBattle(battle.battleStream.battle)
+    battle.boundaryRequestGeneration === battle.boundaryGeneration,
+    simulatorRequests
   );
+  battle.boundaryRequestGeneration = hasBoundaryRequests(battle.boundaryRequests)
+    ? battle.boundaryGeneration
+    : null;
   emit({
     type: "snapshot",
     battleId: battle.battleId,
@@ -311,6 +337,10 @@ function restoreSerializedBattle(battle, snapshot, { cloneSnapshot = false } = {
         ? structuredClone(snapshot.boundaryRequests)
         : snapshot.boundaryRequests
       : {};
+  battle.boundaryGeneration += 1;
+  battle.boundaryRequestGeneration = hasBoundaryRequests(battle.boundaryRequests)
+    ? battle.boundaryGeneration
+    : null;
   battle.readyScheduled = false;
   battle.readyEpoch += 1;
   battle.terminalScheduled = Boolean(snapshot.terminalScheduled);
@@ -415,7 +445,11 @@ function materializeBattle(command) {
   battle.battleStream.battle = State.deserializeBattle(snapshot);
   battle.battleStream.battle.restart(send);
   restoreDeferredOpponentActions(battle.battleStream.battle, publicState);
+  battle.boundaryGeneration += 1;
   battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
+  battle.boundaryRequestGeneration = hasBoundaryRequests(battle.boundaryRequests)
+    ? battle.boundaryGeneration
+    : null;
   battle.readyScheduled = false;
   battle.readyEpoch += 1;
   battle.terminalScheduled = false;
@@ -451,7 +485,11 @@ function materializeScenarioBattle(command) {
   const send = battle.battleStream.battle.send;
   battle.battleStream.battle = State.deserializeBattle(snapshot);
   battle.battleStream.battle.restart(send);
+  battle.boundaryGeneration += 1;
   battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
+  battle.boundaryRequestGeneration = hasBoundaryRequests(battle.boundaryRequests)
+    ? battle.boundaryGeneration
+    : null;
   battle.readyScheduled = false;
   battle.readyEpoch += 1;
   battle.terminalScheduled = false;
@@ -1628,6 +1666,7 @@ async function sendChoice(command) {
   if (typeof choice !== "string" || !choice.trim()) {
     throw new Error("Choice must be a non-empty string.");
   }
+  invalidateBoundaryRequests(battle);
   await battle.streams[player].write(choice);
   emit({ type: "choice_ack", battleId: battle.battleId, player, choice });
 }
@@ -1636,11 +1675,7 @@ async function submitChoices(battle, choices, receivedAt) {
   if (!choices || typeof choices !== "object") {
     throw new Error("Choices must be an object keyed by player.");
   }
-  battle.boundaryRequests = {};
-  battle.readyScheduled = false;
-  battle.readyEpoch += 1;
-  battle.terminalScheduled = false;
-  battle.tRecv = receivedAt;
+  invalidateBoundaryRequests(battle, receivedAt);
   for (const player of ["p1", "p2"]) {
     if (!Object.prototype.hasOwnProperty.call(choices, player)) continue;
     const choice = choices[player];
