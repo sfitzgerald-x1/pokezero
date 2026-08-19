@@ -292,6 +292,47 @@ function snapshotBattle(command) {
   });
 }
 
+async function snapshotActionableBoundary(command) {
+  const startedAt = process.hrtime.bigint();
+  const battle = requireBattle(command);
+  if (!battle.battleStream?.battle) {
+    throw new Error(`No simulator state for battleId ${battle.battleId}.`);
+  }
+  // `ready` is delivered from asynchronous protocol streams. Let their final
+  // turn settle, then prove the exact bytes sent to a fresh shell expose a
+  // boundary. Never manufacture a request from the stream/Python cache.
+  await new Promise(resolve => setImmediate(resolve));
+  const serialized = jsonSnapshotClone(State.serializeBattle(battle.battleStream.battle));
+  if (!serialized) throw new Error("Could not serialize the current Battle.");
+  const probe = State.deserializeBattle(serialized);
+  probe.restart(() => {});
+  const boundaryRequests = boundaryRequestsFromBattle(probe);
+  const requested = ["p1", "p2"].filter(player => isActionableRequest(boundaryRequests[player]));
+  if (!requested.length) {
+    emit({
+      type: "snapshot_actionable_boundary",
+      battleId: battle.battleId,
+      available: false,
+      requestStateType: typeof probe.requestState,
+      terminalScheduled: battle.terminalScheduled,
+      nodeProcMs: elapsedNodeProcMs(startedAt),
+    });
+    return;
+  }
+  emit({
+    type: "snapshot_actionable_boundary",
+    battleId: battle.battleId,
+    available: true,
+    requested,
+    snapshot: {
+      battle: serialized,
+      boundaryRequests,
+      terminalScheduled: battle.terminalScheduled,
+    },
+    nodeProcMs: elapsedNodeProcMs(startedAt),
+  });
+}
+
 function snapshotSearchBattle(command) {
   const startedAt = process.hrtime.bigint();
   const battle = requireBattle(command);
@@ -1724,6 +1765,9 @@ async function handleCommand(command) {
       break;
     case "snapshot":
       snapshotBattle(command);
+      break;
+    case "snapshot_actionable_boundary":
+      await snapshotActionableBoundary(command);
       break;
     case "snapshot_search":
       snapshotSearchBattle(command);

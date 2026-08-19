@@ -893,6 +893,34 @@ class LocalShowdownEnv:
                 self._request_history[player].append(_json_clone_mapping(request))
         return self._local_snapshot(bridge_snapshot=_json_clone_mapping(snapshot))
 
+    def snapshot_actionable_boundary(self) -> LocalShowdownSnapshot:
+        """Snapshot only a direct, actionable request boundary from the current Battle."""
+
+        if self._battle_token is None:
+            raise LocalShowdownError("Cannot snapshot before reset.")
+        self._sync_incremental_state()
+        event = self._bridge_request_event(
+            {"type": "snapshot_actionable_boundary", "battleId": self._battle_token},
+            "snapshot_actionable_boundary",
+        )
+        # The bridge's bounded settling turn may have delivered protocol stream
+        # chunks while the command was in flight. Fold them before freezing the
+        # parser/belief side of this exact simulator boundary.
+        self._sync_incremental_state()
+        if event.get("available") is not True:
+            raise LocalShowdownError(
+                "Bridge could not bind an actionable request to the current simulator state."
+            )
+        snapshot = event.get("snapshot")
+        requested = event.get("requested")
+        if not isinstance(snapshot, Mapping) or not isinstance(requested, list):
+            raise LocalShowdownError(f"Bridge emitted malformed actionable snapshot: {event!r}")
+        direct_requests = _json_clone_requests(snapshot.get("boundaryRequests", {}))
+        if requested_players_from_requests(direct_requests) != tuple(requested):
+            raise LocalShowdownError("Bridge actionable snapshot request mapping disagrees with its player list.")
+        self._latest_requests = direct_requests
+        return self._local_snapshot(bridge_snapshot=_json_clone_mapping(snapshot))
+
     def snapshot_for_search(self) -> LocalShowdownSnapshot:
         """Store a sampled search-world snapshot inside the bridge and return only its handle.
 
