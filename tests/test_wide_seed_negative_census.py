@@ -23,12 +23,14 @@ weakens a guard that exists to notice growth.
 WHAT IS PINNED.
 
   1. **The inventory is DERIVED and it is EXACTLY covered.** `scripts/c153_wide_negative_census.py`
-     builds the inventory from source by AST -- the 40 `EngineWorldUnsupported` reasons,
+     builds C153's historical inventory from source by AST -- the 40
+     `EngineWorldUnsupported` reasons present when the measurement ran,
      the 19 `classify_divergence` classes, the 8 `UnmappableChoice` reasons -- and this
      module re-runs that derivation and asserts the committed artifact's verdict map has
-     exactly those keys, in both directions. A reason added to `engine_world.py` therefore
-     joins the inventory and reddens this module until it is measured, which is the
-     failure mode §3.5 has had seven times.
+     exactly those keys, in both directions. A reason that predates C153 therefore joins
+     the inventory and reddens this module until it is measured. A later reason must instead
+     be named in the artifact's post-C153 boundary; it cannot be laundered into a historical
+     zero.
 
   2. **Every entry has an emittable counter key.** An inventory row whose key the harness
      cannot emit is not a negative that survived a census; it is a check that asserts
@@ -248,13 +250,33 @@ class TheInventoryIsDerivedAndExactlyCoveredTests(unittest.TestCase):
         self.assertEqual(
             _document()["taxonomy_sizes"],
             {
-                "world_unsupported_reasons": len(CENSUS_SCRIPT.world_unsupported_reasons()),
+                "world_unsupported_reasons": len(
+                    CENSUS_SCRIPT.world_unsupported_reasons_measured_by_c153()
+                ),
                 "divergence_classes": len(CENSUS_SCRIPT.divergence_classes()),
                 "unmappable_choice_reasons": len(CENSUS_SCRIPT.unmappable_choice_reasons()),
             },
-            "the committed census was taken against a different taxonomy than source "
-            "carries today",
+            "the committed census taxonomy no longer agrees with the source taxonomy "
+            "at the time its measurement was taken",
         )
+
+    def test_post_census_refusals_are_named_not_mislabeled_as_historical_zeros(self) -> None:
+        document = _document()
+        recorded = set(document["post_census_unmeasured_world_unsupported_reasons"])
+        self.assertEqual(recorded, CENSUS_SCRIPT.POST_CENSUS_UNMEASURED_WORLD_UNSUPPORTED)
+        self.assertTrue(recorded <= CENSUS_SCRIPT.world_unsupported_reasons())
+        self.assertTrue(
+            all(
+                f"skip:world_unsupported:{reason}" not in document["verdicts"]
+                for reason in recorded
+            ),
+            "a post-C153 refusal was relabeled as a historical census verdict",
+        )
+        ledger = (REPO / "reports/c138_known_gaps_ledger.md").read_text(encoding="utf-8")
+        for reason in recorded:
+            with self.subTest(reason=reason):
+                self.assertIn(reason, ledger)
+                self.assertIn("NEW / UNMEASURED AFTER C153", ledger)
 
     def test_section_3_5s_inventory_is_fifty_and_forty_six_are_window_scoped(self) -> None:
         # RE-DERIVED, and it corrected the brief this work started from. §3.5's four
