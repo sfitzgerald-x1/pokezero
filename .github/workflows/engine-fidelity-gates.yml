@@ -301,6 +301,8 @@ jobs:
             scripts/foulplay_paired_eval.py
             scripts/foulplay_budget_calibration.py
             scripts/foulplay_power_report.py
+            scripts/battle_bridge.mjs
+            scripts/battle_bridge_boundary_requests.mjs
             scripts/hc_depth_grid.py
             scripts/mcts_acceptance_h2h.py
             # The canonical uniform-leaf writer consumes externally materialised
@@ -330,6 +332,7 @@ jobs:
             # normal raw arm.  Exercise both whenever either side moves.
             tests/test_foulplay_paired_eval.py
             tests/test_foulplay_budget_calibration.py
+            tests/test_battle_bridge_boundary_requests.py
             # The schema-default gate and everything it depends on. 332 of its 390 rows live
             # outside src/ (288 tests/, 43 scripts/, 1 docs/).
             #
@@ -2004,10 +2007,11 @@ jobs:
             tests.test_rollout_leaf_witness_mutation_battery \
             tests.test_price_uniform_rollout_leaves \
             tests.test_foulplay_paired_eval \
-            tests.test_foulplay_budget_calibration -v 2>&1 \
+            tests.test_foulplay_budget_calibration \
+            tests.test_battle_bridge_boundary_requests -v 2>&1 \
             | tee /tmp/rollout-leaf-arbiter.log
-          if ! grep -qE 'Ran 310 tests' /tmp/rollout-leaf-arbiter.log; then
-            echo "::error::the arbiter and calibration suite did not run all 310 tests"
+          if ! grep -qE 'Ran 314 tests' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the arbiter and calibration suite did not run all 314 tests"
             exit 1
           fi
           rollout_leaf_skip_status=0
