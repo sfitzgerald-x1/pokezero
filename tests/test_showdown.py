@@ -1512,6 +1512,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
     def test_baton_pass_carries_public_volatiles_and_marks_direct_state_gaps(self) -> None:
         replay = parse_showdown_replay(
             [
+                "|switch|p2a: Charizard|Charizard, L78|100/100",
                 "|-start|p2a: Charizard|move: Ingrain",
                 "|-start|p2a: Charizard|Substitute",
                 "|move|p2a: Charizard|Baton Pass",
@@ -1520,12 +1521,13 @@ class Phase2DynamicStateTest(unittest.TestCase):
             battle_id="battle-gen3randombattle-1",
         )
 
-        # Both effects copy in Gen 3. Substitute stays fail-closed: the passed
-        # volatile carries the PASSER's remaining sub HP, which the constructor
-        # cannot derive -- modelling it as recipient.maxhp//4 would be a
-        # different Pokemon's number (see _DIRECT_MATERIALIZATION_VOLATILES).
+        # Both effects copy in Gen 3. Substitute retains its creator's identity:
+        # the recipient does not mint a new HP pool, and engine-world can bind
+        # the carried state to the sampled Charizard rather than Snorlax.
         self.assertEqual(replay.volatiles["p2"], ("ingrain", "substitute"))
-        self.assertEqual(replay.direct_materialization_blockers["p2"], ("baton-pass:substitute",))
+        self.assertEqual(replay.direct_materialization_blockers["p2"], ())
+        self.assertEqual(replay.substitute_health_state["p2"], "full")
+        self.assertEqual(replay.substitute_origin_species["p2"], "charizard")
 
         cleared = parse_showdown_replay(
             [
@@ -1538,6 +1540,23 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(cleared.volatiles["p2"], ())
         self.assertEqual(cleared.direct_materialization_blockers["p2"], ())
+
+        # A truncated prefix cannot name the original creator, so the carried
+        # Substitute correctly blocks direct construction. Once that effect
+        # breaks, however, its unknown creator cannot poison later state.
+        expired = parse_showdown_replay(
+            [
+                "|-start|p2a: Charizard|Substitute",
+                "|move|p2a: Charizard|Baton Pass",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100",
+                "|-end|p2a: Snorlax|Substitute",
+            ],
+            battle_id="battle-gen3randombattle-1",
+        )
+        self.assertEqual(
+            expired.direct_materialization_blockers["p2"], (),
+        )
+        self.assertEqual(expired.substitute_origin_species["p2"], None)
 
     def test_psych_up_copies_opponent_boosts(self) -> None:
         # -copyboost: the self mon (p2) copies the opponent's (p1) boost stages.

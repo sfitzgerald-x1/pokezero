@@ -1099,6 +1099,7 @@ function applyPublicState(snapshot, publicState) {
         leechSeedSourceSides,
         publicSide,
         Boolean(row.active),
+        serializedSide.pokemon,
       );
       if (row.currentItem !== undefined) {
         applyKnownCurrentItem(serializedSide.pokemon[index], row.currentItem, sideId, row.species);
@@ -1424,11 +1425,30 @@ function normalizedBoosts(boosts) {
 // it public state. A wrong materialized Substitute is a silently wrong searched world, which
 // is strictly worse than a refusal. The refusal is therefore kept, but it is now NAMED so it
 // lands in a counted bucket instead of the `materializer_error` catch-all.
-function publicSubstituteHp(pokemon, publicSide, sideId) {
+function publicSubstituteHp(pokemon, publicSide, sideId, sidePokemon) {
   const rawState = publicSide?.substituteHealthState;
   const state = typeof rawState === "string" ? normalizeId(rawState) : "";
   const rawDepletion = publicSide?.substituteDepletion;
-  const initial = Math.floor(pokemon.maxhp / 4);
+  // A normal Substitute belongs to the active mon. A Gen-3 Baton-Passed
+  // Substitute keeps the original creator's HP pool, so use the uniquely
+  // matching sampled team member when public provenance names one.
+  const rawOrigin = publicSide?.substituteOriginSpecies;
+  let source = pokemon;
+  if (rawOrigin !== null && rawOrigin !== undefined) {
+    if (typeof rawOrigin !== "string" || !rawOrigin.trim()) {
+      throw new Error(
+        `Materialize found invalid Substitute origin for ${sideId}: ${rawOrigin}.`,
+      );
+    }
+    const matching = sidePokemon.filter(candidate => sameSpecies(candidate, rawOrigin));
+    if (matching.length !== 1) {
+      throw new Error(
+        `Materialize cannot uniquely match Substitute origin ${rawOrigin} for ${sideId}.`,
+      );
+    }
+    source = matching[0];
+  }
+  const initial = Math.floor(source.maxhp / 4);
   // The Shedinja clause makes `floor(maxhp / 4) === 0` unreachable for a Substitute that
   // really started (`onTryHit` refuses at `maxhp === 1`), so this is a contradiction between
   // the sampled world and the public record, not a game state.
@@ -1479,7 +1499,9 @@ function publicSubstituteHp(pokemon, publicSide, sideId) {
   );
 }
 
-function applyPublicVolatiles(pokemon, rawVolatiles, sideId, leechSeedSourceSides, publicSide, isActive) {
+function applyPublicVolatiles(
+  pokemon, rawVolatiles, sideId, leechSeedSourceSides, publicSide, isActive, sidePokemon,
+) {
   if (!Array.isArray(rawVolatiles)) {
     throw new Error(`Materialize received invalid volatile effects for ${sideId}.`);
   }
@@ -1521,7 +1543,7 @@ function applyPublicVolatiles(pokemon, rawVolatiles, sideId, leechSeedSourceSide
         id: volatile,
         effectOrder: 0,
         target: `[Pokemon:${sideId}a]`,
-        hp: publicSubstituteHp(pokemon, publicSide, sideId),
+        hp: publicSubstituteHp(pokemon, publicSide, sideId, sidePokemon),
       };
       continue;
     }
@@ -1540,10 +1562,9 @@ function applyPublicVolatiles(pokemon, rawVolatiles, sideId, leechSeedSourceSide
   }
   // The REVERSE direction, on the active slot only: public Substitute provenance with no
   // Substitute volatile to hang it on. Defence in depth rather than a live path -- a
-  // Baton-Passed Substitute already trips the producer's `baton-pass:substitute` blocker at
-  // the top of this file's side loop, and the producer zeroes the provenance on every switch
-  // (`showdown.py:2588`). Without this the payload's two halves could disagree silently, which
-  // is the shape the Python sibling's own `else` branch exists to catch.
+  // Baton-Passed Substitute preserves its explicit source provenance; ordinary switch-out and
+  // faint clear it. Without this the payload's two halves could disagree silently, which is the
+  // shape the Python sibling's own `else` branch exists to catch.
   if (isActive && !seen.has("substitute")) {
     const rawState = publicSide?.substituteHealthState;
     const state = typeof rawState === "string" ? normalizeId(rawState) : "";
@@ -1558,6 +1579,13 @@ function applyPublicVolatiles(pokemon, rawVolatiles, sideId, leechSeedSourceSide
       throw new Error(
         `Materialize found contradictory Substitute health provenance for ${sideId}: ` +
         `depletion ${rawDepletion} with no Substitute volatile.`,
+      );
+    }
+    const rawOrigin = publicSide?.substituteOriginSpecies;
+    if (rawOrigin !== null && rawOrigin !== undefined) {
+      throw new Error(
+        `Materialize found contradictory Substitute health provenance for ${sideId}: ` +
+        `origin ${rawOrigin} with no Substitute volatile.`,
       );
     }
   }

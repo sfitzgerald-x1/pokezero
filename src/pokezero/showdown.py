@@ -1620,6 +1620,11 @@ class ShowdownReplayState:
     # This stays distinct from volatile presence because an active Substitute
     # can exist while its remaining HP is not public.
     substitute_health_state: Mapping[str, str] = field(default_factory=dict)
+    # Normalized species id of the Pokemon that CREATED the currently active
+    # Substitute. This is the active mon for an ordinary Substitute, but it
+    # remains the original passer through one or more Gen 3 Baton Passes: the
+    # effect's HP pool is ``floor(passer.maxhp / 4)``, never the recipient's.
+    substitute_origin_species: Mapping[str, str | None] = field(default_factory=dict)
     # Cumulative exact depletion since creation when public fixed-damage
     # chronology derives it. This invariant is portable across sampled max HP.
     substitute_depletion: Mapping[str, int | None] = field(default_factory=dict)
@@ -1963,6 +1968,7 @@ class _ReplayParser:
         self.boosts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
         self.volatiles: dict[str, set[str]] = {"p1": set(), "p2": set()}
         self.substitute_health_state: dict[str, str] = {"p1": "absent", "p2": "absent"}
+        self.substitute_origin_species: dict[str, str | None] = {"p1": None, "p2": None}
         self.substitute_depletion: dict[str, int | None] = {"p1": None, "p2": None}
         self.substitute_min_depletion: dict[str, int] = {"p1": 0, "p2": 0}
         self.direct_materialization_blockers: dict[str, set[str]] = {"p1": set(), "p2": set()}
@@ -2093,6 +2099,17 @@ class _ReplayParser:
         }
         parser.substitute_health_state = {
             slot: str(snapshot.substitute_health_state.get(slot, "absent"))
+            for slot in ("p1", "p2")
+        }
+        snapshot_substitute_origin = getattr(snapshot, "substitute_origin_species", {})
+        parser.substitute_origin_species = {
+            slot: (
+                str(snapshot_substitute_origin.get(slot))
+                if isinstance(snapshot_substitute_origin, Mapping)
+                and isinstance(snapshot_substitute_origin.get(slot), str)
+                and snapshot_substitute_origin.get(slot)
+                else None
+            )
             for slot in ("p1", "p2")
         }
         parser.substitute_min_depletion = {
@@ -2566,6 +2583,7 @@ class _ReplayParser:
             # active Pokemon, even though its side prefix is recognizable.
             pokemon = _pokemon_from_public_line(parts) if replacement_is_canonical else None
             if pokemon is not None:
+                outgoing = self.public_active.get(pokemon.showdown_slot)
                 self._refund_rest_sleep_on_switch(pokemon)
                 self.public_active[pokemon.showdown_slot] = pokemon
                 _record_public_reveal(self.public_revealed, pokemon)
@@ -2624,13 +2642,28 @@ class _ReplayParser:
                     self.volatiles[pokemon.showdown_slot] = set()
                     self.direct_materialization_blockers[pokemon.showdown_slot].clear()
                     self.leech_seed_source_sides.pop(pokemon.showdown_slot, None)
-                # The existing Baton-Pass path deliberately declines to
-                # materialize a passed Substitute: its HP belongs to the
-                # passer and cannot be reconstructed for the recipient. Keep
-                # this provenance surface aligned with that fail-closed world.
-                self.substitute_health_state[pokemon.showdown_slot] = "absent"
-                self.substitute_depletion[pokemon.showdown_slot] = None
-                self.substitute_min_depletion[pokemon.showdown_slot] = 0
+                passed_substitute = is_baton_pass and "substitute" in transferred_volatiles
+                if passed_substitute:
+                    # Substitute's HP belongs to the Pokemon that first created it, not the
+                    # recipient and not necessarily the immediate passer (a second Baton Pass
+                    # preserves the original pool). Preserve its public depletion provenance
+                    # and name that source explicitly for engine-world reconstruction.
+                    origin = self.substitute_origin_species.get(pokemon.showdown_slot)
+                    if origin is None and outgoing is not None:
+                        candidate = _normalize_identifier(outgoing.species or "")
+                        origin = candidate or None
+                    self.substitute_origin_species[pokemon.showdown_slot] = origin
+                    if origin is None:
+                        self.direct_materialization_blockers[pokemon.showdown_slot].add(
+                            "baton-pass:substitute-origin-unknown"
+                        )
+                else:
+                    # Volatile/provenance state belongs to the Pokemon that left, except for
+                    # the Gen-3 Baton-Pass subset handled above.
+                    self.substitute_health_state[pokemon.showdown_slot] = "absent"
+                    self.substitute_origin_species[pokemon.showdown_slot] = None
+                    self.substitute_depletion[pokemon.showdown_slot] = None
+                    self.substitute_min_depletion[pokemon.showdown_slot] = 0
                 # Gen 3 resets the toxic counter when a mon leaves the field.
                 self.toxic_stage[pokemon.showdown_slot] = 0
                 self.toxic_stage_known[pokemon.showdown_slot] = True
@@ -3082,6 +3115,10 @@ class _ReplayParser:
             # fainted mon's Substitute would construct a phantom active effect.
             self.volatiles[slot].discard("substitute")
             self.substitute_health_state[slot] = "absent"
+            self.substitute_origin_species[slot] = None
+            self.direct_materialization_blockers[slot].discard(
+                "baton-pass:substitute-origin-unknown"
+            )
             self.substitute_depletion[slot] = None
             self.substitute_min_depletion[slot] = 0
             return
@@ -3089,6 +3126,13 @@ class _ReplayParser:
             return
         if event_type == "-start":
             self.substitute_health_state[slot] = "full"
+            active = self.public_active.get(slot)
+            origin = _normalize_identifier(active.species or "") if active is not None else ""
+            self.substitute_origin_species[slot] = origin or None
+            # A newly-created Substitute has no relation to a prior incomplete Baton Pass.
+            self.direct_materialization_blockers[slot].discard(
+                "baton-pass:substitute-origin-unknown"
+            )
             self.substitute_depletion[slot] = 0
             # A NEW Substitute: the old one's absorbed damage describes an effect that no
             # longer exists, so carrying that bound forward would constrain the wrong one.
@@ -3103,6 +3147,10 @@ class _ReplayParser:
             return
         if event_type == "-end":
             self.substitute_health_state[slot] = "broken"
+            self.substitute_origin_species[slot] = None
+            self.direct_materialization_blockers[slot].discard(
+                "baton-pass:substitute-origin-unknown"
+            )
             self.substitute_depletion[slot] = None
             self.substitute_min_depletion[slot] = 0
             return
@@ -3928,6 +3976,7 @@ class _ReplayParser:
             boosts={slot: dict(sorted(stages.items())) for slot, stages in self.boosts.items()},
             volatiles={slot: tuple(sorted(names)) for slot, names in self.volatiles.items()},
             substitute_health_state=dict(self.substitute_health_state),
+            substitute_origin_species=dict(self.substitute_origin_species),
             substitute_depletion=dict(self.substitute_depletion),
             substitute_min_depletion=dict(self.substitute_min_depletion),
             direct_materialization_blockers={
@@ -4957,17 +5006,13 @@ _BATON_PASS_TRANSFERRED_VOLATILES = frozenset({
 # engine faints on PERISH1, so a mon publicly showing perishN acts N more times
 # in both. confusion and partial trap ride their existing named approximations.
 #
-# SUBSTITUTE IS DELIBERATELY ABSENT. It transfers in gen 3 -- copyVolatileFrom
-# shallow-clones the volatile including its ``hp`` field -- but that HP is
-# ``floor(PASSER.maxhp/4)`` minus everything it has already absorbed, and the
-# constructor can only derive ``recipient.maxhp // 4``. That is not an
-# approximation of the true value, it is a different Pokemon's number: wrong in
-# both directions (Ninjask->Snorlax models 86 where reality is <=56), and for a
-# Shedinja recipient it computes 0, which makes the engine absorb one hit of
-# ARBITRARY size for zero damage. Fail closed instead.
+# Substitute transfers in Gen 3 with the original creator's HP pool. The parser
+# therefore preserves ``substitute_origin_species`` with its public depletion
+# provenance; engine_world reconstructs from that sampled passer rather than
+# the recipient. A missing or unmatched origin remains a fail-closed blocker.
 _DIRECT_MATERIALIZATION_VOLATILES = frozenset({
     "focusenergy", "ingrain", "leechseed", "mudsport", "watersport",
-    "confusion", "partiallytrapped",
+    "confusion", "partiallytrapped", "substitute",
     "perish1", "perish2", "perish3",
 })
 

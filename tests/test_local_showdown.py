@@ -155,6 +155,23 @@ def _with_substitute_provenance(
     )
 
 
+def _with_substitute_origin(materialization: Any, *, player: str, origin: str | None) -> Any:
+    """Rewrite only the creator identity, retaining all existing public state."""
+
+    replay = materialization.replay
+    other = "p2" if player == "p1" else "p1"
+    return replace(
+        materialization,
+        replay=replace(
+            replay,
+            substitute_origin_species={
+                player: origin,
+                other: replay.substitute_origin_species.get(other),
+            },
+        ),
+    )
+
+
 def _active_item_state_from_snapshot(snapshot: LocalShowdownSnapshot, player: str) -> tuple[str, str]:
     battle = snapshot.bridge_snapshot["battle"]
     side_index = 0 if player == "p1" else 1
@@ -2329,10 +2346,9 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         guard-level mutation proved it: deleting the reverse check left the battery fully
         green, so without this test that guard was decoration.
 
-        Defence in depth rather than a live path -- a Baton-Passed Substitute already trips
-        the producer's `baton-pass:substitute` blocker, and the producer zeroes this
-        provenance on every switch. Guarded anyway, because the two halves of the payload
-        have different producers and nothing else makes them agree.
+        Defence in depth rather than a live path -- the producer clears health/origin
+        provenance whenever the carried Substitute ends. Guarded anyway, because the two
+        halves of the payload have different producers and nothing else makes them agree.
         """
 
         config = integration_config()
@@ -2368,6 +2384,24 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                     self.assertEqual(
                         category, "substitute_health_provenance_contradiction"
                     )
+
+            stale_origin = _with_substitute_origin(
+                _without_substitute_volatile(
+                    _with_substitute_provenance(base, player="p1", state="absent"), player="p1"
+                ),
+                player="p1",
+                origin="Smeargle",
+            )
+            self.assertNotIn("substitute", stale_origin.replay.volatiles["p1"])
+            with LocalShowdownEnv(config) as search_env:
+                with self.assertRaises(LocalShowdownError) as caught:
+                    search_env.materialize_public_world(
+                        state=stale_origin, start_override=start_override, seed=41
+                    )
+            self.assertEqual(
+                root_puct_direct_materialization_rejection_category(caught.exception),
+                "substitute_health_provenance_contradiction",
+            )
 
     def test_public_materialization_restores_a_really_depleted_substitute(self) -> None:
         """`exact` from a REAL public chronology, not a rewritten provenance triple.
@@ -2857,7 +2891,7 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
         self.assertEqual(protocol.count("|upkeep"), 1)
         self.assertEqual(conditioned_protocol.count("|upkeep"), 1)
 
-    def test_public_materialization_fails_closed_for_baton_passed_substitute(self) -> None:
+    def test_public_materialization_reconstructs_baton_passed_substitute_from_its_creator(self) -> None:
         config = integration_config()
         assert config is not None
         start_override = BattleStartOverride(
@@ -2888,16 +2922,13 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             materialization = source.public_materialization_state("p1")
 
             self.assertIn("substitute", materialization.replay.volatiles["p1"])
-            self.assertEqual(
-                materialization.replay.direct_materialization_blockers["p1"],
-                ("baton-pass:substitute",),
+            self.assertEqual(materialization.replay.direct_materialization_blockers["p1"], ())
+            self.assertEqual(materialization.replay.substitute_origin_species["p1"], "smeargle")
+            search_env.materialize_public_world(
+                state=materialization,
+                start_override=start_override,
+                seed=41,
             )
-            with self.assertRaisesRegex(LocalShowdownError, "baton-pass:substitute"):
-                search_env.materialize_public_world(
-                    state=materialization,
-                    start_override=start_override,
-                    seed=41,
-                )
 
     def test_public_materialization_fails_closed_when_actor_pp_history_is_unavailable(self) -> None:
         config = integration_config()

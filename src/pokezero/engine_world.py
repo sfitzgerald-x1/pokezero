@@ -1425,7 +1425,33 @@ def _build_side_spec(
         # Only canonical ``unknown`` provenance is a named public-information
         # limit. Validate the state/value PAIR before construction or limit
         # accounting so a malformed companion cannot hide behind a valid name.
-        initial_substitute_health = party[active_index].maxhp // 4
+        # A normal Substitute belongs to the active mon. Gen 3 Baton Pass
+        # transfers its *existing* HP pool, however, so a producer that names
+        # ``substituteOriginSpecies`` must be reconstructed from the matching
+        # sampled passer. Never replace a malformed/unmatched origin with the
+        # recipient: that would silently model a different HP pool.
+        origin_species = side_payload.get("substituteOriginSpecies")
+        if origin_species is None:
+            origin_index = active_index
+        elif not isinstance(origin_species, str) or not origin_species.strip():
+            raise EngineWorldUnsupported(
+                "substitute_origin_unknown",
+                f"side {slot!r} has an invalid Substitute origin {origin_species!r}",
+            )
+        else:
+            normalized_origin = normalize_id(origin_species)
+            matches = [
+                index for index, species in enumerate(species_order)
+                if species == normalized_origin
+            ]
+            if len(matches) != 1:
+                raise EngineWorldUnsupported(
+                    "substitute_origin_unknown",
+                    f"side {slot!r} Substitute origin {origin_species!r} does not name exactly "
+                    "one sampled party member",
+                )
+            origin_index = matches[0]
+        initial_substitute_health = party[origin_index].maxhp // 4
         if substitute_health_state in {"full", "unknown"} and not (
             raw_substitute_depletion is None
             or (
@@ -1584,6 +1610,12 @@ def _build_side_spec(
                 f"{raw_substitute_health_state!r}",
             )
     else:
+        if side_payload.get("substituteOriginSpecies") is not None:
+            raise EngineWorldUnsupported(
+                "substitute_health_provenance_contradiction",
+                f"side {slot!r} has no Substitute volatile but carries origin "
+                f"{side_payload.get('substituteOriginSpecies')!r}",
+            )
         if raw_substitute_depletion is not None:
             raise EngineWorldUnsupported(
                 "substitute_health_provenance_contradiction",
