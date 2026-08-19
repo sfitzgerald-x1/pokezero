@@ -299,17 +299,21 @@ async function snapshotActionableBoundary(command) {
     throw new Error(`No simulator state for battleId ${battle.battleId}.`);
   }
   // `ready` is delivered from asynchronous protocol streams. Let their final
-  // turn settle, then bind the serialized world only to requests read directly
-  // from that same current Battle. Never manufacture a boundary from the cache.
+  // turn settle, then prove the exact bytes sent to a fresh shell expose a
+  // boundary. Never manufacture a request from the stream/Python cache.
   await new Promise(resolve => setImmediate(resolve));
-  const boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
+  const serialized = jsonSnapshotClone(State.serializeBattle(battle.battleStream.battle));
+  if (!serialized) throw new Error("Could not serialize the current Battle.");
+  const probe = State.deserializeBattle(serialized);
+  probe.restart(() => {});
+  const boundaryRequests = boundaryRequestsFromBattle(probe);
   const requested = ["p1", "p2"].filter(player => isActionableRequest(boundaryRequests[player]));
   if (!requested.length) {
     emit({
       type: "snapshot_actionable_boundary",
       battleId: battle.battleId,
       available: false,
-      requestStateType: typeof battle.battleStream.battle.requestState,
+      requestStateType: typeof probe.requestState,
       terminalScheduled: battle.terminalScheduled,
       nodeProcMs: elapsedNodeProcMs(startedAt),
     });
@@ -321,7 +325,7 @@ async function snapshotActionableBoundary(command) {
     available: true,
     requested,
     snapshot: {
-      battle: State.serializeBattle(battle.battleStream.battle),
+      battle: serialized,
       boundaryRequests,
       terminalScheduled: battle.terminalScheduled,
     },
