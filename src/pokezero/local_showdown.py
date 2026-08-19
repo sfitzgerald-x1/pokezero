@@ -2343,6 +2343,7 @@ def _public_materialization_payload(
             # carries world-portable depletion; other surviving hits remain
             # explicitly unknown so engine_world declines them.
             "substituteHealthState": replay.substitute_health_state.get(player, "absent"),
+            "substituteOriginSpecies": replay.substitute_origin_species.get(player),
             "substituteDepletion": replay.substitute_depletion.get(player),
             "substituteMinDepletion": replay.substitute_min_depletion.get(player, 0),
             "materializationBlockers": sorted(blockers),

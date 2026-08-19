@@ -562,7 +562,7 @@ saying they are still "open" would be false.
    `NARROW_FORECLOSURE` classification itself. No pin carries any of them.
 3. **Three rows are foreclosed only over §4's own population** — **R1, R23, R24**, classified
    `RANDBATS_POPULATION` in the artifact. So "26 UNREACHABLE" must be read against §4's stated
-   scope at `reports/c138_known_gaps_ledger.md:589`, *"cannot be reached in gen3 randbats"*,
+   scope at `reports/c138_known_gaps_ledger.md:601`, *"cannot be reached in gen3 randbats"*,
    resolved here by a unique anchor. R23's counter fires today on this repo's own scenario corpus.
 4. **The retraction guard is defeatable by deliberate obfuscation.** It folds whitespace, case,
    markdown emphasis and zero-width characters, each added after something got past the previous
@@ -985,7 +985,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t6.reasons_incomplete` | 9 |
 | `t6.reasons_sound` | 13 |
 | `t6.rows_foreclosed_over_section_4_population_only` | R1, R23, R24 |
-| `t6.section_4_population_anchor` | reports/c138_known_gaps_ledger.md:589 |
+| `t6.section_4_population_anchor` | reports/c138_known_gaps_ledger.md:601 |
 | `t6.verdicts_unreachable` | 26 |
 | `t6.verdicts_withdrawn` | 1 |
 | `t6.workflow_steps_checking_out_showdown` | 1 |

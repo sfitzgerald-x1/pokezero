@@ -592,6 +592,51 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertNotIn("substitute", broken.volatile_statuses)
         self.assertEqual(broken.substitute_health, 0)
 
+    def test_baton_passed_substitute_uses_the_sampled_creator_max_hp(self) -> None:
+        """A carried Substitute must not be resized to the recipient's HP pool."""
+
+        payload = _payload(self.dex)
+        starmie_max = _maxhp(_STARMIE, self.dex)
+        payload["sides"]["p1"]["pokemon"][0]["active"] = False
+        payload["sides"]["p1"]["pokemon"][1]["active"] = True
+        payload["sides"]["p1"]["pokemon"][1]["condition"] = f"{starmie_max}/{starmie_max}"
+        payload["sides"]["p1"]["pokemon"][1]["moves"] = [
+            {"id": "surf", "pp": 24, "maxpp": 24, "disabled": False},
+        ]
+        payload["sides"]["p1"]["volatiles"] = ["substitute"]
+        payload["sides"]["p1"]["substituteHealthState"] = "full"
+        payload["sides"]["p1"]["substituteOriginSpecies"] = "Swampert"
+
+        side = battle_spec_from_payload(
+            payload, _override(), dex=self.dex, approximate_substitute_health=True
+        ).spec.side_one
+
+        self.assertEqual(side.active_index, 1)
+        self.assertEqual(side.substitute_health, side.pokemon[0].maxhp // 4)
+        self.assertNotEqual(side.substitute_health, side.pokemon[1].maxhp // 4)
+
+    def test_substitute_origin_must_name_one_sampled_party_member(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["volatiles"] = ["Substitute"]
+        payload["sides"]["p2"]["substituteHealthState"] = "full"
+        payload["sides"]["p2"]["substituteOriginSpecies"] = "Swampert"
+
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(
+                payload, _override(), dex=self.dex, approximate_substitute_health=True
+            )
+
+        self.assertEqual(caught.exception.reason, "substitute_origin_unknown")
+
+    def test_substitute_origin_without_the_volatile_is_a_contradiction(self) -> None:
+        payload = _payload(self.dex)
+        payload["sides"]["p2"]["substituteOriginSpecies"] = "Snorlax"
+
+        with self.assertRaises(EngineWorldUnsupported) as caught:
+            battle_spec_from_payload(payload, _override(), dex=self.dex)
+
+        self.assertEqual(caught.exception.reason, "substitute_health_provenance_contradiction")
+
     def test_active_substitute_invalid_provenance_is_a_terminal_contradiction(self) -> None:
         for state, depletion in (
             (None, None),

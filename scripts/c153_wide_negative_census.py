@@ -449,6 +449,28 @@ FIRED_IN_CORPUS_WORLD_UNSUPPORTED = frozenset(
     }
 )
 
+# C153's 10,000-game measurement ran at source commit 7fcd9e19.  A refusal added
+# after that observation cannot honestly receive its historical
+# `NOT_OBSERVED_AT_SCOPE` verdict: its producer did not exist when the shards
+# were generated. Keep the small, named temporal boundary alongside the
+# historical inventory until a new C153-shaped measurement explicitly retires
+# it. The live corpus census still sees every current reason; this exception is
+# only about what the old wide-seed measurement can claim.
+POST_CENSUS_UNMEASURED_WORLD_UNSUPPORTED = frozenset({"substitute_origin_unknown"})
+
+
+def world_unsupported_reasons_measured_by_c153() -> set[str]:
+    """Current taxonomy minus refusals introduced after C153's observation."""
+
+    current = world_unsupported_reasons()
+    missing = POST_CENSUS_UNMEASURED_WORLD_UNSUPPORTED - current
+    if missing:
+        raise SystemExit(
+            "post-C153 unmeasured refusal(s) no longer exist in the source taxonomy: "
+            + ", ".join(sorted(missing))
+        )
+    return current - POST_CENSUS_UNMEASURED_WORLD_UNSUPPORTED
+
 # §3.5 excludes `future_sight_pending` from its list of 33 (and therefore from the 29)
 # and retires it under R1 as UNREACHABLE in this pool: `futuresight` and `doomdesire` are
 # each 0 of 220 species. It is carried here anyway, with an UNREACHABLE verdict, because
@@ -698,7 +720,7 @@ def inventory() -> dict[str, dict[str, Any]]:
         }
 
     unobserved = (
-        world_unsupported_reasons()
+        world_unsupported_reasons_measured_by_c153()
         - FIRED_IN_CORPUS_WORLD_UNSUPPORTED
         - {"future_sight_pending"}
     )
@@ -1085,10 +1107,18 @@ def main(argv: list[str] | None = None) -> int:
             "single_build": len(distinct_provenance) == 1,
         },
         "taxonomy_sizes": {
-            "world_unsupported_reasons": len(world_unsupported_reasons()),
+            "world_unsupported_reasons": len(world_unsupported_reasons_measured_by_c153()),
             "divergence_classes": len(divergence_classes()),
             "unmappable_choice_reasons": len(unmappable_choice_reasons()),
         },
+        # A current source refusal whose producer post-dates this historical
+        # measurement is intentionally not a historical zero. Its current
+        # corpus status is tracked in C138; this list forces a future C153
+        # regeneration to make an explicit choice rather than silently absorb
+        # it into the old verdict map.
+        "post_census_unmeasured_world_unsupported_reasons": sorted(
+            POST_CENSUS_UNMEASURED_WORLD_UNSUPPORTED
+        ),
         "inventory_size": {
             "total": len(entries),
             "section_3_5_verified_negatives": sum(

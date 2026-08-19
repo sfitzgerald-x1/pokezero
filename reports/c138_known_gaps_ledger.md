@@ -390,12 +390,20 @@ corrections below now mark in place:
   is how H14 went wrong, and then H13.
 
 Mechanized, because prose has now failed here four times:
-**`tests/test_never_fired_counter_census.py`** derives the 40 refusal reasons from
+**`tests/test_never_fired_counter_census.py`** derives the 41 current refusal reasons from
 `src/pokezero/engine_world.py` and the 19 divergence classes from `classify_divergence` by AST,
 scans all 347 artifacts under both matching shapes, and asserts the fired/never-fired partition
 as **exact set equality in both directions** — so a counter that starts firing is red, and so is
 a scanner that stops finding one. Gated as its own step in
 `.github/workflows/engine-fidelity-gates.yml`. See `reports/c146_negative_claim_audit.md`.
+
+⚠ **ADDED 2026-08-19 — `substitute_origin_unknown` is a new, explicitly unmeasured exit.**
+The Phase-1 replay materializer now refuses to construct a passed Substitute if it cannot name
+the original creator whose HP pool defines the Substitute's fixed damage. The 347-file archive
+and C153's wide census predate that exit, so their zeros do **not** measure it. It is recorded in
+the source-derived 41-reason taxonomy and in the list below as **NEW / UNMEASURED**, not folded
+into C153's 29 verified legacy negatives or its rule-of-three bound. A later corpus run must
+either exercise it or retire it with a reachability proof.
 
 ✅ **RE-MEASURED OUTSIDE THE WINDOWS 2026-08-08 (C153), and this is the instrument §8's newest
 rule was missing.** Every list in this section was a *corpus* result: `test_never_fired_counter_census.py`
@@ -409,9 +417,10 @@ a **25.8×** wider measurement, in a place the program has never tuned against.
 `reports/artifacts/c153_{wide,banded}_census_*_sweep.json`; pinned by
 `tests/test_wide_seed_negative_census.py`.
 
-**The result for this section: all four lists survive, and now say at what scope.**
-**Not one** of the 8 static counters, 6 dynamic families, 7 `unmappable_choice` reasons or 29
-`world_unsupported` reasons fired. Every "still absent" sentence below is therefore a claim about
+**The result for this section: the four lists that existed when C153 ran survive, and now say at
+what scope.** **Not one** of the 8 static counters, 6 dynamic families, 7 `unmappable_choice`
+reasons or 29 legacy `world_unsupported` reasons fired. Every "still absent" sentence below is
+therefore a claim about
 **803,264 boundaries outside both windows**, not about 31,082 inside them. Rule of three: zero in
 8,000 strict games bounds a per-game rate at **3.75 × 10⁻⁴** (95 %) and a per-boundary rate at
 **4.67 × 10⁻⁶** — so §1.4's own named blind spot, *"a shape with a 1-in-50,000 boundary incidence
@@ -525,8 +534,8 @@ the 347 artifacts.
 (`struggle_not_submittable`) present in 78 of them, which is the control that makes the seven
 mean something — a scanner that found nothing would have "verified" all eight.
 
-**`skip:world_unsupported` — 36 of 40 reasons unobserved in both windows.** That window figure
-is correct and re-derived (the four that fire in c136 are `volatile_unsupported` 144/127,
+**`skip:world_unsupported` — 36 of 40 legacy reasons unobserved in both windows.** That window
+figure is correct and re-derived (the four that fire in c136 are `volatile_unsupported` 144/127,
 `materialization_blocker` 18/8, `encore_move_unknown` 2/1 and `self_request_state_unsupported`
 13/0). Two of the 36 are structurally diverted on the default flags and their absence *in the
 windows* is expected (`status_unsupported` → `hidden_counter_support:sleep`;
@@ -556,7 +565,10 @@ sweep artifacts c121–c133, 108 in the c7–c13 era, 11 in `reports/c112_leaf_s
 `self_pp_unknown`, `self_world_mismatch`,
 `side_condition_turns_inconsistent`, `side_condition_turns_unknown`,
 `side_condition_unsupported`, `species_unknown`, `substitute_depletion_world_incompatible`,
-`substitute_health_provenance_contradiction`, `toxic_stage_inconsistent`, `toxic_stage_unknown`,
+`substitute_health_provenance_contradiction`,
+`substitute_origin_unknown` (**NEW / UNMEASURED AFTER C153** — a Baton Passed Substitute without
+an identified creator is refused rather than sized from the recipient; no historical corpus can
+certify its absence), `toxic_stage_inconsistent`, `toxic_stage_unknown`,
 `transform_unexpressible` (⚠ **FIRED** — 23 in c32, `ranked[8]` in c43, 208 in
 `docs/audit_artifacts/k0-depth-grid-20260729/results/k0g-{a,c}-d1-1.json`),
 `weather_turns_inconsistent`, `weather_turns_unknown`,
@@ -710,9 +722,11 @@ Six constraints, each traceable to a row above.
    the *attribution* was fixed; the cross-side modelling gap is unchanged. G9's row closed via
    the hit-count partition, not via the shared-roll defect. A row is evidence about a row.
 6. **Name the unobserved exits rather than omitting them — and say which corpus made them
-   unobserved.** 36 of 40 world-construction refusal reasons are zero *in the two c136 windows*;
-   **30 of 40** have never fired *anywhere* in the 347 committed JSON under `reports/` and
-   `docs/`, and the gap between those two numbers is six reasons that fired and closed. 7 of 8
+   unobserved.** 36 of the 40 legacy world-construction refusal reasons are zero *in the two
+   c136 windows*; **30 of those 40** have never fired *anywhere* in the 347 committed JSON under
+   `reports/` and `docs/`, and the gap between those two numbers is six reasons that fired and
+   closed. `substitute_origin_unknown` is the 41st current exit and is explicitly unmeasured,
+   not a 31st verified negative. 7 of 8
    unmappable-choice reasons and **12 of 19** divergence classes (⚠ not 13 — H15) have never
    fired repo-wide. Some are unreachable (R1, R7, R8) and should be retired; the rest are
    untested code paths sitting behind the measurement. §3.5 is the list, each entry now labelled

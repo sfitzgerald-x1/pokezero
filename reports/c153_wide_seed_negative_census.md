@@ -46,11 +46,16 @@ negative a verdict at a stated new scope.
 ## 2. The inventory, re-derived — and it is 46, not 45
 
 Derived from source by AST in `scripts/c153_wide_negative_census.py`, never transcribed:
-40 `EngineWorldUnsupported` reasons from `src/pokezero/engine_world.py`, 19
+40 `EngineWorldUnsupported` reasons from `src/pokezero/engine_world.py` at C153's
+measurement commit, 19
 `classify_divergence` return classes and 8 `UnmappableChoice` reasons from
 `scripts/engine_transition_differential.py`, plus the whole `counts[...]` **key space** so
 an inventory entry the harness cannot emit is a loud failure rather than a row that
 measures nothing.
+
+The live source now has a 41st reason, `substitute_origin_unknown`. It was introduced after
+C153 and is explicitly recorded as **NEW / UNMEASURED AFTER C153** in C138, not retroactively
+assigned this historical census's `NOT_OBSERVED_AT_SCOPE` verdict.
 
 §3.5's four verified-negative lists come to **50**: 8 static counters, 6 dynamic-family
 prefixes, 7 `unmappable_choice` reasons, 29 `world_unsupported` reasons.
