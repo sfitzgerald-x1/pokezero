@@ -922,7 +922,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.support_gated_holdout` | 9.185 % |
 | `base.expected_counter_artifacts` | 406 |
 | `base.expected_sweep_artifacts` | 115 |
-| `base.patch_stack` | 74 |
+| `base.patch_stack` | 75 |
 | `base.section3_rows` | 82 |
 | `base.section4_candidates` | 27 |
 | `base.section4_drops` | 26 |
@@ -943,8 +943,8 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 12 |
-| `t1.hashed_input_files` | 92 |
-| `t1.head_fingerprint` | 8e029a6b8526719c |
+| `t1.hashed_input_files` | 93 |
+| `t1.head_fingerprint` | 8d27a5cc8e77962b |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

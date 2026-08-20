@@ -1,0 +1,68 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -68,6 +68,11 @@ fn chance_to_wake_up(turns_asleep: i8, early_bird: bool) -> f32 {
+     }
+     if turns_asleep == 0 {
+         0.0
++    } else if turns_asleep >= MAX_SLEEP_TURNS {
++        // Gen 3 samples a one-to-four-turn sleep duration. A reconstructed
++        // state can retain a count beyond that terminal rung; the next move
++        // attempt must wake rather than calculate `1 / 0` at count five.
++        1.0
+     } else {
+         1.0 / (1 + MAX_SLEEP_TURNS - turns_asleep) as f32
+     }
+--- a/src/mcts.rs
++++ b/src/mcts.rs
+@@ -122,8 +122,14 @@ impl Node {
+         let weights: Vec<f64> = (*move_vector)
+             .iter()
+             .map(|x| x.instructions.percentage as f64)
+             .collect();
+-        let dist = WeightedIndex::new(weights).unwrap();
++        let dist = WeightedIndex::new(&weights).unwrap_or_else(|error| {
++            panic!(
++                "MCTS chance distribution is invalid: {:?}; weights={:?}",
++                error,
++                weights,
++            )
++        });
+         let chosen_node = &mut (&mut *move_vector)[dist.sample(&mut rng)];
+         let chosen_node_ptr = chosen_node as *mut Node;
+         chosen_node_ptr
+--- a/tests/test_gen3.rs
++++ b/tests/test_gen3.rs
+@@ -15,9 +15,11 @@ use poke_engine::instruction::{
+     SwitchInstruction,
+ };
++use poke_engine::mcts::perform_mcts;
+ use poke_engine::state::PokemonSideCondition;
+ use poke_engine::state::{
+     Move, PokemonIndex, PokemonMoveIndex, PokemonStatus, PokemonType, SideReference, State,
+ };
++use std::time::Duration;
+-
++
+ pub fn generate_instructions_with_state_assertion(
+     state: &mut State,
+@@ -47,5 +49,19 @@ fn set_moves_on_pkmn_and_call_generate_instructions(
+     instructions
+ }
+-
++
++// Captured, create-only diagnostic witness: FoulPlay passed this Gen 3 state
++// to the native single-threaded MCTS. Walrein's retained ordinary-sleep count
++// was five, which previously divided by zero in `chance_to_wake_up` and made
++// the chance-node weights `[inf, -inf, ...]`.
++const FOULPLAY_INVALIDWEIGHT_WITNESS: &str = r#"WALREIN,80,ICE,WATER,ICE,WATER,24,307,THICKFAT,THICKFAT,LEFTOVERS,SERIOUS,85;85;85;85;85;85,133,190,198,190,150,SLEEP,0,5,150.6,SLEEPTALK;false;13,ICEBEAM;false;16,SURF;false;24,REST;false;16,false,TYPELESS=MACHAMP,82,FIGHTING,TYPELESS,FIGHTING,TYPELESS,282,282,GUTS,GUTS,LEFTOVERS,SERIOUS,85;85;85;85;85;85,260,178,154,187,137,NONE,0,0,130,SLEEPTALK;false;16,ROCKSLIDE;false;16,CROSSCHOP;false;8,REST;false;16,false,TYPELESS=BLAZIKEN,81,FIRE,FIGHTING,FIRE,FIGHTING,262,262,BLAZE,BLAZE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,241,160,225,160,176,NONE,0,0,52,SKYUPPERCUT;false;24,THUNDERPUNCH;false;24,ROCKSLIDE;false;16,FIREBLAST;false;8,false,TYPELESS=PORYGON2,80,NORMAL,TYPELESS,NORMAL,TYPELESS,221,267,TRACE,TRACE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,174,190,214,198,142,NONE,0,0,32.5,RECOVER;false;32,ICEBEAM;false;16,THUNDERWAVE;false;32,RETURN102;false;30,false,TYPELESS=MAWILE,96,STEEL,TYPELESS,STEEL,TYPELESS,235,251,INTIMIDATE,INTIMIDATE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,218,218,160,159,150,NONE,0,0,11.5,ROCKSLIDE;false;16,HIDDENPOWERSTEEL70;false;24,BRICKBREAK;false;24,SWORDSDANCE;false;48,false,TYPELESS=MASQUERAIN,96,BUG,FLYING,BUG,FLYING,0,0,INTIMIDATE,INTIMIDATE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,120,173,208,212,170,NONE,0,0,3.6,STUNSPORE;false;47,SUBSTITUTE;false;15,HYDROPUMP;false;7,ICEBEAM;false;14,false,TYPELESS=0=0;0;0;0;0;0;0;0;0;0;0;0;1;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=move:0=false/SEVIPER,88,POISON,TYPELESS,POISON,TYPELESS,267,272,SHEDSKIN,SHEDSKIN,LEFTOVERS,SERIOUS,85;85;85;85;85;85,226,156,226,156,165,NONE,0,0,52.5,EARTHQUAKE;false;16,FLAMETHROWER;false;23,HIDDENPOWERGRASS70;false;24,SLUDGEBOMB;false;12,false,TYPELESS=SMEARGLE,89,NORMAL,TYPELESS,NORMAL,TYPELESS,0,243,NONE,NONE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,86,113,86,131,184,NONE,0,0,58,SPORE;false;23,SPIKES;false;31,NONE;true;0,NONE;true;0,false,TYPELESS=MACHAMP,82,FIGHTING,TYPELESS,FIGHTING,TYPELESS,0,282,NONE,NONE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,260,178,154,187,137,PARALYZE,0,0,130,BULKUP;false;31,HIDDENPOWER;false;21,NONE;true;0,NONE;true;0,false,TYPELESS=NINJASK,79,BUG,FLYING,BUG,FLYING,85,226,SPEEDBOOST,SPEEDBOOST,LEFTOVERS,SERIOUS,85;85;85;85;85;85,188,117,125,125,298,NONE,0,0,12,HIDDENPOWER;false;23,SWORDSDANCE;false;31,BATONPASS;false;63,NONE;true;0,false,TYPELESS=FORRETRESS,81,BUG,STEEL,BUG,STEEL,254,254,STURDY,STURDY,LEFTOVERS,SERIOUS,85;85;85;85;85;85,192,273,144,144,111,NONE,0,0,125.8,EXPLOSION;false;8,HIDDENPOWERBUG70;false;24,RAPIDSPIN;false;64,SPIKES;false;32,false,TYPELESS=ARCANINE,78,FIRE,TYPELESS,FIRE,TYPELESS,268,268,INTIMIDATE,INTIMIDATE,LEFTOVERS,SERIOUS,85;85;85;85;85;85,217,170,201,170,193,NONE,0,0,155,EXTREMESPEED;false;8,FIREBLAST;false;8,HIDDENPOWERGRASS70;false;24,TOXIC;false;16,false,TYPELESS=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0==0;0;0;0;0;0=0=0=0=0=0=2=0=0=0=0=0=0=false=NONE=false=false=false=move:3=false/NONE;-1/NONE;0/false;0/false"#;
++
++#[test]
++fn foulplay_invalidweight_witness_has_no_invalid_chance_arm() {
++    let mut state = State::deserialize(FOULPLAY_INVALIDWEIGHT_WITNESS);
++    let (side_one_options, side_two_options) = state.get_all_options();
++    let result = perform_mcts(&mut state, side_one_options, side_two_options, Duration::from_secs(1), 10_000);
++    assert_eq!(result.iteration_count, 10_000);
++}
++
+ #[test]
+ fn test_regular_move_with_protect_side_condition() {

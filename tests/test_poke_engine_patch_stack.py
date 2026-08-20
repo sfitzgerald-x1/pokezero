@@ -26,7 +26,7 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins for the 74-patch stack. The two collapse-class patches, the
+# Post-patch content pins for the 75-patch stack. The two collapse-class patches, the
 # roll-enumeration patch, the immobilizer-marker patch, the Sleep Talk double
 # damage-dealt reset guard and the Leech Seed residual band split all touch
 # generate_instructions.rs
@@ -40,11 +40,11 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # tree on disk -- the build rewrites that tree, so pinning it can pin a stale
 # preimage (which it once did, and shipped a red gate).
 #
-# 73 -> 74 (`poke-engine-gen3-leechseed-residual-band-split.patch`, ledger G8). The
-# three control digests are unchanged across that bump, measured on the replay and
-# not asserted from the diff.
+# 74 -> 75 (`poke-engine-gen3-sleep-clock-bound.patch`). The three control
+# digests are unchanged across that bump, measured on the replay and not
+# asserted from the diff.
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "9fd568c65b125fa109a703ca7699e3caacf2a4f2cce3fb37962efdd2a3f4ce17",
+    "src/gen3/generate_instructions.rs": "5640f931f8818ce6dd90aa98066265b8c091eaa1f918efc2ae1c03788114fe9c",
     "src/gen3/items.rs": "14415306c663e3e7a9a75f5a4882105cbb9bb91013ca96a35be3a30ca395ea93",
     "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
     "src/gen3/choice_effects.rs": "4d2179c6adf99c444be594c195faa3999447d7f366d97f9f26b70b99a544c7c6",
@@ -126,7 +126,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-17:]],
+                [entry.name for entry in applied[-18:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -155,6 +155,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     # collapse-class patches above already rewrote, so it can only be
                     # authored against the fully-patched tree and only appended.
                     "poke-engine-gen3-leechseed-residual-band-split.patch",
+                    "poke-engine-gen3-sleep-clock-bound.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
