@@ -20,7 +20,7 @@
              .map(|x| x.instructions.percentage as f64)
              .collect();
 -        let dist = WeightedIndex::new(weights).unwrap();
-+        let dist = WeightedIndex::new(weights.clone()).unwrap_or_else(|error| {
++        let dist = WeightedIndex::new(&weights).unwrap_or_else(|error| {
 +            panic!(
 +                "MCTS chance distribution is invalid: {:?}; weights={:?}",
 +                error,
@@ -41,13 +41,15 @@
      Move, PokemonIndex, PokemonMoveIndex, PokemonStatus, PokemonType, SideReference, State,
  };
 +use std::time::Duration;
- 
+-
++
  pub fn generate_instructions_with_state_assertion(
      state: &mut State,
 @@ -47,5 +49,19 @@ fn set_moves_on_pkmn_and_call_generate_instructions(
      instructions
  }
- 
+-
++
 +// Captured, create-only diagnostic witness: FoulPlay passed this Gen 3 state
 +// to the native single-threaded MCTS. Walrein's retained ordinary-sleep count
 +// was five, which previously divided by zero in `chance_to_wake_up` and made
