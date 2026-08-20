@@ -325,6 +325,13 @@ jobs:
             tests/test_rollout_leaf_arbiter.py
             tests/test_rollout_leaf_witness_mutation_battery.py
             tests/test_price_uniform_rollout_leaves.py
+            # V1's checkpoint conversion is a writer on the model path.  The
+            # converter and both its direct and load-path pin suites must start
+            # the model-wheel gate even when a PR changes only test or script
+            # bytes; `src/pokezero/**` alone cannot cover that closure.
+            scripts/convert_value_head.py
+            tests/test_convert_value_head.py
+            tests/test_value_head_capacity.py
             # The FoulPlay throughput calibration is a distinct paired-data
             # contract.  Its reader refuses mixed 1000/760-ms conditions and
             # forged think telemetry, while the paired driver owns the named
@@ -2007,12 +2014,14 @@ jobs:
             tests.test_rollout_leaf_arbiter \
             tests.test_rollout_leaf_witness_mutation_battery \
             tests.test_price_uniform_rollout_leaves \
+            tests.test_convert_value_head \
+            tests.test_value_head_capacity \
             tests.test_foulplay_paired_eval \
             tests.test_foulplay_budget_calibration \
             tests.test_battle_bridge_boundary_requests -v 2>&1 \
             | tee /tmp/rollout-leaf-arbiter.log
-          if ! grep -qE 'Ran 314 tests' /tmp/rollout-leaf-arbiter.log; then
-            echo "::error::the arbiter and calibration suite did not run all 314 tests"
+          if ! grep -qE 'Ran 349 tests' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the arbiter, V1 conversion, and calibration suite did not run all 349 tests"
             exit 1
           fi
           rollout_leaf_skip_status=0
