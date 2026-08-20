@@ -141,6 +141,24 @@ def serialized_probe_config(args: argparse.Namespace, *, source_max_decision_rou
     return config
 
 
+def source_game_trace(*, seed: int, decision_rounds: int,
+                      sampled_prefixes: Sequence[int]) -> dict[str, Any]:
+    """Serialize the source trajectory surface independently of continuations."""
+    if (type(seed) is not int or seed < 0 or type(decision_rounds) is not int
+            or decision_rounds < 0):
+        raise ValueError("source trace seed and decision rounds must be non-negative integers")
+    prefixes = list(sampled_prefixes)
+    if any(type(prefix) is not int or prefix < 0 or prefix >= decision_rounds
+           for prefix in prefixes):
+        raise ValueError("source trace prefixes must be integer source-round indices")
+    if len(set(prefixes)) != len(prefixes):
+        raise ValueError("source trace prefixes must be unique")
+    if any(left >= right for left, right in zip(prefixes, prefixes[1:])):
+        raise ValueError("source trace prefixes must be strictly increasing")
+    return {"seed": seed, "decision_rounds": decision_rounds,
+            "sampled_prefixes": prefixes}
+
+
 def _json_hi(hi: float):
     """None for the open-ended bucket, so the payload stays valid JSON."""
     return None if hi == float("inf") else hi
@@ -717,6 +735,7 @@ def main() -> int:
     continuation_rollout_cfg = RolloutConfig(max_decision_rounds=continuation_max_decision_rounds)
     pairs: list[dict] = []
     terminal_pairs: list[dict] = []
+    source_games: list[dict[str, Any]] = []
     skipped = collections.Counter()
 
     for gi in range(args.games):
@@ -745,10 +764,13 @@ def main() -> int:
         usable = sorted(seat_rounds & opp_rounds)
         # Drop the last: branching AT the final round has no successor to evaluate.
         usable = [r for r in usable if r < rounds - 1]
+        prefixes = (spread_prefixes(usable, args.decisions_per_game)
+                    if len(usable) >= 2 else [])
+        source_games.append(source_game_trace(
+            seed=seed, decision_rounds=rounds, sampled_prefixes=prefixes))
         if len(usable) < 2:
             skipped["no_usable_joint_rounds"] += 1
             continue
-        prefixes = spread_prefixes(usable, args.decisions_per_game)
         print(f"  {len(usable)} rounds have BOTH seats acting; sampling {prefixes}", flush=True)
 
         for prefix in prefixes:
@@ -1191,6 +1213,7 @@ def main() -> int:
                  "independent games: this SE is policy-sampling variance alone and "
                  "understates total uncertainty by an unmeasured amount."),
              "scored": scored,
+             "source_games": source_games,
              # outcomes_a/outcomes_b are 2xR entries per pair and exist only to compute the
              # paired SE, which is retained. Dropped from the payload so the artifact stays
              # readable rather than being mostly raw trial dumps.
