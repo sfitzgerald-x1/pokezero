@@ -66,6 +66,13 @@ if str(REPO / "src") not in sys.path:
     sys.path.insert(0, str(REPO / "src"))
 
 
+# The source-game trajectory and each post-branch policy continuation are
+# different experiment surfaces. A higher continuation cap must not silently
+# expand the source-prefix domain that a later search-capture contract consumes.
+DEFAULT_SOURCE_MAX_DECISION_ROUNDS = 250
+DEFAULT_CONTINUATION_MAX_DECISION_ROUNDS = 250
+
+
 def wilson(k: float, n: int, z: float = 1.96) -> tuple[float, float]:
     if n <= 0:
         return (0.0, 1.0)
@@ -90,6 +97,48 @@ def rollout_seed(base: int, battle_id: str, round_index: int, arm: int, trial: i
     if not paired:
         parts.append(str(arm))
     return int(hashlib.sha256(":".join(parts).encode()).hexdigest()[:12], 16)
+
+
+def resolve_rollout_caps(*, legacy: int | None, source: int | None,
+                         continuation: int | None) -> tuple[int, int]:
+    """Resolve distinct source and post-branch continuation caps.
+
+    ``--max-decision-rounds`` remains a compatibility spelling that deliberately
+    sets both caps. New evidence contracts must state the two fields explicitly,
+    proving that a long continuation did not widen the sampled source horizon.
+    """
+    if legacy is not None:
+        if source is not None or continuation is not None:
+            raise ValueError(
+                "--max-decision-rounds cannot be combined with --source-max-decision-rounds "
+                "or --continuation-max-decision-rounds")
+        source = continuation = legacy
+    source = DEFAULT_SOURCE_MAX_DECISION_ROUNDS if source is None else source
+    continuation = (DEFAULT_CONTINUATION_MAX_DECISION_ROUNDS
+                    if continuation is None else continuation)
+    for label, value in (("source", source), ("continuation", continuation)):
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"{label} max decision rounds must be a positive integer")
+    if continuation < source:
+        raise ValueError(
+            "continuation max decision rounds is an absolute cap and must be at least "
+            "the source max decision rounds")
+    return source, continuation
+
+
+def serialized_probe_config(args: argparse.Namespace, *, source_max_decision_rounds: int,
+                            continuation_max_decision_rounds: int) -> dict[str, Any]:
+    """Serialize cap identity without breaking equal-cap legacy consumers."""
+    config = {
+        key: (str(value) if isinstance(value, Path) else value)
+        for key, value in vars(args).items() if key != "legacy_max_decision_rounds"
+    }
+    config["source_max_decision_rounds"] = source_max_decision_rounds
+    config["continuation_max_decision_rounds"] = continuation_max_decision_rounds
+    if source_max_decision_rounds == continuation_max_decision_rounds:
+        # Existing artifacts call this field the shared source/continuation cap.
+        config["max_decision_rounds"] = source_max_decision_rounds
+    return config
 
 
 def _json_hi(hi: float):
@@ -493,8 +542,12 @@ def main() -> int:
     ap.add_argument("--paired-seeds", action="store_true", default=True,
                     help="common random numbers across the two arms (default on)")
     ap.add_argument("--no-paired-seeds", dest="paired_seeds", action="store_false")
-    ap.add_argument("--max-decision-rounds", type=int, default=250,
-                    help="rollout cap; 250 is effectively 'play to terminal'")
+    ap.add_argument("--source-max-decision-rounds", type=int, default=None,
+                    help="source-game trajectory cap; this bounds sampled prefixes (default: 250)")
+    ap.add_argument("--continuation-max-decision-rounds", type=int, default=None,
+                    help="absolute post-branch policy-continuation cap (default: 250)")
+    ap.add_argument("--max-decision-rounds", dest="legacy_max_decision_rounds", type=int,
+                    default=None, help="deprecated compatibility spelling: set both caps together")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--buckets", default="0.0,0.02,0.05,0.10,0.20")
     ap.add_argument("--allow-unstamped-belief", action="store_true",
@@ -503,6 +556,16 @@ def main() -> int:
                          "the checkpoint was trained that way. Record it in the write-up.")
     ap.add_argument("--json", type=Path, default=None)
     args = ap.parse_args()
+    try:
+        source_max_decision_rounds, continuation_max_decision_rounds = resolve_rollout_caps(
+            legacy=args.legacy_max_decision_rounds,
+            source=args.source_max_decision_rounds,
+            continuation=args.continuation_max_decision_rounds,
+        )
+    except ValueError as exc:
+        ap.error(str(exc))
+    args.source_max_decision_rounds = source_max_decision_rounds
+    args.continuation_max_decision_rounds = continuation_max_decision_rounds
 
     from pokezero.local_showdown import (
         LocalShowdownConfig, LocalShowdownEnv, env_config_from_checkpoint_provenance,
@@ -650,7 +713,8 @@ def main() -> int:
               f"verdict thresholds. Treat the sigma_diff boundaries as rescaled by that "
               f"factor, or re-derive them.")
 
-    cfg = RolloutConfig(max_decision_rounds=args.max_decision_rounds)
+    source_rollout_cfg = RolloutConfig(max_decision_rounds=source_max_decision_rounds)
+    continuation_rollout_cfg = RolloutConfig(max_decision_rounds=continuation_max_decision_rounds)
     pairs: list[dict] = []
     terminal_pairs: list[dict] = []
     skipped = collections.Counter()
@@ -661,7 +725,7 @@ def main() -> int:
         env.reset(seed=seed)
         policies = {"p1": make_policy(), "p2": make_policy()}
         source = continue_rollout_from_current_state(
-            env=env, policies=policies, config=cfg, seed=seed,
+            env=env, policies=policies, config=source_rollout_cfg, seed=seed,
             battle_id=f"probe-{seed}", starting_decision_round_index=0)
         traj = source.trajectory
         rounds = source.decision_round_count
@@ -815,7 +879,7 @@ def main() -> int:
                         cont = continue_rollout_from_current_state(
                             env=renv,
                             policies={"p1": make_policy(), "p2": make_policy()},
-                            config=cfg, seed=rseed,
+                            config=continuation_rollout_cfg, seed=rseed,
                             battle_id=f"probe-roll-{seed}-{prefix}-{label}-{trial}",
                             starting_decision_round_index=prefix + 1,
                             available_observations=br2.step_result.observations,
@@ -1113,8 +1177,11 @@ def main() -> int:
              # affirmative false reassurance on the axis the thresholds live on.
              "value_calibration_scale": (_vct_scale if _vct_method == "affine" else None),
              "value_calibration_method": _vct_method,
-             "config": {k: (str(v) if isinstance(v, Path) else v)
-                        for k, v in vars(args).items()},
+             "config": serialized_probe_config(
+                 args,
+                 source_max_decision_rounds=source_max_decision_rounds,
+                 continuation_max_decision_rounds=continuation_max_decision_rounds,
+             ),
              "ground_truth_se": se,
              "ground_truth_se_note": "gap SE = 0.5*sqrt(2/n), not the per-arm 0.5/sqrt(n)",
              "paired_se_median": paired_se,

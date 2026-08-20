@@ -8,6 +8,8 @@ accuracy figure that nobody can tell is wrong.
 from __future__ import annotations
 
 import importlib.util
+from argparse import Namespace
+import ast
 from pathlib import Path
 import unittest
 
@@ -64,6 +66,70 @@ class RolloutSeedTest(unittest.TestCase):
     def test_distinct_decisions_do_not_share_seeds(self) -> None:
         self.assertNotEqual(vhsp.rollout_seed(7, "b", 3, 0, 0, paired=True),
                             vhsp.rollout_seed(7, "b", 4, 0, 0, paired=True))
+
+
+class SplitRolloutCapTest(unittest.TestCase):
+    def test_defaults_preserve_the_historical_shared_250_cap(self) -> None:
+        self.assertEqual(
+            vhsp.resolve_rollout_caps(legacy=None, source=None, continuation=None),
+            (250, 250),
+        )
+
+    def test_continuation_can_expand_without_expanding_source_prefixes(self) -> None:
+        self.assertEqual(
+            vhsp.resolve_rollout_caps(legacy=None, source=250, continuation=4096),
+            (250, 4096),
+        )
+
+    def test_legacy_flag_sets_both_caps_and_cannot_mask_a_split_contract(self) -> None:
+        self.assertEqual(
+            vhsp.resolve_rollout_caps(legacy=250, source=None, continuation=None),
+            (250, 250),
+        )
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            vhsp.resolve_rollout_caps(legacy=250, source=250, continuation=4096)
+
+    def test_continuation_cap_is_absolute_and_cannot_precede_a_source_prefix(self) -> None:
+        with self.assertRaisesRegex(ValueError, "absolute cap"):
+            vhsp.resolve_rollout_caps(legacy=None, source=250, continuation=249)
+
+    @staticmethod
+    def _args(*, legacy: int | None = None) -> Namespace:
+        return Namespace(
+            checkpoint=Path("checkpoint.pt"),
+            source_max_decision_rounds=250,
+            continuation_max_decision_rounds=250,
+            legacy_max_decision_rounds=legacy,
+            other="preserved",
+        )
+
+    def test_serialized_config_keeps_the_legacy_field_for_equal_caps(self) -> None:
+        config = vhsp.serialized_probe_config(
+            self._args(), source_max_decision_rounds=250, continuation_max_decision_rounds=250)
+        self.assertEqual(config["max_decision_rounds"], 250)
+        self.assertEqual(config["source_max_decision_rounds"], 250)
+        self.assertEqual(config["continuation_max_decision_rounds"], 250)
+        self.assertNotIn("legacy_max_decision_rounds", config)
+        self.assertEqual(config["checkpoint"], "checkpoint.pt")
+
+    def test_serialized_config_makes_a_split_explicit_without_an_ambiguous_legacy_field(self) -> None:
+        config = vhsp.serialized_probe_config(
+            self._args(), source_max_decision_rounds=250, continuation_max_decision_rounds=4096)
+        self.assertNotIn("max_decision_rounds", config)
+        self.assertEqual(config["source_max_decision_rounds"], 250)
+        self.assertEqual(config["continuation_max_decision_rounds"], 4096)
+
+    def test_main_routes_source_and_branch_continuations_to_distinct_configs(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "scripts"
+                  / "value_head_sibling_probe.py").read_text()
+        tree = ast.parse(source)
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name)
+                 and node.func.id == "continue_rollout_from_current_state"]
+        configs = [next(keyword.value.id for keyword in call.keywords
+                        if keyword.arg == "config" and isinstance(keyword.value, ast.Name))
+                   for call in calls]
+        self.assertEqual(configs, ["source_rollout_cfg", "continuation_rollout_cfg"])
 
 
 class ScorePairsTest(unittest.TestCase):
