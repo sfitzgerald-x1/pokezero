@@ -10,6 +10,8 @@ indistinguishable from a truncated write, which the load path correctly refuses.
 """
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -28,6 +30,14 @@ from pokezero.neural_policy import (
 )
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "convert_value_head.py"
+
+
+def _converter_module():
+    spec = importlib.util.spec_from_file_location("convert_value_head_under_test", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _cfg(hidden=None):
@@ -228,6 +238,24 @@ class VerificationIsPinnedTest(unittest.TestCase):
         self.assertIn("REFUSING", proc.stdout + proc.stderr)
         self.assertFalse(out.exists(), "an unverifiable artifact was left on disk")
 
+    def test_an_incomplete_checkpoint_is_refused_by_the_production_loader_before_publish(self):
+        """A config/state-dict lookalike without training_config is not a loadable checkpoint."""
+        import torch
+
+        src = self._write("inc.pt", None)
+        payload = torch.load(src, map_location="cpu", weights_only=True)
+        payload.pop("training_config")
+        incomplete = self.dir / "incomplete.pt"
+        torch.save(payload, incomplete)
+        out = self.dir / "never.pt"
+
+        proc = self._run("--checkpoint", str(incomplete), "--output", str(out),
+                         "--value-head-hidden", "32")
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("training_config", proc.stdout + proc.stderr)
+        self.assertFalse(out.exists(), "the incomplete candidate was published")
+
     def test_an_existing_output_is_not_clobbered_without_force(self):
         src = self._write("inc.pt", None)
         victim = self.dir / "victim.pt"
@@ -236,6 +264,46 @@ class VerificationIsPinnedTest(unittest.TestCase):
                          "--value-head-hidden", "32")
         self.assertNotEqual(proc.returncode, 0)
         self.assertEqual(victim.read_bytes(), b"precious")
+
+    def test_no_force_publication_refuses_a_destination_created_during_verification(self):
+        """No-force publication needs an atomic create, not a stale exists() predicate."""
+        converter = _converter_module()
+        candidate = self.dir / "candidate.pt"
+        destination = self.dir / "late-writer.pt"
+        candidate.write_bytes(b"verified candidate")
+        destination.write_bytes(b"late writer")
+
+        with self.assertRaises(SystemExit) as ctx:
+            converter._publish_verified_candidate(candidate, destination, force=False)
+
+        self.assertIn("appeared while the candidate was being verified", str(ctx.exception))
+        self.assertEqual(candidate.read_bytes(), b"verified candidate")
+        self.assertEqual(destination.read_bytes(), b"late writer")
+
+    def test_force_preserves_an_existing_output_when_candidate_verification_fails(self):
+        """`--force` may replace a destination only after the private candidate reloads.
+
+        A malformed non-head tensor reaches the post-write reload path.  Before this control,
+        the converter replaced `victim` and then deleted it on that reload exception, turning a
+        failed conversion into data loss.  The existing checkpoint must survive byte-for-byte.
+        """
+        import torch
+
+        src = self._write("inc.pt", None)
+        payload = torch.load(src, map_location="cpu", weights_only=True)
+        trunk_name = "numeric_projection.weight"
+        payload["state_dict"][trunk_name] = payload["state_dict"][trunk_name][:-1]
+        malformed = self.dir / "malformed.pt"
+        torch.save(payload, malformed)
+        victim = self._write("victim.pt", None)
+        before = hashlib.sha256(victim.read_bytes()).hexdigest()
+
+        proc = self._run("--checkpoint", str(malformed), "--output", str(victim),
+                         "--value-head-hidden", "32", "--force")
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("numeric_projection.weight", proc.stdout + proc.stderr)
+        self.assertEqual(hashlib.sha256(victim.read_bytes()).hexdigest(), before)
 
     def test_the_output_is_group_readable(self):
         """NamedTemporaryFile creates 0600; os.replace preserves it, breaking a different-UID read."""

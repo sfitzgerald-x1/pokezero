@@ -43,11 +43,34 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from pokezero.neural_policy import (  # noqa: E402
     EntityTokenTransformerPolicy,
     TransformerPolicyConfig,
+    load_transformer_checkpoint,
     load_state_dict_allowing_fresh_value_head,
     require_torch,
 )
 
 VALUE_HEAD_PREFIX = "value_head."
+
+
+def _publish_verified_candidate(candidate: Path, destination: Path, *, force: bool) -> None:
+    """Publish a verified candidate without weakening the no-clobber contract.
+
+    ``os.replace`` is correct only for the explicit ``--force`` case.  A predicate such as
+    ``destination.exists()`` cannot reserve the no-force name: another writer may create it
+    while the private candidate is being verified.  A hard-link creation in the same directory
+    is atomic and fails with ``FileExistsError`` instead of replacing that late writer.  The
+    temporary and destination share a directory specifically so this is the same filesystem.
+    """
+    if force:
+        os.replace(candidate, destination)
+        return
+    try:
+        os.link(candidate, destination)
+    except FileExistsError as exc:
+        raise SystemExit(
+            f"REFUSING: {destination} appeared while the candidate was being verified; "
+            "a no-force conversion never overwrites another writer's output."
+        ) from exc
+    candidate.unlink()
 
 
 def main() -> int:
@@ -148,6 +171,7 @@ def main() -> int:
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile("wb", dir=str(dst.parent), delete=False)
+    candidate = Path(handle.name)
     try:
         torch.save(payload, handle)
         handle.flush()
@@ -157,22 +181,19 @@ def main() -> int:
         # `NamedTemporaryFile` creates 0600 and `os.replace` preserves it, so a converted
         # checkpoint read by a different UID in the cluster failed to open.
         os.chmod(handle.name, 0o644)
-        os.replace(handle.name, dst)
     except BaseException:
         handle.close()
-        Path(handle.name).unlink(missing_ok=True)
+        candidate.unlink(missing_ok=True)
         raise
-
-    print(f"value_head_hidden {old_width!r} -> {new_width!r}")
-    print(f"  {len(head_tensors)} stale head tensor(s) left in place (ignored on load, and "
-          f"required to distinguish this from a truncated write): {head_tensors}")
-    print(f"  wrote {dst}")
 
     # VERIFY THE RESULT RELOADS WITH THE HEAD IT CLAIMS. A conversion that writes a checkpoint
     # nothing can read back is worse than no conversion, and this series has shipped exactly
     # that once already (an export whose own parity check passed on a wrong architecture).
-    # Load the converted file through the SAME loader `load_transformer_checkpoint` uses, and
-    # take the reinitialised set from its RETURN VALUE.
+    # Load the private candidate through the SAME loader that production consumers use, then
+    # independently take the reinitialised set from the shared load primitive.  This must happen
+    # BEFORE publication:
+    # `--force` is permission to replace an existing verified output only with another verified
+    # output, never to delete it when a malformed source fails the candidate reload.
     #
     # An earlier version parsed tensor names out of the warning message text -- and that message
     # contains the output PATH, so `--output ".../value_head.2.bias/out.pt"` injected a name into
@@ -181,25 +202,29 @@ def main() -> int:
     # this block exists to catch, reachable by choosing a directory name. Parsing prose for a
     # value the callee already returns was the whole mistake.
     try:
-        payload_back = torch.load(dst, map_location="cpu", weights_only=True)
+        # The checkpoint's model_config/state_dict are not its complete consumer contract:
+        # `load_transformer_checkpoint` also requires training_config and is the production
+        # boundary V1 must actually cross.  Do not certify a hand-assembled partial payload just
+        # because its tensors instantiate in this script.
+        load_transformer_checkpoint(candidate, map_location="cpu")
+        payload_back = torch.load(candidate, map_location="cpu", weights_only=True)
         config_back = TransformerPolicyConfig.from_dict(payload_back["model_config"])
         model = EntityTokenTransformerPolicy(config_back)
         reinit = set(load_state_dict_allowing_fresh_value_head(
             model, payload_back["state_dict"]))
     except BaseException:
-        # The reload is exactly what this block exists to test, so an exception from it must not
-        # leave the artifact behind. Previously only the two SystemExit branches unlinked, and a
-        # raise from the load escaped as a traceback after "wrote {dst}" had printed.
-        dst.unlink(missing_ok=True)
+        # The reload is exactly what this block exists to test.  It is still private here, so a
+        # malformed source cannot delete or corrupt a pre-existing `--force` destination.
+        candidate.unlink(missing_ok=True)
         raise
     head_type = type(model.value_head).__name__
     expected = "Sequential" if new_width else "Linear"
     if config_back.value_head_hidden != (new_width or None) or head_type != expected:
-        dst.unlink(missing_ok=True)
+        candidate.unlink(missing_ok=True)
         raise SystemExit(
             f"CONVERSION VERIFICATION FAILED: reloaded head is {head_type} with width "
             f"{config_back.value_head_hidden!r}, expected {expected} / "
-            f"{(new_width or None)!r}. {dst} has been removed."
+            f"{(new_width or None)!r}. The unpublished candidate has been removed."
         )
 
     head_params = {f"value_head.{n}" for n in dict(model.value_head.state_dict())}
@@ -213,11 +238,12 @@ def main() -> int:
             n for n in carried
             if n not in source_head or tuple(source_head[n].shape) != tuple(live[n].shape))
         if mismatched:
-            dst.unlink(missing_ok=True)
+            candidate.unlink(missing_ok=True)
             raise SystemExit(
                 f"CONVERSION VERIFICATION FAILED: head tensors {mismatched} were neither "
                 "reinitialised nor carried from a same-shape source, so this checkpoint's head "
-                f"has MIXED provenance while claiming width {new_width}. {dst} has been removed."
+                f"has MIXED provenance while claiming width {new_width}. The unpublished "
+                "candidate has been removed."
             )
         if len(carried) == len(head_params):
             print(f"  verified: reloads as {head_type}, width "
@@ -238,6 +264,15 @@ def main() -> int:
               "arm unless you intended the partial carry-over.")
     else:
         print("  the trunk is carried over; only the value head starts fresh. That is the V1 arm.")
+    try:
+        _publish_verified_candidate(candidate, dst, force=args.force)
+    except BaseException:
+        candidate.unlink(missing_ok=True)
+        raise
+    print(f"value_head_hidden {old_width!r} -> {new_width!r}")
+    print(f"  {len(head_tensors)} stale head tensor(s) left in place (ignored on load, and "
+          f"required to distinguish this from a truncated write): {head_tensors}")
+    print(f"  wrote {dst}")
     return 0
 
 
