@@ -132,6 +132,72 @@ class SplitRolloutCapTest(unittest.TestCase):
         self.assertEqual(configs, ["source_rollout_cfg", "continuation_rollout_cfg"])
 
 
+class SourceGameTraceTest(unittest.TestCase):
+    def test_trace_binds_source_rounds_to_the_exact_sampled_prefixes(self) -> None:
+        self.assertEqual(
+            vhsp.source_game_trace(
+                seed=24_010_000, decision_rounds=113,
+                sampled_prefixes=[0, 23, 45, 67, 90, 111],
+            ),
+            {"seed": 24_010_000, "decision_rounds": 113,
+             "sampled_prefixes": [0, 23, 45, 67, 90, 111]},
+        )
+
+    def test_trace_rejects_non_source_prefixes_and_type_coercion(self) -> None:
+        for prefixes in ([113], [False], [4, 4], [23, 0]):
+            with self.subTest(prefixes=prefixes):
+                with self.assertRaises(ValueError):
+                    vhsp.source_game_trace(seed=1, decision_rounds=113, sampled_prefixes=prefixes)
+        with self.assertRaises(ValueError):
+            vhsp.source_game_trace(seed=-1, decision_rounds=113, sampled_prefixes=[])
+
+    def test_main_serializes_exactly_one_trace_for_each_source_seed(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "scripts"
+                  / "value_head_sibling_probe.py").read_text()
+        tree = ast.parse(source)
+        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
+        game_loop = next(
+            node for node in ast.walk(main)
+            if isinstance(node, ast.For) and isinstance(node.target, ast.Name) and node.target.id == "gi"
+        )
+        direct_append_positions = [
+            index for index, node in enumerate(game_loop.body)
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id == "source_games"
+            and node.value.func.attr == "append"
+        ]
+        self.assertEqual(len(direct_append_positions), 1)
+        skip_positions = [
+            index for index, node in enumerate(game_loop.body)
+            if isinstance(node, ast.If)
+            and isinstance(node.test, ast.Compare)
+            and any(isinstance(child, ast.Continue) for child in ast.walk(node))
+        ]
+        self.assertEqual(len(skip_positions), 1)
+        self.assertLess(direct_append_positions[0], skip_positions[0])
+        appends = [node for node in ast.walk(main) if isinstance(node, ast.Call)
+                   and isinstance(node.func, ast.Attribute) and node.func.attr == "append"
+                   and isinstance(node.func.value, ast.Name) and node.func.value.id == "source_games"]
+        self.assertEqual(len(appends), 1)
+        trace = appends[0].args[0]
+        self.assertIsInstance(trace, ast.Call)
+        self.assertIsInstance(trace.func, ast.Name)
+        self.assertEqual(trace.func.id, "source_game_trace")
+        self.assertEqual(
+            {keyword.arg: getattr(keyword.value, "id", None) for keyword in trace.keywords},
+            {"seed": "seed", "decision_rounds": "rounds", "sampled_prefixes": "prefixes"},
+        )
+        dictionaries = [node for node in ast.walk(main) if isinstance(node, ast.Dict)]
+        self.assertTrue(any(
+            any(isinstance(key, ast.Constant) and key.value == "source_games"
+                and isinstance(value, ast.Name) and value.id == "source_games"
+                for key, value in zip(dictionary.keys, dictionary.values))
+            for dictionary in dictionaries
+        ))
+
+
 class ScorePairsTest(unittest.TestCase):
     BUCKETS = [0.0, 0.02, 0.05, 0.10, 0.20]
 
