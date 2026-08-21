@@ -28,6 +28,7 @@ the library and the per-example dump become pure data.
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import random
 import sys
@@ -256,6 +257,9 @@ def _run_main(monkeypatch, tmp_path, head_preds, *, ref="ctl", rets=None, per_he
     per_head_rets = dict(per_head_rets or {})
     data_dir = tmp_path / "calibration-shard"
     data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "calibration.bin").write_bytes(b"frozen calibration rows")
+    for name in head_preds:
+        (tmp_path / f"{name}.pt").write_bytes(f"checkpoint:{name}".encode())
     json_out = tmp_path / "ece.json"
 
     def rets_for(name):
@@ -451,6 +455,31 @@ def test_main_refuses_an_expect_ece_that_the_recomputation_does_not_match(monkey
                      argv_extra=("--expect-ece", f"ctl={ref_ece!r}"), boot=20)
     assert good.status == 0, good.message
     assert "[matches published]" in capsys.readouterr().out
+
+
+def test_main_records_immutable_checkpoint_and_calibration_input_identities(monkeypatch, tmp_path):
+    got = _run_main(monkeypatch, tmp_path, {"ctl": CTL_PREDS, "good": GOOD_PREDS}, boot=20)
+    assert got.status == 0, got.message
+    assert got.json["heads"]["ctl"]["checkpoint_sha256"] == hashlib.sha256(
+        (tmp_path / "ctl.pt").read_bytes()).hexdigest()
+    assert got.json["heads"]["good"]["checkpoint_sha256"] == hashlib.sha256(
+        (tmp_path / "good.pt").read_bytes()).hexdigest()
+    assert got.json["data_inputs"] == [{
+        "path": str(tmp_path / "calibration-shard"),
+        "sha256": vhe.sha256_path(tmp_path / "calibration-shard"),
+    }]
+
+
+def test_main_refuses_unknown_or_duplicate_published_ece_expectations(monkeypatch, tmp_path):
+    unknown = _run_main(monkeypatch, tmp_path, {"ctl": CTL_PREDS},
+                        argv_extra=("--expect-ece", "stale=0.1"), boot=20)
+    assert unknown.status == 1
+    assert "not supplied --head names" in unknown.message
+    duplicate = _run_main(monkeypatch, tmp_path / "duplicate", {"ctl": CTL_PREDS},
+                          argv_extra=("--expect-ece", "ctl=0.1", "--expect-ece", "ctl=0.2"),
+                          boot=20)
+    assert duplicate.status == 1
+    assert "one unique NAME=VALUE" in duplicate.message
 
 
 def test_main_refuses_a_ref_that_is_not_one_of_the_heads(monkeypatch, tmp_path):

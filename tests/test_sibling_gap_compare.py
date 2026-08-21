@@ -20,6 +20,7 @@ programme off arithmetic on the output spread.
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -59,7 +60,7 @@ def synth(tmp_path_factory):
     for name, hg in cells.items():
         (d / f"{name}.json").write_text(json.dumps({"pairs": [
             {"seed": i, "prefix": 0, "seat": "p1", "head_gap": h, "true_gap": t,
-             "noise_var": NOISE_VAR}
+             "noise_var": NOISE_VAR, "arm_a": "move-a", "arm_b": "move-b"}
             for i, (h, t) in enumerate(zip(hg, truth))]}))
     return d
 
@@ -67,6 +68,9 @@ def synth(tmp_path_factory):
 def _run(synth, ref="ref", boot=600):
     import subprocess
     import sys
+    _certify_candidates(
+        [(name, synth / (name + ".json")) for name in ("ref", "rescale", "better", "worse")],
+        ref)
     cmd = [sys.executable, str(REPO / "scripts" / "sibling_gap_compare.py"),
            "--ref", ref, "--boot", str(boot), "--json", str(synth / "out.json")]
     for name in ("ref", "rescale", "better", "worse"):
@@ -151,6 +155,7 @@ def test_it_refuses_cells_that_disagree_on_the_reused_ground_truth(synth, tmp_pa
     for r in rows:
         r["true_gap"] = r["true_gap"] + 0.01
     bad.write_text(json.dumps({"pairs": rows}))
+    _certify_candidate(bad, _sha256(synth / "ref.json"))
     proc = subprocess.run(
         [sys.executable, str(REPO / "scripts" / "sibling_gap_compare.py"),
          "--ref", "ref", "--boot", "10",
@@ -158,6 +163,39 @@ def test_it_refuses_cells_that_disagree_on_the_reused_ground_truth(synth, tmp_pa
         capture_output=True, text=True)
     assert proc.returncode != 0
     assert "true_gap column differs" in (proc.stdout + proc.stderr)
+
+
+def test_it_refuses_an_uncertified_or_wrong_bank_candidate(synth, tmp_path):
+    """Per-shard diagnostic output is not valid Phase-3 comparison evidence."""
+    import subprocess
+    import sys
+    raw = tmp_path / "raw-candidate.json"
+    raw_doc = json.loads((synth / "rescale.json").read_text())
+    raw_doc.pop("rescore", None)
+    raw.write_text(json.dumps(raw_doc))
+    cmd = [sys.executable, str(REPO / "scripts" / "sibling_gap_compare.py"), "--ref", "ref",
+           "--cell", f"ref={synth / 'ref.json'}", "--cell", f"raw={raw}"]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert "not a certified merged rescore" in (proc.stdout + proc.stderr)
+
+    _certify_candidate(raw, "e" * 64)
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert "source bank SHA" in (proc.stdout + proc.stderr)
+
+
+@pytest.mark.parametrize("field, value", [("arm_a", "other-action"), ("noise_var", 0.9)])
+def test_it_refuses_candidate_rows_that_do_not_describe_identical_actions_and_labels(
+        synth, tmp_path, field, value):
+    candidate = tmp_path / f"changed-{field}.json"
+    doc = json.loads((synth / "rescale.json").read_text())
+    doc["pairs"][17][field] = value
+    candidate.write_text(json.dumps(doc))
+    proc, _ = _run_cli(tmp_path, [("ref", synth / "ref.json"), ("changed", candidate)], "ref",
+                       boot=10)
+    assert proc.returncode != 0
+    assert field in (proc.stdout + proc.stderr)
 
 
 # ---------------------------------------------------------------------------------------
@@ -186,9 +224,35 @@ def _write_cell(path, head_gaps, truths, noise_var):
     col = ([noise_var] * len(head_gaps) if isinstance(noise_var, (int, float))
            else list(noise_var))
     path.write_text(json.dumps({"pairs": [
-        {"seed": i, "prefix": 0, "seat": "p1", "head_gap": h, "true_gap": t, "noise_var": nv}
+        {"seed": i, "prefix": 0, "seat": "p1", "head_gap": h, "true_gap": t,
+         "noise_var": nv, "arm_a": "move-a", "arm_b": "move-b"}
         for i, (h, t, nv) in enumerate(zip(head_gaps, truths, col))]}))
     return path
+
+
+def _sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _certify_candidate(path, bank_sha256, *, head_sha256="c" * 64):
+    """Give a synthetic non-reference file the same merged-rescore contract as production."""
+    doc = json.loads(Path(path).read_text())
+    doc["rescore"] = {
+        "schema": "pokezero.phase3.value-head-rescore.v1",
+        "certified_reproduction": True,
+        "head_checkpoint_sha256": head_sha256,
+        "banked_pairs_sha256": bank_sha256,
+        "state_checkpoint_sha256": "d" * 64,
+    }
+    Path(path).write_text(json.dumps(doc))
+
+
+def _certify_candidates(cells, ref):
+    by_name = dict(cells)
+    bank_sha256 = _sha256(by_name[ref])
+    for name, path in cells:
+        if name != ref:
+            _certify_candidate(path, bank_sha256)
 
 
 def _run_cli(tmp_path, cells, ref, *, boot=50, json_name="cli-out.json", boot_seeds=None):
@@ -200,6 +264,7 @@ def _run_cli(tmp_path, cells, ref, *, boot=50, json_name="cli-out.json", boot_se
            "--ref", ref, "--boot", str(boot), "--json", str(out)]
     if boot_seeds is not None:
         cmd += ["--boot-seeds", boot_seeds]
+    _certify_candidates(cells, ref)
     for name, path in cells:
         cmd += ["--cell", f"{name}={path}"]
     proc = subprocess.run(cmd, capture_output=True, text=True)

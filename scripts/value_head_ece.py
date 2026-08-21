@@ -32,7 +32,10 @@ and a reader must be able to see that from the output rather than infer it.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
+import os
 import random
 import statistics as st
 import sys
@@ -132,6 +135,43 @@ def fmt_share(share: float | None, width: int = 11) -> str:
     return f"{'n/a':>{width}s}" if share is None else f"{share:{width}.4f}"
 
 
+def sha256_path(path: Path) -> str:
+    """Hash one regular file's bytes or an ordered, symlink-free calibration tree."""
+    h = hashlib.sha256()
+    try:
+        path.lstat()
+    except OSError as exc:
+        raise SystemExit(f"REFUSING: cannot stat {path}: {exc}") from exc
+    if os.path.islink(path):
+        raise SystemExit(f"REFUSING: {path} is a symlink, not immutable calibration input")
+    if path.is_file():
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    if not path.is_dir():
+        raise SystemExit(f"REFUSING: {path} is neither a regular file nor a directory")
+    h.update(b"directory\0")
+    for root, dirs, files in os.walk(path, followlinks=False):
+        root_path = Path(root)
+        dirs.sort()
+        files.sort()
+        for name in dirs:
+            entry = root_path / name
+            if entry.is_symlink():
+                raise SystemExit(f"REFUSING: calibration tree {path} contains symlink {entry}")
+        for name in files:
+            entry = root_path / name
+            if entry.is_symlink() or not entry.is_file():
+                raise SystemExit(
+                    f"REFUSING: calibration tree {path} contains non-regular input {entry}")
+            h.update(entry.relative_to(path).as_posix().encode() + b"\0")
+            with entry.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1 << 20), b""):
+                    h.update(chunk)
+    return h.hexdigest()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--head", action="append", required=True, metavar="NAME=PATH")
@@ -153,13 +193,30 @@ def main() -> int:
     heads = {}
     for spec in args.head:
         name, _, path = spec.partition("=")
+        if not name or not path or name in heads:
+            raise SystemExit(f"--head must be one unique NAME=PATH, got {spec!r}")
         heads[name] = Path(path or name)
     if args.ref not in heads:
         raise SystemExit(f"--ref {args.ref!r} is not one of {sorted(heads)}")
     expect = {}
     for spec in args.expect_ece:
         name, _, val = spec.partition("=")
-        expect[name] = float(val)
+        if not name or not val or name in expect:
+            raise SystemExit(f"--expect-ece must be one unique NAME=VALUE, got {spec!r}")
+        try:
+            value = float(val)
+        except ValueError as exc:
+            raise SystemExit(f"--expect-ece {spec!r} has a non-numeric value") from exc
+        if not math.isfinite(value):
+            raise SystemExit(f"--expect-ece {spec!r} must be finite")
+        expect[name] = value
+    unknown_expectations = sorted(set(expect) - set(heads))
+    if unknown_expectations:
+        raise SystemExit(
+            f"--expect-ece names {unknown_expectations} are not supplied --head names "
+            f"{sorted(heads)}. A typo must not silently disable a published-ECE pin.")
+    data_identities = [{"path": str(path), "sha256": sha256_path(Path(path))}
+                       for path in args.data]
 
     # Per-example dumps, in one fixed example order. Recomputed per head by re-reading the
     # same shard list; the returns column is then asserted IDENTICAL across heads, which is
@@ -167,6 +224,7 @@ def main() -> int:
     per_head: dict[str, dict] = {}
     ref_returns: list[float] | None = None
     for name, path in heads.items():
+        checkpoint_sha256 = sha256_path(path)
         model, result = load_transformer_checkpoint(path, map_location=args.device)
         preds, rets = _dump(model, result, args.data, args.batch_size, args.device)
         if ref_returns is None:
@@ -190,7 +248,16 @@ def main() -> int:
                 f"REFUSING: {name} ECE {got['ece']:.8f} != expected {expect[name]:.8f}. Either "
                 f"the calibration data or the checkpoint is not the one the published cell "
                 f"used, so nothing here is comparable to it.")
-        per_head[name] = {"preds": preds, "point": got}
+        if sha256_path(path) != checkpoint_sha256:
+            raise SystemExit(
+                f"REFUSING: checkpoint {path} changed while {name} was evaluated. "
+                "Retry from immutable bytes rather than publishing a path-only ECE result.")
+        if [{"path": str(path), "sha256": sha256_path(Path(path))}
+                for path in args.data] != data_identities:
+            raise SystemExit(
+                "REFUSING: calibration input changed while heads were evaluated. Retry from "
+                "one immutable corpus rather than publishing a mixed ECE comparison.")
+        per_head[name] = {"preds": preds, "point": got, "checkpoint_sha256": checkpoint_sha256}
         print(f"{name}: n={got['n']} ECE {got['ece']:.6f}  bias {got['bias']:+.6f}  "
               f"|bias|/ECE {fmt_share(got['bias_share_of_ece'], 0).strip()}  "
               f"mae {got['mae']:.4f}"
@@ -232,8 +299,11 @@ def main() -> int:
     out = {
         "schema": "pokezero.phase3.value-head-ece.v1",
         "ref": args.ref, "bins": args.bins, "n_examples": n,
-        "data_paths": [str(p) for p in args.data],
-        "heads": {k: {"checkpoint": str(heads[k]), **per_head[k]["point"]} for k in heads},
+        "data_paths": [str(path) for path in args.data],
+        "data_inputs": data_identities,
+        "heads": {k: {"checkpoint": str(heads[k]),
+                        "checkpoint_sha256": per_head[k]["checkpoint_sha256"],
+                        **per_head[k]["point"]} for k in heads},
         "ece_ci95": {k: [pct(draws[k], .025), pct(draws[k], .975)] for k in heads},
         "paired_delta_ece_ci95_vs_ref": {
             k: [pct(dif[k], .025), pct(dif[k], .975)] for k in heads if k != args.ref},

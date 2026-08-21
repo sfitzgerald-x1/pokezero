@@ -28,6 +28,7 @@ Also reported, because it is the mechanism test that separates verdict (a) from 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import statistics as st
@@ -60,6 +61,43 @@ def pct(v, q):
     return sorted(v)[min(len(v) - 1, int(q * len(v)))]
 
 
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _certified_rescore(doc: dict, *, name: str, path: Path) -> dict:
+    """Require a candidate to be the merger's certified replay product.
+
+    The raw bank is a permitted reference because it is the original ground truth.  Every
+    other cell must come through ``rescore_value_head --merge``: per-shard diagnostic output is
+    intentionally written before a failed reproduction refusal, and comparing that output as a
+    normal cell would turn a known state mismatch into a plausible beta/R² verdict.
+    """
+    rescore = doc.get("rescore")
+    if not isinstance(rescore, dict):
+        raise SystemExit(
+            f"REFUSING: candidate cell {name!r} ({path}) is not a certified merged rescore. "
+            "Raw pairs are allowed only for --ref; every candidate must pass replay "
+            "reproduction before it can be compared.")
+    if (rescore.get("schema") != "pokezero.phase3.value-head-rescore.v1"
+            or rescore.get("certified_reproduction") is not True):
+        raise SystemExit(
+            f"REFUSING: candidate cell {name!r} ({path}) lacks the merged rescore "
+            "certification. Do not score diagnostic-only or per-shard output.")
+    for key in ("banked_pairs_sha256", "state_checkpoint_sha256", "head_checkpoint_sha256"):
+        value = rescore.get(key)
+        if (not isinstance(value, str) or len(value) != 64
+                or any(ch not in "0123456789abcdef" for ch in value)):
+            raise SystemExit(
+                f"REFUSING: candidate cell {name!r} ({path}) has no valid {key}. "
+                "Its replay and candidate-weight identity is not auditable.")
+    return rescore
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cell", action="append", required=True, metavar="NAME=FILE")
@@ -70,25 +108,46 @@ def main():
     args = ap.parse_args()
 
     cells = {}
+    source_banks = {}
     for spec in args.cell:
         name, _, path = spec.partition("=")
-        doc = json.loads(Path(path).read_text())
+        if not name or not path or name in cells:
+            raise SystemExit(f"REFUSING: --cell must name one unique NAME=FILE, got {spec!r}")
+        path_obj = Path(path)
+        doc = json.loads(path_obj.read_text())
+        if name == args.ref:
+            source_banks[name] = sha256_file(path_obj)
+        else:
+            source_banks[name] = _certified_rescore(doc, name=name, path=path_obj)[
+                "banked_pairs_sha256"]
         rows = {}
         for p in doc.get("pairs") or []:
             if p.get("head_gap") is None or p.get("true_gap") is None:
                 continue
-            rows[(p["seed"], p["prefix"], p["seat"])] = p
+            key = (p["seed"], p["prefix"], p["seat"])
+            if key in rows:
+                raise SystemExit(f"REFUSING: {name} duplicates pair {key}.")
+            rows[key] = p
         cells[name] = rows
         print(f"{name}: {len(rows)} pairs from {path}")
     if args.ref not in cells:
         raise SystemExit(f"--ref {args.ref!r} is not one of {sorted(cells)}")
+
+    expected_bank = source_banks[args.ref]
+    for name, bank in source_banks.items():
+        if bank != expected_bank:
+            raise SystemExit(
+                f"REFUSING: {name}'s source bank SHA {bank} != {args.ref}'s "
+                f"{expected_bank}. The cells do not reuse one ground truth.")
 
     # ALIGN on the pair identity. A cell that dropped a pair must not shift another cell's
     # rows by one; the whole design rests on every cell being read at the same states.
     keys = sorted(set.intersection(*(set(r) for r in cells.values())))
     for name, rows in cells.items():
         if len(rows) != len(keys):
-            print(f"  NOTE: {name} has {len(rows)} pairs; {len(keys)} are common to all cells")
+            raise SystemExit(
+                f"REFUSING: {name} has {len(rows)} pairs but only {len(keys)} are common to "
+                "all cells. A dropped or foreign pair cannot be silently intersected away.")
     print(f"\naligned on {len(keys)} pairs common to all {len(cells)} cells")
 
     ys = [float(cells[args.ref][k]["true_gap"]) for k in keys]
@@ -99,6 +158,15 @@ def main():
         other = [float(cells[n][k]["true_gap"]) for k in keys]
         if other != ys:
             raise SystemExit(f"REFUSING: {n}'s true_gap column differs from {args.ref}'s.")
+        for key in keys:
+            reference = cells[args.ref][key]
+            candidate = cells[n][key]
+            for field in ("arm_a", "arm_b", "noise_var"):
+                if candidate.get(field) != reference.get(field):
+                    raise SystemExit(
+                        f"REFUSING: {n}'s {field} differs from {args.ref}'s at {key}. "
+                        "A value-head comparison must retain the same sibling actions and "
+                        "the same ground-truth noise witness.")
 
     lab_var = st.mean([float(cells[args.ref][k]["noise_var"]) for k in keys])
     sd_true = st.pstdev(ys)
@@ -221,6 +289,7 @@ def main():
         Path(args.json).write_text(json.dumps({
             "schema": "pokezero.phase3.cell-comparison.v1",
             "ref": args.ref, "n_pairs_aligned": len(keys),
+            "banked_pairs_sha256": expected_bank,
             "label_variance": lab_var, "attenuation_factor_shared": atten,
             "r2_ceiling": atten,
             "point": point,

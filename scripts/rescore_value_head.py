@@ -55,6 +55,7 @@ import argparse
 import collections
 import hashlib
 import json
+import math
 import statistics
 import sys
 import time
@@ -84,6 +85,12 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _sha256_identity(value: object) -> bool:
+    """Whether a provenance field is a real SHA-256 identity, not a label."""
+    return (isinstance(value, str) and len(value) == 64
+            and all(ch in "0123456789abcdef" for ch in value))
 
 
 def trunk_difference(state_sd, head_sd) -> list[str]:
@@ -147,7 +154,7 @@ def merge(shards: list[Path], out: Path) -> int:
       resampled copies of the same pair.
     """
     pairs: list[dict] = []
-    heads, banks, states, names = set(), set(), set(), set()
+    heads, head_sha256s, banks, states, names = set(), set(), set(), set(), set()
     seen: dict[tuple, str] = {}
     repro: dict[str, Any] = {
         "n": 0, "max_abs_delta": 0.0, "tol_max": None,
@@ -167,38 +174,73 @@ def merge(shards: list[Path], out: Path) -> int:
                              f"written by this tool and its head_gap provenance is unknown.")
         heads.add(doc.get("head_checkpoint"))
         names.add(doc.get("head_name"))
+        head_sha256s.add(rs.get("head_checkpoint_sha256"))
         banks.add(rs.get("banked_pairs_sha256"))
         states.add(rs.get("state_checkpoint_sha256"))
-        r = rs.get("reproduction") or {}
-        if r.get("n_outside_tol"):
+        r = rs.get("reproduction")
+        shard_pairs = doc.get("pairs")
+        if not isinstance(r, dict) or not isinstance(shard_pairs, list):
             raise SystemExit(
-                f"CANNOT RUN: {path} reports {r['n_outside_tol']} pairs outside its "
+                f"CANNOT RUN: {path} lacks the exact reproduction/pairs accounting required "
+                "to certify a rescore shard.")
+        n_rebuilt, n_outside = r.get("n"), r.get("n_outside_tol")
+        tol, max_delta = r.get("tol"), r.get("max_abs_delta")
+        if (type(n_rebuilt) is not int or n_rebuilt <= 0
+                or n_rebuilt != len(shard_pairs)
+                or type(n_outside) is not int or n_outside < 0
+                or type(tol) not in (int, float) or isinstance(tol, bool)
+                or not math.isfinite(tol) or tol < 0
+                or type(max_delta) not in (int, float) or isinstance(max_delta, bool)
+                or not math.isfinite(max_delta) or max_delta < 0
+                or (n_outside == 0 and max_delta > tol)):
+            raise SystemExit(
+                f"CANNOT RUN: {path} has invalid reproduction accounting. A certified shard "
+                "must report one finite replay result for every emitted pair.")
+        if n_outside:
+            raise SystemExit(
+                f"CANNOT RUN: {path} reports {n_outside} pairs outside its "
                 f"reproduction tolerance. Its rebuilt states are not the banked states and "
                 f"pooling it would launder that into a comparable-looking beta.")
-        repro["n"] += r.get("n") or 0
-        repro["max_abs_delta"] = max(repro["max_abs_delta"], r.get("max_abs_delta") or 0.0)
-        tol = r.get("tol")
-        if tol is not None:
-            repro["tol_max"] = (float(tol) if repro["tol_max"] is None
-                                else max(repro["tol_max"], float(tol)))
+        repro["n"] += n_rebuilt
+        repro["max_abs_delta"] = max(repro["max_abs_delta"], max_delta)
+        repro["tol_max"] = (float(tol) if repro["tol_max"] is None
+                            else max(repro["tol_max"], float(tol)))
         for k, v in (rs.get("dropped") or {}).items():
             dropped[k] += v
-        for pr in doc.get("pairs") or []:
+        for pr in shard_pairs:
             key = (pr["seed"], pr["prefix"], pr["seat"])
             if key in seen:
                 raise SystemExit(f"CANNOT RUN: pair {key} appears in both {seen[key]} and "
                                  f"{path}. Overlapping shards would double-count it.")
             seen[key] = str(path)
             pairs.append(pr)
-    for label, vals in (("head_checkpoint", heads), ("head_name", names),
+    for label, vals in (("head_checkpoint", heads),
+                        ("head_checkpoint_sha256", head_sha256s),
+                        ("head_name", names),
                         ("banked_pairs_sha256", banks),
                         ("state_checkpoint_sha256", states)):
         if len(vals) != 1:
             raise SystemExit(f"CANNOT RUN: shards disagree on {label}: {sorted(vals)}")
+    head_sha256 = head_sha256s.pop()
+    bank_sha256 = banks.pop()
+    state_sha256 = states.pop()
+    for label, value in (("head_checkpoint_sha256", head_sha256),
+                         ("banked_pairs_sha256", bank_sha256),
+                         ("state_checkpoint_sha256", state_sha256)):
+        if not _sha256_identity(value):
+            raise SystemExit(
+                f"CANNOT RUN: merged {label} is not a lowercase SHA-256 identity: {value!r}")
     payload = {
         "schema": "pokezero.phase0.vhprobe-pairs.v1",
         "source": f"merge of {len(shards)} rescore shards",
         "head_checkpoint": heads.pop(), "head_name": names.pop(),
+        "rescore": {
+            "schema": "pokezero.phase3.value-head-rescore.v1",
+            "certified_reproduction": True,
+            "head_checkpoint_sha256": head_sha256,
+            "banked_pairs_sha256": bank_sha256,
+            "state_checkpoint_sha256": state_sha256,
+        },
         "merged_from": [str(p) for p in shards],
         "reproduction_pooled": repro,
         "dropped_pooled": dict(dropped),
@@ -255,7 +297,12 @@ def main() -> int:
         raise SystemExit(f"required for a rescore run: {', '.join(missing)}")
 
     heads = parse_heads(args.head)
+    banked_pairs_sha256 = sha256_file(args.pairs)
     doc = json.loads(args.pairs.read_text())
+    if sha256_file(args.pairs) != banked_pairs_sha256:
+        raise SystemExit(
+            "REFUSING: banked pairs changed while they were read. Retry from immutable bytes "
+            "rather than replaying one bank and stamping another.")
     banked = doc.get("pairs") or doc.get("rows") or []
     if not banked:
         raise SystemExit(f"CANNOT RUN: no pairs in {args.pairs}")
@@ -293,8 +340,13 @@ def main() -> int:
 
     print(f"state checkpoint (plays the source games, ranks the arms): "
           f"{args.state_checkpoint}", flush=True)
+    state_checkpoint_sha256 = sha256_file(args.state_checkpoint)
     state_model, state_result = load_transformer_checkpoint(
         args.state_checkpoint, map_location=args.device)
+    if sha256_file(args.state_checkpoint) != state_checkpoint_sha256:
+        raise SystemExit(
+            "REFUSING: state checkpoint changed while it was loaded. Retry from immutable "
+            "bytes rather than claiming a replay identity that was never executed.")
     if prov_belief and getattr(state_result, "belief_set_source_hash", None) not in prov_belief:
         raise SystemExit(
             f"CANNOT RUN: state checkpoint belief hash "
@@ -306,9 +358,17 @@ def main() -> int:
     # evidence is produced by the same code path as every real head rather than by a
     # bespoke branch that could pass while the real path is broken.
     loaded: dict[str, Any] = {REPRODUCE: (state_model, state_result)}
+    head_sha256s: dict[str, str] = {REPRODUCE: state_checkpoint_sha256}
     state_sd = state_model.state_dict()
     for name, path in heads.items():
+        before_sha256 = sha256_file(path)
         model, result = load_transformer_checkpoint(path, map_location=args.device)
+        after_sha256 = sha256_file(path)
+        if after_sha256 != before_sha256:
+            raise SystemExit(
+                f"REFUSING: head {name!r} changed while it was loaded ({before_sha256} -> "
+                f"{after_sha256}). A path is not a checkpoint identity; retry from immutable "
+                "bytes rather than scoring an unbound candidate.")
         diff = trunk_difference(state_sd, model.state_dict())
         if diff:
             raise SystemExit(
@@ -326,6 +386,7 @@ def main() -> int:
               f"value_calibration_transform {'NONE (identity)' if vct is None else vct}",
               flush=True)
         loaded[name] = (model, result)
+        head_sha256s[name] = before_sha256
 
     model_config = state_result.model_config
     env_spec = observation_spec_from_model_config(model_config)
@@ -501,7 +562,6 @@ def main() -> int:
                       f"(replay {vals[REPRODUCE]['a']:+.6f}/{vals[REPRODUCE]['b']:+.6f} vs "
                       f"banked {want['head_a']:+.6f}/{want['head_b']:+.6f})", flush=True)
 
-    args.out_dir.mkdir(parents=True, exist_ok=True)
     n_repro = len(repro_deltas)
     n_bad = sum(1 for d in repro_deltas if d > args.reproduce_tol)
     print(f"\n=== REPRODUCTION: {n_repro} pairs rebuilt, "
@@ -511,15 +571,20 @@ def main() -> int:
               f"{statistics.median(repro_deltas):.3e}  mean "
               f"{statistics.fmean(repro_deltas):.3e}")
     print(f"  dropped: {dict(dropped)}")
+    if sha256_file(args.pairs) != banked_pairs_sha256:
+        raise SystemExit(
+            "REFUSING: banked pairs changed during replay. No rescore shard can certify "
+            "rows rebuilt from different bytes than its recorded ground truth.")
+    args.out_dir.mkdir(parents=True, exist_ok=True)
     meta_common = {
         "schema": doc.get("schema", "pokezero.phase0.vhprobe-pairs.v1"),
         "source": f"rescore of {args.pairs.name} (ground truth REUSED, head_gap RECOMPUTED)",
         "rescore": {
             "tool": Path(__file__).name,
             "banked_pairs": str(args.pairs),
-            "banked_pairs_sha256": sha256_file(args.pairs),
+            "banked_pairs_sha256": banked_pairs_sha256,
             "state_checkpoint": str(args.state_checkpoint),
-            "state_checkpoint_sha256": sha256_file(args.state_checkpoint),
+            "state_checkpoint_sha256": state_checkpoint_sha256,
             "device": args.device,
             "shard": args.shard, "num_shards": args.num_shards,
             "seeds": mine,
@@ -543,10 +608,15 @@ def main() -> int:
         "provenance_of_reused_ground_truth": prov,
     }
     for name, rows in out.items():
+        if sha256_file(args.pairs) != banked_pairs_sha256:
+            raise SystemExit(
+                "REFUSING: banked pairs changed during shard publication. No later output "
+                "may be linked to a bank different from the replayed bytes.")
         path = args.out_dir / f"pairs-{name.strip('_')}.json"
         payload = dict(meta_common)
         payload["head_checkpoint"] = str(
             args.state_checkpoint if name == REPRODUCE else heads[name])
+        payload["rescore"]["head_checkpoint_sha256"] = head_sha256s[name]
         payload["head_name"] = name
         payload["n_pairs"] = len(rows)
         payload["pairs"] = rows

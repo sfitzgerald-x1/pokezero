@@ -123,8 +123,9 @@ def test_parse_heads_names_a_bare_path_by_its_parent_directory():
         "v1": Path("/tmp/cells/v1/value-tuned.pt")}
 
 
-def _shard(tmp_path, name, idx, pairs, *, bank="BANKSHA", state="STATESHA",
-           head="/ck/v1.pt", outside=0, tol=1e-4, max_delta=1e-7):
+def _shard(tmp_path, name, idx, pairs, *, bank="b" * 64, state="a" * 64,
+           head_sha="c" * 64, head="/ck/v1.pt", outside=0, tol=1e-4,
+           max_delta=1e-7):
     """One per-shard rescore file.
 
     `tol` and `max_delta` are BOTH parameters, and the second one had to become one: every
@@ -133,7 +134,8 @@ def _shard(tmp_path, name, idx, pairs, *, bank="BANKSHA", state="STATESHA",
     """
     doc = {
         "head_checkpoint": head, "head_name": name,
-        "rescore": {"banked_pairs_sha256": bank, "state_checkpoint_sha256": state,
+        "rescore": {"head_checkpoint_sha256": head_sha,
+                    "banked_pairs_sha256": bank, "state_checkpoint_sha256": state,
                     "reproduction": {"n": len(pairs), "n_outside_tol": outside,
                                      "tol": tol, "max_abs_delta": max_delta},
                     "dropped": {"arm_mismatch": 1}},
@@ -157,6 +159,8 @@ def test_merge_pools_pairs_and_sums_reproduction(tmp_path):
     doc = json.loads(out.read_text())
     assert doc["n_pairs"] == 3 and len(doc["pairs"]) == 3
     assert doc["head_name"] == "v1"
+    assert doc["rescore"]["certified_reproduction"] is True
+    assert doc["rescore"]["head_checkpoint_sha256"] == "c" * 64
     assert doc["reproduction_pooled"]["n"] == 3
     # Dropped counts are SUMMED, not overwritten: a per-shard view would understate how many
     # of the 465 banked pairs failed to rebuild.
@@ -178,11 +182,19 @@ def test_merge_refuses_mixed_heads_banks_and_state_checkpoints(tmp_path):
         rvh.merge([a, _shard(tmp_path, "v1", 2, [_pair(2, 0)], head="/ck/v2.pt")],
                   tmp_path / "m2.json")
     with pytest.raises(SystemExit, match="banked_pairs_sha256"):
-        rvh.merge([a, _shard(tmp_path, "v1", 3, [_pair(2, 0)], bank="OTHER")],
+        rvh.merge([a, _shard(tmp_path, "v1", 3, [_pair(2, 0)], bank="d" * 64)],
                   tmp_path / "m3.json")
     with pytest.raises(SystemExit, match="state_checkpoint_sha256"):
-        rvh.merge([a, _shard(tmp_path, "v1", 4, [_pair(2, 0)], state="OTHER")],
+        rvh.merge([a, _shard(tmp_path, "v1", 4, [_pair(2, 0)], state="e" * 64)],
                   tmp_path / "m4.json")
+
+
+def test_merge_refuses_candidate_weight_bytes_that_differ_at_one_path(tmp_path):
+    """A mutable checkpoint path cannot pool two candidate weight versions as one cell."""
+    a = _shard(tmp_path, "v1", 0, [_pair(1, 0)], head="/ck/v1.pt", head_sha="c" * 64)
+    b = _shard(tmp_path, "v1", 1, [_pair(2, 0)], head="/ck/v1.pt", head_sha="d" * 64)
+    with pytest.raises(SystemExit, match="head_checkpoint_sha256"):
+        rvh.merge([a, b], tmp_path / "merged.json")
 
 
 def test_merge_refuses_duplicate_pairs_across_shards(tmp_path):
@@ -274,9 +286,7 @@ def test_pooled_max_abs_delta_is_the_largest_across_shards(tmp_path, capsys):
     a = _shard(tmp_path, "v1", 0, [_pair(1, 0)], max_delta=3e-7)
     b = _shard(tmp_path, "v1", 1, [_pair(2, 0)], max_delta=9e-7)
     c = _shard(tmp_path, "v1", 2, [_pair(3, 0)], max_delta=1e-8)
-    # A shard that rebuilt nothing reports None, which must not become the pooled answer or
-    # crash the max.
-    d = _shard(tmp_path, "v1", 3, [_pair(4, 0)], max_delta=None)
+    d = _shard(tmp_path, "v1", 3, [_pair(4, 0)], max_delta=2e-8)
     out = tmp_path / "merged.json"
     assert rvh.merge([a, b, c, d], out) == 0
     pooled = json.loads(out.read_text())["reproduction_pooled"]
@@ -284,6 +294,23 @@ def test_pooled_max_abs_delta_is_the_largest_across_shards(tmp_path, capsys):
     assert pooled["max_abs_delta"] != 1e-8, "the greatest, not the least and not the last"
     assert pooled["max_abs_delta"] > 0.0, "not a literal zero"
     assert "max delta 9.000e-07" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda r: r.pop("n_outside_tol"),
+    lambda r: r.__setitem__("n_outside_tol", -1),
+    lambda r: r.__setitem__("n", 0),
+    lambda r: r.__setitem__("tol", float("nan")),
+    lambda r: r.__setitem__("max_abs_delta", None),
+    lambda r: r.__setitem__("max_abs_delta", 1.0),
+])
+def test_merge_refuses_malformed_reproduction_metadata(tmp_path, mutation):
+    shard = _shard(tmp_path, "v1", 0, [_pair(1, 0)])
+    doc = json.loads(shard.read_text())
+    mutation(doc["rescore"]["reproduction"])
+    shard.write_text(json.dumps(doc))
+    with pytest.raises(SystemExit, match="invalid reproduction accounting"):
+        rvh.merge([shard], tmp_path / "merged.json")
 
 
 def test_finalize_pair_gaps_is_reused_from_the_producer():
@@ -437,7 +464,7 @@ def _module(name, **attrs):
 
 def _run_replay(monkeypatch, tmp_path, banked, *, arms=None, argv_extra=(),
                 head_trunk_fill=1.0, state_belief=BELIEF_HASH, bank_belief=BELIEF_HASH,
-                env_belief=BELIEF_HASH, provenance=None):
+                env_belief=BELIEF_HASH, provenance=None, mutate_bank_during_replay=False):
     """Run `rescore_value_head.main()` over `banked` with every heavy dependency stubbed.
 
     Returns the status (0, or 1 for any SystemExit with a message), that message, and the
@@ -467,6 +494,7 @@ def _run_replay(monkeypatch, tmp_path, banked, *, arms=None, argv_extra=(),
         "n_pairs": len(banked), "pairs": banked,
     }))
     out_dir = tmp_path / "out"
+    bank_mutated = False
 
     models = {str(state_ckpt): (_FakeModel(STATE_SCALE, 0.25), _FakeResult(state_belief)),
               str(head_ckpt): (_FakeModel(TUNED_SCALE, 0.75, head_trunk_fill),
@@ -493,6 +521,12 @@ def _run_replay(monkeypatch, tmp_path, banked, *, arms=None, argv_extra=(),
 
     def continue_rollout_from_current_state(*, env, policies, config, seed, battle_id,
                                            starting_decision_round_index):
+        nonlocal bank_mutated
+        if mutate_bank_during_replay and not bank_mutated:
+            replacement = json.loads(bank.read_text())
+            replacement["mutation_after_parse"] = True
+            bank.write_text(json.dumps(replacement))
+            bank_mutated = True
         return types.SimpleNamespace(
             trajectory=types.SimpleNamespace(seed=seed), decision_round_count=9,
             terminal=types.SimpleNamespace(winner="p1"))
@@ -574,6 +608,16 @@ def test_a_clean_replay_reproduces_the_bank_exactly_and_certifies(monkeypatch, t
     # The ground truth is COPIED, never recomputed from the replay.
     assert [r["true_gap"] for r in tuned["pairs"]] == [b["true_gap"] for b in banked]
     assert [r["noise_var"] for r in tuned["pairs"]] == [b["noise_var"] for b in banked]
+
+
+def test_a_bank_replaced_during_replay_refuses_before_any_rescore_can_certify(monkeypatch,
+                                                                               tmp_path):
+    got = _run_replay(monkeypatch, tmp_path, [_banked_pair(101, 4)],
+                      mutate_bank_during_replay=True)
+    assert got.status == 1
+    assert "banked pairs changed during replay" in got.message
+    if got.out_dir.exists():
+        assert not list(got.out_dir.glob("pairs-*.json"))
 
 
 def test_a_head_whose_trunk_differs_from_the_state_checkpoint_refuses_the_run(monkeypatch,
