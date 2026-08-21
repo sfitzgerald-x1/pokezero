@@ -2000,11 +2000,6 @@ def train_transformer_policy(
         raise ValueError("auxiliary_max_fraction requires auxiliary_paths.")
     if auxiliary_paths is not None and not 0.0 < auxiliary_max_fraction < 1.0:
         raise ValueError("auxiliary_max_fraction must be greater than 0 and less than 1.")
-    if context.enabled and resolved_training_config.value_ranking_loss_weight:
-        raise ValueError(
-            "Distributed training does not support value_ranking_loss_weight yet because cross-rank pairs "
-            "would change the objective. Set it to 0.0 for DDP training."
-        )
     device = torch_module.device(resolve_torch_device(resolved_training_config.device))
     if context.enabled and device.type == "cuda":
         # ``initialize_distributed_training`` already sets this, but keeping the
@@ -2326,6 +2321,46 @@ def _distributed_value_loss(
     return gradient, metric, eligible, clipped
 
 
+def _distributed_value_ranking_loss(
+    output: TransformerPolicyOutput,
+    tensors: Mapping[str, Any],
+    config: TransformerTrainingConfig,
+    *,
+    context: DistributedTrainingContext,
+    active: bool,
+    zero: Any,
+) -> tuple[Any, float, int]:
+    """Rank-local pairwise ranking loss with a global pair-count mean.
+
+    V2 deliberately constructs ranking pairs only inside each contiguous local
+    DDP shard.  It does not all-gather predictions or targets, so changing the
+    world size changes which pairs are eligible; that is the registered V2
+    objective rather than an accidental approximation of the single-process
+    all-pairs objective.  The scalar pair loss is nevertheless reduced over
+    the total number of those rank-local pairs so DDP gradient averaging has
+    the intended global mean scale.
+    """
+
+    if config.value_ranking_loss_weight <= 0.0:
+        return zero, 0.0, 0
+    if not active:
+        local_sum = zero
+        local_count = 0
+    else:
+        local_sum, local_count = _value_ranking_loss_sum_and_count(
+            output.value,
+            _value_targets(tensors, config.objective),
+            config,
+        )
+    local_denominator = local_sum.new_tensor(float(local_count)) if local_count else zero
+    gradient, metric, global_count_float = _distributed_loss_term(
+        local_sum,
+        local_denominator,
+        context=context,
+    )
+    return gradient, metric, int(round(global_count_float))
+
+
 def _distributed_cross_entropy_term(
     logits: Any,
     targets: Any,
@@ -2361,12 +2396,14 @@ def _distributed_transformer_loss(
     local_examples: int,
     global_examples: int,
 ) -> tuple[Any, dict[str, float | int]]:
-    """PPO/BC loss preserving the legacy global-batch objective under DDP.
+    """PPO/BC loss with globally reduced scalar terms under DDP.
 
     Every term keeps its own global denominator because PPO validity masks,
     sample weights, opponent labels, and switch labels are not uniformly
-    distributed across rank slices. Value-ranking is rejected at setup because
-    its pairwise objective needs cross-rank pairs rather than a scalar reduce.
+    distributed across rank slices. Value-ranking is the explicit V2 exception:
+    it uses rank-local pairs only, then reduces their scalar mean by the total
+    number of rank-local pairs. It intentionally does not preserve the
+    single-process all-pairs objective across different world sizes.
     """
 
     torch_module = require_torch()
@@ -2379,6 +2416,14 @@ def _distributed_transformer_loss(
     )
     policy_correct = _distributed_int_sum(context, local_policy_correct, device=output.value.device)
     value_gradient, value_metric, value_clip_eligible, value_clip_count = _distributed_value_loss(
+        output,
+        tensors,
+        config,
+        context=context,
+        active=active,
+        zero=zero,
+    )
+    value_ranking_gradient, value_ranking_metric, value_ranking_pairs = _distributed_value_ranking_loss(
         output,
         tensors,
         config,
@@ -2400,8 +2445,8 @@ def _distributed_transformer_loss(
     if config.objective == "value-only":
         policy_gradient = zero
         policy_metric = 0.0
-        loss_gradient = value_gradient
-        loss_metric = value_metric
+        loss_gradient = value_gradient + (config.value_ranking_loss_weight * value_ranking_gradient)
+        loss_metric = value_metric + (config.value_ranking_loss_weight * value_ranking_metric)
     elif config.objective == "ppo":
         ppo_objective_examples = global_examples
         training_weights = _training_sample_weights(tensors)
@@ -2467,8 +2512,18 @@ def _distributed_transformer_loss(
         ppo_ratio_sum = float(_distributed_reduce_sum(context, local_metric_ratio_sum).item())
         ppo_entropy_sum = float(_distributed_reduce_sum(context, local_metric_entropy_sum).item())
         ppo_clip_count = _distributed_int_sum(context, local_metric_clip_count, device=output.value.device)
-        loss_gradient = policy_gradient + (config.value_loss_weight * value_gradient) - (config.entropy_coef * entropy_gradient)
-        loss_metric = policy_metric + (config.value_loss_weight * value_metric) - (config.entropy_coef * entropy_metric)
+        loss_gradient = (
+            policy_gradient
+            + (config.value_loss_weight * value_gradient)
+            + (config.value_ranking_loss_weight * value_ranking_gradient)
+            - (config.entropy_coef * entropy_gradient)
+        )
+        loss_metric = (
+            policy_metric
+            + (config.value_loss_weight * value_metric)
+            + (config.value_ranking_loss_weight * value_ranking_metric)
+            - (config.entropy_coef * entropy_metric)
+        )
     else:
         per_example_policy_loss = functional.cross_entropy(masked_policy_logits, tensors["action_indices"], reduction="none")
         if config.objective == "reward-weighted":
@@ -2481,8 +2536,16 @@ def _distributed_transformer_loss(
         local_policy_sum = (per_example_policy_loss * weights).sum() if active else zero
         local_denominator = weights.sum() if active else zero
         policy_gradient, policy_metric, _ = _distributed_loss_term(local_policy_sum, local_denominator, context=context)
-        loss_gradient = policy_gradient + (config.value_loss_weight * value_gradient)
-        loss_metric = policy_metric + (config.value_loss_weight * value_metric)
+        loss_gradient = (
+            policy_gradient
+            + (config.value_loss_weight * value_gradient)
+            + (config.value_ranking_loss_weight * value_ranking_gradient)
+        )
+        loss_metric = (
+            policy_metric
+            + (config.value_loss_weight * value_metric)
+            + (config.value_ranking_loss_weight * value_ranking_metric)
+        )
 
     if config.objective == "value-only":
         opponent_gradient = zero
@@ -2563,8 +2626,8 @@ def _distributed_transformer_loss(
         "policy_loss": policy_metric,
         "policy_correct": policy_correct,
         "value_loss": value_metric,
-        "value_ranking_loss": 0.0,
-        "value_ranking_pairs": 0,
+        "value_ranking_loss": value_ranking_metric,
+        "value_ranking_pairs": value_ranking_pairs,
         "opponent_loss": opponent_metric,
         "opponent_correct": opponent_correct,
         "opponent_examples": opponent_examples,
@@ -3574,9 +3637,11 @@ def _training_sample_weights(tensors: Mapping[str, Any]):
     return tensors["training_weights"].clamp(min=0.0)
 
 
-def _value_ranking_loss_terms(values: Any, targets: Any, config: TransformerTrainingConfig) -> tuple[Any, float, int]:
+def _value_ranking_loss_sum_and_count(values: Any, targets: Any, config: TransformerTrainingConfig) -> tuple[Any, int]:
+    """Return the unnormalised pair loss and pair count for one tensor shard."""
+
     if config.value_ranking_loss_weight <= 0.0:
-        return values.sum() * 0.0, 0.0, 0
+        return values.sum() * 0.0, 0
     torch_module = require_torch()
     functional = torch_module.nn.functional
     target_delta = targets.unsqueeze(1) - targets.unsqueeze(0)
@@ -3586,10 +3651,20 @@ def _value_ranking_loss_terms(values: Any, targets: Any, config: TransformerTrai
     )
     pair_count = int(pair_mask.sum().item())
     if not pair_count:
-        return values.sum() * 0.0, 0.0, 0
+        return values.sum() * 0.0, 0
     direction = target_delta[pair_mask].sign()
     prediction_delta = values.unsqueeze(1) - values.unsqueeze(0)
-    loss = functional.softplus(config.value_ranking_margin - (direction * prediction_delta[pair_mask])).mean()
+    loss_sum = functional.softplus(config.value_ranking_margin - (direction * prediction_delta[pair_mask])).sum()
+    return loss_sum, pair_count
+
+
+def _value_ranking_loss_terms(values: Any, targets: Any, config: TransformerTrainingConfig) -> tuple[Any, float, int]:
+    """Single-process mean ranking loss over every eligible pair."""
+
+    loss_sum, pair_count = _value_ranking_loss_sum_and_count(values, targets, config)
+    if not pair_count:
+        return loss_sum, 0.0, 0
+    loss = loss_sum / float(pair_count)
     return loss, float(loss.detach().item()), pair_count
 
 
