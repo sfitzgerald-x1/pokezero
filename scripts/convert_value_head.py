@@ -9,9 +9,12 @@ refusal with silent loss of trained head parameters. The premise was also wrong:
 `load_transformer_checkpoint` runs BEFORE `_validate_initial_model_config` and keys off the
 checkpoint's own config, so nothing in the validator blocks a widened warm start.
 
-What actually works, and what this does: rewrite the config stamp, and let
+What actually works, and what this does: rewrite the config stamp.  Its legacy mode lets
 `load_state_dict_allowing_fresh_value_head` (#1262) reinitialise the head on the next load. The
-trunk carries over byte-identically; only the head starts fresh, which is the arm.
+Phase-3 mode additionally accepts `--head-init-seed` and materialises those new tensors into the
+checkpoint itself.  This matters because a warm-start loader runs before training's DDP seed is
+installed; a seed recorded only in the trainer would otherwise not identify the V1 initial head.
+In both cases the trunk carries over byte-identically; only the head starts fresh.
 
 WHAT THIS REFUSES TO DO, because each was a real failure mode in this series:
 
@@ -51,6 +54,31 @@ from pokezero.neural_policy import (  # noqa: E402
 VALUE_HEAD_PREFIX = "value_head."
 
 
+def _materialize_seeded_value_head(torch, config, state_dict, *, seed: int) -> tuple[dict, set[str]]:
+    """Build the new head under one explicit CPU seed and copy the old trunk exactly.
+
+    The normal V1 transition is a linear source head to a two-layer MLP, so the shared loader
+    leaves all four MLP tensors fresh while loading every non-head tensor from the source.  We
+    persist that initialized model rather than relying on a later warm-start process to make a
+    fresh, ambient-RNG draw.  Keeping the RNG fork local also makes conversion repeatable without
+    perturbing an embedding caller's randomness.
+    """
+    with torch.random.fork_rng(devices=[]):
+        # `torch.manual_seed` also mutates accelerator generators, while this CPU-only
+        # construction needs only the default CPU generator.  The surrounding fork restores
+        # that generator, so embedding callers retain their CPU and accelerator RNG streams.
+        torch.random.default_generator.manual_seed(seed)
+        model = EntityTokenTransformerPolicy(config)
+    fresh = set(load_state_dict_allowing_fresh_value_head(model, state_dict))
+    head_params = {f"{VALUE_HEAD_PREFIX}{name}" for name in model.value_head.state_dict()}
+    if fresh != head_params:
+        raise SystemExit(
+            "REFUSING: seeded materialization did not replace the entire value head. Expected "
+            f"{sorted(head_params)}, got {sorted(fresh)}. A V1 initializer may not mix old and "
+            "new head tensors.")
+    return dict(model.state_dict()), head_params
+
+
 def _publish_verified_candidate(candidate: Path, destination: Path, *, force: bool) -> None:
     """Publish a verified candidate without weakening the no-clobber contract.
 
@@ -81,6 +109,10 @@ def main() -> int:
                     help="new hidden width. Must be >= TransformerPolicyConfig."
                          "VALUE_HEAD_HIDDEN_MIN; a width of 1 is a scalar reparameterisation of "
                          "one linear functional and is refused by the config itself.")
+    ap.add_argument("--head-init-seed", type=int, default=None,
+                    help="materialize a wholly fresh widened V1 head under this non-negative "
+                         "seed. Required by provenance-bound V1 training; without it, legacy "
+                         "conversion defers fresh initialization to the next checkpoint load.")
     ap.add_argument("--force", action="store_true",
                     help="replace --output if it already exists")
     ap.add_argument("--force-narrow", action="store_true",
@@ -126,6 +158,9 @@ def main() -> int:
     old_width = old_config.value_head_hidden
     new_width = args.value_head_hidden
 
+    if args.head_init_seed is not None and args.head_init_seed < 0:
+        raise SystemExit("REFUSING: --head-init-seed must be a non-negative integer")
+
     if old_width == new_width or (not old_width and not new_width):
         raise SystemExit(
             f"NOTHING TO DO: the checkpoint's value_head_hidden is already {old_width!r}."
@@ -137,9 +172,15 @@ def main() -> int:
             "its trained parameters. The load path would accept this with only a warning, which "
             "is why the refusal lives here. Pass --force-narrow if that is genuinely intended."
         )
+    if args.head_init_seed is not None and old_width:
+        raise SystemExit(
+            "REFUSING: --head-init-seed is only defined for the incumbent linear-to-MLP V1 "
+            "transition. A width-to-width conversion can retain compatible tensors; make that "
+            "a separately reviewed initializer rather than claiming a wholly fresh head.")
 
-    # THE STALE HEAD TENSORS ARE LEFT IN PLACE, and that is deliberate -- my first version of
-    # this tool stripped them and broke itself against my own safety net.
+    # IN LEGACY MODE, THE STALE HEAD TENSORS ARE LEFT IN PLACE, and that is deliberate -- my
+    # first version of this tool stripped them and broke itself against my own safety net.  The
+    # seeded V1 mode below deliberately replaces all of them with the materialized MLP head.
     #
     # Stripping looked right: "the config claim and the weights must not disagree". But a
     # checkpoint with NO `value_head.` tensor is indistinguishable from a truncated write, which
@@ -164,6 +205,18 @@ def main() -> int:
         )
     payload["model_config"] = dataclasses.replace(
         old_config, value_head_hidden=(new_width or None)).to_dict()
+    materialized_head_params: set[str] | None = None
+    if args.head_init_seed is not None:
+        materialized, materialized_head_params = _materialize_seeded_value_head(
+            torch, TransformerPolicyConfig.from_dict(payload["model_config"]),
+            payload["state_dict"], seed=args.head_init_seed)
+        payload["state_dict"] = materialized
+        payload["phase3_value_head_initialization"] = {
+            "schema": "pokezero.phase3.value-head-initialization.v1",
+            "kind": "linear-to-mlp-fresh",
+            "seed": args.head_init_seed,
+            "head_parameter_names": sorted(materialized_head_params),
+        }
     # NOTE: no `training_result`/`result` sync here, deliberately. An earlier version had one
     # and both it and the PR body claimed it mattered; `save_transformer_checkpoint` writes
     # `model_config` at the top level only, and no checkpoint in this repo carries such a key, so
@@ -206,7 +259,7 @@ def main() -> int:
         # `load_transformer_checkpoint` also requires training_config and is the production
         # boundary V1 must actually cross.  Do not certify a hand-assembled partial payload just
         # because its tensors instantiate in this script.
-        load_transformer_checkpoint(candidate, map_location="cpu")
+        loaded_candidate, _ = load_transformer_checkpoint(candidate, map_location="cpu")
         payload_back = torch.load(candidate, map_location="cpu", weights_only=True)
         config_back = TransformerPolicyConfig.from_dict(payload_back["model_config"])
         model = EntityTokenTransformerPolicy(config_back)
@@ -229,7 +282,32 @@ def main() -> int:
 
     head_params = {f"value_head.{n}" for n in dict(model.value_head.state_dict())}
     carried = head_params - reinit
-    if carried:
+    if args.head_init_seed is not None:
+        if reinit:
+            candidate.unlink(missing_ok=True)
+            raise SystemExit(
+                "CONVERSION VERIFICATION FAILED: a seeded materialized head was reinitialised "
+                f"on reload ({sorted(reinit)}). The output does not contain the claimed V1 "
+                "initialization bytes.")
+        if materialized_head_params != head_params:
+            candidate.unlink(missing_ok=True)
+            raise SystemExit(
+                "CONVERSION VERIFICATION FAILED: the materialized head parameter inventory "
+                "changed before reload. The unpublished candidate has been removed.")
+        loaded_head = {f"{VALUE_HEAD_PREFIX}{name}": tensor
+                       for name, tensor in loaded_candidate.value_head.state_dict().items()}
+        expected_head = {f"{VALUE_HEAD_PREFIX}{name}": tensor
+                         for name, tensor in model.value_head.state_dict().items()}
+        if set(loaded_head) != set(expected_head) or any(
+                not torch.equal(loaded_head[name], expected_head[name]) for name in expected_head):
+            candidate.unlink(missing_ok=True)
+            raise SystemExit(
+                "CONVERSION VERIFICATION FAILED: seeded value-head tensors changed across the "
+                "production reload. The unpublished candidate has been removed.")
+        print(f"  verified: reloads as {head_type}, width {config_back.value_head_hidden!r}; "
+              f"all {len(head_params)} head tensors are FRESH and materialized under seed "
+              f"{args.head_init_seed}")
+    elif carried:
         # Carried-over tensors are only legitimate if they came from a head of the SAME shape.
         source_head = {k: v for k, v in payload["state_dict"].items()
                        if k.startswith(VALUE_HEAD_PREFIX)}
@@ -270,8 +348,12 @@ def main() -> int:
         candidate.unlink(missing_ok=True)
         raise
     print(f"value_head_hidden {old_width!r} -> {new_width!r}")
-    print(f"  {len(head_tensors)} stale head tensor(s) left in place (ignored on load, and "
-          f"required to distinguish this from a truncated write): {head_tensors}")
+    if args.head_init_seed is None:
+        print(f"  {len(head_tensors)} stale head tensor(s) left in place (ignored on load, and "
+              f"required to distinguish this from a truncated write): {head_tensors}")
+    else:
+        print(f"  replaced {len(head_tensors)} incumbent head tensor(s) with the verified "
+              f"seeded MLP initialization: {head_tensors}")
     print(f"  wrote {dst}")
     return 0
 
