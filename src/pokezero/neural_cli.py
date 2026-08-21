@@ -71,6 +71,7 @@ from .showdown import observation_schema_version_from_choice, observation_spec_f
 from .neural_policy import (
     CONSTANT_LEARNING_RATE_SCHEDULE,
     DEFAULT_CATEGORY_OOV_BUCKETS,
+    DistributedTrainingContext,
     EntityTokenTransformerPolicy,
     LEARNING_RATE_SCHEDULES,
     MIT_THESIS_LEARNING_RATE_SCHEDULE,
@@ -2502,6 +2503,15 @@ def _add_foundation_value_tune_arguments(parser: argparse.ArgumentParser, *, inc
         default=None,
         help="Registered non-negative train seed. Required with the other Phase-3 converted-head arguments.",
     )
+    parser.add_argument(
+        "--phase3-world-size",
+        type=int,
+        default=None,
+        help=(
+            "Registered local torchrun world size for a provenance-bound Phase-3 tune. Defaults to one; "
+            "values above one launch the nested train command through torch.distributed.run."
+        ),
+    )
     parser.add_argument("--max-batches", type=int, default=None, help="Optional max training batches per epoch for smoke runs.")
     parser.add_argument("--device", default=None, help="Torch device for the underlying train command.")
     if include_summary_path:
@@ -3183,6 +3193,7 @@ def _train(args: argparse.Namespace) -> int:
             consumed_cache_callback=cache_lifecycle.consumed_cache_callback,
             auxiliary_paths=refutation_cache_paths or None,
             auxiliary_max_fraction=args.refutation_max_fraction if refutation_cache_paths else 0.0,
+            distributed_context_override=distributed_context_value if distributed_context_value.enabled else None,
         )
     else:
         train_kwargs: dict[str, object] = {}
@@ -3630,6 +3641,7 @@ def _train_with_value_selection(
     consumed_cache_callback: Callable[[Path], None] | None = None,
     auxiliary_paths: Sequence[Path] | None = None,
     auxiliary_max_fraction: float = 0.0,
+    distributed_context_override: DistributedTrainingContext | None = None,
 ) -> tuple[object, object, dict[str, object]]:
     if batch_size <= 0:
         raise ValueError("value selection batch_size must be positive.")
@@ -3689,6 +3701,8 @@ def _train_with_value_selection(
     if auxiliary_paths is not None:
         train_kwargs["auxiliary_paths"] = auxiliary_paths
         train_kwargs["auxiliary_max_fraction"] = auxiliary_max_fraction
+    if distributed_context_override is not None:
+        train_kwargs["distributed_context_override"] = distributed_context_override
     model, full_result = train_transformer_policy(
         paths,
         model_config=model_config,
@@ -3697,6 +3711,12 @@ def _train_with_value_selection(
         epoch_callback=evaluate_epoch,
         **train_kwargs,
     )
+    if distributed_context_override is not None and distributed_context_override.enabled and not distributed_context_override.is_primary:
+        # `train_transformer_policy` invokes epoch callbacks only on rank 0,
+        # bracketed by barriers. Non-primary ranks must therefore return after
+        # the shared train phase instead of treating the intentionally absent
+        # local selection witness as a failed selection.
+        return model, full_result, {}
     if best_state is None or best_epoch is None or best_metric_value is None:
         raise ValueError("value selection produced no selectable epoch reports.")
     model.load_state_dict(best_state)
@@ -6444,6 +6464,7 @@ def _foundation_value_tune_phase3_provenance(
 ) -> Mapping[str, Any] | None:
     """Validate and freeze the optional converted-head Phase-3 inputs."""
 
+    phase3_world_size = getattr(args, "phase3_world_size", None)
     phase3_values = (
         args.converted_initial_checkpoint,
         args.converted_initial_checkpoint_sha256,
@@ -6453,6 +6474,8 @@ def _foundation_value_tune_phase3_provenance(
         args.phase3_training_seed,
     )
     if all(value is None for value in phase3_values):
+        if phase3_world_size is not None:
+            raise ValueError("--phase3-world-size requires the converted-head Phase-3 provenance arguments.")
         return None
     if any(value is None for value in phase3_values):
         raise ValueError(
@@ -6466,6 +6489,9 @@ def _foundation_value_tune_phase3_provenance(
         raise ValueError("--expected-value-head-hidden must be positive.")
     if args.phase3_training_seed < 0:
         raise ValueError("--phase3-training-seed must be non-negative.")
+    expected_world_size = 1 if phase3_world_size is None else phase3_world_size
+    if type(expected_world_size) is not int or expected_world_size <= 0:
+        raise ValueError("--phase3-world-size must be a positive integer when supplied.")
     source_identity = _foundation_value_tune_file_identity(source_checkpoint, label="selected source checkpoint")
     converted_path = Path(args.converted_initial_checkpoint)
     converted_identity = _foundation_value_tune_file_identity(converted_path, label="converted initial checkpoint")
@@ -6487,6 +6513,7 @@ def _foundation_value_tune_phase3_provenance(
             "expected_value_head_hidden": args.expected_value_head_hidden,
         },
         "training_seed": args.phase3_training_seed,
+        "distributed_training": {"world_size": expected_world_size},
         "source_checkpoint": source_identity,
         "converted_initial_checkpoint": converted_identity,
         "converted_input_frozen_trunk": _foundation_value_tune_frozen_trunk_identity(
@@ -7057,6 +7084,14 @@ def _foundation_value_tune_require_phase3_train_summary(
         or (distributed.get("backend") is not None and not isinstance(distributed.get("backend"), str))
     ):
         raise ValueError("Phase-3 trainer summary has an invalid distributed-training witness.")
+    provenance = _foundation_value_tune_mapping(recipe.get("phase3_provenance"), label="Phase-3 provenance")
+    expected_distributed = _foundation_value_tune_mapping(
+        provenance.get("distributed_training"), label="Phase-3 registered distributed-training provenance"
+    )
+    if set(expected_distributed) != {"world_size"} or expected_distributed.get("world_size") != world_size:
+        raise ValueError("Phase-3 trainer summary world size differs from the registered execution contract.")
+    if rank != 0 or local_rank != 0:
+        raise ValueError("Phase-3 trainer summary must be emitted by primary rank 0.")
     if not isinstance(payload.get("epochs"), list) or not payload["epochs"]:
         raise ValueError("Phase-3 trainer summary has no epoch metrics.")
     epoch_metrics = [
@@ -8099,6 +8134,19 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         selection_paths=selection_paths,
         calibration_paths=calibration_paths,
     )
+    phase3_world_size = (
+        _foundation_value_tune_mapping(
+            phase3_provenance.get("distributed_training"), label="Phase-3 distributed-training provenance"
+        )["world_size"]
+        if phase3_provenance is not None
+        else 1
+    )
+    if (
+        phase3_provenance is not None
+        and phase3_world_size > 1
+        and (args.device is None or not str(args.device).lower().startswith("cuda"))
+    ):
+        raise ValueError("--phase3-world-size above one requires an explicit CUDA --device.")
     initial_checkpoint = (
         str(args.converted_initial_checkpoint)
         if phase3_provenance is not None
@@ -8162,6 +8210,22 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         argv.extend(["--max-batches", str(args.max_batches)])
     if args.device is not None:
         argv.extend(["--device", str(args.device)])
+    if phase3_provenance is not None and phase3_world_size > 1:
+        # The outer provenance wrapper must remain one process so it can own
+        # create-only publication.  Launch only its nested `train` subprocess
+        # under torchrun; the child command is the sole CLI subcommand allowed
+        # to observe WORLD_SIZE > 1.
+        argv = [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            f"--nproc-per-node={phase3_world_size}",
+            "-m",
+            "pokezero.neural_cli",
+            "train",
+            *argv[4:],
+        ]
     return {
         "schema_version": NEURAL_FOUNDATION_VALUE_TUNE_PLAN_SCHEMA_VERSION,
         "source": collect_source_metadata(),
@@ -8200,6 +8264,7 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
             "phase3_value_head_init_seed": args.phase3_value_head_init_seed,
             "expected_value_head_hidden": args.expected_value_head_hidden,
             "phase3_training_seed": args.phase3_training_seed,
+            "phase3_world_size": phase3_world_size if phase3_provenance is not None else None,
             "window_size": load_transformer_model_config(Path(initial_checkpoint)).window_size
             if phase3_provenance is not None
             else None,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import socket
@@ -9,6 +10,7 @@ import tempfile
 import unittest
 
 from pokezero.collection import RolloutRecord, write_rollout_record
+from pokezero import neural_cli
 from pokezero.env import TerminalState
 from pokezero.neural_policy import (
     EntityTokenTransformerPolicy,
@@ -149,6 +151,73 @@ def _ddp_train_worker(
             torch.distributed.destroy_process_group()
 
 
+def _ddp_value_selection_worker(
+    rank: int,
+    world_size: int,
+    port: int,
+    data_path: str,
+    initial_checkpoint: str,
+    selection_summary: str,
+) -> None:
+    """Exercise the rank-zero-only callback path used by Phase-3 torchrun."""
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+    )
+    context = initialize_distributed_training("cpu")
+    try:
+        model, prior = load_transformer_checkpoint(initial_checkpoint, map_location="cpu")
+        selected_model, selected_result, selection = neural_cli._train_with_value_selection(
+            paths=[Path(data_path)],
+            model_config=prior.model_config,
+            training_config=TransformerTrainingConfig(
+                batch_size=4,
+                epochs=1,
+                max_batches=1,
+                window_size=1,
+                device="cpu",
+                value_loss_weight=0.25,
+                opponent_action_loss_weight=0.0,
+                objective="behavior-cloning",
+                random_seed=113,
+            ),
+            initial_model=model,
+            selection_paths=[Path(data_path)],
+            selection_metric="mse",
+            batch_size=4,
+            bins=10,
+            distributed_context_override=context,
+        )
+        if context.is_primary:
+            if not selection:
+                raise AssertionError("rank zero must publish a selection witness")
+            save_transformer_checkpoint(selection_summary + ".pt", selected_model, result=selected_result)
+            Path(selection_summary).write_text(
+                json.dumps(
+                    {
+                        "selected_epoch": selection["selected_epoch"],
+                        "epochs": len(selection["epochs"]),
+                        "examples": selected_result.final_metrics.examples,
+                    }
+                ),
+                encoding="utf-8",
+            )
+        elif selection:
+            raise AssertionError("non-primary rank must not manufacture a selection witness")
+        import torch
+
+        torch.distributed.barrier()
+    finally:
+        import torch
+
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+
+
 @unittest.skipUnless(torch_available(), "requires torch")
 class DistributedTrainingTest(unittest.TestCase):
     def test_distributed_loss_term_preserves_legacy_denominator_floor(self) -> None:
@@ -236,6 +305,52 @@ class DistributedTrainingTest(unittest.TestCase):
                     torch.allclose(value, ddp_model.state_dict()[name], rtol=0.0, atol=1e-6),
                     name,
                 )
+
+    def test_ddp_value_selection_returns_only_rank_zero_witness(self) -> None:
+        """All ranks participate in training while only rank zero selects an epoch."""
+        import torch
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_path = root / "rollouts.jsonl"
+            initial_path = root / "initial.pt"
+            selection_summary = root / "selection.json"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, _rollout_record())
+            config = TransformerPolicyConfig.compact_category(
+                category_vocab=("a", "b", "c", "d"),
+                category_oov_buckets=1,
+                policy_id="ddp-value-selection",
+                window_size=1,
+                categorical_feature_count=1,
+                numeric_feature_count=1,
+                embedding_dim=8,
+                transformer_layers=0,
+                attention_heads=1,
+                feedforward_dim=8,
+                dropout=0.0,
+            )
+            torch.manual_seed(113)
+            initial_model = EntityTokenTransformerPolicy(config)
+            save_transformer_checkpoint(
+                initial_path,
+                initial_model,
+                result=TransformerTrainingResult(
+                    model_config=config,
+                    training_config=TransformerTrainingConfig(batch_size=4, window_size=1, device="cpu"),
+                    epochs=(),
+                ),
+            )
+            torch.multiprocessing.spawn(
+                _ddp_value_selection_worker,
+                args=(2, _free_local_port(), str(data_path), str(initial_path), str(selection_summary)),
+                nprocs=2,
+                join=True,
+            )
+            self.assertEqual(
+                json.loads(selection_summary.read_text(encoding="utf-8")),
+                {"selected_epoch": 1, "epochs": 1, "examples": 4},
+            )
 
     def test_ddp_value_ranking_uses_only_rank_local_pairs(self) -> None:
         """V2 ranking permits DDP without silently creating cross-rank pairs."""
