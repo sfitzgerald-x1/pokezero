@@ -16,6 +16,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import warnings
+from unittest import mock
 from pathlib import Path
 
 from pokezero.neural_policy import (
@@ -25,6 +27,8 @@ from pokezero.neural_policy import (
     TransformerPolicyConfig,
     TransformerTrainingConfig,
     TransformerTrainingResult,
+    FreshValueHeadWarning,
+    load_transformer_checkpoint,
     save_transformer_checkpoint,
     torch_available,
 )
@@ -105,6 +109,75 @@ class ConvertValueHeadTest(unittest.TestCase):
             self.assertTrue(torch.equal(after[name], tensor), f"{name} moved")
             checked += 1
         self.assertGreater(checked, 5)
+
+    def test_seeded_v1_materialization_persists_a_wholly_fresh_deterministic_head(self):
+        """The V1 training seed must identify the actual initial MLP tensors.
+
+        A config-only conversion deferred these tensors to the warm-start loader, which runs
+        before DDP training sets its seed.  Two equal seed conversions must therefore persist
+        equal head bytes, a different seed must move at least one head tensor, and the output
+        must reload with no fresh-head warning at all.
+        """
+        import torch
+
+        a, b, different = self.dir / "seed-a.pt", self.dir / "seed-b.pt", self.dir / "seed-c.pt"
+        for out, seed in ((a, 77), (b, 77), (different, 78)):
+            proc = self._run("--checkpoint", str(self.incumbent), "--output", str(out),
+                             "--value-head-hidden", "32", "--head-init-seed", str(seed))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr[-800:])
+            self.assertIn("materialized under seed", proc.stdout)
+
+        def head_state(path):
+            return {name: value for name, value in torch.load(
+                path, map_location="cpu", weights_only=True)["state_dict"].items()
+                    if name.startswith("value_head.")}
+
+        same_a, same_b, different_state = head_state(a), head_state(b), head_state(different)
+        self.assertEqual(set(same_a), {"value_head.0.weight", "value_head.0.bias",
+                                       "value_head.2.weight", "value_head.2.bias"})
+        self.assertTrue(all(torch.equal(same_a[name], same_b[name]) for name in same_a))
+        self.assertTrue(any(not torch.equal(same_a[name], different_state[name]) for name in same_a))
+        incumbent_state = torch.load(
+            self.incumbent, map_location="cpu", weights_only=True)["state_dict"]
+        seeded_state = torch.load(a, map_location="cpu", weights_only=True)["state_dict"]
+        for name, tensor in incumbent_state.items():
+            if not name.startswith("value_head."):
+                self.assertTrue(torch.equal(seeded_state[name], tensor), f"{name} moved")
+        # The conversion helper is also used by tooling, so its explicit seed must not mutate
+        # the caller's CPU generator (nor invoke torch.manual_seed, which would also perturb
+        # accelerator generators).  The output subprocesses above prove file determinism; this
+        # direct seam proves the narrower embedding contract.
+        caller_rng_state = torch.get_rng_state()
+        try:
+            torch.random.default_generator.manual_seed(991)
+            before_materialization = torch.get_rng_state()
+            source_payload = torch.load(self.incumbent, map_location="cpu", weights_only=True)
+            with mock.patch.object(torch, "manual_seed", side_effect=AssertionError):
+                materialized, fresh = _converter_module()._materialize_seeded_value_head(
+                    torch, _cfg(32), source_payload["state_dict"], seed=77)
+            self.assertTrue(torch.equal(torch.get_rng_state(), before_materialization))
+            self.assertEqual(fresh, set(same_a))
+            self.assertTrue(all(torch.equal(materialized[name], same_a[name]) for name in same_a))
+        finally:
+            torch.set_rng_state(caller_rng_state)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FreshValueHeadWarning)
+            model, result = load_transformer_checkpoint(a)
+        self.assertEqual(result.model_config.value_head_hidden, 32)
+        self.assertEqual(type(model.value_head).__name__, "Sequential")
+        payload = torch.load(a, map_location="cpu", weights_only=True)
+        self.assertEqual(payload["phase3_value_head_initialization"], {
+            "schema": "pokezero.phase3.value-head-initialization.v1",
+            "kind": "linear-to-mlp-fresh",
+            "seed": 77,
+            "head_parameter_names": sorted(same_a),
+        })
+
+    def test_seeded_materialization_is_refused_for_a_prior_mlp_head(self):
+        proc = self._run("--checkpoint", str(self.widened), "--output", str(self.dir / "next.pt"),
+                         "--value-head-hidden", "64", "--head-init-seed", "77")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("only defined for the incumbent linear-to-MLP", proc.stdout + proc.stderr)
 
     def test_narrowing_is_refused_without_force(self):
         proc = self._run("--checkpoint", str(self.widened), "--output", str(self.dir / "n.pt"),
