@@ -99,6 +99,7 @@ class FoundationValueTunePhase3Test(unittest.TestCase):
             "phase3_value_head_init_seed": 2718,
             "expected_value_head_hidden": 32,
             "phase3_training_seed": 31415,
+            "phase3_world_size": None,
         }
         values.update(overrides)
         return SimpleNamespace(**values)
@@ -114,7 +115,13 @@ class FoundationValueTunePhase3Test(unittest.TestCase):
             )
         )
 
-    def _recipe(self, out_dir: Path) -> dict[str, object]:
+    def _recipe(
+        self,
+        out_dir: Path,
+        *,
+        phase3_world_size: int | None = None,
+        device: str | None = None,
+    ) -> dict[str, object]:
         manifest_path = self.root / "manifest.json"
         summary_path = self.root / "neural-foundation-run-summary.json"
         manifest_path.write_text(
@@ -164,6 +171,12 @@ class FoundationValueTunePhase3Test(unittest.TestCase):
                     "32",
                     "--phase3-training-seed",
                     "31415",
+                    *(
+                        ["--phase3-world-size", str(phase3_world_size)]
+                        if phase3_world_size is not None
+                        else []
+                    ),
+                    *(["--device", device] if device is not None else []),
                     "--json",
                 ]
             )
@@ -177,6 +190,7 @@ class FoundationValueTunePhase3Test(unittest.TestCase):
         self.assertEqual(provenance["converted_initial_checkpoint"]["sha256"], _sha256(self.converted))
         self.assertEqual(provenance["phase3_value_head_initialization"]["seed"], 2718)
         self.assertEqual(provenance["training_seed"], 31415)
+        self.assertEqual(provenance["distributed_training"]["world_size"], 1)
         self.assertEqual(provenance["converted_input_frozen_trunk"]["value_head_hidden"], 32)
         self.assertEqual(
             [entry["path"] for entry in provenance["inputs"]["training"]],
@@ -358,6 +372,33 @@ class FoundationValueTunePhase3Test(unittest.TestCase):
                 calibration_paths=[self.calibration],
             )
 
+    def test_phase3_world_size_is_positive_and_requires_converted_head_provenance(self) -> None:
+        with self.assertRaisesRegex(ValueError, "positive integer"):
+            neural_cli._foundation_value_tune_phase3_provenance(
+                self._args(phase3_world_size=0),
+                source_checkpoint=self.source,
+                train_paths=[self.train],
+                selection_paths=[self.selection],
+                calibration_paths=[self.calibration],
+            )
+        without_converted_head = self._args(
+            converted_initial_checkpoint=None,
+            converted_initial_checkpoint_sha256=None,
+            source_checkpoint_sha256=None,
+            phase3_value_head_init_seed=None,
+            expected_value_head_hidden=None,
+            phase3_training_seed=None,
+            phase3_world_size=2,
+        )
+        with self.assertRaisesRegex(ValueError, "requires the converted-head"):
+            neural_cli._foundation_value_tune_phase3_provenance(
+                without_converted_head,
+                source_checkpoint=self.source,
+                train_paths=[self.train],
+                selection_paths=[self.selection],
+                calibration_paths=[self.calibration],
+            )
+
     def test_plan_routes_the_provenance_bound_converted_checkpoint_to_train(self) -> None:
         out_dir = self.root / "phase3-output"
         recipe = self._recipe(out_dir)
@@ -369,6 +410,26 @@ class FoundationValueTunePhase3Test(unittest.TestCase):
         self.assertEqual(argv[argv.index("--training-seed") + 1], "31415")
         self.assertEqual(argv[argv.index("--window-size") + 1], "2")
         self.assertEqual(recipe["config"]["window_size"], 2)
+        self.assertEqual(recipe["config"]["phase3_world_size"], 1)
+
+    def test_plan_uses_torchrun_and_binds_world_size_for_multirank_phase3(self) -> None:
+        recipe = self._recipe(self.root / "multirank-output", phase3_world_size=2, device="cuda")
+
+        self.assertEqual(
+            recipe["command"]["argv"][:8],
+            [
+                sys.executable,
+                "-m",
+                "torch.distributed.run",
+                "--standalone",
+                "--nproc-per-node=2",
+                "-m",
+                "pokezero.neural_cli",
+                "train",
+            ],
+        )
+        self.assertEqual(recipe["phase3_provenance"]["distributed_training"], {"world_size": 2})
+        self.assertEqual(recipe["config"]["phase3_world_size"], 2)
 
     def test_output_checkpoint_must_self_describe_the_selected_value_only_run(self) -> None:
         output = self.root / "misdeclared-output.pt"
@@ -765,6 +826,25 @@ class FoundationValueTunePhase3Test(unittest.TestCase):
         summary = json.loads((out_dir / "neural-foundation-value-tune-summary.json").read_text(encoding="utf-8"))
         self.assertEqual(summary["status"], "passed")
         self.assertEqual(summary["phase3_verification"]["published_artifacts"]["checkpoint_path"]["sha256"], _sha256(out_dir / "value-tuned-transformer-policy.pt"))
+
+        # The wrapper must not accept a training summary from a different DDP
+        # topology merely because its model/output bytes look otherwise valid.
+        world_size_mismatch_out_dir = self.root / "runner-mismatched-world-size-output"
+        world_size_mismatch_recipe = self._recipe(world_size_mismatch_out_dir)
+        world_size_mismatch_recipe["phase3_provenance"]["distributed_training"] = {"world_size": 2}
+        with (
+            patch.object(neural_cli, "_foundation_value_tune_recipe", return_value=world_size_mismatch_recipe),
+            patch.object(neural_cli, "_foundation_value_tune_require_clean_source_metadata", return_value=clean_source),
+            patch.object(neural_cli.subprocess, "run", side_effect=fake_train),
+        ):
+            with patch("sys.stdout", new_callable=io.StringIO):
+                world_size_mismatch_exit_code = neural_cli._foundation_value_tune_run(SimpleNamespace(summary_path=None))
+        self.assertEqual(world_size_mismatch_exit_code, 1)
+        world_size_mismatch_summary = json.loads(
+            (world_size_mismatch_out_dir / "neural-foundation-value-tune-summary.json").read_text(encoding="utf-8")
+        )
+        self.assertIn("world size differs", world_size_mismatch_summary["error"]["message"])
+        self.assertFalse((world_size_mismatch_out_dir / "value-tuned-transformer-policy.pt").exists())
 
         # A selected report cannot describe different optimizer metrics from the saved selected
         # checkpoint. The row is otherwise complete, so this exercises the cross-artifact gate.
