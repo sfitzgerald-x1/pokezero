@@ -6,11 +6,13 @@ import argparse
 import copy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import shlex
+import stat
 import subprocess
 import sys
 import time
@@ -69,9 +71,13 @@ from .showdown import observation_schema_version_from_choice, observation_spec_f
 from .neural_policy import (
     CONSTANT_LEARNING_RATE_SCHEDULE,
     DEFAULT_CATEGORY_OOV_BUCKETS,
+    EntityTokenTransformerPolicy,
     LEARNING_RATE_SCHEDULES,
     MIT_THESIS_LEARNING_RATE_SCHEDULE,
+    NEURAL_POLICY_SCHEMA_VERSION,
+    NEURAL_TRAINING_SCHEMA_VERSION,
     TransformerInferenceTimingAccumulator,
+    TransformerEpochMetrics,
     TransformerPolicyConfig,
     TransformerSoftmaxPolicy,
     TransformerTrainingConfig,
@@ -87,6 +93,8 @@ from .neural_policy import (
     feature_masks_from_model_config,
     initialize_distributed_training,
     load_transformer_checkpoint,
+    load_transformer_checkpoint_payload,
+    load_state_dict_allowing_fresh_value_head,
     load_transformer_model_config,
     load_transformer_policy,
     observation_spec_from_model_config,
@@ -2446,6 +2454,44 @@ def _add_foundation_value_tune_arguments(parser: argparse.ArgumentParser, *, inc
         "--require-heldout-selection",
         action="store_true",
         help="Fail unless the selected candidate has value-selection held-out rollout paths.",
+    )
+    parser.add_argument(
+        "--converted-initial-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Optional deterministically converted value-head checkpoint. When supplied, "
+            "the Phase-3 provenance arguments below are required and this checkpoint, "
+            "rather than the selected foundation checkpoint, is fine-tuned."
+        ),
+    )
+    parser.add_argument(
+        "--converted-initial-checkpoint-sha256",
+        default=None,
+        help="Required SHA-256 of --converted-initial-checkpoint for a provenance-bound Phase-3 value tune.",
+    )
+    parser.add_argument(
+        "--source-checkpoint-sha256",
+        default=None,
+        help="Required SHA-256 of the selected foundation checkpoint for a provenance-bound Phase-3 value tune.",
+    )
+    parser.add_argument(
+        "--phase3-value-head-init-seed",
+        type=int,
+        default=None,
+        help="Registered non-negative deterministic head-initialization seed for a converted Phase-3 value-head checkpoint.",
+    )
+    parser.add_argument(
+        "--expected-value-head-hidden",
+        type=int,
+        default=None,
+        help="Expected positive hidden width of --converted-initial-checkpoint's MLP value head.",
+    )
+    parser.add_argument(
+        "--phase3-training-seed",
+        type=int,
+        default=None,
+        help="Registered non-negative train seed. Required with the other Phase-3 converted-head arguments.",
     )
     parser.add_argument("--max-batches", type=int, default=None, help="Optional max training batches per epoch for smoke runs.")
     parser.add_argument("--device", default=None, help="Torch device for the underlying train command.")
@@ -5968,8 +6014,29 @@ def _foundation_value_tune_run(args: argparse.Namespace) -> int:
     recipe = _foundation_value_tune_recipe(args)
     out_dir = Path(str(recipe["out_dir"]))
     summary_path = args.summary_path if args.summary_path is not None else out_dir / "neural-foundation-value-tune-summary.json"
-    _validate_foundation_value_tune_paths(out_dir, summary_path=summary_path)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    phase3_mode = recipe.get("phase3_provenance") is not None
+    if phase3_mode:
+        # A converted-head run is evidence-producing infrastructure.  A best-effort HEAD label
+        # is not sufficient when the exact local implementation can be dirty or unavailable.
+        recipe = copy.deepcopy(recipe)
+        recipe["source"] = _foundation_value_tune_require_clean_source_metadata()
+    _validate_foundation_value_tune_paths(
+        out_dir,
+        summary_path=summary_path,
+        require_fresh_output_dir=phase3_mode,
+        artifact_paths=tuple(
+            Path(str(path))
+            for path in _foundation_value_tune_mapping(
+                recipe.get("artifacts"), label="value-tune artifacts"
+            ).values()
+        ) if phase3_mode else (),
+    )
+    out_dir.mkdir(parents=True, exist_ok=not phase3_mode)
+    execution_recipe = (
+        _foundation_value_tune_prepare_phase3_execution(recipe, out_dir=out_dir)
+        if phase3_mode
+        else recipe
+    )
     started = time.perf_counter()
     summary: dict[str, Any] = {
         "schema_version": NEURAL_FOUNDATION_VALUE_TUNE_SUMMARY_SCHEMA_VERSION,
@@ -5979,21 +6046,31 @@ def _foundation_value_tune_run(args: argparse.Namespace) -> int:
         "ended_at": None,
         "duration_seconds": None,
         "source": recipe["source"],
-        "recipe": recipe,
+        "recipe": execution_recipe,
         "returncode": None,
         "stdout_tail": None,
         "stderr_tail": None,
         "artifacts": recipe["artifacts"],
         "value_calibration": None,
+        "phase3_verification": None,
         "error": None,
     }
     _write_json(summary_path, summary)
     print("neural_foundation_value_tune_run:")
     print("purpose: value-only fine-tune for a selected foundation checkpoint")
     print(f"summary: {summary_path}")
-    print(recipe["command"]["shell"], flush=True)
+    execution_command = _foundation_value_tune_mapping(
+        execution_recipe.get("execution_command", execution_recipe.get("command")),
+        label="value-tune execution command",
+    )
+    print(execution_command["shell"], flush=True)
     try:
-        completed = subprocess.run(recipe["command"]["argv"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        completed = subprocess.run(
+            execution_command["argv"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
     except Exception as exc:
         summary["status"] = "failed"
         summary["ended_at"] = _utc_timestamp()
@@ -6006,19 +6083,48 @@ def _foundation_value_tune_run(args: argparse.Namespace) -> int:
     summary["returncode"] = int(completed.returncode)
     summary["stdout_tail"] = _text_tail(completed.stdout)
     summary["stderr_tail"] = _text_tail(completed.stderr)
-    summary["value_calibration"] = _load_optional_json_or_error(Path(str(recipe["artifacts"]["value_calibration_path"])))
-    summary["status"] = "passed" if completed.returncode == 0 else "failed"
+    if completed.returncode == 0 and phase3_mode:
+        try:
+            execution_recipe = _foundation_value_tune_capture_phase3_outputs(execution_recipe)
+            summary["recipe"] = execution_recipe
+            verification = _foundation_value_tune_verify_phase3_completion(execution_recipe)
+            summary["phase3_verification"] = _foundation_value_tune_publish_phase3_artifacts(
+                execution_recipe,
+                verification=verification,
+            )
+            summary["value_calibration"] = _load_json_mapping(
+                Path(str(_foundation_value_tune_mapping(
+                    execution_recipe.get("artifacts"), label="value-tune artifacts"
+                )["value_calibration_path"]))
+            )
+        except Exception as exc:
+            summary["status"] = "failed"
+            summary["returncode"] = 1
+            summary["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        else:
+            summary["status"] = "passed"
+    else:
+        execution_artifacts = _foundation_value_tune_mapping(
+            execution_recipe.get("execution_artifacts", execution_recipe.get("artifacts")),
+            label="value-tune execution artifacts",
+        )
+        summary["value_calibration"] = _load_optional_json_or_error(
+            Path(str(execution_artifacts["value_calibration_path"]))
+        )
+        summary["status"] = "passed" if completed.returncode == 0 else "failed"
     summary["ended_at"] = _utc_timestamp()
     summary["duration_seconds"] = round(time.perf_counter() - started, 6)
     _write_json(summary_path, summary)
-    if completed.returncode == 0:
+    if summary["status"] == "passed":
         print("neural_foundation_value_tune_run: PASS")
         print("note: PASS means value-only fine-tune completed; inspect calibration before using as a search leaf evaluator.")
     else:
-        print(f"error: neural foundation value tune failed with exit code {completed.returncode}", file=sys.stderr)
+        print(f"error: neural foundation value tune failed with exit code {summary['returncode']}", file=sys.stderr)
         if completed.stderr:
             print(_text_tail(completed.stderr), file=sys.stderr)
-    return int(completed.returncode)
+        if summary["error"] is not None:
+            print(f"error: Phase-3 provenance validation refused: {summary['error']['message']}", file=sys.stderr)
+    return int(summary["returncode"])
 
 
 def _foundation_value_tune_report(args: argparse.Namespace) -> int:
@@ -6053,6 +6159,1224 @@ def _foundation_value_tune_report(args: argparse.Namespace) -> int:
     else:
         print("value_calibration: missing")
     return 0 if status == "passed" else 2
+
+
+def _foundation_value_tune_file_identity(path: Path, *, label: str) -> dict[str, Any]:
+    """Return a content identity for a required Phase-3 input or output file."""
+
+    try:
+        stat_result = path.lstat()
+    except OSError as exc:
+        raise ValueError(f"{label} is unavailable: {path}") from exc
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"{label} must be a regular non-symlink file: {path}")
+    return {
+        "path": str(path),
+        "sha256": checkpoint_file_sha256(path),
+        "bytes": int(stat_result.st_size),
+    }
+
+
+def _foundation_value_tune_file_identities(paths: Sequence[Path], *, label: str) -> list[dict[str, Any]]:
+    return [
+        _foundation_value_tune_file_identity(path, label=f"{label}[{index}]")
+        for index, path in enumerate(paths)
+    ]
+
+
+def _foundation_value_tune_require_sha256(identity: Mapping[str, Any], expected: str, *, label: str) -> None:
+    if identity.get("sha256") != expected:
+        raise ValueError(
+            f"{label} SHA-256 mismatch: observed {identity.get('sha256')!r}, expected {expected!r}."
+        )
+
+
+def _foundation_value_tune_mapping(value: Any, *, label: str) -> Mapping[str, Any]:
+    try:
+        return _mapping(value)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be an object.") from exc
+
+
+def _foundation_value_tune_frozen_trunk_identity(
+    *,
+    source_checkpoint: Path,
+    compared_checkpoint: Path,
+    expected_value_head_hidden: int,
+    label: str,
+    expected_initialization_seed: int | None = None,
+) -> dict[str, Any]:
+    """Require one candidate to differ from a source only in its value head.
+
+    This is deliberately payload-level instead of model-level: a compatible model
+    load can hide a missing/reinitialized head, while a Phase-3 value-only arm must
+    preserve the exact source trunk tensor inventory and bytes.
+    """
+
+    source_payload = _foundation_value_tune_mapping(
+        load_transformer_checkpoint_payload(source_checkpoint),
+        label="source checkpoint payload",
+    )
+    compared_payload = _foundation_value_tune_mapping(
+        load_transformer_checkpoint_payload(compared_checkpoint),
+        label=f"{label} checkpoint payload",
+    )
+    source_state = _foundation_value_tune_mapping(source_payload.get("state_dict"), label="source checkpoint state_dict")
+    compared_state = _foundation_value_tune_mapping(compared_payload.get("state_dict"), label=f"{label} checkpoint state_dict")
+    source_trunk = {name for name in source_state if not str(name).startswith("value_head.")}
+    compared_trunk = {name for name in compared_state if not str(name).startswith("value_head.")}
+    if source_trunk != compared_trunk:
+        raise ValueError(f"{label} checkpoint changed the non-value tensor inventory.")
+    for name in sorted(source_trunk):
+        source_tensor = source_state[name]
+        compared_tensor = compared_state[name]
+        if not _foundation_value_tune_tensor_bytes_identical(source_tensor, compared_tensor):
+            raise ValueError(f"{label} checkpoint changed non-value tensor {name!r}.")
+    source_head = {name for name in source_state if str(name).startswith("value_head.")}
+    compared_head = {name for name in compared_state if str(name).startswith("value_head.")}
+    if not source_head or not compared_head or source_head == compared_head:
+        raise ValueError(f"{label} checkpoint does not demonstrate a converted value-head shape.")
+    source_config = load_transformer_model_config(source_checkpoint)
+    compared_config = load_transformer_model_config(compared_checkpoint)
+    if compared_config.value_head_hidden != expected_value_head_hidden:
+        raise ValueError(
+            f"{label} checkpoint value_head_hidden={compared_config.value_head_hidden!r}, "
+            f"expected {expected_value_head_hidden}."
+        )
+    source_config_payload = source_config.to_dict()
+    compared_config_payload = compared_config.to_dict()
+    source_config_payload.pop("value_head_hidden", None)
+    compared_config_payload.pop("value_head_hidden", None)
+    if source_config_payload != compared_config_payload:
+        raise ValueError(
+            f"{label} checkpoint changed model_config outside value_head_hidden."
+        )
+    live_model = EntityTokenTransformerPolicy(compared_config)
+    expected_head_state = {
+        f"value_head.{name}": tensor
+        for name, tensor in live_model.value_head.state_dict().items()
+    }
+    if set(compared_head) != set(expected_head_state):
+        raise ValueError(f"{label} checkpoint has an incomplete or foreign value-head tensor inventory.")
+    for name, expected_tensor in expected_head_state.items():
+        if not _foundation_value_tune_tensor_representation_matches(compared_state[name], expected_tensor):
+            raise ValueError(f"{label} checkpoint value-head tensor {name!r} has an incompatible shape or dtype.")
+        _foundation_value_tune_require_finite_value_head_tensor(
+            compared_state[name], label=f"{label} checkpoint value-head tensor {name!r}"
+        )
+    fresh_head_tensors = set(load_state_dict_allowing_fresh_value_head(live_model, compared_state))
+    if fresh_head_tensors:
+        raise ValueError(
+            f"{label} checkpoint would reinitialize value-head tensors on production load: "
+            f"{sorted(fresh_head_tensors)}."
+        )
+    initialization: Mapping[str, Any] | None = None
+    if expected_initialization_seed is not None:
+        initialization = _foundation_value_tune_mapping(
+            compared_payload.get("phase3_value_head_initialization"),
+            label=f"{label} Phase-3 value-head initialization",
+        )
+        expected_head_names = sorted(compared_head)
+        if set(initialization) != {
+            "schema", "kind", "seed", "head_parameter_names",
+        }:
+            raise ValueError(f"{label} checkpoint has an unrecognized Phase-3 initialization schema.")
+        if initialization.get("schema") != "pokezero.phase3.value-head-initialization.v1":
+            raise ValueError(f"{label} checkpoint has no recognized Phase-3 initialization schema.")
+        if initialization.get("kind") != "linear-to-mlp-fresh":
+            raise ValueError(f"{label} checkpoint has no fresh linear-to-MLP initialization witness.")
+        seed = initialization.get("seed")
+        if type(seed) is not int or seed != expected_initialization_seed:
+            raise ValueError(
+                f"{label} checkpoint initialization seed {seed!r} does not match "
+                f"the registered Phase-3 seed {expected_initialization_seed}."
+            )
+        names = initialization.get("head_parameter_names")
+        if not isinstance(names, list) or any(type(name) is not str for name in names):
+            raise ValueError(f"{label} checkpoint initialization has no strict head tensor inventory.")
+        if names != expected_head_names:
+            raise ValueError(
+                f"{label} checkpoint initialization head tensor inventory does not match "
+                "the converted checkpoint."
+            )
+        # The raw state inventory alone can be made to look plausible. Reload through the
+        # production checkpoint boundary as well, and require exactly the stamped MLP names.
+        if sorted(expected_head_state) != expected_head_names:
+            raise ValueError(
+                f"{label} checkpoint does not reload with the stamped Phase-3 head inventory."
+            )
+        # The stamp is a claim, not the initialized weights themselves.  Re-run the exact
+        # CPU-only construction used by convert_value_head.py from the selected source state
+        # and require byte-for-byte equality for every materialized MLP tensor.
+        torch = require_torch()
+        with torch.random.fork_rng(devices=[]):
+            torch.random.default_generator.manual_seed(expected_initialization_seed)
+            expected_model = EntityTokenTransformerPolicy(compared_config)
+        regenerated = set(load_state_dict_allowing_fresh_value_head(expected_model, source_state))
+        expected_fresh = set(expected_head_names)
+        if regenerated != expected_fresh:
+            raise ValueError(
+                f"{label} checkpoint source state did not regenerate exactly the Phase-3 head tensors."
+            )
+        for name, expected_tensor in expected_model.state_dict().items():
+            full_name = str(name)
+            if full_name.startswith("value_head.") and not _foundation_value_tune_tensor_bytes_identical(
+                expected_tensor, compared_state[full_name]
+            ):
+                raise ValueError(
+                    f"{label} checkpoint value-head tensor {full_name!r} does not match its registered seed."
+                )
+    result: dict[str, Any] = {
+        "non_value_tensor_count": len(source_trunk),
+        "source_value_head_tensors": sorted(source_head),
+        "compared_value_head_tensors": sorted(compared_head),
+        "value_head_hidden": expected_value_head_hidden,
+    }
+    if initialization is not None:
+        result["phase3_value_head_initialization"] = dict(initialization)
+    return result
+
+
+def _foundation_value_tune_tensor_bytes_identical(left: Any, right: Any) -> bool:
+    """Return true only for the same logical tensor representation and bytes.
+
+    ``torch.equal`` alone is intentionally insufficient here: it can accept different
+    dtypes, broadcastable shapes, and +0/-0.  The Phase-3 frozen-trunk assertion is a
+    byte-identity claim, not merely numerical equality.
+    """
+
+    required = ("shape", "dtype", "layout", "stride", "storage_offset", "detach", "cpu", "contiguous")
+    if any(not hasattr(value, attribute) for value in (left, right) for attribute in required):
+        return False
+    if not _foundation_value_tune_tensor_representation_matches(left, right):
+        return False
+    try:
+        torch = require_torch()
+        left_bytes = left.detach().cpu().contiguous().view(torch.uint8)
+        right_bytes = right.detach().cpu().contiguous().view(torch.uint8)
+        return bool(torch.equal(left_bytes, right_bytes))
+    except Exception:
+        return False
+
+
+def _foundation_value_tune_tensor_representation_matches(left: Any, right: Any) -> bool:
+    """Check the non-value portion of tensor identity without comparing values."""
+
+    required = ("shape", "dtype", "layout", "stride", "storage_offset", "detach", "cpu", "contiguous")
+    if any(not hasattr(value, attribute) for value in (left, right) for attribute in required):
+        return False
+    return not (
+        tuple(left.shape) != tuple(right.shape)
+        or left.dtype != right.dtype
+        or left.layout != right.layout
+        or tuple(left.stride()) != tuple(right.stride())
+        or left.storage_offset() != right.storage_offset()
+    )
+
+
+def _foundation_value_tune_require_finite_value_head_tensor(value: Any, *, label: str) -> None:
+    """Reject a structurally plausible but numerically unusable value-head tensor."""
+
+    try:
+        torch = require_torch()
+        if not bool(value.is_floating_point()) or not bool(torch.isfinite(value).all().item()):
+            raise ValueError(f"{label} contains non-finite or non-floating values.")
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"{label} is not a finite floating tensor.") from exc
+
+
+def _foundation_value_tune_require_value_head_updated(
+    *,
+    converted_checkpoint: Path,
+    output_checkpoint: Path,
+) -> list[str]:
+    """Require a real value-head update, not a copied converted initializer."""
+
+    converted_payload = _foundation_value_tune_mapping(
+        load_transformer_checkpoint_payload(converted_checkpoint),
+        label="converted initial checkpoint payload",
+    )
+    output_payload = _foundation_value_tune_mapping(
+        load_transformer_checkpoint_payload(output_checkpoint),
+        label="value-tuned checkpoint payload",
+    )
+    converted_state = _foundation_value_tune_mapping(
+        converted_payload.get("state_dict"), label="converted initial checkpoint state_dict"
+    )
+    output_state = _foundation_value_tune_mapping(
+        output_payload.get("state_dict"), label="value-tuned checkpoint state_dict"
+    )
+    converted_head = {
+        str(name): value for name, value in converted_state.items() if str(name).startswith("value_head.")
+    }
+    output_head = {
+        str(name): value for name, value in output_state.items() if str(name).startswith("value_head.")
+    }
+    if not converted_head or set(converted_head) != set(output_head):
+        raise ValueError("value-tuned checkpoint does not retain the complete converted value-head inventory.")
+    changed = [
+        name for name in sorted(converted_head)
+        if not _foundation_value_tune_tensor_bytes_identical(converted_head[name], output_head[name])
+    ]
+    if not changed:
+        raise ValueError("value-tuned checkpoint is byte-identical to the converted value-head initialization.")
+    return changed
+
+
+def _foundation_value_tune_phase3_provenance(
+    args: argparse.Namespace,
+    *,
+    source_checkpoint: Path,
+    train_paths: Sequence[Path],
+    selection_paths: Sequence[Path],
+    calibration_paths: Sequence[Path],
+) -> Mapping[str, Any] | None:
+    """Validate and freeze the optional converted-head Phase-3 inputs."""
+
+    phase3_values = (
+        args.converted_initial_checkpoint,
+        args.converted_initial_checkpoint_sha256,
+        args.source_checkpoint_sha256,
+        args.phase3_value_head_init_seed,
+        args.expected_value_head_hidden,
+        args.phase3_training_seed,
+    )
+    if all(value is None for value in phase3_values):
+        return None
+    if any(value is None for value in phase3_values):
+        raise ValueError(
+            "--converted-initial-checkpoint, both checkpoint SHA-256 arguments, "
+            "--phase3-value-head-init-seed, --expected-value-head-hidden, and "
+            "--phase3-training-seed must be supplied together."
+        )
+    if args.phase3_value_head_init_seed < 0:
+        raise ValueError("--phase3-value-head-init-seed must be non-negative.")
+    if args.expected_value_head_hidden <= 0:
+        raise ValueError("--expected-value-head-hidden must be positive.")
+    if args.phase3_training_seed < 0:
+        raise ValueError("--phase3-training-seed must be non-negative.")
+    source_identity = _foundation_value_tune_file_identity(source_checkpoint, label="selected source checkpoint")
+    converted_path = Path(args.converted_initial_checkpoint)
+    converted_identity = _foundation_value_tune_file_identity(converted_path, label="converted initial checkpoint")
+    _foundation_value_tune_require_sha256(
+        source_identity,
+        args.source_checkpoint_sha256,
+        label="selected source checkpoint",
+    )
+    _foundation_value_tune_require_sha256(
+        converted_identity,
+        args.converted_initial_checkpoint_sha256,
+        label="converted initial checkpoint",
+    )
+    if source_identity["sha256"] == converted_identity["sha256"]:
+        raise ValueError("converted initial checkpoint must not be byte-identical to the selected source checkpoint.")
+    return {
+        "phase3_value_head_initialization": {
+            "seed": args.phase3_value_head_init_seed,
+            "expected_value_head_hidden": args.expected_value_head_hidden,
+        },
+        "training_seed": args.phase3_training_seed,
+        "source_checkpoint": source_identity,
+        "converted_initial_checkpoint": converted_identity,
+        "converted_input_frozen_trunk": _foundation_value_tune_frozen_trunk_identity(
+            source_checkpoint=source_checkpoint,
+            compared_checkpoint=converted_path,
+            expected_value_head_hidden=args.expected_value_head_hidden,
+            label="converted initial",
+            expected_initialization_seed=args.phase3_value_head_init_seed,
+        ),
+        "inputs": {
+            "training": _foundation_value_tune_file_identities(train_paths, label="training input"),
+            "selection": _foundation_value_tune_file_identities(selection_paths, label="selection input"),
+            "calibration": _foundation_value_tune_file_identities(calibration_paths, label="calibration input"),
+        },
+    }
+
+
+def _foundation_value_tune_require_clean_source_metadata() -> Mapping[str, Any]:
+    source = collect_source_metadata()
+    if source.get("available") is not True:
+        raise ValueError("provenance-bound Phase-3 value tune requires readable Git source metadata.")
+    if source.get("dirty") is not False:
+        raise ValueError("provenance-bound Phase-3 value tune refuses a dirty source checkout.")
+    head = source.get("head")
+    if not isinstance(head, str) or len(head) != 40:
+        raise ValueError("provenance-bound Phase-3 value tune requires an exact Git HEAD.")
+    return source
+
+
+def _foundation_value_tune_private_snapshot(
+    source: Path,
+    destination: Path,
+    *,
+    expected: Mapping[str, Any],
+    label: str,
+) -> dict[str, Any]:
+    """Copy one immutable input through a single verified source descriptor.
+
+    Pre/post hashing a mutable shared pathname cannot prove which bytes a long-running trainer
+    read.  This opens one non-symlink regular file, hashes exactly those bytes while copying
+    them into a new private run directory, and refuses if that descriptor's content differs from
+    the frozen preflight identity.
+    """
+
+    expected_sha = _string_or_none(expected.get("sha256"))
+    expected_bytes = expected.get("bytes")
+    if expected_sha is None or type(expected_bytes) is not int or expected_bytes < 0:
+        raise ValueError(f"{label} has no strict frozen file identity.")
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError("Phase-3 input snapshots require O_NOFOLLOW support.")
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.snapshot-tmp")
+    if temporary.exists() or destination.exists():
+        raise ValueError(f"private Phase-3 snapshot destination already exists: {destination}")
+    source_fd: int | None = None
+    target_fd: int | None = None
+    try:
+        source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+        source_stat = os.fstat(source_fd)
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise ValueError(f"{label} must be a regular non-symlink file: {source}")
+        target_fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        digest = hashlib.sha256()
+        copied = 0
+        while True:
+            block = os.read(source_fd, 1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+            view = memoryview(block)
+            while view:
+                written = os.write(target_fd, view)
+                view = view[written:]
+            copied += len(block)
+        os.fsync(target_fd)
+        observed_sha = digest.hexdigest()
+        if observed_sha != expected_sha or copied != expected_bytes:
+            raise ValueError(
+                f"{label} changed before it could be privately snapshotted: observed "
+                f"SHA-256 {observed_sha!r}/{copied} bytes, expected {expected_sha!r}/{expected_bytes} bytes."
+            )
+    except BaseException:
+        if target_fd is not None:
+            os.close(target_fd)
+            target_fd = None
+        temporary.unlink(missing_ok=True)
+        raise
+    finally:
+        if source_fd is not None:
+            os.close(source_fd)
+    if target_fd is not None:
+        os.close(target_fd)
+    try:
+        os.link(temporary, destination)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    temporary.unlink()
+    return _foundation_value_tune_file_identity(destination, label=f"private {label} snapshot")
+
+
+def _foundation_value_tune_snapshot_identity(
+    identity: Mapping[str, Any],
+    destination: Path,
+    *,
+    label: str,
+) -> dict[str, Any]:
+    source = Path(_string_or_none(identity.get("path")) or "")
+    snapshot = _foundation_value_tune_private_snapshot(
+        source,
+        destination,
+        expected=identity,
+        label=label,
+    )
+    _foundation_value_tune_require_identity(snapshot, identity, label=f"private {label} snapshot")
+    return snapshot
+
+
+def _foundation_value_tune_require_identity(
+    observed: Mapping[str, Any],
+    expected: Mapping[str, Any],
+    *,
+    label: str,
+) -> None:
+    expected_sha = _string_or_none(expected.get("sha256"))
+    expected_bytes = expected.get("bytes")
+    if expected_sha is None or type(expected_bytes) is not int or expected_bytes < 0:
+        raise ValueError(f"{label} has no strict expected identity.")
+    if observed.get("sha256") != expected_sha or observed.get("bytes") != expected_bytes:
+        raise ValueError(
+            f"{label} SHA-256/byte identity mismatch: observed "
+            f"{observed.get('sha256')!r}/{observed.get('bytes')!r}, expected "
+            f"{expected_sha!r}/{expected_bytes!r}."
+        )
+
+
+def _foundation_value_tune_prepare_phase3_execution(
+    recipe: Mapping[str, Any],
+    *,
+    out_dir: Path,
+) -> dict[str, Any]:
+    """Build a private-input/private-output Phase-3 execution recipe.
+
+    The public plan remains useful as a human-readable command.  The runner instead invokes
+    this derived command so both the inputs it reads and the outputs it verifies are private
+    until every identity check succeeds.
+    """
+
+    execution = copy.deepcopy(dict(recipe))
+    provenance = _foundation_value_tune_mapping(execution.get("phase3_provenance"), label="Phase-3 provenance")
+    inputs = _foundation_value_tune_mapping(provenance.get("inputs"), label="Phase-3 inputs")
+    snapshot_root = out_dir / ".phase3-input-snapshots"
+    snapshot_root.mkdir(mode=0o700)
+    source_snapshot = _foundation_value_tune_snapshot_identity(
+        _foundation_value_tune_mapping(provenance.get("source_checkpoint"), label="Phase-3 source checkpoint provenance"),
+        snapshot_root / "source-checkpoint.pt",
+        label="selected source checkpoint",
+    )
+    converted_snapshot = _foundation_value_tune_snapshot_identity(
+        _foundation_value_tune_mapping(provenance.get("converted_initial_checkpoint"), label="Phase-3 converted checkpoint provenance"),
+        snapshot_root / "converted-initial-checkpoint.pt",
+        label="converted initial checkpoint",
+    )
+    input_snapshots: dict[str, list[dict[str, Any]]] = {}
+    # A held-out/calibration fallback may deliberately reuse a data file.  Snapshot it once and
+    # preserve that one identity in every consuming group; a path-keyed argv rewrite cannot
+    # safely choose two different private paths for the same original pathname.
+    snapshots_by_source_path: dict[str, tuple[Mapping[str, Any], dict[str, Any]]] = {}
+    for group in ("training", "selection", "calibration"):
+        snapshots: list[dict[str, Any]] = []
+        for index, raw_identity in enumerate(_sequence(inputs.get(group, ()))):
+            identity = _foundation_value_tune_mapping(raw_identity, label=f"Phase-3 {group} input provenance")
+            source_path = Path(_string_or_none(identity.get("path")) or "")
+            suffix = source_path.suffix or ".input"
+            source_text = _string_or_none(identity.get("path"))
+            if source_text is None:
+                raise ValueError(f"Phase-3 {group} input {index} has no source path.")
+            prior = snapshots_by_source_path.get(source_text)
+            if prior is not None:
+                prior_identity, prior_snapshot = prior
+                _foundation_value_tune_require_identity(
+                    identity,
+                    prior_identity,
+                    label=f"Phase-3 repeated {group} input {index}",
+                )
+                snapshots.append(dict(prior_snapshot))
+                continue
+            snapshot = _foundation_value_tune_snapshot_identity(
+                identity,
+                snapshot_root / f"input-{len(snapshots_by_source_path):03d}{suffix}",
+                label=f"{group} input {index}",
+            )
+            snapshots_by_source_path[source_text] = (identity, snapshot)
+            snapshots.append(snapshot)
+        if not snapshots:
+            raise ValueError(f"Phase-3 requires at least one {group} input snapshot.")
+        input_snapshots[group] = snapshots
+
+    final_artifacts = _foundation_value_tune_mapping(execution.get("artifacts"), label="value-tune artifacts")
+    if "training_summary_path" not in final_artifacts:
+        raise ValueError("Phase-3 recipe has no trainer summary artifact.")
+    stage_root = out_dir / ".phase3-private-training-stage"
+    stage_root.mkdir(mode=0o700)
+    execution_artifacts = {
+        name: str(stage_root / Path(str(path)).name)
+        for name, path in final_artifacts.items()
+    }
+    replacements: dict[str | None, str] = {
+        _string_or_none(_foundation_value_tune_mapping(provenance.get("source_checkpoint"), label="Phase-3 source checkpoint provenance").get("path")): str(source_snapshot["path"]),
+        _string_or_none(_foundation_value_tune_mapping(provenance.get("converted_initial_checkpoint"), label="Phase-3 converted checkpoint provenance").get("path")): str(converted_snapshot["path"]),
+    }
+    for group in ("training", "selection", "calibration"):
+        originals = tuple(
+            _foundation_value_tune_mapping(item, label=f"Phase-3 {group} input provenance")
+            for item in _sequence(inputs.get(group, ()))
+        )
+        for original, snapshot in zip(originals, input_snapshots[group], strict=True):
+            replacements[_string_or_none(original.get("path"))] = str(snapshot["path"])
+    for name, path in final_artifacts.items():
+        replacements[str(path)] = execution_artifacts[name]
+    if None in replacements:
+        raise ValueError("Phase-3 recipe contains an input path without a string identity.")
+    command = _foundation_value_tune_mapping(execution.get("command"), label="value-tune command")
+    original_argv = _sequence(command.get("argv"))
+    if any(not isinstance(item, str) for item in original_argv):
+        raise ValueError("value-tune command argv must contain only strings.")
+    argv = [replacements.get(item, item) for item in original_argv]
+    argv.extend(["--summary-out", execution_artifacts["training_summary_path"]])
+    execution["phase3_private_snapshots"] = {
+        "source_checkpoint": source_snapshot,
+        "converted_initial_checkpoint": converted_snapshot,
+        "inputs": input_snapshots,
+    }
+    execution["execution_artifacts"] = execution_artifacts
+    execution["execution_command"] = {"argv": argv, "shell": shlex.join(argv)}
+    return execution
+
+
+def _foundation_value_tune_verified_snapshot(
+    snapshot: Mapping[str, Any],
+    original: Mapping[str, Any],
+    *,
+    label: str,
+) -> Path:
+    path = Path(_string_or_none(snapshot.get("path")) or "")
+    observed = _foundation_value_tune_file_identity(path, label=f"private {label} snapshot")
+    _foundation_value_tune_require_identity(observed, original, label=f"private {label} snapshot")
+    _foundation_value_tune_require_identity(snapshot, original, label=f"recorded private {label} snapshot")
+    return path
+
+
+def _foundation_value_tune_capture_phase3_outputs(recipe: Mapping[str, Any]) -> dict[str, Any]:
+    """Freeze all trainer outputs before parsing or validating any of them.
+
+    The trainer writes private-stage names, but those names are still pathnames.  Hashing them
+    and then reopening them for schema/model validation leaves a replacement window.  Capture
+    every regular output descriptor once into an invocation-private directory; all subsequent
+    validation and final hard-link publication use only those copies.
+    """
+
+    execution = copy.deepcopy(dict(recipe))
+    staged = _foundation_value_tune_mapping(execution.get("execution_artifacts"), label="Phase-3 execution artifacts")
+    final = _foundation_value_tune_mapping(execution.get("artifacts"), label="Phase-3 registered artifacts")
+    if set(staged) != set(final):
+        raise ValueError("Phase-3 staged and registered artifact inventories differ before capture.")
+    out_dirs = {Path(str(path)).parent.resolve(strict=False) for path in final.values()}
+    if len(out_dirs) != 1:
+        raise ValueError("Phase-3 registered artifacts do not share one output directory.")
+    capture_root = next(iter(out_dirs)) / ".phase3-verified-output-snapshots"
+    capture_root.mkdir(mode=0o700)
+    captured: dict[str, dict[str, Any]] = {}
+    execution_artifacts: dict[str, str] = {}
+    for index, name in enumerate(sorted(staged)):
+        staged_path = Path(str(staged[name]))
+        expected = _foundation_value_tune_file_identity(staged_path, label=f"private staged {name}")
+        capture_path = capture_root / f"{index:02d}-{Path(str(final[name])).name}"
+        snapshot = _foundation_value_tune_private_snapshot(
+            staged_path,
+            capture_path,
+            expected=expected,
+            label=f"private staged {name}",
+        )
+        captured[name] = snapshot
+        execution_artifacts[name] = str(capture_path)
+    execution["phase3_captured_execution_artifacts"] = captured
+    execution["phase3_trainer_artifacts"] = dict(staged)
+    execution["execution_artifacts"] = execution_artifacts
+    return execution
+
+
+def _foundation_value_tune_require_finite_number(value: Any, *, label: str, allow_none: bool = False) -> None:
+    if value is None and allow_none:
+        return
+    if type(value) not in {int, float} or isinstance(value, bool) or not math.isfinite(float(value)):
+        raise ValueError(f"{label} must be a finite number.")
+
+
+def _foundation_value_tune_require_calibration_report(
+    report: Any,
+    *,
+    expected_bins: int,
+    label: str,
+) -> Mapping[str, Any]:
+    payload = _foundation_value_tune_mapping(report, label=label)
+    required = {
+        "examples", "mse", "mae", "bias", "sign_accuracy",
+        "expected_calibration_error", "pearson_correlation", "bins", "slices",
+    }
+    if set(payload) != required:
+        raise ValueError(f"{label} does not match the value-calibration report schema.")
+    examples = payload.get("examples")
+    if type(examples) is not int or examples <= 0:
+        raise ValueError(f"{label}.examples must be a positive integer.")
+    for field in ("mse", "mae", "bias", "sign_accuracy", "expected_calibration_error"):
+        _foundation_value_tune_require_finite_number(payload.get(field), label=f"{label}.{field}")
+    _foundation_value_tune_require_finite_number(
+        payload.get("pearson_correlation"), label=f"{label}.pearson_correlation", allow_none=True
+    )
+    if examples <= 1 and payload.get("pearson_correlation") is not None:
+        raise ValueError(f"{label}.pearson_correlation must be null with fewer than two examples.")
+    bins = payload.get("bins")
+    if not isinstance(bins, list) or len(bins) != expected_bins:
+        raise ValueError(f"{label}.bins must contain exactly {expected_bins} rows.")
+    total = 0
+    for index, raw_bin in enumerate(bins):
+        bin_payload = _foundation_value_tune_mapping(raw_bin, label=f"{label}.bins[{index}]")
+        if set(bin_payload) != {
+            "lower", "upper", "count", "mean_prediction", "mean_return", "calibration_error",
+        }:
+            raise ValueError(f"{label}.bins[{index}] has an unrecognized schema.")
+        if type(bin_payload.get("count")) is not int or bin_payload.get("count") < 0:
+            raise ValueError(f"{label}.bins[{index}].count must be a non-negative integer.")
+        for field in ("lower", "upper", "mean_prediction", "mean_return", "calibration_error"):
+            _foundation_value_tune_require_finite_number(
+                bin_payload.get(field), label=f"{label}.bins[{index}].{field}"
+            )
+        expected_lower = -1.0 + (2.0 * index / expected_bins)
+        expected_upper = -1.0 + (2.0 * (index + 1) / expected_bins)
+        if float(bin_payload["lower"]) != expected_lower or float(bin_payload["upper"]) != expected_upper:
+            raise ValueError(f"{label}.bins[{index}] does not match the evaluator bin boundaries.")
+        total += int(bin_payload["count"])
+    if total != examples:
+        raise ValueError(f"{label}.bins counts do not sum to examples.")
+    slices = payload.get("slices")
+    if not isinstance(slices, list) or not slices:
+        raise ValueError(f"{label}.slices must contain production calibration slices.")
+    allowed_slice_names = (
+        "return:positive", "return:negative", "return:zero",
+        "turn:early_0_9", "turn:mid_10_29", "turn:late_30_plus",
+        "terminal:uncapped", "terminal:capped",
+    )
+    slice_order = {name: index for index, name in enumerate(allowed_slice_names)}
+    seen_names: set[str] = set()
+    totals_by_family = {"return": 0, "turn": 0, "terminal": 0}
+    previous_order = -1
+    for index, raw_slice in enumerate(slices):
+        slice_payload = _foundation_value_tune_mapping(raw_slice, label=f"{label}.slices[{index}]")
+        if set(slice_payload) != {
+            "name", "examples", "mse", "mae", "bias", "sign_accuracy",
+            "expected_calibration_error", "pearson_correlation", "sign_accuracy_applicable",
+        }:
+            raise ValueError(f"{label}.slices[{index}] has an unrecognized schema.")
+        name = slice_payload.get("name")
+        if not isinstance(name, str) or name not in slice_order or name in seen_names or slice_order[name] <= previous_order:
+            raise ValueError(f"{label}.slices[{index}] has an invalid evaluator slice name/order.")
+        seen_names.add(name)
+        previous_order = slice_order[name]
+        slice_examples = slice_payload.get("examples")
+        if type(slice_examples) is not int or slice_examples <= 0:
+            raise ValueError(f"{label}.slices[{index}].examples must be a positive integer.")
+        for field in ("mse", "mae", "bias", "sign_accuracy", "expected_calibration_error"):
+            _foundation_value_tune_require_finite_number(slice_payload.get(field), label=f"{label}.slices[{index}].{field}")
+        _foundation_value_tune_require_finite_number(
+            slice_payload.get("pearson_correlation"), label=f"{label}.slices[{index}].pearson_correlation", allow_none=True
+        )
+        if (
+            (slice_examples <= 1 or name.startswith("return:")) and slice_payload.get("pearson_correlation") is not None
+        ):
+            raise ValueError(f"{label}.slices[{index}] has an impossible Pearson witness.")
+        if type(slice_payload.get("sign_accuracy_applicable")) is not bool or slice_payload.get("sign_accuracy_applicable") != (name != "return:zero"):
+            raise ValueError(f"{label}.slices[{index}] has an invalid sign-accuracy applicability witness.")
+        family = name.partition(":")[0]
+        totals_by_family[family] += slice_examples
+    if any(total != examples for total in totals_by_family.values()):
+        raise ValueError(f"{label}.slices do not partition every example by evaluator family.")
+    return payload
+
+
+def _foundation_value_tune_require_epoch_metrics(payload: Any, *, label: str) -> Mapping[str, Any]:
+    metrics = _foundation_value_tune_mapping(payload, label=label)
+    expected = set(TransformerEpochMetrics(1, 0, 0.0, 0.0, 0.0).to_dict())
+    if set(metrics) != expected:
+        raise ValueError(f"{label} does not match the production epoch-metrics schema.")
+    if type(metrics.get("epoch")) is not int or metrics.get("epoch") <= 0:
+        raise ValueError(f"{label}.epoch must be positive.")
+    if type(metrics.get("examples")) is not int or metrics.get("examples") < 0:
+        raise ValueError(f"{label}.examples must be non-negative.")
+    for field in ("loss", "policy_loss", "policy_accuracy", "value_loss"):
+        _foundation_value_tune_require_finite_number(metrics.get(field), label=f"{label}.{field}")
+    integer_or_none = {
+        "value_ranking_pairs", "ppo_valid_examples", "ppo_value_clip_eligible_examples", "batches",
+    }
+    for field in integer_or_none:
+        value = metrics.get(field)
+        if value is not None and (type(value) is not int or value < 0):
+            raise ValueError(f"{label}.{field} must be a non-negative integer or null.")
+    for field in expected - {"epoch", "examples", *integer_or_none}:
+        _foundation_value_tune_require_finite_number(metrics.get(field), label=f"{label}.{field}", allow_none=True)
+    return metrics
+
+
+def _foundation_value_tune_require_phase3_report(
+    path: Path,
+    *,
+    label: str,
+    expected_paths: Sequence[Path],
+    required_keys: set[str],
+    expected_batch_size: int,
+    expected_bins: int,
+    expected_metric: str | None = None,
+    expected_epoch_count: int | None = None,
+) -> dict[str, Any]:
+    identity = _foundation_value_tune_file_identity(path, label=label)
+    payload = dict(_load_json_mapping(path))
+    if not required_keys <= set(payload):
+        raise ValueError(f"{label} is missing required result fields.")
+    paths = payload.get("paths")
+    if not isinstance(paths, list) or paths != [str(item) for item in expected_paths]:
+        raise ValueError(f"{label} does not bind the private input paths it evaluated.")
+    if (
+        type(payload.get("batch_size")) is not int
+        or payload.get("batch_size") != expected_batch_size
+        or type(payload.get("bins")) is not int
+        or payload.get("bins") != expected_bins
+    ):
+        raise ValueError(f"{label} does not bind the registered evaluation batch/bucket configuration.")
+    if expected_metric is not None:
+        if payload.get("metric") != expected_metric or payload.get("metric_direction") != value_selection_metric_direction(expected_metric):
+            raise ValueError(f"{label} does not bind the registered value-selection metric.")
+        if (
+            type(payload.get("selected_epoch")) is not int
+            or payload.get("selected_epoch") <= 0
+            or type(payload.get("selected_metric_value")) not in {int, float}
+            or isinstance(payload.get("selected_metric_value"), bool)
+            or not math.isfinite(float(payload["selected_metric_value"]))
+            or not isinstance(payload.get("epochs"), list)
+            or not payload["epochs"]
+        ):
+            raise ValueError(f"{label} does not contain a finite selected epoch witness.")
+        epochs = payload["epochs"]
+        if expected_epoch_count is not None and len(epochs) != expected_epoch_count:
+            raise ValueError(f"{label}.epochs does not contain every registered training epoch.")
+        selected_entry: Mapping[str, Any] | None = None
+        for index, raw_epoch in enumerate(epochs):
+            epoch = _foundation_value_tune_mapping(raw_epoch, label=f"{label}.epochs[{index}]")
+            allowed_epoch_keys = {"epoch", "metric_value", "training_metrics", "report", "metric_unavailable_reason"}
+            if not {"epoch", "metric_value", "training_metrics", "report"} <= set(epoch) or set(epoch) - allowed_epoch_keys:
+                raise ValueError(f"{label}.epochs[{index}] has an unrecognized schema.")
+            if type(epoch.get("epoch")) is not int or epoch.get("epoch") != index + 1:
+                raise ValueError(f"{label}.epochs must be ordered consecutive epochs.")
+            if epoch.get("metric_value") is None:
+                if (
+                    expected_metric != "pearson_correlation"
+                    or epoch.get("epoch") == payload.get("selected_epoch")
+                    or not isinstance(epoch.get("metric_unavailable_reason"), str)
+                    or not epoch["metric_unavailable_reason"]
+                ):
+                    raise ValueError(f"{label}.epochs[{index}] has an invalid unavailable metric witness.")
+            else:
+                _foundation_value_tune_require_finite_number(
+                    epoch.get("metric_value"), label=f"{label}.epochs[{index}].metric_value"
+                )
+            _foundation_value_tune_require_epoch_metrics(
+                epoch.get("training_metrics"), label=f"{label}.epochs[{index}].training_metrics"
+            )
+            report = _foundation_value_tune_require_calibration_report(
+                epoch.get("report"), expected_bins=expected_bins, label=f"{label}.epochs[{index}].report"
+            )
+            if epoch.get("metric_value") is not None:
+                report_metric_fields = {
+                    "mae": "mae",
+                    "mse": "mse",
+                    "expected_calibration_error": "expected_calibration_error",
+                    "sign_accuracy": "sign_accuracy",
+                    "pearson_correlation": "pearson_correlation",
+                }
+                report_value = (
+                    abs(float(report["bias"]))
+                    if expected_metric == "abs_bias"
+                    else report.get(report_metric_fields[expected_metric])
+                )
+                if report_value != epoch.get("metric_value"):
+                    raise ValueError(f"{label}.epochs[{index}] metric_value does not match its report.")
+            if epoch["epoch"] == payload["selected_epoch"]:
+                selected_entry = epoch
+        if selected_entry is None or selected_entry.get("metric_value") != payload.get("selected_metric_value"):
+            raise ValueError(f"{label} selected metric does not match its selected epoch row.")
+    else:
+        _foundation_value_tune_require_calibration_report(
+            payload.get("report"), expected_bins=expected_bins, label=f"{label}.report"
+        )
+    return {"identity": identity, "payload": payload}
+
+
+def _foundation_value_tune_require_phase3_train_summary(
+    path: Path,
+    *,
+    recipe: Mapping[str, Any],
+    train_paths: Sequence[Path],
+    expected_training_config: Mapping[str, Any],
+    expected_model_config: TransformerPolicyConfig,
+    expected_value_selection: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = dict(_load_json_mapping(path))
+    if payload.get("schema_version") != NEURAL_TRAIN_SUMMARY_SCHEMA_VERSION:
+        raise ValueError("Phase-3 trainer summary has an unrecognized schema.")
+    required_summary_keys = {
+        "schema_version", "source", "started_at", "completed_at", "elapsed_seconds",
+        "train_elapsed_seconds", "data_paths", "input_data_bytes", "refutation_cache_bytes",
+        "checkpoint_path", "checkpoint_bytes", "model", "training_config", "distributed_training",
+        "epochs", "final_metrics", "value_selection", "refutation_training", "training_cache",
+    }
+    if set(payload) != required_summary_keys:
+        raise ValueError("Phase-3 trainer summary does not match the public train-summary schema.")
+    if not all(isinstance(payload.get(field), str) and payload[field] for field in ("started_at", "completed_at")):
+        raise ValueError("Phase-3 trainer summary has no start/completion timestamps.")
+    for field in ("elapsed_seconds", "train_elapsed_seconds"):
+        _foundation_value_tune_require_finite_number(payload.get(field), label=f"Phase-3 trainer summary.{field}")
+    if (
+        type(payload.get("input_data_bytes")) is not int
+        or payload.get("input_data_bytes") != sum(path.stat().st_size for path in train_paths)
+    ):
+        raise ValueError("Phase-3 trainer summary does not bind the exact private training-input bytes.")
+    if payload.get("refutation_cache_bytes") is not None:
+        _foundation_value_tune_require_finite_number(
+            payload.get("refutation_cache_bytes"), label="Phase-3 trainer summary.refutation_cache_bytes"
+        )
+    model = _foundation_value_tune_mapping(payload.get("model"), label="Phase-3 trainer model")
+    expected_model = {
+        "policy_id": expected_model_config.policy_id,
+        "window_size": expected_model_config.window_size,
+        "embedding_dim": expected_model_config.embedding_dim,
+        "transformer_layers": expected_model_config.transformer_layers,
+        "attention_heads": expected_model_config.attention_heads,
+        "feedforward_dim": expected_model_config.feedforward_dim,
+        "dropout": expected_model_config.dropout,
+        "temporal_aggregator": expected_model_config.temporal_aggregator,
+        "categorical_vocab_size": expected_model_config.categorical_vocab_size,
+        "category_oov_buckets": expected_model_config.category_oov_buckets,
+    }
+    if dict(model) != expected_model:
+        raise ValueError("Phase-3 trainer summary model differs from the frozen converted checkpoint.")
+    distributed = _foundation_value_tune_mapping(payload.get("distributed_training"), label="Phase-3 distributed training")
+    if set(distributed) != {"rank", "world_size", "local_rank", "backend", "enabled", "base_seed", "rank_seed"}:
+        raise ValueError("Phase-3 trainer summary has an unrecognized distributed-training witness.")
+    rank, world_size, local_rank = (distributed.get(field) for field in ("rank", "world_size", "local_rank"))
+    if (
+        type(rank) is not int
+        or type(world_size) is not int
+        or type(local_rank) is not int
+        or world_size <= 0
+        or not 0 <= rank < world_size
+        or local_rank < 0
+        or type(distributed.get("enabled")) is not bool
+        or distributed.get("enabled") != (world_size > 1)
+        or distributed.get("base_seed") != expected_training_config.get("random_seed")
+        or distributed.get("rank_seed") != distributed.get("base_seed") + rank
+        or (distributed.get("backend") is not None and not isinstance(distributed.get("backend"), str))
+    ):
+        raise ValueError("Phase-3 trainer summary has an invalid distributed-training witness.")
+    if not isinstance(payload.get("epochs"), list) or not payload["epochs"]:
+        raise ValueError("Phase-3 trainer summary has no epoch metrics.")
+    epoch_metrics = [
+        _foundation_value_tune_require_epoch_metrics(item, label=f"Phase-3 trainer epochs[{index}]")
+        for index, item in enumerate(payload["epochs"])
+    ]
+    if dict(_foundation_value_tune_mapping(payload.get("final_metrics"), label="Phase-3 trainer final metrics")) != dict(epoch_metrics[-1]):
+        raise ValueError("Phase-3 trainer summary final_metrics does not equal its final epoch row.")
+    if dict(_foundation_value_tune_mapping(payload.get("value_selection"), label="Phase-3 trainer value selection")) != dict(expected_value_selection):
+        raise ValueError("Phase-3 trainer summary value-selection witness differs from the verified report.")
+    selection_epochs = _sequence(expected_value_selection.get("epochs"))
+    selected_epoch = expected_value_selection.get("selected_epoch")
+    if type(selected_epoch) is not int or selected_epoch <= 0 or len(selection_epochs) < selected_epoch:
+        raise ValueError("Phase-3 verified value-selection report has no valid selected-epoch prefix.")
+    selected_training_metrics = [
+        dict(_foundation_value_tune_mapping(
+            _foundation_value_tune_mapping(entry, label=f"Phase-3 value-selection epoch {index}").get("training_metrics"),
+            label=f"Phase-3 value-selection epoch {index} training metrics",
+        ))
+        for index, entry in enumerate(selection_epochs[:selected_epoch], start=1)
+    ]
+    if [dict(item) for item in epoch_metrics] != selected_training_metrics:
+        raise ValueError("Phase-3 trainer summary epochs differ from the selected value-selection metrics.")
+    expected_refutation = {"enabled": False, "paths": [], "max_fraction": None, "target_mode": None}
+    if payload.get("refutation_training") != expected_refutation:
+        raise ValueError("Phase-3 trainer summary records an unregistered refutation-training input.")
+    cache = _foundation_value_tune_mapping(payload.get("training_cache"), label="Phase-3 training cache")
+    if set(cache) != {"root", "footprint_bytes", "footprint_limit_bytes", "delete_after_checkpoint", "consumed_paths", "deleted_paths", "deleted_bytes"}:
+        raise ValueError("Phase-3 trainer summary has an unrecognized training-cache witness.")
+    if (
+        cache.get("root") is not None and not isinstance(cache.get("root"), str)
+        or any(cache.get(field) is not None and (type(cache.get(field)) is not int or cache[field] < 0) for field in ("footprint_bytes", "footprint_limit_bytes"))
+        or type(cache.get("delete_after_checkpoint")) is not bool
+        or any(not isinstance(item, str) for field in ("consumed_paths", "deleted_paths") for item in _sequence(cache.get(field)))
+        or type(cache.get("deleted_bytes")) is not int
+        or cache.get("deleted_bytes") < 0
+    ):
+        raise ValueError("Phase-3 trainer summary has an invalid training-cache witness.")
+    config = _foundation_value_tune_mapping(payload.get("training_config"), label="Phase-3 trainer summary training_config")
+    if dict(config) != dict(expected_training_config):
+        raise ValueError("Phase-3 trainer summary does not attest the registered frozen-trunk value-only config.")
+    if payload.get("data_paths") != [str(path) for path in train_paths]:
+        raise ValueError("Phase-3 trainer summary did not consume the private training snapshots.")
+    runner_source = _foundation_value_tune_mapping(recipe.get("source"), label="Phase-3 runner source")
+    if _foundation_value_tune_mapping(payload.get("source"), label="Phase-3 trainer source") != runner_source:
+        raise ValueError("Phase-3 trainer source provenance differs from the reviewed wrapper source.")
+    identity = _foundation_value_tune_file_identity(path, label="Phase-3 trainer summary")
+    checkpoint_bytes = payload.get("checkpoint_bytes")
+    checkpoint_path = payload.get("checkpoint_path")
+    trainer_artifacts = _foundation_value_tune_mapping(
+        recipe.get("phase3_trainer_artifacts"), label="Phase-3 trainer artifacts"
+    )
+    if checkpoint_path != trainer_artifacts.get("checkpoint_path") or type(checkpoint_bytes) is not int or checkpoint_bytes <= 0:
+        raise ValueError("Phase-3 trainer summary does not bind its private checkpoint output.")
+    return {"identity": identity, "payload": payload}
+
+
+def _foundation_value_tune_expected_phase3_training_config(
+    recipe: Mapping[str, Any],
+    *,
+    converted_model_config: TransformerPolicyConfig,
+) -> dict[str, Any]:
+    """Reconstruct the exact public ``train`` config from frozen Phase-3 inputs.
+
+    The Phase-3 command intentionally exposes only its small value-tuning surface. The
+    checkpoint and train-summary serialize every resolved training knob, so compare against a
+    complete reconstruction rather than trusting a selectively copied subset of those records.
+    The inherited checkpoint determines both the required history window and inherited shaping
+    configuration; the wrapper cannot silently fall back to parser defaults.
+    """
+
+    provenance = _foundation_value_tune_mapping(recipe.get("phase3_provenance"), label="Phase-3 provenance")
+    recipe_config = _foundation_value_tune_mapping(recipe.get("config"), label="value-tune config")
+    training_seed = provenance.get("training_seed")
+    if type(training_seed) is not int or training_seed < 0:
+        raise ValueError("Phase-3 provenance has no non-negative training seed.")
+    for field in (
+        "epochs", "batch_size", "value_ranking_loss_weight", "value_ranking_margin", "max_batches", "device",
+    ):
+        if field not in recipe_config:
+            raise ValueError(f"Phase-3 recipe config has no {field!r} value.")
+    learning_rate = recipe_config.get("learning_rate")
+    if type(learning_rate) not in {int, float} or isinstance(learning_rate, bool) or not math.isfinite(float(learning_rate)):
+        raise ValueError("Phase-3 recipe has no finite learning rate.")
+    return TransformerTrainingConfig(
+        batch_size=recipe_config["batch_size"],
+        epochs=recipe_config["epochs"],
+        learning_rate=float(learning_rate),
+        window_size=converted_model_config.window_size,
+        value_ranking_loss_weight=recipe_config["value_ranking_loss_weight"],
+        value_ranking_margin=recipe_config["value_ranking_margin"],
+        max_batches=recipe_config["max_batches"],
+        device=str(resolve_torch_device(recipe_config.get("device"))),
+        objective="value-only",
+        random_seed=training_seed,
+        freeze_non_value_parameters=True,
+        shaping_weights=converted_model_config.reward_shaping,
+    ).to_dict()
+
+
+def _foundation_value_tune_require_phase3_checkpoint_payload(
+    path: Path,
+    *,
+    training_summary: Mapping[str, Any],
+    selection: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Bind the saved checkpoint's self-description to the verified Phase-3 run."""
+
+    payload = _foundation_value_tune_mapping(
+        load_transformer_checkpoint_payload(path), label="value-tuned checkpoint payload"
+    )
+    required_keys = {
+        "schema_version", "training_schema_version", "model_config", "training_config", "epochs",
+        "value_calibration_transform", "belief_set_source_hash", "value_calibration_source_checkpoint_sha256",
+        "state_dict",
+    }
+    if set(payload) != required_keys:
+        raise ValueError("value-tuned checkpoint payload does not match the production checkpoint schema.")
+    if (
+        payload.get("schema_version") != NEURAL_POLICY_SCHEMA_VERSION
+        or payload.get("training_schema_version") != NEURAL_TRAINING_SCHEMA_VERSION
+    ):
+        raise ValueError("value-tuned checkpoint payload has an unrecognized production schema version.")
+    # This command emits evaluation reports but never fits or registers a checkpoint transform.
+    # A hidden affine/isotonic transform would alter every downstream value read independently of
+    # the verified value-head update, so no transform-bearing checkpoint is a valid Phase-3 arm.
+    if (
+        payload.get("value_calibration_transform") is not None
+        or payload.get("value_calibration_source_checkpoint_sha256") is not None
+    ):
+        raise ValueError("value-tuned checkpoint carries an unregistered value-calibration transform.")
+    output_config = _foundation_value_tune_mapping(
+        payload.get("training_config"), label="value-tuned checkpoint training_config"
+    )
+    summary_config = _foundation_value_tune_mapping(
+        training_summary.get("training_config"), label="Phase-3 trainer summary training_config"
+    )
+    selection_payload = _foundation_value_tune_mapping(selection.get("payload"), label="Phase-3 value-selection report")
+    selected_epoch = selection_payload.get("selected_epoch")
+    if type(selected_epoch) is not int or selected_epoch <= 0:
+        raise ValueError("Phase-3 value-selection report has no selected epoch for checkpoint binding.")
+    expected_output_config = dict(summary_config)
+    expected_output_config["epochs"] = selected_epoch
+    if dict(output_config) != expected_output_config:
+        raise ValueError("value-tuned checkpoint training_config does not bind the selected frozen-trunk run.")
+    summary_epochs = training_summary.get("epochs")
+    output_epochs = payload.get("epochs")
+    if (
+        not isinstance(summary_epochs, list)
+        or not isinstance(output_epochs, list)
+        or len(output_epochs) != selected_epoch
+        or output_epochs != summary_epochs
+    ):
+        raise ValueError("value-tuned checkpoint epochs do not match the selected trainer-summary prefix.")
+    if not output_epochs or output_epochs[-1].get("epoch") != selected_epoch:
+        raise ValueError("value-tuned checkpoint has no final selected-epoch witness.")
+    return payload
+
+
+def _foundation_value_tune_verify_phase3_completion(recipe: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    raw_provenance = recipe.get("phase3_provenance")
+    if raw_provenance is None:
+        return None
+    provenance = _foundation_value_tune_mapping(raw_provenance, label="Phase-3 provenance")
+    source = _foundation_value_tune_mapping(provenance.get("source_checkpoint"), label="Phase-3 source checkpoint provenance")
+    converted = _foundation_value_tune_mapping(provenance.get("converted_initial_checkpoint"), label="Phase-3 converted checkpoint provenance")
+    initialization = _foundation_value_tune_mapping(provenance.get("phase3_value_head_initialization"), label="Phase-3 initialization")
+    expected_hidden = initialization.get("expected_value_head_hidden")
+    expected_init_seed = initialization.get("seed")
+    if type(expected_hidden) is not int or expected_hidden <= 0:
+        raise ValueError("Phase-3 recipe has no positive expected value-head width.")
+    if type(expected_init_seed) is not int or expected_init_seed < 0:
+        raise ValueError("Phase-3 recipe has no non-negative initialization seed.")
+    snapshots = _foundation_value_tune_mapping(recipe.get("phase3_private_snapshots"), label="Phase-3 private snapshots")
+    source_path = _foundation_value_tune_verified_snapshot(
+        _foundation_value_tune_mapping(snapshots.get("source_checkpoint"), label="Phase-3 source snapshot"),
+        source,
+        label="selected source checkpoint",
+    )
+    converted_path = _foundation_value_tune_verified_snapshot(
+        _foundation_value_tune_mapping(snapshots.get("converted_initial_checkpoint"), label="Phase-3 converted snapshot"),
+        converted,
+        label="converted initial checkpoint",
+    )
+    converted_model_config = load_transformer_model_config(converted_path)
+    expected_training_config = _foundation_value_tune_expected_phase3_training_config(
+        recipe,
+        converted_model_config=converted_model_config,
+    )
+    _foundation_value_tune_frozen_trunk_identity(
+        source_checkpoint=source_path,
+        compared_checkpoint=converted_path,
+        expected_value_head_hidden=expected_hidden,
+        expected_initialization_seed=expected_init_seed,
+        label="converted initial",
+    )
+    input_provenance = _foundation_value_tune_mapping(provenance.get("inputs"), label="Phase-3 inputs")
+    snapshot_inputs = _foundation_value_tune_mapping(snapshots.get("inputs"), label="Phase-3 private input snapshots")
+    verified_inputs: dict[str, list[Path]] = {}
+    for group in ("training", "selection", "calibration"):
+        originals = tuple(
+            _foundation_value_tune_mapping(item, label=f"Phase-3 {group} input provenance")
+            for item in _sequence(input_provenance.get(group, ()))
+        )
+        saved_snapshots = tuple(
+            _foundation_value_tune_mapping(item, label=f"Phase-3 {group} private input snapshot")
+            for item in _sequence(snapshot_inputs.get(group, ()))
+        )
+        if len(originals) != len(saved_snapshots) or not originals:
+            raise ValueError(f"Phase-3 {group} private snapshot inventory is incomplete.")
+        verified_inputs[group] = [
+            _foundation_value_tune_verified_snapshot(snapshot, original, label=f"{group} input {index}")
+            for index, (original, snapshot) in enumerate(zip(originals, saved_snapshots, strict=True))
+        ]
+    artifacts = _foundation_value_tune_mapping(recipe.get("execution_artifacts"), label="Phase-3 execution artifacts")
+    candidate_path = Path(str(artifacts["checkpoint_path"]))
+    output_identity = _foundation_value_tune_file_identity(candidate_path, label="private value-tuned checkpoint")
+    output_frozen_trunk = _foundation_value_tune_frozen_trunk_identity(
+        source_checkpoint=source_path,
+        compared_checkpoint=candidate_path,
+        expected_value_head_hidden=expected_hidden,
+        label="value-tuned",
+    )
+    changed_head_tensors = _foundation_value_tune_require_value_head_updated(
+        converted_checkpoint=converted_path,
+        output_checkpoint=candidate_path,
+    )
+    selection = _foundation_value_tune_require_phase3_report(
+        Path(str(artifacts["value_selection_path"])),
+        label="Phase-3 private value-selection report",
+        expected_paths=verified_inputs["selection"],
+        required_keys={"paths", "batch_size", "bins", "metric", "metric_direction", "selected_epoch", "selected_metric_value", "epochs"},
+        expected_batch_size=_foundation_value_tune_mapping(recipe.get("config"), label="value-tune config")["value_calibration_batch_size"],
+        expected_bins=_foundation_value_tune_mapping(recipe.get("config"), label="value-tune config")["value_calibration_bins"],
+        expected_metric=_foundation_value_tune_mapping(recipe.get("config"), label="value-tune config")["value_selection_metric"],
+        expected_epoch_count=_foundation_value_tune_mapping(recipe.get("config"), label="value-tune config")["epochs"],
+    )
+    calibration = _foundation_value_tune_require_phase3_report(
+        Path(str(artifacts["value_calibration_path"])),
+        label="Phase-3 private value-calibration report",
+        expected_paths=verified_inputs["calibration"],
+        required_keys={"paths", "batch_size", "bins", "report"},
+        expected_batch_size=_foundation_value_tune_mapping(recipe.get("config"), label="value-tune config")["value_calibration_batch_size"],
+        expected_bins=_foundation_value_tune_mapping(recipe.get("config"), label="value-tune config")["value_calibration_bins"],
+    )
+    train_summary = _foundation_value_tune_require_phase3_train_summary(
+        Path(str(artifacts["training_summary_path"])),
+        recipe=recipe,
+        train_paths=verified_inputs["training"],
+        expected_training_config=expected_training_config,
+        expected_model_config=converted_model_config,
+        expected_value_selection=selection["payload"],
+    )
+    if train_summary["payload"].get("checkpoint_bytes") != output_identity["bytes"]:
+        raise ValueError("Phase-3 trainer summary checkpoint byte count differs from the private checkpoint.")
+    _foundation_value_tune_require_phase3_checkpoint_payload(
+        candidate_path,
+        training_summary=train_summary["payload"],
+        selection=selection,
+    )
+    return {
+        "private_output_checkpoint": output_identity,
+        "output_frozen_trunk": output_frozen_trunk,
+        "updated_value_head_tensors": changed_head_tensors,
+        "private_value_selection": selection["identity"],
+        "private_value_calibration": calibration["identity"],
+        "private_training_summary": train_summary["identity"],
+        "verified_artifacts": {
+            "checkpoint_path": output_identity,
+            "value_selection_path": selection["identity"],
+            "value_calibration_path": calibration["identity"],
+            "training_summary_path": train_summary["identity"],
+        },
+    }
+
+
+def _foundation_value_tune_publish_phase3_artifacts(
+    recipe: Mapping[str, Any],
+    *,
+    verification: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Atomically link verified private artifacts into their registered output names."""
+
+    if verification is None:
+        raise ValueError("Phase-3 publication requires a successful private-output verification.")
+    staged = _foundation_value_tune_mapping(recipe.get("execution_artifacts"), label="Phase-3 execution artifacts")
+    final = _foundation_value_tune_mapping(recipe.get("artifacts"), label="Phase-3 registered artifacts")
+    if set(staged) != set(final):
+        raise ValueError("Phase-3 staged and registered artifact inventories differ.")
+    expected_artifacts = _foundation_value_tune_mapping(
+        verification.get("verified_artifacts"), label="Phase-3 verified artifact identities"
+    )
+    if set(expected_artifacts) != set(final):
+        raise ValueError("Phase-3 verified and registered artifact inventories differ.")
+    published: dict[str, dict[str, Any]] = {}
+    for name in sorted(final):
+        staged_path = Path(str(staged[name]))
+        final_path = Path(str(final[name]))
+        staged_identity = _foundation_value_tune_file_identity(staged_path, label=f"private {name}")
+        expected_identity = _foundation_value_tune_mapping(
+            expected_artifacts.get(name), label=f"verified private {name}"
+        )
+        _foundation_value_tune_require_identity(
+            staged_identity, expected_identity, label=f"private {name} after verification"
+        )
+        staged_stat = staged_path.stat(follow_symlinks=False)
+        try:
+            os.link(staged_path, final_path)
+        except FileExistsError as exc:
+            raise ValueError(f"registered Phase-3 artifact already exists: {final_path}") from exc
+        # The verifier deliberately keeps private snapshots 0600 while it parses and hashes
+        # them.  A published hard link shares that inode, so set the intended cross-UID artifact
+        # mode only after the verified link exists.  Cluster readers otherwise hit the same
+        # 0600 checkpoint failure that the deterministic converter already guards against.
+        os.chmod(final_path, 0o644)
+        final_identity = _foundation_value_tune_file_identity(final_path, label=f"published {name}")
+        final_stat = final_path.stat(follow_symlinks=False)
+        if (final_stat.st_dev, final_stat.st_ino) != (staged_stat.st_dev, staged_stat.st_ino):
+            raise ValueError(f"published {name} is not the verified private staged inode.")
+        _foundation_value_tune_require_identity(final_identity, expected_identity, label=f"published {name}")
+        if stat.S_IMODE(final_stat.st_mode) != 0o644:
+            raise ValueError(f"published {name} does not have the required cross-UID 0644 mode.")
+        published[name] = final_identity
+    directory_fd = os.open(Path(str(next(iter(final.values())))).parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    return {"private_verification": dict(verification), "published_artifacts": published}
 
 
 def _foundation_report_payload(summary_path: Path, summary: Mapping[str, Any]) -> dict[str, Any]:
@@ -6759,11 +8083,25 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         or str(summary_path.parent)
     )
     out_dir = args.out_dir or run_dir / "value-tune" / f"{args.candidate_source}-iteration-{candidate_iteration:04d}"
+    phase3_provenance = _foundation_value_tune_phase3_provenance(
+        args,
+        source_checkpoint=Path(candidate_checkpoint),
+        train_paths=train_paths,
+        selection_paths=selection_paths,
+        calibration_paths=calibration_paths,
+    )
+    initial_checkpoint = (
+        str(args.converted_initial_checkpoint)
+        if phase3_provenance is not None
+        else candidate_checkpoint
+    )
     artifacts = {
         "checkpoint_path": str(out_dir / "value-tuned-transformer-policy.pt"),
         "value_selection_path": str(out_dir / "value-selection.json"),
         "value_calibration_path": str(out_dir / "value-calibration.json"),
     }
+    if phase3_provenance is not None:
+        artifacts["training_summary_path"] = str(out_dir / "phase3-train-summary.json")
     argv = [
         sys.executable,
         "-m",
@@ -6774,7 +8112,7 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "--out",
         artifacts["checkpoint_path"],
         "--initial-checkpoint",
-        candidate_checkpoint,
+        initial_checkpoint,
         "--objective",
         "value-only",
         "--freeze-non-value-parameters",
@@ -6803,6 +8141,14 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "--value-calibration-bins",
         str(args.value_calibration_bins),
     ]
+    if phase3_provenance is not None:
+        initial_model_config = load_transformer_model_config(Path(initial_checkpoint))
+        argv.extend(
+            [
+                "--training-seed", str(args.phase3_training_seed),
+                "--window-size", str(initial_model_config.window_size),
+            ]
+        )
     if args.max_batches is not None:
         argv.extend(["--max-batches", str(args.max_batches)])
     if args.device is not None:
@@ -6815,6 +8161,7 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "candidate_source": args.candidate_source,
         "candidate_iteration": candidate_iteration,
         "candidate_checkpoint_path": candidate_checkpoint,
+        "initial_checkpoint_path": initial_checkpoint,
         "out_dir": str(out_dir),
         "train_paths": [str(path) for path in train_paths],
         "selection_paths": [str(path) for path in selection_paths],
@@ -6836,7 +8183,19 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
             "require_heldout_selection": args.require_heldout_selection,
             "max_batches": args.max_batches,
             "device": args.device,
+            "converted_initial_checkpoint": str(args.converted_initial_checkpoint)
+            if args.converted_initial_checkpoint is not None
+            else None,
+            "converted_initial_checkpoint_sha256": args.converted_initial_checkpoint_sha256,
+            "source_checkpoint_sha256": args.source_checkpoint_sha256,
+            "phase3_value_head_init_seed": args.phase3_value_head_init_seed,
+            "expected_value_head_hidden": args.expected_value_head_hidden,
+            "phase3_training_seed": args.phase3_training_seed,
+            "window_size": load_transformer_model_config(Path(initial_checkpoint)).window_size
+            if phase3_provenance is not None
+            else None,
         },
+        "phase3_provenance": phase3_provenance,
         "artifacts": artifacts,
         "command": {
             "argv": argv,
@@ -6902,9 +8261,31 @@ def _validate_foundation_value_tune_args(args: argparse.Namespace) -> None:
         raise ValueError("--max-batches must be positive when provided.")
 
 
-def _validate_foundation_value_tune_paths(out_dir: Path, *, summary_path: Path) -> None:
+def _validate_foundation_value_tune_paths(
+    out_dir: Path,
+    *,
+    summary_path: Path,
+    require_fresh_output_dir: bool = False,
+    artifact_paths: Sequence[Path] = (),
+) -> None:
     if summary_path.exists():
         raise ValueError(f"summary path already exists: {summary_path}")
+    if require_fresh_output_dir and out_dir.exists():
+        raise ValueError(f"provenance-bound Phase-3 value tune requires a new output directory: {out_dir}")
+    if require_fresh_output_dir and summary_path.parent.resolve(strict=False) != out_dir.resolve(strict=False):
+        raise ValueError("provenance-bound Phase-3 value-tune summary must be created inside its output directory.")
+    if require_fresh_output_dir:
+        protected = {
+            path.resolve(strict=False)
+            for artifact in artifact_paths
+            for path in (artifact, artifact.with_name(f".{artifact.name}.tmp"))
+        }
+        if summary_path.resolve(strict=False) in protected:
+            raise ValueError(
+                "provenance-bound Phase-3 value-tune summary may not collide with a training artifact."
+            )
+        if any(path.parent.resolve(strict=False) != out_dir.resolve(strict=False) for path in artifact_paths):
+            raise ValueError("provenance-bound Phase-3 training artifacts must be direct children of the output directory.")
     if out_dir.exists() and any(out_dir.iterdir()):
         raise ValueError(f"value tune output directory already exists and is not empty: {out_dir}")
 
