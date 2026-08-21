@@ -678,7 +678,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--value-ranking-loss-weight",
         type=float,
         default=0.0,
-        help="Optional pairwise value-ranking loss weight. Optimizes leaf ordering for search when positive.",
+        help=(
+            "Optional pairwise value-ranking loss weight. Optimizes leaf ordering for search when positive; "
+            "DDP constructs pairs within each rank-local shard, never across ranks."
+        ),
     )
     train.add_argument(
         "--value-ranking-margin",
@@ -1830,7 +1833,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--value-ranking-loss-weight",
         type=float,
         default=0.0,
-        help="Optional pairwise value-ranking loss weight. Optimizes leaf ordering for search when positive.",
+        help=(
+            "Optional pairwise value-ranking loss weight. Optimizes leaf ordering for search when positive; "
+            "DDP constructs pairs within each rank-local shard, never across ranks."
+        ),
     )
     iterate.add_argument(
         "--value-ranking-margin",
@@ -2427,7 +2433,10 @@ def _add_foundation_value_tune_arguments(parser: argparse.ArgumentParser, *, inc
         "--value-ranking-loss-weight",
         type=float,
         default=0.0,
-        help="Optional pairwise value-ranking loss weight for value-only fine-tuning.",
+        help=(
+            "Optional pairwise value-ranking loss weight for value-only fine-tuning; DDP constructs pairs "
+            "within each rank-local shard, never across ranks."
+        ),
     )
     parser.add_argument(
         "--value-ranking-margin",

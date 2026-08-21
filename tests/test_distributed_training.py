@@ -75,6 +75,40 @@ def _rollout_record() -> RolloutRecord:
     )
 
 
+def _ranking_rollout_record() -> RolloutRecord:
+    """Five returns that make two rank-local pairs plus a ragged final shard."""
+
+    trajectory = BattleTrajectory(battle_id="ddp-ranking", format_id="gen3randombattle", seed=19)
+    # With a global batch size of four and two ranks, the first batch gives
+    # each rank one p1 (+1) and one p2 (-1) decision: exactly one local pair
+    # per rank. The fifth decision exercises the zero-example placeholder on
+    # rank 1 without inventing a pair.
+    for turn_index, player_id in enumerate(("p1", "p2", "p1", "p2", "p1")):
+        trajectory.append(
+            TrajectoryStep(
+                player_id=player_id,
+                turn_index=turn_index,
+                observation=_observation((turn_index % 3) + 1),
+                legal_action_mask=(True, True, False, False, False, False, False, False, False),
+                action_index=turn_index % 2,
+                opponent_action_index=1 - (turn_index % 2),
+                action_probability=0.5,
+                value_estimate=0.0,
+            )
+        )
+    trajectory.record_terminal(TerminalState(winner="p1", turn_count=5))
+    return RolloutRecord(
+        battle_id=trajectory.battle_id,
+        seed=trajectory.seed,
+        format_id=trajectory.format_id,
+        policy_ids={"p1": "fixture", "p2": "fixture"},
+        decision_round_count=5,
+        elapsed_seconds=0.01,
+        terminal=trajectory.terminal,
+        trajectory=trajectory,
+    )
+
+
 def _ddp_train_worker(
     rank: int,
     world_size: int,
@@ -202,6 +236,70 @@ class DistributedTrainingTest(unittest.TestCase):
                     torch.allclose(value, ddp_model.state_dict()[name], rtol=0.0, atol=1e-6),
                     name,
                 )
+
+    def test_ddp_value_ranking_uses_only_rank_local_pairs(self) -> None:
+        """V2 ranking permits DDP without silently creating cross-rank pairs."""
+
+        import torch
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_path = root / "ranking-rollouts.jsonl"
+            initial_path = root / "initial.pt"
+            ddp_path = root / "ddp.pt"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, _ranking_rollout_record())
+            config = TransformerPolicyConfig.compact_category(
+                category_vocab=("a", "b", "c", "d"),
+                category_oov_buckets=1,
+                policy_id="ddp-rank-local-ranking",
+                window_size=1,
+                categorical_feature_count=1,
+                numeric_feature_count=1,
+                embedding_dim=8,
+                transformer_layers=0,
+                attention_heads=1,
+                feedforward_dim=8,
+                dropout=0.0,
+            )
+            torch.manual_seed(101)
+            initial_model = EntityTokenTransformerPolicy(config)
+            save_transformer_checkpoint(
+                initial_path,
+                initial_model,
+                result=TransformerTrainingResult(
+                    model_config=config,
+                    training_config=TransformerTrainingConfig(batch_size=4, window_size=1, device="cpu"),
+                    epochs=(),
+                ),
+            )
+            training_options = {
+                "batch_size": 4,
+                "epochs": 1,
+                "window_size": 1,
+                "device": "cpu",
+                "value_loss_weight": 0.25,
+                "value_ranking_loss_weight": 0.5,
+                "value_ranking_margin": 0.1,
+                "opponent_action_loss_weight": 0.0,
+                "objective": "behavior-cloning",
+                "random_seed": 101,
+            }
+            torch.multiprocessing.spawn(
+                _ddp_train_worker,
+                args=(2, _free_local_port(), str(data_path), str(initial_path), str(ddp_path), training_options),
+                nprocs=2,
+                join=True,
+            )
+            _, result = load_transformer_checkpoint(ddp_path, map_location="cpu")
+            metrics = result.final_metrics
+            self.assertEqual(metrics.examples, 5)
+            # Four global examples would make four opposing-return pairs. V2
+            # instead makes one within each rank's two-example shard, and the
+            # ragged final global batch has no valid pair.
+            self.assertEqual(metrics.value_ranking_pairs, 2)
+            self.assertIsNotNone(metrics.value_ranking_loss)
+            self.assertGreater(float(metrics.value_ranking_loss), 0.0)
 
     def test_ddp_two_rank_ppo_reports_global_metrics_within_parity_bounds(self) -> None:
         """The PPO path allows reduction-order drift but not metric drift.
