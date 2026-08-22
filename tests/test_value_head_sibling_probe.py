@@ -10,7 +10,9 @@ from __future__ import annotations
 import importlib.util
 from argparse import Namespace
 import ast
+import hashlib
 from pathlib import Path
+import tempfile
 import unittest
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -66,6 +68,46 @@ class RolloutSeedTest(unittest.TestCase):
     def test_distinct_decisions_do_not_share_seeds(self) -> None:
         self.assertNotEqual(vhsp.rollout_seed(7, "b", 3, 0, 0, paired=True),
                             vhsp.rollout_seed(7, "b", 4, 0, 0, paired=True))
+
+    def test_nonempty_stream_is_independent_but_preserves_pairing(self) -> None:
+        base = vhsp.rollout_seed(7, "b", 3, 0, 5, paired=True)
+        streamed_a = vhsp.rollout_seed(7, "b", 3, 0, 5, paired=True, stream="confirm")
+        streamed_b = vhsp.rollout_seed(7, "b", 3, 1, 5, paired=True, stream="confirm")
+        self.assertNotEqual(base, streamed_a)
+        self.assertEqual(streamed_a, streamed_b)
+
+    def test_empty_stream_preserves_the_predecessor_address(self) -> None:
+        historical = vhsp.rollout_seed(7, "b", 3, 0, 5, paired=True)
+        self.assertEqual(historical, vhsp.rollout_seed(
+            7, "b", 3, 0, 5, paired=True, stream=""))
+
+
+class SourceSeedScheduleTest(unittest.TestCase):
+    @staticmethod
+    def _args(path: Path | None, games: int) -> Namespace:
+        return Namespace(source_seed_list=path, seed_start=500, games=games)
+
+    def test_contiguous_schedule_is_unchanged_without_a_selection_file(self) -> None:
+        self.assertEqual(vhsp.source_seed_schedule(self._args(None, 3)), [500, 501, 502])
+
+    def test_selected_schedule_is_exact_and_records_its_content_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "selected-seeds.txt"
+            payload = b"900\n901\n902\n"
+            path.write_bytes(payload)
+            args = self._args(path, 3)
+            self.assertEqual(vhsp.source_seed_schedule(args), [900, 901, 902])
+            self.assertEqual(args.source_seed_list_sha256, hashlib.sha256(payload).hexdigest())
+
+    def test_selected_schedule_refuses_a_count_mismatch_or_duplicate_address(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "selected-seeds.txt"
+            path.write_text("900\n900\n", encoding="ascii")
+            with self.assertRaisesRegex(ValueError, "unique"):
+                vhsp.source_seed_schedule(self._args(path, 2))
+            path.write_text("900\n901\n", encoding="ascii")
+            with self.assertRaisesRegex(ValueError, "--games"):
+                vhsp.source_seed_schedule(self._args(path, 1))
 
 
 class SplitRolloutCapTest(unittest.TestCase):
