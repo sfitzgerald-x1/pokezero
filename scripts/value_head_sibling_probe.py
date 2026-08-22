@@ -84,7 +84,7 @@ def wilson(k: float, n: int, z: float = 1.96) -> tuple[float, float]:
 
 
 def rollout_seed(base: int, battle_id: str, round_index: int, arm: int, trial: int,
-                 *, paired: bool) -> int:
+                 *, paired: bool, stream: str = "") -> int:
     """Seed for one rollout.
 
     With `paired=True` the arm index is EXCLUDED from the hash, so arm A's trial i and
@@ -96,7 +96,33 @@ def rollout_seed(base: int, battle_id: str, round_index: int, arm: int, trial: i
     parts = [str(base), battle_id, str(round_index), str(trial)]
     if not paired:
         parts.append(str(arm))
+    # The default preserves every predecessor rollout address. A nonempty stream
+    # makes a second measurement independent without breaking A/B pairing within it.
+    if stream:
+        parts.append(stream)
     return int(hashlib.sha256(":".join(parts).encode()).hexdigest()[:12], 16)
+
+
+def source_seed_schedule(args: argparse.Namespace) -> list[int]:
+    """Return the historical contiguous schedule or an audited selected-source schedule."""
+    if args.source_seed_list is None:
+        return [args.seed_start + index for index in range(args.games)]
+    try:
+        payload = args.source_seed_list.read_bytes()
+        entries = [line.strip() for line in payload.decode("ascii").splitlines() if line.strip()]
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError(f"cannot read --source-seed-list: {exc}") from exc
+    if not entries:
+        raise ValueError("--source-seed-list must contain at least one decimal seed")
+    if any(not entry.isdecimal() for entry in entries):
+        raise ValueError("--source-seed-list may contain only one decimal seed per nonblank line")
+    seeds = [int(entry) for entry in entries]
+    if any(seed < 0 for seed in seeds) or len(set(seeds)) != len(seeds):
+        raise ValueError("--source-seed-list must contain unique non-negative seeds")
+    if args.games != len(seeds):
+        raise ValueError("--games must equal the number of --source-seed-list seeds")
+    args.source_seed_list_sha256 = hashlib.sha256(payload).hexdigest()
+    return seeds
 
 
 def resolve_rollout_caps(*, legacy: int | None, source: int | None,
@@ -567,6 +593,10 @@ def main() -> int:
     ap.add_argument("--max-decision-rounds", dest="legacy_max_decision_rounds", type=int,
                     default=None, help="deprecated compatibility spelling: set both caps together")
     ap.add_argument("--device", default="cpu")
+    ap.add_argument("--rollout-seed-salt", default="",
+                    help="nonempty independent rollout stream tag; A/B pairing remains enabled")
+    ap.add_argument("--source-seed-list", type=Path, default=None,
+                    help="newline-delimited selected source seeds; --games must equal its line count")
     ap.add_argument("--buckets", default="0.0,0.02,0.05,0.10,0.20")
     ap.add_argument("--allow-unstamped-belief", action="store_true",
                     help="run against a checkpoint with no belief_set_source_hash. The "
@@ -584,6 +614,10 @@ def main() -> int:
         ap.error(str(exc))
     args.source_max_decision_rounds = source_max_decision_rounds
     args.continuation_max_decision_rounds = continuation_max_decision_rounds
+    try:
+        source_seeds = source_seed_schedule(args)
+    except ValueError as exc:
+        ap.error(str(exc))
 
     from pokezero.local_showdown import (
         LocalShowdownConfig, LocalShowdownEnv, env_config_from_checkpoint_provenance,
@@ -739,7 +773,7 @@ def main() -> int:
     skipped = collections.Counter()
 
     for gi in range(args.games):
-        seed = args.seed_start + gi
+        seed = source_seeds[gi]
         env = make_env()
         env.reset(seed=seed)
         policies = {"p1": make_policy(), "p2": make_policy()}
@@ -872,7 +906,7 @@ def main() -> int:
                 for trial in range(args.rollouts):
                     rseed = rollout_seed(seed, f"probe-{seed}", prefix,
                                          0 if label == "a" else 1, trial,
-                                         paired=args.paired_seeds)
+                                         paired=args.paired_seeds, stream=args.rollout_seed_salt)
                     try:
                         renv = make_env()
                         renv.reset(seed=seed)
