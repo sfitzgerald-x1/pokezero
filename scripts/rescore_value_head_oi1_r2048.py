@@ -282,14 +282,18 @@ def run(args: argparse.Namespace) -> None:
     source_sha = sha256_file(args.source_checkpoint)
     if source_sha != SOURCE_CHECKPOINT_SHA256:
         _refuse("source checkpoint digest is not the registered targeted-gap iteration-2533 checkpoint")
-    source_model, source_result = load_transformer_checkpoint(args.source_checkpoint, map_location=args.device)
+    # Source action sampling and source-head reproduction must preserve the CPU
+    # geometry in the confirmation contract. Candidate values are independent
+    # forward passes on already-fixed histories and may use the GPU.
+    source_model, source_result = load_transformer_checkpoint(
+        args.source_checkpoint, map_location=args.source_device)
     if sha256_file(args.source_checkpoint) != source_sha:
         _refuse("source checkpoint changed while it was loaded")
     loaded: dict[str, tuple[Any, Any]] = {SOURCE_NAME: (source_model, source_result)}
     head_sha: dict[str, str] = {SOURCE_NAME: source_sha}
     for name, path in heads.items():
         before = sha256_file(path)
-        model, result = load_transformer_checkpoint(path, map_location=args.device)
+        model, result = load_transformer_checkpoint(path, map_location=args.candidate_device)
         if sha256_file(path) != before:
             _refuse(f"candidate checkpoint {name} changed while it was loaded")
         _check_candidate_observation_schema(source_result, result, args.showdown_root)
@@ -315,7 +319,7 @@ def run(args: argparse.Namespace) -> None:
 
     def source_policy() -> Any:
         return TransformerSoftmaxPolicy(
-            model=source_model, result=source_result, device=args.device,
+            model=source_model, result=source_result, device=args.source_device,
             deterministic=False, sampling_temperature=1.0)
 
     by_seed: dict[int, list[dict[str, Any]]] = collections.defaultdict(list)
@@ -346,7 +350,7 @@ def run(args: argparse.Namespace) -> None:
                 history = player_observation_history(
                     trajectory, player_id=seat, through_decision_round=prefix)
                 arm_a, arm_b, opponent_action = probe._top_two_and_opponent(
-                    trajectory, seat, prefix, source_model, source_result, args.device,
+                    trajectory, seat, prefix, source_model, source_result, args.source_device,
                     evaluate_transformer_action_priors, history)
             except Exception as exc:  # noqa: BLE001
                 _refuse(f"cannot rederive source sibling arms at {(seed, prefix, seat)}: {exc}")
@@ -376,7 +380,8 @@ def run(args: argparse.Namespace) -> None:
                     _refuse(f"source successor fallback flag drift at {(seed, prefix, seat, label)}")
                 for name, (model, result) in loaded.items():
                     values[name][label] = evaluate_transformer_observation_value(
-                        model=model, result=result, observations=successor_history, device=args.device)
+                        model=model, result=result, observations=successor_history,
+                        device=(args.source_device if name == SOURCE_NAME else args.candidate_device))
             source_delta = max(abs(values[SOURCE_NAME]["a"] - float(want["head_a"])),
                                abs(values[SOURCE_NAME]["b"] - float(want["head_b"])))
             reproduction.append(source_delta)
@@ -397,7 +402,8 @@ def run(args: argparse.Namespace) -> None:
         "n": len(reproduction), "tol": args.reproduce_tol,
         "max_abs_delta": max(reproduction),
         "mean_abs_delta": sum(reproduction) / len(reproduction),
-        "device": args.device,
+        "source_device": args.source_device,
+        "candidate_device": args.candidate_device,
         "source_max_decision_rounds": args.source_max_decision_rounds,
     }
     write_cells_new(
@@ -416,7 +422,8 @@ def main() -> int:
     parser.add_argument("--head", action="append", default=[], metavar="NAME=CHECKPOINT")
     parser.add_argument("--showdown-root", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
-    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--source-device", default="cpu")
+    parser.add_argument("--candidate-device", default="cuda")
     parser.add_argument("--source-max-decision-rounds", type=int, default=250)
     parser.add_argument("--reproduce-tol", type=float, default=1e-4)
     parser.add_argument("--allow-unstamped-belief", action="store_true")
