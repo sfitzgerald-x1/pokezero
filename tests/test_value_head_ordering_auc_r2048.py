@@ -58,7 +58,18 @@ def write_cell(tmp_path: Path, name: str, rows: list[dict], **meta_override: obj
         "corpus_sha256": "a" * 64,
         "confirmation_shard_sha256": {"confirm-00.json": "b" * 64},
         "pair_set_sha256": oi.pair_set_sha256(keyed),
-        "source_checkpoint_sha256": "c" * 64,
+        "source_checkpoint_sha256": oi.SOURCE_CHECKPOINT_SHA256,
+        "phase3_rescore": {
+            "schema": oi.PHASE3_RESCORE_SCHEMA,
+            "candidate_checkpoint_sha256": "d" * 64,
+            "source_belief_set_hash": oi.SOURCE_BELIEF_SET_HASH,
+            "source_reproduction": {
+                "n": len(rows), "tol": oi.REPRODUCTION_TOL,
+                "max_abs_delta": 0.0, "mean_abs_delta": 0.0,
+                "source_device": "cpu", "candidate_device": "cuda",
+                "source_max_decision_rounds": oi.SOURCE_MAX_DECISION_ROUNDS,
+            },
+        },
         **meta_override,
     }
     path = tmp_path / f"{name}.json"
@@ -141,6 +152,39 @@ def test_accepts_the_registered_source_cap_zero_encoding(tmp_path):
     path = write_cell(tmp_path, "canonical", rows)
     loaded, _ = oi.load_cell(path, "canonical")
     assert len(loaded) == 1800
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"phase3_rescore": {}}, "Phase-3 source-replay"),
+        ({"source_checkpoint_sha256": "c" * 64}, "foreign source checkpoint"),
+    ],
+)
+def test_refuses_unattested_or_foreign_phase3_rescore_cells(tmp_path, override, message):
+    path = write_cell(tmp_path, "bad", pairs(), **override)
+    with pytest.raises(oi.Refusal, match=message):
+        oi.load_cell(path, "bad")
+
+
+def test_refuses_noncanonical_source_replay_geometry_or_incomplete_attestation(tmp_path):
+    path = write_cell(tmp_path, "bad", pairs())
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    replay = doc["oi1_targeted_gap_r2048"]["phase3_rescore"]["source_reproduction"]
+    replay["source_device"] = "cuda"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(oi.Refusal, match="CPU-source/CUDA-candidate"):
+        oi.load_cell(path, "bad")
+    replay["source_device"] = "cpu"
+    replay["tol"] = 0.2
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(oi.Refusal, match="nonregistered reproduction tolerance"):
+        oi.load_cell(path, "bad")
+    replay["tol"] = oi.REPRODUCTION_TOL
+    doc["oi1_targeted_gap_r2048"]["phase3_rescore"]["source_belief_set_hash"] = None
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(oi.Refusal, match="source belief provenance"):
+        oi.load_cell(path, "bad")
 
 
 def test_refuses_mismatched_pair_or_corpus_provenance(tmp_path):

@@ -18,6 +18,7 @@ import hashlib
 import importlib.util
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -39,6 +40,11 @@ MIN_COMPLETE_PAIRS = 1800
 MIN_PRIMARY_ELIGIBLE_PAIRS = 1000
 WORST_CASE_GAP_SE = 0.5 * math.sqrt(2.0 / ROLLOUTS)
 SE_OVER_TAU = WORST_CASE_GAP_SE / TAU_PRIMARY
+SOURCE_CHECKPOINT_SHA256 = "0897676c295a79bac0b24c347b8f6a72e1359b98c37327bc5639fb6229005937"
+SOURCE_BELIEF_SET_HASH = "f5a5265143d423af"
+PHASE3_RESCORE_SCHEMA = "pokezero.phase3.oi1-r2048-rescore.v1"
+REPRODUCTION_TOL = 1e-4
+SOURCE_MAX_DECISION_ROUNDS = 250
 
 
 class Refusal(RuntimeError):
@@ -95,6 +101,33 @@ def _metadata(doc: Mapping[str, Any], name: str, path: Path) -> Mapping[str, Any
             raise Refusal(f"REFUSING: {name} ({path.name}) lacks provenance field {field!r}")
     if not isinstance(value["confirmation_shard_sha256"], Mapping):
         raise Refusal(f"REFUSING: {name} ({path.name}) has no confirmation-shard digest map")
+    if value["source_checkpoint_sha256"] != SOURCE_CHECKPOINT_SHA256:
+        raise Refusal(f"REFUSING: {name} ({path.name}) has a foreign source checkpoint")
+    phase3 = value.get("phase3_rescore")
+    if not isinstance(phase3, Mapping) or phase3.get("schema") != PHASE3_RESCORE_SCHEMA:
+        raise Refusal(f"REFUSING: {name} ({path.name}) lacks Phase-3 source-replay provenance")
+    if phase3.get("source_belief_set_hash") != SOURCE_BELIEF_SET_HASH:
+        raise Refusal(f"REFUSING: {name} ({path.name}) lacks registered source belief provenance")
+    candidate_sha = phase3.get("candidate_checkpoint_sha256")
+    if not isinstance(candidate_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", candidate_sha):
+        raise Refusal(f"REFUSING: {name} ({path.name}) lacks a lowercase candidate checkpoint SHA-256")
+    replay = phase3.get("source_reproduction")
+    if not isinstance(replay, Mapping):
+        raise Refusal(f"REFUSING: {name} ({path.name}) lacks source-head reproduction evidence")
+    if replay.get("tol") != REPRODUCTION_TOL:
+        raise Refusal(f"REFUSING: {name} ({path.name}) has a nonregistered reproduction tolerance")
+    if replay.get("source_device") != "cpu" or replay.get("candidate_device") != "cuda":
+        raise Refusal(f"REFUSING: {name} ({path.name}) does not retain CPU-source/CUDA-candidate geometry")
+    if replay.get("source_max_decision_rounds") != SOURCE_MAX_DECISION_ROUNDS:
+        raise Refusal(f"REFUSING: {name} ({path.name}) has a nonregistered source decision cap")
+    for field in ("n", "max_abs_delta", "mean_abs_delta"):
+        number = replay.get(field)
+        if ((field == "n" and type(number) is not int)
+                or (field != "n" and type(number) not in (int, float))
+                or not math.isfinite(number) or number < 0):
+            raise Refusal(f"REFUSING: {name} ({path.name}) has malformed source reproduction {field}")
+    if replay["max_abs_delta"] > REPRODUCTION_TOL or replay["mean_abs_delta"] > REPRODUCTION_TOL:
+        raise Refusal(f"REFUSING: {name} ({path.name}) exceeds the registered source reproduction tolerance")
     return value
 
 
@@ -106,6 +139,9 @@ def load_cell(path: Path, name: str) -> tuple[dict[tuple, dict], Mapping[str, An
         rows = base.load_cell(path, name, rollouts=ROLLOUTS)
     except SystemExit as exc:
         raise Refusal(str(exc)) from exc
+    replay = meta["phase3_rescore"]["source_reproduction"]
+    if replay["n"] != len(rows):
+        raise Refusal(f"REFUSING: {name} ({path.name}) source reproduction count does not cover every pair")
     for key, row in rows.items():
         if row.get("rollouts_a") != ROLLOUTS or row.get("rollouts_b") != ROLLOUTS:
             raise Refusal(f"REFUSING: {name} lacks complete R=2048 truth at {key}")
