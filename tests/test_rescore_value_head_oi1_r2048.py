@@ -125,9 +125,12 @@ def test_create_only_cells_bind_the_r2048_corpus_and_identical_keys(tmp_path):
     output = tmp_path / "cells"
     rescore.write_cells_new(
         output, {"control": loaded, "v1": loaded}, corpus_sha256=corpus_sha,
-        shard_sha256=shards, source_checkpoint_sha256="a" * 64,
+        shard_sha256=shards, source_checkpoint_sha256=rescore.SOURCE_CHECKPOINT_SHA256,
         checkpoint_sha256={"control": "b" * 64, "v1": "c" * 64},
-        source_reproduction={"n": 1800, "tol": 1e-4, "max_abs_delta": 0.0},
+        source_reproduction={"n": 1800, "tol": 1e-4, "max_abs_delta": 0.0,
+                             "mean_abs_delta": 0.0, "source_device": "cpu",
+                             "candidate_device": "cuda", "source_max_decision_rounds": 250},
+        source_belief_set_hash=rescore.SOURCE_BELIEF_SET_HASH,
     )
     control, control_meta = rescore.oi.load_cell(output / "control.json", "control")
     v1, v1_meta = rescore.oi.load_cell(output / "v1.json", "v1")
@@ -137,8 +140,10 @@ def test_create_only_cells_bind_the_r2048_corpus_and_identical_keys(tmp_path):
     with pytest.raises(rescore.Refusal, match="create-only"):
         rescore.write_cells_new(
             output, {"control": loaded}, corpus_sha256=corpus_sha, shard_sha256=shards,
-            source_checkpoint_sha256="a" * 64, checkpoint_sha256={"control": "b" * 64},
+            source_checkpoint_sha256=rescore.SOURCE_CHECKPOINT_SHA256,
+            checkpoint_sha256={"control": "b" * 64},
             source_reproduction={"n": 1800},
+            source_belief_set_hash=rescore.SOURCE_BELIEF_SET_HASH,
         )
 
 
@@ -147,9 +152,19 @@ def test_parse_refuses_ambiguous_candidate_identity():
         rescore._parse("checkpoint.pt")
     with pytest.raises(rescore.Refusal, match="reserves"):
         rescore._parse(f"{rescore.SOURCE_NAME}=checkpoint.pt")
+    with pytest.raises(rescore.Refusal, match="safe single filename"):
+        rescore._parse("../escape=checkpoint.pt")
     assert rescore._parse("v2=/tmp/v2.pt") == ("v2", Path("/tmp/v2.pt"))
+
+
+def test_replay_geometry_is_not_exposed_as_a_mutable_cli_override():
+    source = (REPO / "scripts" / "rescore_value_head_oi1_r2048.py").read_text(encoding="utf-8")
+    for flag in ("--source-device", "--candidate-device", "--source-max-decision-rounds",
+                 "--reproduce-tol", "--allow-unstamped-belief"):
+        assert flag not in source
 
 
 def test_source_checkpoint_identity_is_an_immutable_digest_not_a_path_claim():
     assert rescore.SOURCE_CHECKPOINT_SHA256 == (
         "0897676c295a79bac0b24c347b8f6a72e1359b98c37327bc5639fb6229005937")
+    assert rescore.SOURCE_BELIEF_SET_HASH == "f5a5265143d423af"
