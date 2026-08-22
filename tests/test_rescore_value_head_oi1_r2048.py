@@ -87,6 +87,7 @@ def test_loads_only_the_sealed_complete_r2048_confirmation_inventory(tmp_path):
         ({"failed_a": [2]}, "failed_a"),
         ({"pairing_intact": False}, "paired rollout"),
         ({"seat": "p2"}, "nonregistered seat"),
+        ({"head_gap": 0.9}, "head_gap disagrees"),
     ],
 )
 def test_refuses_invalid_confirmation_evidence_before_rescoring(tmp_path, mutation, message):

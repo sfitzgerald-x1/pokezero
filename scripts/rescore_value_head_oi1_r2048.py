@@ -101,7 +101,7 @@ def _complete_pair(pair: Mapping[str, Any], *, label: str) -> tuple[int, int, st
     for field in ("arm_a", "arm_b"):
         if type(pair.get(field)) is not int:
             _refuse(f"{label} lacks integer {field}")
-    for field in ("true_a", "true_b", "true_gap", "head_a", "head_b"):
+    for field in ("true_a", "true_b", "true_gap", "head_a", "head_b", "head_gap"):
         try:
             value = float(pair[field])
         except (KeyError, TypeError, ValueError) as exc:
@@ -110,6 +110,8 @@ def _complete_pair(pair: Mapping[str, Any], *, label: str) -> tuple[int, int, st
             _refuse(f"{label} has non-finite {field}")
     if abs((float(pair["true_a"]) - float(pair["true_b"])) - float(pair["true_gap"])) > 1e-12:
         _refuse(f"{label} true_gap disagrees with true_a/true_b")
+    if abs((float(pair["head_a"]) - float(pair["head_b"])) / 2.0 - float(pair["head_gap"])) > 1e-12:
+        _refuse(f"{label} head_gap disagrees with head_a/head_b")
     return int(pair["seed"]), int(pair["prefix"]), str(pair["seat"])
 
 
