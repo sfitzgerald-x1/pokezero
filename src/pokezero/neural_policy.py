@@ -867,6 +867,8 @@ class TransformerEpochMetrics:
     ppo_advantage_mean: float | None = None
     ppo_advantage_std: float | None = None
     ppo_ratio_mean: float | None = None
+    ppo_approx_kl: float | None = None
+    value_explained_variance: float | None = None
     ppo_clip_fraction: float | None = None
     ppo_value_clip_eligible_examples: int | None = None
     ppo_value_clip_fraction: float | None = None
@@ -2439,8 +2441,43 @@ def _distributed_transformer_loss(
     ppo_ratio_sum = 0.0
     ppo_clip_count = 0
     ppo_entropy_sum = 0.0
+    ppo_kl_sum = 0.0
     entropy_gradient = zero
     entropy_metric = 0.0
+
+    # Plateau vitals: critic explained variance against the realized value targets.
+    #
+    # Read together with the PRE-normalization advantage statistics that already emit
+    # (ppo_advantage_mean / ppo_advantage_std), this separates "the policy stopped moving"
+    # from "the learning signal died" at a plateau. Deliberately NOT an advantage SNR:
+    # advantages are globally normalized a few lines below, so |mean|/std is degenerate
+    # post-normalization, and even pre-normalization a zero mean is what a WORKING baseline
+    # produces -- an SNR-shaped vital would fire on a healthy run.
+    #
+    # Computed over the examples the critic actually trains on (non-zero training weight),
+    # unweighted, so the statistic answers "how much of the return variance does the critic
+    # explain" rather than a loss-weighted restatement of the value loss.
+    value_ev_examples = 0
+    value_ev_target_sum = 0.0
+    value_ev_target_square_sum = 0.0
+    value_ev_residual_sum = 0.0
+    value_ev_residual_square_sum = 0.0
+    if active:
+        ev_weights = _training_sample_weights(tensors)
+        ev_mask = ev_weights > 0
+        ev_count = int(ev_mask.sum().detach().item())
+        if ev_count:
+            ev_targets = _value_targets(tensors)[ev_mask].detach()
+            ev_residual = (ev_targets - output.value[ev_mask].detach())
+            local_ev_target_sum = ev_targets.sum()
+            local_ev_target_square_sum = (ev_targets * ev_targets).sum()
+            local_ev_residual_sum = ev_residual.sum()
+            local_ev_residual_square_sum = (ev_residual * ev_residual).sum()
+            value_ev_examples = _distributed_int_sum(context, ev_count, device=output.value.device)
+            value_ev_target_sum = float(_distributed_reduce_sum(context, local_ev_target_sum).item())
+            value_ev_target_square_sum = float(_distributed_reduce_sum(context, local_ev_target_square_sum).item())
+            value_ev_residual_sum = float(_distributed_reduce_sum(context, local_ev_residual_sum).item())
+            value_ev_residual_square_sum = float(_distributed_reduce_sum(context, local_ev_residual_square_sum).item())
 
     if config.objective == "value-only":
         policy_gradient = zero
@@ -2497,6 +2534,11 @@ def _distributed_transformer_loss(
             local_metric_advantage_sum = valid_advantage.sum()
             local_metric_advantage_square_sum = (valid_advantage * valid_advantage).sum()
             local_metric_ratio_sum = valid_ratio.sum()
+            # Schulman's k3 approximate KL: (r - 1) - log r. Non-negative by construction and
+            # far lower variance than the naive -log r mean, so a per-update read is meaningful
+            # at batch size. Detached: a vital never contributes gradient.
+            valid_log_ratio = (chosen_log_prob - behavior_log_prob)[valid_mask].detach()
+            local_metric_kl_sum = ((valid_ratio.detach() - 1.0) - valid_log_ratio).sum()
             local_metric_entropy_sum = entropy[valid_mask].sum()
             local_metric_clip_count = int(
                 ((valid_ratio < (1.0 - config.clip_epsilon)) | (valid_ratio > (1.0 + config.clip_epsilon))).sum().detach().item()
@@ -2505,11 +2547,13 @@ def _distributed_transformer_loss(
             local_metric_advantage_sum = zero
             local_metric_advantage_square_sum = zero
             local_metric_ratio_sum = zero
+            local_metric_kl_sum = zero
             local_metric_entropy_sum = zero
             local_metric_clip_count = 0
         ppo_advantage_sum = float(_distributed_reduce_sum(context, local_metric_advantage_sum).item())
         ppo_advantage_square_sum = float(_distributed_reduce_sum(context, local_metric_advantage_square_sum).item())
         ppo_ratio_sum = float(_distributed_reduce_sum(context, local_metric_ratio_sum).item())
+        ppo_kl_sum = float(_distributed_reduce_sum(context, local_metric_kl_sum).item())
         ppo_entropy_sum = float(_distributed_reduce_sum(context, local_metric_entropy_sum).item())
         ppo_clip_count = _distributed_int_sum(context, local_metric_clip_count, device=output.value.device)
         loss_gradient = (
@@ -2642,10 +2686,16 @@ def _distributed_transformer_loss(
         "ppo_advantage_sum": ppo_advantage_sum,
         "ppo_advantage_square_sum": ppo_advantage_square_sum,
         "ppo_ratio_sum": ppo_ratio_sum,
+        "ppo_kl_sum": ppo_kl_sum,
         "ppo_clip_count": ppo_clip_count,
         "ppo_value_clip_eligible_examples": value_clip_eligible,
         "ppo_value_clip_count": value_clip_count,
         "ppo_entropy_sum": ppo_entropy_sum,
+        "value_ev_examples": value_ev_examples,
+        "value_ev_target_sum": value_ev_target_sum,
+        "value_ev_target_square_sum": value_ev_target_square_sum,
+        "value_ev_residual_sum": value_ev_residual_sum,
+        "value_ev_residual_square_sum": value_ev_residual_square_sum,
     }
 
 
@@ -3031,6 +3081,8 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
                 ppo_advantage_mean=_optional_float(metrics.get("ppo_advantage_mean")),
                 ppo_advantage_std=_optional_float(metrics.get("ppo_advantage_std")),
                 ppo_ratio_mean=_optional_float(metrics.get("ppo_ratio_mean")),
+                ppo_approx_kl=_optional_float(metrics.get("ppo_approx_kl")),
+                value_explained_variance=_optional_float(metrics.get("value_explained_variance")),
                 ppo_clip_fraction=_optional_float(metrics.get("ppo_clip_fraction")),
                 ppo_value_clip_eligible_examples=_optional_int(metrics.get("ppo_value_clip_eligible_examples")),
                 ppo_value_clip_fraction=_optional_float(metrics.get("ppo_value_clip_fraction")),
@@ -3139,10 +3191,16 @@ class _TorchMetricTotals:
     ppo_advantage_sum: float = 0.0
     ppo_advantage_square_sum: float = 0.0
     ppo_ratio_sum: float = 0.0
+    ppo_kl_sum: float = 0.0
     ppo_clip_count: int = 0
     ppo_value_clip_eligible_examples: int = 0
     ppo_value_clip_count: int = 0
     ppo_entropy_sum: float = 0.0
+    value_ev_examples: int = 0
+    value_ev_target_sum: float = 0.0
+    value_ev_target_square_sum: float = 0.0
+    value_ev_residual_sum: float = 0.0
+    value_ev_residual_square_sum: float = 0.0
 
     def add(self, batch_size: int, pieces: Mapping[str, float | int]) -> None:
         self.examples += batch_size
@@ -3176,10 +3234,18 @@ class _TorchMetricTotals:
             self.ppo_advantage_sum += float(pieces["ppo_advantage_sum"])
             self.ppo_advantage_square_sum += float(pieces["ppo_advantage_square_sum"])
             self.ppo_ratio_sum += float(pieces["ppo_ratio_sum"])
+            self.ppo_kl_sum += float(pieces.get("ppo_kl_sum", 0.0))
             self.ppo_clip_count += int(pieces["ppo_clip_count"])
             self.ppo_entropy_sum += float(pieces["ppo_entropy_sum"])
         self.ppo_value_clip_eligible_examples += int(pieces.get("ppo_value_clip_eligible_examples", 0))
         self.ppo_value_clip_count += int(pieces.get("ppo_value_clip_count", 0))
+        value_ev_examples = int(pieces.get("value_ev_examples", 0))
+        if value_ev_examples:
+            self.value_ev_examples += value_ev_examples
+            self.value_ev_target_sum += float(pieces["value_ev_target_sum"])
+            self.value_ev_target_square_sum += float(pieces["value_ev_target_square_sum"])
+            self.value_ev_residual_sum += float(pieces["value_ev_residual_sum"])
+            self.value_ev_residual_square_sum += float(pieces["value_ev_residual_square_sum"])
 
     def to_epoch_metrics(
         self,
@@ -3191,6 +3257,8 @@ class _TorchMetricTotals:
         ppo_advantage_mean = None
         ppo_advantage_std = None
         ppo_ratio_mean = None
+        ppo_approx_kl = None
+        value_explained_variance = None
         ppo_clip_fraction = None
         ppo_value_clip_fraction = None
         ppo_entropy = None
@@ -3206,8 +3274,24 @@ class _TorchMetricTotals:
             )
             ppo_advantage_std = math.sqrt(ppo_advantage_variance)
             ppo_ratio_mean = self.ppo_ratio_sum / self.ppo_valid_examples
+            ppo_approx_kl = self.ppo_kl_sum / self.ppo_valid_examples
             ppo_clip_fraction = self.ppo_clip_count / self.ppo_valid_examples
             ppo_entropy = self.ppo_entropy_sum / self.ppo_valid_examples
+        if self.value_ev_examples > 1:
+            ev_target_mean = self.value_ev_target_sum / self.value_ev_examples
+            ev_residual_mean = self.value_ev_residual_sum / self.value_ev_examples
+            ev_target_variance = max(
+                0.0,
+                (self.value_ev_target_square_sum / self.value_ev_examples) - (ev_target_mean**2),
+            )
+            ev_residual_variance = max(
+                0.0,
+                (self.value_ev_residual_square_sum / self.value_ev_examples) - (ev_residual_mean**2),
+            )
+            # Undefined when the targets carry no variance (nothing to explain); left None
+            # rather than reported as a perfect or zero score.
+            if ev_target_variance > 0.0:
+                value_explained_variance = 1.0 - (ev_residual_variance / ev_target_variance)
         timing_payload = dict(timing or {})
         return TransformerEpochMetrics(
             epoch=epoch,
@@ -3232,6 +3316,8 @@ class _TorchMetricTotals:
             ppo_advantage_mean=ppo_advantage_mean,
             ppo_advantage_std=ppo_advantage_std,
             ppo_ratio_mean=ppo_ratio_mean,
+            ppo_approx_kl=ppo_approx_kl,
+            value_explained_variance=value_explained_variance,
             ppo_clip_fraction=ppo_clip_fraction,
             ppo_value_clip_eligible_examples=(
                 self.ppo_value_clip_eligible_examples if self.ppo_objective_examples else None
@@ -3428,6 +3514,25 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         config,
         training_weights=training_weights,
     )
+    # Plateau vitals: critic explained variance. Mirrors the distributed path (see the long
+    # comment there for why this is NOT an advantage SNR); computed over the examples the
+    # critic trains on, unweighted, and fully detached so it can never enter a gradient.
+    value_ev_examples = 0
+    value_ev_target_sum = 0.0
+    value_ev_target_square_sum = 0.0
+    value_ev_residual_sum = 0.0
+    value_ev_residual_square_sum = 0.0
+    _ev_mask = training_weights > 0
+    _ev_count = int(_ev_mask.sum().item())
+    if _ev_count:
+        _ev_targets = value_targets[_ev_mask].detach()
+        _ev_residual = _ev_targets - output.value[_ev_mask].detach()
+        value_ev_examples = _ev_count
+        value_ev_target_sum = float(_ev_targets.sum().item())
+        value_ev_target_square_sum = float((_ev_targets * _ev_targets).sum().item())
+        value_ev_residual_sum = float(_ev_residual.sum().item())
+        value_ev_residual_square_sum = float((_ev_residual * _ev_residual).sum().item())
+
     value_ranking_loss, value_ranking_loss_value, value_ranking_pairs = _value_ranking_loss_terms(
         output.value,
         value_targets,
@@ -3438,6 +3543,7 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
     ppo_advantage_sum = 0.0
     ppo_advantage_square_sum = 0.0
     ppo_ratio_sum = 0.0
+    ppo_kl_sum = 0.0
     ppo_clip_count = 0
     ppo_entropy_sum = 0.0
 
@@ -3482,6 +3588,9 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
             ppo_advantage_sum = float(valid_advantage.sum().detach().item())
             ppo_advantage_square_sum = float((valid_advantage * valid_advantage).sum().detach().item())
             ppo_ratio_sum = float(valid_ratio.sum().detach().item())
+            # k3 approximate KL, matching the distributed path exactly (see its comment).
+            valid_log_ratio = (chosen_log_prob - behavior_log_prob)[valid_mask].detach()
+            ppo_kl_sum = float(((valid_ratio.detach() - 1.0) - valid_log_ratio).sum().item())
             ppo_clip_count = int(
                 (
                     (valid_ratio < (1.0 - config.clip_epsilon))
@@ -3554,10 +3663,16 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         "ppo_advantage_sum": ppo_advantage_sum,
         "ppo_advantage_square_sum": ppo_advantage_square_sum,
         "ppo_ratio_sum": ppo_ratio_sum,
+        "ppo_kl_sum": ppo_kl_sum,
         "ppo_clip_count": ppo_clip_count,
         "ppo_value_clip_eligible_examples": ppo_value_clip_eligible_examples,
         "ppo_value_clip_count": ppo_value_clip_count,
         "ppo_entropy_sum": ppo_entropy_sum,
+        "value_ev_examples": value_ev_examples,
+        "value_ev_target_sum": value_ev_target_sum,
+        "value_ev_target_square_sum": value_ev_target_square_sum,
+        "value_ev_residual_sum": value_ev_residual_sum,
+        "value_ev_residual_square_sum": value_ev_residual_square_sum,
     }
 
 
