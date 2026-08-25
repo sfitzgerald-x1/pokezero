@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import random
 import subprocess
+import socket
 import sys
 from types import SimpleNamespace
 import tempfile
@@ -2256,6 +2257,433 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(metrics["ppo_valid_examples"], 1)
         self.assertEqual(metrics["ppo_clip_count"], 1)
         self.assertGreater(metrics["ppo_ratio_sum"], 1.2)
+
+    def _vitals_case(self, *, values, targets, behavior_prob=0.5, logit_boost=0.0):
+        """One-example-per-row PPO loss call, returning the raw metric pieces."""
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        n = len(values)
+        logits = torch.zeros(n, 9)
+        logits[:, 0] = logit_boost
+        output = TransformerPolicyOutput(
+            policy_logits=logits,
+            value=torch.tensor(values, dtype=torch.float32),
+            opponent_action_logits=torch.zeros(n, 9),
+        )
+        tensors = {
+            "legal_action_mask": torch.ones(n, 9, dtype=torch.bool),
+            "action_indices": torch.zeros(n, dtype=torch.long),
+            "returns": torch.tensor(targets, dtype=torch.float32),
+            "action_probabilities": torch.full((n,), behavior_prob),
+            "action_probability_mask": torch.ones(n, dtype=torch.bool),
+            "opponent_action_mask": torch.zeros(n, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(n, dtype=torch.long),
+        }
+        config = TransformerTrainingConfig(
+            objective="ppo", normalize_advantage=False, opponent_action_loss_weight=0.0
+        )
+        _, metrics = _transformer_loss(output, tensors, config)
+        return metrics
+
+    def _explained_variance(self, metrics):
+        """Route the pieces through the SHIPPING aggregation, never a local reimplementation.
+
+        The first version of this helper recomputed the formula here. That is the defect class
+        this programme keeps finding: a test that re-derives the implementation cannot see the
+        implementation being wrong -- review confirmed it by mutating the shipping Var(residual)
+        to E[residual^2] and watching the whole suite stay green.
+        """
+        from pokezero.neural_policy import _TorchMetricTotals
+
+        totals = _TorchMetricTotals()
+        pieces = dict(metrics)
+        pieces.setdefault("loss", 0.0)
+        pieces.setdefault("policy_loss", 0.0)
+        pieces.setdefault("policy_correct", 0)
+        pieces.setdefault("value_loss", 0.0)
+        pieces.setdefault("opponent_examples", 0)
+        pieces.setdefault("action_family_examples", 0)
+        pieces.setdefault("switch_target_examples", 0)
+        totals.add(int(metrics.get("ppo_objective_examples") or 1), pieces)
+        return totals.to_epoch_metrics(epoch=1).value_explained_variance
+
+    def test_critic_explained_variance_separates_a_working_critic_from_a_dead_one(self) -> None:
+        """The plateau vital, with its demonstrated failing inputs.
+
+        Explained variance exists to answer one question at a plateau: is the critic carrying
+        real information about returns, or has it collapsed toward predicting the mean? Each
+        row below is an input on which the metric MUST read a specific value -- a metric that
+        cannot read ~0 on a mean-predicting critic could never diagnose the condition it is
+        registered to diagnose.
+        """
+        if not torch_available():
+            self.skipTest("requires torch")
+
+        targets = [1.0, 0.0, 1.0, 0.0]
+
+        with self.subTest(critic="perfect"):
+            ev = self._explained_variance(self._vitals_case(values=targets, targets=targets))
+            self.assertAlmostEqual(ev, 1.0, places=5)
+
+        with self.subTest(critic="predicts the mean (the failing input)"):
+            ev = self._explained_variance(self._vitals_case(values=[0.5] * 4, targets=targets))
+            self.assertAlmostEqual(ev, 0.0, places=5)
+
+        with self.subTest(critic="anti-correlated -- worse than the mean"):
+            ev = self._explained_variance(
+                self._vitals_case(values=[0.0, 1.0, 0.0, 1.0], targets=targets)
+            )
+            self.assertLess(ev, 0.0)
+
+        with self.subTest(critic="constant bias -- the case that separates Var(r) from E[r^2]"):
+            # A critic offset by +0.3 on every example explains ALL the variance (its errors are
+            # perfectly predictable), so explained variance is 1.0 even though every prediction
+            # is wrong. Computing E[residual^2] instead of Var(residual) reads 0.64 here.
+            # Without this case the two formulas agree on every other input in this test, which
+            # is exactly why review's E[r^2] mutation survived the whole suite.
+            ev = self._explained_variance(
+                self._vitals_case(values=[t + 0.3 for t in targets], targets=targets)
+            )
+            self.assertAlmostEqual(ev, 1.0, places=5)
+
+        with self.subTest(case="targets carry no variance -> undefined, not a perfect score"):
+            metrics = self._vitals_case(values=[0.4] * 4, targets=[1.0] * 4)
+            self.assertIsNone(self._explained_variance(metrics))
+
+    def test_approx_kl_reads_zero_only_when_the_policy_has_not_moved(self) -> None:
+        """The other half of the plateau read: is the policy still travelling?
+
+        k3 estimator ((r-1) - log r), so it is non-negative by construction and reads exactly
+        zero when the update leaves the policy where the behaviour policy was. The failing
+        input is a policy that HAS moved: the metric must be materially positive there, or it
+        could not distinguish a stalled optimizer from a moving one.
+        """
+        if not torch_available():
+            self.skipTest("requires torch")
+
+        n = 4
+        # Uniform logits over 9 legal actions -> chosen prob 1/9; behaviour prob 1/9 too.
+        unmoved = self._vitals_case(
+            values=[0.5] * n, targets=[1.0, 0.0, 1.0, 0.0], behavior_prob=1.0 / 9.0
+        )
+        self.assertAlmostEqual(unmoved["ppo_kl_sum"] / unmoved["ppo_valid_examples"], 0.0, places=6)
+
+        moved = self._vitals_case(
+            values=[0.5] * n,
+            targets=[1.0, 0.0, 1.0, 0.0],
+            behavior_prob=1.0 / 9.0,
+            logit_boost=2.0,
+        )
+        # Closed form, not a floor: 9 legal actions, uniform behaviour (1/9), current policy
+        # boosts action 0's logit by 2.0 -> p = e^2 / (e^2 + 8). The chosen action is 0 on every
+        # row, so r = 9p and k3 = (r - 1) - log r exactly.
+        import math
+
+        p_current = math.exp(2.0) / (math.exp(2.0) + 8.0)
+        ratio = 9.0 * p_current
+        expected_k3 = (ratio - 1.0) - math.log(ratio)
+        self.assertAlmostEqual(
+            moved["ppo_kl_sum"] / moved["ppo_valid_examples"], expected_k3, places=5
+        )
+        # Non-negativity is the k3 property that makes a per-update read interpretable.
+        self.assertGreaterEqual(moved["ppo_kl_sum"], 0.0)
+
+    def test_vitals_collectives_run_on_every_rank_including_an_inactive_one(self) -> None:
+        """The regression test for a real DDP deadlock this change once introduced.
+
+        The first version issued the explained-variance reductions inside `if active:` /
+        `if ev_count:` -- both RANK-LOCAL. A rank handed the documented one-example placeholder
+        (see _distributed_training_batch_shard) skipped five collectives, every later reduction
+        on the surviving ranks read the wrong buffer, and the job hung. Review reproduced it on a
+        real 2-rank group: the inactive rank returned the ENTROPY sum as ppo_kl_sum and the
+        active rank blocked forever -- and the same shift corrupted global_weight_sum, which
+        normalizes the gradient, so it was never a metrics-only fault.
+
+        world_size=1 contexts short-circuit every reduction (`context.enabled` is False), so the
+        same-process parity test is structurally incapable of catching this. Only a real group
+        can. A deadlock surfaces here as a timeout, not a hang.
+        """
+        if not torch_available():
+            self.skipTest("requires torch")
+        import subprocess
+
+        worker = Path(__file__).resolve().parent / "support" / "ddp_vitals_worker.py"
+        if not worker.is_file():
+            self.skipTest("ddp worker helper is missing")
+        repo_src = str(Path(__file__).resolve().parents[1] / "src")
+        env = dict(os.environ)
+        with contextlib.closing(socket.socket()) as probe:
+            probe.bind(("127.0.0.1", 0))
+            free_port = probe.getsockname()[1]
+        env.update({"MASTER_ADDR": "127.0.0.1", "MASTER_PORT": str(free_port), "REPO_SRC": repo_src})
+
+        processes = []
+        for rank in (0, 1):
+            rank_env = dict(env)
+            rank_env["RANK"] = str(rank)
+            processes.append(
+                subprocess.Popen(
+                    [sys.executable, str(worker)],
+                    env=rank_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+            )
+        results = []
+        try:
+            for process in processes:
+                try:
+                    stdout, stderr = process.communicate(timeout=120)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    self.fail(
+                        "a rank never returned: a collective is still gated on a rank-local "
+                        "condition, which is the deadlock this test exists for"
+                    )
+                self.assertEqual(process.returncode, 0, stderr[-2000:])
+                line = next((l for l in stdout.splitlines() if l.startswith("RESULT ")), None)
+                self.assertIsNotNone(line, f"worker produced no result: {stdout[-500:]}")
+                results.append(json.loads(line[len("RESULT "):]))
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+
+        self.assertEqual(len(results), 2)
+        active, inactive = sorted(results, key=lambda r: r["rank"])
+        for key in ("ppo_kl_sum", "ppo_kl_outliers", "value_ev_examples", "value_ev_target_sum",
+                    "value_ev_residual_square_sum"):
+            with self.subTest(key=key):
+                # Both ranks must see the SAME reduced value. A shifted reduction shows up here
+                # as disagreement even when neither rank hangs.
+                self.assertAlmostEqual(float(active[key]), float(inactive[key]), places=5)
+        # And the reduced values are the active rank's own data, not a shifted buffer.
+        self.assertEqual(active["value_ev_examples"], 4)
+        self.assertAlmostEqual(active["value_ev_target_sum"], 2.0, places=5)
+        # Rank 0's illegal recorded action produced exactly one clamped outlier, and BOTH ranks
+        # must see the reduced count. A rank-local gate on this collective reads 0 == 0 and
+        # passes vacuously, which is why the worker gives the ranks different inputs.
+        self.assertEqual(active["ppo_kl_outliers"], 1)
+        self.assertEqual(inactive["ppo_kl_outliers"], 1)
+
+    def test_explained_variance_scores_against_the_objective_s_own_targets(self) -> None:
+        """_value_targets is objective-gated everywhere; the EV site must be too.
+
+        Behavioural, not a source grep: an earlier version asserted the call text, which caught
+        the mutation but would also have failed on a formatter reflow while proving nothing about
+        what the code scores. Here the two target sources are given DIFFERENT values, so an
+        ungated call is visible in the numbers on both loss paths.
+        """
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import (
+            DistributedTrainingContext, TransformerPolicyOutput,
+            _distributed_transformer_loss, _transformer_loss,
+        )
+
+        n = 4
+        returns = torch.tensor([1.0, 0.0, 1.0, 0.0])
+        # ppo targets deliberately differ from returns: under value-only the EV must follow
+        # `returns`, and any leak of the ppo source shows up as a different target sum.
+        ppo_targets = torch.tensor([0.25, 0.25, 0.25, 0.25])
+
+        def build():
+            output = TransformerPolicyOutput(
+                policy_logits=torch.zeros(n, 9),
+                value=torch.tensor([0.5, 0.5, 0.5, 0.5]),
+                opponent_action_logits=torch.zeros(n, 9),
+            )
+            tensors = {
+                "legal_action_mask": torch.ones(n, 9, dtype=torch.bool),
+                "action_indices": torch.zeros(n, dtype=torch.long),
+                "returns": returns,
+                "action_probabilities": torch.full((n,), 0.5),
+                "action_probability_mask": torch.ones(n, dtype=torch.bool),
+                "opponent_action_mask": torch.zeros(n, dtype=torch.bool),
+                "opponent_action_indices": torch.zeros(n, dtype=torch.long),
+                "ppo_value_targets": ppo_targets,
+                "ppo_value_target_mask": torch.ones(n, dtype=torch.bool),
+            }
+            return output, tensors
+
+        config = TransformerTrainingConfig(
+            objective="value-only", normalize_advantage=False, opponent_action_loss_weight=0.0,
+            freeze_non_value_parameters=True,
+        )
+        expected_sum = float(returns.sum())
+        output, tensors = build()
+        _, single = _transformer_loss(output, tensors, config)
+        output, tensors = build()
+        _, distributed = _distributed_transformer_loss(
+            output, tensors, config, context=DistributedTrainingContext(),
+            local_examples=n, global_examples=n,
+        )
+        for label, pieces in (("single-process", single), ("distributed", distributed)):
+            with self.subTest(path=label):
+                self.assertAlmostEqual(
+                    pieces["value_ev_target_sum"], expected_sum, places=5,
+                    msg="explained variance scored against the wrong objective's targets",
+                )
+
+    def test_explained_variance_counts_only_examples_the_critic_trains_on(self) -> None:
+        """Zero training weight means the example contributes no value gradient, so it must not
+        enter the critic's own report card either. Never previously exercised: no test set
+        training_weights at all, so the mask was inert."""
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        n = 4
+        logits = torch.zeros(n, 9)
+        output = TransformerPolicyOutput(
+            policy_logits=logits,
+            value=torch.tensor([1.0, 0.0, 9.9, 9.9]),
+            opponent_action_logits=torch.zeros(n, 9),
+        )
+        tensors = {
+            "legal_action_mask": torch.ones(n, 9, dtype=torch.bool),
+            "action_indices": torch.zeros(n, dtype=torch.long),
+            "returns": torch.tensor([1.0, 0.0, 1.0, 0.0]),
+            "action_probabilities": torch.full((n,), 0.5),
+            "action_probability_mask": torch.ones(n, dtype=torch.bool),
+            "opponent_action_mask": torch.zeros(n, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(n, dtype=torch.long),
+            # The last two rows are excluded from training and carry absurd value errors.
+            "training_weights": torch.tensor([1.0, 1.0, 0.0, 0.0]),
+        }
+        config = TransformerTrainingConfig(
+            objective="ppo", normalize_advantage=False, opponent_action_loss_weight=0.0
+        )
+        _, metrics = _transformer_loss(output, tensors, config)
+        self.assertEqual(metrics["value_ev_examples"], 2)
+        # Perfect on the two rows that count; the excluded rows would have destroyed this.
+        self.assertAlmostEqual(metrics["value_ev_residual_square_sum"], 0.0, places=6)
+
+    def test_both_loss_paths_emit_identical_plateau_vitals(self) -> None:
+        """The two loss implementations must agree, or the vitals mean different things.
+
+        This test exists because the first version of this change patched only the
+        DISTRIBUTED path: every single-process caller silently emitted no vitals at all, and
+        an accumulator-level test would never have noticed. Production trains through one of
+        these paths depending on world size; a vital present on only one is a vital that
+        vanishes on the run you happen to be reading.
+        """
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import (
+            DistributedTrainingContext,
+            TransformerPolicyOutput,
+            _distributed_transformer_loss,
+            _transformer_loss,
+        )
+
+        values = [0.6, 0.1, 0.9, 0.3]
+        targets = [1.0, 0.0, 1.0, 0.0]
+        n = len(values)
+
+        def build():
+            logits = torch.zeros(n, 9)
+            logits[:, 0] = 1.5
+            output = TransformerPolicyOutput(
+                policy_logits=logits,
+                value=torch.tensor(values, dtype=torch.float32),
+                opponent_action_logits=torch.zeros(n, 9),
+            )
+            tensors = {
+                "legal_action_mask": torch.ones(n, 9, dtype=torch.bool),
+                "action_indices": torch.zeros(n, dtype=torch.long),
+                "returns": torch.tensor(targets, dtype=torch.float32),
+                "action_probabilities": torch.full((n,), 1.0 / 9.0),
+                "action_probability_mask": torch.ones(n, dtype=torch.bool),
+                "opponent_action_mask": torch.zeros(n, dtype=torch.bool),
+                "opponent_action_indices": torch.zeros(n, dtype=torch.long),
+            }
+            return output, tensors
+
+        config = TransformerTrainingConfig(
+            objective="ppo", normalize_advantage=False, opponent_action_loss_weight=0.0
+        )
+        output, tensors = build()
+        _, single = _transformer_loss(output, tensors, config)
+        output, tensors = build()
+        _, distributed = _distributed_transformer_loss(
+            output,
+            tensors,
+            config,
+            context=DistributedTrainingContext(),
+            local_examples=n,
+            global_examples=n,
+        )
+
+        vitals = (
+            "ppo_kl_sum",
+            "value_ev_examples",
+            "value_ev_target_sum",
+            "value_ev_target_square_sum",
+            "value_ev_residual_sum",
+            "value_ev_residual_square_sum",
+        )
+        for key in vitals:
+            with self.subTest(key=key):
+                self.assertIn(key, single, "single-process path does not emit this vital")
+                self.assertIn(key, distributed, "distributed path does not emit this vital")
+                self.assertAlmostEqual(float(single[key]), float(distributed[key]), places=5)
+        # And the vitals are non-trivial on this input, so agreement is not agreement on zero.
+        self.assertGreater(single["value_ev_examples"], 0)
+        self.assertGreater(single["ppo_kl_sum"], 0.0)
+
+    def test_plateau_vitals_consume_no_rng(self) -> None:
+        """A vital that perturbs the training stream is not a vital, it is a variable.
+
+        The plan's gate: the metric computation must leave the RNG stream byte-identical, so
+        adding it cannot change any run it observes.
+        """
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import (
+            DistributedTrainingContext, TransformerPolicyOutput, _distributed_transformer_loss,
+        )
+
+        torch.manual_seed(1234)
+        before = torch.get_rng_state()
+        self._vitals_case(values=[0.5, 0.25], targets=[1.0, 0.0])
+        self.assertTrue(torch.equal(before, torch.get_rng_state()), "single-process path consumed RNG")
+
+        # The DISTRIBUTED path too: it is a separate implementation, and covering only one of
+        # them is how this change already shipped a metric that existed on one path alone.
+        n = 2
+        output = TransformerPolicyOutput(
+            policy_logits=torch.zeros(n, 9),
+            value=torch.tensor([0.5, 0.25]),
+            opponent_action_logits=torch.zeros(n, 9),
+        )
+        tensors = {
+            "legal_action_mask": torch.ones(n, 9, dtype=torch.bool),
+            "action_indices": torch.zeros(n, dtype=torch.long),
+            "returns": torch.tensor([1.0, 0.0]),
+            "action_probabilities": torch.full((n,), 0.5),
+            "action_probability_mask": torch.ones(n, dtype=torch.bool),
+            "opponent_action_mask": torch.zeros(n, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(n, dtype=torch.long),
+        }
+        config = TransformerTrainingConfig(
+            objective="ppo", normalize_advantage=False, opponent_action_loss_weight=0.0
+        )
+        torch.manual_seed(4321)
+        before = torch.get_rng_state()
+        _distributed_transformer_loss(
+            output, tensors, config,
+            context=DistributedTrainingContext(), local_examples=n, global_examples=n,
+        )
+        self.assertTrue(torch.equal(before, torch.get_rng_state()), "distributed path consumed RNG")
 
     def test_ppo_masks_examples_without_positive_behavior_prob(self) -> None:
         if not torch_available():

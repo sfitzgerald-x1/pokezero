@@ -6915,6 +6915,9 @@ def _foundation_value_tune_require_epoch_metrics(payload: Any, *, label: str) ->
         _foundation_value_tune_require_finite_number(metrics.get(field), label=f"{label}.{field}")
     integer_or_none = {
         "value_ranking_pairs", "ppo_valid_examples", "ppo_value_clip_eligible_examples", "batches",
+        # A count, so it validates as a non-negative int like its siblings rather than as a
+        # generic finite number.
+        "ppo_kl_outliers",
     }
     for field in integer_or_none:
         value = metrics.get(field)
