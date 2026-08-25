@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import random
 import subprocess
+import socket
 import sys
 from types import SimpleNamespace
 import tempfile
@@ -2413,7 +2414,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             self.skipTest("ddp worker helper is missing")
         repo_src = str(Path(__file__).resolve().parents[1] / "src")
         env = dict(os.environ)
-        env.update({"MASTER_ADDR": "127.0.0.1", "MASTER_PORT": "29623", "REPO_SRC": repo_src})
+        with contextlib.closing(socket.socket()) as probe:
+            probe.bind(("127.0.0.1", 0))
+            free_port = probe.getsockname()[1]
+        env.update({"MASTER_ADDR": "127.0.0.1", "MASTER_PORT": str(free_port), "REPO_SRC": repo_src})
 
         processes = []
         for rank in (0, 1):
@@ -2447,7 +2451,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(len(results), 2)
         active, inactive = sorted(results, key=lambda r: r["rank"])
-        for key in ("ppo_kl_sum", "value_ev_examples", "value_ev_target_sum", "value_ev_residual_square_sum"):
+        for key in ("ppo_kl_sum", "ppo_kl_outliers", "value_ev_examples", "value_ev_target_sum",
+                    "value_ev_residual_square_sum"):
             with self.subTest(key=key):
                 # Both ranks must see the SAME reduced value. A shifted reduction shows up here
                 # as disagreement even when neither rank hangs.
@@ -2455,21 +2460,72 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         # And the reduced values are the active rank's own data, not a shifted buffer.
         self.assertEqual(active["value_ev_examples"], 4)
         self.assertAlmostEqual(active["value_ev_target_sum"], 2.0, places=5)
+        # Rank 0's illegal recorded action produced exactly one clamped outlier, and BOTH ranks
+        # must see the reduced count. A rank-local gate on this collective reads 0 == 0 and
+        # passes vacuously, which is why the worker gives the ranks different inputs.
+        self.assertEqual(active["ppo_kl_outliers"], 1)
+        self.assertEqual(inactive["ppo_kl_outliers"], 1)
 
-    def test_explained_variance_respects_the_objective_target_source(self) -> None:
-        """_value_targets is objective-gated everywhere else, and must be here too.
+    def test_explained_variance_scores_against_the_objective_s_own_targets(self) -> None:
+        """_value_targets is objective-gated everywhere; the EV site must be too.
 
-        Under value-only with a GAE-collected cache the target source differs from ppo. An
-        ungated call scores the critic against a different target than the loss it is paired
-        with -- a divergence this file's own docstring records as previously caught by review.
+        Behavioural, not a source grep: an earlier version asserted the call text, which caught
+        the mutation but would also have failed on a formatter reflow while proving nothing about
+        what the code scores. Here the two target sources are given DIFFERENT values, so an
+        ungated call is visible in the numbers on both loss paths.
         """
         if not torch_available():
             self.skipTest("requires torch")
-        from pokezero import neural_policy as neural_policy_module
+        import torch
 
-        source = Path(neural_policy_module.__file__).read_text(encoding="utf-8")
-        self.assertIn("_value_targets(tensors, config.objective)[ev_mask]", source)
-        self.assertNotIn("_value_targets(tensors)[ev_mask]", source)
+        from pokezero.neural_policy import (
+            DistributedTrainingContext, TransformerPolicyOutput,
+            _distributed_transformer_loss, _transformer_loss,
+        )
+
+        n = 4
+        returns = torch.tensor([1.0, 0.0, 1.0, 0.0])
+        # ppo targets deliberately differ from returns: under value-only the EV must follow
+        # `returns`, and any leak of the ppo source shows up as a different target sum.
+        ppo_targets = torch.tensor([0.25, 0.25, 0.25, 0.25])
+
+        def build():
+            output = TransformerPolicyOutput(
+                policy_logits=torch.zeros(n, 9),
+                value=torch.tensor([0.5, 0.5, 0.5, 0.5]),
+                opponent_action_logits=torch.zeros(n, 9),
+            )
+            tensors = {
+                "legal_action_mask": torch.ones(n, 9, dtype=torch.bool),
+                "action_indices": torch.zeros(n, dtype=torch.long),
+                "returns": returns,
+                "action_probabilities": torch.full((n,), 0.5),
+                "action_probability_mask": torch.ones(n, dtype=torch.bool),
+                "opponent_action_mask": torch.zeros(n, dtype=torch.bool),
+                "opponent_action_indices": torch.zeros(n, dtype=torch.long),
+                "ppo_value_targets": ppo_targets,
+                "ppo_value_target_mask": torch.ones(n, dtype=torch.bool),
+            }
+            return output, tensors
+
+        config = TransformerTrainingConfig(
+            objective="value-only", normalize_advantage=False, opponent_action_loss_weight=0.0,
+            freeze_non_value_parameters=True,
+        )
+        expected_sum = float(returns.sum())
+        output, tensors = build()
+        _, single = _transformer_loss(output, tensors, config)
+        output, tensors = build()
+        _, distributed = _distributed_transformer_loss(
+            output, tensors, config, context=DistributedTrainingContext(),
+            local_examples=n, global_examples=n,
+        )
+        for label, pieces in (("single-process", single), ("distributed", distributed)):
+            with self.subTest(path=label):
+                self.assertAlmostEqual(
+                    pieces["value_ev_target_sum"], expected_sum, places=5,
+                    msg="explained variance scored against the wrong objective's targets",
+                )
 
     def test_explained_variance_counts_only_examples_the_critic_trains_on(self) -> None:
         """Zero training weight means the example contributes no value gradient, so it must not
