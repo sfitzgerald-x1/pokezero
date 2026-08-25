@@ -989,7 +989,14 @@ def _run_selfplay_game_record(
         record,
         current_player,
         opponent_pool_entry=opponent_entry,
-        opponent_policy_spec=opponent_spec if opponent_entry is not None else None,
+        # Recorded for EVERY opponent, not only pool members. Previously a fixed
+        # `--opponent-policy` run wrote no opponent metadata at all, so its training caches
+        # carried no evidence of who the opponent actually was -- and a run whose fixed opponent
+        # silently reverted to the mirror default (the collector mirrors `--current-policy` when
+        # the flag is absent) was indistinguishable after the fact from one that ran as intended.
+        # Any audit of a fixed-opponent run had no population to read, which is a check that
+        # cannot fail. Pool runs are unaffected: they already recorded this and still do.
+        opponent_policy_spec=opponent_spec,
     )
 
 
