@@ -282,9 +282,12 @@ class SelfPlayTest(unittest.TestCase):
             output_path = Path(temp_dir) / "rollouts.jsonl"
             training_output_path = Path(temp_dir) / "training-rollouts.jsonl"
 
+            training_cache_path = Path(temp_dir) / "training-cache"
             collect_selfplay_rollouts(
                 output_path=output_path,
                 training_output_path=training_output_path,
+                training_cache_output_path=training_cache_path,
+                training_cache_dataset_config=TrajectoryDatasetConfig(window_size=1),
                 games=2,
                 env_factory=OneTurnEnv,
                 rollout_config=RolloutConfig(max_decision_rounds=5),
@@ -298,6 +301,9 @@ class SelfPlayTest(unittest.TestCase):
                 },
             )
             training_records = read_rollout_records(training_output_path)
+            cache_metadata = json.loads(
+                (training_cache_path / "metadata.json").read_text(encoding="utf-8")
+            )
 
         self.assertTrue(training_records, "no training records were written")
         for index, record in enumerate(training_records):
@@ -307,7 +313,14 @@ class SelfPlayTest(unittest.TestCase):
                     "frozen-champion",
                     "the fixed opponent left no trace in the training record",
                 )
-        # And a pool run still records the pool fields alongside it (no regression there).
+        # THE CACHE LAYER, which is what an audit actually reads -- the rationale for this
+        # change is that "its training caches carried no evidence", so pinning only the
+        # in-memory record would leave the claim itself untested.
+        provenance = cache_metadata["opponent_pool_provenance"]
+        self.assertEqual(len(provenance), cache_metadata["record_count"])
+        self.assertEqual({entry["opponent_policy_spec"] for entry in provenance}, {"frozen-champion"})
+        # Every record is labelled, so nothing reads as a partially-unlabelled collection.
+        self.assertFalse(cache_metadata["opponent_pool_provenance_mixed"])
 
     def test_collect_selfplay_rollouts_samples_weighted_opponent_pool_with_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
