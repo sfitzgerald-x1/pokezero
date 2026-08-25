@@ -868,6 +868,7 @@ class TransformerEpochMetrics:
     ppo_advantage_std: float | None = None
     ppo_ratio_mean: float | None = None
     ppo_approx_kl: float | None = None
+    ppo_kl_outliers: int | None = None
     value_explained_variance: float | None = None
     ppo_clip_fraction: float | None = None
     ppo_value_clip_eligible_examples: int | None = None
@@ -2389,6 +2390,13 @@ def _distributed_cross_entropy_term(
     return gradient, metric, global_correct, global_count
 
 
+# One sample's ceiling on the k3 KL estimator. k3 is unbounded above and masked logits fill
+# with -1e9, so a recorded action that is illegal under the CURRENT mask would contribute ~1e9
+# and swamp an epoch mean. 10.0 is far above any real per-update movement (a healthy update is
+# ~1e-3) while bounding the pathological sample; ppo_kl_outliers reports how often it bit.
+_PPO_KL_SAMPLE_CLAMP = 10.0
+
+
 def _distributed_transformer_loss(
     output: TransformerPolicyOutput,
     tensors: Mapping[str, Any],
@@ -2442,6 +2450,7 @@ def _distributed_transformer_loss(
     ppo_clip_count = 0
     ppo_entropy_sum = 0.0
     ppo_kl_sum = 0.0
+    ppo_kl_outliers = 0
     entropy_gradient = zero
     entropy_metric = 0.0
 
@@ -2457,27 +2466,39 @@ def _distributed_transformer_loss(
     # Computed over the examples the critic actually trains on (non-zero training weight),
     # unweighted, so the statistic answers "how much of the return variance does the critic
     # explain" rather than a loss-weighted restatement of the value loss.
-    value_ev_examples = 0
-    value_ev_target_sum = 0.0
-    value_ev_target_square_sum = 0.0
-    value_ev_residual_sum = 0.0
-    value_ev_residual_square_sum = 0.0
+    #
+    # COLLECTIVES ARE UNCONDITIONAL. Each reduction runs on every rank with a zeroed local
+    # contribution when this rank has nothing to add -- the compute-or-zero shape the ppo metric
+    # block below already uses. The first version issued these five reductions inside
+    # `if active:` / `if ev_count:`, both RANK-LOCAL: a rank handed the documented one-example
+    # placeholder (see _distributed_training_batch_shard) skipped them, every later collective on
+    # the surviving ranks read the wrong buffer, and the job deadlocked. Reproduced on a real
+    # 2-rank gloo group in review, where the shifted reductions ALSO corrupted global_weight_sum
+    # -- the gradient normalizer, not just a metric. A rank-local condition around a collective is
+    # a correctness bug, never a metrics bug.
+    ev_count = 0
+    local_ev_target_sum = zero
+    local_ev_target_square_sum = zero
+    local_ev_residual_sum = zero
+    local_ev_residual_square_sum = zero
     if active:
-        ev_weights = _training_sample_weights(tensors)
-        ev_mask = ev_weights > 0
+        ev_mask = _training_sample_weights(tensors) > 0
         ev_count = int(ev_mask.sum().detach().item())
         if ev_count:
-            ev_targets = _value_targets(tensors)[ev_mask].detach()
-            ev_residual = (ev_targets - output.value[ev_mask].detach())
+            # Same objective gate as every other _value_targets call site: under value-only the
+            # target source differs from ppo, so an ungated call scores the critic against a
+            # different target than the loss it is paired with.
+            ev_targets = _value_targets(tensors, config.objective)[ev_mask].detach()
+            ev_residual = ev_targets - output.value[ev_mask].detach()
             local_ev_target_sum = ev_targets.sum()
             local_ev_target_square_sum = (ev_targets * ev_targets).sum()
             local_ev_residual_sum = ev_residual.sum()
             local_ev_residual_square_sum = (ev_residual * ev_residual).sum()
-            value_ev_examples = _distributed_int_sum(context, ev_count, device=output.value.device)
-            value_ev_target_sum = float(_distributed_reduce_sum(context, local_ev_target_sum).item())
-            value_ev_target_square_sum = float(_distributed_reduce_sum(context, local_ev_target_square_sum).item())
-            value_ev_residual_sum = float(_distributed_reduce_sum(context, local_ev_residual_sum).item())
-            value_ev_residual_square_sum = float(_distributed_reduce_sum(context, local_ev_residual_square_sum).item())
+    value_ev_examples = _distributed_int_sum(context, ev_count, device=output.value.device)
+    value_ev_target_sum = float(_distributed_reduce_sum(context, local_ev_target_sum).item())
+    value_ev_target_square_sum = float(_distributed_reduce_sum(context, local_ev_target_square_sum).item())
+    value_ev_residual_sum = float(_distributed_reduce_sum(context, local_ev_residual_sum).item())
+    value_ev_residual_square_sum = float(_distributed_reduce_sum(context, local_ev_residual_square_sum).item())
 
     if config.objective == "value-only":
         policy_gradient = zero
@@ -2534,11 +2555,13 @@ def _distributed_transformer_loss(
             local_metric_advantage_sum = valid_advantage.sum()
             local_metric_advantage_square_sum = (valid_advantage * valid_advantage).sum()
             local_metric_ratio_sum = valid_ratio.sum()
-            # Schulman's k3 approximate KL: (r - 1) - log r. Non-negative by construction and
-            # far lower variance than the naive -log r mean, so a per-update read is meaningful
-            # at batch size. Detached: a vital never contributes gradient.
+            # Schulman's k3 estimator of KL(behavior || current) -- the standard PPO direction.
+            # Non-negative by construction, far lower variance than the naive -log r mean.
+            # Detached: a vital never contributes gradient. Clamped per sample (see the constant).
             valid_log_ratio = (chosen_log_prob - behavior_log_prob)[valid_mask].detach()
-            local_metric_kl_sum = ((valid_ratio.detach() - 1.0) - valid_log_ratio).sum()
+            raw_kl = (valid_ratio.detach() - 1.0) - valid_log_ratio
+            local_metric_kl_outliers = int((raw_kl > _PPO_KL_SAMPLE_CLAMP).sum().detach().item())
+            local_metric_kl_sum = raw_kl.clamp(max=_PPO_KL_SAMPLE_CLAMP).sum()
             local_metric_entropy_sum = entropy[valid_mask].sum()
             local_metric_clip_count = int(
                 ((valid_ratio < (1.0 - config.clip_epsilon)) | (valid_ratio > (1.0 + config.clip_epsilon))).sum().detach().item()
@@ -2548,12 +2571,14 @@ def _distributed_transformer_loss(
             local_metric_advantage_square_sum = zero
             local_metric_ratio_sum = zero
             local_metric_kl_sum = zero
+            local_metric_kl_outliers = 0
             local_metric_entropy_sum = zero
             local_metric_clip_count = 0
         ppo_advantage_sum = float(_distributed_reduce_sum(context, local_metric_advantage_sum).item())
         ppo_advantage_square_sum = float(_distributed_reduce_sum(context, local_metric_advantage_square_sum).item())
         ppo_ratio_sum = float(_distributed_reduce_sum(context, local_metric_ratio_sum).item())
         ppo_kl_sum = float(_distributed_reduce_sum(context, local_metric_kl_sum).item())
+        ppo_kl_outliers = _distributed_int_sum(context, local_metric_kl_outliers, device=output.value.device)
         ppo_entropy_sum = float(_distributed_reduce_sum(context, local_metric_entropy_sum).item())
         ppo_clip_count = _distributed_int_sum(context, local_metric_clip_count, device=output.value.device)
         loss_gradient = (
@@ -2687,6 +2712,7 @@ def _distributed_transformer_loss(
         "ppo_advantage_square_sum": ppo_advantage_square_sum,
         "ppo_ratio_sum": ppo_ratio_sum,
         "ppo_kl_sum": ppo_kl_sum,
+        "ppo_kl_outliers": ppo_kl_outliers,
         "ppo_clip_count": ppo_clip_count,
         "ppo_value_clip_eligible_examples": value_clip_eligible,
         "ppo_value_clip_count": value_clip_count,
@@ -3082,6 +3108,7 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
                 ppo_advantage_std=_optional_float(metrics.get("ppo_advantage_std")),
                 ppo_ratio_mean=_optional_float(metrics.get("ppo_ratio_mean")),
                 ppo_approx_kl=_optional_float(metrics.get("ppo_approx_kl")),
+                ppo_kl_outliers=_optional_int(metrics.get("ppo_kl_outliers")),
                 value_explained_variance=_optional_float(metrics.get("value_explained_variance")),
                 ppo_clip_fraction=_optional_float(metrics.get("ppo_clip_fraction")),
                 ppo_value_clip_eligible_examples=_optional_int(metrics.get("ppo_value_clip_eligible_examples")),
@@ -3192,6 +3219,7 @@ class _TorchMetricTotals:
     ppo_advantage_square_sum: float = 0.0
     ppo_ratio_sum: float = 0.0
     ppo_kl_sum: float = 0.0
+    ppo_kl_outliers: int = 0
     ppo_clip_count: int = 0
     ppo_value_clip_eligible_examples: int = 0
     ppo_value_clip_count: int = 0
@@ -3235,6 +3263,7 @@ class _TorchMetricTotals:
             self.ppo_advantage_square_sum += float(pieces["ppo_advantage_square_sum"])
             self.ppo_ratio_sum += float(pieces["ppo_ratio_sum"])
             self.ppo_kl_sum += float(pieces.get("ppo_kl_sum", 0.0))
+            self.ppo_kl_outliers += int(pieces.get("ppo_kl_outliers", 0))
             self.ppo_clip_count += int(pieces["ppo_clip_count"])
             self.ppo_entropy_sum += float(pieces["ppo_entropy_sum"])
         self.ppo_value_clip_eligible_examples += int(pieces.get("ppo_value_clip_eligible_examples", 0))
@@ -3258,6 +3287,7 @@ class _TorchMetricTotals:
         ppo_advantage_std = None
         ppo_ratio_mean = None
         ppo_approx_kl = None
+        ppo_kl_outliers = None
         value_explained_variance = None
         ppo_clip_fraction = None
         ppo_value_clip_fraction = None
@@ -3275,6 +3305,7 @@ class _TorchMetricTotals:
             ppo_advantage_std = math.sqrt(ppo_advantage_variance)
             ppo_ratio_mean = self.ppo_ratio_sum / self.ppo_valid_examples
             ppo_approx_kl = self.ppo_kl_sum / self.ppo_valid_examples
+            ppo_kl_outliers = self.ppo_kl_outliers
             ppo_clip_fraction = self.ppo_clip_count / self.ppo_valid_examples
             ppo_entropy = self.ppo_entropy_sum / self.ppo_valid_examples
         if self.value_ev_examples > 1:
@@ -3317,6 +3348,7 @@ class _TorchMetricTotals:
             ppo_advantage_std=ppo_advantage_std,
             ppo_ratio_mean=ppo_ratio_mean,
             ppo_approx_kl=ppo_approx_kl,
+            ppo_kl_outliers=ppo_kl_outliers,
             value_explained_variance=value_explained_variance,
             ppo_clip_fraction=ppo_clip_fraction,
             ppo_value_clip_eligible_examples=(
@@ -3544,6 +3576,7 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
     ppo_advantage_square_sum = 0.0
     ppo_ratio_sum = 0.0
     ppo_kl_sum = 0.0
+    ppo_kl_outliers = 0
     ppo_clip_count = 0
     ppo_entropy_sum = 0.0
 
@@ -3588,9 +3621,11 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
             ppo_advantage_sum = float(valid_advantage.sum().detach().item())
             ppo_advantage_square_sum = float((valid_advantage * valid_advantage).sum().detach().item())
             ppo_ratio_sum = float(valid_ratio.sum().detach().item())
-            # k3 approximate KL, matching the distributed path exactly (see its comment).
+            # k3 KL(behavior || current), matching the distributed path exactly, clamp included.
             valid_log_ratio = (chosen_log_prob - behavior_log_prob)[valid_mask].detach()
-            ppo_kl_sum = float(((valid_ratio.detach() - 1.0) - valid_log_ratio).sum().item())
+            _raw_kl = (valid_ratio.detach() - 1.0) - valid_log_ratio
+            ppo_kl_outliers = int((_raw_kl > _PPO_KL_SAMPLE_CLAMP).sum().item())
+            ppo_kl_sum = float(_raw_kl.clamp(max=_PPO_KL_SAMPLE_CLAMP).sum().item())
             ppo_clip_count = int(
                 (
                     (valid_ratio < (1.0 - config.clip_epsilon))
@@ -3664,6 +3699,7 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         "ppo_advantage_square_sum": ppo_advantage_square_sum,
         "ppo_ratio_sum": ppo_ratio_sum,
         "ppo_kl_sum": ppo_kl_sum,
+        "ppo_kl_outliers": ppo_kl_outliers,
         "ppo_clip_count": ppo_clip_count,
         "ppo_value_clip_eligible_examples": ppo_value_clip_eligible_examples,
         "ppo_value_clip_count": ppo_value_clip_count,
