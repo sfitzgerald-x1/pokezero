@@ -267,6 +267,48 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(training_records[0].policy_ids, {"p1": "random-legal"})
         self.assertEqual(training_records[1].policy_ids, {"p2": "random-legal"})
 
+    def test_a_fixed_opponent_records_its_spec_so_a_run_can_be_audited(self) -> None:
+        """A FIXED --opponent-policy run must leave evidence of who the opponent was.
+
+        Previously the spec was recorded only for pool members, so a fixed-opponent run wrote no
+        opponent metadata at all. That matters because the collector MIRRORS --current-policy
+        when the opponent flag is absent: a run whose fixed opponent silently reverted to the
+        mirror was indistinguishable, after the fact, from one that ran as intended. Any audit
+        had no population to read, which is a check that cannot fail.
+
+        This is the population the exploiter fork's per-shard runtime assert reads.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "rollouts.jsonl"
+            training_output_path = Path(temp_dir) / "training-rollouts.jsonl"
+
+            collect_selfplay_rollouts(
+                output_path=output_path,
+                training_output_path=training_output_path,
+                games=2,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=21,
+                current_policy_spec="current",
+                # A fixed opponent, with NO pool: the exploiter fork's exact shape.
+                opponent_policy_specs=("frozen-champion",),
+                policy_factory_overrides={
+                    "current": lambda: RandomLegalPolicy(policy_id="current"),
+                    "frozen-champion": lambda: RandomLegalPolicy(policy_id="frozen-champion"),
+                },
+            )
+            training_records = read_rollout_records(training_output_path)
+
+        self.assertTrue(training_records, "no training records were written")
+        for index, record in enumerate(training_records):
+            with self.subTest(record=index):
+                self.assertEqual(
+                    record.trajectory.metadata.get("opponent_policy_spec"),
+                    "frozen-champion",
+                    "the fixed opponent left no trace in the training record",
+                )
+        # And a pool run still records the pool fields alongside it (no regression there).
+
     def test_collect_selfplay_rollouts_samples_weighted_opponent_pool_with_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "rollouts.jsonl"
