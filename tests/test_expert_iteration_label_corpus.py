@@ -42,22 +42,25 @@ def cache(path: Path, *, targets: list[float], seeds: list[int], turns: list[int
     # padding row and every example's one-step window points at its own row.
     rows = len(targets) + 1
     categorical = numpy.zeros((rows, 1, 1), dtype=numpy.uint16)
-    categorical[1:, 0, 0] = numpy.arange(1, rows, dtype=numpy.uint16)
     numeric = numpy.zeros((rows, 1, 1), dtype=numpy.float16)
-    numeric[1:, 0, 0] = numpy.arange(1, rows, dtype=numpy.float16)
     token_type = numpy.zeros((rows, 1), dtype=numpy.uint8)
-    attention = numpy.ones((rows, 1), dtype=numpy.bool_)
+    attention = numpy.zeros((rows, 1), dtype=numpy.bool_)
     numpy.save(path / "categorical_ids.npy", categorical)
     numpy.save(path / "numeric_features.npy", numeric)
     numpy.save(path / "token_type_ids.npy", token_type)
     numpy.save(path / "attention_mask.npy", attention)
-    numpy.save(path / "window_indices.npy", numpy.arange(1, rows, dtype=numpy.uint32).reshape(len(targets), 1))
+    window_indices = numpy.stack(
+        (numpy.zeros(len(targets), dtype=numpy.uint32), numpy.arange(1, rows, dtype=numpy.uint32)),
+        axis=1,
+    )
+    numpy.save(path / "window_indices.npy", window_indices)
     legal_action_mask = numpy.ones((len(targets), 3), dtype=numpy.bool_)
     numpy.save(path / "legal_action_mask.npy", legal_action_mask)
     successors = [
         corpus_tool.successor_observation_sha256(
-            categorical_ids=categorical[index:index + 1], numeric_features=numeric[index:index + 1],
-            token_type_ids=token_type[index:index + 1], attention_mask=attention[index:index + 1],
+            categorical_ids=categorical[window_indices[index - 1]], numeric_features=numeric[window_indices[index - 1]],
+            token_type_ids=token_type[window_indices[index - 1]], attention_mask=attention[window_indices[index - 1]],
+            window_indices=window_indices[index - 1],
             legal_action_mask=legal_action_mask[index - 1],
         )
         for index in range(1, rows)
@@ -224,6 +227,19 @@ class ExpertIterationLabelCorpusTest(unittest.TestCase):
         numpy.save(paths["train"] / "categorical_ids.npy", categorical)
         # This is deliberately not a tree-digest test: reseal the changed cache in
         # the manifest, then prove the per-row replay digest still catches it.
+        corpus = json.loads(paths["corpus"].read_text(encoding="utf-8"))
+        corpus["training_caches"]["train"]["tree_sha256"] = corpus_tool.training_cache_tree_sha256(paths["train"])
+        write_json(paths["corpus"], corpus)
+        with self.assertRaisesRegex(corpus_tool.CorpusError, "successor observation differs from its model-visible cache row"):
+            validate(paths)
+
+    def test_refuses_window_history_mask_changed_with_padding_identical_rows(self) -> None:
+        paths = fixture(self.root)
+        # Row 1 is deliberately byte-identical to padding in this fixture; this
+        # mutation changes only source-row addressing and the model's history mask.
+        windows = numpy.load(paths["train"] / "window_indices.npy")
+        windows[0] = numpy.asarray([1, 1], dtype=numpy.uint32)
+        numpy.save(paths["train"] / "window_indices.npy", windows)
         corpus = json.loads(paths["corpus"].read_text(encoding="utf-8"))
         corpus["training_caches"]["train"]["tree_sha256"] = corpus_tool.training_cache_tree_sha256(paths["train"])
         write_json(paths["corpus"], corpus)

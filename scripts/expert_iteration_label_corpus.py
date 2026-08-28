@@ -31,7 +31,7 @@ from typing import Any
 
 CORPUS_SCHEMA = "pokezero.expert-iteration.oracle-label-corpus.v1"
 CORPUS_RECEIPT_SCHEMA = "pokezero.expert-iteration.oracle-label-corpus-receipt.v1"
-MODEL_INPUT_HASH_SCHEMA = "pokezero.training-cache-model-input.v1"
+MODEL_INPUT_HASH_SCHEMA = "pokezero.training-cache-model-input.v2"
 ROOT_BANK_SCHEMA = "pokezero.root-policy-continuation-oracle-bank.v1"
 SPLIT_SCHEMA = "pokezero.expert-iteration.p0-label-splits.v1"
 TRAINING_CACHE_SCHEMA = "pokezero.training_cache.v2"
@@ -142,15 +142,18 @@ def successor_observation_sha256(
     numeric_features: Any,
     token_type_ids: Any,
     attention_mask: Any,
+    window_indices: Any,
     legal_action_mask: Any,
 ) -> str:
     """Hash the exact cache example consumed by the model.
 
     A claimed digest in the replay manifest is not provenance.  The cache uses
     compact categorical storage, so this deliberately hashes the expanded
-    on-disk window and legal-action mask (including dtype and shape) instead of
-    re-encoding a convenient Python view.  This covers both the successor row
-    and the history the model actually receives.
+    on-disk window, its source-row addressing and derived history mask, and
+    legal-action mask (including dtype and shape) instead of re-encoding a
+    convenient Python view.  This covers both the successor row and the
+    history the model actually receives, including masks that differ even
+    when a non-padding row happens to have padding-identical tensor bytes.
     """
 
     try:
@@ -158,11 +161,15 @@ def successor_observation_sha256(
     except ModuleNotFoundError as exc:  # pragma: no cover - installation error
         raise CorpusError("NumPy is required to validate a training cache") from exc
     digest = hashlib.sha256()
+    contiguous_window = numpy.ascontiguousarray(window_indices)
+    history_mask = numpy.ascontiguousarray(contiguous_window != 0)
     for name, value in (
         ("categorical_ids", categorical_ids),
         ("numeric_features", numeric_features),
         ("token_type_ids", token_type_ids),
         ("attention_mask", attention_mask),
+        ("window_indices", contiguous_window),
+        ("history_mask", history_mask),
         ("legal_action_mask", legal_action_mask),
     ):
         array = numpy.ascontiguousarray(value)
@@ -223,6 +230,8 @@ def _cache_arrays(path: Path, *, label: str) -> tuple[Any, Any, Any, list[str], 
         raise CorpusError(f"{label}.window_indices.npy must address every example with a non-empty window")
     successor_hashes: list[str] = []
     for cache_index, window in enumerate(window_indices):
+        if any(not 0 <= int(row) < row_count for row in window):
+            raise CorpusError(f"{label}.window_indices.npy[{cache_index}] has an out-of-range cache row")
         observed_row = int(window[-1])
         if not 0 < observed_row < row_count:
             raise CorpusError(f"{label}.window_indices.npy[{cache_index}] has no non-padding successor row")
@@ -232,6 +241,7 @@ def _cache_arrays(path: Path, *, label: str) -> tuple[Any, Any, Any, list[str], 
                 numeric_features=observation_arrays["numeric_features"][window],
                 token_type_ids=observation_arrays["token_type_ids"][window],
                 attention_mask=observation_arrays["attention_mask"][window],
+                window_indices=window,
                 legal_action_mask=legal_action_masks[cache_index],
             )
         )
