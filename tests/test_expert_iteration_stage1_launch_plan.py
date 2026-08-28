@@ -43,7 +43,7 @@ def recipe() -> dict[str, object]:
         "recipe_id": planner.RECIPE_ID,
         "status": "REGISTERED-NOT-RUN",
         "source": {
-            "checkpoint": {"path": "/shared/champion.pt", "sha256": "b" * 64},
+            "checkpoint": {"path": "/test-data/champion.pt", "sha256": "b" * 64},
             "label_corpus": {
                 "required_schema": planner.CORPUS_SCHEMA,
                 "required_receipt_schema": planner.CORPUS_RECEIPT_SCHEMA,
