@@ -1,5 +1,6 @@
 import io
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Mapping
@@ -5754,6 +5755,79 @@ class NeuralSelfPlayTest(unittest.TestCase):
             # it, so checking .exists() after the `with` exits would always fail (the dir is gone).
             self.assertTrue(result.latest_checkpoint_path and result.latest_checkpoint_path.exists())
             self.assertIsNotNone(result.iterations[0].benchmark)
+
+    def test_p0_cpu_smoke_coemits_real_collection_and_ppo_vitals(self) -> None:
+        """P0.3 must be proved by a real CPU collection and PPO update, not fabricated metrics."""
+
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            result = run_neural_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                # The collector alternates the current policy's seat.  With p1 always
+                # winning in OneTurnEnv, two games give a non-degenerate return batch and
+                # an observable 1/2 win-rate against the recorded training opponent.
+                games_per_iteration=2,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                model_config=TransformerPolicyConfig.compact_category(
+                    category_vocab=tuple(range(1, 17)),
+                    category_oov_buckets=4,
+                    policy_id="p0-vitals-smoke",
+                    window_size=2,
+                    token_type_vocab_size=8,
+                    categorical_feature_count=1,
+                    numeric_feature_count=1,
+                    embedding_dim=16,
+                    transformer_layers=1,
+                    attention_heads=4,
+                    feedforward_dim=32,
+                    dropout=0.0,
+                ),
+                training_config=TransformerTrainingConfig(
+                    window_size=2,
+                    epochs=1,
+                    batch_size=2,
+                    max_batches=1,
+                    objective="ppo",
+                    device="cpu",
+                ),
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=0,
+            )
+            manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            self.assertTrue(result.latest_checkpoint_path and result.latest_checkpoint_path.exists())
+
+        vitals = manifest["training_vitals"]
+        self.assertEqual(set(vitals["registered_columns"]), set(REGISTERED_VITAL_COLUMNS))
+        self.assertTrue(
+            all(
+                isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+                for value in vitals["registered_columns"].values()
+            )
+        )
+        gradient = vitals["realized_gradient"]
+        self.assertEqual(gradient["samples"], 1)
+        self.assertGreater(gradient["mean"], 0.0)
+        self.assertGreaterEqual(gradient["max"], gradient["mean"])
+        window = vitals["negative_surrogate_window"]
+        self.assertEqual(window["observed_iterations"], 1)
+        self.assertIn(window["rate"], (0.0, 1.0))
+        self.assertIsInstance(window["current_iteration_has_negative_surrogate_epoch"], bool)
+        self.assertEqual(
+            manifest["collection_metrics"]["training_opponent_metrics"]["random-legal"],
+            {
+                "games": 2,
+                "wins": 1,
+                "losses": 1,
+                "draws": 0,
+                "capped_games": 0,
+                "resolved_games": 2,
+                "win_rate": 0.5,
+            },
+        )
 
     def test_torch_smoke_trains_from_real_cache_chunks_and_deletes_them(self) -> None:
         if not torch_available():
