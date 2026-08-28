@@ -31,6 +31,7 @@ from typing import Any
 
 CORPUS_SCHEMA = "pokezero.expert-iteration.oracle-label-corpus.v1"
 CORPUS_RECEIPT_SCHEMA = "pokezero.expert-iteration.oracle-label-corpus-receipt.v1"
+MODEL_INPUT_HASH_SCHEMA = "pokezero.training-cache-model-input.v1"
 ROOT_BANK_SCHEMA = "pokezero.root-policy-continuation-oracle-bank.v1"
 SPLIT_SCHEMA = "pokezero.expert-iteration.p0-label-splits.v1"
 TRAINING_CACHE_SCHEMA = "pokezero.training_cache.v2"
@@ -386,6 +387,8 @@ def _validate_split(splits: Mapping[str, Any], *, bank_sha256: str, source_seeds
 def _validate_corpus_runtime(corpus: Mapping[str, Any], runtime: Mapping[str, Any], estimator: Mapping[str, Any]) -> None:
     if corpus.get("schema") != CORPUS_SCHEMA:
         raise CorpusError("corpus has an unsupported schema")
+    if corpus.get("successor_observation_hash_schema") != MODEL_INPUT_HASH_SCHEMA:
+        raise CorpusError("corpus does not bind successor hashes to exact cache model inputs")
     corpus_runtime = _mapping(corpus.get("runtime"), label="corpus.runtime")
     for field in ("checkpoint_sha256", "public_source_commit", "showdown_commit"):
         if corpus_runtime.get(field) != runtime[field]:

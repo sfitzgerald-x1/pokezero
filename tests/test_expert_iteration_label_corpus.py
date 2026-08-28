@@ -132,6 +132,7 @@ def fixture(tmp_path: Path) -> dict[str, Path]:
     heldout_digest, heldout_successors = cache(heldout, targets=[0.75], seeds=[4], turns=[9])
     corpus = {
         "schema": corpus_tool.CORPUS_SCHEMA,
+        "successor_observation_hash_schema": corpus_tool.MODEL_INPUT_HASH_SCHEMA,
         "bank": {"sha256": digest(bank_path)},
         "runtime": contract["runtime"],
         "replay": {
