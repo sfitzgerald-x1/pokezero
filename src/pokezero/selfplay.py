@@ -808,6 +808,7 @@ def _write_selfplay_game_results(
     midpoint = max(1, total_results // 2) if total_results else None
     for index, (record, training_record) in enumerate(results, start=1):
         metrics_accumulator.add(record)
+        metrics_accumulator.add_training_opponent_record(training_record)
         if handle is not None:
             write_started = perf_counter()
             write_rollout_record(handle, record)
