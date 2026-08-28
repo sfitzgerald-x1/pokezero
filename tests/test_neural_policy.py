@@ -7574,6 +7574,141 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(payload["selected_metric_value"], 0.2)
         self.assertEqual(len(payload["epochs"]), 3)
 
+    def test_value_selection_stops_after_registered_heldout_patience(self) -> None:
+        from pokezero.neural_cli import (
+            ValueSelectionEarlyStoppingConfig,
+            _train_with_value_selection,
+        )
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.weight = 0
+
+            def state_dict(self) -> dict[str, int]:
+                return {"weight": self.weight}
+
+            def load_state_dict(self, state: dict[str, int]) -> None:
+                self.weight = state["weight"]
+
+        class FakeReport:
+            def __init__(self, mae: float) -> None:
+                self.examples = 2
+                self.mse = mae * mae
+                self.mae = mae
+                self.bias = 0.0
+                self.sign_accuracy = 0.5
+                self.expected_calibration_error = mae / 2.0
+                self.pearson_correlation = 0.0
+
+            def to_dict(self) -> dict[str, float | int | None]:
+                return {
+                    "examples": self.examples,
+                    "mse": self.mse,
+                    "mae": self.mae,
+                    "bias": self.bias,
+                    "sign_accuracy": self.sign_accuracy,
+                    "expected_calibration_error": self.expected_calibration_error,
+                    "pearson_correlation": self.pearson_correlation,
+                }
+
+        model = FakeModel()
+        model_config = TransformerPolicyConfig.compact_category(
+            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+            category_vocab=("species:a",),
+            category_oov_buckets=2,
+        )
+        training_config = TransformerTrainingConfig(epochs=8)
+
+        def fake_train(paths, *, model_config, training_config, initial_model=None, epoch_callback=None):
+            metrics = []
+            for epoch in range(1, training_config.epochs + 1):
+                model.weight = epoch
+                metrics.append(
+                    TransformerEpochMetrics(
+                        epoch=epoch,
+                        examples=2,
+                        loss=float(epoch),
+                        policy_loss=float(epoch),
+                        policy_accuracy=0.5,
+                        value_loss=float(epoch),
+                    )
+                )
+                if epoch_callback is not None and epoch_callback(
+                    model,
+                    TransformerTrainingResult(
+                        model_config=model_config,
+                        training_config=training_config,
+                        epochs=tuple(metrics),
+                    ),
+                ) is False:
+                    break
+            return model, TransformerTrainingResult(
+                model_config=model_config,
+                training_config=training_config,
+                epochs=tuple(metrics),
+            )
+
+        reports = [FakeReport(0.4), FakeReport(0.2), FakeReport(0.3), FakeReport(0.31)]
+        with (
+            patch("pokezero.neural_cli.train_transformer_policy", side_effect=fake_train),
+            patch("pokezero.neural_cli.evaluate_value_calibration", side_effect=reports),
+        ):
+            selected_model, selected_result, payload = _train_with_value_selection(
+                paths=[Path("train.jsonl")],
+                model_config=model_config,
+                training_config=training_config,
+                initial_model=model,
+                selection_paths=[Path("heldout.jsonl")],
+                selection_metric="mae",
+                batch_size=5,
+                bins=4,
+                early_stopping=ValueSelectionEarlyStoppingConfig(
+                    patience_epochs=2,
+                    min_delta=0.01,
+                    warmup_epochs=1,
+                ),
+            )
+
+        self.assertEqual(selected_model.weight, 2)
+        self.assertEqual(selected_result.final_metrics.epoch, 2)
+        self.assertEqual([entry["epoch"] for entry in payload["epochs"]], [1, 2, 3, 4])
+        self.assertEqual(
+            payload["early_stopping"],
+            {
+                "enabled": True,
+                "patience_epochs": 2,
+                "min_delta": 0.01,
+                "warmup_epochs": 1,
+                "stopped_early": True,
+                "stop_epoch": 4,
+                "non_improving_epochs": 2,
+            },
+        )
+
+    def test_value_selection_early_stopping_flags_require_a_complete_heldout_rule(self) -> None:
+        from pokezero.neural_cli import _value_selection_early_stopping_from_args
+
+        args = SimpleNamespace(
+            value_selection_data=[Path("heldout.jsonl")],
+            value_selection_early_stopping_patience=6,
+            value_selection_early_stopping_min_delta=0.0005,
+            value_selection_early_stopping_warmup_epochs=8,
+        )
+        config = _value_selection_early_stopping_from_args(args)
+        self.assertIsNotNone(config)
+        self.assertEqual(config.patience_epochs, 6)
+        self.assertEqual(config.min_delta, 0.0005)
+        self.assertEqual(config.warmup_epochs, 8)
+
+        args.value_selection_early_stopping_patience = None
+        with self.assertRaisesRegex(ValueError, "require --value-selection-early-stopping-patience"):
+            _value_selection_early_stopping_from_args(args)
+
+        args.value_selection_early_stopping_patience = 6
+        args.value_selection_data = None
+        with self.assertRaisesRegex(ValueError, "requires --value-selection-data"):
+            _value_selection_early_stopping_from_args(args)
+
     def test_value_selection_can_restore_best_epoch_by_pearson_correlation(self) -> None:
         from pokezero.neural_cli import _train_with_value_selection
 
@@ -7738,6 +7873,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         "expected_calibration_error",
                         "--value-selection-out",
                         str(selection_path),
+                        "--value-selection-early-stopping-patience",
+                        "6",
+                        "--value-selection-early-stopping-min-delta",
+                        "0.0005",
+                        "--value-selection-early-stopping-warmup-epochs",
+                        "8",
                         "--value-calibration-batch-size",
                         "11",
                         "--value-calibration-bins",
@@ -7752,6 +7893,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(select_train.call_args.kwargs["selection_metric"], "expected_calibration_error")
         self.assertEqual(select_train.call_args.kwargs["batch_size"], 11)
         self.assertEqual(select_train.call_args.kwargs["bins"], 7)
+        early_stopping = select_train.call_args.kwargs["early_stopping"]
+        self.assertIsNotNone(early_stopping)
+        self.assertEqual(early_stopping.patience_epochs, 6)
+        self.assertEqual(early_stopping.min_delta, 0.0005)
+        self.assertEqual(early_stopping.warmup_epochs, 8)
         self.assertEqual(save.call_args.args[0], checkpoint_path)
         self.assertEqual(payload["selected_epoch"], 1)
         self.assertEqual(payload["selected_metric_value"], 0.12)
@@ -9088,6 +9234,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 write_rollout_record(handle, rollout_record())
 
             callback_epochs = []
+
             _, result = train_transformer_policy(
                 data_path,
                 model_config=TransformerPolicyConfig.compact_category(
@@ -9113,6 +9260,50 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     device="cpu",
                 ),
                 epoch_callback=lambda model, epoch_result: callback_epochs.append(epoch_result.final_metrics.epoch),
+            )
+
+        self.assertEqual(callback_epochs, [1, 2])
+        self.assertEqual(result.final_metrics.epoch, 2)
+
+    def test_train_transformer_policy_honors_false_epoch_callback(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+
+            callback_epochs = []
+
+            def stop_after_second_epoch(model, epoch_result):
+                callback_epochs.append(epoch_result.final_metrics.epoch)
+                return epoch_result.final_metrics.epoch != 2
+
+            _, result = train_transformer_policy(
+                data_path,
+                model_config=TransformerPolicyConfig.compact_category(
+                    observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+                    category_vocab=tuple(range(1, 17)),
+                    category_oov_buckets=4,
+                    policy_id="callback-stop-smoke",
+                    window_size=2,
+                    token_type_vocab_size=8,
+                    categorical_feature_count=1,
+                    numeric_feature_count=1,
+                    embedding_dim=16,
+                    transformer_layers=1,
+                    attention_heads=4,
+                    feedforward_dim=32,
+                    dropout=0.0,
+                ),
+                training_config=TransformerTrainingConfig(
+                    batch_size=2,
+                    epochs=3,
+                    window_size=2,
+                    max_batches=1,
+                    device="cpu",
+                ),
+                epoch_callback=stop_after_second_epoch,
             )
 
         self.assertEqual(callback_epochs, [1, 2])

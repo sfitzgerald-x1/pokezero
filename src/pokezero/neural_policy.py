@@ -1089,6 +1089,26 @@ def _distributed_barrier(context: DistributedTrainingContext) -> None:
         require_torch().distributed.barrier()
 
 
+def _distributed_callback_continue(
+    context: DistributedTrainingContext, continue_training: bool, *, device: Any
+) -> bool:
+    """Broadcast rank zero's epoch-callback stop decision to every DDP rank.
+
+    Value selection evaluates only on rank zero.  A local ``False`` callback
+    result therefore needs an explicit broadcast: otherwise rank zero would
+    leave the epoch loop while its peers entered another DDP step and deadlock.
+    """
+
+    if not context.enabled:
+        return continue_training
+    torch_module = require_torch()
+    decision = torch_module.tensor(
+        1 if continue_training else 0, dtype=torch_module.int64, device=device
+    )
+    torch_module.distributed.broadcast(decision, src=0)
+    return bool(decision.item())
+
+
 def _distributed_reduce_sum(context: DistributedTrainingContext, value: Any) -> Any:
     """All-reduce a detached scalar as fp32 without adding collectives to autograd."""
 
@@ -1991,7 +2011,7 @@ def train_transformer_policy(
     model_config: TransformerPolicyConfig | None = None,
     training_config: TransformerTrainingConfig | None = None,
     initial_model: Any | None = None,
-    epoch_callback: Callable[[Any, TransformerTrainingResult], None] | None = None,
+    epoch_callback: Callable[[Any, TransformerTrainingResult], bool | None] | None = None,
     consumed_cache_callback: Callable[[Path], None] | None = None,
     auxiliary_paths: str | PathLike[str] | Path | Iterable[str | PathLike[str] | Path] | None = None,
     auxiliary_max_fraction: float = 0.0,
@@ -2210,8 +2230,9 @@ def train_transformer_policy(
         epoch_metrics.append(totals.to_epoch_metrics(epoch, learning_rate=epoch_learning_rate, timing=timing))
         if epoch_callback is not None:
             _distributed_barrier(context)
+            continue_training = True
             if not context.enabled or context.is_primary:
-                epoch_callback(
+                callback_result = epoch_callback(
                     base_model,
                     TransformerTrainingResult(
                         model_config=resolved_model_config,
@@ -2219,7 +2240,13 @@ def train_transformer_policy(
                         epochs=tuple(epoch_metrics),
                     ),
                 )
+                continue_training = callback_result is not False
+            continue_training = _distributed_callback_continue(
+                context, continue_training, device=device
+            )
             _distributed_barrier(context)
+            if not continue_training:
+                break
     if replay_enabled and consumed_cache_callback is not None:
         # Deferred consumed-cache release: every epoch trained from the retained batches, so
         # the caches recorded during the epoch-1 stream are only released once all epochs are
