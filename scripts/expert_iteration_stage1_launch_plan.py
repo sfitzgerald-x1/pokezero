@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import tempfile
@@ -23,10 +24,10 @@ from typing import Any
 
 RECIPE_SCHEMA = "pokezero.expert-iteration.stage1-value-head-recipe.v1"
 RECIPE_ID = "expert-iteration-stage1-value-head-ladder-20260827"
-RECIPE_SHA256 = "63c506d72a9d348904152072d82f02e6852358d99d443848dc075d0b3a106033"
+RECIPE_SHA256 = "0bc283008a8e385796ebdcef313ae0b74e24bc7a13082cdb7334b76e9ce034fd"
 CORPUS_SCHEMA = "pokezero.expert-iteration.oracle-label-corpus.v1"
 CORPUS_RECEIPT_SCHEMA = "pokezero.expert-iteration.oracle-label-corpus-receipt.v1"
-MODEL_INPUT_HASH_SCHEMA = "pokezero.training-cache-model-input.v1"
+MODEL_INPUT_HASH_SCHEMA = "pokezero.training-cache-model-input.v2"
 PLAN_SCHEMA = "pokezero.expert-iteration.stage1-launch-plan.v1"
 
 
@@ -65,30 +66,27 @@ def _sha256(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def training_cache_tree_sha256(path: Path) -> str:
-    if not path.is_dir() or path.is_symlink():
-        raise Stage1LaunchRefusal(f"training cache must be a non-symlink directory: {path}")
-    digest = hashlib.sha256()
-    for item in sorted(path.rglob("*"), key=lambda candidate: candidate.relative_to(path).as_posix()):
-        relative = item.relative_to(path).as_posix()
-        if item.is_symlink():
-            raise Stage1LaunchRefusal(f"training cache contains symlink: {relative}")
-        if item.is_dir():
-            continue
-        if not item.is_file():
-            raise Stage1LaunchRefusal(f"training cache contains non-regular entry: {relative}")
-        raw = item.read_bytes()
-        digest.update(relative.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(len(raw).to_bytes(8, "big"))
-        digest.update(raw)
-    return digest.hexdigest()
-
-
 def _digest(value: object, *, label: str) -> str:
     if not isinstance(value, str) or len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
         raise Stage1LaunchRefusal(f"{label} must be a lowercase SHA-256")
     return value
+
+
+def _corpus_reader() -> Any:
+    """Load the in-repository corpus reader used to mint Stage-1 receipts.
+
+    A receipt's status is not an authority.  The planner re-runs this reader
+    against the receipt's exact bank, contract, split, corpus, and cache paths
+    before it will enumerate even non-executing commands.
+    """
+
+    path = Path(__file__).with_name("expert_iteration_label_corpus.py")
+    spec = importlib.util.spec_from_file_location("expert_iteration_label_corpus_for_stage1_plan", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - static source error
+        raise Stage1LaunchRefusal("cannot load the registered oracle-label corpus reader")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _validate_recipe(recipe: Mapping[str, Any]) -> None:
@@ -132,28 +130,40 @@ def _validated_corpus_inputs(
     receipt_bank = _mapping(receipt.get("bank"), label="corpus receipt.bank")
     if receipt_bank.get("sha256") != requirement.get("source_bank_sha256"):
         raise Stage1LaunchRefusal("corpus receipt binds a different source bank")
-    corpus_identity = _mapping(receipt.get("corpus"), label="corpus receipt.corpus")
-    corpus_path = Path(str(corpus_identity.get("path", "")))
-    corpus, corpus_raw = _json(corpus_path, label="materialized corpus")
-    if _sha256(corpus_raw) != _digest(corpus_identity.get("sha256"), label="corpus receipt.corpus.sha256"):
-        raise Stage1LaunchRefusal("materialized corpus differs from its validated receipt")
-    if (
-        corpus.get("schema") != requirement["required_schema"]
-        or corpus.get("successor_observation_hash_schema")
-        != requirement["model_input_hash_schema"]
-    ):
-        raise Stage1LaunchRefusal("materialized corpus lacks the exact cache-input hash contract")
-    corpus_bank = _mapping(corpus.get("bank"), label="materialized corpus.bank")
-    if corpus_bank.get("sha256") != requirement["source_bank_sha256"]:
-        raise Stage1LaunchRefusal("materialized corpus binds a different source bank")
+    identities = {
+        name: _mapping(receipt.get(name), label=f"corpus receipt.{name}")
+        for name in ("bank", "contract", "splits", "corpus")
+    }
     caches = _mapping(receipt.get("training_caches"), label="corpus receipt.training_caches")
     paths: dict[str, Path] = {}
     for split in ("train", "heldout"):
         cache = _mapping(caches.get(split), label=f"corpus receipt.training_caches.{split}")
-        path = Path(str(cache.get("path", "")))
-        if training_cache_tree_sha256(path) != _digest(cache.get("tree_sha256"), label=f"{split} cache tree_sha256"):
-            raise Stage1LaunchRefusal(f"{split} cache differs from its validated receipt")
-        paths[split] = path
+        _digest(cache.get("tree_sha256"), label=f"{split} cache tree_sha256")
+        paths[split] = Path(str(cache.get("path", "")))
+    reader = _corpus_reader()
+    try:
+        recomputed = reader.build_receipt(
+            bank_path=Path(str(identities["bank"].get("path", ""))),
+            contract_path=Path(str(identities["contract"].get("path", ""))),
+            split_path=Path(str(identities["splits"].get("path", ""))),
+            corpus_path=Path(str(identities["corpus"].get("path", ""))),
+            train_cache_path=paths["train"],
+            heldout_cache_path=paths["heldout"],
+        )
+    except Exception as exc:
+        corpus_error = getattr(reader, "CorpusError", ())
+        if corpus_error and isinstance(exc, corpus_error):
+            raise Stage1LaunchRefusal(f"corpus reader revalidation failed: {exc}") from exc
+        raise
+    if receipt != recomputed:
+        raise Stage1LaunchRefusal("corpus receipt is not the exact current output of reader revalidation")
+    corpus_identity = _mapping(recomputed["corpus"], label="recomputed corpus receipt.corpus")
+    corpus, _ = _json(Path(str(corpus_identity["path"])), label="materialized corpus")
+    if (
+        corpus.get("schema") != requirement["required_schema"]
+        or corpus.get("successor_observation_hash_schema") != requirement["model_input_hash_schema"]
+    ):
+        raise Stage1LaunchRefusal("materialized corpus lacks the exact cache-input hash contract")
     return receipt, _sha256(receipt_raw), paths["train"], paths["heldout"]
 
 
