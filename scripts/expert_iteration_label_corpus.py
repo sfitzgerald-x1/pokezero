@@ -235,9 +235,16 @@ def _bank_candidates(
                 raise CorpusError(f"bank repeats source decision {source_key}")
             seen_source_decisions.add(source_key)
             selected = _integer(decision.get("selected_action"), label=f"bank decision {source_key}.selected_action")
-            fixed = _mapping(decision.get("opponent_actions_fixed_before_selection"), label=f"bank decision {source_key}.opponent_actions_fixed_before_selection")
-            if set(fixed) != {"p2"} or _integer(fixed.get("p2"), label=f"bank decision {source_key}.opponent_actions_fixed_before_selection.p2") < 0:
-                raise CorpusError(f"bank decision {source_key} must bind exactly one non-negative p2 action")
+            fixed = _mapping(
+                decision.get("opponent_actions_fixed_before_selection"),
+                label=f"bank decision {source_key}.opponent_actions_fixed_before_selection",
+            )
+            if set(fixed) - {"p2"}:
+                raise CorpusError(f"bank decision {source_key} binds a foreign opponent action")
+            if "p2" in fixed and _integer(
+                fixed["p2"], label=f"bank decision {source_key}.opponent_actions_fixed_before_selection.p2"
+            ) < 0:
+                raise CorpusError(f"bank decision {source_key} has a negative fixed p2 action")
             candidates = _sequence(decision.get("candidate_scores"), label=f"bank decision {source_key}.candidate_scores")
             if decision.get("candidate_count") != len(candidates) or not 1 <= len(candidates) <= int(estimator["top_k_legal_priors"]):
                 raise CorpusError(f"bank decision {source_key} has invalid candidate geometry")
@@ -263,7 +270,7 @@ def _bank_candidates(
                     "target": target,
                     "terminal_shortcut": shortcut,
                     "selected_action": selected,
-                    "fixed_opponent_action": fixed["p2"],
+                    "fixed_opponent_actions": dict(fixed),
                 }
                 if action == selected:
                     selected_value = target
@@ -369,8 +376,8 @@ def validate(
         if record.get("selected_action") != expected["selected_action"]:
             raise CorpusError(f"corpus record {key} differs from bank selected action")
         fixed = _mapping(record.get("fixed_opponent_actions"), label=f"corpus record {key}.fixed_opponent_actions")
-        if fixed != {"p2": expected["fixed_opponent_action"]}:
-            raise CorpusError(f"corpus record {key} differs from bank fixed opponent action")
+        if dict(fixed) != expected["fixed_opponent_actions"]:
+            raise CorpusError(f"corpus record {key} differs from bank fixed opponent actions")
         target = _finite_probability(record.get("target"), label=f"corpus record {key}.target")
         if not math.isclose(target, float(expected["target"]), abs_tol=1e-12, rel_tol=0.0):
             raise CorpusError(f"corpus record {key} target differs from bank label")

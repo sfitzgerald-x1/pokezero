@@ -86,7 +86,7 @@ def fixture(tmp_path: Path) -> dict[str, Path]:
             "oracle_decisions": [{
                 "decision_index": 2, "candidate_count": 1, "selected_action": 1,
                 "selected_policy_continuation_value": 0.5,
-                "opponent_actions_fixed_before_selection": {"p2": 4},
+                "opponent_actions_fixed_before_selection": {},
                 "candidate_scores": [
                     {"action": 1, "policy_continuation_value": 0.5, "rollouts_completed": 16, "terminal_shortcut": False},
                 ],
@@ -129,7 +129,7 @@ def fixture(tmp_path: Path) -> dict[str, Path]:
              "terminal_shortcut": True, "source_state_sha256": None,
              "successor_observation_sha256": None, "cache_index": None},
             {"split": "train", "source_game_seed": 5, "decision_index": 2, "candidate_action": 1,
-             "selected_action": 1, "fixed_opponent_actions": {"p2": 4}, "target": 0.5,
+             "selected_action": 1, "fixed_opponent_actions": {}, "target": 0.5,
              "terminal_shortcut": False, "source_state_sha256": "f" * 64,
              "successor_observation_sha256": "0" * 64, "cache_index": 0},
         ],
