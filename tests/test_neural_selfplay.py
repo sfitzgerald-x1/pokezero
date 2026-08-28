@@ -1,5 +1,6 @@
 import io
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Mapping
@@ -23,6 +24,7 @@ from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZe
 from pokezero.neural_selfplay import (
     DEFAULT_COLLECTION_EXPLORATION_EPSILON,
     NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
+    REGISTERED_VITAL_COLUMNS,
     NeuralSelfPlayPromotionConfig,
     NeuralValueCalibrationConfig,
     NeuralValueSelectionConfig,
@@ -1057,6 +1059,14 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(run_manifest["latest_checkpoint_path"], str(run_dir / "iteration-0002" / "transformer-policy.pt"))
         self.assertEqual(run_manifest["current_policy_spec"], second_manifest["checkpoint_policy_spec"])
         self.assertEqual(run_manifest["latest_accepted_checkpoint_path"], str(run_dir / "iteration-0002" / "transformer-policy.pt"))
+        # P0 instrumentation is an iteration artifact, not an in-memory convenience.  The
+        # fixture has a non-PPO trainer, so its values are intentionally null, but all six
+        # registered columns and the windowed-rate/gradient schema must still be present.
+        training_vitals = first_manifest["training_vitals"]
+        self.assertEqual(set(training_vitals["registered_columns"]), set(REGISTERED_VITAL_COLUMNS))
+        self.assertEqual(training_vitals["negative_surrogate_window"]["observed_iterations"], 1)
+        self.assertEqual(training_vitals["negative_surrogate_window"]["rate"], 0.0)
+        self.assertEqual(training_vitals["realized_gradient"]["samples"], None)
         self.assertEqual([call["seed_start"] for call in collected], [20, 22])
         self.assertEqual([call["worker_count"] for call in collected], [3, 3])
         self.assertEqual([tuple(path.name for path in paths) for paths in trained_paths], [
@@ -2260,6 +2270,96 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(scalars["ppo/entropy"], 1.7)
         self.assertAlmostEqual(scalars["winrate/max-damage"], 0.25)
         self.assertEqual(scalars["train/advanced"], 1.0)
+
+    def test_training_vitals_emits_all_registered_columns_and_windowed_negative_rate(self) -> None:
+        from pokezero.neural_selfplay import _training_vitals_snapshot
+
+        model_config = _entity_test_model_config(policy_id="vitals")
+        training = TransformerTrainingResult(
+            model_config=model_config,
+            training_config=TransformerTrainingConfig(objective="ppo"),
+            epochs=(
+                TransformerEpochMetrics(
+                    epoch=1,
+                    examples=8,
+                    loss=0.5,
+                    policy_loss=0.2,
+                    policy_accuracy=0.6,
+                    ppo_approx_kl=0.01,
+                    ppo_clip_fraction=0.2,
+                    ppo_advantage_std=0.4,
+                    ppo_advantage_mean=-0.03,
+                    value_explained_variance=0.7,
+                    ppo_entropy=1.2,
+                    ppo_kl_outliers=0,
+                    gradient_norm_pre_clip_mean=0.9,
+                    gradient_norm_pre_clip_max=1.1,
+                    gradient_norm_samples=2,
+                    gradient_clipped_fraction=0.5,
+                ),
+                TransformerEpochMetrics(
+                    epoch=2,
+                    examples=8,
+                    loss=0.4,
+                    policy_loss=-0.2,
+                    policy_accuracy=0.7,
+                    ppo_approx_kl=0.02,
+                    ppo_clip_fraction=0.3,
+                    ppo_advantage_std=0.5,
+                    ppo_advantage_mean=-0.04,
+                    value_explained_variance=0.8,
+                    ppo_entropy=1.3,
+                    ppo_kl_outliers=2,
+                    gradient_norm_pre_clip_mean=1.2,
+                    gradient_norm_pre_clip_max=1.5,
+                    gradient_norm_samples=3,
+                    gradient_clipped_fraction=2.0 / 3.0,
+                ),
+            ),
+        )
+        prior = {"training": {"epochs": [{"policy_loss": -0.01}]}}
+
+        vitals = _training_vitals_snapshot(
+            training=training,
+            prior_iteration_manifests=(prior,),
+            completed_iterations=(),
+        )
+
+        self.assertEqual(vitals["schema_version"], "pokezero.training_vitals.v1")
+        self.assertEqual(vitals["epoch"], 2)
+        self.assertEqual(
+            vitals["registered_columns"],
+            {
+                "ppo_approx_kl": 0.02,
+                "ppo_clip_fraction": 0.3,
+                "ppo_advantage_std": 0.5,
+                "ppo_advantage_mean": -0.04,
+                "value_explained_variance": 0.8,
+                "ppo_entropy": 1.3,
+            },
+        )
+        self.assertEqual(vitals["ppo_kl_outliers"], 2)
+        self.assertEqual(
+            vitals["negative_surrogate_window"],
+            {
+                "unit": "iteration_with_any_negative_policy_loss_epoch",
+                "window_iterations": 50,
+                "observed_iterations": 2,
+                "negative_surrogate_iterations": 2,
+                "rate": 1.0,
+                "current_iteration_has_negative_surrogate_epoch": True,
+            },
+        )
+        self.assertEqual(
+            vitals["realized_gradient"],
+            {
+                "definition": "global_l2_norm_after_backward_before_optional_clip",
+                "mean": 1.2,
+                "max": 1.5,
+                "samples": 3,
+                "clipped_fraction": 2.0 / 3.0,
+            },
+        )
 
     def test_tensorboard_logger_closed_when_iteration_raises(self) -> None:
         closed: list[bool] = []
@@ -5655,6 +5755,79 @@ class NeuralSelfPlayTest(unittest.TestCase):
             # it, so checking .exists() after the `with` exits would always fail (the dir is gone).
             self.assertTrue(result.latest_checkpoint_path and result.latest_checkpoint_path.exists())
             self.assertIsNotNone(result.iterations[0].benchmark)
+
+    def test_p0_cpu_smoke_coemits_real_collection_and_ppo_vitals(self) -> None:
+        """P0.3 must be proved by a real CPU collection and PPO update, not fabricated metrics."""
+
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            result = run_neural_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                # The collector alternates the current policy's seat.  With p1 always
+                # winning in OneTurnEnv, two games give a non-degenerate return batch and
+                # an observable 1/2 win-rate against the recorded training opponent.
+                games_per_iteration=2,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                model_config=TransformerPolicyConfig.compact_category(
+                    category_vocab=tuple(range(1, 17)),
+                    category_oov_buckets=4,
+                    policy_id="p0-vitals-smoke",
+                    window_size=2,
+                    token_type_vocab_size=8,
+                    categorical_feature_count=1,
+                    numeric_feature_count=1,
+                    embedding_dim=16,
+                    transformer_layers=1,
+                    attention_heads=4,
+                    feedforward_dim=32,
+                    dropout=0.0,
+                ),
+                training_config=TransformerTrainingConfig(
+                    window_size=2,
+                    epochs=1,
+                    batch_size=2,
+                    max_batches=1,
+                    objective="ppo",
+                    device="cpu",
+                ),
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=0,
+            )
+            manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            self.assertTrue(result.latest_checkpoint_path and result.latest_checkpoint_path.exists())
+
+        vitals = manifest["training_vitals"]
+        self.assertEqual(set(vitals["registered_columns"]), set(REGISTERED_VITAL_COLUMNS))
+        self.assertTrue(
+            all(
+                isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+                for value in vitals["registered_columns"].values()
+            )
+        )
+        gradient = vitals["realized_gradient"]
+        self.assertEqual(gradient["samples"], 1)
+        self.assertGreater(gradient["mean"], 0.0)
+        self.assertGreaterEqual(gradient["max"], gradient["mean"])
+        window = vitals["negative_surrogate_window"]
+        self.assertEqual(window["observed_iterations"], 1)
+        self.assertIn(window["rate"], (0.0, 1.0))
+        self.assertIsInstance(window["current_iteration_has_negative_surrogate_epoch"], bool)
+        self.assertEqual(
+            manifest["collection_metrics"]["training_opponent_metrics"]["random-legal"],
+            {
+                "games": 2,
+                "wins": 1,
+                "losses": 1,
+                "draws": 0,
+                "capped_games": 0,
+                "resolved_games": 2,
+                "win_rate": 0.5,
+            },
+        )
 
     def test_torch_smoke_trains_from_real_cache_chunks_and_deletes_them(self) -> None:
         if not torch_available():

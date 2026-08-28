@@ -209,6 +209,41 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(training_records[1].policy_ids, {"p2": "simple-legal"})
         self.assertEqual({step.player_id for record in training_records for step in record.trajectory.steps}, {"p1", "p2"})
 
+    def test_collection_reports_seat_correct_win_rate_against_recorded_training_opponent(self) -> None:
+        """The collection vital must score the collecting policy, not the fixed p1 seat."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metrics = collect_selfplay_rollouts(
+                output_path=Path(temp_dir) / "rollouts.jsonl",
+                training_output_path=Path(temp_dir) / "training-rollouts.jsonl",
+                games=4,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=70,
+                current_policy_spec="collector",
+                opponent_policy_specs=("frozen-opponent",),
+                policy_factory_overrides={
+                    "collector": lambda: RandomLegalPolicy(policy_id="collector"),
+                    "frozen-opponent": lambda: RandomLegalPolicy(policy_id="frozen-opponent"),
+                },
+            )
+
+        payload = metrics.to_dict()["training_opponent_metrics"]["frozen-opponent"]
+        # OneTurnEnv always awards p1. The collector alternates p1/p2, so any p1-only
+        # aggregation would read 1.0 and any p2-only aggregation 0.0; the real answer is 2/4.
+        self.assertEqual(
+            payload,
+            {
+                "games": 4,
+                "wins": 2,
+                "losses": 2,
+                "draws": 0,
+                "capped_games": 0,
+                "resolved_games": 4,
+                "win_rate": 0.5,
+            },
+        )
+
     def test_collect_selfplay_rollouts_can_write_training_cache_chunks_without_raw_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

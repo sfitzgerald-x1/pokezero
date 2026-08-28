@@ -943,6 +943,12 @@ class TransformerEpochMetrics:
     ppo_value_clip_eligible_examples: int | None = None
     ppo_value_clip_fraction: float | None = None
     ppo_entropy: float | None = None
+    # Observed after backward and before the optional global clip. A configured clip ceiling is
+    # not evidence of the gradient that was actually present.
+    gradient_norm_pre_clip_mean: float | None = None
+    gradient_norm_pre_clip_max: float | None = None
+    gradient_norm_samples: int | None = None
+    gradient_clipped_fraction: float | None = None
     batches: int | None = None
     elapsed_seconds: float | None = None
     batch_load_elapsed_seconds: float | None = None
@@ -1150,6 +1156,26 @@ def distributed_training_context() -> DistributedTrainingContext:
 def _distributed_barrier(context: DistributedTrainingContext) -> None:
     if context.enabled:
         require_torch().distributed.barrier()
+
+
+def _distributed_callback_continue(
+    context: DistributedTrainingContext, continue_training: bool, *, device: Any
+) -> bool:
+    """Broadcast rank zero's epoch-callback stop decision to every DDP rank.
+
+    Value selection evaluates only on rank zero.  A local ``False`` callback
+    result therefore needs an explicit broadcast: otherwise rank zero would
+    leave the epoch loop while its peers entered another DDP step and deadlock.
+    """
+
+    if not context.enabled:
+        return continue_training
+    torch_module = require_torch()
+    decision = torch_module.tensor(
+        1 if continue_training else 0, dtype=torch_module.int64, device=device
+    )
+    torch_module.distributed.broadcast(decision, src=0)
+    return bool(decision.item())
 
 
 def _distributed_reduce_sum(context: DistributedTrainingContext, value: Any) -> Any:
@@ -2056,7 +2082,7 @@ def train_transformer_policy(
     model_config: TransformerPolicyConfig | None = None,
     training_config: TransformerTrainingConfig | None = None,
     initial_model: Any | None = None,
-    epoch_callback: Callable[[Any, TransformerTrainingResult], None] | None = None,
+    epoch_callback: Callable[[Any, TransformerTrainingResult], bool | None] | None = None,
     consumed_cache_callback: Callable[[Path], None] | None = None,
     auxiliary_paths: str | PathLike[str] | Path | Iterable[str | PathLike[str] | Path] | None = None,
     auxiliary_max_fraction: float = 0.0,
@@ -2225,11 +2251,23 @@ def train_transformer_policy(
             backward_started = perf_counter()
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            gradient_norm_pre_clip = _global_gradient_norm(trainable_parameters, torch_module)
+            gradient_was_clipped = (
+                resolved_training_config.max_grad_norm is not None
+                and gradient_norm_pre_clip > resolved_training_config.max_grad_norm
+            )
             if resolved_training_config.max_grad_norm is not None:
                 torch_module.nn.utils.clip_grad_norm_(
                     trainable_parameters,
                     resolved_training_config.max_grad_norm,
                 )
+            pieces = {
+                **pieces,
+                "gradient_norm_pre_clip_sum": gradient_norm_pre_clip,
+                "gradient_norm_pre_clip_max": gradient_norm_pre_clip,
+                "gradient_norm_samples": 1,
+                "gradient_clip_count": int(gradient_was_clipped),
+            }
             backward_elapsed_seconds += perf_counter() - backward_started
             optimizer_started = perf_counter()
             optimizer.step()
@@ -2264,8 +2302,9 @@ def train_transformer_policy(
         epoch_metrics.append(totals.to_epoch_metrics(epoch, learning_rate=epoch_learning_rate, timing=timing))
         if epoch_callback is not None:
             _distributed_barrier(context)
+            continue_training = True
             if not context.enabled or context.is_primary:
-                epoch_callback(
+                callback_result = epoch_callback(
                     base_model,
                     TransformerTrainingResult(
                         model_config=resolved_model_config,
@@ -2273,7 +2312,13 @@ def train_transformer_policy(
                         epochs=tuple(epoch_metrics),
                     ),
                 )
+                continue_training = callback_result is not False
+            continue_training = _distributed_callback_continue(
+                context, continue_training, device=device
+            )
             _distributed_barrier(context)
+            if not continue_training:
+                break
     if replay_enabled and consumed_cache_callback is not None:
         # Deferred consumed-cache release: every epoch trained from the retained batches, so
         # the caches recorded during the epoch-1 stream are only released once all epochs are
@@ -2286,6 +2331,22 @@ def train_transformer_policy(
         training_config=resolved_training_config,
         epochs=tuple(epoch_metrics),
     )
+
+
+def _global_gradient_norm(parameters: Sequence[Any], torch_module: Any) -> float:
+    """Return a detached global L2 norm without changing gradients or consuming RNG."""
+
+    squared_norm = 0.0
+    for parameter in parameters:
+        gradient = parameter.grad
+        if gradient is None:
+            continue
+        detached = gradient.detach()
+        if detached.is_sparse:
+            detached = detached.coalesce().values()
+        value = float(torch_module.linalg.vector_norm(detached).item())
+        squared_norm += value * value
+    return math.sqrt(squared_norm)
 
 
 def _distributed_training_batch_shard(
@@ -3199,6 +3260,10 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
                 ppo_value_clip_eligible_examples=_optional_int(metrics.get("ppo_value_clip_eligible_examples")),
                 ppo_value_clip_fraction=_optional_float(metrics.get("ppo_value_clip_fraction")),
                 ppo_entropy=_optional_float(metrics.get("ppo_entropy")),
+                gradient_norm_pre_clip_mean=_optional_float(metrics.get("gradient_norm_pre_clip_mean")),
+                gradient_norm_pre_clip_max=_optional_float(metrics.get("gradient_norm_pre_clip_max")),
+                gradient_norm_samples=_optional_int(metrics.get("gradient_norm_samples")),
+                gradient_clipped_fraction=_optional_float(metrics.get("gradient_clipped_fraction")),
                 learning_rate=_optional_float(metrics.get("learning_rate")),
                 batches=_optional_int(metrics.get("batches")),
                 elapsed_seconds=_optional_float(metrics.get("elapsed_seconds")),
@@ -3309,6 +3374,10 @@ class _TorchMetricTotals:
     ppo_value_clip_eligible_examples: int = 0
     ppo_value_clip_count: int = 0
     ppo_entropy_sum: float = 0.0
+    gradient_norm_pre_clip_sum: float = 0.0
+    gradient_norm_pre_clip_max: float = 0.0
+    gradient_norm_samples: int = 0
+    gradient_clip_count: int = 0
     value_ev_examples: int = 0
     value_ev_target_sum: float = 0.0
     value_ev_target_square_sum: float = 0.0
@@ -3353,6 +3422,15 @@ class _TorchMetricTotals:
             self.ppo_entropy_sum += float(pieces["ppo_entropy_sum"])
         self.ppo_value_clip_eligible_examples += int(pieces.get("ppo_value_clip_eligible_examples", 0))
         self.ppo_value_clip_count += int(pieces.get("ppo_value_clip_count", 0))
+        gradient_norm_samples = int(pieces.get("gradient_norm_samples", 0))
+        if gradient_norm_samples:
+            self.gradient_norm_pre_clip_sum += float(pieces["gradient_norm_pre_clip_sum"])
+            self.gradient_norm_pre_clip_max = max(
+                self.gradient_norm_pre_clip_max,
+                float(pieces["gradient_norm_pre_clip_max"]),
+            )
+            self.gradient_norm_samples += gradient_norm_samples
+            self.gradient_clip_count += int(pieces.get("gradient_clip_count", 0))
         value_ev_examples = int(pieces.get("value_ev_examples", 0))
         if value_ev_examples:
             self.value_ev_examples += value_ev_examples
@@ -3377,6 +3455,9 @@ class _TorchMetricTotals:
         ppo_clip_fraction = None
         ppo_value_clip_fraction = None
         ppo_entropy = None
+        gradient_norm_pre_clip_mean = None
+        gradient_norm_pre_clip_max = None
+        gradient_clipped_fraction = None
         if self.ppo_value_clip_eligible_examples:
             ppo_value_clip_fraction = (
                 self.ppo_value_clip_count / self.ppo_value_clip_eligible_examples
@@ -3408,6 +3489,10 @@ class _TorchMetricTotals:
             # rather than reported as a perfect or zero score.
             if ev_target_variance > 0.0:
                 value_explained_variance = 1.0 - (ev_residual_variance / ev_target_variance)
+        if self.gradient_norm_samples:
+            gradient_norm_pre_clip_mean = self.gradient_norm_pre_clip_sum / self.gradient_norm_samples
+            gradient_norm_pre_clip_max = self.gradient_norm_pre_clip_max
+            gradient_clipped_fraction = self.gradient_clip_count / self.gradient_norm_samples
         timing_payload = dict(timing or {})
         return TransformerEpochMetrics(
             epoch=epoch,
@@ -3441,6 +3526,10 @@ class _TorchMetricTotals:
             ),
             ppo_value_clip_fraction=ppo_value_clip_fraction,
             ppo_entropy=ppo_entropy,
+            gradient_norm_pre_clip_mean=gradient_norm_pre_clip_mean,
+            gradient_norm_pre_clip_max=gradient_norm_pre_clip_max,
+            gradient_norm_samples=self.gradient_norm_samples if self.gradient_norm_samples else None,
+            gradient_clipped_fraction=gradient_clipped_fraction,
             batches=_optional_int_from_mapping(timing_payload, "batches"),
             elapsed_seconds=_optional_float_from_mapping(timing_payload, "elapsed_seconds"),
             batch_load_elapsed_seconds=_optional_float_from_mapping(timing_payload, "batch_load_elapsed_seconds"),

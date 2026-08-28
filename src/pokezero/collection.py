@@ -302,6 +302,9 @@ class CollectionMetrics:
     peak_rss_mb: float | None = None
     peak_rss_mb_by_phase: Mapping[str, float | None] | None = None
     policy_decision_summary: Mapping[str, Mapping[str, Any]] | None = None
+    # Outcomes for the collector policy, grouped by the recorded opponent spec.  This is a
+    # collection-time vital, not a later benchmark: its seat is reconciled before aggregation.
+    training_opponent_metrics: Mapping[str, Mapping[str, Any]] | None = None
     collection_timing: Mapping[str, Any] | None = None
 
     @property
@@ -348,6 +351,16 @@ class CollectionMetrics:
                     }
                 }
                 if self.policy_decision_summary
+                else {}
+            ),
+            **(
+                {
+                    "training_opponent_metrics": {
+                        key: dict(value)
+                        for key, value in sorted(self.training_opponent_metrics.items())
+                    }
+                }
+                if self.training_opponent_metrics
                 else {}
             ),
             **({"collection_timing": dict(self.collection_timing)} if self.collection_timing else {}),
@@ -1597,6 +1610,7 @@ class _MetricsAccumulator:
     ties: int = 0
     capped_games: int = 0
     policy_summaries: dict[str, "_PolicyDecisionAccumulator"] = field(default_factory=dict)
+    training_opponents: dict[str, "_TrainingOpponentAccumulator"] = field(default_factory=dict)
     timing: _CollectionTimingAccumulator = field(default_factory=_CollectionTimingAccumulator)
 
     def add(self, record: RolloutRecord) -> None:
@@ -1621,6 +1635,25 @@ class _MetricsAccumulator:
                 self.policy_summaries[policy_id] = summary
             summary.add(metadata)
 
+    def add_training_opponent_record(self, record: RolloutRecord) -> None:
+        """Add the collector-seat outcome from its one-seat filtered training record."""
+
+        # Self-play emits one filtered record for the policy being trained. Its sole policy-id
+        # key is the actual p1/p2 seat, rather than an inference from a policy label that may be
+        # shared by distinct checkpoints. Generic rollouts retain both seats and never call this
+        # method, so they cannot contaminate the collection-only vital.
+        if len(record.policy_ids) != 1:
+            return
+        player_id = next(iter(record.policy_ids))
+        opponent_spec = record.trajectory.metadata.get("opponent_policy_spec")
+        if player_id not in {"p1", "p2"} or not isinstance(opponent_spec, str) or not opponent_spec:
+            return
+        opponent = self.training_opponents.get(opponent_spec)
+        if opponent is None:
+            opponent = _TrainingOpponentAccumulator()
+            self.training_opponents[opponent_spec] = opponent
+        opponent.add(player_id=player_id, terminal=record.terminal)
+
     def add_timing(self, phase: str, elapsed_seconds: float, *, calls: int = 1) -> None:
         self.timing.add(phase, elapsed_seconds, calls=calls)
 
@@ -1639,8 +1672,51 @@ class _MetricsAccumulator:
                 policy_id: summary.to_dict()
                 for policy_id, summary in sorted(self.policy_summaries.items())
             },
+            training_opponent_metrics={
+                opponent_spec: summary.to_dict()
+                for opponent_spec, summary in sorted(self.training_opponents.items())
+            },
             collection_timing=self.timing.to_dict(),
         )
+
+
+@dataclass
+class _TrainingOpponentAccumulator:
+    """Resolved collection outcomes for one recorded training-opponent spec."""
+
+    games: int = 0
+    wins: int = 0
+    losses: int = 0
+    draws: int = 0
+    capped_games: int = 0
+
+    def add(self, *, player_id: str, terminal: TerminalState) -> None:
+        self.games += 1
+        # A capped game has no result. Excluding it avoids translating a wall guard into a
+        # spurious loss against the training opponent.
+        if terminal.capped:
+            self.capped_games += 1
+            return
+        if terminal.winner == player_id:
+            self.wins += 1
+        elif terminal.winner in {"p1", "p2"}:
+            self.losses += 1
+        else:
+            self.draws += 1
+
+    def to_dict(self) -> dict[str, Any]:
+        resolved_games = self.games - self.capped_games
+        return {
+            "games": self.games,
+            "wins": self.wins,
+            "losses": self.losses,
+            "draws": self.draws,
+            "capped_games": self.capped_games,
+            "resolved_games": resolved_games,
+            # This follows the benchmark convention (wins / completed games); draws remain
+            # explicit for readers that need score-rate rather than win-rate.
+            "win_rate": (self.wins / resolved_games) if resolved_games else None,
+        }
 
 
 @dataclass

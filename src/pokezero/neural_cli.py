@@ -833,6 +833,34 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional JSON output path for per-epoch --value-selection-data reports.",
     )
+    train.add_argument(
+        "--value-selection-early-stopping-patience",
+        type=int,
+        default=None,
+        help=(
+            "Stop value-selection training after this many post-warmup held-out epochs "
+            "without an improvement of --value-selection-early-stopping-min-delta. "
+            "Requires --value-selection-data."
+        ),
+    )
+    train.add_argument(
+        "--value-selection-early-stopping-min-delta",
+        type=float,
+        default=None,
+        help=(
+            "Minimum strict held-out metric improvement that resets early-stopping patience; "
+            "requires --value-selection-early-stopping-patience."
+        ),
+    )
+    train.add_argument(
+        "--value-selection-early-stopping-warmup-epochs",
+        type=int,
+        default=None,
+        help=(
+            "Number of initial held-out epochs to observe before early-stopping patience starts; "
+            "requires --value-selection-early-stopping-patience."
+        ),
+    )
     train.set_defaults(func=_train)
 
     cache_data = subparsers.add_parser("cache-data", help="Convert rollout JSONL into a compact neural training cache.")
@@ -3009,6 +3037,10 @@ def _require_cache_shaping_matches_training_config(paths, shaping_json: str | No
 def _train(args: argparse.Namespace) -> int:
     command_started_at = datetime.now(timezone.utc)
     command_started = time.perf_counter()
+    # Validate the stop rule before importing torch or initializing a DDP process
+    # group.  A partial rule is an operator/configuration error, never a reason to
+    # allocate workers and then fail after launch.
+    value_selection_early_stopping = _value_selection_early_stopping_from_args(args)
     # Surface the missing-neural-extra message before any file I/O (vocab building reads data).
     require_torch()
     distributed_context_value = initialize_distributed_training(args.device)
@@ -3199,6 +3231,7 @@ def _train(args: argparse.Namespace) -> int:
             selection_metric=args.value_selection_metric,
             batch_size=args.value_calibration_batch_size,
             bins=args.value_calibration_bins,
+            early_stopping=value_selection_early_stopping,
             consumed_cache_callback=cache_lifecycle.consumed_cache_callback,
             auxiliary_paths=refutation_cache_paths or None,
             auxiliary_max_fraction=args.refutation_max_fraction if refutation_cache_paths else 0.0,
@@ -3637,6 +3670,48 @@ def _training_dataset_config_from_args(args: argparse.Namespace) -> TrajectoryDa
     )
 
 
+@dataclass(frozen=True)
+class ValueSelectionEarlyStoppingConfig:
+    """Registered held-out patience rule for an offline value-only run."""
+
+    patience_epochs: int
+    min_delta: float
+    warmup_epochs: int
+
+
+def _value_selection_early_stopping_from_args(
+    args: argparse.Namespace,
+) -> ValueSelectionEarlyStoppingConfig | None:
+    """Reject partially configured patience rules before a trainer is started."""
+
+    patience = args.value_selection_early_stopping_patience
+    min_delta = args.value_selection_early_stopping_min_delta
+    warmup_epochs = args.value_selection_early_stopping_warmup_epochs
+    if patience is None and min_delta is None and warmup_epochs is None:
+        return None
+    if not args.value_selection_data:
+        raise ValueError("value-selection early stopping requires --value-selection-data.")
+    if patience is None:
+        raise ValueError(
+            "--value-selection-early-stopping-min-delta and "
+            "--value-selection-early-stopping-warmup-epochs require "
+            "--value-selection-early-stopping-patience."
+        )
+    if patience <= 0:
+        raise ValueError("--value-selection-early-stopping-patience must be positive.")
+    resolved_min_delta = 0.0 if min_delta is None else min_delta
+    resolved_warmup_epochs = 0 if warmup_epochs is None else warmup_epochs
+    if not math.isfinite(resolved_min_delta) or resolved_min_delta < 0.0:
+        raise ValueError("--value-selection-early-stopping-min-delta must be finite and non-negative.")
+    if resolved_warmup_epochs < 0:
+        raise ValueError("--value-selection-early-stopping-warmup-epochs must be non-negative.")
+    return ValueSelectionEarlyStoppingConfig(
+        patience_epochs=patience,
+        min_delta=resolved_min_delta,
+        warmup_epochs=resolved_warmup_epochs,
+    )
+
+
 def _train_with_value_selection(
     *,
     paths: list[Path],
@@ -3647,6 +3722,7 @@ def _train_with_value_selection(
     selection_metric: str,
     batch_size: int,
     bins: int,
+    early_stopping: ValueSelectionEarlyStoppingConfig | None = None,
     consumed_cache_callback: Callable[[Path], None] | None = None,
     auxiliary_paths: Sequence[Path] | None = None,
     auxiliary_max_fraction: float = 0.0,
@@ -3663,10 +3739,16 @@ def _train_with_value_selection(
     best_epoch = None
     best_metric_value = None
     best_score = None
+    early_stopping_best_score = None
+    early_stopping_non_improving_epochs = 0
+    stopped_early = False
+    early_stopping_stop_epoch = None
     device = resolve_torch_device(training_config.device)
 
-    def evaluate_epoch(model: object, epoch_result: TransformerTrainingResult) -> None:
+    def evaluate_epoch(model: object, epoch_result: TransformerTrainingResult) -> bool | None:
         nonlocal best_epoch, best_metric_value, best_score, best_state
+        nonlocal early_stopping_best_score, early_stopping_non_improving_epochs
+        nonlocal stopped_early, early_stopping_stop_epoch
         epoch_metric = epoch_result.final_metrics
         report = evaluate_value_calibration(
             model=model,
@@ -3697,12 +3779,33 @@ def _train_with_value_selection(
             selection_entry["metric_unavailable_reason"] = metric_unavailable_reason
         selection_reports.append(selection_entry)
         if score is None:
+            if early_stopping is not None:
+                raise ValueError("value-selection early stopping requires a selectable metric at every epoch.")
             return
         if best_score is None or score > best_score:
             best_score = score
             best_metric_value = metric_value
             best_epoch = epoch
             best_state = copy.deepcopy(model.state_dict())
+        if early_stopping is None:
+            return None
+        if epoch <= early_stopping.warmup_epochs:
+            if early_stopping_best_score is None or score > early_stopping_best_score:
+                early_stopping_best_score = score
+            return None
+        if early_stopping_best_score is None:
+            early_stopping_best_score = score
+            return None
+        if score > early_stopping_best_score + early_stopping.min_delta:
+            early_stopping_best_score = score
+            early_stopping_non_improving_epochs = 0
+            return None
+        early_stopping_non_improving_epochs += 1
+        if early_stopping_non_improving_epochs >= early_stopping.patience_epochs:
+            stopped_early = True
+            early_stopping_stop_epoch = epoch
+            return False
+        return None
 
     train_kwargs: dict[str, object] = {}
     if consumed_cache_callback is not None:
@@ -3744,6 +3847,16 @@ def _train_with_value_selection(
         "selected_metric_value": best_metric_value,
         "epochs": selection_reports,
     }
+    if early_stopping is not None:
+        payload["early_stopping"] = {
+            "enabled": True,
+            "patience_epochs": early_stopping.patience_epochs,
+            "min_delta": early_stopping.min_delta,
+            "warmup_epochs": early_stopping.warmup_epochs,
+            "stopped_early": stopped_early,
+            "stop_epoch": early_stopping_stop_epoch,
+            "non_improving_epochs": early_stopping_non_improving_epochs,
+        }
     return model, selected_result, payload
 
 def _benchmark(args: argparse.Namespace) -> int:
