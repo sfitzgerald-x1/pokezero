@@ -29,7 +29,7 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def cache(path: Path, *, targets: list[float], seeds: list[int], turns: list[int]) -> str:
+def cache(path: Path, *, targets: list[float], seeds: list[int], turns: list[int]) -> tuple[str, list[str]]:
     path.mkdir()
     write_json(path / "metadata.json", {
         "schema_version": corpus_tool.TRAINING_CACHE_SCHEMA,
@@ -38,7 +38,31 @@ def cache(path: Path, *, targets: list[float], seeds: list[int], turns: list[int
     numpy.save(path / "returns.npy", numpy.asarray(targets, dtype=numpy.float32))
     numpy.save(path / "seeds.npy", numpy.asarray(seeds, dtype=numpy.int64))
     numpy.save(path / "turn_indices.npy", numpy.asarray(turns, dtype=numpy.int32))
-    return corpus_tool.training_cache_tree_sha256(path)
+    # Cache rows are the model-visible successor observations.  Row zero is the
+    # padding row and every example's one-step window points at its own row.
+    rows = len(targets) + 1
+    categorical = numpy.zeros((rows, 1, 1), dtype=numpy.uint16)
+    categorical[1:, 0, 0] = numpy.arange(1, rows, dtype=numpy.uint16)
+    numeric = numpy.zeros((rows, 1, 1), dtype=numpy.float16)
+    numeric[1:, 0, 0] = numpy.arange(1, rows, dtype=numpy.float16)
+    token_type = numpy.zeros((rows, 1), dtype=numpy.uint8)
+    attention = numpy.ones((rows, 1), dtype=numpy.bool_)
+    numpy.save(path / "categorical_ids.npy", categorical)
+    numpy.save(path / "numeric_features.npy", numeric)
+    numpy.save(path / "token_type_ids.npy", token_type)
+    numpy.save(path / "attention_mask.npy", attention)
+    numpy.save(path / "window_indices.npy", numpy.arange(1, rows, dtype=numpy.uint32).reshape(len(targets), 1))
+    legal_action_mask = numpy.ones((len(targets), 3), dtype=numpy.bool_)
+    numpy.save(path / "legal_action_mask.npy", legal_action_mask)
+    successors = [
+        corpus_tool.successor_observation_sha256(
+            categorical_ids=categorical[index:index + 1], numeric_features=numeric[index:index + 1],
+            token_type_ids=token_type[index:index + 1], attention_mask=attention[index:index + 1],
+            legal_action_mask=legal_action_mask[index - 1],
+        )
+        for index in range(1, rows)
+    ]
+    return corpus_tool.training_cache_tree_sha256(path), successors
 
 
 def fixture(tmp_path: Path) -> dict[str, Path]:
@@ -104,8 +128,8 @@ def fixture(tmp_path: Path) -> dict[str, Path]:
     })
     train = tmp_path / "train-cache"
     heldout = tmp_path / "heldout-cache"
-    train_digest = cache(train, targets=[0.5], seeds=[5], turns=[2])
-    heldout_digest = cache(heldout, targets=[0.75], seeds=[4], turns=[9])
+    train_digest, train_successors = cache(train, targets=[0.5], seeds=[5], turns=[2])
+    heldout_digest, heldout_successors = cache(heldout, targets=[0.75], seeds=[4], turns=[9])
     corpus = {
         "schema": corpus_tool.CORPUS_SCHEMA,
         "bank": {"sha256": digest(bank_path)},
@@ -123,7 +147,7 @@ def fixture(tmp_path: Path) -> dict[str, Path]:
             {"split": "heldout", "source_game_seed": 4, "decision_index": 9, "candidate_action": 7,
              "selected_action": 7, "fixed_opponent_actions": {"p2": 3}, "target": 0.75,
              "terminal_shortcut": False, "source_state_sha256": "d" * 64,
-             "successor_observation_sha256": "e" * 64, "cache_index": 0},
+             "successor_observation_sha256": heldout_successors[0], "cache_index": 0},
             {"split": "heldout", "source_game_seed": 4, "decision_index": 9, "candidate_action": 8,
              "selected_action": 7, "fixed_opponent_actions": {"p2": 3}, "target": 0.0,
              "terminal_shortcut": True, "source_state_sha256": None,
@@ -131,7 +155,7 @@ def fixture(tmp_path: Path) -> dict[str, Path]:
             {"split": "train", "source_game_seed": 5, "decision_index": 2, "candidate_action": 1,
              "selected_action": 1, "fixed_opponent_actions": {}, "target": 0.5,
              "terminal_shortcut": False, "source_state_sha256": "f" * 64,
-             "successor_observation_sha256": "0" * 64, "cache_index": 0},
+             "successor_observation_sha256": train_successors[0], "cache_index": 0},
         ],
     }
     corpus_path = tmp_path / "corpus.json"
@@ -191,6 +215,42 @@ class ExpertIterationLabelCorpusTest(unittest.TestCase):
         write_json(paths["corpus"], corpus)
         with self.assertRaisesRegex(corpus_tool.CorpusError, "exact bank candidate set"):
             validate(paths)
+
+    def test_refuses_a_cache_row_whose_model_visible_observation_differs_from_replay(self) -> None:
+        paths = fixture(self.root)
+        categorical = numpy.load(paths["train"] / "categorical_ids.npy")
+        categorical[1, 0, 0] += 7
+        numpy.save(paths["train"] / "categorical_ids.npy", categorical)
+        # This is deliberately not a tree-digest test: reseal the changed cache in
+        # the manifest, then prove the per-row replay digest still catches it.
+        corpus = json.loads(paths["corpus"].read_text(encoding="utf-8"))
+        corpus["training_caches"]["train"]["tree_sha256"] = corpus_tool.training_cache_tree_sha256(paths["train"])
+        write_json(paths["corpus"], corpus)
+        with self.assertRaisesRegex(corpus_tool.CorpusError, "successor observation differs from its model-visible cache row"):
+            validate(paths)
+
+    def test_writes_an_immutable_replay_bound_corpus_receipt(self) -> None:
+        paths = fixture(self.root)
+        out = self.root / "corpus-receipt.json"
+        self.assertEqual(
+            corpus_tool.main([
+                "--bank", str(paths["bank"]), "--contract", str(paths["contract"]),
+                "--splits", str(paths["splits"]), "--corpus", str(paths["corpus"]),
+                "--train-cache", str(paths["train"]), "--heldout-cache", str(paths["heldout"]),
+                "--out", str(out),
+            ]),
+            0,
+        )
+        receipt = json.loads(out.read_text(encoding="utf-8"))
+        self.assertEqual(receipt["schema"], corpus_tool.CORPUS_RECEIPT_SCHEMA)
+        self.assertEqual(receipt["status"], "VALIDATED_REPLAY_BOUND_ORACLE_CORPUS")
+        with self.assertRaisesRegex(corpus_tool.CorpusError, "refusing to overwrite"):
+            corpus_tool.main([
+                "--bank", str(paths["bank"]), "--contract", str(paths["contract"]),
+                "--splits", str(paths["splits"]), "--corpus", str(paths["corpus"]),
+                "--train-cache", str(paths["train"]), "--heldout-cache", str(paths["heldout"]),
+                "--out", str(out),
+            ])
 
 
 if __name__ == "__main__":

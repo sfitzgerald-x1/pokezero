@@ -23,11 +23,14 @@ import argparse
 import hashlib
 import json
 import math
+import os
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 CORPUS_SCHEMA = "pokezero.expert-iteration.oracle-label-corpus.v1"
+CORPUS_RECEIPT_SCHEMA = "pokezero.expert-iteration.oracle-label-corpus-receipt.v1"
 ROOT_BANK_SCHEMA = "pokezero.root-policy-continuation-oracle-bank.v1"
 SPLIT_SCHEMA = "pokezero.expert-iteration.p0-label-splits.v1"
 TRAINING_CACHE_SCHEMA = "pokezero.training_cache.v2"
@@ -132,8 +135,48 @@ def _git_commit(value: Any, *, label: str) -> str:
     return value
 
 
-def _cache_arrays(path: Path, *, label: str) -> tuple[Any, Any, Any, int]:
-    """Read only the target/address arrays needed to prove the label join."""
+def successor_observation_sha256(
+    *,
+    categorical_ids: Any,
+    numeric_features: Any,
+    token_type_ids: Any,
+    attention_mask: Any,
+    legal_action_mask: Any,
+) -> str:
+    """Hash the exact cache example consumed by the model.
+
+    A claimed digest in the replay manifest is not provenance.  The cache uses
+    compact categorical storage, so this deliberately hashes the expanded
+    on-disk window and legal-action mask (including dtype and shape) instead of
+    re-encoding a convenient Python view.  This covers both the successor row
+    and the history the model actually receives.
+    """
+
+    try:
+        import numpy
+    except ModuleNotFoundError as exc:  # pragma: no cover - installation error
+        raise CorpusError("NumPy is required to validate a training cache") from exc
+    digest = hashlib.sha256()
+    for name, value in (
+        ("categorical_ids", categorical_ids),
+        ("numeric_features", numeric_features),
+        ("token_type_ids", token_type_ids),
+        ("attention_mask", attention_mask),
+        ("legal_action_mask", legal_action_mask),
+    ):
+        array = numpy.ascontiguousarray(value)
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(array.dtype.str.encode("ascii"))
+        digest.update(b"\0")
+        digest.update(json.dumps(list(array.shape), separators=(",", ":")).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(array.tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def _cache_arrays(path: Path, *, label: str) -> tuple[Any, Any, Any, list[str], int]:
+    """Read the target/address arrays and derive every model-visible successor hash."""
 
     metadata, _ = _json(path / "metadata.json", label=f"{label}.metadata")
     if metadata.get("schema_version") != TRAINING_CACHE_SCHEMA:
@@ -154,7 +197,44 @@ def _cache_arrays(path: Path, *, label: str) -> tuple[Any, Any, Any, int]:
         if len(array) != example_count:
             raise CorpusError(f"{label}.{name}.npy length disagrees with metadata.example_count")
         arrays.append(array)
-    return arrays[0], arrays[1], arrays[2], example_count
+    observation_arrays: dict[str, Any] = {}
+    for name in ("categorical_ids", "numeric_features", "token_type_ids", "attention_mask"):
+        array_path = path / f"{name}.npy"
+        if not array_path.is_file() or array_path.is_symlink():
+            raise CorpusError(f"{label} lacks regular {name}.npy")
+        observation_arrays[name] = numpy.load(array_path, mmap_mode="r", allow_pickle=False)
+    row_count = len(observation_arrays["categorical_ids"])
+    if row_count < 2:
+        raise CorpusError(f"{label}.categorical_ids.npy lacks a padding row plus successor rows")
+    if any(len(array) != row_count for array in observation_arrays.values()):
+        raise CorpusError(f"{label} observation arrays disagree on row count")
+    legal_mask_path = path / "legal_action_mask.npy"
+    if not legal_mask_path.is_file() or legal_mask_path.is_symlink():
+        raise CorpusError(f"{label} lacks regular legal_action_mask.npy")
+    legal_action_masks = numpy.load(legal_mask_path, mmap_mode="r", allow_pickle=False)
+    if len(legal_action_masks) != example_count:
+        raise CorpusError(f"{label}.legal_action_mask.npy length disagrees with metadata.example_count")
+    window_path = path / "window_indices.npy"
+    if not window_path.is_file() or window_path.is_symlink():
+        raise CorpusError(f"{label} lacks regular window_indices.npy")
+    window_indices = numpy.load(window_path, mmap_mode="r", allow_pickle=False)
+    if window_indices.ndim != 2 or window_indices.shape[0] != example_count or window_indices.shape[1] < 1:
+        raise CorpusError(f"{label}.window_indices.npy must address every example with a non-empty window")
+    successor_hashes: list[str] = []
+    for cache_index, window in enumerate(window_indices):
+        observed_row = int(window[-1])
+        if not 0 < observed_row < row_count:
+            raise CorpusError(f"{label}.window_indices.npy[{cache_index}] has no non-padding successor row")
+        successor_hashes.append(
+            successor_observation_sha256(
+                categorical_ids=observation_arrays["categorical_ids"][window],
+                numeric_features=observation_arrays["numeric_features"][window],
+                token_type_ids=observation_arrays["token_type_ids"][window],
+                attention_mask=observation_arrays["attention_mask"][window],
+                legal_action_mask=legal_action_masks[cache_index],
+            )
+        )
+    return arrays[0], arrays[1], arrays[2], successor_hashes, example_count
 
 
 def _validated_contract(contract: Mapping[str, Any]) -> tuple[str, Mapping[str, Any], Mapping[str, Any]]:
@@ -351,7 +431,7 @@ def validate(
         if _hex(declared.get("tree_sha256"), label=f"corpus.training_caches.{split}.tree_sha256") != training_cache_tree_sha256(path):
             raise CorpusError(f"{split} training-cache tree digest differs from corpus manifest")
         cache_arrays[split] = _cache_arrays(path, label=f"{split} training_cache")
-        if declared.get("example_count") != cache_arrays[split][3]:
+        if declared.get("example_count") != cache_arrays[split][4]:
             raise CorpusError(f"{split} training-cache example count differs from corpus manifest")
     seen: set[tuple[int, int, int]] = set()
     cache_rows: dict[str, set[int]] = {"train": set(), "heldout": set()}
@@ -392,7 +472,7 @@ def validate(
         _hex(record.get("source_state_sha256"), label=f"corpus record {key}.source_state_sha256")
         _hex(record.get("successor_observation_sha256"), label=f"corpus record {key}.successor_observation_sha256")
         row = _integer(record.get("cache_index"), label=f"corpus record {key}.cache_index")
-        returns, seeds, turns, count = cache_arrays[str(split)]
+        returns, seeds, turns, successor_hashes, count = cache_arrays[str(split)]
         if not 0 <= row < count or row in cache_rows[str(split)]:
             raise CorpusError(f"corpus record {key} has duplicate/out-of-range cache_index")
         cache_rows[str(split)].add(row)
@@ -400,21 +480,79 @@ def validate(
             raise CorpusError(f"corpus record {key} does not address its declared cache row")
         if not math.isclose(float(returns[row]), target, abs_tol=2e-7, rel_tol=0.0):
             raise CorpusError(f"corpus record {key} cache return differs from oracle label")
+        if record["successor_observation_sha256"] != successor_hashes[row]:
+            raise CorpusError(f"corpus record {key} successor observation differs from its model-visible cache row")
     if seen != set(candidates):
         missing = len(set(candidates) - seen)
         extra = len(seen - set(candidates))
         raise CorpusError(f"corpus does not cover the exact bank candidate set (missing={missing}, extra={extra})")
     for split, arrays in cache_arrays.items():
-        if cache_rows[split] != set(range(arrays[3])):
+        if cache_rows[split] != set(range(arrays[4])):
             raise CorpusError(f"{split} cache contains an unbound or missing manifest row")
     return {
         "experiment_id": experiment_id,
         "bank_sha256": bank_sha256,
         "bank_candidates": len(candidates),
         "terminal_shortcuts": terminal_shortcuts,
-        "train_examples": cache_arrays["train"][3],
-        "heldout_examples": cache_arrays["heldout"][3],
+        "train_examples": cache_arrays["train"][4],
+        "heldout_examples": cache_arrays["heldout"][4],
+        "train_cache_tree_sha256": training_cache_tree_sha256(train_cache_path),
+        "heldout_cache_tree_sha256": training_cache_tree_sha256(heldout_cache_path),
     }
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n"
+
+
+def build_receipt(
+    *, bank_path: Path, contract_path: Path, split_path: Path, corpus_path: Path,
+    train_cache_path: Path, heldout_cache_path: Path,
+) -> dict[str, object]:
+    """Validate and bind the exact corpus bytes a Stage-1 launcher may consume."""
+
+    summary = validate(
+        bank_path=bank_path,
+        contract_path=contract_path,
+        split_path=split_path,
+        corpus_path=corpus_path,
+        train_cache_path=train_cache_path,
+        heldout_cache_path=heldout_cache_path,
+    )
+    return {
+        "schema": CORPUS_RECEIPT_SCHEMA,
+        "status": "VALIDATED_REPLAY_BOUND_ORACLE_CORPUS",
+        "experiment_id": summary["experiment_id"],
+        "bank": {"path": str(bank_path), "sha256": summary["bank_sha256"]},
+        "contract": {"path": str(contract_path), "sha256": _sha256(_regular_bytes(contract_path, label="contract"))},
+        "splits": {"path": str(split_path), "sha256": _sha256(_regular_bytes(split_path, label="splits"))},
+        "corpus": {"path": str(corpus_path), "sha256": _sha256(_regular_bytes(corpus_path, label="corpus"))},
+        "training_caches": {
+            "train": {"path": str(train_cache_path), "tree_sha256": summary["train_cache_tree_sha256"], "example_count": summary["train_examples"]},
+            "heldout": {"path": str(heldout_cache_path), "tree_sha256": summary["heldout_cache_tree_sha256"], "example_count": summary["heldout_examples"]},
+        },
+        "summary": {
+            "bank_candidates": summary["bank_candidates"],
+            "terminal_shortcuts": summary["terminal_shortcuts"],
+        },
+    }
+
+
+def write_new(path: Path, payload: object) -> None:
+    if path.exists() or path.is_symlink():
+        raise CorpusError(f"refusing to overwrite output: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+        temporary = Path(handle.name)
+        handle.write(_canonical_json(payload))
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        os.link(temporary, path)
+    except FileExistsError as exc:
+        raise CorpusError(f"refusing to overwrite output: {path}") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -425,12 +563,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--corpus", type=Path, required=True)
     parser.add_argument("--train-cache", type=Path, required=True)
     parser.add_argument("--heldout-cache", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    summary = validate(
+    receipt = build_receipt(
         bank_path=args.bank,
         contract_path=args.contract,
         split_path=args.splits,
@@ -438,11 +577,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         train_cache_path=args.train_cache,
         heldout_cache_path=args.heldout_cache,
     )
+    write_new(args.out, receipt)
     print(
-        "VALID EXPERT-ITERATION ORACLE LABEL CORPUS: "
-        f"experiment={summary['experiment_id']} candidates={summary['bank_candidates']} "
-        f"terminal_shortcuts={summary['terminal_shortcuts']} train={summary['train_examples']} "
-        f"heldout={summary['heldout_examples']} bank_sha256={summary['bank_sha256']}"
+        "WROTE EXPERT-ITERATION ORACLE LABEL CORPUS RECEIPT: "
+        f"{args.out} experiment={receipt['experiment_id']} "
+        f"candidates={receipt['summary']['bank_candidates']} "
+        f"train={receipt['training_caches']['train']['example_count']} "
+        f"heldout={receipt['training_caches']['heldout']['example_count']}"
     )
     return 0
 
