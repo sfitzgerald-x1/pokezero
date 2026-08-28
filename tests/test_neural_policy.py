@@ -8430,7 +8430,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 return real_clip(parameters, max_norm, *args, **kwargs)
 
             with patch.object(torch.nn.utils, "clip_grad_norm_", side_effect=_spy):
-                train_transformer_policy(
+                _, clipped_result = train_transformer_policy(
                     data_path,
                     model_config=model_config,
                     training_config=TransformerTrainingConfig(
@@ -8439,11 +8439,20 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 )
             self.assertTrue(observed)
             self.assertEqual(observed[0], 0.5)
+            clipped_metrics = clipped_result.final_metrics
+            self.assertIsNotNone(clipped_metrics.gradient_norm_pre_clip_mean)
+            self.assertIsNotNone(clipped_metrics.gradient_norm_pre_clip_max)
+            self.assertEqual(clipped_metrics.gradient_norm_samples, 1)
+            self.assertGreater(clipped_metrics.gradient_norm_pre_clip_mean or 0.0, 0.0)
+            self.assertGreaterEqual(
+                clipped_metrics.gradient_norm_pre_clip_max or 0.0,
+                clipped_metrics.gradient_norm_pre_clip_mean or 0.0,
+            )
 
             # Without the knob, gradient clipping must not be invoked (preserved legacy behavior).
             observed.clear()
             with patch.object(torch.nn.utils, "clip_grad_norm_", side_effect=_spy):
-                train_transformer_policy(
+                _, unclipped_result = train_transformer_policy(
                     data_path,
                     model_config=model_config,
                     training_config=TransformerTrainingConfig(
@@ -8451,6 +8460,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     ),
                 )
             self.assertEqual(observed, [])
+            self.assertEqual(unclipped_result.final_metrics.gradient_clipped_fraction, 0.0)
 
     def test_train_transformer_policy_bf16_autocast_runs_and_engages(self) -> None:
         # WS-A1: bf16 autocast must (a) run without error, (b) actually enter a bf16 autocast
@@ -8856,6 +8866,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         ppo_value_clip_eligible_examples=6,
                         ppo_value_clip_fraction=0.5,
                         ppo_entropy=1.7,
+                        gradient_norm_pre_clip_mean=0.75,
+                        gradient_norm_pre_clip_max=1.25,
+                        gradient_norm_samples=3,
+                        gradient_clipped_fraction=1.0 / 3.0,
                     ),
                 ),
             )
@@ -8873,6 +8887,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(restored_metrics.ppo_value_clip_eligible_examples, 6)
         self.assertEqual(restored_metrics.ppo_value_clip_fraction, 0.5)
         self.assertEqual(restored_metrics.ppo_entropy, 1.7)
+        self.assertEqual(restored_metrics.gradient_norm_pre_clip_mean, 0.75)
+        self.assertEqual(restored_metrics.gradient_norm_pre_clip_max, 1.25)
+        self.assertEqual(restored_metrics.gradient_norm_samples, 3)
+        self.assertEqual(restored_metrics.gradient_clipped_fraction, 1.0 / 3.0)
         self.assertIsNotNone(restored.value_calibration_transform)
         self.assertEqual(restored.value_calibration_transform.scale, 1.5)
         self.assertEqual(restored.value_calibration_transform.bias, -0.2)

@@ -82,6 +82,15 @@ ACCEPTED_ADVANCEMENT_REASONS = frozenset(
     }
 )
 DEFAULT_COLLECTOR_YARDSTICK_POLICY_ID = "max-damage"
+NEGATIVE_SURROGATE_WINDOW_ITERATIONS = 50
+REGISTERED_VITAL_COLUMNS = (
+    "ppo_approx_kl",
+    "ppo_clip_fraction",
+    "ppo_advantage_std",
+    "ppo_advantage_mean",
+    "value_explained_variance",
+    "ppo_entropy",
+)
 
 
 @dataclass(frozen=True)
@@ -217,6 +226,7 @@ class NeuralSelfPlayIterationResult:
     training_cache_deleted_bytes: int = 0
     value_calibration: Mapping[str, Any] | None = None
     value_selection: Mapping[str, Any] | None = None
+    training_vitals: Mapping[str, Any] = field(default_factory=dict)
     source: Mapping[str, Any] = field(default_factory=dict)
 
     @property
@@ -267,6 +277,7 @@ class NeuralSelfPlayIterationResult:
                 self.value_selection_metrics.to_dict() if self.value_selection_metrics is not None else None
             ),
             "training": _training_result_to_dict(self.training),
+            **({"training_vitals": dict(self.training_vitals)} if self.training_vitals else {}),
             "value_calibration": dict(self.value_calibration) if self.value_calibration is not None else None,
             "value_selection": dict(self.value_selection) if self.value_selection is not None else None,
             "benchmark": self.benchmark.to_dict() if self.benchmark is not None else None,
@@ -786,6 +797,11 @@ def run_neural_selfplay_iterations(
                     artifact_path=iteration_dir / "value-selection.json",
                 )
             training_elapsed_seconds = perf_counter() - training_started
+            training_vitals = _training_vitals_snapshot(
+                training=training,
+                prior_iteration_manifests=prior_iteration_manifests,
+                completed_iterations=results,
+            )
             provenance_hashes = distinct_belief_set_source_hashes(training_input_paths)
             if len(provenance_hashes) == 1 and provenance_hashes[0] is not None:
                 training = replace(training, belief_set_source_hash=provenance_hashes[0])
@@ -898,6 +914,7 @@ def run_neural_selfplay_iterations(
                 training_cache_deleted_bytes=training_cache_deleted_bytes,
                 value_calibration=value_calibration,
                 value_selection=value_selection,
+                training_vitals=training_vitals,
                 source=source_metadata,
             )
             _write_json(iteration_manifest_path, result.to_manifest_dict())
@@ -2008,6 +2025,78 @@ def _training_result_to_dict(result: TransformerTrainingResult) -> dict[str, Any
     if result.value_calibration_transform is not None:
         payload["value_calibration_transform"] = result.value_calibration_transform.to_dict()
     return payload
+
+
+def _training_vitals_snapshot(
+    *,
+    training: TransformerTrainingResult,
+    prior_iteration_manifests: Iterable[Mapping[str, Any]],
+    completed_iterations: Iterable[NeuralSelfPlayIterationResult],
+) -> dict[str, Any]:
+    """Emit the registered plateau vitals without making any of them a train-time assert.
+
+    The negative-surrogate signal is deliberately a *windowed rate of iterations*, not a
+    per-epoch pass/fail rule: healthy runs have occasional negative epochs, whereas the broken
+    probe was negative in every iteration.  The raw epoch rows remain in ``training`` so a
+    reader can fix an epoch index when comparing the staleness-sensitive KL series.
+    """
+
+    final = training.final_metrics
+    history = [
+        _has_negative_surrogate_epoch(_manifest_training_epochs(manifest))
+        for manifest in prior_iteration_manifests
+    ]
+    history.extend(
+        _has_negative_surrogate_epoch(iteration.training.epochs)
+        for iteration in completed_iterations
+    )
+    current_has_negative = _has_negative_surrogate_epoch(training.epochs)
+    window = (*history, current_has_negative)[-NEGATIVE_SURROGATE_WINDOW_ITERATIONS:]
+    negative_iterations = sum(window)
+    return {
+        "schema_version": "pokezero.training_vitals.v1",
+        "epoch": final.epoch,
+        "registered_columns": {
+            field_name: getattr(final, field_name)
+            for field_name in REGISTERED_VITAL_COLUMNS
+        },
+        # This counter is a validity condition on the KL column, rather than one of the six
+        # vital columns: a non-zero count means readers must void KL for this iteration.
+        "ppo_kl_outliers": final.ppo_kl_outliers,
+        "negative_surrogate_window": {
+            "unit": "iteration_with_any_negative_policy_loss_epoch",
+            "window_iterations": NEGATIVE_SURROGATE_WINDOW_ITERATIONS,
+            "observed_iterations": len(window),
+            "negative_surrogate_iterations": negative_iterations,
+            "rate": (negative_iterations / len(window)) if window else None,
+            "current_iteration_has_negative_surrogate_epoch": current_has_negative,
+        },
+        "realized_gradient": {
+            "definition": "global_l2_norm_after_backward_before_optional_clip",
+            "mean": final.gradient_norm_pre_clip_mean,
+            "max": final.gradient_norm_pre_clip_max,
+            "samples": final.gradient_norm_samples,
+            "clipped_fraction": final.gradient_clipped_fraction,
+        },
+    }
+
+
+def _manifest_training_epochs(manifest: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    training = manifest.get("training")
+    if not isinstance(training, Mapping):
+        return ()
+    epochs = training.get("epochs")
+    if not isinstance(epochs, Iterable) or isinstance(epochs, (str, bytes)):
+        return ()
+    return tuple(epoch for epoch in epochs if isinstance(epoch, Mapping))
+
+
+def _has_negative_surrogate_epoch(epochs: Iterable[Any]) -> bool:
+    for epoch in epochs:
+        policy_loss = epoch.get("policy_loss") if isinstance(epoch, Mapping) else getattr(epoch, "policy_loss", None)
+        if isinstance(policy_loss, (int, float)) and not isinstance(policy_loss, bool) and policy_loss < 0.0:
+            return True
+    return False
 
 
 def _training_config_for_iteration_learning_rate_schedule(
