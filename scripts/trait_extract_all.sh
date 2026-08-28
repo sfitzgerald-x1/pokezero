@@ -126,13 +126,26 @@ echo "  extracted: $(echo "$results" | grep -c '^ok ')  skipped-current: $(echo 
 # Scoped to the v3 arms on purpose: this line is read inside the v3/v4 reports as "what FoulPlay
 # does against THIS generation". Pooling the v2 arms in would silently change what the contrast
 # means and would invent milestones (800k, 1.9M) where only a v2 arm has foul-play games.
-fp_tasks=$(echo "$tasks" | awk '$4=="foulplay" && $2 ~ /^v3-/')
+# ONE POOL PER GENERATION, not one pool overall. The line answers "what does FoulPlay do against
+# THIS generation's arms at milestone M", so a pool that spans generations is answering two
+# questions at once -- and the composition would jump at 10M, where the v3 arms end and only v4
+# continues.
+#
+# Scoping to ^v3- alone was the bug this replaces: the v4 arms were excluded, so the contrast line
+# simply STOPPED at 10M while the v4 fp curve ran on to 15M. A missing line reads as "no data"
+# rather than "excluded by a filter", which is why it went unnoticed.
+#
+# Pooling v4 into the existing v3 line would also silently rewrite every point below 10M, where
+# both generations have games. Separate pools leave measured points alone.
+for gen in v3 v4; do
+fp_tasks=$(echo "$tasks" | awk -v g="^${gen}-" '$4=="foulplay" && $2 ~ g')
+[ -n "$fp_tasks" ] || continue
 fp_ms=$(echo "$fp_tasks" | awk '{print $3}' | sort -un)
 fp_built=0
 for ms in $fp_ms; do
   dirs=$(echo "$fp_tasks" | awk -v m="$ms" '$3==m {print $1}')
   n_lin=$(echo "$dirs" | grep -c .)
-  out="$REPORT/metrics-v3-foulplay-$ms-foulplay.json"
+  out="$REPORT/metrics-${gen}-foulplay-$ms-foulplay.json"
   # Rebuild when any contributing set is newer than the pooled file: its composition changes as
   # arms retire (five arms below 3M, two above), and a stale pool would misattribute the mix.
   if [ -z "${FORCE:-}" ] && [ -f "$out" ]; then
@@ -142,14 +155,15 @@ for ms in $fp_ms; do
   # shellcheck disable=SC2046
   if python3 "$SCR/trait_extract.py" --measure-seat opponent \
        --events $(echo "$dirs" | sed 's#$#/events-*.jsonl.gz#' | tr '\n' ' ') \
-       --lineage v3-foulplay --milestone "$ms" --out "$out" >/dev/null 2>&1; then
+       --lineage "${gen}-foulplay" --milestone "$ms" --out "$out" >/dev/null 2>&1; then
     fp_built=$((fp_built+1))
-    echo "  foulplay-seat $ms: pooled $n_lin lineage(s)"
+    echo "  foulplay-seat ${gen} $ms: pooled $n_lin lineage(s)"
   else
-    echo "  foulplay-seat $ms: FAILED (pooling $n_lin lineage(s))"
+    echo "  foulplay-seat ${gen} $ms: FAILED (pooling $n_lin lineage(s))"
   fi
 done
-echo "  foulplay-seat sets rebuilt: $fp_built"
+echo "  foulplay-seat ${gen} sets rebuilt: $fp_built"
+done
 
 # v2 report (m50-ep7 / l200-ep7-wu75 / v22-lr3m) and the separate v3 report (empty until v3 runs
 # exist and V3_LINEAGES/ACTIVE are populated).

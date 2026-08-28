@@ -24,6 +24,7 @@ LINEAGE_ORDER = ["m50-ep7", "l200-ep7-wu75", "v22-lr3m", "v22-flat2m",
                  "v3-k0-enthalf", "v3-k1-enthalf", "v3-k8-enthalf",   # enthalf across history lengths
                  "v3-k64-enthalf", "v3-k64-eps-entq",   # k64 experiment variants (own entities from game 0)
                  "v4-enthalf", "v4-entfull",   # v4 production arms (own entities from game 0)
+                 "v4-foulplay",   # FoulPlay's own play vs the v4 arms (per-generation contrast)
                  "m50-seq", "l200-seq"]
 PALETTE = ["#2563eb", "#dc2626", "#059669", "#0891b2", "#d97706", "#7c3aed"]
 
@@ -71,6 +72,7 @@ def esc(x):
 # the same red as the v3-foulplay contrast line, i.e. collisions exactly where the comparison
 # matters. Pin any lineage whose colour must not drift; unpinned ones keep the palette.
 LINEAGE_COLOR_OVERRIDES = {
+    "v4-foulplay": "#2563eb",  # blue — v4-generation contrast; cyan collides with v3-k1-enthalf
     "v4-entfull": "#7c3aed",   # purple — was green, indistinguishable from v3-k0-enthalf
     "v4-enthalf": "#d97706",   # amber  — was red, indistinguishable from v3-foulplay
 }
@@ -752,6 +754,9 @@ def build_html(rows, report_set="v2"):
         charts = TRAJECTORY_CHARTS + V3_EXTRA_CHARTS
         title = "PokeZero checkpoint trait tracking — v3 legacy (history-length arms)"
     elif report_set == "v4":
+        # v4-foulplay is caught by is_v4()'s "v4" prefix; v3-foulplay is named explicitly because
+        # the v4 report shows BOTH contrast lines -- the v3 one covers the range where the carried
+        # -over control arms have games, the v4 one continues past 10M where only v4 does.
         rows = [r for r in rows if is_v4(r.get("lineage")) or r.get("lineage") == "v3-foulplay"]
         charts = TRAJECTORY_CHARTS + V3_EXTRA_CHARTS
         title = "PokeZero checkpoint trait tracking — v4 (with carried-over control arms)"
