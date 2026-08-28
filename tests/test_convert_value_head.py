@@ -44,13 +44,14 @@ def _converter_module():
     return module
 
 
-def _cfg(hidden=None):
+def _cfg(hidden=None, hidden_layers=()):
     return TransformerPolicyConfig.compact_category(
         observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
         category_vocab=tuple(range(1, 17)), category_oov_buckets=4, policy_id="conv",
         window_size=2, token_type_vocab_size=8, categorical_feature_count=1,
         numeric_feature_count=1, embedding_dim=16, transformer_layers=1,
-        attention_heads=4, feedforward_dim=32, dropout=0.0, value_head_hidden=hidden)
+        attention_heads=4, feedforward_dim=32, dropout=0.0, value_head_hidden=hidden,
+        value_head_hidden_layers=hidden_layers)
 
 
 class ConvertValueHeadTest(unittest.TestCase):
@@ -178,6 +179,44 @@ class ConvertValueHeadTest(unittest.TestCase):
                          "--value-head-hidden", "64", "--head-init-seed", "77")
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("only defined for the incumbent linear-to-MLP", proc.stdout + proc.stderr)
+
+    def test_seeded_three_layer_arm_is_durable_and_marks_the_new_schema(self):
+        import torch
+        from pokezero.neural_policy import NEURAL_POLICY_VALUE_HEAD_LADDER_SCHEMA_VERSION
+
+        out = self.dir / "three-layer.pt"
+        proc = self._run(
+            "--checkpoint", str(self.incumbent), "--output", str(out),
+            "--value-head-hidden-layers", "32,24", "--head-init-seed", "77",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr[-800:])
+        self.assertIn("all 6 head tensors are FRESH", proc.stdout)
+        payload = torch.load(out, map_location="cpu", weights_only=True)
+        self.assertEqual(payload["schema_version"], NEURAL_POLICY_VALUE_HEAD_LADDER_SCHEMA_VERSION)
+        self.assertEqual(payload["expert_iteration_value_head_initialization"], {
+            "schema": "pokezero.expert-iteration.value-head-initialization.v1",
+            "kind": "linear-to-three-layer-mlp-fresh",
+            "seed": 77,
+            "hidden_layers": [32, 24],
+            "head_parameter_names": [
+                "value_head.0.bias", "value_head.0.weight",
+                "value_head.2.bias", "value_head.2.weight",
+                "value_head.4.bias", "value_head.4.weight",
+            ],
+        })
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FreshValueHeadWarning)
+            model, result = load_transformer_checkpoint(out)
+        self.assertEqual(result.model_config.value_head_layer_widths, (32, 24))
+        self.assertEqual(type(model.value_head).__name__, "Sequential")
+
+    def test_three_layer_arm_requires_a_durable_seed(self):
+        proc = self._run(
+            "--checkpoint", str(self.incumbent), "--output", str(self.dir / "unseeded.pt"),
+            "--value-head-hidden-layers", "32,24",
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("requires --head-init-seed", proc.stdout + proc.stderr)
 
     def test_narrowing_is_refused_without_force(self):
         proc = self._run("--checkpoint", str(self.widened), "--output", str(self.dir / "n.pt"),

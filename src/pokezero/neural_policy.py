@@ -59,6 +59,15 @@ except ModuleNotFoundError:  # pragma: no cover - covered through require_torch.
 
 
 NEURAL_POLICY_SCHEMA_VERSION = "pokezero.neural_policy.v0"
+# V1 is intentionally reserved for checkpoints whose value head has two hidden layers.  A v0
+# reader does not know ``value_head_hidden_layers`` and would otherwise construct a linear head,
+# tolerate the renamed head tensors, and score with a fresh random value head.  Failing closed in
+# older readers is preferable to that plausible-looking but invalid result.
+NEURAL_POLICY_VALUE_HEAD_LADDER_SCHEMA_VERSION = "pokezero.neural_policy.v1"
+SUPPORTED_NEURAL_POLICY_SCHEMA_VERSIONS = (
+    NEURAL_POLICY_SCHEMA_VERSION,
+    NEURAL_POLICY_VALUE_HEAD_LADDER_SCHEMA_VERSION,
+)
 NEURAL_TRAINING_SCHEMA_VERSION = "pokezero.neural_training.v0"
 NEURAL_INSTALL_MESSAGE = "PyTorch is required for neural policy support. Install with `pip install -e .[neural]`."
 DEFAULT_TOKEN_TYPE_VOCAB_SIZE = 16
@@ -265,6 +274,12 @@ class TransformerPolicyConfig:
     #: check (the activation is present) while adding no capacity, so it is refused rather than
     #: silently accepted as an arm.
     VALUE_HEAD_HIDDEN_MIN: ClassVar[int] = 8
+    #: Two hidden widths make the Stage-1 three-linear-layer arm:
+    #: ``Linear(d,h1) -> GELU -> Linear(h1,h2) -> GELU -> Linear(h2,1)``.  A tuple rather
+    #: than an overloaded scalar keeps legacy two-layer checkpoints byte- and schema-compatible.
+    #: The ladder has exactly this one new architecture; arbitrary-depth heads need their own
+    #: contract rather than turning a registered three-arm experiment into an open-ended sweep.
+    value_head_hidden_layers: tuple[int, ...] = ()
     transformer_layers: int = 2
     attention_heads: int = 4
     feedforward_dim: int = 256
@@ -383,6 +398,29 @@ class TransformerPolicyConfig:
                     "check while adding no capacity, so it would be a degenerate V1 arm "
                     "reported as a real one. Use 0 or None for the incumbent head."
                 )
+        raw_hidden_layers = self.value_head_hidden_layers
+        if isinstance(raw_hidden_layers, (str, bytes)):
+            raise ValueError("value_head_hidden_layers must be a sequence of integer widths, not text.")
+        try:
+            hidden_layers = tuple(int(width) for width in raw_hidden_layers)
+        except TypeError as exc:
+            raise ValueError("value_head_hidden_layers must be a sequence of integer widths.") from exc
+        if self.value_head_hidden is not None and hidden_layers:
+            raise ValueError(
+                "value_head_hidden and value_head_hidden_layers are mutually exclusive. Use the scalar "
+                "field for the legacy two-layer MLP or two widths for the registered three-layer arm."
+            )
+        if len(hidden_layers) not in (0, 2):
+            raise ValueError(
+                "value_head_hidden_layers must contain exactly two widths for the registered "
+                "three-layer value-head arm."
+            )
+        if any(width < self.VALUE_HEAD_HIDDEN_MIN for width in hidden_layers):
+            raise ValueError(
+                f"each value_head_hidden_layers width must be >= {self.VALUE_HEAD_HIDDEN_MIN}, got "
+                f"{hidden_layers!r}."
+            )
+        object.__setattr__(self, "value_head_hidden_layers", hidden_layers)
         # Normalize to an immutable tuple of strings so a frozen config stays hashable and
         # to_dict()/from_dict() round-trips regardless of whether a list or tuple was passed.
         object.__setattr__(self, "category_vocab", tuple(str(value) for value in self.category_vocab))
@@ -553,6 +591,13 @@ class TransformerPolicyConfig:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    @property
+    def value_head_layer_widths(self) -> tuple[int, ...]:
+        """The hidden-layer widths in the concrete value-head architecture."""
+        if self.value_head_hidden is not None:
+            return (int(self.value_head_hidden),)
+        return self.value_head_hidden_layers
+
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "TransformerPolicyConfig":
         # Feature-width defaults are keyed on the PAYLOAD's stamped observation schema, never
@@ -591,6 +636,7 @@ class TransformerPolicyConfig:
             value_head_hidden=(
                 None if payload.get("value_head_hidden") in (None, 0)
                 else _int_field(payload, "value_head_hidden", 0)),
+            value_head_hidden_layers=_int_tuple_field(payload, "value_head_hidden_layers", ()),
             transformer_layers=_int_field(payload, "transformer_layers", 2),
             attention_heads=_int_field(payload, "attention_heads", 4),
             feedforward_dim=_int_field(payload, "feedforward_dim", 256),
@@ -638,6 +684,17 @@ class TransformerPolicyConfig:
             # on terminal-only value targets -> always resolve to unshaped.
             reward_shaping=(str(payload["reward_shaping"]) if payload.get("reward_shaping") else None),
         )
+
+
+def neural_policy_schema_version_for_model_config(config: TransformerPolicyConfig) -> str:
+    """Return the checkpoint schema that can represent ``config`` without old-reader drift."""
+    if config.value_head_hidden_layers:
+        return NEURAL_POLICY_VALUE_HEAD_LADDER_SCHEMA_VERSION
+    return NEURAL_POLICY_SCHEMA_VERSION
+
+
+def is_supported_neural_policy_schema_version(value: Any) -> bool:
+    return value in SUPPORTED_NEURAL_POLICY_SCHEMA_VERSIONS
 
 
 @dataclass(frozen=True)
@@ -697,6 +754,11 @@ class TransformerTrainingConfig:
     # remains unchanged unless a caller chooses to seed torch themselves.
     random_seed: int = 0
     freeze_non_value_parameters: bool = False
+    # Value-only ladder mode: permit gradients through the trunk while freezing every policy
+    # prediction head.  ``freeze_non_value_parameters`` is the stricter frozen-trunk arm;
+    # this flag is the finetuned-trunk arm.  The two modes preserve the policy exactly while
+    # making their differing representation updates explicit in checkpoint provenance.
+    freeze_policy_heads: bool = False
     # Dense potential-based reward shaping applied to returns/GAE targets (canonical JSON of a
     # pokezero.shaping ShapingConfig, or None for unshaped). Stored as a JSON string so
     # checkpoint payload round-trips through TransformerTrainingConfig(**payload) unchanged.
@@ -732,10 +794,17 @@ class TransformerTrainingConfig:
             raise ValueError("ppo_target_mode='gae' requires objective='ppo' or 'value-only'.")
         if not 0.0 <= self.gae_lambda <= 1.0:
             raise ValueError("gae_lambda must be between 0 and 1.")
-        if self.objective == "value-only" and not self.freeze_non_value_parameters:
-            raise ValueError("objective='value-only' requires freeze_non_value_parameters=True.")
+        if self.objective == "value-only" and not (
+            self.freeze_non_value_parameters or self.freeze_policy_heads
+        ):
+            raise ValueError(
+                "objective='value-only' requires freeze_non_value_parameters=True (frozen trunk) "
+                "or freeze_policy_heads=True (finetuned trunk)."
+            )
         if self.freeze_non_value_parameters and self.objective != "value-only":
             raise ValueError("freeze_non_value_parameters requires objective='value-only'.")
+        if self.freeze_policy_heads and self.objective != "value-only":
+            raise ValueError("freeze_policy_heads requires objective='value-only'.")
         if self.clip_epsilon <= 0.0:
             raise ValueError("clip_epsilon must be positive.")
         if self.entropy_coef < 0.0:
@@ -1205,15 +1274,17 @@ if nn is not None:  # pragma: no cover - optional dependency path.
                 else None
             )
             self.policy_head = nn.Linear(policy_input_dim, 1)
-            self.value_head = (
-                nn.Linear(config.embedding_dim, 1)
-                if not config.value_head_hidden
-                else nn.Sequential(
-                    nn.Linear(config.embedding_dim, int(config.value_head_hidden)),
-                    nn.GELU(),
-                    nn.Linear(int(config.value_head_hidden), 1),
-                )
-            )
+            value_head_widths = config.value_head_layer_widths
+            if not value_head_widths:
+                self.value_head = nn.Linear(config.embedding_dim, 1)
+            else:
+                value_head_layers: list[Any] = []
+                value_head_input = config.embedding_dim
+                for width in value_head_widths:
+                    value_head_layers.extend((nn.Linear(value_head_input, width), nn.GELU()))
+                    value_head_input = width
+                value_head_layers.append(nn.Linear(value_head_input, 1))
+                self.value_head = nn.Sequential(*value_head_layers)
             self.opponent_action_head = nn.Linear(config.embedding_dim, ACTION_COUNT)
             # The observation already stores compact embedding rows (the encoder converts token
             # strings to rows via the matching CategoryVocabulary), so the embedding is indexed
@@ -2045,6 +2116,7 @@ def train_transformer_policy(
     trainable_parameters = _configure_trainable_parameters(
         base_model,
         freeze_non_value_parameters=resolved_training_config.freeze_non_value_parameters,
+        freeze_policy_heads=resolved_training_config.freeze_policy_heads,
     )
     if resolved_training_config.freeze_non_value_parameters and hasattr(base_model, "eval"):
         base_model.eval()
@@ -2801,12 +2873,19 @@ def _validate_initial_model_config(model: Any, expected: TransformerPolicyConfig
         raise ValueError("initial_model config must match model_config except for policy_id.")
 
 
-def _configure_trainable_parameters(model: Any, *, freeze_non_value_parameters: bool) -> list[Any]:
+def _configure_trainable_parameters(
+    model: Any,
+    *,
+    freeze_non_value_parameters: bool,
+    freeze_policy_heads: bool,
+) -> list[Any]:
     if not hasattr(model, "named_parameters"):
         return list(model.parameters())
     trainable_parameters = []
     for name, parameter in model.named_parameters():
         trainable = not freeze_non_value_parameters or name.startswith("value_head.")
+        if freeze_policy_heads and name.startswith(("policy_head.", "opponent_action_head.")):
+            trainable = False
         parameter.requires_grad = trainable
         if trainable:
             trainable_parameters.append(parameter)
@@ -2829,7 +2908,7 @@ def save_transformer_checkpoint(
     checkpoint_path = Path(path)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema_version": NEURAL_POLICY_SCHEMA_VERSION,
+        "schema_version": neural_policy_schema_version_for_model_config(result.model_config),
         "training_schema_version": NEURAL_TRAINING_SCHEMA_VERSION,
         "model_config": result.model_config.to_dict(),
         "training_config": result.training_config.to_dict(),
@@ -2990,9 +3069,17 @@ def parse_transformer_model_config(payload: Mapping[str, Any]) -> TransformerPol
     twice on a multi-megabyte file. The schema check stays here so it cannot be skipped by
     the shorter path.
     """
-    if payload.get("schema_version") != NEURAL_POLICY_SCHEMA_VERSION:
+    if not is_supported_neural_policy_schema_version(payload.get("schema_version")):
         raise ValueError(f"Unsupported neural policy schema: {payload.get('schema_version')!r}.")
-    return TransformerPolicyConfig.from_dict(payload["model_config"])
+    model_config = TransformerPolicyConfig.from_dict(payload["model_config"])
+    expected_schema = neural_policy_schema_version_for_model_config(model_config)
+    if payload.get("schema_version") != expected_schema:
+        raise ValueError(
+            f"Neural policy schema {payload.get('schema_version')!r} does not match its value-head "
+            f"architecture (expected {expected_schema!r}). Refusing a checkpoint that an older "
+            "reader could reload with a fresh random head."
+        )
+    return model_config
 
 
 def load_transformer_checkpoint_payload(path: str | PathLike[str] | Path) -> Mapping[str, Any]:
@@ -3099,9 +3186,7 @@ def load_state_dict_allowing_fresh_value_head(model: Any, state_dict: Mapping[st
 def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_location: str | Any | None = None) -> tuple[Any, TransformerTrainingResult]:
     torch_module = require_torch()
     payload = torch_module.load(Path(path), map_location=map_location, weights_only=True)
-    if payload.get("schema_version") != NEURAL_POLICY_SCHEMA_VERSION:
-        raise ValueError(f"Unsupported neural policy schema: {payload.get('schema_version')!r}.")
-    model_config = TransformerPolicyConfig.from_dict(payload["model_config"])
+    model_config = parse_transformer_model_config(payload)
     # Forward-compat: a checkpoint written by a newer trainer may carry training
     # config fields this build does not know (e.g. batch_replay). They describe
     # HOW the checkpoint was trained, never how to serve it, so drop them
@@ -4150,6 +4235,17 @@ def _int_field(payload: Mapping[str, Any], key: str, default: int) -> int:
     if key not in payload:
         return default
     return int(payload[key])
+
+
+def _int_tuple_field(
+    payload: Mapping[str, Any], key: str, default: tuple[int, ...]
+) -> tuple[int, ...]:
+    if key not in payload:
+        return default
+    raw = payload[key]
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
+        raise ValueError(f"{key} must be a sequence of integer widths.")
+    return tuple(int(value) for value in raw)
 
 
 def _float_field(payload: Mapping[str, Any], key: str, default: float) -> float:

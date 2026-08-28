@@ -24,12 +24,14 @@ from pokezero.neural_policy import (
     OBSERVATION_SCHEMA_VERSION_V2_2,
     EntityTokenTransformerPolicy,
     TransformerPolicyConfig,
+    TransformerTrainingConfig,
+    _configure_trainable_parameters,
     load_state_dict_allowing_fresh_value_head,
     torch_available,
 )
 
 
-def _cfg(hidden=None):
+def _cfg(hidden=None, hidden_layers=()):
     return TransformerPolicyConfig.compact_category(
         observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
         category_vocab=tuple(range(1, 17)), category_oov_buckets=4,
@@ -37,6 +39,7 @@ def _cfg(hidden=None):
         categorical_feature_count=1, numeric_feature_count=1, embedding_dim=16,
         transformer_layers=1, attention_heads=4, feedforward_dim=32, dropout=0.0,
         value_head_hidden=hidden,
+        value_head_hidden_layers=hidden_layers,
     )
 
 
@@ -59,6 +62,22 @@ class ValueHeadShapeTest(unittest.TestCase):
         head = EntityTokenTransformerPolicy(_cfg(32)).value_head
         self.assertIsInstance(head, nn.Sequential)
         self.assertGreater(sum(p.numel() for p in head.parameters()), 500)
+
+    def test_two_hidden_widths_build_the_registered_three_layer_arm(self):
+        import torch.nn as nn
+
+        cfg = _cfg(hidden_layers=(32, 24))
+        head = EntityTokenTransformerPolicy(cfg).value_head
+        self.assertIsInstance(head, nn.Sequential)
+        self.assertEqual(cfg.value_head_layer_widths, (32, 24))
+        self.assertEqual(
+            [type(layer).__name__ for layer in head],
+            ["Linear", "GELU", "Linear", "GELU", "Linear"],
+        )
+        self.assertEqual(
+            [layer.out_features for layer in head if isinstance(layer, nn.Linear)],
+            [32, 24, 1],
+        )
 
     def test_the_widened_head_is_actually_NONLINEAR(self):
         """Otherwise the arm is silently its own null control.
@@ -165,6 +184,35 @@ class CheckpointRoundTripTest(unittest.TestCase):
             [w for w in caught if issubclass(w.category, RuntimeWarning)], [],
             "a clean round trip must not warn about an untrained head")
 
+    def test_three_layer_checkpoint_round_trips_under_the_new_schema(self):
+        import tempfile
+        import warnings
+        from pathlib import Path
+
+        import torch
+        from pokezero.neural_policy import (
+            NEURAL_POLICY_VALUE_HEAD_LADDER_SCHEMA_VERSION,
+            load_transformer_checkpoint,
+        )
+
+        cfg = _cfg(hidden_layers=(32, 24))
+        model = EntityTokenTransformerPolicy(cfg)
+        with torch.no_grad():
+            for parameter in model.value_head.parameters():
+                parameter.fill_(3.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write(Path(tmp), model, cfg)
+            payload = torch.load(path, map_location="cpu", weights_only=True)
+            self.assertEqual(payload["schema_version"], NEURAL_POLICY_VALUE_HEAD_LADDER_SCHEMA_VERSION)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                loaded, result = load_transformer_checkpoint(path)
+        self.assertEqual(result.model_config.value_head_layer_widths, (32, 24))
+        self.assertEqual(type(loaded.value_head).__name__, "Sequential")
+        self.assertTrue(all(float(parameter.flatten()[0]) == 3.0
+                            for parameter in loaded.value_head.parameters()))
+        self.assertEqual([w for w in caught if issubclass(w.category, RuntimeWarning)], [])
+
     def test_a_head_mismatch_WARNS_and_names_the_tensors(self):
         """The mitigation round 1 demanded. Three mutations of it previously went unnoticed."""
         import tempfile
@@ -229,6 +277,37 @@ class CheckpointRoundTripTest(unittest.TestCase):
             _cfg(1)
         self.assertIn("degenerate V1 arm", str(ctx.exception))
 
+    def test_three_layer_configuration_is_unambiguous_and_bounded(self):
+        with self.assertRaises(ValueError) as both:
+            _cfg(32, (24, 16))
+        self.assertIn("mutually exclusive", str(both.exception))
+        with self.assertRaises(ValueError) as depth:
+            _cfg(hidden_layers=(32, 24, 16))
+        self.assertIn("exactly two widths", str(depth.exception))
+        with self.assertRaises(ValueError) as narrow:
+            _cfg(hidden_layers=(32, 1))
+        self.assertIn("must be >=", str(narrow.exception))
+
+    def test_finetuned_ladder_arm_trains_the_trunk_but_not_policy_heads(self):
+        model = EntityTokenTransformerPolicy(_cfg(hidden_layers=(32, 24)))
+        config = TransformerTrainingConfig(
+            objective="value-only",
+            freeze_policy_heads=True,
+        )
+        trainable = _configure_trainable_parameters(
+            model,
+            freeze_non_value_parameters=config.freeze_non_value_parameters,
+            freeze_policy_heads=config.freeze_policy_heads,
+        )
+        trainable_ids = {id(parameter) for parameter in trainable}
+        trainable_names = {
+            name for name, parameter in model.named_parameters() if id(parameter) in trainable_ids
+        }
+        self.assertTrue(any(name.startswith("encoder.") for name in trainable_names))
+        self.assertFalse(any(name.startswith("policy_head.") for name in trainable_names))
+        self.assertFalse(any(name.startswith("opponent_action_head.") for name in trainable_names))
+        self.assertTrue(any(name.startswith("value_head.") for name in trainable_names))
+
     def test_the_warning_is_promotable_to_an_error(self):
         """A bare RuntimeWarning could not be promoted without catching unrelated ones."""
         import tempfile
@@ -268,6 +347,18 @@ class LoadPathScopingTest(unittest.TestCase):
             {"value_head.0.weight", "value_head.0.bias",
              "value_head.2.weight", "value_head.2.bias"})
 
+    def test_three_layer_head_loads_and_reports_all_six_fresh_tensors(self):
+        reinit = load_state_dict_allowing_fresh_value_head(
+            EntityTokenTransformerPolicy(_cfg(hidden_layers=(32, 24))), self.state)
+        self.assertEqual(
+            set(reinit),
+            {
+                "value_head.0.weight", "value_head.0.bias",
+                "value_head.2.weight", "value_head.2.bias",
+                "value_head.4.weight", "value_head.4.bias",
+            },
+        )
+
     def test_a_MISSING_value_head_still_raises(self):
         """`main`'s safety net, which prefix-only scoping had removed.
 
@@ -301,6 +392,11 @@ class LoadPathScopingTest(unittest.TestCase):
         plain = _cfg()
         self.assertIsNone(
             TransformerPolicyConfig.from_dict(plain.to_dict()).value_head_hidden)
+        three_layer = _cfg(hidden_layers=(32, 24))
+        self.assertEqual(
+            TransformerPolicyConfig.from_dict(three_layer.to_dict()).value_head_layer_widths,
+            (32, 24),
+        )
 
     def test_an_unchanged_head_reinitialises_NOTHING(self):
         """Otherwise a plain continuation could silently reset a trained head."""

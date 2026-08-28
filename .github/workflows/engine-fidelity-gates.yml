@@ -2020,8 +2020,8 @@ jobs:
             tests.test_foulplay_budget_calibration \
             tests.test_battle_bridge_boundary_requests -v 2>&1 \
             | tee /tmp/rollout-leaf-arbiter.log
-          if ! grep -qE 'Ran 351 tests' /tmp/rollout-leaf-arbiter.log; then
-            echo "::error::the arbiter, V1 conversion, and calibration suite did not run all 351 tests"
+          if ! grep -qE 'Ran 358 tests' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the arbiter, V1 conversion, and calibration suite did not run all 358 tests"
             exit 1
           fi
           rollout_leaf_skip_status=0

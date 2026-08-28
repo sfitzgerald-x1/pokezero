@@ -447,7 +447,7 @@ def _fence_calibration_seam(payload: Mapping[str, Any], where: str) -> None:
     ``truth_differential_census.py``; both merely mention ``NativeLeafModel`` in a docstring.
     A disclosure that over-states which paths are unguarded is its own kind of wrong.
     """
-    from .neural_policy import NEURAL_POLICY_SCHEMA_VERSION  # noqa: PLC0415
+    from .neural_policy import is_supported_neural_policy_schema_version
 
     if "value_calibration_transform" not in payload:
         # Absence is benign ONLY on a schema that predates the field. On the CURRENT schema
@@ -455,10 +455,10 @@ def _fence_calibration_seam(payload: Mapping[str, Any], where: str) -> None:
         # means the field was renamed or dropped -- which would give a real calibration a
         # silent path through the fence. Review found this branch failing open with no
         # artifact justifying it.
-        if payload.get("schema_version") == NEURAL_POLICY_SCHEMA_VERSION:
+        if is_supported_neural_policy_schema_version(payload.get("schema_version")):
             raise ValueError(
                 f"REFUSING model-leaf search: {where} declares the current schema "
-                f"({NEURAL_POLICY_SCHEMA_VERSION!r}) but carries no "
+                f"({payload.get('schema_version')!r}) but carries no "
                 "'value_calibration_transform' key. Every checkpoint on this schema writes "
                 "one, so the field has been renamed or dropped and this fence can no longer "
                 "see it. Update the fence alongside the schema."
