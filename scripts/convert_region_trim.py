@@ -43,8 +43,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from pokezero.neural_policy import (  # noqa: E402
-    NEURAL_POLICY_SCHEMA_VERSION,
     TransformerPolicyConfig,
+    is_supported_neural_policy_schema_version,
+    neural_policy_schema_version_for_model_config,
 )
 from pokezero.showdown import observation_spec_for_schema  # noqa: E402
 
@@ -98,8 +99,14 @@ def _load_payload(path: Path):
     import torch
 
     payload = torch.load(path, map_location="cpu", weights_only=True)
-    if payload.get("schema_version") != NEURAL_POLICY_SCHEMA_VERSION:
+    if not is_supported_neural_policy_schema_version(payload.get("schema_version")):
         raise ValueError(f"Unsupported neural policy schema: {payload.get('schema_version')!r}")
+    if "model_config" not in payload:
+        raise ValueError("checkpoint carries no model_config")
+    if payload.get("schema_version") != neural_policy_schema_version_for_model_config(
+        TransformerPolicyConfig.from_dict(payload["model_config"])
+    ):
+        raise ValueError("checkpoint schema does not match its value-head architecture")
     return payload
 
 

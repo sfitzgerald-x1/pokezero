@@ -46,12 +46,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from pokezero.neural_policy import (  # noqa: E402
     EntityTokenTransformerPolicy,
     TransformerPolicyConfig,
-    load_transformer_checkpoint,
     load_state_dict_allowing_fresh_value_head,
+    load_transformer_checkpoint,
     require_torch,
 )
 
 VALUE_HEAD_PREFIX = "value_head."
+
+
+def _three_layer_widths(value: str) -> tuple[int, int]:
+    """Parse the one registered multi-width architecture, without accepting a free-form sweep."""
+    parts = tuple(part.strip() for part in value.split(","))
+    if len(parts) != 2 or any(not part for part in parts):
+        raise argparse.ArgumentTypeError(
+            "--value-head-hidden-layers must be exactly two comma-separated widths, e.g. 64,32."
+        )
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--value-head-hidden-layers must contain integer widths, e.g. 64,32."
+        ) from exc
 
 
 def _materialize_seeded_value_head(torch, config, state_dict, *, seed: int) -> tuple[dict, set[str]]:
@@ -105,10 +120,15 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--checkpoint", required=True, help="source checkpoint (never modified)")
     ap.add_argument("--output", required=True, help="destination; refuses to overwrite the input")
-    ap.add_argument("--value-head-hidden", type=int, required=True,
-                    help="new hidden width. Must be >= TransformerPolicyConfig."
-                         "VALUE_HEAD_HIDDEN_MIN; a width of 1 is a scalar reparameterisation of "
-                         "one linear functional and is refused by the config itself.")
+    target = ap.add_mutually_exclusive_group(required=True)
+    target.add_argument("--value-head-hidden", type=int,
+                        help="legacy new hidden width. Must be >= TransformerPolicyConfig."
+                             "VALUE_HEAD_HIDDEN_MIN; a width of 1 is a scalar reparameterisation "
+                             "of one linear functional and is refused by the config itself.")
+    target.add_argument("--value-head-hidden-layers", type=_three_layer_widths,
+                        help="the Stage-1 three-layer arm's two hidden widths, e.g. 64,32. "
+                             "Only an incumbent linear checkpoint may be converted, and "
+                             "--head-init-seed is required so all six head tensors are durable.")
     ap.add_argument("--head-init-seed", type=int, default=None,
                     help="materialize a wholly fresh widened V1 head under this non-negative "
                          "seed. Required by provenance-bound V1 training; without it, legacy "
@@ -146,27 +166,59 @@ def main() -> int:
     # Gate the schema BEFORE writing. Previously the output was written first and the
     # verification then died on a raw traceback, leaving an unverified artifact on disk with a
     # widened stamp. `convert_region_trim.py:101` refuses first; so does this now.
-    from pokezero.neural_policy import NEURAL_POLICY_SCHEMA_VERSION  # noqa: PLC0415
+    from pokezero.neural_policy import (  # noqa: PLC0415
+        is_supported_neural_policy_schema_version,
+        neural_policy_schema_version_for_model_config,
+    )
 
-    if payload.get("schema_version") != NEURAL_POLICY_SCHEMA_VERSION:
+    if not is_supported_neural_policy_schema_version(payload.get("schema_version")):
         raise SystemExit(
-            f"REFUSING: {src} declares schema {payload.get('schema_version')!r}, not "
-            f"{NEURAL_POLICY_SCHEMA_VERSION!r}. Converting an unsupported schema would write an "
-            "artifact this tool cannot verify."
+            f"REFUSING: {src} declares unsupported schema {payload.get('schema_version')!r}. "
+            "Converting an unsupported schema would write an artifact this tool cannot verify."
         )
     old_config = TransformerPolicyConfig.from_dict(payload["model_config"])
+    if payload.get("schema_version") != neural_policy_schema_version_for_model_config(old_config):
+        raise SystemExit(
+            "REFUSING: the source schema does not match its value-head architecture. An older "
+            "reader could have loaded it with a fresh random head, so this converter will not "
+            "relabel it as a valid source."
+        )
     old_width = old_config.value_head_hidden
+    old_widths = old_config.value_head_layer_widths
+    requested_widths = (
+        args.value_head_hidden_layers
+        if args.value_head_hidden_layers is not None
+        else ((args.value_head_hidden,) if args.value_head_hidden else ())
+    )
     new_width = args.value_head_hidden
 
     if args.head_init_seed is not None and args.head_init_seed < 0:
         raise SystemExit("REFUSING: --head-init-seed must be a non-negative integer")
 
-    if old_width == new_width or (not old_width and not new_width):
+    if old_widths == requested_widths:
         raise SystemExit(
-            f"NOTHING TO DO: the checkpoint's value_head_hidden is already {old_width!r}."
+            f"NOTHING TO DO: the checkpoint's value-head hidden widths are already {old_widths!r}."
+        )
+    is_three_layer_arm = args.value_head_hidden_layers is not None
+    if is_three_layer_arm and old_widths:
+        raise SystemExit(
+            "REFUSING: --value-head-hidden-layers is only defined for an incumbent linear source. "
+            "The registered Stage-1 arm must materialize a wholly fresh three-layer head, not "
+            "mix a previous MLP's trained tensors into it."
+        )
+    if not is_three_layer_arm and old_config.value_head_hidden_layers:
+        raise SystemExit(
+            "REFUSING: legacy --value-head-hidden cannot convert a three-layer value head. "
+            "That transition has no wholly-fresh or whole-head-carryover proof; add a dedicated, "
+            "reviewed converter rather than silently reusing a subset of tensors."
+        )
+    if is_three_layer_arm and args.head_init_seed is None:
+        raise SystemExit(
+            "REFUSING: --value-head-hidden-layers requires --head-init-seed. A Stage-1 arm's "
+            "head initialization must be durable and reproducible, not deferred to ambient RNG."
         )
     widening = (old_width or 0) < (new_width or 0)
-    if not widening and not args.force_narrow:
+    if not is_three_layer_arm and not widening and not args.force_narrow:
         raise SystemExit(
             f"REFUSING: {old_width!r} -> {new_width!r} NARROWS the value head, which discards "
             "its trained parameters. The load path would accept this with only a warning, which "
@@ -203,20 +255,38 @@ def main() -> int:
             "from a truncated write and the converted file would not load. Convert a checkpoint "
             "that has a value head."
         )
-    payload["model_config"] = dataclasses.replace(
-        old_config, value_head_hidden=(new_width or None)).to_dict()
+    new_config = (
+        dataclasses.replace(
+            old_config, value_head_hidden=None, value_head_hidden_layers=requested_widths
+        )
+        if is_three_layer_arm
+        else dataclasses.replace(
+            old_config, value_head_hidden=(new_width or None), value_head_hidden_layers=()
+        )
+    )
+    payload["model_config"] = new_config.to_dict()
+    payload["schema_version"] = neural_policy_schema_version_for_model_config(new_config)
     materialized_head_params: set[str] | None = None
     if args.head_init_seed is not None:
         materialized, materialized_head_params = _materialize_seeded_value_head(
             torch, TransformerPolicyConfig.from_dict(payload["model_config"]),
             payload["state_dict"], seed=args.head_init_seed)
         payload["state_dict"] = materialized
-        payload["phase3_value_head_initialization"] = {
-            "schema": "pokezero.phase3.value-head-initialization.v1",
-            "kind": "linear-to-mlp-fresh",
-            "seed": args.head_init_seed,
-            "head_parameter_names": sorted(materialized_head_params),
-        }
+        if is_three_layer_arm:
+            payload["expert_iteration_value_head_initialization"] = {
+                "schema": "pokezero.expert-iteration.value-head-initialization.v1",
+                "kind": "linear-to-three-layer-mlp-fresh",
+                "seed": args.head_init_seed,
+                "hidden_layers": list(requested_widths),
+                "head_parameter_names": sorted(materialized_head_params),
+            }
+        else:
+            payload["phase3_value_head_initialization"] = {
+                "schema": "pokezero.phase3.value-head-initialization.v1",
+                "kind": "linear-to-mlp-fresh",
+                "seed": args.head_init_seed,
+                "head_parameter_names": sorted(materialized_head_params),
+            }
     # NOTE: no `training_result`/`result` sync here, deliberately. An earlier version had one
     # and both it and the PR body claimed it mattered; `save_transformer_checkpoint` writes
     # `model_config` at the top level only, and no checkpoint in this repo carries such a key, so
@@ -271,13 +341,13 @@ def main() -> int:
         candidate.unlink(missing_ok=True)
         raise
     head_type = type(model.value_head).__name__
-    expected = "Sequential" if new_width else "Linear"
-    if config_back.value_head_hidden != (new_width or None) or head_type != expected:
+    expected = "Sequential" if requested_widths else "Linear"
+    if config_back.value_head_layer_widths != requested_widths or head_type != expected:
         candidate.unlink(missing_ok=True)
         raise SystemExit(
-            f"CONVERSION VERIFICATION FAILED: reloaded head is {head_type} with width "
-            f"{config_back.value_head_hidden!r}, expected {expected} / "
-            f"{(new_width or None)!r}. The unpublished candidate has been removed."
+            f"CONVERSION VERIFICATION FAILED: reloaded head is {head_type} with hidden widths "
+            f"{config_back.value_head_layer_widths!r}, expected {expected} / "
+            f"{requested_widths!r}. The unpublished candidate has been removed."
         )
 
     head_params = {f"value_head.{n}" for n in dict(model.value_head.state_dict())}
@@ -304,7 +374,7 @@ def main() -> int:
             raise SystemExit(
                 "CONVERSION VERIFICATION FAILED: seeded value-head tensors changed across the "
                 "production reload. The unpublished candidate has been removed.")
-        print(f"  verified: reloads as {head_type}, width {config_back.value_head_hidden!r}; "
+        print(f"  verified: reloads as {head_type}, hidden widths {config_back.value_head_layer_widths!r}; "
               f"all {len(head_params)} head tensors are FRESH and materialized under seed "
               f"{args.head_init_seed}")
     elif carried:
@@ -320,21 +390,21 @@ def main() -> int:
             raise SystemExit(
                 f"CONVERSION VERIFICATION FAILED: head tensors {mismatched} were neither "
                 "reinitialised nor carried from a same-shape source, so this checkpoint's head "
-                f"has MIXED provenance while claiming width {new_width}. The unpublished "
+                f"has MIXED provenance while claiming hidden widths {requested_widths!r}. The unpublished "
                 "candidate has been removed."
             )
         if len(carried) == len(head_params):
-            print(f"  verified: reloads as {head_type}, width "
-                  f"{config_back.value_head_hidden!r}; the ENTIRE head carried over from "
+            print(f"  verified: reloads as {head_type}, hidden widths "
+                  f"{config_back.value_head_layer_widths!r}; the ENTIRE head carried over from "
                   "a same-shape source, so nothing is untrained")
         else:
-            print(f"  verified: reloads as {head_type}, width "
-                  f"{config_back.value_head_hidden!r}; {len(reinit)} of "
+            print(f"  verified: reloads as {head_type}, hidden widths "
+                  f"{config_back.value_head_layer_widths!r}; {len(reinit)} of "
                   f"{len(head_params)} head tensors are FRESH, and the rest "
                   f"({sorted(carried)}) carried from a same-shape source")
     else:
-        print(f"  verified: reloads as {head_type}, width "
-              f"{config_back.value_head_hidden!r}; all {len(head_params)} head tensors "
+        print(f"  verified: reloads as {head_type}, hidden widths "
+              f"{config_back.value_head_layer_widths!r}; all {len(head_params)} head tensors "
               "are FRESH")
     if carried:
         print("  the trunk is carried over. NOTE the head is NOT wholly fresh -- see the line "
@@ -347,7 +417,7 @@ def main() -> int:
     except BaseException:
         candidate.unlink(missing_ok=True)
         raise
-    print(f"value_head_hidden {old_width!r} -> {new_width!r}")
+    print(f"value-head hidden widths {old_widths!r} -> {requested_widths!r}")
     if args.head_init_seed is None:
         print(f"  {len(head_tensors)} stale head tensor(s) left in place (ignored on load, and "
               f"required to distinguish this from a truncated write): {head_tensors}")

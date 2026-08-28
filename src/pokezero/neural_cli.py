@@ -751,6 +751,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Train only value-head parameters; intended for value-only calibration fine-tunes from --initial-checkpoint.",
     )
+    train.add_argument(
+        "--freeze-policy-heads",
+        action="store_true",
+        help=(
+            "For objective=value-only, freeze policy_head and opponent_action_head while allowing "
+            "the shared trunk and value head to finetune."
+        ),
+    )
     train.add_argument("--max-batches", type=int, default=None, help="Optional max batches per epoch for smoke runs.")
     train.add_argument(
         "--train-batch-replay",
@@ -3068,6 +3076,7 @@ def _train(args: argparse.Namespace) -> int:
         amp=args.amp,
         random_seed=args.training_seed,
         freeze_non_value_parameters=args.freeze_non_value_parameters,
+        freeze_policy_heads=args.freeze_policy_heads,
         shaping_weights=shaping_weights_json,
         batch_replay=args.train_batch_replay,
     )
