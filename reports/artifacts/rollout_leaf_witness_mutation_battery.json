@@ -769,7 +769,7 @@
   "survived": 0,
   "targets": {
     "engine_search.py": "98461620c9a5ea9bc53d567dc99525ce8699738a0dcf8e1956a9ac3a7c7c2c04",
-    "foulplay_bridge.py": "d43d5fc8f18ccdd4eee1c9dcbf5ef8f1189b6ae8fd5dda817e82909fcc53a8e6",
+    "foulplay_bridge.py": "d04a9924167d9154ea085b135186e48a5fd76c4c794ab61b23437e5b8fb7542e",
     "foulplay_paired_eval.py": "770c6c522489e34524270ec6fcd139becf689e2035bf124b5725da57e9090f60",
     "foulplay_power_report.py": "8a24784085320c5e0c36769f41276ea67ae8eef554bf4157a7d16966beaa41c5",
     "hc_depth_grid.py": "fdd534de5b32d4b788b196de7fabb68073cb8ba4542851a638ee33067191b3c1",

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections import Counter
+from collections import Counter, deque
 import contextlib
 import hashlib
 import json
@@ -45,7 +45,14 @@ from .local_showdown import (
     PublicBattleMaterializationState,
     actor_move_states_from_request_history,
     belief_set_source_env_enabled,
+    requested_players_from_requests,
     showdown_seed_from_int,
+)
+from .live_foulplay_continuation import (
+    LiveFoulPlayBoundary,
+    LiveFoulPlayContinuationError,
+    reconstruct_live_foulplay_boundary,
+    run_live_foulplay_continuation,
 )
 from .mcts_diagnostics import (
     root_puct_fallback_category,
@@ -865,6 +872,14 @@ class ControlledFoulPlayConfig:
     # cost and size measurements behind that default, and `--no-refusal-records`
     # for the way out on a long run.
     record_refusals: bool = True
+    # B2-pre capability seam.  When enabled, one qualifying simultaneous live
+    # FoulPlay boundary is snapshotted *after* its actual FoulPlay action has
+    # been decoded, restored into a fresh local shell, advanced by that fixed
+    # joint action, and continued locally before the source choices are sent.
+    # This is deliberately opt-in and one-game only so the ordinary benchmark
+    # timing/path remains byte-for-byte unchanged.
+    live_continuation_smoke: bool = False
+    live_continuation_minimum_decision_round: int = 1
 
     def __post_init__(self) -> None:
         # The opponent seat's DISPLAY NAME follows who actually sits there. Left at the
@@ -891,6 +906,25 @@ class ControlledFoulPlayConfig:
             raise ValueError("max_decision_rounds must be positive.")
         if self.policy_mode not in {"raw", "root-puct", "engine-mcts"}:
             raise ValueError("policy_mode must be 'raw', 'root-puct', or 'engine-mcts'.")
+        if self.live_continuation_smoke:
+            if self.games != 1:
+                raise ValueError("live_continuation_smoke requires exactly one source game.")
+            if self.policy_mode != "raw" or self.opponent_policy_mode != "foul-play":
+                raise ValueError(
+                    "live_continuation_smoke requires a raw PokeZero source policy against live FoulPlay."
+                )
+            if self.capture_driver != "checkpoint":
+                raise ValueError("live_continuation_smoke requires the checkpoint source driver.")
+            if self.pokezero_player != "p1" or self.foulplay_player != "p2":
+                raise ValueError("live_continuation_smoke requires PokeZero=p1 and FoulPlay=p2.")
+            if self.live_continuation_minimum_decision_round < 1:
+                raise ValueError(
+                    "live_continuation_minimum_decision_round must be at least one."
+                )
+            if self.max_decision_rounds <= self.live_continuation_minimum_decision_round + 1:
+                raise ValueError(
+                    "live_continuation_smoke needs room for a fixed joint step and a later continuation."
+                )
         for _axis in ("opponent_engine_depth", "opponent_engine_sims"):
             if getattr(self, _axis) is not None and self.opponent_policy_mode != "engine-mcts":
                 # Refused, not ignored: a shard whose config echoed an opponent depth the
@@ -4546,6 +4580,10 @@ class _BattleBridge:
         self.node_binary = node_binary
         self.process: asyncio.subprocess.Process | None = None
         self.events: asyncio.Queue[Mapping[str, Any]] = asyncio.Queue()
+        # A targeted diagnostic request (the B2-pre generic snapshot) can race
+        # ordinary stream output.  Preserve every nonmatching event for the
+        # main game loop instead of dropping it while awaiting that reply.
+        self._deferred_events: deque[Mapping[str, Any]] = deque()
         self.stderr_lines: list[str] = []
         self._stdout_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
@@ -4596,10 +4634,38 @@ class _BattleBridge:
         await self.process.stdin.drain()
 
     async def next_event(self, *, timeout_seconds: float = 120.0) -> Mapping[str, Any]:
-        event = await asyncio.wait_for(self.events.get(), timeout=timeout_seconds)
+        event = self._deferred_events.popleft() if self._deferred_events else await asyncio.wait_for(
+            self.events.get(), timeout=timeout_seconds
+        )
         if event.get("type") == "error":
             raise RuntimeError(str(event.get("message") or "BattleStream bridge error."))
         return event
+
+    async def next_event_matching(
+        self,
+        predicate: Callable[[Mapping[str, Any]], bool],
+        *,
+        timeout_seconds: float = 120.0,
+    ) -> Mapping[str, Any]:
+        """Await one reply without consuming unrelated live stream events."""
+
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        for index, event in enumerate(self._deferred_events):
+            if predicate(event):
+                del self._deferred_events[index]
+                if event.get("type") == "error":
+                    raise RuntimeError(str(event.get("message") or "BattleStream bridge error."))
+                return event
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("timed out waiting for the requested BattleStream event.")
+            event = await asyncio.wait_for(self.events.get(), timeout=remaining)
+            if event.get("type") == "error":
+                raise RuntimeError(str(event.get("message") or "BattleStream bridge error."))
+            if predicate(event):
+                return event
+            self._deferred_events.append(event)
 
     async def _drain_stdout(self) -> None:
         assert self.process is not None and self.process.stdout is not None
@@ -4696,9 +4762,125 @@ class _ControlledBattleState:
     # requests, and rebuilding them per decision would repack 12 sets a turn for
     # an answer that cannot change. None under every other arm.
     oracle_truth_builder: Any | None = None
+    # Populated only by the opt-in B2-pre capability probe.  It deliberately
+    # stores receipt fields, never the privileged serialized simulator state.
+    live_continuation_smoke_proof: Mapping[str, Any] | None = None
 
     def all_lines(self) -> list[str]:
         return [*self.public_lines, *self.request_lines.values()]
+
+
+@dataclass(frozen=True)
+class _LiveFoulPlayContinuationProbe:
+    """One-shot B2-pre scorer operating outside every policy input path."""
+
+    config: ControlledFoulPlayConfig
+    model: Any
+    result: Any
+    value_model: Any
+    value_result: Any
+    env_config: LocalShowdownConfig
+    rollout_config: RolloutConfig
+    policy_id: str
+
+    async def capture_boundary_async(
+        self,
+        *,
+        bridge: _BattleBridge,
+        state: _ControlledBattleState,
+        requested_players: tuple[PlayerId, ...],
+    ) -> LiveFoulPlayBoundary:
+        if requested_players != ("p1", "p2"):
+            raise LiveFoulPlayContinuationError(
+                "live continuation smoke requires a simultaneous p1/p2 source boundary"
+            )
+        await bridge.send({"type": "snapshot", "battleId": state.battle_id})
+        event = await bridge.next_event_matching(
+            lambda candidate: candidate.get("type") == "snapshot"
+            and candidate.get("battleId") == state.battle_id
+        )
+        snapshot = event.get("snapshot")
+        if not isinstance(snapshot, Mapping):
+            raise LiveFoulPlayContinuationError("BattleStream returned a malformed generic snapshot")
+        boundary_requests = snapshot.get("boundaryRequests")
+        if not isinstance(boundary_requests, Mapping) or requested_players_from_requests(
+            boundary_requests
+        ) != requested_players:
+            raise LiveFoulPlayContinuationError(
+                "generic live snapshot is not an actionable simultaneous p1/p2 boundary"
+            )
+        request_history: dict[PlayerId, list[str]] = {"p1": [], "p2": []}
+        for player, line in state.request_history:
+            if player in request_history:
+                request_history[player].append(line)
+        return reconstruct_live_foulplay_boundary(
+            source_battle_id=state.battle_id,
+            format_id=state.format_id,
+            bridge_snapshot=snapshot,
+            public_protocol_lines=[
+                *state.public_lines,
+                *(line for _player, line in state.request_history),
+            ],
+            current_request_lines=state.request_lines,
+            request_history_lines=request_history,
+            belief_set_source=_resolved_belief_set_source(self.config),
+        )
+
+    def _fresh_raw_continuation_policies(self) -> Mapping[PlayerId, Policy]:
+        raw_config = replace(self.config, live_continuation_smoke=False)
+        return {
+            "p1": _build_policy(
+                config=raw_config,
+                model=self.model,
+                result=self.result,
+                value_model=self.value_model,
+                value_result=self.value_result,
+                env_config=self.env_config,
+                rollout_config=self.rollout_config,
+                policy_id=f"{self.policy_id}+live-continuation-p1",
+            ),
+            "p2": _build_policy(
+                config=raw_config,
+                model=self.model,
+                result=self.result,
+                value_model=self.value_model,
+                value_result=self.value_result,
+                env_config=self.env_config,
+                rollout_config=self.rollout_config,
+                policy_id=f"{self.policy_id}+live-continuation-p2",
+            ),
+        }
+
+    def run(
+        self,
+        *,
+        boundary: LiveFoulPlayBoundary,
+        state: _ControlledBattleState,
+        decision_round: int,
+        pokezero_action: int,
+        foulplay_action: int,
+        foulplay_choice: str,
+    ) -> Mapping[str, Any]:
+        proof = run_live_foulplay_continuation(
+            boundary=boundary,
+            source_seed=state.seed,
+            source_decision_round=decision_round,
+            pokezero_action=pokezero_action,
+            foulplay_action=foulplay_action,
+            foulplay_choice=foulplay_choice,
+            env_factory=lambda: LocalShowdownEnv(self.env_config),
+            continuation_policy_factory=self._fresh_raw_continuation_policies,
+            rollout_config=self.rollout_config,
+        )
+        if int(proof["continuation"]["decision_round_count"]) <= 0:
+            raise LiveFoulPlayContinuationError(
+                "live continuation smoke observed no decision after the fixed joint step"
+            )
+        return {
+            **proof,
+            "continuation_policy_mode": "raw",
+            "full_state_snapshot_scope": "scorer-only",
+        }
 
 
 async def run_controlled_foulplay_benchmark(
@@ -4808,6 +4990,20 @@ async def run_controlled_foulplay_benchmark(
             rollout_config=rollout_config,
             policy_id=f"{policy_id}-opp-{config.opponent_policy_mode}",
         )
+    live_continuation_probe = (
+        _LiveFoulPlayContinuationProbe(
+            config=config,
+            model=model,
+            result=result,
+            value_model=value_model,
+            value_result=value_result,
+            env_config=env_config,
+            rollout_config=rollout_config,
+            policy_id=policy_id,
+        )
+        if config.live_continuation_smoke
+        else None
+    )
     return await _run_controlled_foulplay_games(
         config,
         policy=policy,
@@ -4821,6 +5017,7 @@ async def run_controlled_foulplay_benchmark(
         value_leaf_provenance=value_leaf_provenance,
         progress_callback=progress_callback,
         trajectory_callback=trajectory_callback,
+        live_continuation_probe=live_continuation_probe,
     )
 
 
@@ -4838,6 +5035,7 @@ async def _run_controlled_foulplay_games(
     progress_callback: ControlledFoulPlayProgressCallback | None = None,
     trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
     opponent_policy: Policy | None = None,
+    live_continuation_probe: _LiveFoulPlayContinuationProbe | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
     """Run a preconstructed legal policy through the shared FoulPlay bridge.
 
@@ -4920,6 +5118,7 @@ async def _run_controlled_foulplay_games(
                         trajectory_callback=trajectory_callback,
                         refusal_capture=refusal_capture,
                         opponent_policy=opponent_policy,
+                        live_continuation_probe=live_continuation_probe,
                     )
                 )
             finally:
@@ -6082,6 +6281,7 @@ async def _run_single_game(
     trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
     refusal_capture: "_RefusalCapture | None" = None,
     opponent_policy: Policy | None = None,
+    live_continuation_probe: _LiveFoulPlayContinuationProbe | None = None,
 ) -> ControlledFoulPlayGameResult:
     battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
     state = _ControlledBattleState(
@@ -6154,6 +6354,7 @@ async def _run_single_game(
                 foulplay_process=foulplay_process,
                 foulplay_logs=foulplay_logs,
                 opponent_policy=opponent_policy,
+                live_continuation_probe=live_continuation_probe,
             )
             decision_round += 1
             continue
@@ -6164,6 +6365,10 @@ async def _run_single_game(
             )
             break
 
+    if config.live_continuation_smoke and state.live_continuation_smoke_proof is None:
+        raise LiveFoulPlayContinuationError(
+            "source game ended before a qualifying live FoulPlay continuation proof completed"
+        )
     await _notify_foulplay_terminal(
         state=state,
         server=server,
@@ -6403,6 +6608,11 @@ async def _run_single_game(
             ],
             "protocol_signature_schema_version": PROTOCOL_SIGNATURE_SCHEMA_VERSION,
             "protocol_signatures": dict(sorted(protocol_signature_counts(state.public_lines).items())),
+            **(
+                {"live_foulplay_continuation_smoke": dict(state.live_continuation_smoke_proof)}
+                if state.live_continuation_smoke_proof is not None
+                else {}
+            ),
         }
         # Opt-in omniscient stash for trait capture (trait_foulplay.py). Gated on an env flag so it
         # never contaminates the default p1-only/opponent-hidden capture path, which spreads this
@@ -6865,6 +7075,67 @@ def _context_for_seat(
     )
 
 
+async def _select_live_foulplay_decision(
+    *,
+    config: ControlledFoulPlayConfig,
+    server: _FoulPlayWebsocketServer,
+    state: _ControlledBattleState,
+    player_state: PlayerRelativeBattleState,
+    decision_round: int,
+    foulplay_process: asyncio.subprocess.Process | None,
+    foulplay_logs: _ProcessLogBuffer,
+) -> tuple[str, PolicyDecision]:
+    """Wait for, decode, and record the live FoulPlay action without submitting it."""
+
+    think_clock = _FoulPlayThinkClock()
+    choice = await _wait_for_foulplay_choice_or_exit(
+        server=server,
+        battle_id=state.battle_id,
+        process=foulplay_process,
+        logs=foulplay_logs,
+        clock=think_clock,
+    )
+    foulplay_action = action_index_from_choice_string(player_state, choice)
+    if foulplay_action is None:
+        raise RuntimeError(f"unable to decode foul-play choice {choice!r}.")
+    # The contention record is telemetry only.  Keeping it in this helper makes
+    # the ordinary and B2-pre paths share one decode/recording implementation.
+    think_row: Mapping[str, Any] | None = None
+    try:
+        think_row = await _foulplay_think_observation(
+            clock=think_clock,
+            logs=foulplay_logs,
+            state=state,
+            decision_round=decision_round,
+        )
+        state.opponent_think.append(think_row)
+    except Exception:  # noqa: BLE001 -- a telemetry failure must not invent a move failure
+        think_row = None
+        state.opponent_think_failures += 1
+    decision = PolicyDecision(
+        action_index=foulplay_action,
+        policy_id="foul-play",
+        metadata={
+            "raw_choice": choice,
+            **({"foulplay_think": dict(think_row)} if think_row is not None else {}),
+        },
+    )
+    if config.opponent_journal != "off":
+        try:
+            state.opponent_journal.append(
+                OpponentJournalEntry(
+                    round=decision_round,
+                    seat=config.foulplay_player,
+                    choice=choice,
+                    action=foulplay_action,
+                    request_sha256=_request_digest(state.request_lines.get(config.foulplay_player)),
+                )
+            )
+        except Exception:  # noqa: BLE001 -- journalling must not change the game outcome
+            state.opponent_journal_failures += 1
+    return choice, decision
+
+
 async def _handle_decision_boundary(
     *,
     config: ControlledFoulPlayConfig,
@@ -6881,6 +7152,7 @@ async def _handle_decision_boundary(
     foulplay_process: asyncio.subprocess.Process | None,
     foulplay_logs: _ProcessLogBuffer,
     opponent_policy: Policy | None = None,
+    live_continuation_probe: _LiveFoulPlayContinuationProbe | None = None,
 ) -> TerminalState | None:
     assert state.trajectory is not None
     pokezero_player = config.pokezero_player
@@ -6913,6 +7185,34 @@ async def _handle_decision_boundary(
     choices: dict[PlayerId, str] = {}
     decisions: dict[PlayerId, PolicyDecision] = {}
     pokezero_context: PolicyContext | None = None
+    live_boundary: LiveFoulPlayBoundary | None = None
+    predecoded_foulplay: tuple[str, PolicyDecision] | None = None
+    probe_this_boundary = (
+        live_continuation_probe is not None
+        and state.live_continuation_smoke_proof is None
+        and decision_round >= config.live_continuation_minimum_decision_round
+        and requested_players == ("p1", "p2")
+    )
+    if probe_this_boundary:
+        # B2-pre is the one intentional ordering exception: decode the action
+        # FoulPlay actually chose before taking the generic full-state snapshot.
+        # The source PokeZero candidate is selected only after that boundary has
+        # been bound, and no source choice is sent until the local continuation
+        # succeeds.
+        predecoded_foulplay = await _select_live_foulplay_decision(
+            config=config,
+            server=server,
+            state=state,
+            player_state=player_states[foulplay_player],
+            decision_round=decision_round,
+            foulplay_process=foulplay_process,
+            foulplay_logs=foulplay_logs,
+        )
+        live_boundary = await live_continuation_probe.capture_boundary_async(
+            bridge=bridge,
+            state=state,
+            requested_players=requested_players,
+        )
     if pokezero_player in requested_players:
         # Shared with the neural-opponent branch below via _context_for_seat, so the two
         # seats cannot be packed differently. The capability gate that used to live inline
@@ -7009,73 +7309,35 @@ async def _handle_decision_boundary(
             },
         )
     elif foulplay_player in requested_players:
-        think_clock = _FoulPlayThinkClock()
-        choice = await _wait_for_foulplay_choice_or_exit(
+        choice, foulplay_decision = predecoded_foulplay or await _select_live_foulplay_decision(
+            config=config,
             server=server,
-            battle_id=state.battle_id,
-            process=foulplay_process,
-            logs=foulplay_logs,
-            clock=think_clock,
+            state=state,
+            player_state=player_states[foulplay_player],
+            decision_round=decision_round,
+            foulplay_process=foulplay_process,
+            foulplay_logs=foulplay_logs,
         )
-        foulplay_action = action_index_from_choice_string(player_states[foulplay_player], choice)
-        if foulplay_action is None:
-            raise RuntimeError(f"unable to decode foul-play choice {choice!r}.")
         choices[foulplay_player] = choice
-        # THE CONTENTION INSTRUMENT (module block: OPPONENT-THINK CONTENTION INSTRUMENT).
-        # ISOLATED for the same reason the journal below is: this is telemetry on the live
-        # decision path, ON BY DEFAULT, and the failure mode it guards against is losing a
-        # scored battle to a bug in a field nobody scores. It reads a clock the wait just
-        # stamped and stdout lines the drain task already buffered; it takes no lock,
-        # draws no RNG, and touches neither the choice above nor the submission below. The
-        # count is reported per game and summed into the run header, so a shard that is
-        # short of think rows says so as a NUMBER.
-        think_row: Mapping[str, Any] | None = None
-        try:
-            think_row = await _foulplay_think_observation(
-                clock=think_clock,
-                logs=foulplay_logs,
-                state=state,
-                decision_round=decision_round,
+        decisions[foulplay_player] = foulplay_decision
+
+    if live_boundary is not None:
+        pokezero_decision = decisions.get(pokezero_player)
+        foulplay_decision = decisions.get(foulplay_player)
+        if pokezero_decision is None or foulplay_decision is None:
+            raise LiveFoulPlayContinuationError(
+                "live continuation smoke could not obtain both fixed source actions"
             )
-            state.opponent_think.append(think_row)
-        except Exception:  # noqa: BLE001 -- count, never fail the battle
-            think_row = None
-            state.opponent_think_failures += 1
-        decisions[foulplay_player] = PolicyDecision(
-            action_index=foulplay_action,
-            policy_id="foul-play",
-            metadata={
-                "raw_choice": choice,
-                **({"foulplay_think": dict(think_row)} if think_row is not None else {}),
-            },
+        assert live_continuation_probe is not None
+        state.live_continuation_smoke_proof = await asyncio.to_thread(
+            live_continuation_probe.run,
+            boundary=live_boundary,
+            state=state,
+            decision_round=decision_round,
+            pokezero_action=pokezero_decision.action_index,
+            foulplay_action=foulplay_decision.action_index,
+            foulplay_choice=choices[foulplay_player],
         )
-        # Journal AFTER the decode and BEFORE the submit, reading only values that
-        # already exist. Nothing here is passed to a policy, to the searcher, or to
-        # the BattleStream, and no RNG is drawn -- the pokezero decision above has
-        # already been selected and submitted into `choices`, so this cannot reorder
-        # or perturb it.
-        #
-        # ISOLATED, because this is TELEMETRY on the live decision path and it is ON
-        # BY DEFAULT. Every input is already validated by the lines above, so the
-        # except is not expected to fire -- but the failure mode it guards is losing
-        # a battle (and, in the paired-eval harness, forfeiting a scored seed band)
-        # to a bug in a field nobody scores. The count is reported per game and
-        # summed into the journal header, so a silently short journal is visible as a
-        # number: an unrecorded round makes every later round of that battle
-        # unreplayable, and that must not be inferred from a gap.
-        if config.opponent_journal != "off":
-            try:
-                state.opponent_journal.append(
-                    OpponentJournalEntry(
-                        round=decision_round,
-                        seat=foulplay_player,
-                        choice=choice,
-                        action=foulplay_action,
-                        request_sha256=_request_digest(state.request_lines.get(foulplay_player)),
-                    )
-                )
-            except Exception:  # noqa: BLE001 -- count, never fail the battle
-                state.opponent_journal_failures += 1
 
     for player in requested_players:
         decision = decisions.get(player)
