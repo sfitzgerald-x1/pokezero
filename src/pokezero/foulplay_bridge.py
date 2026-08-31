@@ -53,6 +53,7 @@ from .live_foulplay_continuation import (
     LiveFoulPlayContinuationError,
     reconstruct_live_foulplay_boundary,
     run_live_foulplay_continuation,
+    select_live_foulplay_continuation_oracle_action,
 )
 from .mcts_diagnostics import (
     root_puct_fallback_category,
@@ -880,6 +881,15 @@ class ControlledFoulPlayConfig:
     # timing/path remains byte-for-byte unchanged.
     live_continuation_smoke: bool = False
     live_continuation_minimum_decision_round: int = 1
+    # B2 continuation-oracle treatment.  At each ordinary simultaneous boundary,
+    # it binds a generic live snapshot after FoulPlay has committed its *actual*
+    # choice, scores every legal PokeZero action under fresh local continuations,
+    # and submits the selected action.  This is a controller-only full-state path:
+    # no snapshot reaches the checkpoint policy, trajectory observation, or result.
+    # Forced one-seat boundaries remain raw and are labelled as such; all ordinary
+    # boundaries must succeed or the source game fails closed.
+    live_continuation_oracle: bool = False
+    live_continuation_oracle_candidate_cap: int = ACTION_COUNT
 
     def __post_init__(self) -> None:
         # The opponent seat's DISPLAY NAME follows who actually sits there. Left at the
@@ -924,6 +934,28 @@ class ControlledFoulPlayConfig:
             if self.max_decision_rounds <= self.live_continuation_minimum_decision_round + 1:
                 raise ValueError(
                     "live_continuation_smoke needs room for a fixed joint step and a later continuation."
+                )
+        if self.live_continuation_oracle:
+            if self.live_continuation_smoke:
+                raise ValueError(
+                    "live_continuation_oracle and live_continuation_smoke are distinct experiments "
+                    "and may not be enabled together."
+                )
+            if self.policy_mode != "raw" or self.opponent_policy_mode != "foul-play":
+                raise ValueError(
+                    "live_continuation_oracle requires a raw PokeZero source policy against external FoulPlay."
+                )
+            if self.capture_driver != "checkpoint":
+                raise ValueError("live_continuation_oracle requires the checkpoint source driver.")
+            if self.live_continuation_oracle_candidate_cap <= 0:
+                raise ValueError("live_continuation_oracle_candidate_cap must be positive.")
+            if self.live_continuation_oracle_candidate_cap > ACTION_COUNT:
+                raise ValueError(
+                    "live_continuation_oracle_candidate_cap may not exceed the action-space size."
+                )
+            if self.max_decision_rounds <= 2:
+                raise ValueError(
+                    "live_continuation_oracle needs room for a fixed joint step and a later continuation."
                 )
         for _axis in ("opponent_engine_depth", "opponent_engine_sims"):
             if getattr(self, _axis) is not None and self.opponent_policy_mode != "engine-mcts":
@@ -1642,6 +1674,11 @@ class ControlledFoulPlayGameResult:
     # distinguishable from one where the opponent did no work.
     opponent_think: tuple[Mapping[str, Any], ...] = ()
     opponent_think_failures: int = 0
+    # B2 live continuation-oracle controller receipts.  These are intentionally
+    # bounded, action-only summaries; the generic live snapshot never leaves the
+    # controller path.  A nonempty oracle game must have at least one entry.
+    live_continuation_oracle_decisions: tuple[Mapping[str, Any], ...] = ()
+    live_continuation_oracle_forced_boundary_raw_decisions: int = 0
     # Every refusal the #1180 recorder captured in THIS battle, with the
     # per-decision state that produced it. Filed on the game row rather than only in
     # a run-level list so a record travels with the battle it belongs to; the run
@@ -1745,6 +1782,14 @@ class ControlledFoulPlayGameResult:
             # ON THE ROW, not only in the header: a run total says think rows were lost, it
             # cannot say which battle's contention reading is short.
             payload["opponent_think_record_failures"] = self.opponent_think_failures
+        if self.live_continuation_oracle_decisions or self.live_continuation_oracle_forced_boundary_raw_decisions:
+            payload["live_continuation_oracle"] = {
+                "schema_version": "pokezero.live-foulplay-continuation-oracle.v1",
+                "controller_only_full_state": True,
+                "oracle_decisions": [dict(item) for item in self.live_continuation_oracle_decisions],
+                "oracle_decision_count": len(self.live_continuation_oracle_decisions),
+                "forced_boundary_raw_decisions": self.live_continuation_oracle_forced_boundary_raw_decisions,
+            }
         if self.refusal_records:
             # `refusals`, and NOT a name the address reader dispatches on. Every key
             # inside a serialized `RefusalRecord` is likewise distinct from the
@@ -2044,6 +2089,14 @@ class ControlledFoulPlayBenchmarkResult:
         # "nobody measured", and it is indistinguishable from the documented no-contention
         # reading ("flat between arms") to any consumer that does not hand-check the misses.
         foulplay_think_block["reading"] = foulplay_think_reading_status(foulplay_think_block)
+        refusal_recorder = self.refusal_recorder or RefusalRecorderHealth()
+        live_oracle_decisions = sum(
+            len(game.live_continuation_oracle_decisions) for game in self.games
+        )
+        live_oracle_forced_raw = sum(
+            game.live_continuation_oracle_forced_boundary_raw_decisions
+            for game in self.games
+        )
         payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "checkpoint": _checkpoint_path_label(self.config),
@@ -2071,6 +2124,31 @@ class ControlledFoulPlayBenchmarkResult:
             "foulplay_random_seed": self.config.resolved_foulplay_random_seed,
             "max_decision_rounds": self.config.max_decision_rounds,
             "belief_set_source": self.config.belief_set_source_enabled(),
+            "live_continuation_oracle": {
+                "enabled": self.config.live_continuation_oracle,
+                "schema_version": "pokezero.live-foulplay-continuation-oracle.v1",
+                "candidate_cap": self.config.live_continuation_oracle_candidate_cap,
+                "controller_only_full_state": True,
+                "oracle_decisions": live_oracle_decisions,
+                "games_with_oracle_decision": sum(
+                    1 for game in self.games if game.live_continuation_oracle_decisions
+                ),
+                "forced_boundary_raw_decisions": live_oracle_forced_raw,
+            },
+            # The ordinary benchmark path does not retry games: an exception aborts
+            # the invocation and therefore cannot produce a complete JSON result.
+            # Keep that fact explicit for the B2 paired driver, alongside the
+            # recorder's independently observable error/refusal counters.  A B2
+            # artifact requires every one of these to be zero rather than treating
+            # omitted diagnostics as a clean run.
+            "execution_integrity": {
+                "retries": 0,
+                "errors": 0,
+                "refusal_records": refusal_recorder.recorded_refusals,
+                "refusal_recorder_instrument_errors": refusal_recorder.instrument_errors_total,
+                "refusal_records_unrowed": refusal_recorder.records_unrowed,
+                "forced_boundary_raw_decisions": live_oracle_forced_raw,
+            },
             # Sibling of root_puct, populated only when policy_mode is
             # engine-mcts. Fallback here means the native searcher could not
             # construct a single belief world and played uniform-legal instead,
@@ -2236,7 +2314,7 @@ class ControlledFoulPlayBenchmarkResult:
             # too old), and a reader that cannot tell them apart will call all three
             # "no refusals". `health_reported: false` is the default and means
             # UNKNOWN.
-            "refusal_recorder": (self.refusal_recorder or RefusalRecorderHealth()).to_dict(),
+            "refusal_recorder": refusal_recorder.to_dict(),
             "game_results": [game.to_dict() for game in self.games],
         }
         if self.value_leaf_provenance is not None:
@@ -4765,6 +4843,11 @@ class _ControlledBattleState:
     # Populated only by the opt-in B2-pre capability probe.  It deliberately
     # stores receipt fields, never the privileged serialized simulator state.
     live_continuation_smoke_proof: Mapping[str, Any] | None = None
+    # B2 controller receipts stay action-only.  The snapshot consumed to make
+    # these choices is deliberately not retained in state after the controller
+    # returns, and never reaches trajectory metadata or a policy context.
+    live_continuation_oracle_decisions: list[Mapping[str, Any]] = field(default_factory=list)
+    live_continuation_oracle_forced_boundary_raw_decisions: int = 0
 
     def all_lines(self) -> list[str]:
         return [*self.public_lines, *self.request_lines.values()]
@@ -4881,6 +4964,131 @@ class _LiveFoulPlayContinuationProbe:
             "continuation_policy_mode": "raw",
             "full_state_snapshot_scope": "scorer-only",
         }
+
+
+@dataclass(frozen=True)
+class _LiveFoulPlayContinuationOracleController:
+    """B2's fail-closed, seat-relative live continuation controller.
+
+    The controller shares no policy-input path with the source checkpoint.  It
+    is called only after external FoulPlay's actual action has been decoded and
+    the generic snapshot has been bound to both live requests.  Its returned
+    metadata contains bounded action/terminal summaries only; no full state is
+    retained in the bridge state, trajectory, or shard.
+    """
+
+    config: ControlledFoulPlayConfig
+    model: Any
+    result: Any
+    value_model: Any
+    value_result: Any
+    env_config: LocalShowdownConfig
+    rollout_config: RolloutConfig
+    policy_id: str
+
+    async def capture_boundary_async(
+        self,
+        *,
+        bridge: _BattleBridge,
+        state: _ControlledBattleState,
+        requested_players: tuple[PlayerId, ...],
+    ) -> LiveFoulPlayBoundary:
+        if set(requested_players) != {"p1", "p2"}:
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle requires a simultaneous p1/p2 source boundary"
+            )
+        await bridge.send({"type": "snapshot", "battleId": state.battle_id})
+        event = await bridge.next_event_matching(
+            lambda candidate: candidate.get("type") == "snapshot"
+            and candidate.get("battleId") == state.battle_id
+        )
+        snapshot = event.get("snapshot")
+        if not isinstance(snapshot, Mapping):
+            raise LiveFoulPlayContinuationError(
+                "BattleStream returned a malformed generic snapshot for the continuation oracle"
+            )
+        boundary_requests = snapshot.get("boundaryRequests")
+        if not isinstance(boundary_requests, Mapping) or set(
+            requested_players_from_requests(boundary_requests)
+        ) != {"p1", "p2"}:
+            raise LiveFoulPlayContinuationError(
+                "generic live snapshot is not an actionable simultaneous p1/p2 boundary"
+            )
+        request_history: dict[PlayerId, list[str]] = {"p1": [], "p2": []}
+        for player, line in state.request_history:
+            if player in request_history:
+                request_history[player].append(line)
+        return reconstruct_live_foulplay_boundary(
+            source_battle_id=state.battle_id,
+            format_id=state.format_id,
+            bridge_snapshot=snapshot,
+            public_protocol_lines=[
+                *state.public_lines,
+                *(line for _player, line in state.request_history),
+            ],
+            current_request_lines=state.request_lines,
+            request_history_lines=request_history,
+            belief_set_source=_resolved_belief_set_source(self.config),
+        )
+
+    def _fresh_raw_continuation_policies(self) -> Mapping[PlayerId, Policy]:
+        raw_config = replace(
+            self.config,
+            live_continuation_smoke=False,
+            live_continuation_oracle=False,
+        )
+        return {
+            "p1": _build_policy(
+                config=raw_config,
+                model=self.model,
+                result=self.result,
+                value_model=self.value_model,
+                value_result=self.value_result,
+                env_config=self.env_config,
+                rollout_config=self.rollout_config,
+                policy_id=f"{self.policy_id}+live-continuation-oracle-p1",
+            ),
+            "p2": _build_policy(
+                config=raw_config,
+                model=self.model,
+                result=self.result,
+                value_model=self.value_model,
+                value_result=self.value_result,
+                env_config=self.env_config,
+                rollout_config=self.rollout_config,
+                policy_id=f"{self.policy_id}+live-continuation-oracle-p2",
+            ),
+        }
+
+    def select(
+        self,
+        *,
+        boundary: LiveFoulPlayBoundary,
+        state: _ControlledBattleState,
+        decision_round: int,
+        raw_action: int,
+        legal_actions: Sequence[int],
+        foulplay_action: int,
+        foulplay_choice: str,
+    ) -> Mapping[str, Any]:
+        decision = select_live_foulplay_continuation_oracle_action(
+            boundary=boundary,
+            source_seed=state.seed,
+            source_decision_round=decision_round,
+            raw_action=raw_action,
+            legal_actions=legal_actions,
+            foulplay_action=foulplay_action,
+            foulplay_choice=foulplay_choice,
+            pokezero_player=self.config.pokezero_player,
+            foulplay_player=self.config.foulplay_player,
+            candidate_cap=self.config.live_continuation_oracle_candidate_cap,
+            env_factory=lambda: LocalShowdownEnv(self.env_config),
+            continuation_policy_factory=self._fresh_raw_continuation_policies,
+            rollout_config=self.rollout_config,
+        )
+        payload = dict(decision.metadata)
+        payload["action_index"] = decision.action_index
+        return payload
 
 
 async def run_controlled_foulplay_benchmark(
@@ -5004,6 +5212,20 @@ async def run_controlled_foulplay_benchmark(
         if config.live_continuation_smoke
         else None
     )
+    live_continuation_oracle_controller = (
+        _LiveFoulPlayContinuationOracleController(
+            config=config,
+            model=model,
+            result=result,
+            value_model=value_model,
+            value_result=value_result,
+            env_config=env_config,
+            rollout_config=rollout_config,
+            policy_id=policy_id,
+        )
+        if config.live_continuation_oracle
+        else None
+    )
     return await _run_controlled_foulplay_games(
         config,
         policy=policy,
@@ -5018,6 +5240,7 @@ async def run_controlled_foulplay_benchmark(
         progress_callback=progress_callback,
         trajectory_callback=trajectory_callback,
         live_continuation_probe=live_continuation_probe,
+        live_continuation_oracle_controller=live_continuation_oracle_controller,
     )
 
 
@@ -5036,6 +5259,7 @@ async def _run_controlled_foulplay_games(
     trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
     opponent_policy: Policy | None = None,
     live_continuation_probe: _LiveFoulPlayContinuationProbe | None = None,
+    live_continuation_oracle_controller: _LiveFoulPlayContinuationOracleController | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
     """Run a preconstructed legal policy through the shared FoulPlay bridge.
 
@@ -5119,6 +5343,7 @@ async def _run_controlled_foulplay_games(
                         refusal_capture=refusal_capture,
                         opponent_policy=opponent_policy,
                         live_continuation_probe=live_continuation_probe,
+                        live_continuation_oracle_controller=live_continuation_oracle_controller,
                     )
                 )
             finally:
@@ -6282,6 +6507,7 @@ async def _run_single_game(
     refusal_capture: "_RefusalCapture | None" = None,
     opponent_policy: Policy | None = None,
     live_continuation_probe: _LiveFoulPlayContinuationProbe | None = None,
+    live_continuation_oracle_controller: _LiveFoulPlayContinuationOracleController | None = None,
 ) -> ControlledFoulPlayGameResult:
     battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
     state = _ControlledBattleState(
@@ -6355,6 +6581,7 @@ async def _run_single_game(
                 foulplay_logs=foulplay_logs,
                 opponent_policy=opponent_policy,
                 live_continuation_probe=live_continuation_probe,
+                live_continuation_oracle_controller=live_continuation_oracle_controller,
             )
             decision_round += 1
             continue
@@ -6368,6 +6595,10 @@ async def _run_single_game(
     if config.live_continuation_smoke and state.live_continuation_smoke_proof is None:
         raise LiveFoulPlayContinuationError(
             "source game ended before a qualifying live FoulPlay continuation proof completed"
+        )
+    if config.live_continuation_oracle and not state.live_continuation_oracle_decisions:
+        raise LiveFoulPlayContinuationError(
+            "source game ended without a successful live FoulPlay continuation-oracle decision"
         )
     await _notify_foulplay_terminal(
         state=state,
@@ -6707,6 +6938,10 @@ async def _run_single_game(
         opponent_journal_failures=state.opponent_journal_failures,
         opponent_think=tuple(state.opponent_think),
         opponent_think_failures=state.opponent_think_failures,
+        live_continuation_oracle_decisions=tuple(state.live_continuation_oracle_decisions),
+        live_continuation_oracle_forced_boundary_raw_decisions=(
+            state.live_continuation_oracle_forced_boundary_raw_decisions
+        ),
         # Filtered on the REAL battle_id, so a run-scoped recorder still files each
         # refusal against the battle it happened in.
         refusal_records=(
@@ -7153,6 +7388,7 @@ async def _handle_decision_boundary(
     foulplay_logs: _ProcessLogBuffer,
     opponent_policy: Policy | None = None,
     live_continuation_probe: _LiveFoulPlayContinuationProbe | None = None,
+    live_continuation_oracle_controller: _LiveFoulPlayContinuationOracleController | None = None,
 ) -> TerminalState | None:
     assert state.trajectory is not None
     pokezero_player = config.pokezero_player
@@ -7186,6 +7422,7 @@ async def _handle_decision_boundary(
     decisions: dict[PlayerId, PolicyDecision] = {}
     pokezero_context: PolicyContext | None = None
     live_boundary: LiveFoulPlayBoundary | None = None
+    live_oracle_boundary: LiveFoulPlayBoundary | None = None
     predecoded_foulplay: tuple[str, PolicyDecision] | None = None
     probe_this_boundary = (
         live_continuation_probe is not None
@@ -7193,12 +7430,22 @@ async def _handle_decision_boundary(
         and decision_round >= config.live_continuation_minimum_decision_round
         and requested_players == ("p1", "p2")
     )
-    if probe_this_boundary:
-        # B2-pre is the one intentional ordering exception: decode the action
-        # FoulPlay actually chose before taking the generic full-state snapshot.
-        # The source PokeZero candidate is selected only after that boundary has
-        # been bound, and no source choice is sent until the local continuation
-        # succeeds.
+    oracle_this_boundary = (
+        live_continuation_oracle_controller is not None
+        # B2 measures a genuinely mid-game restoration.  The opening joint
+        # request remains an explicitly counted raw boundary rather than
+        # accidentally becoming a zero-decision continuation score.
+        and decision_round >= 1
+        and pokezero_player in requested_players
+        and foulplay_player in requested_players
+        and set(requested_players) == {"p1", "p2"}
+    )
+    if probe_this_boundary or oracle_this_boundary:
+        # Both B2-pre and B2 use the only safe ordering for a live FoulPlay
+        # continuation: decode the external action first, bind the generic
+        # snapshot second, select our action third, and submit nothing until the
+        # local continuation has completed.  The controller itself never sees
+        # the snapshot as a policy observation.
         predecoded_foulplay = await _select_live_foulplay_decision(
             config=config,
             server=server,
@@ -7208,11 +7455,20 @@ async def _handle_decision_boundary(
             foulplay_process=foulplay_process,
             foulplay_logs=foulplay_logs,
         )
-        live_boundary = await live_continuation_probe.capture_boundary_async(
-            bridge=bridge,
-            state=state,
-            requested_players=requested_players,
-        )
+        if probe_this_boundary:
+            assert live_continuation_probe is not None
+            live_boundary = await live_continuation_probe.capture_boundary_async(
+                bridge=bridge,
+                state=state,
+                requested_players=requested_players,
+            )
+        if oracle_this_boundary:
+            assert live_continuation_oracle_controller is not None
+            live_oracle_boundary = await live_continuation_oracle_controller.capture_boundary_async(
+                bridge=bridge,
+                state=state,
+                requested_players=requested_players,
+            )
     if pokezero_player in requested_players:
         # Shared with the neural-opponent branch below via _context_for_seat, so the two
         # seats cannot be packed differently. The capability gate that used to live inline
@@ -7248,6 +7504,59 @@ async def _handle_decision_boundary(
             pokezero_context,
             seed=state.seed,
         )
+        if live_continuation_oracle_controller is not None:
+            if live_oracle_boundary is not None:
+                if predecoded_foulplay is None:
+                    raise LiveFoulPlayContinuationError(
+                        "live continuation oracle reached a bound snapshot without an external FoulPlay action"
+                    )
+                raw_action = policy_decision.action_index
+                legal_actions = tuple(
+                    index
+                    for index, allowed in enumerate(observations[pokezero_player].legal_action_mask)
+                    if allowed
+                )
+                oracle_payload = await asyncio.to_thread(
+                    live_continuation_oracle_controller.select,
+                    boundary=live_oracle_boundary,
+                    state=state,
+                    decision_round=decision_round,
+                    raw_action=raw_action,
+                    legal_actions=legal_actions,
+                    foulplay_action=predecoded_foulplay[1].action_index,
+                    foulplay_choice=predecoded_foulplay[0],
+                )
+                selected_action = oracle_payload.get("action_index")
+                if not isinstance(selected_action, int) or selected_action not in legal_actions:
+                    raise LiveFoulPlayContinuationError(
+                        "live continuation oracle returned an action outside the bound legal candidate set"
+                    )
+                policy_decision = replace(
+                    policy_decision,
+                    action_index=selected_action,
+                    policy_id=f"{policy_decision.policy_id}+live-continuation-oracle",
+                    metadata={**dict(policy_decision.metadata), **dict(oracle_payload)},
+                )
+                # The payload is action-only and bounded by the configured candidate
+                # cap.  Do not store `live_oracle_boundary` or any generic snapshot.
+                state.live_continuation_oracle_decisions.append(dict(oracle_payload))
+            else:
+                # Opening, force-switch, and other one-seat boundaries have no
+                # admissible mid-game simultaneous continuation score.  This raw
+                # dispatch is explicit in every affected game row; it is never
+                # treated as an oracle success and cannot satisfy the per-game
+                # success gate.
+                state.live_continuation_oracle_forced_boundary_raw_decisions += 1
+                policy_decision = replace(
+                    policy_decision,
+                    metadata={
+                        **dict(policy_decision.metadata),
+                        "schema_version": "pokezero.live-foulplay-continuation-oracle.v1",
+                        "controller": "live-foulplay-continuation-oracle",
+                        "controller_status": "forced-boundary-raw",
+                        "forced_boundary_requested_players": tuple(requested_players),
+                    },
+                )
         policy_elapsed_seconds = time.perf_counter() - pokezero_choice_wall_start
         choices[pokezero_player] = showdown_choice_for_action(
             player_states[pokezero_player],
@@ -8425,6 +8734,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="p1",
         help="Showdown seat controlled by PokeZero; use both seats for mirrored evaluation.",
     )
+    parser.add_argument(
+        "--live-continuation-oracle",
+        action="store_true",
+        help=(
+            "B2 treatment: use a bounded controller-only full-state continuation oracle "
+            "against external FoulPlay. Requires the raw PokeZero policy; failures abort the game "
+            "rather than falling back to raw."
+        ),
+    )
+    parser.add_argument(
+        "--live-continuation-oracle-candidate-cap",
+        type=int,
+        default=ACTION_COUNT,
+        help=(
+            "Maximum legal PokeZero actions the live continuation oracle may score. "
+            "The controller refuses rather than truncating an over-cap action set."
+        ),
+    )
     parser.add_argument("--summary-out", type=Path, default=None, help="Optional JSON result path.")
     parser.add_argument("--json", action="store_true", help="Print JSON result.")
     return parser
@@ -8566,6 +8893,10 @@ def _config_from_args(
         pokezero_username=args.pokezero_username,
         foulplay_username=args.foulplay_username,
         pokezero_player=args.pokezero_player,
+        live_continuation_oracle=getattr(args, "live_continuation_oracle", False),
+        live_continuation_oracle_candidate_cap=getattr(
+            args, "live_continuation_oracle_candidate_cap", ACTION_COUNT
+        ),
         capture_driver=getattr(args, "capture_driver", "checkpoint"),
         audit_observation_schema=getattr(args, "observation_schema", None),
         opponent_journal=getattr(args, "opponent_journal", "addressed"),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -8,12 +9,13 @@ from unittest.mock import patch
 from pokezero.actions import ACTION_COUNT
 from pokezero.env import StepResult, TerminalState
 from pokezero import foulplay_bridge
-from pokezero.foulplay_bridge import _BattleBridge, _ControlledBattleState
+from pokezero.foulplay_bridge import ControlledFoulPlayConfig, _BattleBridge, _ControlledBattleState
 from pokezero.live_foulplay_continuation import (
     LiveFoulPlayBoundary,
     LiveFoulPlayContinuationError,
     reconstruct_live_foulplay_boundary,
     run_live_foulplay_continuation,
+    select_live_foulplay_continuation_oracle_action,
 )
 from pokezero.rollout import RolloutConfig
 from pokezero.trajectory import BattleTrajectory
@@ -39,6 +41,16 @@ class _FakeEnv:
 
     def close(self) -> None:
         self.calls.append("close")
+
+
+class _FakeTerminalEnv(_FakeEnv):
+    def step(self, actions: dict[str, int]) -> StepResult:
+        self.calls.append(("step", dict(actions)))
+        return StepResult(
+            observations={},
+            rewards={},
+            terminal=TerminalState(winner="p2", turn_count=4, capped=False),
+        )
 
 
 class _FakeSourceBridge:
@@ -76,7 +88,127 @@ class _FakeProbe:
         }
 
 
+class _FakeOracleController:
+    def __init__(self, calls: list[str], *, failure: Exception | None = None) -> None:
+        self.calls = calls
+        self.failure = failure
+        self.boundary = object()
+
+    async def capture_boundary_async(self, **_kwargs: object) -> object:
+        self.calls.append("oracle-snapshot-bound")
+        return self.boundary
+
+    def select(self, **kwargs: object) -> dict[str, object]:
+        assert kwargs["boundary"] is self.boundary
+        assert kwargs["raw_action"] == 0
+        assert kwargs["legal_actions"] == (0, 1)
+        assert kwargs["foulplay_action"] == 1
+        self.calls.append("oracle-controller")
+        if self.failure is not None:
+            raise self.failure
+        return {
+            "action_index": 1,
+            "controller": "live-foulplay-continuation-oracle",
+            "controller_status": "oracle-selected",
+        }
+
+
 class LiveFoulPlayContinuationTest(unittest.TestCase):
+    def test_oracle_config_is_raw_external_foulplay_only_and_keeps_both_orientations(self) -> None:
+        for seat in ("p1", "p2"):
+            with self.subTest(seat=seat):
+                config = ControlledFoulPlayConfig(
+                    checkpoint=Path("/tmp/ckpt.pt"),
+                    showdown_root=Path("/tmp/showdown"),
+                    policy_mode="raw",
+                    opponent_policy_mode="foul-play",
+                    pokezero_player=seat,
+                    live_continuation_oracle=True,
+                    live_continuation_oracle_candidate_cap=9,
+                    max_decision_rounds=8,
+                )
+                self.assertTrue(config.live_continuation_oracle)
+                self.assertEqual(config.foulplay_player, "p2" if seat == "p1" else "p1")
+        with self.assertRaisesRegex(ValueError, "raw PokeZero source policy"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("/tmp/ckpt.pt"),
+                showdown_root=Path("/tmp/showdown"),
+                policy_mode="root-puct",
+                live_continuation_oracle=True,
+            )
+
+    def _run_oracle_boundary_seam(
+        self, *, failure: Exception | None = None, decision_round: int = 1
+    ) -> tuple[list[str], _ControlledBattleState]:
+        calls: list[str] = []
+        state = _ControlledBattleState(
+            battle_id="live-oracle-108000000",
+            seed=108_000_000,
+            format_id="gen3randombattle",
+            request_lines={"p1": "|request|{}", "p2": "|request|{}"},
+            trajectory=BattleTrajectory(
+                battle_id="live-oracle-108000000", format_id="gen3randombattle", seed=108_000_000
+            ),
+        )
+        config = SimpleNamespace(
+            pokezero_player="p1",
+            foulplay_player="p2",
+            live_continuation_minimum_decision_round=1,
+            engine_oracle_belief=False,
+            belief_set_source_enabled=lambda: False,
+        )
+        observation = SimpleNamespace(
+            legal_action_mask=tuple(index in {0, 1} for index in range(ACTION_COUNT))
+        )
+
+        async def fake_foulplay(**_kwargs: object) -> tuple[str, object]:
+            calls.append("decoded-foulplay")
+            return "move 2", foulplay_bridge.PolicyDecision(action_index=1, policy_id="foul-play")
+
+        async def fake_to_thread(function: object, /, *args: object, **kwargs: object) -> object:
+            return function(*args, **kwargs)  # type: ignore[operator]
+
+        def fake_select(*_args: object, **_kwargs: object) -> object:
+            calls.append("source-p1-raw")
+            return foulplay_bridge.PolicyDecision(action_index=0, policy_id="raw")
+
+        with (
+            patch.object(foulplay_bridge, "_capture_resolved_public_action_round"),
+            patch.object(foulplay_bridge, "_player_state", side_effect=lambda *_args, **_kwargs: object()),
+            patch.object(foulplay_bridge, "observation_from_player_state", return_value=observation),
+            patch.object(foulplay_bridge, "_observation_with_search_metadata", return_value=observation),
+            patch.object(
+                foulplay_bridge,
+                "_context_for_seat",
+                return_value=SimpleNamespace(player_id="p1"),
+            ),
+            patch.object(foulplay_bridge, "_select_live_foulplay_decision", side_effect=fake_foulplay),
+            patch.object(foulplay_bridge, "_select_policy_decision", side_effect=fake_select),
+            patch.object(foulplay_bridge, "showdown_choice_for_action", return_value="move 2"),
+            patch.object(foulplay_bridge.asyncio, "to_thread", side_effect=fake_to_thread),
+        ):
+            coroutine = foulplay_bridge._handle_decision_boundary(
+                config=config,
+                bridge=_FakeSourceBridge(calls),
+                server=SimpleNamespace(),
+                state=state,
+                policy=object(),
+                vocab=SimpleNamespace(),
+                dex=SimpleNamespace(),
+                observation_spec=SimpleNamespace(schema_version="v2"),
+                decision_round=decision_round,
+                requested_players=("p1", "p2"),
+                foulplay_process=None,
+                foulplay_logs=SimpleNamespace(),
+                live_continuation_oracle_controller=_FakeOracleController(calls, failure=failure),
+            )
+            if failure is None:
+                asyncio.run(coroutine)
+            else:
+                with self.assertRaisesRegex(RuntimeError, "oracle failed"):
+                    asyncio.run(coroutine)
+        return calls, state
+
     def _run_boundary_seam(self, *, failure: Exception | None = None) -> list[str]:
         calls: list[str] = []
         state = _ControlledBattleState(
@@ -166,6 +298,35 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
             ["decoded-foulplay", "snapshot-bound", "source-p1-candidate", "local-continuation"],
         )
 
+    def test_oracle_controller_binds_external_choice_and_submits_no_raw_fallback(self) -> None:
+        calls, state = self._run_oracle_boundary_seam()
+        self.assertEqual(
+            calls,
+            [
+                "decoded-foulplay",
+                "oracle-snapshot-bound",
+                "source-p1-raw",
+                "oracle-controller",
+                "source-choices",
+            ],
+        )
+        self.assertEqual(len(state.live_continuation_oracle_decisions), 1)
+        self.assertEqual(state.trajectory.steps[0].action_index, 1)
+
+    def test_oracle_controller_failure_never_submits_the_raw_source_choice(self) -> None:
+        calls, state = self._run_oracle_boundary_seam(failure=RuntimeError("oracle failed"))
+        self.assertEqual(
+            calls,
+            ["decoded-foulplay", "oracle-snapshot-bound", "source-p1-raw", "oracle-controller"],
+        )
+        self.assertEqual(state.trajectory.steps, [])
+
+    def test_b2_opening_boundary_is_explicitly_counted_raw_before_midgame_oracle_scoring(self) -> None:
+        calls, state = self._run_oracle_boundary_seam(decision_round=0)
+        self.assertEqual(calls, ["source-p1-raw", "decoded-foulplay", "source-choices"])
+        self.assertEqual(state.live_continuation_oracle_decisions, [])
+        self.assertEqual(state.live_continuation_oracle_forced_boundary_raw_decisions, 1)
+
     def test_targeted_snapshot_wait_preserves_unrelated_stream_events(self) -> None:
         async def exercise() -> tuple[object, object]:
             bridge = _BattleBridge(showdown_root=SimpleNamespace(), node_binary="node")
@@ -222,6 +383,180 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
         self.assertTrue(continuation_calls[0]["reset_policies"])
         self.assertIs(continuation_calls[0]["available_observations"], env.observations)
         self.assertEqual(env.calls[-1], "close")
+
+    def test_restores_the_correct_seats_when_pokezero_is_p2(self) -> None:
+        env = _FakeEnv()
+        snapshot = SimpleNamespace(battle_id="live-p2", format_id="gen3randombattle")
+        boundary = LiveFoulPlayBoundary(
+            snapshot=snapshot,
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+        with patch(
+            "pokezero.live_foulplay_continuation.continue_rollout_from_current_state",
+            return_value=SimpleNamespace(
+                decision_round_count=1,
+                terminal=TerminalState(winner="p2", turn_count=9, capped=False),
+            ),
+        ):
+            proof = run_live_foulplay_continuation(
+                boundary=boundary,
+                source_seed=108_000_000,
+                source_decision_round=1,
+                pokezero_action=4,
+                foulplay_action=7,
+                foulplay_choice="move 2",
+                pokezero_player="p2",
+                foulplay_player="p1",
+                env_factory=lambda: env,
+                continuation_policy_factory=lambda: {"p1": object(), "p2": object()},
+                rollout_config=RolloutConfig(max_decision_rounds=10, format_id="gen3randombattle"),
+            )
+        self.assertEqual(env.calls[2], ("step", {"p2": 4, "p1": 7}))
+        self.assertEqual(proof["first_restored_joint_step"], {"p2": 4, "p1": 7})
+
+    def test_oracle_scores_all_legal_candidates_without_storing_a_snapshot(self) -> None:
+        boundary = LiveFoulPlayBoundary(
+            snapshot=SimpleNamespace(battle_id="live-oracle", format_id="gen3randombattle"),
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+        observed: list[int] = []
+
+        def fake_run(**kwargs: object) -> dict[str, object]:
+            action = int(kwargs["pokezero_action"])
+            observed.append(action)
+            self.assertFalse(kwargs["allow_opening_boundary"])
+            self.assertFalse(kwargs["allow_terminal_fixed_step"])
+            return {
+                "continuation": {
+                    "decision_round_count": 2,
+                    "terminal": {"winner": "p1" if action == 2 else "p2", "turn_count": 8, "capped": False},
+                }
+            }
+
+        with patch("pokezero.live_foulplay_continuation.run_live_foulplay_continuation", side_effect=fake_run):
+            decision = select_live_foulplay_continuation_oracle_action(
+                boundary=boundary,
+                source_seed=108_000_000,
+                source_decision_round=2,
+                raw_action=1,
+                legal_actions=(0, 1, 2),
+                foulplay_action=3,
+                foulplay_choice="move 4",
+                pokezero_player="p1",
+                foulplay_player="p2",
+                candidate_cap=3,
+                env_factory=lambda: self.fail("runner is patched"),
+                continuation_policy_factory=lambda: self.fail("runner is patched"),
+                rollout_config=RolloutConfig(max_decision_rounds=10),
+            )
+        self.assertEqual(observed, [0, 1, 2])
+        self.assertEqual(decision.action_index, 2)
+        self.assertEqual(decision.metadata["full_state_snapshot_scope"], "controller-only")
+        self.assertNotIn("snapshot", decision.metadata)
+        self.assertEqual(decision.metadata["source_request_sha256"], {"p1": "a", "p2": "b"})
+        self.assertEqual(decision.metadata["snapshot_request_sha256"], {"p1": "c", "p2": "d"})
+        self.assertEqual(decision.metadata["actual_foulplay_choice"], "move 4")
+        self.assertEqual(decision.metadata["decoded_actual_foulplay_action"], 3)
+        self.assertEqual(decision.metadata["legal_action_indices"], (0, 1, 2))
+
+    def test_oracle_handles_opening_boundary_and_terminal_fixed_joint_step(self) -> None:
+        env = _FakeTerminalEnv()
+        boundary = LiveFoulPlayBoundary(
+            snapshot=SimpleNamespace(battle_id="opening", format_id="gen3randombattle"),
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+        proof = run_live_foulplay_continuation(
+            boundary=boundary,
+            source_seed=108_000_000,
+            source_decision_round=0,
+            pokezero_action=1,
+            foulplay_action=2,
+            foulplay_choice="move 3",
+            allow_opening_boundary=True,
+            allow_terminal_fixed_step=True,
+            env_factory=lambda: env,
+            continuation_policy_factory=lambda: self.fail("terminal fixed step needs no continuation policies"),
+            rollout_config=RolloutConfig(max_decision_rounds=2),
+        )
+        self.assertEqual(proof["continuation"]["decision_round_count"], 0)
+        self.assertTrue(proof["continuation"]["terminal_after_fixed_joint_step"])
+        self.assertEqual(proof["continuation"]["terminal"]["winner"], "p2")
+
+    def test_oracle_receipt_is_seat_relative_for_p2(self) -> None:
+        boundary = LiveFoulPlayBoundary(
+            snapshot=SimpleNamespace(battle_id="live-oracle-p2", format_id="gen3randombattle"),
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+
+        def fake_run(**kwargs: object) -> dict[str, object]:
+            self.assertEqual(kwargs["pokezero_player"], "p2")
+            self.assertEqual(kwargs["foulplay_player"], "p1")
+            action = int(kwargs["pokezero_action"])
+            return {
+                "continuation": {
+                    "decision_round_count": 1,
+                    "terminal": {"winner": "p2" if action == 1 else "p1", "turn_count": 8, "capped": False},
+                }
+            }
+
+        with patch("pokezero.live_foulplay_continuation.run_live_foulplay_continuation", side_effect=fake_run):
+            decision = select_live_foulplay_continuation_oracle_action(
+                boundary=boundary,
+                source_seed=108_000_001,
+                source_decision_round=1,
+                raw_action=0,
+                legal_actions=(0, 1),
+                foulplay_action=3,
+                foulplay_choice="move 4",
+                pokezero_player="p2",
+                foulplay_player="p1",
+                candidate_cap=2,
+                env_factory=lambda: self.fail("runner is patched"),
+                continuation_policy_factory=lambda: self.fail("runner is patched"),
+                rollout_config=RolloutConfig(max_decision_rounds=10),
+            )
+        self.assertEqual(decision.action_index, 1)
+        self.assertEqual(decision.metadata["first_restored_joint_step"], {"p2": 1, "p1": 3})
+
+    def test_b2_oracle_refuses_opening_round_candidates(self) -> None:
+        with self.assertRaisesRegex(LiveFoulPlayContinuationError, "mid-game source decision round"):
+            select_live_foulplay_continuation_oracle_action(
+                boundary=SimpleNamespace(),
+                source_seed=108_000_000,
+                source_decision_round=0,
+                raw_action=0,
+                legal_actions=(0,),
+                foulplay_action=1,
+                foulplay_choice="move 2",
+                pokezero_player="p1",
+                foulplay_player="p2",
+                candidate_cap=1,
+                env_factory=lambda: self.fail("opening must fail before a restore"),
+                continuation_policy_factory=lambda: self.fail("opening must fail before a restore"),
+                rollout_config=RolloutConfig(max_decision_rounds=10),
+            )
+
+    def test_oracle_refuses_to_truncate_a_live_legal_candidate_set(self) -> None:
+        with self.assertRaisesRegex(LiveFoulPlayContinuationError, "refusing to truncate"):
+            select_live_foulplay_continuation_oracle_action(
+                boundary=SimpleNamespace(),  # not reached before the cap refusal
+                source_seed=1,
+                source_decision_round=1,
+                raw_action=0,
+                legal_actions=(0, 1),
+                foulplay_action=0,
+                foulplay_choice="move 1",
+                pokezero_player="p1",
+                foulplay_player="p2",
+                candidate_cap=1,
+                env_factory=lambda: self.fail("must not construct env"),
+                continuation_policy_factory=lambda: self.fail("must not construct policies"),
+                rollout_config=RolloutConfig(max_decision_rounds=10),
+            )
 
     def test_rejects_corrupt_snapshot_request_before_any_restore_or_continuation(self) -> None:
         with self.assertRaisesRegex(
