@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed B2-pre proof for a continuation rollout in a live FoulPlay game.
-
-The ordinary controlled-FoulPlay bridge is an online match driver.  Root-PUCT
-search reconstructs branch environments from the live bridge trajectory, and a
-positive ``root_puct_leaf_actual_rollout_rounds`` entry is the execution-side
-evidence that a branch was continued after its root action.  This small driver
-makes that evidence an explicit, durable capability receipt instead of asking a
-reviewer to infer it from a general benchmark summary.
-
-It is deliberately a smoke, not a strength evaluation: one FoulPlay game, one
-mid-game PokeZero decision, and at least one realised continuation decision in
-that decision's branch search.  The runner refuses fallbacks, an opening-only
-decision, capped games, and zero-length continuations.
-"""
+"""Run the non-bankable B2-pre live FoulPlay continuation capability smoke."""
 
 from __future__ import annotations
 
@@ -34,92 +21,12 @@ from pokezero.foulplay_bridge import ControlledFoulPlayConfig, run_controlled_fo
 from pokezero.trajectory import BattleTrajectory  # noqa: E402
 
 
-SCHEMA_VERSION = "pokezero.live-foulplay-continuation-smoke.v1"
-SUCCESS_MARKER = "WROTE LIVE FOULPLAY CONTINUATION SMOKE RECEIPT"
+SCHEMA_VERSION = "pokezero.live-foulplay-continuation-smoke.v2"
+SUCCESS_MARKER = "WROTE B2-PRE LIVE FOULPLAY CONTINUATION SMOKE RECEIPT"
 
 
 class ContinuationSmokeError(RuntimeError):
-    """The requested live continuation proof was not observed."""
-
-
-def _positive_actual_continuation_rounds(value: object) -> int:
-    """Return a fail-closed total from Root-PUCT's per-leaf continuation metadata."""
-
-    if not isinstance(value, Mapping):
-        return 0
-    total = 0
-    for rounds, count in value.items():
-        try:
-            rounds_int = int(rounds)
-            count_int = int(count)
-        except (TypeError, ValueError):
-            return 0
-        if rounds_int < 0 or count_int < 0:
-            return 0
-        total += rounds_int * count_int
-    return total
-
-
-def continuation_proof_from_trajectory(
-    trajectory: BattleTrajectory,
-    *,
-    pokezero_player: str,
-    minimum_live_decision_round: int,
-) -> dict[str, object]:
-    """Extract one validated mid-game continuation proof from a bridge trajectory.
-
-    ``trajectory`` is the callback payload produced only after the controlled
-    bridge reaches a terminal result.  A static or self-play trajectory cannot
-    satisfy the controlled-bridge provenance check, and an ordinary Root-PUCT
-    choice with no realised tail cannot satisfy the positive-round check.
-    """
-
-    if minimum_live_decision_round < 1:
-        raise ValueError("minimum_live_decision_round must be at least 1.")
-    if trajectory.terminal is None:
-        raise ContinuationSmokeError("live FoulPlay trajectory was not terminal")
-    if trajectory.terminal.capped:
-        raise ContinuationSmokeError("live FoulPlay trajectory capped before a smoke proof")
-    if dict(trajectory.metadata).get("controlled_foulplay_bridge") is not True:
-        raise ContinuationSmokeError("trajectory lacks controlled live-FoulPlay bridge provenance")
-
-    for step in trajectory.steps:
-        if step.player_id != pokezero_player or step.turn_index < minimum_live_decision_round:
-            continue
-        metadata = dict(step.metadata)
-        if metadata.get("policy_family") != "root-puct-search":
-            continue
-        if metadata.get("root_puct_fallback"):
-            raise ContinuationSmokeError(
-                f"mid-game decision {step.turn_index} fell back instead of running continuation search"
-            )
-        configured = metadata.get("root_puct_leaf_rollout_rounds")
-        try:
-            configured_rounds = int(configured)
-        except (TypeError, ValueError):
-            configured_rounds = 0
-        actual_rounds = _positive_actual_continuation_rounds(
-            metadata.get("root_puct_leaf_actual_rollout_rounds")
-        )
-        total_visits = int(metadata.get("root_puct_total_visits") or 0)
-        if configured_rounds <= 0 or total_visits <= 0 or actual_rounds <= 0:
-            continue
-        return {
-            "battle_id": trajectory.battle_id,
-            "seed": trajectory.seed,
-            "pokezero_player": pokezero_player,
-            "live_decision_round": step.turn_index,
-            "policy_family": metadata["policy_family"],
-            "root_puct_total_visits": total_visits,
-            "configured_leaf_rollout_rounds": configured_rounds,
-            "actual_leaf_continuation_decision_rounds": actual_rounds,
-            "actual_leaf_rollout_rounds": dict(
-                metadata["root_puct_leaf_actual_rollout_rounds"]
-            ),
-        }
-    raise ContinuationSmokeError(
-        "no non-fallback Root-PUCT continuation rollout was observed from a live mid-game FoulPlay state"
-    )
+    """The B2-pre capability proof did not complete safely."""
 
 
 def _sha256_file(path: Path) -> str:
@@ -131,7 +38,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def _write_new_json(path: Path, payload: Mapping[str, object]) -> None:
-    """Atomically create a receipt without replacing an existing artifact."""
+    """Atomically create one receipt without replacing an existing artifact."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
@@ -152,6 +59,48 @@ def _write_new_json(path: Path, payload: Mapping[str, object]) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+def proof_from_trajectory(trajectory: BattleTrajectory) -> dict[str, object]:
+    """Extract and validate the scorer-only proof written by the live bridge."""
+
+    if trajectory.terminal is None:
+        raise ContinuationSmokeError("live FoulPlay source game was not terminal")
+    if trajectory.terminal.capped:
+        raise ContinuationSmokeError("live FoulPlay source game capped before the smoke completed")
+    metadata = dict(trajectory.metadata)
+    if metadata.get("controlled_foulplay_bridge") is not True:
+        raise ContinuationSmokeError("trajectory lacks controlled live-FoulPlay provenance")
+    proof = metadata.get("live_foulplay_continuation_smoke")
+    if not isinstance(proof, Mapping):
+        raise ContinuationSmokeError("live source trajectory lacks a continuation proof")
+    continuation = proof.get("continuation")
+    if not isinstance(continuation, Mapping):
+        raise ContinuationSmokeError("continuation proof lacks its terminal readout")
+    if int(continuation.get("decision_round_count") or 0) <= 0:
+        raise ContinuationSmokeError("continuation proof has no post-joint-action decision")
+    terminal = continuation.get("terminal")
+    if not isinstance(terminal, Mapping) or terminal.get("capped") is not False:
+        raise ContinuationSmokeError("continuation proof is capped or lacks a terminal result")
+    expected = {"p1", "p2"}
+    if set(proof.get("source_request_sha256") or ()) != expected:
+        raise ContinuationSmokeError("continuation proof does not bind both source requests")
+    if set(proof.get("snapshot_request_sha256") or ()) != expected:
+        raise ContinuationSmokeError("continuation proof does not bind both snapshot requests")
+    joint_step = proof.get("first_restored_joint_step")
+    if not isinstance(joint_step, Mapping) or set(joint_step) != expected:
+        raise ContinuationSmokeError("continuation proof lacks the fixed restored joint step")
+    if proof.get("continuation_policy_mode") != "raw":
+        raise ContinuationSmokeError("continuation proof did not use fresh raw policies")
+    if proof.get("full_state_snapshot_scope") != "scorer-only":
+        raise ContinuationSmokeError("full-state snapshot reached a path other than the scorer")
+    if not isinstance(proof.get("actual_foulplay_choice"), str) or not proof["actual_foulplay_choice"].strip():
+        raise ContinuationSmokeError("continuation proof lacks the actual FoulPlay choice")
+    if not isinstance(proof.get("decoded_actual_foulplay_action"), int):
+        raise ContinuationSmokeError("continuation proof lacks the decoded FoulPlay action")
+    if int(proof.get("source_decision_round") or 0) < 1:
+        raise ContinuationSmokeError("continuation proof is not from a mid-game source boundary")
+    return dict(proof)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
@@ -165,20 +114,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--foulplay-search-time-ms", type=int, default=1000)
     parser.add_argument("--max-decision-rounds", type=int, default=64)
     parser.add_argument("--minimum-live-decision-round", type=int, default=1)
-    parser.add_argument("--root-visit-budget", type=int, default=1)
     return parser
 
 
 async def _run(args: argparse.Namespace) -> dict[str, object]:
-    if args.minimum_live_decision_round < 1:
-        raise ValueError("--minimum-live-decision-round must be at least 1")
-    if args.root_visit_budget <= 0:
-        raise ValueError("--root-visit-budget must be positive")
-    if args.foulplay_search_time_ms <= 0:
-        raise ValueError("--foulplay-search-time-ms must be positive")
-    if args.max_decision_rounds <= args.minimum_live_decision_round:
-        raise ValueError("--max-decision-rounds must leave room for the required mid-game decision")
-
     observed: list[BattleTrajectory] = []
     config = ControlledFoulPlayConfig(
         checkpoint=args.checkpoint,
@@ -190,17 +129,15 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
         foulplay_random_seed=args.seed,
         search_time_ms=args.foulplay_search_time_ms,
         max_decision_rounds=args.max_decision_rounds,
-        policy_mode="root-puct",
+        policy_mode="raw",
         device=args.device,
-        root_visit_budget=args.root_visit_budget,
-        root_opponent_action_scenarios=1,
-        root_opponent_action_candidate_scenarios=1,
-        leaf_rollout_rounds=1,
         opponent_legal_mask_mode="hidden",
         allow_search_fallback=False,
         node_binary=args.node_binary,
         pokezero_player="p1",
         record_refusals=False,
+        live_continuation_smoke=True,
+        live_continuation_minimum_decision_round=args.minimum_live_decision_round,
     )
     result = await run_controlled_foulplay_benchmark(
         config,
@@ -208,17 +145,15 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
     )
     if len(result.games) != 1 or len(observed) != 1:
         raise ContinuationSmokeError(
-            f"expected one completed live game and one callback, got games={len(result.games)} callbacks={len(observed)}"
+            f"expected one completed source game and one callback, got games={len(result.games)} callbacks={len(observed)}"
         )
-    proof = continuation_proof_from_trajectory(
-        observed[0],
-        pokezero_player=config.pokezero_player,
-        minimum_live_decision_round=args.minimum_live_decision_round,
-    )
+    proof = proof_from_trajectory(observed[0])
     return {
         "schema_version": SCHEMA_VERSION,
         "status": "PASS",
         "purpose": "B2-pre live-FoulPlay continuation capability smoke",
+        "non_bankable": True,
+        "does_not_license": ["B2", "B3", "B4"],
         "success_marker": SUCCESS_MARKER,
         "runtime": {
             "checkpoint": str(args.checkpoint),
@@ -228,12 +163,9 @@ async def _run(args: argparse.Namespace) -> dict[str, object]:
             "foulplay_search_time_ms": args.foulplay_search_time_ms,
             "seed": args.seed,
             "device": args.device,
-            "root_visit_budget": args.root_visit_budget,
-            "leaf_rollout_rounds": 1,
-            "allow_search_fallback": False,
+            "minimum_live_decision_round": args.minimum_live_decision_round,
         },
         "proof": proof,
-        "result": result.to_dict(),
     }
 
 

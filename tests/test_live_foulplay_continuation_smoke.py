@@ -5,10 +5,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from pokezero.actions import ACTION_COUNT
 from pokezero.env import TerminalState
-from pokezero.observation import PokeZeroObservationV0
-from pokezero.trajectory import BattleTrajectory, TrajectoryStep
+from pokezero.trajectory import BattleTrajectory
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,100 +21,62 @@ def _module():
     return module
 
 
-def _observation() -> PokeZeroObservationV0:
-    return PokeZeroObservationV0(
-        categorical_ids=(),
-        numeric_features=(),
-        token_type_ids=(),
-        attention_mask=(),
-        legal_action_mask=tuple(index == 0 for index in range(ACTION_COUNT)),
-    )
-
-
-def _trajectory(*, metadata: dict[str, object], turn_index: int = 1, capped: bool = False) -> BattleTrajectory:
-    observation = _observation()
+def _trajectory(proof: object) -> BattleTrajectory:
     trajectory = BattleTrajectory(
-        battle_id="controlled-foulplay-108000000",
+        battle_id="controlled-foulplay-118000000",
         format_id="gen3randombattle",
-        seed=108_000_000,
-        metadata={"controlled_foulplay_bridge": True},
+        seed=118_000_000,
+        metadata={"controlled_foulplay_bridge": True, "live_foulplay_continuation_smoke": proof},
     )
-    trajectory.append(
-        TrajectoryStep(
-            player_id="p1",
-            turn_index=turn_index,
-            observation=observation,
-            legal_action_mask=tuple(observation.legal_action_mask),
-            action_index=0,
-            metadata=metadata,
-        )
-    )
-    trajectory.record_terminal(TerminalState(winner="p1", turn_count=turn_index + 1, capped=capped))
+    trajectory.record_terminal(TerminalState(winner="p1", turn_count=8, capped=False))
     return trajectory
 
 
 class LiveFoulPlayContinuationSmokeTest(unittest.TestCase):
-    def test_extracts_a_nonfallback_midgame_continuation_proof(self) -> None:
+    def test_extracts_a_validated_live_continuation_proof(self) -> None:
         module = _module()
-        trajectory = _trajectory(
-            metadata={
-                "policy_family": "root-puct-search",
-                "root_puct_fallback": False,
-                "root_puct_total_visits": 9,
-                "root_puct_leaf_rollout_rounds": 1,
-                "root_puct_leaf_actual_rollout_rounds": {"1": 3},
-            }
-        )
-
-        proof = module.continuation_proof_from_trajectory(
-            trajectory,
-            pokezero_player="p1",
-            minimum_live_decision_round=1,
-        )
-
-        self.assertEqual(proof["live_decision_round"], 1)
-        self.assertEqual(proof["actual_leaf_continuation_decision_rounds"], 3)
-        self.assertEqual(proof["actual_leaf_rollout_rounds"], {"1": 3})
-
-    def test_rejects_the_failing_zero_continuation_input(self) -> None:
-        module = _module()
-        trajectory = _trajectory(
-            metadata={
-                "policy_family": "root-puct-search",
-                "root_puct_fallback": False,
-                "root_puct_total_visits": 1,
-                "root_puct_leaf_rollout_rounds": 1,
-                "root_puct_leaf_actual_rollout_rounds": {"0": 4},
-            }
-        )
-
-        with self.assertRaisesRegex(module.ContinuationSmokeError, "no non-fallback Root-PUCT continuation"):
-            module.continuation_proof_from_trajectory(
-                trajectory,
-                pokezero_player="p1",
-                minimum_live_decision_round=1,
+        proof = module.proof_from_trajectory(
+            _trajectory(
+                {
+                    "source_request_sha256": {"p1": "a", "p2": "b"},
+                    "snapshot_request_sha256": {"p1": "c", "p2": "d"},
+                    "first_restored_joint_step": {"p1": 1, "p2": 2},
+                    "actual_foulplay_choice": "move 3",
+                    "decoded_actual_foulplay_action": 2,
+                    "continuation_policy_mode": "raw",
+                    "full_state_snapshot_scope": "scorer-only",
+                    "source_decision_round": 2,
+                    "continuation": {
+                        "decision_round_count": 2,
+                        "terminal": {"winner": "p2", "turn_count": 9, "capped": False},
+                    },
+                }
             )
+        )
+        self.assertEqual(proof["first_restored_joint_step"], {"p1": 1, "p2": 2})
 
-    def test_rejects_an_opening_only_or_capped_trajectory(self) -> None:
+    def test_rejects_a_missing_or_capped_continuation_proof(self) -> None:
         module = _module()
-        metadata = {
-            "policy_family": "root-puct-search",
-            "root_puct_fallback": False,
-            "root_puct_total_visits": 1,
-            "root_puct_leaf_rollout_rounds": 1,
-            "root_puct_leaf_actual_rollout_rounds": {"1": 1},
-        }
-        with self.assertRaises(module.ContinuationSmokeError):
-            module.continuation_proof_from_trajectory(
-                _trajectory(metadata=metadata, turn_index=0),
-                pokezero_player="p1",
-                minimum_live_decision_round=1,
-            )
+        with self.assertRaisesRegex(module.ContinuationSmokeError, "lacks a continuation proof"):
+            module.proof_from_trajectory(_trajectory(None))
         with self.assertRaisesRegex(module.ContinuationSmokeError, "capped"):
-            module.continuation_proof_from_trajectory(
-                _trajectory(metadata=metadata, capped=True),
-                pokezero_player="p1",
-                minimum_live_decision_round=1,
+            module.proof_from_trajectory(
+                _trajectory(
+                    {
+                        "source_request_sha256": {"p1": "a", "p2": "b"},
+                        "snapshot_request_sha256": {"p1": "c", "p2": "d"},
+                        "first_restored_joint_step": {"p1": 1, "p2": 2},
+                        "actual_foulplay_choice": "move 3",
+                        "decoded_actual_foulplay_action": 2,
+                        "continuation_policy_mode": "raw",
+                        "full_state_snapshot_scope": "scorer-only",
+                        "source_decision_round": 2,
+                        "continuation": {
+                            "decision_round_count": 1,
+                            "terminal": {"winner": None, "turn_count": 8, "capped": True},
+                        },
+                    }
+                )
             )
 
     def test_refuses_to_replace_an_existing_receipt(self) -> None:
