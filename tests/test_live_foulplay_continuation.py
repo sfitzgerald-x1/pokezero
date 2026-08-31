@@ -5,8 +5,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from pokezero.actions import ACTION_COUNT
 from pokezero.env import StepResult, TerminalState
-from pokezero.foulplay_bridge import _BattleBridge
+from pokezero import foulplay_bridge
+from pokezero.foulplay_bridge import _BattleBridge, _ControlledBattleState
 from pokezero.live_foulplay_continuation import (
     LiveFoulPlayBoundary,
     LiveFoulPlayContinuationError,
@@ -14,6 +16,7 @@ from pokezero.live_foulplay_continuation import (
     run_live_foulplay_continuation,
 )
 from pokezero.rollout import RolloutConfig
+from pokezero.trajectory import BattleTrajectory
 
 
 class _FakeEnv:
@@ -38,7 +41,131 @@ class _FakeEnv:
         self.calls.append("close")
 
 
+class _FakeSourceBridge:
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    async def send(self, command: dict[str, object]) -> None:
+        if command.get("type") == "choices":
+            self.calls.append("source-choices")
+
+
+class _FakeProbe:
+    def __init__(self, calls: list[str], *, failure: Exception | None = None) -> None:
+        self.calls = calls
+        self.failure = failure
+        self.boundary = object()
+
+    async def capture_boundary_async(self, **_kwargs: object) -> object:
+        self.calls.append("snapshot-bound")
+        return self.boundary
+
+    def run(self, **kwargs: object) -> dict[str, object]:
+        assert kwargs["boundary"] is self.boundary
+        assert kwargs["decision_round"] == 1
+        assert kwargs["pokezero_action"] == 0
+        assert kwargs["foulplay_action"] == 1
+        assert kwargs["foulplay_choice"] == "move 2"
+        self.calls.append("local-continuation")
+        if self.failure is not None:
+            raise self.failure
+        return {
+            "continuation": {"decision_round_count": 1},
+            "source_request_sha256": {"p1": "a", "p2": "b"},
+            "snapshot_request_sha256": {"p1": "c", "p2": "d"},
+        }
+
+
 class LiveFoulPlayContinuationTest(unittest.TestCase):
+    def _run_boundary_seam(self, *, failure: Exception | None = None) -> list[str]:
+        calls: list[str] = []
+        state = _ControlledBattleState(
+            battle_id="live-118000000",
+            seed=118_000_000,
+            format_id="gen3randombattle",
+            request_lines={"p1": "|request|{}", "p2": "|request|{}"},
+            trajectory=BattleTrajectory(
+                battle_id="live-118000000", format_id="gen3randombattle", seed=118_000_000
+            ),
+        )
+        config = SimpleNamespace(
+            pokezero_player="p1",
+            foulplay_player="p2",
+            live_continuation_minimum_decision_round=1,
+            engine_oracle_belief=False,
+            belief_set_source_enabled=lambda: False,
+        )
+        observation = SimpleNamespace(
+            legal_action_mask=tuple(index in {0, 1} for index in range(ACTION_COUNT))
+        )
+
+        async def fake_foulplay(**_kwargs: object) -> tuple[str, object]:
+            calls.append("decoded-foulplay")
+            return "move 2", foulplay_bridge.PolicyDecision(action_index=1, policy_id="foul-play")
+
+        async def fake_to_thread(function: object, /, *args: object, **kwargs: object) -> object:
+            return function(*args, **kwargs)  # type: ignore[operator]
+
+        def fake_select(*_args: object, **_kwargs: object) -> object:
+            calls.append("source-p1-candidate")
+            return foulplay_bridge.PolicyDecision(action_index=0, policy_id="raw")
+
+        with (
+            patch.object(foulplay_bridge, "_capture_resolved_public_action_round"),
+            patch.object(foulplay_bridge, "_player_state", side_effect=lambda *_args, **_kwargs: object()),
+            patch.object(foulplay_bridge, "observation_from_player_state", return_value=observation),
+            patch.object(foulplay_bridge, "_observation_with_search_metadata", return_value=observation),
+            patch.object(
+                foulplay_bridge,
+                "_context_for_seat",
+                return_value=SimpleNamespace(player_id="p1"),
+            ),
+            patch.object(foulplay_bridge, "_select_live_foulplay_decision", side_effect=fake_foulplay),
+            patch.object(foulplay_bridge, "_select_policy_decision", side_effect=fake_select),
+            patch.object(foulplay_bridge, "showdown_choice_for_action", return_value="move 1"),
+            patch.object(foulplay_bridge.asyncio, "to_thread", side_effect=fake_to_thread),
+        ):
+            coroutine = foulplay_bridge._handle_decision_boundary(
+                config=config,
+                bridge=_FakeSourceBridge(calls),
+                server=SimpleNamespace(),
+                state=state,
+                policy=object(),
+                vocab=SimpleNamespace(),
+                dex=SimpleNamespace(),
+                observation_spec=SimpleNamespace(schema_version="v2"),
+                decision_round=1,
+                requested_players=("p1", "p2"),
+                foulplay_process=None,
+                foulplay_logs=SimpleNamespace(),
+                live_continuation_probe=_FakeProbe(calls, failure=failure),
+            )
+            if failure is None:
+                asyncio.run(coroutine)
+            else:
+                with self.assertRaisesRegex(RuntimeError, "continuation failed"):
+                    asyncio.run(coroutine)
+        return calls
+
+    def test_full_probe_seam_orders_local_proof_before_source_choice_submission(self) -> None:
+        self.assertEqual(
+            self._run_boundary_seam(),
+            [
+                "decoded-foulplay",
+                "snapshot-bound",
+                "source-p1-candidate",
+                "local-continuation",
+                "source-choices",
+            ],
+        )
+
+    def test_full_probe_seam_never_submits_source_choices_after_continuation_failure(self) -> None:
+        calls = self._run_boundary_seam(failure=RuntimeError("continuation failed"))
+        self.assertEqual(
+            calls,
+            ["decoded-foulplay", "snapshot-bound", "source-p1-candidate", "local-continuation"],
+        )
+
     def test_targeted_snapshot_wait_preserves_unrelated_stream_events(self) -> None:
         async def exercise() -> tuple[object, object]:
             bridge = _BattleBridge(showdown_root=SimpleNamespace(), node_binary="node")
