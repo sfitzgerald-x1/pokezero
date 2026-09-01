@@ -328,13 +328,26 @@ def _require_oracle_candidate_receipt(
             raise B2EvaluationError("oracle receipt candidate is capped")
         if _require_nonnegative_int(terminal.get("turn_count"), field="candidate.terminal.turn_count") < 1:
             raise B2EvaluationError("oracle receipt candidate terminal has no turn count")
-        if _require_nonnegative_int(
+        continuation_decision_round_count = _require_nonnegative_int(
             record.get("continuation_decision_round_count"),
             field="candidate.continuation_decision_round_count",
-        ) < 1:
+        )
+        terminal_after_fixed_joint_step = record.get("terminal_after_fixed_joint_step")
+        if not isinstance(terminal_after_fixed_joint_step, bool):
+            raise B2EvaluationError(
+                "oracle candidate must declare terminal_after_fixed_joint_step "
+                "as a boolean"
+            )
+        if terminal_after_fixed_joint_step and continuation_decision_round_count != 0:
+            raise B2EvaluationError(
+                "terminal fixed-step candidate must have zero continuation "
+                "decision rounds"
+            )
+        if (
+            not terminal_after_fixed_joint_step
+            and continuation_decision_round_count < 1
+        ):
             raise B2EvaluationError("B2 candidate did not continue from its mid-game joint step")
-        if record.get("terminal_after_fixed_joint_step") is not False:
-            raise B2EvaluationError("B2 candidate terminated at the fixed joint step")
         winner = terminal.get("winner")
         expected_score = (
             1.0 if winner == pokezero_player else 0.5 if winner is None else 0.0 if winner == foulplay_player else None

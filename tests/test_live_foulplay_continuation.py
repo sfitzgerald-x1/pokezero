@@ -427,10 +427,11 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
             action = int(kwargs["pokezero_action"])
             observed.append(action)
             self.assertFalse(kwargs["allow_opening_boundary"])
-            self.assertFalse(kwargs["allow_terminal_fixed_step"])
+            self.assertTrue(kwargs["allow_terminal_fixed_step"])
             return {
                 "continuation": {
                     "decision_round_count": 2,
+                    "terminal_after_fixed_joint_step": False,
                     "terminal": {"winner": "p1" if action == 2 else "p2", "turn_count": 8, "capped": False},
                 }
             }
@@ -460,6 +461,75 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
         self.assertEqual(decision.metadata["actual_foulplay_choice"], "move 4")
         self.assertEqual(decision.metadata["decoded_actual_foulplay_action"], 3)
         self.assertEqual(decision.metadata["legal_action_indices"], (0, 1, 2))
+
+    def test_oracle_records_terminal_fixed_step_candidate(self) -> None:
+        boundary = LiveFoulPlayBoundary(
+            snapshot=SimpleNamespace(
+                battle_id="live-terminal", format_id="gen3randombattle"
+            ),
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+
+        def fake_run(**kwargs: object) -> dict[str, object]:
+            action = int(kwargs["pokezero_action"])
+            self.assertTrue(kwargs["allow_terminal_fixed_step"])
+            if action == 0:
+                return {
+                    "continuation": {
+                        "decision_round_count": 0,
+                        "terminal_after_fixed_joint_step": True,
+                        "terminal": {"winner": "p1", "turn_count": 7, "capped": False},
+                    }
+                }
+            return {
+                "continuation": {
+                    "decision_round_count": 1,
+                    "terminal_after_fixed_joint_step": False,
+                    "terminal": {"winner": "p2", "turn_count": 8, "capped": False},
+                }
+            }
+
+        with patch(
+            "pokezero.live_foulplay_continuation.run_live_foulplay_continuation",
+            side_effect=fake_run,
+        ):
+            decision = select_live_foulplay_continuation_oracle_action(
+                boundary=boundary,
+                source_seed=108_000_000,
+                source_decision_round=2,
+                raw_action=1,
+                legal_actions=(0, 1),
+                foulplay_action=3,
+                foulplay_choice="move 4",
+                pokezero_player="p1",
+                foulplay_player="p2",
+                candidate_cap=2,
+                env_factory=lambda: self.fail("runner is patched"),
+                continuation_policy_factory=lambda: self.fail("runner is patched"),
+                rollout_config=RolloutConfig(max_decision_rounds=10),
+            )
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertEqual(
+            decision.metadata["candidates"],
+            (
+                {
+                    "action_index": 0,
+                    "score": 1.0,
+                    "continuation_decision_round_count": 0,
+                    "terminal": {"winner": "p1", "turn_count": 7, "capped": False},
+                    "terminal_after_fixed_joint_step": True,
+                },
+                {
+                    "action_index": 1,
+                    "score": 0.0,
+                    "continuation_decision_round_count": 1,
+                    "terminal": {"winner": "p2", "turn_count": 8, "capped": False},
+                    "terminal_after_fixed_joint_step": False,
+                },
+            ),
+        )
 
     def test_oracle_handles_opening_boundary_and_terminal_fixed_joint_step(self) -> None:
         env = _FakeTerminalEnv()
@@ -499,6 +569,7 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
             return {
                 "continuation": {
                     "decision_round_count": 1,
+                    "terminal_after_fixed_joint_step": False,
                     "terminal": {"winner": "p2" if action == 1 else "p1", "turn_count": 8, "capped": False},
                 }
             }
