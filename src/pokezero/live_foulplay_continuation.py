@@ -14,6 +14,7 @@ import hashlib
 import json
 from typing import Any, Callable, Mapping, Sequence
 
+from .actions import ACTION_COUNT
 from .belief import PublicBattleBeliefEngine
 from .env import PlayerId, PokeZeroEnv
 from .local_showdown import LocalShowdownSnapshot
@@ -27,6 +28,26 @@ _PLAYER_IDS: tuple[PlayerId, PlayerId] = ("p1", "p2")
 
 class LiveFoulPlayContinuationError(RuntimeError):
     """The live boundary cannot safely support a continuation proof."""
+
+
+LIVE_FOULPLAY_CONTINUATION_ORACLE_SCHEMA_VERSION = (
+    "pokezero.live-foulplay-continuation-oracle.v1"
+)
+
+
+@dataclass(frozen=True)
+class LiveFoulPlayContinuationOracleDecision:
+    """A bounded, receipt-safe decision from the live continuation oracle.
+
+    The controller deliberately returns only action indices and terminal summaries.
+    It never returns the generic snapshot or simulator state that it used while
+    scoring candidates.  That keeps the full state confined to the controller
+    path rather than allowing it to become a policy observation or a durable
+    evaluation artifact.
+    """
+
+    action_index: int
+    metadata: Mapping[str, Any]
 
 
 def _canonical_json(value: object) -> str:
@@ -169,6 +190,10 @@ def run_live_foulplay_continuation(
     pokezero_action: int,
     foulplay_action: int,
     foulplay_choice: str,
+    pokezero_player: PlayerId = "p1",
+    foulplay_player: PlayerId = "p2",
+    allow_opening_boundary: bool = False,
+    allow_terminal_fixed_step: bool = False,
     env_factory: Callable[[], PokeZeroEnv],
     continuation_policy_factory: Callable[[], Mapping[PlayerId, Policy]],
     rollout_config: RolloutConfig,
@@ -181,11 +206,17 @@ def run_live_foulplay_continuation(
     the source battle before its choices can be submitted.
     """
 
-    if source_decision_round < 1:
+    if source_decision_round < 0:
+        raise LiveFoulPlayContinuationError("live continuation source decision round must be non-negative")
+    if source_decision_round == 0 and not allow_opening_boundary:
         raise LiveFoulPlayContinuationError("live continuation smoke refuses opening-round states")
     if not foulplay_choice.strip():
         raise LiveFoulPlayContinuationError("live continuation smoke requires a decoded FoulPlay choice")
-    if rollout_config.max_decision_rounds <= source_decision_round + 1:
+    if {pokezero_player, foulplay_player} != set(_PLAYER_IDS) or pokezero_player == foulplay_player:
+        raise LiveFoulPlayContinuationError(
+            "live continuation requires distinct p1/p2 PokeZero and FoulPlay seats"
+        )
+    if rollout_config.max_decision_rounds <= source_decision_round + 1 and not allow_terminal_fixed_step:
         raise LiveFoulPlayContinuationError("continuation rollout leaves no decision round after the fixed joint step")
     env = env_factory()
     try:
@@ -196,9 +227,35 @@ def run_live_foulplay_continuation(
         restore(boundary.snapshot)
         if tuple(env.requested_players()) != _PLAYER_IDS:
             raise LiveFoulPlayContinuationError("restored live snapshot is not a simultaneous p1/p2 boundary")
-        first_step = env.step({"p1": pokezero_action, "p2": foulplay_action})
+        first_restored_joint_step = {
+            pokezero_player: pokezero_action,
+            foulplay_player: foulplay_action,
+        }
+        first_step = env.step(first_restored_joint_step)
         if first_step.terminal is not None:
-            raise LiveFoulPlayContinuationError("fixed live joint step reached terminal before continuation")
+            if not allow_terminal_fixed_step:
+                raise LiveFoulPlayContinuationError("fixed live joint step reached terminal before continuation")
+            if first_step.terminal.capped:
+                raise LiveFoulPlayContinuationError("fixed live joint step ended in a capped terminal state")
+            return {
+                "source_battle_id": boundary.snapshot.battle_id,
+                "source_seed": source_seed,
+                "source_decision_round": source_decision_round,
+                "source_request_sha256": dict(boundary.source_request_sha256),
+                "snapshot_request_sha256": dict(boundary.snapshot_request_sha256),
+                "actual_foulplay_choice": foulplay_choice,
+                "decoded_actual_foulplay_action": foulplay_action,
+                "first_restored_joint_step": first_restored_joint_step,
+                "continuation": {
+                    "decision_round_count": 0,
+                    "terminal_after_fixed_joint_step": True,
+                    "terminal": {
+                        "winner": first_step.terminal.winner,
+                        "turn_count": first_step.terminal.turn_count,
+                        "capped": False,
+                    },
+                },
+            }
         policies = dict(continuation_policy_factory())
         if set(policies) != set(_PLAYER_IDS):
             raise LiveFoulPlayContinuationError("fresh continuation policies must cover exactly p1 and p2")
@@ -222,7 +279,7 @@ def run_live_foulplay_continuation(
             "snapshot_request_sha256": dict(boundary.snapshot_request_sha256),
             "actual_foulplay_choice": foulplay_choice,
             "decoded_actual_foulplay_action": foulplay_action,
-            "first_restored_joint_step": {"p1": pokezero_action, "p2": foulplay_action},
+            "first_restored_joint_step": first_restored_joint_step,
             "continuation": {
                 "decision_round_count": continuation.decision_round_count,
                 "terminal": {
@@ -236,3 +293,145 @@ def run_live_foulplay_continuation(
         close = getattr(env, "close", None)
         if callable(close):
             close()
+
+
+def select_live_foulplay_continuation_oracle_action(
+    *,
+    boundary: LiveFoulPlayBoundary,
+    source_seed: int,
+    source_decision_round: int,
+    raw_action: int,
+    legal_actions: Sequence[int],
+    foulplay_action: int,
+    foulplay_choice: str,
+    pokezero_player: PlayerId,
+    foulplay_player: PlayerId,
+    candidate_cap: int,
+    env_factory: Callable[[], PokeZeroEnv],
+    continuation_policy_factory: Callable[[], Mapping[PlayerId, Policy]],
+    rollout_config: RolloutConfig,
+) -> LiveFoulPlayContinuationOracleDecision:
+    """Choose a live action by continuing every legal candidate to terminal.
+
+    This is intentionally a controller, not a regular policy: it receives the
+    generic live snapshot only after the external FoulPlay choice is decoded,
+    and it never gives that snapshot to the raw checkpoint policy.  The action
+    set is *all* legal actions at the boundary.  A candidate cap is therefore a
+    safety contract, never a request to truncate the set.  Every malformed
+    candidate list, restore/binding failure, capped continuation, or failed
+    candidate raises -- a purported oracle arm must not silently submit the raw
+    action because its controller could not run.
+    """
+
+    if candidate_cap <= 0:
+        raise LiveFoulPlayContinuationError("live continuation oracle candidate cap must be positive")
+    if source_decision_round < 1:
+        raise LiveFoulPlayContinuationError(
+            "B2 live continuation oracle requires a mid-game source decision round"
+        )
+    candidates = tuple(int(action) for action in legal_actions)
+    if not candidates:
+        raise LiveFoulPlayContinuationError("live continuation oracle received no legal candidates")
+    if len(set(candidates)) != len(candidates):
+        raise LiveFoulPlayContinuationError("live continuation oracle received duplicate legal candidates")
+    if any(action < 0 or action >= ACTION_COUNT for action in candidates):
+        raise LiveFoulPlayContinuationError(
+            "live continuation oracle received an action outside the PokeZero action space"
+        )
+    if raw_action not in candidates:
+        raise LiveFoulPlayContinuationError(
+            "live continuation oracle raw action is not among the live legal candidates"
+        )
+    if len(candidates) > candidate_cap:
+        raise LiveFoulPlayContinuationError(
+            "live continuation oracle legal candidate count "
+            f"{len(candidates)} exceeds cap {candidate_cap}; refusing to truncate"
+        )
+
+    scored: list[dict[str, Any]] = []
+    for action in candidates:
+        proof = run_live_foulplay_continuation(
+            boundary=boundary,
+            source_seed=source_seed,
+            source_decision_round=source_decision_round,
+            pokezero_action=action,
+            foulplay_action=foulplay_action,
+            foulplay_choice=foulplay_choice,
+            pokezero_player=pokezero_player,
+            foulplay_player=foulplay_player,
+            allow_opening_boundary=False,
+            allow_terminal_fixed_step=False,
+            env_factory=env_factory,
+            continuation_policy_factory=continuation_policy_factory,
+            rollout_config=rollout_config,
+        )
+        continuation = proof.get("continuation")
+        if not isinstance(continuation, Mapping):
+            raise LiveFoulPlayContinuationError("live continuation oracle candidate lacks continuation readout")
+        terminal = continuation.get("terminal")
+        if not isinstance(terminal, Mapping) or terminal.get("capped") is not False:
+            raise LiveFoulPlayContinuationError("live continuation oracle candidate capped or lacks terminal")
+        continuation_decision_round_count = int(continuation.get("decision_round_count") or 0)
+        if continuation_decision_round_count <= 0:
+            raise LiveFoulPlayContinuationError(
+                "B2 live continuation oracle candidate had no decision after the fixed joint step"
+            )
+        winner = terminal.get("winner")
+        if winner == pokezero_player:
+            score = 1.0
+        elif winner is None:
+            score = 0.5
+        elif winner == foulplay_player:
+            score = 0.0
+        else:
+            raise LiveFoulPlayContinuationError(
+                f"live continuation oracle candidate has unknown winner {winner!r}"
+            )
+        scored.append(
+            {
+                "action_index": action,
+                "score": score,
+                "continuation_decision_round_count": continuation_decision_round_count,
+                "terminal": {
+                    "winner": winner,
+                    "turn_count": terminal.get("turn_count"),
+                    "capped": False,
+                },
+                "terminal_after_fixed_joint_step": bool(
+                    continuation.get("terminal_after_fixed_joint_step")
+                ),
+            }
+        )
+
+    # Stable action-index tie-break.  In particular, the raw action receives no
+    # privileged tie break: choosing it is an oracle result only when it wins the
+    # same comparison as every other candidate.
+    selected = max(scored, key=lambda candidate: (float(candidate["score"]), -int(candidate["action_index"])))
+    selected_action = int(selected["action_index"])
+    return LiveFoulPlayContinuationOracleDecision(
+        action_index=selected_action,
+        metadata={
+            "schema_version": LIVE_FOULPLAY_CONTINUATION_ORACLE_SCHEMA_VERSION,
+            "controller": "live-foulplay-continuation-oracle",
+            "controller_status": "oracle-selected",
+            "full_state_snapshot_scope": "controller-only",
+            "source_decision_round": source_decision_round,
+            "pokezero_player": pokezero_player,
+            "foulplay_player": foulplay_player,
+            "source_request_sha256": dict(boundary.source_request_sha256),
+            "snapshot_request_sha256": dict(boundary.snapshot_request_sha256),
+            "actual_foulplay_choice": foulplay_choice,
+            "decoded_actual_foulplay_action": foulplay_action,
+            "raw_action_index": raw_action,
+            "selected_action_index": selected_action,
+            "selected_changed_raw_action": selected_action != raw_action,
+            "first_restored_joint_step": {
+                pokezero_player: selected_action,
+                foulplay_player: foulplay_action,
+            },
+            "candidate_count": len(candidates),
+            "candidate_cap": candidate_cap,
+            "legal_action_indices": candidates,
+            "candidates": tuple(scored),
+        },
+    )
