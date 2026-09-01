@@ -127,6 +127,48 @@ def _require_sha256(value: object, *, field: str) -> str:
     return value
 
 
+_FORBIDDEN_ARM_FULL_STATE_FIELDS = frozenset(
+    {
+        "snapshot",
+        "bridge_snapshot",
+        "generic_snapshot",
+        "serialized_snapshot",
+        "full_state",
+        "generic_full_state",
+        "full_state_snapshot",
+        "simulator_state",
+    }
+)
+
+
+def _arm_envelope_key(key: object) -> str:
+    """Normalize a top-level arm key without treating benign provenance as state.
+
+    The B2 arm envelope may name identities such as ``showdown_sim_sha256``;
+    those are not state snapshots.  Only exact, normalized field names that
+    conventionally carry a serialized simulator/full state are refused.  This
+    is deliberately scoped to the arm envelope: the oracle-decision receipt
+    below has its own exact key schema and may retain request *hashes*.
+    """
+
+    if not isinstance(key, str):
+        return ""
+    snake = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
+    return snake.replace("-", "_").lower()
+
+
+def _reject_arm_envelope_full_state(summary: Mapping[str, Any], *, field: str) -> None:
+    leaked = sorted(
+        key
+        for key in summary
+        if _arm_envelope_key(key) in _FORBIDDEN_ARM_FULL_STATE_FIELDS
+    )
+    if leaked:
+        raise B2EvaluationError(
+            f"{field} contains serialized generic/full-state evidence at arm scope: {leaked!r}"
+        )
+
+
 def _registered_unit(*, seat: str, seed: int) -> dict[str, int | str]:
     if seat not in _ORIENTATION_REGISTRATION:
         raise B2EvaluationError("B2 unit has an unknown PokeZero orientation")
@@ -306,6 +348,7 @@ def _require_oracle_candidate_receipt(
 def _require_controller_receipt(
     summary: Mapping[str, Any], *, oracle: bool, seat: str, expected_seed: int | None = None
 ) -> Mapping[str, Any]:
+    _reject_arm_envelope_full_state(summary, field="oracle continuation arm" if oracle else "raw arm")
     if summary.get("schema_version") != SOURCE_SCHEMA_VERSION or summary.get("status") != "complete":
         raise B2EvaluationError("B2 arm did not emit the complete controlled-FoulPlay source schema")
     if summary.get("games") != 1 or summary.get("complete") is not True or summary.get("completed_games") != 1:

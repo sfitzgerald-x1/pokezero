@@ -213,6 +213,16 @@ class B2EvaluatorTest(unittest.TestCase):
         with self.assertRaisesRegex(module.B2EvaluationError, "unexpected receipt shape"):
             module.validate_b2_document(missing_legal)
 
+    def test_rejects_serialized_full_state_at_either_arm_envelope(self) -> None:
+        module = _module()
+        for arm_name in ("raw", "oracle_continuation"):
+            for field in ("snapshot", "bridge_snapshot", "full_state", "genericFullState"):
+                with self.subTest(arm=arm_name, field=field):
+                    leaked = _unit_document(module)
+                    leaked[arm_name][field] = {"hidden": "must not persist"}
+                    with self.assertRaisesRegex(module.B2EvaluationError, "serialized generic/full-state"):
+                        module.validate_b2_document(leaked)
+
     def test_rejects_terminal_integrity_candidate_or_seed_schedule_failures(self) -> None:
         module = _module()
         capped = _unit_document(module)
