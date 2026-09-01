@@ -202,8 +202,10 @@ def run_live_foulplay_continuation(
 
     The caller intentionally supplies *factories*: no source-game policy or
     source battle shell is reused for the continuation.  Any rejected restore,
-    terminal first step, capped continuation, or missing terminal result fails
-    the source battle before its choices can be submitted.
+    capped terminal, capped continuation, or missing terminal result fails the
+    source battle before its choices can be submitted.  Callers that explicitly
+    opt in may record an uncapped terminal reached by the fixed joint step as a
+    zero-decision direct outcome.
     """
 
     if source_decision_round < 0:
@@ -282,6 +284,7 @@ def run_live_foulplay_continuation(
             "first_restored_joint_step": first_restored_joint_step,
             "continuation": {
                 "decision_round_count": continuation.decision_round_count,
+                "terminal_after_fixed_joint_step": False,
                 "terminal": {
                     "winner": continuation.terminal.winner,
                     "turn_count": continuation.terminal.turn_count,
@@ -311,16 +314,18 @@ def select_live_foulplay_continuation_oracle_action(
     continuation_policy_factory: Callable[[], Mapping[PlayerId, Policy]],
     rollout_config: RolloutConfig,
 ) -> LiveFoulPlayContinuationOracleDecision:
-    """Choose a live action by continuing every legal candidate to terminal.
+    """Choose a live action by evaluating every legal candidate to terminal.
 
     This is intentionally a controller, not a regular policy: it receives the
     generic live snapshot only after the external FoulPlay choice is decoded,
     and it never gives that snapshot to the raw checkpoint policy.  The action
     set is *all* legal actions at the boundary.  A candidate cap is therefore a
     safety contract, never a request to truncate the set.  Every malformed
-    candidate list, restore/binding failure, capped continuation, or failed
-    candidate raises -- a purported oracle arm must not silently submit the raw
-    action because its controller could not run.
+    candidate list, restore/binding failure, capped terminal/continuation, or
+    failed candidate raises -- a purported oracle arm must not silently submit
+    the raw action because its controller could not run.  An uncapped terminal
+    after the fixed PokeZero/FoulPlay step is an exact direct outcome, not a
+    continuation failure: it is retained with zero continuation decisions.
     """
 
     if candidate_cap <= 0:
@@ -360,7 +365,7 @@ def select_live_foulplay_continuation_oracle_action(
             pokezero_player=pokezero_player,
             foulplay_player=foulplay_player,
             allow_opening_boundary=False,
-            allow_terminal_fixed_step=False,
+            allow_terminal_fixed_step=True,
             env_factory=env_factory,
             continuation_policy_factory=continuation_policy_factory,
             rollout_config=rollout_config,
@@ -371,8 +376,33 @@ def select_live_foulplay_continuation_oracle_action(
         terminal = continuation.get("terminal")
         if not isinstance(terminal, Mapping) or terminal.get("capped") is not False:
             raise LiveFoulPlayContinuationError("live continuation oracle candidate capped or lacks terminal")
-        continuation_decision_round_count = int(continuation.get("decision_round_count") or 0)
-        if continuation_decision_round_count <= 0:
+        continuation_decision_round_count = continuation.get("decision_round_count")
+        if (
+            isinstance(continuation_decision_round_count, bool)
+            or not isinstance(continuation_decision_round_count, int)
+            or continuation_decision_round_count < 0
+        ):
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle candidate has an invalid "
+                "continuation decision count"
+            )
+        terminal_after_fixed_joint_step = continuation.get(
+            "terminal_after_fixed_joint_step"
+        )
+        if not isinstance(terminal_after_fixed_joint_step, bool):
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle candidate must declare whether "
+                "the fixed joint step "
+                "terminated"
+            )
+        if terminal_after_fixed_joint_step and continuation_decision_round_count != 0:
+            raise LiveFoulPlayContinuationError(
+                "terminal fixed-step candidate must have zero continuation decisions"
+            )
+        if (
+            not terminal_after_fixed_joint_step
+            and continuation_decision_round_count < 1
+        ):
             raise LiveFoulPlayContinuationError(
                 "B2 live continuation oracle candidate had no decision after the fixed joint step"
             )
@@ -397,9 +427,7 @@ def select_live_foulplay_continuation_oracle_action(
                     "turn_count": terminal.get("turn_count"),
                     "capped": False,
                 },
-                "terminal_after_fixed_joint_step": bool(
-                    continuation.get("terminal_after_fixed_joint_step")
-                ),
+                "terminal_after_fixed_joint_step": terminal_after_fixed_joint_step,
             }
         )
 

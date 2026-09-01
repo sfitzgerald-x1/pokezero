@@ -269,6 +269,35 @@ class B2EvaluatorTest(unittest.TestCase):
 
     def test_rejects_terminal_integrity_candidate_or_seed_schedule_failures(self) -> None:
         module = _module()
+        terminal_fixed_step = _unit_document(module)
+        decision = terminal_fixed_step["oracle_continuation"]["game_results"][0][
+            "live_continuation_oracle"
+        ]["oracle_decisions"][0]
+        candidate = decision["candidates"][1]
+        candidate["continuation_decision_round_count"] = 0
+        candidate["terminal_after_fixed_joint_step"] = True
+        module.validate_b2_document(terminal_fixed_step)
+
+        terminal_with_continuation = _unit_document(module)
+        candidate = terminal_with_continuation["oracle_continuation"]["game_results"][
+            0
+        ][
+            "live_continuation_oracle"
+        ]["oracle_decisions"][0]["candidates"][1]
+        candidate["terminal_after_fixed_joint_step"] = True
+        with self.assertRaisesRegex(
+            module.B2EvaluationError, "zero continuation decision rounds"
+        ):
+            module.validate_b2_document(terminal_with_continuation)
+
+        zero_without_terminal = _unit_document(module)
+        candidate = zero_without_terminal["oracle_continuation"]["game_results"][0][
+            "live_continuation_oracle"
+        ]["oracle_decisions"][0]["candidates"][1]
+        candidate["continuation_decision_round_count"] = 0
+        with self.assertRaisesRegex(module.B2EvaluationError, "did not continue"):
+            module.validate_b2_document(zero_without_terminal)
+
         capped = _unit_document(module)
         capped["raw"]["game_results"][0]["capped"] = True
         with self.assertRaisesRegex(module.B2EvaluationError, "capped"):
