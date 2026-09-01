@@ -81,6 +81,8 @@ def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> di
     provenance = {
         "bridge_schema_version": module.SOURCE_SCHEMA_VERSION,
         "bridge_source_sha256": _digest("e"),
+        "unit_evaluator_source_sha256": _digest("3"),
+        "live_continuation_source_sha256": _digest("4"),
         "format_id": "gen3randombattle",
         "capture_driver": "checkpoint",
         "belief_set_source": False,
@@ -204,7 +206,7 @@ class B2EvaluatorTest(unittest.TestCase):
         leaked = _unit_document(module)
         decision = leaked["oracle_continuation"]["game_results"][0]["live_continuation_oracle"]["oracle_decisions"][0]
         decision["bridge_snapshot"] = {"hidden": "must not persist"}
-        with self.assertRaisesRegex(module.B2EvaluationError, "unexpected receipt shape"):
+        with self.assertRaisesRegex(module.B2EvaluationError, "serialized generic/full-state"):
             module.validate_b2_document(leaked)
 
         missing_legal = _unit_document(module)
@@ -213,15 +215,57 @@ class B2EvaluatorTest(unittest.TestCase):
         with self.assertRaisesRegex(module.B2EvaluationError, "unexpected receipt shape"):
             module.validate_b2_document(missing_legal)
 
-    def test_rejects_serialized_full_state_at_either_arm_envelope(self) -> None:
+    def test_rejects_serialized_full_state_at_any_arm_evidence_depth(self) -> None:
         module = _module()
         for arm_name in ("raw", "oracle_continuation"):
-            for field in ("snapshot", "bridge_snapshot", "full_state", "genericFullState"):
+            for evidence_path, field in (
+                ((), "snapshot"),
+                ((), "bridge_snapshot"),
+                ((), "full_state"),
+                (("game_results", 0), "raw_snapshot"),
+                (("game_results", 0), "snapshot_data"),
+                (("game_results", 0), "state"),
+                (("game_results", 0, "nested_evidence"), "genericFullState"),
+            ):
                 with self.subTest(arm=arm_name, field=field):
                     leaked = _unit_document(module)
-                    leaked[arm_name][field] = {"hidden": "must not persist"}
+                    target = leaked[arm_name]
+                    for path_part in evidence_path:
+                        if isinstance(path_part, int):
+                            target = target[path_part]
+                        else:
+                            target = target.setdefault(path_part, {})
+                    target[field] = {"hidden": "must not persist"}
                     with self.assertRaisesRegex(module.B2EvaluationError, "serialized generic/full-state"):
                         module.validate_b2_document(leaked)
+
+    def test_requires_exact_source_manifest_and_binds_paths_and_hashes_to_arms(self) -> None:
+        module = _module()
+        missing_source = _unit_document(module)
+        del missing_source["source_files_sha256"]["src/pokezero/live_foulplay_continuation.py"]
+        with self.assertRaisesRegex(module.B2EvaluationError, "source_files_sha256.*unexpected receipt shape"):
+            module.validate_b2_document(missing_source)
+
+        extra_source = _unit_document(module)
+        extra_source["source_files_sha256"]["src/pokezero/extra.py"] = _digest("9")
+        with self.assertRaisesRegex(module.B2EvaluationError, "source_files_sha256.*unexpected receipt shape"):
+            module.validate_b2_document(extra_source)
+
+        for source_path, provenance_field in (
+            ("scripts/live_foulplay_continuation_oracle_b2_eval.py", "unit_evaluator_source_sha256"),
+            ("src/pokezero/foulplay_bridge.py", "bridge_source_sha256"),
+            ("src/pokezero/live_foulplay_continuation.py", "live_continuation_source_sha256"),
+        ):
+            with self.subTest(source_path=source_path):
+                mismatched_source = _unit_document(module)
+                mismatched_source["source_files_sha256"][source_path] = _digest("9")
+                with self.assertRaisesRegex(module.B2EvaluationError, provenance_field):
+                    module.validate_b2_document(mismatched_source)
+
+        mismatched_checkpoint_path = _unit_document(module)
+        mismatched_checkpoint_path["registration"]["checkpoint"] = "/another-checkpoint.pt"
+        with self.assertRaisesRegex(module.B2EvaluationError, "checkpoint registration path"):
+            module.validate_b2_document(mismatched_checkpoint_path)
 
     def test_rejects_terminal_integrity_candidate_or_seed_schedule_failures(self) -> None:
         module = _module()

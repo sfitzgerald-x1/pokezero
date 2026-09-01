@@ -48,6 +48,11 @@ _ORIENTATION_REGISTRATION = {
 SOURCE_SCHEMA_VERSION = "pokezero.controlled-foulplay-benchmark.v1"
 ORACLE_RECEIPT_SCHEMA_VERSION = "pokezero.live-foulplay-continuation-oracle.v1"
 SUCCESS_MARKER = "WROTE B2 LIVE FOULPLAY CONTINUATION ORACLE PAIRED UNIT"
+_SOURCE_FILE_PATHS = (
+    "scripts/live_foulplay_continuation_oracle_b2_eval.py",
+    "src/pokezero/foulplay_bridge.py",
+    "src/pokezero/live_foulplay_continuation.py",
+)
 
 
 class B2EvaluationError(RuntimeError):
@@ -65,12 +70,7 @@ def _sha256_file(path: Path) -> str:
 def _source_files_sha256() -> dict[str, str]:
     """Hashes for exactly the source files that define this B2 unit protocol."""
 
-    paths = (
-        "scripts/live_foulplay_continuation_oracle_b2_eval.py",
-        "src/pokezero/foulplay_bridge.py",
-        "src/pokezero/live_foulplay_continuation.py",
-    )
-    return {relative: _sha256_file(REPO_ROOT / relative) for relative in paths}
+    return {relative: _sha256_file(REPO_ROOT / relative) for relative in _SOURCE_FILE_PATHS}
 
 
 def _write_new_json(path: Path, payload: Mapping[str, object]) -> None:
@@ -127,29 +127,21 @@ def _require_sha256(value: object, *, field: str) -> str:
     return value
 
 
-_FORBIDDEN_ARM_FULL_STATE_FIELDS = frozenset(
+_STATE_AUDIT_ALLOWED_FIELDS = frozenset(
     {
-        "snapshot",
-        "bridge_snapshot",
-        "generic_snapshot",
-        "serialized_snapshot",
-        "full_state",
-        "generic_full_state",
-        "full_state_snapshot",
-        "simulator_state",
+        # These are digests of live requests, not generic snapshots.  The
+        # oracle-decision schema below validates their exact p1/p2 shape.
+        "source_request_sha256",
+        "snapshot_request_sha256",
+        # These are assertions about confinement, not serialized state.
+        "controller_only_full_state",
+        "full_state_snapshot_scope",
     }
 )
 
 
-def _arm_envelope_key(key: object) -> str:
-    """Normalize a top-level arm key without treating benign provenance as state.
-
-    The B2 arm envelope may name identities such as ``showdown_sim_sha256``;
-    those are not state snapshots.  Only exact, normalized field names that
-    conventionally carry a serialized simulator/full state are refused.  This
-    is deliberately scoped to the arm envelope: the oracle-decision receipt
-    below has its own exact key schema and may retain request *hashes*.
-    """
+def _arm_evidence_key(key: object) -> str:
+    """Normalize JSON keys, including camel-case aliases, for the state audit."""
 
     if not isinstance(key, str):
         return ""
@@ -157,16 +149,49 @@ def _arm_envelope_key(key: object) -> str:
     return snake.replace("-", "_").lower()
 
 
-def _reject_arm_envelope_full_state(summary: Mapping[str, Any], *, field: str) -> None:
-    leaked = sorted(
-        key
-        for key in summary
-        if _arm_envelope_key(key) in _FORBIDDEN_ARM_FULL_STATE_FIELDS
-    )
-    if leaked:
-        raise B2EvaluationError(
-            f"{field} contains serialized generic/full-state evidence at arm scope: {leaked!r}"
-        )
+def _audit_arm_evidence_no_full_state(value: object, *, field: str) -> None:
+    """Fail closed on generic/full-state evidence anywhere in an arm document.
+
+    The bridge result has useful nested blocks (including ``game_results``), so
+    a shallow envelope check is insufficient.  This walk refuses snapshot and
+    state aliases at every depth--``raw_snapshot``, ``snapshot_data``, and
+    ``state`` included--while permitting only the request-digest fields and
+    controller-confinement assertions needed by the B2 receipt.  Provenance
+    identities such as ``showdown_sim_sha256`` do not contain those state
+    tokens and remain admissible.
+    """
+
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            normalized = _arm_evidence_key(key)
+            if not normalized:
+                raise B2EvaluationError(f"{field} has a non-string evidence key")
+            nested_field = f"{field}.{key}"
+            if normalized in _STATE_AUDIT_ALLOWED_FIELDS:
+                if normalized == "controller_only_full_state":
+                    if nested is not True:
+                        raise B2EvaluationError(f"{nested_field} must assert controller-only confinement")
+                    continue
+                if normalized == "full_state_snapshot_scope":
+                    if nested != "controller-only":
+                        raise B2EvaluationError(f"{nested_field} must be controller-only")
+                    continue
+                if not isinstance(nested, Mapping):
+                    raise B2EvaluationError(f"{nested_field} must be a request-digest mapping")
+                if set(nested) != {"p1", "p2"}:
+                    raise B2EvaluationError(f"{nested_field} must bind exactly the p1/p2 requests")
+                for player in ("p1", "p2"):
+                    _require_sha256(nested[player], field=f"{nested_field}.{player}")
+                continue
+            if "snapshot" in normalized or "state" in normalized:
+                raise B2EvaluationError(
+                    f"{nested_field} contains serialized generic/full-state evidence"
+                )
+            _audit_arm_evidence_no_full_state(nested, field=nested_field)
+        return
+    if isinstance(value, (list, tuple)):
+        for index, nested in enumerate(value):
+            _audit_arm_evidence_no_full_state(nested, field=f"{field}[{index}]")
 
 
 def _registered_unit(*, seat: str, seed: int) -> dict[str, int | str]:
@@ -348,7 +373,9 @@ def _require_oracle_candidate_receipt(
 def _require_controller_receipt(
     summary: Mapping[str, Any], *, oracle: bool, seat: str, expected_seed: int | None = None
 ) -> Mapping[str, Any]:
-    _reject_arm_envelope_full_state(summary, field="oracle continuation arm" if oracle else "raw arm")
+    _audit_arm_evidence_no_full_state(
+        summary, field="oracle continuation arm" if oracle else "raw arm"
+    )
     if summary.get("schema_version") != SOURCE_SCHEMA_VERSION or summary.get("status") != "complete":
         raise B2EvaluationError("B2 arm did not emit the complete controlled-FoulPlay source schema")
     if summary.get("games") != 1 or summary.get("complete") is not True or summary.get("completed_games") != 1:
@@ -512,6 +539,8 @@ def _require_controller_receipt(
 _ARM_PROVENANCE_KEYS = {
     "bridge_schema_version",
     "bridge_source_sha256",
+    "unit_evaluator_source_sha256",
+    "live_continuation_source_sha256",
     "format_id",
     "capture_driver",
     "belief_set_source",
@@ -533,6 +562,8 @@ def _require_arm_provenance(summary: Mapping[str, Any]) -> Mapping[str, Any]:
     _require_exact_keys(provenance, field="b2_provenance", keys=_ARM_PROVENANCE_KEYS)
     for field in (
         "bridge_source_sha256",
+        "unit_evaluator_source_sha256",
+        "live_continuation_source_sha256",
         "checkpoint_sha256",
         "showdown_sim_sha256",
         "foulplay_entrypoint_sha256",
@@ -595,11 +626,13 @@ def validate_b2_document(payload: Mapping[str, Any]) -> None:
     if seat not in _ORIENTATION_REGISTRATION:
         raise B2EvaluationError("B2 unit has an unknown PokeZero orientation")
     source_files = _require_mapping(payload.get("source_files_sha256"), field="source_files_sha256")
-    if not source_files:
-        raise B2EvaluationError("B2 unit has no source file identities")
-    for relative_path, digest in source_files.items():
-        if not isinstance(relative_path, str) or not relative_path or Path(relative_path).is_absolute():
-            raise B2EvaluationError("B2 source file identity path must be a non-empty relative path")
+    _require_exact_keys(
+        source_files,
+        field="source_files_sha256",
+        keys=set(_SOURCE_FILE_PATHS),
+    )
+    for relative_path in _SOURCE_FILE_PATHS:
+        digest = source_files.get(relative_path)
         _require_sha256(digest, field=f"source_files_sha256.{relative_path}")
     registration = _require_mapping(payload.get("registration"), field="registration")
     if registration.get("pokezero_player") != seat or registration.get("seed") != seed:
@@ -682,9 +715,21 @@ def validate_b2_document(payload: Mapping[str, Any]) -> None:
         raise B2EvaluationError("paired arms disagree on source, checkpoint, Showdown, or FoulPlay provenance")
     if raw_provenance["checkpoint_sha256"] != registration["checkpoint_sha256"]:
         raise B2EvaluationError("B2 unit checkpoint registration does not match paired arm provenance")
-    bridge_source_sha256 = source_files.get("src/pokezero/foulplay_bridge.py")
-    if raw_provenance["bridge_source_sha256"] != bridge_source_sha256:
-        raise B2EvaluationError("B2 bridge provenance does not match the top-level source file identity")
+    if (
+        raw_provenance["checkpoint_path"] != registration["checkpoint"]
+        or oracle_provenance["checkpoint_path"] != registration["checkpoint"]
+    ):
+        raise B2EvaluationError("B2 unit checkpoint registration path does not match paired arm provenance")
+    source_provenance_fields = {
+        "scripts/live_foulplay_continuation_oracle_b2_eval.py": "unit_evaluator_source_sha256",
+        "src/pokezero/foulplay_bridge.py": "bridge_source_sha256",
+        "src/pokezero/live_foulplay_continuation.py": "live_continuation_source_sha256",
+    }
+    for source_path, provenance_field in source_provenance_fields.items():
+        if raw_provenance[provenance_field] != source_files[source_path]:
+            raise B2EvaluationError(
+                f"B2 {provenance_field} does not match the top-level source file identity"
+            )
     if float(payload.get("oracle_minus_raw_score")) != (
         float(oracle_game.get("pokezero_score")) - float(raw_game.get("pokezero_score"))
     ):
@@ -700,6 +745,12 @@ def _arm_provenance(args: argparse.Namespace, summary: Mapping[str, Any]) -> dic
     return {
         "bridge_schema_version": summary.get("schema_version"),
         "bridge_source_sha256": _sha256_file(REPO_ROOT / "src" / "pokezero" / "foulplay_bridge.py"),
+        "unit_evaluator_source_sha256": _sha256_file(
+            REPO_ROOT / "scripts" / "live_foulplay_continuation_oracle_b2_eval.py"
+        ),
+        "live_continuation_source_sha256": _sha256_file(
+            REPO_ROOT / "src" / "pokezero" / "live_foulplay_continuation.py"
+        ),
         "format_id": summary.get("format_id"),
         "capture_driver": summary.get("capture_driver"),
         "belief_set_source": summary.get("belief_set_source"),
@@ -854,7 +905,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "candidate_cap": args.candidate_cap,
             "arms": ["raw", "live-continuation-oracle"],
             "external_opponent": "FoulPlay",
-            "checkpoint": str(args.checkpoint),
+            "checkpoint": str(args.checkpoint.resolve()),
             "checkpoint_sha256": _sha256_file(args.checkpoint),
         },
         "raw": unit["raw"],
