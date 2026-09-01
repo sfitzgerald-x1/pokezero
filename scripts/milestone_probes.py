@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""JSON/logic helper for scripts/milestone_probes.sh (WS-3 items 2-3 of
+"""JSON/logic helper for deployment-side milestone orchestration (WS-3 items 2-3 of
 docs/next_train_readiness_plan.md). Stdlib only — invoked with plain python3.
 
 Subcommands:

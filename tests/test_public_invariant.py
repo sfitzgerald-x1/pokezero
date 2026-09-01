@@ -1,27 +1,9 @@
-"""Public-repo invariant guard: no internal-environment identifiers in tracked files.
+"""Public-repo invariant guard for personal filesystem paths.
 
-Covers two classes. Fixed internal identifiers (cluster, registry, namespace) via _FORBIDDEN,
-and PERSONAL FILESYSTEM PATHS via _FORBIDDEN_PATTERNS. The second was added on 2026-08-03 after
-137 occurrences of a maintainer home directory were found across 48 tracked files -- 23 of them
-test files that hardcoded it as the default Showdown checkout root, which leaked a username and
-silently skipped for every other contributor.
-
-The internal cluster deployment must leave zero trace in this public repo —
-no private-repo names, cluster or node-pool identifiers, internal registry or
-storage paths, namespaces, or kube contexts. Docs that need to reference such
-things use neutral placeholders (``<private-store>/...``,
-``<internal-registry>:...``, "the internal GPU environment") with the real
-values recorded in the private deployment tooling.
-
-This guard exists because the invariant was violated four separate times by
-committed docs and audit artifacts before 2026-07-30 (see the divergence
-ledger's invariant-scrub entries): documentation of the rule did not enforce
-it, and reviewer greps only caught what a reviewer happened to scan. A test
-runs every time. If this test fails, REWORD the file (see the scrub commit for
-patterns) — do not add exceptions here without the owner's sign-off.
-
-The patterns below are assembled from fragments so this file does not match
-its own scan.
+Absolute home-directory paths leak workstation details and silently create
+defaults that fail for every other contributor. This generic guard rejects the
+whole path class without embedding private infrastructure identifiers in the
+public repository. Exact deployment identifiers are enforced by private CI.
 """
 
 from __future__ import annotations
@@ -34,21 +16,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Assembled from fragments so the guard does not flag itself.
-_FORBIDDEN = [
-    ("private deploy repo name", "pokezero" + "-deploy"),
-    ("cluster name", "olf" + "usa"),
-    ("infra provider", "cru" + "soe"),
-    ("node-pool identifier", "node" + "pool"),
-    ("internal storage root", "/sha" + "red/"),
-    ("internal namespace prefix", "scott-" + "experiment"),
-    ("controller job prefix", "scott-" + "fnd-"),
-    ("gpu pool label", "scott-" + "gpu-slice"),
-    ("kube context flag", "kubectl " + "--context"),
-]
-
-# Regex rules, for classes of leak rather than fixed strings. Assembled from fragments for the
-# same reason as _FORBIDDEN: an unfragmented pattern would match this file.
+# Regex rules cover classes of leak rather than disclosing a fixed private denylist.
 _FORBIDDEN_PATTERNS = [
     (
         "maintainer home directory",
@@ -72,9 +40,8 @@ _FORBIDDEN_PATTERNS = [
     ),
 ]
 
-# PER-RULE, deliberately: a blanket file allowlist would exempt the file from the
-# internal-cluster checks as well, silently weakening the older invariant to accommodate the
-# newer one. Keyed by rule label.
+# PER-RULE, deliberately: a blanket file allowlist would exempt a file from every
+# generic path check. Keyed by rule label.
 # EMPTY, and that is the point. This held one carve-out -- the golden corpus sample's
 # `rows.jsonl`, whose recorded provenance embedded absolute `sets_path` / `generator_path` /
 # `showdown_root` values. Those could not be scrubbed in place (each row carries a `row_sha256`
@@ -224,7 +191,7 @@ class PublicInvariantTest(unittest.TestCase):
         self.assertIn("pull_request:\n", workflow)
         self.assertNotIn("paths:", workflow)
 
-    def test_no_internal_identifiers_in_tracked_files(self) -> None:
+    def test_no_personal_paths_in_tracked_files(self) -> None:
         tracked = subprocess.run(
             ["git", "ls-files"],
             cwd=REPO_ROOT,
@@ -251,10 +218,6 @@ class PublicInvariantTest(unittest.TestCase):
                     text = path.read_text(errors="ignore")
             except (OSError, UnicodeDecodeError, EOFError, gzip.BadGzipFile):
                 continue
-            for label, needle in _FORBIDDEN:
-                for match in re.finditer(re.escape(needle), text, re.IGNORECASE):
-                    line = text.count("\n", 0, match.start()) + 1
-                    violations.append(f"{rel}:{line}: {label} ({needle!r})")
             for label, pattern in _FORBIDDEN_PATTERNS:
                 if rel in _ALLOWED_FOR_RULE.get(label, ()):
                     continue
@@ -265,9 +228,8 @@ class PublicInvariantTest(unittest.TestCase):
         self.assertEqual(
             violations,
             [],
-            "internal-environment identifiers in tracked files — reword with "
-            "neutral placeholders (the private deployment tooling holds the "
-            "real values):\n" + "\n".join(violations),
+            "personal filesystem paths in tracked files — use repository-relative "
+            "paths or environment variables instead:\n" + "\n".join(violations),
         )
 
 
