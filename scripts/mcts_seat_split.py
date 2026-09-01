@@ -19,8 +19,8 @@ Usage::
 
     python3 scripts/mcts_seat_split.py <results-dir> [<results-dir> ...]
 
-Runs on a bare python3 (no repo imports) so it can be dropped into a controller
-pod and pointed at ``/shared``.
+Runs on a bare python3 (no repo imports) so it can be copied into an analysis
+environment and pointed at any results directory.
 """
 
 from __future__ import annotations
