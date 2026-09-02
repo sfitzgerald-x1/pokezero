@@ -3107,6 +3107,24 @@ def _find_committed_fanin_task_evidence(
                 for entry in tasks:
                     if entry.task_id == candidate.task_id:
                         matches.append((entry, selected))
+            # A concurrent producer is allowed to prune an older version once
+            # it has published its successor.  Every use of this selected
+            # snapshot, including these final coherence checks, therefore has
+            # to remain inside the transient-version retry boundary.
+            for selected in selected_shards:
+                _verify_selected_fanin_shard(selected)
+            if not matches:
+                return None
+            if len(matches) != 1:
+                if any(entry != matches[0][0] for entry, _selected in matches[1:]):
+                    raise FanInInventoryValidationError(
+                        f"fan-in inventory has conflicting metadata for {candidate.task_id!r}"
+                    )
+                raise FanInInventoryValidationError(
+                    f"fan-in inventory repeats task id {candidate.task_id!r}"
+                )
+            _verify_selected_fanin_shard(matches[0][1])
+            return matches[0]
         except _SelectedFanInVersionVanishedError as exc:
             vanished = exc
             time.sleep(_SELECTED_FANIN_RETRY_SECONDS)
@@ -3117,20 +3135,6 @@ def _find_committed_fanin_task_evidence(
             raise FanInInventoryValidationError(
                 f"selected fan-in inventory is corrupt: {exc}"
             ) from exc
-        for selected in selected_shards:
-            _verify_selected_fanin_shard(selected)
-        if not matches:
-            return None
-        if len(matches) != 1:
-            if any(entry != matches[0][0] for entry, _selected in matches[1:]):
-                raise FanInInventoryValidationError(
-                    f"fan-in inventory has conflicting metadata for {candidate.task_id!r}"
-                )
-            raise FanInInventoryValidationError(
-                f"fan-in inventory repeats task id {candidate.task_id!r}"
-            )
-        _verify_selected_fanin_shard(matches[0][1])
-        return matches[0]
     raise _FanInTransientError(
         f"selected fan-in version for task {candidate.task_id!r} kept vanishing"
     ) from vanished

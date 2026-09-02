@@ -1181,6 +1181,34 @@ class FanInTests(FanInFixture):
         self.assertTrue(self._claim("w1", "i1-s0.env").exists())
         self.assertFalse(list((self.queue / "failed").iterdir()))
 
+    def test_committed_task_lookup_retries_a_vanished_final_snapshot(self) -> None:
+        """Pruning a selected old version is transient, not terminal corruption."""
+        from unittest.mock import patch
+
+        expected = self._fanin_task("i1-s0.env", 1, 0, 1, 100)
+        self._write_version("shard-wother-v1", [expected])
+        original_verify = fleet_worker._verify_selected_fanin_shard
+        checks = 0
+
+        def vanish_once_at_final_coherence_check(selected):
+            nonlocal checks
+            checks += 1
+            # The first three checks occur while the first attempt is still
+            # collecting its snapshot.  The fourth is its final coherence
+            # check, which previously escaped the retry handler.
+            if checks == 4:
+                raise fleet_worker._SelectedFanInVersionVanishedError("pruned after selection")
+            return original_verify(selected)
+
+        with patch.object(
+            fleet_worker, "_verify_selected_fanin_shard", new=vanish_once_at_final_coherence_check,
+        ):
+            result = fleet_worker._find_committed_fanin_task_evidence(self.cache_dir, expected)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0], expected)
+        self.assertGreaterEqual(checks, 8)
+
     def test_inventory_becoming_malformed_after_collection_preserves_claim_and_fails_terminally(self) -> None:
         self._manifests(2)
         calls: list[list[str]] = []
