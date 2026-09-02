@@ -25,6 +25,7 @@ from pokezero.foulplay_bridge import (
     _FOULPLAY_THINK_LINE_CAP,
     _FOULPLAY_THINK_SETTLE_GIVEUP_DECISIONS,
     _FOULPLAY_THINK_SETTLE_SECONDS,
+    _BattleBridge,
     _FoulPlayThinkClock,
     _ProcessLogBuffer,
     _foulplay_think_aggregate,
@@ -85,6 +86,34 @@ from pokezero.value_calibration import evaluate_value_calibration
 
 
 class FoulPlayBridgeTest(unittest.TestCase):
+    def test_snapshot_capture_uses_a_correlated_reply(self) -> None:
+        bridge = _BattleBridge(showdown_root=Path("/showdown"), node_binary="node")
+        sent: list[dict[str, object]] = []
+
+        async def send(command: dict[str, object]) -> None:
+            sent.append(command)
+            bridge.events.put_nowait({"type": "snapshot", "battleId": "other", "requestId": "snapshot-1"})
+            bridge.events.put_nowait(
+                {"type": "snapshot", "battleId": "b-1", "requestId": command["requestId"]}
+            )
+
+        bridge.send = send  # type: ignore[method-assign]
+        event = asyncio.run(bridge.capture_snapshot_event(battle_id="b-1"))
+
+        self.assertEqual(sent, [{"type": "snapshot", "battleId": "b-1", "requestId": "snapshot-1"}])
+        self.assertEqual(event["battleId"], "b-1")
+        self.assertEqual(bridge._deferred_events[0]["battleId"], "other")
+
+    def test_bridge_failure_wakes_a_targeted_wait(self) -> None:
+        bridge = _BattleBridge(showdown_root=Path("/showdown"), node_binary="node")
+        bridge._record_failure("bridge exited with status 17")
+
+        async def wait_for_snapshot() -> None:
+            await bridge.next_event_matching(lambda event: event.get("type") == "snapshot")
+
+        with self.assertRaisesRegex(RuntimeError, "status 17"):
+            asyncio.run(wait_for_snapshot())
+
     def test_capture_parser_forces_raw_policy_mode(self) -> None:
         parser = build_capture_arg_parser()
         args = parser.parse_args(["--checkpoint", "checkpoint.pt", "--out", "pool.jsonl"])
