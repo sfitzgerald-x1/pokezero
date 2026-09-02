@@ -4740,6 +4740,12 @@ class _BattleBridge:
         process = self.process
         assert process is not None
         await process.wait()
+        # The stderr task is bounded by the closed child pipe once wait()
+        # returns.  Drain it before reporting so an exit diagnosis contains
+        # the child failure rather than an earlier generic stdout-EOF notice.
+        if self._stderr_task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._stderr_task
         self._record_failure(self._exit_message())
 
     async def send(self, command: Mapping[str, Any]) -> None:
@@ -4815,7 +4821,16 @@ class _BattleBridge:
         except Exception as error:
             self._record_failure(f"BattleStream bridge stdout drain failed: {error}")
         else:
-            self._record_failure("BattleStream bridge stdout closed before the requested reply.")
+            # A child that exits normally closes stdout just before its return
+            # code and stderr become observable.  Give the exit watcher a
+            # short bounded chance to publish the more useful diagnosis.
+            process = self.process
+            if self._closing or process is None:
+                return
+            try:
+                await asyncio.wait_for(asyncio.shield(process.wait()), timeout=0.25)
+            except asyncio.TimeoutError:
+                self._record_failure("BattleStream bridge stdout closed before the requested reply.")
 
     async def _drain_stderr(self) -> None:
         assert self.process is not None and self.process.stderr is not None
