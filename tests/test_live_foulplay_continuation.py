@@ -640,6 +640,41 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
         )
         self.assertEqual(decision.metadata["candidates"][0]["max_continuation_decision_rounds"], 256)
 
+    def test_oracle_fails_closed_when_the_expanded_candidate_still_hits_its_bound(self) -> None:
+        boundary = LiveFoulPlayBoundary(
+            snapshot=SimpleNamespace(battle_id="live-expand-fail", format_id="gen3randombattle"),
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+        calls: list[tuple[int, int]] = []
+
+        def fake_run(**kwargs: object) -> dict[str, object]:
+            action = int(kwargs["pokezero_action"])
+            bound = int(kwargs["max_continuation_decision_rounds"])
+            calls.append((action, bound))
+            raise LiveFoulPlayContinuationBoundExceeded("candidate still capped")
+
+        with patch("pokezero.live_foulplay_continuation.run_live_foulplay_continuation", side_effect=fake_run):
+            with self.assertRaisesRegex(LiveFoulPlayContinuationBoundExceeded, "still capped"):
+                select_live_foulplay_continuation_oracle_action(
+                    boundary=boundary,
+                    source_seed=108_000_000,
+                    source_decision_round=2,
+                    raw_action=0,
+                    legal_actions=(0, 1),
+                    foulplay_action=3,
+                    foulplay_choice="move 4",
+                    pokezero_player="p1",
+                    foulplay_player="p2",
+                    candidate_cap=2,
+                    env_factory=lambda: self.fail("runner is patched"),
+                    continuation_policy_factory=lambda: self.fail("runner is patched"),
+                    rollout_config=RolloutConfig(max_decision_rounds=300),
+                    max_continuation_decision_rounds=128,
+                    expanded_continuation_decision_rounds=256,
+                )
+        self.assertEqual(calls, [(0, 128), (0, 256)])
+
     def test_oracle_records_terminal_fixed_step_candidate(self) -> None:
         boundary = LiveFoulPlayBoundary(
             snapshot=SimpleNamespace(
