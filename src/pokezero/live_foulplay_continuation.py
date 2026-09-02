@@ -31,6 +31,10 @@ class LiveFoulPlayContinuationError(RuntimeError):
     """The live boundary cannot safely support a continuation proof."""
 
 
+class LiveFoulPlayContinuationBoundExceeded(LiveFoulPlayContinuationError):
+    """A candidate reached a registered local-continuation eligibility bound."""
+
+
 LIVE_FOULPLAY_CONTINUATION_ORACLE_SCHEMA_VERSION = (
     "pokezero.live-foulplay-continuation-oracle.v1"
 )
@@ -294,7 +298,7 @@ def run_live_foulplay_continuation(
         )
         if continuation.terminal.capped:
             if max_continuation_decision_rounds is not None:
-                raise LiveFoulPlayContinuationError(
+                raise LiveFoulPlayContinuationBoundExceeded(
                     "live continuation candidate exceeded its configured "
                     f"{max_continuation_decision_rounds}-decision eligibility bound"
                 )
@@ -340,6 +344,7 @@ def select_live_foulplay_continuation_oracle_action(
     continuation_policy_factory: Callable[[], Mapping[PlayerId, Policy]],
     rollout_config: RolloutConfig,
     max_continuation_decision_rounds: int | None = None,
+    expanded_continuation_decision_rounds: int | None = None,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> LiveFoulPlayContinuationOracleDecision:
     """Choose a live action by evaluating every legal candidate to terminal.
@@ -365,6 +370,15 @@ def select_live_foulplay_continuation_oracle_action(
         raise LiveFoulPlayContinuationError(
             "live continuation oracle maximum continuation decision rounds must be positive"
         )
+    if expanded_continuation_decision_rounds is not None:
+        if max_continuation_decision_rounds is None:
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle expansion requires an initial eligibility bound"
+            )
+        if expanded_continuation_decision_rounds <= max_continuation_decision_rounds:
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle expansion must exceed the initial eligibility bound"
+            )
     if source_decision_round < 1:
         raise LiveFoulPlayContinuationError(
             "B2 live continuation oracle requires a mid-game source decision round"
@@ -413,22 +427,66 @@ def select_live_foulplay_continuation_oracle_action(
                 }
             )
         candidate_started = perf_counter()
-        proof = run_live_foulplay_continuation(
-            boundary=boundary,
-            source_seed=source_seed,
-            source_decision_round=source_decision_round,
-            pokezero_action=action,
-            foulplay_action=foulplay_action,
-            foulplay_choice=foulplay_choice,
-            pokezero_player=pokezero_player,
-            foulplay_player=foulplay_player,
-            allow_opening_boundary=False,
-            allow_terminal_fixed_step=True,
-            max_continuation_decision_rounds=max_continuation_decision_rounds,
-            env_factory=env_factory,
-            continuation_policy_factory=continuation_policy_factory,
-            rollout_config=rollout_config,
-        )
+        effective_bound = max_continuation_decision_rounds
+        try:
+            proof = run_live_foulplay_continuation(
+                boundary=boundary,
+                source_seed=source_seed,
+                source_decision_round=source_decision_round,
+                pokezero_action=action,
+                foulplay_action=foulplay_action,
+                pokezero_player=pokezero_player,
+                foulplay_player=foulplay_player,
+                allow_opening_boundary=False,
+                allow_terminal_fixed_step=True,
+                max_continuation_decision_rounds=effective_bound,
+                foulplay_choice=foulplay_choice,
+                env_factory=env_factory,
+                continuation_policy_factory=continuation_policy_factory,
+                rollout_config=rollout_config,
+            )
+        except LiveFoulPlayContinuationBoundExceeded:
+            if expanded_continuation_decision_rounds is None:
+                raise
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "event": "candidate-bound-reached",
+                        "source_decision_round": source_decision_round,
+                        "candidate_index": candidate_index,
+                        "candidate_count": len(candidates),
+                        "action_index": action,
+                        "max_continuation_decision_rounds": max_continuation_decision_rounds,
+                        "expanded_continuation_decision_rounds": expanded_continuation_decision_rounds,
+                    }
+                )
+                progress_callback(
+                    {
+                        "event": "candidate-expansion-started",
+                        "source_decision_round": source_decision_round,
+                        "candidate_index": candidate_index,
+                        "candidate_count": len(candidates),
+                        "action_index": action,
+                        "max_continuation_decision_rounds": expanded_continuation_decision_rounds,
+                    }
+                )
+            effective_bound = expanded_continuation_decision_rounds
+            proof = run_live_foulplay_continuation(
+                boundary=boundary,
+                source_seed=source_seed,
+                source_decision_round=source_decision_round,
+                pokezero_action=action,
+                foulplay_action=foulplay_action,
+                foulplay_choice=foulplay_choice,
+                pokezero_player=pokezero_player,
+                foulplay_player=foulplay_player,
+                allow_opening_boundary=False,
+                allow_terminal_fixed_step=True,
+                max_continuation_decision_rounds=effective_bound,
+                env_factory=env_factory,
+                continuation_policy_factory=continuation_policy_factory,
+                rollout_config=rollout_config,
+            )
         continuation = proof.get("continuation")
         if not isinstance(continuation, Mapping):
             raise LiveFoulPlayContinuationError("live continuation oracle candidate lacks continuation readout")
@@ -481,6 +539,11 @@ def select_live_foulplay_continuation_oracle_action(
                 "action_index": action,
                 "score": score,
                 "continuation_decision_round_count": continuation_decision_round_count,
+                **(
+                    {"max_continuation_decision_rounds": effective_bound}
+                    if effective_bound is not None
+                    else {}
+                ),
                 "terminal": {
                     "winner": winner,
                     "turn_count": terminal.get("turn_count"),
@@ -501,7 +564,7 @@ def select_live_foulplay_continuation_oracle_action(
                     "terminal_after_fixed_joint_step": terminal_after_fixed_joint_step,
                     "terminal_winner": winner,
                     "elapsed_milliseconds": max(0, int((perf_counter() - candidate_started) * 1000)),
-                    "max_continuation_decision_rounds": max_continuation_decision_rounds,
+                    "max_continuation_decision_rounds": effective_bound,
                 }
             )
 
@@ -544,11 +607,8 @@ def select_live_foulplay_continuation_oracle_action(
             },
             "candidate_count": len(candidates),
             "candidate_cap": candidate_cap,
-            **(
-                {"max_continuation_decision_rounds": max_continuation_decision_rounds}
-                if max_continuation_decision_rounds is not None
-                else {}
-            ),
+            "max_continuation_decision_rounds": max_continuation_decision_rounds,
+            "expanded_continuation_decision_rounds": expanded_continuation_decision_rounds,
             "legal_action_indices": candidates,
             "candidates": tuple(scored),
         },

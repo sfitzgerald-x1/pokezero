@@ -38,6 +38,7 @@ REGISTERED_UNITS_PER_ORIENTATION = 600
 SHARDS_PER_WORKER = 24
 UNITS_PER_SHARD = 25
 MAX_CONTINUATION_DECISION_ROUNDS = 128
+EXPANDED_CONTINUATION_DECISION_ROUNDS = 256
 _ORIENTATION_REGISTRATION = {
     "p1": {"foulplay_player": "p2", "seed_start": B2_SEED_START, "worker_index": 0},
     "p2": {
@@ -307,6 +308,14 @@ def _require_oracle_candidate_receipt(
         != MAX_CONTINUATION_DECISION_ROUNDS
     ):
         raise B2EvaluationError("oracle receipt does not declare the registered continuation eligibility bound")
+    if (
+        _require_nonnegative_int(
+            item.get("expanded_continuation_decision_rounds"),
+            field="expanded_continuation_decision_rounds",
+        )
+        != EXPANDED_CONTINUATION_DECISION_ROUNDS
+    ):
+        raise B2EvaluationError("oracle receipt does not declare the registered expansion eligibility bound")
     candidates = item.get("candidates")
     if not isinstance(candidates, (list, tuple)) or not candidates:
         raise B2EvaluationError("oracle receipt omits scored legal candidates")
@@ -331,6 +340,7 @@ def _require_oracle_candidate_receipt(
                 "action_index",
                 "score",
                 "continuation_decision_round_count",
+                "max_continuation_decision_rounds",
                 "terminal",
                 "terminal_after_fixed_joint_step",
             },
@@ -353,7 +363,13 @@ def _require_oracle_candidate_receipt(
             record.get("continuation_decision_round_count"),
             field="candidate.continuation_decision_round_count",
         )
-        if continuation_decision_round_count > MAX_CONTINUATION_DECISION_ROUNDS:
+        candidate_bound = _require_nonnegative_int(
+            record.get("max_continuation_decision_rounds"),
+            field="candidate.max_continuation_decision_rounds",
+        )
+        if candidate_bound not in {MAX_CONTINUATION_DECISION_ROUNDS, EXPANDED_CONTINUATION_DECISION_ROUNDS}:
+            raise B2EvaluationError("oracle receipt candidate has an unregistered continuation eligibility bound")
+        if continuation_decision_round_count > candidate_bound:
             raise B2EvaluationError(
                 "oracle receipt candidate exceeds the registered continuation "
                 "eligibility bound"
@@ -439,6 +455,8 @@ def _require_controller_receipt(
             "schema_version",
             "candidate_cap",
             "max_continuation_decision_rounds",
+            "expanded_continuation_decision_rounds",
+            "expanded_continuation_decision_rounds",
             "controller_only_full_state",
             "oracle_decisions",
             "games_with_oracle_decision",
@@ -461,6 +479,8 @@ def _require_controller_receipt(
         != MAX_CONTINUATION_DECISION_ROUNDS
     ):
         raise B2EvaluationError("B2 arm is not using the registered continuation eligibility bound")
+    if controller.get("expanded_continuation_decision_rounds") != EXPANDED_CONTINUATION_DECISION_ROUNDS:
+        raise B2EvaluationError("B2 arm is not using the registered continuation expansion bound")
     _require_nonnegative_int(
         controller.get("forced_boundary_raw_decisions"), field="controller.forced_boundary_raw_decisions"
     )
@@ -541,6 +561,7 @@ def _require_controller_receipt(
                     "candidate_count",
                     "candidate_cap",
                     "max_continuation_decision_rounds",
+                    "expanded_continuation_decision_rounds",
                     "legal_action_indices",
                     "candidates",
                     "action_index",
@@ -554,6 +575,8 @@ def _require_controller_receipt(
                 raise B2EvaluationError("oracle receipt contains a non-oracle controller result")
             if item.get("pokezero_player") != seat or item.get("foulplay_player") != expected_foulplay:
                 raise B2EvaluationError("oracle receipt seats do not match the registered orientation")
+            if item.get("expanded_continuation_decision_rounds") != EXPANDED_CONTINUATION_DECISION_ROUNDS:
+                raise B2EvaluationError("oracle receipt has the wrong continuation expansion bound")
             if _require_nonnegative_int(item.get("source_decision_round"), field="source_decision_round") < 1:
                 raise B2EvaluationError("B2 oracle receipt is not a mid-game continuation")
             source_hashes = _require_mapping(item.get("source_request_sha256"), field="source request hashes")
@@ -595,6 +618,7 @@ _ARM_PROVENANCE_KEYS = {
     "belief_set_source",
     "max_decision_rounds",
     "max_continuation_decision_rounds",
+    "expanded_continuation_decision_rounds",
     "foulplay_search_time_ms",
     "checkpoint_path",
     "checkpoint_sha256",
@@ -636,6 +660,10 @@ def _require_arm_provenance(summary: Mapping[str, Any]) -> Mapping[str, Any]:
         "max_continuation_decision_rounds"
     ):
         raise B2EvaluationError("B2 provenance continuation eligibility bound does not match its arm")
+    if provenance.get("expanded_continuation_decision_rounds") != controller.get(
+        "expanded_continuation_decision_rounds"
+    ):
+        raise B2EvaluationError("B2 provenance continuation expansion bound does not match its arm")
     if provenance.get("checkpoint_sha256") != summary.get("checkpoint_sha256"):
         raise B2EvaluationError("B2 provenance checkpoint does not match its arm")
     foulplay_think = _require_mapping(summary.get("foulplay_think"), field="foulplay_think")
@@ -666,6 +694,8 @@ def _require_arm_provenance(summary: Mapping[str, Any]) -> Mapping[str, Any]:
         != MAX_CONTINUATION_DECISION_ROUNDS
     ):
         raise B2EvaluationError("B2 provenance has the wrong continuation eligibility bound")
+    if provenance.get("expanded_continuation_decision_rounds") != EXPANDED_CONTINUATION_DECISION_ROUNDS:
+        raise B2EvaluationError("B2 provenance has the wrong continuation expansion bound")
     if _require_nonnegative_int(
         provenance.get("foulplay_search_time_ms"), field="b2_provenance.foulplay_search_time_ms"
     ) <= 0:
@@ -725,6 +755,7 @@ def validate_b2_document(payload: Mapping[str, Any]) -> None:
             "shard_id",
             "candidate_cap",
             "max_continuation_decision_rounds",
+            "expanded_continuation_decision_rounds",
             "arms",
             "external_opponent",
             "checkpoint",
@@ -752,6 +783,8 @@ def validate_b2_document(payload: Mapping[str, Any]) -> None:
         raise B2EvaluationError("B2 unit does not record the registered full action-space cap")
     if registration.get("max_continuation_decision_rounds") != MAX_CONTINUATION_DECISION_ROUNDS:
         raise B2EvaluationError("B2 unit does not record the registered continuation eligibility bound")
+    if registration.get("expanded_continuation_decision_rounds") != EXPANDED_CONTINUATION_DECISION_ROUNDS:
+        raise B2EvaluationError("B2 unit does not record the registered continuation expansion bound")
     if registration.get("arms") != ["raw", "live-continuation-oracle"]:
         raise B2EvaluationError("B2 unit has the wrong paired treatment arms")
     if registration.get("external_opponent") != "FoulPlay":
@@ -830,6 +863,9 @@ def _arm_provenance(args: argparse.Namespace, summary: Mapping[str, Any]) -> dic
         "max_continuation_decision_rounds": _require_mapping(
             summary.get("live_continuation_oracle"), field="live_continuation_oracle"
         ).get("max_continuation_decision_rounds"),
+        "expanded_continuation_decision_rounds": _require_mapping(
+            summary.get("live_continuation_oracle"), field="live_continuation_oracle"
+        ).get("expanded_continuation_decision_rounds"),
         "foulplay_search_time_ms": foulplay_think.get("budget_ms_configured"),
         "checkpoint_path": str(args.checkpoint.resolve()),
         "checkpoint_sha256": summary.get("checkpoint_sha256"),
@@ -883,6 +919,8 @@ def _run_arm(args: argparse.Namespace, *, seed: int, seat: str, oracle: bool) ->
                 str(args.candidate_cap),
                 "--live-continuation-oracle-max-continuation-decision-rounds",
                 str(args.max_continuation_decision_rounds),
+                "--live-continuation-oracle-expanded-continuation-decision-rounds",
+                str(args.expanded_continuation_decision_rounds),
             ]
         )
         if args.oracle_progress_dir is not None:
@@ -947,6 +985,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         required=True,
         help="first seed in this declared 600-unit PokeZero orientation band",
     )
+    parser.add_argument(
+        "--expanded-continuation-decision-rounds",
+        type=int,
+        default=EXPANDED_CONTINUATION_DECISION_ROUNDS,
+    )
     parser.add_argument("--foulplay-search-time-ms", type=int, default=1000)
     parser.add_argument("--max-decision-rounds", type=int, default=64)
     parser.add_argument("--candidate-cap", type=int, default=ACTION_COUNT)
@@ -988,6 +1031,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "B2 continuation eligibility bound must be "
             f"{MAX_CONTINUATION_DECISION_ROUNDS} decisions per candidate"
         )
+    if args.expanded_continuation_decision_rounds != EXPANDED_CONTINUATION_DECISION_ROUNDS:
+        raise B2EvaluationError(
+            "B2 continuation expansion bound must be "
+            f"{EXPANDED_CONTINUATION_DECISION_ROUNDS} decisions per capped candidate"
+        )
     if args.oracle_progress_dir is not None and not args.oracle_progress_dir.is_absolute():
         raise B2EvaluationError("--oracle-progress-dir must be absolute when set")
     unit = _paired_unit(args)
@@ -1016,6 +1064,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "shard_id": registered_unit["shard_id"],
             "candidate_cap": args.candidate_cap,
             "max_continuation_decision_rounds": args.max_continuation_decision_rounds,
+            "expanded_continuation_decision_rounds": args.expanded_continuation_decision_rounds,
             "arms": ["raw", "live-continuation-oracle"],
             "external_opponent": "FoulPlay",
             "checkpoint": str(args.checkpoint.resolve()),

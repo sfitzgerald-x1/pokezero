@@ -895,6 +895,9 @@ class ControlledFoulPlayConfig:
     # continuation. It never truncates the live legal action set and a capped
     # candidate fails the source game rather than becoming a partial score.
     live_continuation_oracle_max_continuation_decision_rounds: int = 128
+    # A cap hit is re-run from the same captured boundary at this larger bound.
+    # A second cap is a hard failure, never a partial candidate score.
+    live_continuation_oracle_expanded_continuation_decision_rounds: int | None = 256
     # Optional operational telemetry root. The controller creates immutable,
     # action-only lifecycle records here; generic snapshots never reach disk.
     live_continuation_oracle_progress_dir: Path | None = None
@@ -964,6 +967,13 @@ class ControlledFoulPlayConfig:
             if self.live_continuation_oracle_max_continuation_decision_rounds <= 0:
                 raise ValueError(
                     "live_continuation_oracle_max_continuation_decision_rounds must be positive."
+                )
+            expanded_rounds = self.live_continuation_oracle_expanded_continuation_decision_rounds
+            if expanded_rounds is not None and (
+                expanded_rounds <= self.live_continuation_oracle_max_continuation_decision_rounds
+            ):
+                raise ValueError(
+                    "live_continuation_oracle_expanded_continuation_decision_rounds must exceed the initial bound."
                 )
             if (
                 self.live_continuation_oracle_progress_dir is not None
@@ -2149,6 +2159,9 @@ class ControlledFoulPlayBenchmarkResult:
                 "candidate_cap": self.config.live_continuation_oracle_candidate_cap,
                 "max_continuation_decision_rounds": (
                     self.config.live_continuation_oracle_max_continuation_decision_rounds
+                ),
+                "expanded_continuation_decision_rounds": (
+                    self.config.live_continuation_oracle_expanded_continuation_decision_rounds
                 ),
                 "controller_only_full_state": True,
                 "oracle_decisions": live_oracle_decisions,
@@ -5077,6 +5090,8 @@ _LIVE_ORACLE_PROGRESS_EVENTS = frozenset(
     {
         "decision-started",
         "candidate-started",
+        "candidate-bound-reached",
+        "candidate-expansion-started",
         "candidate-completed",
         "decision-completed",
     }
@@ -5113,6 +5128,19 @@ _LIVE_ORACLE_PROGRESS_EVENT_FIELDS: Mapping[str, frozenset[str]] = {
             "terminal_winner",
             "elapsed_milliseconds",
             "max_continuation_decision_rounds",
+        }
+    ),
+    "candidate-bound-reached": frozenset(
+        {
+            "event", "source_decision_round", "candidate_index", "candidate_count",
+            "action_index", "max_continuation_decision_rounds",
+            "expanded_continuation_decision_rounds",
+        }
+    ),
+    "candidate-expansion-started": frozenset(
+        {
+            "event", "source_decision_round", "candidate_index", "candidate_count",
+            "action_index", "max_continuation_decision_rounds",
         }
     ),
     "decision-completed": frozenset(
@@ -5172,7 +5200,7 @@ def _validate_live_oracle_progress_event(event: Mapping[str, Any]) -> str:
             raise LiveFoulPlayContinuationError(
                 "live continuation oracle progress candidate count exceeds candidate cap"
             )
-    if event_name in {"candidate-started", "candidate-completed"}:
+    if event_name in {"candidate-started", "candidate-bound-reached", "candidate-expansion-started", "candidate-completed"}:
         candidate_index = _live_oracle_progress_int(
             event["candidate_index"], field="candidate_index", minimum=0
         )
@@ -5213,6 +5241,16 @@ def _validate_live_oracle_progress_event(event: Mapping[str, Any]) -> str:
         if event["terminal_winner"] not in ("p1", "p2", None):
             raise LiveFoulPlayContinuationError(
                 "live continuation oracle progress terminal_winner is invalid"
+            )
+    if event_name == "candidate-bound-reached":
+        expanded = _live_oracle_progress_int(
+            event["expanded_continuation_decision_rounds"],
+            field="expanded_continuation_decision_rounds",
+            minimum=1,
+        )
+        if expanded <= maximum_rounds:
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle progress expansion must exceed its initial bound"
             )
     return event_name
 
@@ -5400,6 +5438,9 @@ class _LiveFoulPlayContinuationOracleController:
             candidate_cap=self.config.live_continuation_oracle_candidate_cap,
             max_continuation_decision_rounds=(
                 self.config.live_continuation_oracle_max_continuation_decision_rounds
+            ),
+            expanded_continuation_decision_rounds=getattr(
+                self.config, "live_continuation_oracle_expanded_continuation_decision_rounds", None
             ),
             env_factory=lambda: LocalShowdownEnv(self.env_config),
             continuation_policy_factory=self._fresh_raw_continuation_policies,
@@ -9085,6 +9126,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--live-continuation-oracle-expanded-continuation-decision-rounds",
+        type=int,
+        default=256,
+        help="One bounded exact-boundary retry after a capped candidate; a second cap fails closed.",
+    )
+    parser.add_argument(
         "--live-continuation-oracle-progress-dir",
         type=Path,
         default=None,
@@ -9240,6 +9287,9 @@ def _config_from_args(
         ),
         live_continuation_oracle_max_continuation_decision_rounds=getattr(
             args, "live_continuation_oracle_max_continuation_decision_rounds", 128
+        ),
+        live_continuation_oracle_expanded_continuation_decision_rounds=getattr(
+            args, "live_continuation_oracle_expanded_continuation_decision_rounds", 256
         ),
         live_continuation_oracle_progress_dir=getattr(
             args, "live_continuation_oracle_progress_dir", None

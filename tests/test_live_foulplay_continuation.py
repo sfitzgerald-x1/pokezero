@@ -14,6 +14,7 @@ from pokezero import foulplay_bridge
 from pokezero.foulplay_bridge import ControlledFoulPlayConfig, _BattleBridge, _ControlledBattleState
 from pokezero.live_foulplay_continuation import (
     LiveFoulPlayBoundary,
+    LiveFoulPlayContinuationBoundExceeded,
     LiveFoulPlayContinuationError,
     reconstruct_live_foulplay_boundary,
     run_live_foulplay_continuation,
@@ -584,6 +585,60 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
                 "decision-completed",
             ],
         )
+
+    def test_oracle_expands_only_the_capped_candidate_from_the_same_boundary(self) -> None:
+        boundary = LiveFoulPlayBoundary(
+            snapshot=SimpleNamespace(battle_id="live-expand", format_id="gen3randombattle"),
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+        progress: list[dict[str, object]] = []
+        calls: list[tuple[int, int]] = []
+
+        def fake_run(**kwargs: object) -> dict[str, object]:
+            action = int(kwargs["pokezero_action"])
+            bound = int(kwargs["max_continuation_decision_rounds"])
+            calls.append((action, bound))
+            if action == 0 and bound == 128:
+                raise LiveFoulPlayContinuationBoundExceeded("initial cap")
+            return {
+                "continuation": {
+                    "decision_round_count": 143 if action == 0 else 3,
+                    "terminal_after_fixed_joint_step": False,
+                    "terminal": {"winner": "p1" if action == 0 else "p2", "turn_count": 9, "capped": False},
+                }
+            }
+
+        with patch("pokezero.live_foulplay_continuation.run_live_foulplay_continuation", side_effect=fake_run):
+            decision = select_live_foulplay_continuation_oracle_action(
+                boundary=boundary,
+                source_seed=108_000_000,
+                source_decision_round=2,
+                raw_action=1,
+                legal_actions=(0, 1),
+                foulplay_action=3,
+                foulplay_choice="move 4",
+                pokezero_player="p1",
+                foulplay_player="p2",
+                candidate_cap=2,
+                env_factory=lambda: self.fail("runner is patched"),
+                continuation_policy_factory=lambda: self.fail("runner is patched"),
+                rollout_config=RolloutConfig(max_decision_rounds=300),
+                max_continuation_decision_rounds=128,
+                expanded_continuation_decision_rounds=256,
+                progress_callback=lambda event: progress.append(dict(event)),
+            )
+        self.assertEqual(calls, [(0, 128), (0, 256), (1, 128)])
+        self.assertEqual(decision.action_index, 0)
+        self.assertEqual(
+            [event["event"] for event in progress],
+            [
+                "decision-started", "candidate-started", "candidate-bound-reached",
+                "candidate-expansion-started", "candidate-completed", "candidate-started",
+                "candidate-completed", "decision-completed",
+            ],
+        )
+        self.assertEqual(decision.metadata["candidates"][0]["max_continuation_decision_rounds"], 256)
 
     def test_oracle_records_terminal_fixed_step_candidate(self) -> None:
         boundary = LiveFoulPlayBoundary(
