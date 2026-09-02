@@ -35,6 +35,8 @@ import json
 import sys
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery.json"
@@ -62,6 +64,33 @@ class RolloutLeafWitnessMutationBatteryTest(unittest.TestCase):
             [entry["name"] for entry in self.doc["controls"]],
             [name for name, _required, _edits in harness.CONTROLS],
         )
+
+    def test_missing_pytest_refuses_before_the_harness_can_mutate_targets(self) -> None:
+        """A runner dependency failure is an instrument failure, never a verdict."""
+        with mock.patch.object(
+            harness.subprocess,
+            "run",
+            return_value=SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr="No module named pytest",
+            ),
+        ):
+            with self.assertRaisesRegex(
+                harness.InstrumentFailure,
+                "pytest is required.*No module named pytest",
+            ):
+                harness._require_pytest("python-without-pytest")
+
+    def test_skipped_killer_tests_are_not_accepted_as_a_mutation_verdict(self) -> None:
+        status, detail, killers = harness._classify(
+            SimpleNamespace(returncode=0),
+            "111 passed, 21 skipped, 128 subtests passed",
+            "",
+            imported=True,
+        )
+        self.assertEqual((status, killers), ("DID NOT RUN", []))
+        self.assertIn("skipped 21 selected test", detail)
 
     def test_the_harness_has_not_changed_since_the_recorded_run(self) -> None:
         self.assertEqual(
