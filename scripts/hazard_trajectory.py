@@ -27,7 +27,7 @@ _HAZARD_MILESTONE_RE = re.compile(r"^hazard-(\d+)\.json$")
 
 
 def _milestone_games_from_path(path: Path) -> int | None:
-    # Keep this in sync with scripts/milestone_probes.sh hazard_out.
+    # Keep this in sync with the deployment-side milestone probe artifact name.
     match = _HAZARD_MILESTONE_RE.match(path.name)
     if match is None:
         return None

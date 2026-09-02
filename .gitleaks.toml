@@ -1,0 +1,11 @@
+title = "PokeZero secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Known non-secret boolean keyword assignment in randbat vocabulary history"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^src/pokezero/randbat_vocab\.py$''']
+stopwords = ["include_turn_merged"]

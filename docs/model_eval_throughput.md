@@ -311,7 +311,7 @@ Exact experiment (one job, <30 GPU-minutes):
   jobs (it carries the matching torch); no new image work.
 - **Resource ask:** 1 GPU, 8 CPU, 32Gi, runAsJob with `ttlSecondsAfterFinished:
   600` and deletion as the last workflow step (owner rule). Checkpoints are
-  already on /shared — no data movement.
+  already on the mounted artifact store — no data movement.
 - **Job manifest:** lives in the private deploy repo next to the other
   benchmark jobs; nothing cluster-specific belongs in this repo.
 - **Not in scope for that job:** crate-side (tch-rs) CUDA bench with real

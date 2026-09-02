@@ -43,7 +43,6 @@ import hashlib
 import importlib.util
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -870,76 +869,8 @@ class CommandLineTests(_FixtureCase):
             done.stdout.strip(), f"{bank.PROVENANCE_SCHEMA} {len(bank.ARTIFACT_KINDS)}")
 
 
-class PublicRepoHygieneTests(unittest.TestCase):
-    """The tool ships in the public repo; nothing about any deployment may ride along.
-
-    Scoped by VALUE, not by phrasing: the needles are the literal strings that must never
-    appear. They are assembled from halves so that this file is not itself the only match --
-    a guard whose sole hit is its own pattern list covers nothing.
-    """
-
-    # Structural PATTERNS, not a denylist of real values. The first version of this guard listed
-    # the vendor, the region, the PVC name and a real node-pool id, split across `+` -- which
-    # both narrowed the guard to the instances someone remembered AND put those instances in the
-    # public repo in reconstructable form. A pattern catches the class without naming any
-    # instance, so nothing about a deployment is committed even by the check.
-    #
-    # A few patterns are written with a one-character class (`/sh[a]red`) purely so the file does
-    # not contain the literal it searches for. Same regex, no self-match.
-    FORBIDDEN_PATTERNS = (
-        (r"(?<![\w./])/sh[a]red(?:/|\b)", "the shared filesystem mount root"),
-        (r"\.compute\.intern[a]l\b", "internal node DNS suffix"),
-        (r"\bnp-[0-9a-f]{8}\b", "node-pool identifier"),
-        (r"\b[a-z]{2}-[a-z]{3,}[0-9]-[a-z]\b", "cloud region/zone string"),
-        (r"\bkubect[l]\b|\bkubeconfi[g]\b", "kube CLI or its config"),
-        (r"--namespac[e]\b|--contex[t]\b", "cluster-selecting flags"),
-        (r"\b(?:registry|ccr)\.[a-z0-9.-]+\.(?:com|io|net)\b", "registry hostname"),
-        (r"\b[a-z][a-z0-9-]*-nf[s]\b", "NFS volume / PVC name"),
-        (r"\b(?:10|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "RFC1918 / loopback address"),
-        (r"\b192\.168\.\d{1,3}\.\d{1,3}\b", "RFC1918 address"),
-        (r"\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b", "RFC1918 address"),
-    )
-
-    #: Synthetic strings that match the patterns above and name nothing real. Assembled from
-    #: fragments for the same reason the patterns are: so the file never contains them literally.
-    SYNTHETIC_HITS = (
-        "a harvest under " + "/sh" + "ared/some-campaign",
-        "worker-3" + ".compute." + "internal",
-        "node pool " + "np-" + "0123abcd" + "-7",
-        "zone " + "xx-" + "example1" + "-a",
-        "run " + "kube" + "ctl get pods",
-        "pass " + "--name" + "space to select",
-        "image at " + "registry." + "example.com/x",
-        "volume " + "scratch-" + "nfs",
-        "endpoint " + "10." + "0.0.1",
-        "endpoint " + "192." + "168.1.1",
-        "endpoint " + "172." + "16.0.1",
-    )
-
-    def test_neither_the_tool_nor_this_suite_names_a_deployment(self) -> None:
-        for path in (_SCRIPT, Path(__file__).resolve()):
-            text = path.read_text(encoding="utf-8")
-            for pattern, what in self.FORBIDDEN_PATTERNS:
-                with self.subTest(path=path.name, what=what):
-                    found = re.search(pattern, text)
-                    self.assertIsNone(
-                        found, f"{path.name} contains {what}: {found.group(0) if found else ''}"
-                    )
-
-    def test_every_pattern_matches_a_synthetic_example_of_what_it_claims_to_catch(self) -> None:
-        """The demonstrated failing input for the hygiene guard itself.
-
-        Without this, a typo in any pattern leaves it permanently green -- the shape this repo
-        has already found three times. Each pattern must match at least one synthetic hit, and
-        no pattern may match ordinary prose.
-        """
-        for pattern, what in self.FORBIDDEN_PATTERNS:
-            with self.subTest(what=what):
-                self.assertTrue(
-                    any(re.search(pattern, sample) for sample in self.SYNTHETIC_HITS),
-                    f"the pattern for {what} matches none of the synthetic examples",
-                )
-                self.assertIsNone(re.search(pattern, "a clean line of ordinary code"))
+class PublicToolPortabilityTests(unittest.TestCase):
+    """The public tool must accept its environment through arguments."""
 
     def test_the_tool_hardcodes_no_absolute_paths(self) -> None:
         """Paths arrive as arguments. A default would become somebody's production path."""

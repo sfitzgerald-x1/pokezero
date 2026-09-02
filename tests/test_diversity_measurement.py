@@ -637,7 +637,7 @@ class HazardTrajectoryTest(unittest.TestCase):
                         {
                             "checkpoints": [
                                 {
-                                    # milestone_probes.sh labels rows as
+                                    # Deployment-side milestone probes label rows as
                                     # <run>-i<iteration>, so filename is the
                                     # only durable milestone source. The run
                                     # id intentionally contains a parseable

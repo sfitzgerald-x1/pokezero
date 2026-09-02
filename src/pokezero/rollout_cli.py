@@ -353,7 +353,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--log-dir", type=Path, default=None,
         help=(
             "Also append every timestamped worker log line to <log-dir>/<worker>.log "
-            "(e.g. on /shared) so per-task wall attribution survives pod teardown."
+            "on durable storage so per-task wall attribution survives worker teardown."
         ),
     )
     selfplay_worker.add_argument(
