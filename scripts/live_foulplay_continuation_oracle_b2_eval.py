@@ -194,11 +194,23 @@ def _audit_arm_evidence_no_full_state(value: object, *, field: str) -> None:
             _audit_arm_evidence_no_full_state(nested, field=f"{field}[{index}]")
 
 
-def _registered_unit(*, seat: str, seed: int) -> dict[str, int | str]:
+def _registered_unit(*, seat: str, seed: int, registration_seed_start: int | None = None) -> dict[str, int | str]:
+    """Bind one unit to the caller-declared seat band.
+
+    The evaluator verifies the internal shape of a declared 600-unit orientation band.  The
+    immutable deployment contract owns which distinct band is admissible for a particular B2
+    run; keeping that allocation outside this reusable source validator lets a probe use its
+    own disjoint diagnostic band without ever reusing production evidence.
+    """
+
     if seat not in _ORIENTATION_REGISTRATION:
         raise B2EvaluationError("B2 unit has an unknown PokeZero orientation")
     registration = _ORIENTATION_REGISTRATION[seat]
-    offset = seed - int(registration["seed_start"])
+    if registration_seed_start is None:
+        seed_start = int(registration["seed_start"])
+    else:
+        seed_start = _require_nonnegative_int(registration_seed_start, field="registration seed start")
+    offset = seed - seed_start
     if not 0 <= offset < REGISTERED_UNITS_PER_ORIENTATION:
         raise B2EvaluationError("B2 unit seed is outside its registered orientation band")
     shard_index, unit_index_in_shard = divmod(offset, UNITS_PER_SHARD)
@@ -206,7 +218,7 @@ def _registered_unit(*, seat: str, seed: int) -> dict[str, int | str]:
         "pokezero_player": seat,
         "foulplay_player": str(registration["foulplay_player"]),
         "worker_index": int(registration["worker_index"]),
-        "seed_start": int(registration["seed_start"]),
+        "seed_start": seed_start,
         "seed": seed,
         "seed_offset": offset,
         "shard_index": shard_index,
@@ -650,7 +662,13 @@ def validate_b2_document(payload: Mapping[str, Any]) -> None:
     registration = _require_mapping(payload.get("registration"), field="registration")
     if registration.get("pokezero_player") != seat or registration.get("seed") != seed:
         raise B2EvaluationError("B2 unit registration does not match top-level seat and seed")
-    expected = _registered_unit(seat=seat, seed=seed)
+    expected = _registered_unit(
+        seat=seat,
+        seed=seed,
+        registration_seed_start=_require_nonnegative_int(
+            registration.get("seed_start"), field="registration.seed_start"
+        ),
+    )
     _require_exact_keys(
         registration,
         field="registration",
@@ -870,6 +888,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pokezero-player", choices=("p1", "p2"), required=True)
     parser.add_argument("--foulplay-player", choices=("p1", "p2"), required=True)
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument(
+        "--registration-seed-start",
+        type=int,
+        required=True,
+        help="first seed in this declared 600-unit PokeZero orientation band",
+    )
     parser.add_argument("--foulplay-search-time-ms", type=int, default=1000)
     parser.add_argument("--max-decision-rounds", type=int, default=64)
     parser.add_argument("--candidate-cap", type=int, default=ACTION_COUNT)
@@ -884,7 +908,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     expected = _ORIENTATION_REGISTRATION[args.pokezero_player]
     if args.foulplay_player != expected["foulplay_player"]:
         raise B2EvaluationError("--foulplay-player must be the external FoulPlay complement of --pokezero-player")
-    registered_unit = _registered_unit(seat=args.pokezero_player, seed=args.seed)
+    registered_unit = _registered_unit(
+        seat=args.pokezero_player,
+        seed=args.seed,
+        registration_seed_start=args.registration_seed_start,
+    )
     if args.max_decision_rounds <= 2:
         raise B2EvaluationError("B2 requires room for opening and continued live-oracle decisions")
     if args.candidate_cap != ACTION_COUNT:

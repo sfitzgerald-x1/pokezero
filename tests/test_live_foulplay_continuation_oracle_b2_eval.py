@@ -145,10 +145,14 @@ def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> di
     }
 
 
-def _unit_document(module: object, *, seat: str = "p1", seed: int | None = None) -> dict[str, object]:
+def _unit_document(
+    module: object, *, seat: str = "p1", seed: int | None = None, registration_seed_start: int | None = None,
+) -> dict[str, object]:
     if seed is None:
-        seed = module._ORIENTATION_REGISTRATION[seat]["seed_start"]
-    registered = module._registered_unit(seat=seat, seed=seed)
+        seed = registration_seed_start if registration_seed_start is not None else module._ORIENTATION_REGISTRATION[seat]["seed_start"]
+    registered = module._registered_unit(
+        seat=seat, seed=seed, registration_seed_start=registration_seed_start,
+    )
     raw = _bridge_summary(module, seat=seat, oracle=False, seed=seed)
     oracle = _bridge_summary(module, seat=seat, oracle=True, seed=seed)
     return {
@@ -373,6 +377,22 @@ class B2EvaluatorTest(unittest.TestCase):
         self.assertEqual(p2_last["worker_index"], 1)
         self.assertEqual(p2_last["shard_index"], 23)
         self.assertEqual(p2_last["unit_index_in_shard"], 24)
+
+    def test_accepts_an_explicit_fresh_orientation_band_without_reusing_the_legacy_band(self) -> None:
+        module = _module()
+        for seat, start in (("p1", 109_000_000), ("p2", 109_000_600)):
+            with self.subTest(seat=seat):
+                seed = start + 25
+                registered = module._registered_unit(
+                    seat=seat, seed=seed, registration_seed_start=start,
+                )
+                self.assertEqual(registered["seed_start"], start)
+                self.assertEqual(registered["shard_index"], 1)
+                module.validate_b2_document(
+                    _unit_document(
+                        module, seat=seat, seed=seed, registration_seed_start=start,
+                    )
+                )
 
 
 if __name__ == "__main__":
