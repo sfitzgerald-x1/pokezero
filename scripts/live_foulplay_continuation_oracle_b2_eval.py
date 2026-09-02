@@ -93,6 +93,16 @@ def _write_new_json(path: Path, payload: Mapping[str, object]) -> None:
             os.link(temporary_path, path)
         except FileExistsError as error:
             raise FileExistsError(f"refusing to replace existing B2 evaluation: {path}") from error
+        # A completed evaluator unit is consumed by the R25 parent/finalizer as
+        # a durable child-owned handoff source.  Flushing its parent directory
+        # makes the create-only link durable as well as the JSON bytes, so a
+        # pod/node interruption cannot leave a successful file commit dependent
+        # on directory-entry writeback.
+        directory = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
         temporary_path.unlink(missing_ok=True)
 
