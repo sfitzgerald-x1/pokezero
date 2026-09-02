@@ -57,6 +57,7 @@ def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> di
                     "first_restored_joint_step": {seat: 1, foulplay: 1},
                     "candidate_count": 2,
                     "candidate_cap": 9,
+                    "max_continuation_decision_rounds": 128,
                     "legal_action_indices": [0, 1],
                     "candidates": [
                         {
@@ -87,6 +88,7 @@ def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> di
         "capture_driver": "checkpoint",
         "belief_set_source": False,
         "max_decision_rounds": 64,
+        "max_continuation_decision_rounds": 128,
         "foulplay_search_time_ms": 1000,
         "checkpoint_path": "/checkpoint.pt",
         "checkpoint_sha256": _digest("f"),
@@ -117,6 +119,7 @@ def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> di
             "enabled": oracle,
             "schema_version": module.ORACLE_RECEIPT_SCHEMA_VERSION,
             "candidate_cap": 9,
+            "max_continuation_decision_rounds": 128,
             "controller_only_full_state": True,
             "oracle_decisions": 1 if oracle else 0,
             "games_with_oracle_decision": 1 if oracle else 0,
@@ -182,6 +185,7 @@ def _unit_document(
             "unit_index_in_shard": registered["unit_index_in_shard"],
             "shard_id": registered["shard_id"],
             "candidate_cap": 9,
+            "max_continuation_decision_rounds": 128,
             "arms": ["raw", "live-continuation-oracle"],
             "external_opponent": "FoulPlay",
             "checkpoint": "/checkpoint.pt",
@@ -301,6 +305,16 @@ class B2EvaluatorTest(unittest.TestCase):
         candidate["continuation_decision_round_count"] = 0
         with self.assertRaisesRegex(module.B2EvaluationError, "did not continue"):
             module.validate_b2_document(zero_without_terminal)
+
+        exceeds_registered_bound = _unit_document(module)
+        candidate = exceeds_registered_bound["oracle_continuation"]["game_results"][0][
+            "live_continuation_oracle"
+        ]["oracle_decisions"][0]["candidates"][1]
+        candidate["continuation_decision_round_count"] = (
+            module.MAX_CONTINUATION_DECISION_ROUNDS + 1
+        )
+        with self.assertRaisesRegex(module.B2EvaluationError, "eligibility bound"):
+            module.validate_b2_document(exceeds_registered_bound)
 
         capped = _unit_document(module)
         capped["raw"]["game_results"][0]["capped"] = True

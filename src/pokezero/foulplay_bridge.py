@@ -26,6 +26,7 @@ import random
 import re
 import signal
 import sys
+import tempfile
 import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -890,6 +891,13 @@ class ControlledFoulPlayConfig:
     # boundaries must succeed or the source game fails closed.
     live_continuation_oracle: bool = False
     live_continuation_oracle_candidate_cap: int = ACTION_COUNT
+    # This eligibility bound applies separately to every fully scored candidate
+    # continuation. It never truncates the live legal action set and a capped
+    # candidate fails the source game rather than becoming a partial score.
+    live_continuation_oracle_max_continuation_decision_rounds: int = 128
+    # Optional operational telemetry root. The controller creates immutable,
+    # action-only lifecycle records here; generic snapshots never reach disk.
+    live_continuation_oracle_progress_dir: Path | None = None
 
     def __post_init__(self) -> None:
         # The opponent seat's DISPLAY NAME follows who actually sits there. Left at the
@@ -952,6 +960,17 @@ class ControlledFoulPlayConfig:
             if self.live_continuation_oracle_candidate_cap > ACTION_COUNT:
                 raise ValueError(
                     "live_continuation_oracle_candidate_cap may not exceed the action-space size."
+                )
+            if self.live_continuation_oracle_max_continuation_decision_rounds <= 0:
+                raise ValueError(
+                    "live_continuation_oracle_max_continuation_decision_rounds must be positive."
+                )
+            if (
+                self.live_continuation_oracle_progress_dir is not None
+                and not self.live_continuation_oracle_progress_dir.is_absolute()
+            ):
+                raise ValueError(
+                    "live_continuation_oracle_progress_dir must be absolute when set."
                 )
             if self.max_decision_rounds <= 2:
                 raise ValueError(
@@ -2128,6 +2147,9 @@ class ControlledFoulPlayBenchmarkResult:
                 "enabled": self.config.live_continuation_oracle,
                 "schema_version": "pokezero.live-foulplay-continuation-oracle.v1",
                 "candidate_cap": self.config.live_continuation_oracle_candidate_cap,
+                "max_continuation_decision_rounds": (
+                    self.config.live_continuation_oracle_max_continuation_decision_rounds
+                ),
                 "controller_only_full_state": True,
                 "oracle_decisions": live_oracle_decisions,
                 "games_with_oracle_decision": sum(
@@ -5050,6 +5072,209 @@ class _LiveFoulPlayContinuationProbe:
         }
 
 
+_LIVE_ORACLE_PROGRESS_SCHEMA = "pokezero.live-foulplay-continuation-oracle-progress.v1"
+_LIVE_ORACLE_PROGRESS_EVENTS = frozenset(
+    {
+        "decision-started",
+        "candidate-started",
+        "candidate-completed",
+        "decision-completed",
+    }
+)
+_LIVE_ORACLE_PROGRESS_EVENT_FIELDS: Mapping[str, frozenset[str]] = {
+    "decision-started": frozenset(
+        {
+            "event",
+            "source_decision_round",
+            "candidate_count",
+            "candidate_cap",
+            "max_continuation_decision_rounds",
+        }
+    ),
+    "candidate-started": frozenset(
+        {
+            "event",
+            "source_decision_round",
+            "candidate_index",
+            "candidate_count",
+            "action_index",
+            "max_continuation_decision_rounds",
+        }
+    ),
+    "candidate-completed": frozenset(
+        {
+            "event",
+            "source_decision_round",
+            "candidate_index",
+            "candidate_count",
+            "action_index",
+            "continuation_decision_round_count",
+            "terminal_after_fixed_joint_step",
+            "terminal_winner",
+            "elapsed_milliseconds",
+            "max_continuation_decision_rounds",
+        }
+    ),
+    "decision-completed": frozenset(
+        {
+            "event",
+            "source_decision_round",
+            "candidate_count",
+            "selected_action_index",
+            "elapsed_milliseconds",
+            "max_continuation_decision_rounds",
+        }
+    ),
+}
+
+
+def _live_oracle_progress_int(
+    value: object, *, field: str, minimum: int, maximum: int | None = None
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise LiveFoulPlayContinuationError(
+            f"live continuation oracle progress {field} is invalid"
+        )
+    if maximum is not None and value > maximum:
+        raise LiveFoulPlayContinuationError(
+            f"live continuation oracle progress {field} exceeds its bound"
+        )
+    return value
+
+
+def _validate_live_oracle_progress_event(event: Mapping[str, Any]) -> str:
+    event_name = event.get("event")
+    if event_name not in _LIVE_ORACLE_PROGRESS_EVENTS:
+        raise LiveFoulPlayContinuationError(
+            "live continuation oracle progress event has an invalid event name"
+        )
+    expected_fields = _LIVE_ORACLE_PROGRESS_EVENT_FIELDS[event_name]
+    if set(event) != expected_fields:
+        raise LiveFoulPlayContinuationError(
+            "live continuation oracle progress event has an unexpected schema"
+        )
+    _live_oracle_progress_int(
+        event["source_decision_round"], field="source_decision_round", minimum=1
+    )
+    candidate_count = _live_oracle_progress_int(
+        event["candidate_count"], field="candidate_count", minimum=1
+    )
+    maximum_rounds = _live_oracle_progress_int(
+        event["max_continuation_decision_rounds"],
+        field="max_continuation_decision_rounds",
+        minimum=1,
+    )
+    if event_name == "decision-started":
+        candidate_cap = _live_oracle_progress_int(
+            event["candidate_cap"], field="candidate_cap", minimum=1, maximum=ACTION_COUNT
+        )
+        if candidate_count > candidate_cap:
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle progress candidate count exceeds candidate cap"
+            )
+    if event_name in {"candidate-started", "candidate-completed"}:
+        candidate_index = _live_oracle_progress_int(
+            event["candidate_index"], field="candidate_index", minimum=0
+        )
+        if candidate_index >= candidate_count:
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle progress candidate index is outside candidate count"
+            )
+        _live_oracle_progress_int(
+            event["action_index"], field="action_index", minimum=0, maximum=ACTION_COUNT - 1
+        )
+    if event_name == "decision-completed":
+        _live_oracle_progress_int(
+            event["selected_action_index"],
+            field="selected_action_index",
+            minimum=0,
+            maximum=ACTION_COUNT - 1,
+        )
+    if event_name in {"candidate-completed", "decision-completed"}:
+        _live_oracle_progress_int(
+            event["elapsed_milliseconds"], field="elapsed_milliseconds", minimum=0
+        )
+    if event_name == "candidate-completed":
+        continuation_count = _live_oracle_progress_int(
+            event["continuation_decision_round_count"],
+            field="continuation_decision_round_count",
+            minimum=0,
+            maximum=maximum_rounds,
+        )
+        fixed_terminal = event["terminal_after_fixed_joint_step"]
+        if not isinstance(fixed_terminal, bool):
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle progress terminal_after_fixed_joint_step is invalid"
+            )
+        if fixed_terminal != (continuation_count == 0):
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle progress fixed-terminal decision count is inconsistent"
+            )
+        if event["terminal_winner"] not in ("p1", "p2", None):
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle progress terminal_winner is invalid"
+            )
+    return event_name
+
+
+@dataclass
+class _LiveFoulPlayContinuationOracleProgressRecorder:
+    """Create-only operational records for one controller decision.
+
+    The records deliberately contain only action indices, terminal summaries,
+    and elapsed time.  In particular, this writer never receives or serializes
+    a generic BattleStream snapshot.  A write failure is a controller failure:
+    observability cannot silently disappear during an otherwise bankable arm.
+    """
+
+    root: Path
+    sequence: int = 0
+
+    def record(self, event: Mapping[str, Any]) -> None:
+        event_name = _validate_live_oracle_progress_event(event)
+        payload = {
+            "schema_version": _LIVE_ORACLE_PROGRESS_SCHEMA,
+            "sequence": self.sequence,
+            **dict(event),
+        }
+        try:
+            encoded = (
+                json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+                + "\n"
+            ).encode("utf-8")
+        except (TypeError, ValueError) as error:
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle progress event is not JSON-safe"
+            ) from error
+        self.root.mkdir(parents=True, exist_ok=True)
+        target = self.root / f"{self.sequence:08d}-{event_name}.json"
+        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=self.root)
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary, target)
+            except FileExistsError as error:
+                raise LiveFoulPlayContinuationError(
+                    f"live continuation oracle progress path already exists: {target}"
+                ) from error
+            directory = os.open(self.root, os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError as error:
+            raise LiveFoulPlayContinuationError(
+                f"unable to persist live continuation oracle progress: {error}"
+            ) from error
+        finally:
+            temporary.unlink(missing_ok=True)
+        self.sequence += 1
+
+
 @dataclass(frozen=True)
 class _LiveFoulPlayContinuationOracleController:
     """B2's fail-closed, seat-relative live continuation controller.
@@ -5069,6 +5294,17 @@ class _LiveFoulPlayContinuationOracleController:
     env_config: LocalShowdownConfig
     rollout_config: RolloutConfig
     policy_id: str
+
+    def _progress_callback(
+        self, *, state: _ControlledBattleState, decision_round: int
+    ) -> Callable[[Mapping[str, Any]], None] | None:
+        root = self.config.live_continuation_oracle_progress_dir
+        if root is None:
+            return None
+        recorder = _LiveFoulPlayContinuationOracleProgressRecorder(
+            root=root / state.battle_id / f"round-{decision_round:04d}"
+        )
+        return recorder.record
 
     async def capture_boundary_async(
         self,
@@ -5162,9 +5398,15 @@ class _LiveFoulPlayContinuationOracleController:
             pokezero_player=self.config.pokezero_player,
             foulplay_player=self.config.foulplay_player,
             candidate_cap=self.config.live_continuation_oracle_candidate_cap,
+            max_continuation_decision_rounds=(
+                self.config.live_continuation_oracle_max_continuation_decision_rounds
+            ),
             env_factory=lambda: LocalShowdownEnv(self.env_config),
             continuation_policy_factory=self._fresh_raw_continuation_policies,
             rollout_config=self.rollout_config,
+            progress_callback=self._progress_callback(
+                state=state, decision_round=decision_round
+            ),
         )
         payload = dict(decision.metadata)
         payload["action_index"] = decision.action_index
@@ -8832,6 +9074,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "The controller refuses rather than truncating an over-cap action set."
         ),
     )
+    parser.add_argument(
+        "--live-continuation-oracle-max-continuation-decision-rounds",
+        type=int,
+        default=128,
+        help=(
+            "Per-candidate local continuation eligibility bound. A candidate that does not "
+            "reach an uncapped terminal state within this bound fails the oracle arm; it is "
+            "never scored or substituted."
+        ),
+    )
+    parser.add_argument(
+        "--live-continuation-oracle-progress-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional absolute directory for immutable action-only oracle lifecycle records. "
+            "No BattleStream snapshot is written there."
+        ),
+    )
     parser.add_argument("--summary-out", type=Path, default=None, help="Optional JSON result path.")
     parser.add_argument("--json", action="store_true", help="Print JSON result.")
     return parser
@@ -8976,6 +9237,12 @@ def _config_from_args(
         live_continuation_oracle=getattr(args, "live_continuation_oracle", False),
         live_continuation_oracle_candidate_cap=getattr(
             args, "live_continuation_oracle_candidate_cap", ACTION_COUNT
+        ),
+        live_continuation_oracle_max_continuation_decision_rounds=getattr(
+            args, "live_continuation_oracle_max_continuation_decision_rounds", 128
+        ),
+        live_continuation_oracle_progress_dir=getattr(
+            args, "live_continuation_oracle_progress_dir", None
         ),
         capture_driver=getattr(args, "capture_driver", "checkpoint"),
         audit_observation_schema=getattr(args, "observation_schema", None),

@@ -9,9 +9,10 @@ primitive, not a policy-input or evaluation result.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
+from time import perf_counter
 from typing import Any, Callable, Mapping, Sequence
 
 from .actions import ACTION_COUNT
@@ -197,6 +198,7 @@ def run_live_foulplay_continuation(
     env_factory: Callable[[], PokeZeroEnv],
     continuation_policy_factory: Callable[[], Mapping[PlayerId, Policy]],
     rollout_config: RolloutConfig,
+    max_continuation_decision_rounds: int | None = None,
 ) -> dict[str, Any]:
     """Execute one fixed live joint action then a fresh local continuation.
 
@@ -210,6 +212,13 @@ def run_live_foulplay_continuation(
 
     if source_decision_round < 0:
         raise LiveFoulPlayContinuationError("live continuation source decision round must be non-negative")
+    if (
+        max_continuation_decision_rounds is not None
+        and max_continuation_decision_rounds <= 0
+    ):
+        raise LiveFoulPlayContinuationError(
+            "live continuation maximum decision rounds must be positive when set"
+        )
     if source_decision_round == 0 and not allow_opening_boundary:
         raise LiveFoulPlayContinuationError("live continuation smoke refuses opening-round states")
     if not foulplay_choice.strip():
@@ -261,10 +270,22 @@ def run_live_foulplay_continuation(
         policies = dict(continuation_policy_factory())
         if set(policies) != set(_PLAYER_IDS):
             raise LiveFoulPlayContinuationError("fresh continuation policies must cover exactly p1 and p2")
+        continuation_config = rollout_config
+        if max_continuation_decision_rounds is not None:
+            # This is a fail-closed eligibility bound, not action truncation: a
+            # candidate that does not reach a terminal state within the bound
+            # raises below and cannot influence the selected source action.
+            continuation_config = replace(
+                rollout_config,
+                max_decision_rounds=min(
+                    rollout_config.max_decision_rounds,
+                    source_decision_round + 1 + max_continuation_decision_rounds,
+                ),
+            )
         continuation = continue_rollout_from_current_state(
             env=env,
             policies=policies,
-            config=rollout_config,
+            config=continuation_config,
             seed=source_seed,
             battle_id=f"{boundary.snapshot.battle_id}-live-continuation",
             starting_decision_round_index=source_decision_round + 1,
@@ -272,6 +293,11 @@ def run_live_foulplay_continuation(
             reset_policies=True,
         )
         if continuation.terminal.capped:
+            if max_continuation_decision_rounds is not None:
+                raise LiveFoulPlayContinuationError(
+                    "live continuation candidate exceeded its configured "
+                    f"{max_continuation_decision_rounds}-decision eligibility bound"
+                )
             raise LiveFoulPlayContinuationError("live continuation smoke capped before a terminal result")
         return {
             "source_battle_id": boundary.snapshot.battle_id,
@@ -313,6 +339,8 @@ def select_live_foulplay_continuation_oracle_action(
     env_factory: Callable[[], PokeZeroEnv],
     continuation_policy_factory: Callable[[], Mapping[PlayerId, Policy]],
     rollout_config: RolloutConfig,
+    max_continuation_decision_rounds: int | None = None,
+    progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> LiveFoulPlayContinuationOracleDecision:
     """Choose a live action by evaluating every legal candidate to terminal.
 
@@ -330,6 +358,13 @@ def select_live_foulplay_continuation_oracle_action(
 
     if candidate_cap <= 0:
         raise LiveFoulPlayContinuationError("live continuation oracle candidate cap must be positive")
+    if (
+        max_continuation_decision_rounds is not None
+        and max_continuation_decision_rounds <= 0
+    ):
+        raise LiveFoulPlayContinuationError(
+            "live continuation oracle maximum continuation decision rounds must be positive"
+        )
     if source_decision_round < 1:
         raise LiveFoulPlayContinuationError(
             "B2 live continuation oracle requires a mid-game source decision round"
@@ -353,8 +388,31 @@ def select_live_foulplay_continuation_oracle_action(
             f"{len(candidates)} exceeds cap {candidate_cap}; refusing to truncate"
         )
 
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "event": "decision-started",
+                "source_decision_round": source_decision_round,
+                "candidate_count": len(candidates),
+                "candidate_cap": candidate_cap,
+                "max_continuation_decision_rounds": max_continuation_decision_rounds,
+            }
+        )
     scored: list[dict[str, Any]] = []
-    for action in candidates:
+    decision_started = perf_counter()
+    for candidate_index, action in enumerate(candidates):
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event": "candidate-started",
+                    "source_decision_round": source_decision_round,
+                    "candidate_index": candidate_index,
+                    "candidate_count": len(candidates),
+                    "action_index": action,
+                    "max_continuation_decision_rounds": max_continuation_decision_rounds,
+                }
+            )
+        candidate_started = perf_counter()
         proof = run_live_foulplay_continuation(
             boundary=boundary,
             source_seed=source_seed,
@@ -366,6 +424,7 @@ def select_live_foulplay_continuation_oracle_action(
             foulplay_player=foulplay_player,
             allow_opening_boundary=False,
             allow_terminal_fixed_step=True,
+            max_continuation_decision_rounds=max_continuation_decision_rounds,
             env_factory=env_factory,
             continuation_policy_factory=continuation_policy_factory,
             rollout_config=rollout_config,
@@ -430,12 +489,38 @@ def select_live_foulplay_continuation_oracle_action(
                 "terminal_after_fixed_joint_step": terminal_after_fixed_joint_step,
             }
         )
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event": "candidate-completed",
+                    "source_decision_round": source_decision_round,
+                    "candidate_index": candidate_index,
+                    "candidate_count": len(candidates),
+                    "action_index": action,
+                    "continuation_decision_round_count": continuation_decision_round_count,
+                    "terminal_after_fixed_joint_step": terminal_after_fixed_joint_step,
+                    "terminal_winner": winner,
+                    "elapsed_milliseconds": max(0, int((perf_counter() - candidate_started) * 1000)),
+                    "max_continuation_decision_rounds": max_continuation_decision_rounds,
+                }
+            )
 
     # Stable action-index tie-break.  In particular, the raw action receives no
     # privileged tie break: choosing it is an oracle result only when it wins the
     # same comparison as every other candidate.
     selected = max(scored, key=lambda candidate: (float(candidate["score"]), -int(candidate["action_index"])))
     selected_action = int(selected["action_index"])
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "event": "decision-completed",
+                "source_decision_round": source_decision_round,
+                "candidate_count": len(candidates),
+                "selected_action_index": selected_action,
+                "elapsed_milliseconds": max(0, int((perf_counter() - decision_started) * 1000)),
+                "max_continuation_decision_rounds": max_continuation_decision_rounds,
+            }
+        )
     return LiveFoulPlayContinuationOracleDecision(
         action_index=selected_action,
         metadata={
@@ -459,6 +544,11 @@ def select_live_foulplay_continuation_oracle_action(
             },
             "candidate_count": len(candidates),
             "candidate_cap": candidate_cap,
+            **(
+                {"max_continuation_decision_rounds": max_continuation_decision_rounds}
+                if max_continuation_decision_rounds is not None
+                else {}
+            ),
             "legal_action_indices": candidates,
             "candidates": tuple(scored),
         },

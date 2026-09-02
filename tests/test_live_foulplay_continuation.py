@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -136,6 +138,76 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
                 policy_mode="root-puct",
                 live_continuation_oracle=True,
             )
+        with self.assertRaisesRegex(ValueError, "must be positive"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("/tmp/ckpt.pt"),
+                showdown_root=Path("/tmp/showdown"),
+                policy_mode="raw",
+                live_continuation_oracle=True,
+                live_continuation_oracle_max_continuation_decision_rounds=0,
+            )
+        with self.assertRaisesRegex(ValueError, "must be absolute"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("/tmp/ckpt.pt"),
+                showdown_root=Path("/tmp/showdown"),
+                policy_mode="raw",
+                live_continuation_oracle=True,
+                live_continuation_oracle_progress_dir=Path("relative-progress"),
+            )
+
+    def test_oracle_progress_recorder_is_create_only_and_snapshot_free(self) -> None:
+        with TemporaryDirectory() as directory:
+            recorder = foulplay_bridge._LiveFoulPlayContinuationOracleProgressRecorder(
+                root=Path(directory)
+            )
+            recorder.record(
+                {
+                    "event": "candidate-started",
+                    "source_decision_round": 2,
+                    "candidate_index": 0,
+                    "candidate_count": 2,
+                    "action_index": 1,
+                    "max_continuation_decision_rounds": 128,
+                }
+            )
+            path = Path(directory) / "00000000-candidate-started.json"
+            original_bytes = path.read_bytes()
+            record = json.loads(original_bytes)
+            self.assertEqual(record["schema_version"], "pokezero.live-foulplay-continuation-oracle-progress.v1")
+            self.assertEqual(record["action_index"], 1)
+            self.assertNotIn("snapshot", record)
+            with self.assertRaisesRegex(LiveFoulPlayContinuationError, "unexpected schema"):
+                recorder.record({"event": "candidate-started", "snapshot": {"secret": True}})
+            collision = foulplay_bridge._LiveFoulPlayContinuationOracleProgressRecorder(
+                root=Path(directory)
+            )
+            with self.assertRaisesRegex(LiveFoulPlayContinuationError, "already exists"):
+                collision.record(
+                    {
+                        "event": "candidate-started",
+                        "source_decision_round": 2,
+                        "candidate_index": 0,
+                        "candidate_count": 2,
+                        "action_index": 0,
+                        "max_continuation_decision_rounds": 128,
+                    }
+                )
+            self.assertEqual(path.read_bytes(), original_bytes)
+            with self.assertRaisesRegex(LiveFoulPlayContinuationError, "terminal_winner is invalid"):
+                recorder.record(
+                    {
+                        "event": "candidate-completed",
+                        "source_decision_round": 2,
+                        "candidate_index": 0,
+                        "candidate_count": 2,
+                        "action_index": 1,
+                        "continuation_decision_round_count": 1,
+                        "terminal_after_fixed_joint_step": False,
+                        "terminal_winner": {"snapshot": "forbidden"},
+                        "elapsed_milliseconds": 1,
+                        "max_continuation_decision_rounds": 128,
+                    }
+                )
 
     def _run_oracle_boundary_seam(
         self, *, failure: Exception | None = None, decision_round: int = 1
@@ -462,6 +534,57 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
         self.assertEqual(decision.metadata["decoded_actual_foulplay_action"], 3)
         self.assertEqual(decision.metadata["legal_action_indices"], (0, 1, 2))
 
+    def test_oracle_binds_the_per_candidate_eligibility_limit_and_emits_progress(self) -> None:
+        boundary = LiveFoulPlayBoundary(
+            snapshot=SimpleNamespace(battle_id="live-bounded", format_id="gen3randombattle"),
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+        progress: list[dict[str, object]] = []
+
+        def fake_run(**kwargs: object) -> dict[str, object]:
+            self.assertEqual(kwargs["max_continuation_decision_rounds"], 128)
+            action = int(kwargs["pokezero_action"])
+            return {
+                "continuation": {
+                    "decision_round_count": 1,
+                    "terminal_after_fixed_joint_step": False,
+                    "terminal": {"winner": "p1" if action == 1 else "p2", "turn_count": 4, "capped": False},
+                }
+            }
+
+        with patch("pokezero.live_foulplay_continuation.run_live_foulplay_continuation", side_effect=fake_run):
+            decision = select_live_foulplay_continuation_oracle_action(
+                boundary=boundary,
+                source_seed=108_000_000,
+                source_decision_round=2,
+                raw_action=0,
+                legal_actions=(0, 1),
+                foulplay_action=3,
+                foulplay_choice="move 4",
+                pokezero_player="p1",
+                foulplay_player="p2",
+                candidate_cap=2,
+                env_factory=lambda: self.fail("runner is patched"),
+                continuation_policy_factory=lambda: self.fail("runner is patched"),
+                rollout_config=RolloutConfig(max_decision_rounds=100),
+                max_continuation_decision_rounds=128,
+                progress_callback=lambda event: progress.append(dict(event)),
+            )
+        self.assertEqual(decision.action_index, 1)
+        self.assertEqual(decision.metadata["max_continuation_decision_rounds"], 128)
+        self.assertEqual(
+            [event["event"] for event in progress],
+            [
+                "decision-started",
+                "candidate-started",
+                "candidate-completed",
+                "candidate-started",
+                "candidate-completed",
+                "decision-completed",
+            ],
+        )
+
     def test_oracle_records_terminal_fixed_step_candidate(self) -> None:
         boundary = LiveFoulPlayBoundary(
             snapshot=SimpleNamespace(
@@ -554,6 +677,37 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
         self.assertEqual(proof["continuation"]["decision_round_count"], 0)
         self.assertTrue(proof["continuation"]["terminal_after_fixed_joint_step"])
         self.assertEqual(proof["continuation"]["terminal"]["winner"], "p2")
+
+    def test_candidate_continuation_bound_is_fail_closed(self) -> None:
+        env = _FakeEnv()
+        boundary = LiveFoulPlayBoundary(
+            snapshot=SimpleNamespace(battle_id="bounded", format_id="gen3randombattle"),
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+        capped = SimpleNamespace(
+            terminal=TerminalState(winner=None, turn_count=9, capped=True),
+            decision_round_count=5,
+        )
+        with patch(
+            "pokezero.live_foulplay_continuation.continue_rollout_from_current_state",
+            return_value=capped,
+        ) as continued:
+            with self.assertRaisesRegex(LiveFoulPlayContinuationError, "5-decision eligibility bound"):
+                run_live_foulplay_continuation(
+                    boundary=boundary,
+                    source_seed=108_000_000,
+                    source_decision_round=2,
+                    pokezero_action=1,
+                    foulplay_action=2,
+                    foulplay_choice="move 3",
+                    env_factory=lambda: env,
+                    continuation_policy_factory=lambda: {"p1": object(), "p2": object()},
+                    rollout_config=RolloutConfig(max_decision_rounds=1024),
+                    max_continuation_decision_rounds=5,
+                )
+        self.assertEqual(continued.call_args.kwargs["config"].max_decision_rounds, 8)
+        self.assertEqual(env.calls[-1], "close")
 
     def test_oracle_receipt_is_seat_relative_for_p2(self) -> None:
         boundary = LiveFoulPlayBoundary(

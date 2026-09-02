@@ -37,6 +37,7 @@ B2_SEED_START = 108_000_000
 REGISTERED_UNITS_PER_ORIENTATION = 600
 SHARDS_PER_WORKER = 24
 UNITS_PER_SHARD = 25
+MAX_CONTINUATION_DECISION_ROUNDS = 128
 _ORIENTATION_REGISTRATION = {
     "p1": {"foulplay_player": "p2", "seed_start": B2_SEED_START, "worker_index": 0},
     "p2": {
@@ -298,6 +299,14 @@ def _require_oracle_candidate_receipt(
 ) -> None:
     if _require_nonnegative_int(item.get("candidate_cap"), field="candidate_cap") != ACTION_COUNT:
         raise B2EvaluationError("oracle receipt does not declare the full PokeZero action-space cap")
+    if (
+        _require_nonnegative_int(
+            item.get("max_continuation_decision_rounds"),
+            field="max_continuation_decision_rounds",
+        )
+        != MAX_CONTINUATION_DECISION_ROUNDS
+    ):
+        raise B2EvaluationError("oracle receipt does not declare the registered continuation eligibility bound")
     candidates = item.get("candidates")
     if not isinstance(candidates, (list, tuple)) or not candidates:
         raise B2EvaluationError("oracle receipt omits scored legal candidates")
@@ -344,6 +353,11 @@ def _require_oracle_candidate_receipt(
             record.get("continuation_decision_round_count"),
             field="candidate.continuation_decision_round_count",
         )
+        if continuation_decision_round_count > MAX_CONTINUATION_DECISION_ROUNDS:
+            raise B2EvaluationError(
+                "oracle receipt candidate exceeds the registered continuation "
+                "eligibility bound"
+            )
         terminal_after_fixed_joint_step = record.get("terminal_after_fixed_joint_step")
         if not isinstance(terminal_after_fixed_joint_step, bool):
             raise B2EvaluationError(
@@ -424,6 +438,7 @@ def _require_controller_receipt(
             "enabled",
             "schema_version",
             "candidate_cap",
+            "max_continuation_decision_rounds",
             "controller_only_full_state",
             "oracle_decisions",
             "games_with_oracle_decision",
@@ -438,6 +453,14 @@ def _require_controller_receipt(
         raise B2EvaluationError("B2 arm does not assert controller-only full-state confinement")
     if _require_nonnegative_int(controller.get("candidate_cap"), field="controller.candidate_cap") != ACTION_COUNT:
         raise B2EvaluationError("B2 arm is not using the registered full PokeZero action-space cap")
+    if (
+        _require_nonnegative_int(
+            controller.get("max_continuation_decision_rounds"),
+            field="controller.max_continuation_decision_rounds",
+        )
+        != MAX_CONTINUATION_DECISION_ROUNDS
+    ):
+        raise B2EvaluationError("B2 arm is not using the registered continuation eligibility bound")
     _require_nonnegative_int(
         controller.get("forced_boundary_raw_decisions"), field="controller.forced_boundary_raw_decisions"
     )
@@ -517,6 +540,7 @@ def _require_controller_receipt(
                     "first_restored_joint_step",
                     "candidate_count",
                     "candidate_cap",
+                    "max_continuation_decision_rounds",
                     "legal_action_indices",
                     "candidates",
                     "action_index",
@@ -570,6 +594,7 @@ _ARM_PROVENANCE_KEYS = {
     "capture_driver",
     "belief_set_source",
     "max_decision_rounds",
+    "max_continuation_decision_rounds",
     "foulplay_search_time_ms",
     "checkpoint_path",
     "checkpoint_sha256",
@@ -606,6 +631,11 @@ def _require_arm_provenance(summary: Mapping[str, Any]) -> Mapping[str, Any]:
         raise B2EvaluationError("B2 provenance belief setting does not match its arm")
     if provenance.get("max_decision_rounds") != summary.get("max_decision_rounds"):
         raise B2EvaluationError("B2 provenance decision cap does not match its arm")
+    controller = _require_mapping(summary.get("live_continuation_oracle"), field="live_continuation_oracle")
+    if provenance.get("max_continuation_decision_rounds") != controller.get(
+        "max_continuation_decision_rounds"
+    ):
+        raise B2EvaluationError("B2 provenance continuation eligibility bound does not match its arm")
     if provenance.get("checkpoint_sha256") != summary.get("checkpoint_sha256"):
         raise B2EvaluationError("B2 provenance checkpoint does not match its arm")
     foulplay_think = _require_mapping(summary.get("foulplay_think"), field="foulplay_think")
@@ -628,6 +658,14 @@ def _require_arm_provenance(summary: Mapping[str, Any]) -> Mapping[str, Any]:
         provenance.get("max_decision_rounds"), field="b2_provenance.max_decision_rounds"
     ) <= 2:
         raise B2EvaluationError("B2 provenance has no room for a mid-game continuation")
+    if (
+        _require_nonnegative_int(
+            provenance.get("max_continuation_decision_rounds"),
+            field="b2_provenance.max_continuation_decision_rounds",
+        )
+        != MAX_CONTINUATION_DECISION_ROUNDS
+    ):
+        raise B2EvaluationError("B2 provenance has the wrong continuation eligibility bound")
     if _require_nonnegative_int(
         provenance.get("foulplay_search_time_ms"), field="b2_provenance.foulplay_search_time_ms"
     ) <= 0:
@@ -686,6 +724,7 @@ def validate_b2_document(payload: Mapping[str, Any]) -> None:
             "unit_index_in_shard",
             "shard_id",
             "candidate_cap",
+            "max_continuation_decision_rounds",
             "arms",
             "external_opponent",
             "checkpoint",
@@ -711,6 +750,8 @@ def validate_b2_document(payload: Mapping[str, Any]) -> None:
         raise B2EvaluationError("B2 unit has the wrong registered shard size")
     if registration.get("candidate_cap") != ACTION_COUNT:
         raise B2EvaluationError("B2 unit does not record the registered full action-space cap")
+    if registration.get("max_continuation_decision_rounds") != MAX_CONTINUATION_DECISION_ROUNDS:
+        raise B2EvaluationError("B2 unit does not record the registered continuation eligibility bound")
     if registration.get("arms") != ["raw", "live-continuation-oracle"]:
         raise B2EvaluationError("B2 unit has the wrong paired treatment arms")
     if registration.get("external_opponent") != "FoulPlay":
@@ -786,6 +827,9 @@ def _arm_provenance(args: argparse.Namespace, summary: Mapping[str, Any]) -> dic
         "capture_driver": summary.get("capture_driver"),
         "belief_set_source": summary.get("belief_set_source"),
         "max_decision_rounds": summary.get("max_decision_rounds"),
+        "max_continuation_decision_rounds": _require_mapping(
+            summary.get("live_continuation_oracle"), field="live_continuation_oracle"
+        ).get("max_continuation_decision_rounds"),
         "foulplay_search_time_ms": foulplay_think.get("budget_ms_configured"),
         "checkpoint_path": str(args.checkpoint.resolve()),
         "checkpoint_sha256": summary.get("checkpoint_sha256"),
@@ -837,8 +881,17 @@ def _run_arm(args: argparse.Namespace, *, seed: int, seat: str, oracle: bool) ->
                 "--live-continuation-oracle",
                 "--live-continuation-oracle-candidate-cap",
                 str(args.candidate_cap),
+                "--live-continuation-oracle-max-continuation-decision-rounds",
+                str(args.max_continuation_decision_rounds),
             ]
         )
+        if args.oracle_progress_dir is not None:
+            command.extend(
+                [
+                    "--live-continuation-oracle-progress-dir",
+                    str((args.oracle_progress_dir / f"{seat}-{seed}").resolve()),
+                ]
+            )
     environment = dict(os.environ)
     existing_pythonpath = environment.get("PYTHONPATH")
     environment["PYTHONPATH"] = str(REPO_ROOT / "src") + (
@@ -897,6 +950,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--foulplay-search-time-ms", type=int, default=1000)
     parser.add_argument("--max-decision-rounds", type=int, default=64)
     parser.add_argument("--candidate-cap", type=int, default=ACTION_COUNT)
+    parser.add_argument(
+        "--max-continuation-decision-rounds",
+        type=int,
+        default=MAX_CONTINUATION_DECISION_ROUNDS,
+    )
+    parser.add_argument(
+        "--oracle-progress-dir",
+        type=Path,
+        default=None,
+        help="Optional absolute root for immutable action-only oracle progress records.",
+    )
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--node-binary", default="node")
     parser.add_argument("--python", default=sys.executable)
@@ -919,6 +983,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise B2EvaluationError(
             f"B2 candidate cap must be {ACTION_COUNT}: the complete PokeZero action space"
         )
+    if args.max_continuation_decision_rounds != MAX_CONTINUATION_DECISION_ROUNDS:
+        raise B2EvaluationError(
+            "B2 continuation eligibility bound must be "
+            f"{MAX_CONTINUATION_DECISION_ROUNDS} decisions per candidate"
+        )
+    if args.oracle_progress_dir is not None and not args.oracle_progress_dir.is_absolute():
+        raise B2EvaluationError("--oracle-progress-dir must be absolute when set")
     unit = _paired_unit(args)
     payload: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
@@ -944,6 +1015,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "unit_index_in_shard": registered_unit["unit_index_in_shard"],
             "shard_id": registered_unit["shard_id"],
             "candidate_cap": args.candidate_cap,
+            "max_continuation_decision_rounds": args.max_continuation_decision_rounds,
             "arms": ["raw", "live-continuation-oracle"],
             "external_opponent": "FoulPlay",
             "checkpoint": str(args.checkpoint.resolve()),
