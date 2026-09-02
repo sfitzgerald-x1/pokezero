@@ -5081,22 +5081,140 @@ _LIVE_ORACLE_PROGRESS_EVENTS = frozenset(
         "decision-completed",
     }
 )
-_LIVE_ORACLE_PROGRESS_FIELDS = frozenset(
-    {
-        "event",
-        "source_decision_round",
-        "candidate_index",
-        "candidate_count",
-        "candidate_cap",
-        "action_index",
-        "selected_action_index",
-        "continuation_decision_round_count",
-        "terminal_after_fixed_joint_step",
-        "terminal_winner",
-        "elapsed_milliseconds",
-        "max_continuation_decision_rounds",
-    }
-)
+_LIVE_ORACLE_PROGRESS_EVENT_FIELDS: Mapping[str, frozenset[str]] = {
+    "decision-started": frozenset(
+        {
+            "event",
+            "source_decision_round",
+            "candidate_count",
+            "candidate_cap",
+            "max_continuation_decision_rounds",
+        }
+    ),
+    "candidate-started": frozenset(
+        {
+            "event",
+            "source_decision_round",
+            "candidate_index",
+            "candidate_count",
+            "action_index",
+            "max_continuation_decision_rounds",
+        }
+    ),
+    "candidate-completed": frozenset(
+        {
+            "event",
+            "source_decision_round",
+            "candidate_index",
+            "candidate_count",
+            "action_index",
+            "continuation_decision_round_count",
+            "terminal_after_fixed_joint_step",
+            "terminal_winner",
+            "elapsed_milliseconds",
+            "max_continuation_decision_rounds",
+        }
+    ),
+    "decision-completed": frozenset(
+        {
+            "event",
+            "source_decision_round",
+            "candidate_count",
+            "selected_action_index",
+            "elapsed_milliseconds",
+            "max_continuation_decision_rounds",
+        }
+    ),
+}
+
+
+def _live_oracle_progress_int(
+    value: object, *, field: str, minimum: int, maximum: int | None = None
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise LiveFoulPlayContinuationError(
+            f"live continuation oracle progress {field} is invalid"
+        )
+    if maximum is not None and value > maximum:
+        raise LiveFoulPlayContinuationError(
+            f"live continuation oracle progress {field} exceeds its bound"
+        )
+    return value
+
+
+def _validate_live_oracle_progress_event(event: Mapping[str, Any]) -> str:
+    event_name = event.get("event")
+    if event_name not in _LIVE_ORACLE_PROGRESS_EVENTS:
+        raise LiveFoulPlayContinuationError(
+            "live continuation oracle progress event has an invalid event name"
+        )
+    expected_fields = _LIVE_ORACLE_PROGRESS_EVENT_FIELDS[event_name]
+    if set(event) != expected_fields:
+        raise LiveFoulPlayContinuationError(
+            "live continuation oracle progress event has an unexpected schema"
+        )
+    _live_oracle_progress_int(
+        event["source_decision_round"], field="source_decision_round", minimum=1
+    )
+    candidate_count = _live_oracle_progress_int(
+        event["candidate_count"], field="candidate_count", minimum=1
+    )
+    maximum_rounds = _live_oracle_progress_int(
+        event["max_continuation_decision_rounds"],
+        field="max_continuation_decision_rounds",
+        minimum=1,
+    )
+    if event_name == "decision-started":
+        candidate_cap = _live_oracle_progress_int(
+            event["candidate_cap"], field="candidate_cap", minimum=1, maximum=ACTION_COUNT
+        )
+        if candidate_count > candidate_cap:
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle progress candidate count exceeds candidate cap"
+            )
+    if event_name in {"candidate-started", "candidate-completed"}:
+        candidate_index = _live_oracle_progress_int(
+            event["candidate_index"], field="candidate_index", minimum=0
+        )
+        if candidate_index >= candidate_count:
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle progress candidate index is outside candidate count"
+            )
+        _live_oracle_progress_int(
+            event["action_index"], field="action_index", minimum=0, maximum=ACTION_COUNT - 1
+        )
+    if event_name == "decision-completed":
+        _live_oracle_progress_int(
+            event["selected_action_index"],
+            field="selected_action_index",
+            minimum=0,
+            maximum=ACTION_COUNT - 1,
+        )
+    if event_name in {"candidate-completed", "decision-completed"}:
+        _live_oracle_progress_int(
+            event["elapsed_milliseconds"], field="elapsed_milliseconds", minimum=0
+        )
+    if event_name == "candidate-completed":
+        continuation_count = _live_oracle_progress_int(
+            event["continuation_decision_round_count"],
+            field="continuation_decision_round_count",
+            minimum=0,
+            maximum=maximum_rounds,
+        )
+        fixed_terminal = event["terminal_after_fixed_joint_step"]
+        if not isinstance(fixed_terminal, bool):
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle progress terminal_after_fixed_joint_step is invalid"
+            )
+        if fixed_terminal != (continuation_count == 0):
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle progress fixed-terminal decision count is inconsistent"
+            )
+        if event["terminal_winner"] not in ("p1", "p2", None):
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle progress terminal_winner is invalid"
+            )
+    return event_name
 
 
 @dataclass
@@ -5113,15 +5231,7 @@ class _LiveFoulPlayContinuationOracleProgressRecorder:
     sequence: int = 0
 
     def record(self, event: Mapping[str, Any]) -> None:
-        if set(event) - _LIVE_ORACLE_PROGRESS_FIELDS:
-            raise LiveFoulPlayContinuationError(
-                "live continuation oracle progress event contains an unapproved field"
-            )
-        event_name = event.get("event")
-        if event_name not in _LIVE_ORACLE_PROGRESS_EVENTS:
-            raise LiveFoulPlayContinuationError(
-                "live continuation oracle progress event has an invalid event name"
-            )
+        event_name = _validate_live_oracle_progress_event(event)
         payload = {
             "schema_version": _LIVE_ORACLE_PROGRESS_SCHEMA,
             "sequence": self.sequence,

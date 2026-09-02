@@ -170,12 +170,44 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
                     "max_continuation_decision_rounds": 128,
                 }
             )
-            record = json.loads((Path(directory) / "00000000-candidate-started.json").read_text())
+            path = Path(directory) / "00000000-candidate-started.json"
+            original_bytes = path.read_bytes()
+            record = json.loads(original_bytes)
             self.assertEqual(record["schema_version"], "pokezero.live-foulplay-continuation-oracle-progress.v1")
             self.assertEqual(record["action_index"], 1)
             self.assertNotIn("snapshot", record)
-            with self.assertRaisesRegex(LiveFoulPlayContinuationError, "unapproved field"):
+            with self.assertRaisesRegex(LiveFoulPlayContinuationError, "unexpected schema"):
                 recorder.record({"event": "candidate-started", "snapshot": {"secret": True}})
+            collision = foulplay_bridge._LiveFoulPlayContinuationOracleProgressRecorder(
+                root=Path(directory)
+            )
+            with self.assertRaisesRegex(LiveFoulPlayContinuationError, "already exists"):
+                collision.record(
+                    {
+                        "event": "candidate-started",
+                        "source_decision_round": 2,
+                        "candidate_index": 0,
+                        "candidate_count": 2,
+                        "action_index": 0,
+                        "max_continuation_decision_rounds": 128,
+                    }
+                )
+            self.assertEqual(path.read_bytes(), original_bytes)
+            with self.assertRaisesRegex(LiveFoulPlayContinuationError, "terminal_winner is invalid"):
+                recorder.record(
+                    {
+                        "event": "candidate-completed",
+                        "source_decision_round": 2,
+                        "candidate_index": 0,
+                        "candidate_count": 2,
+                        "action_index": 1,
+                        "continuation_decision_round_count": 1,
+                        "terminal_after_fixed_joint_step": False,
+                        "terminal_winner": {"snapshot": "forbidden"},
+                        "elapsed_milliseconds": 1,
+                        "max_continuation_decision_rounds": 128,
+                    }
+                )
 
     def _run_oracle_boundary_seam(
         self, *, failure: Exception | None = None, decision_round: int = 1
