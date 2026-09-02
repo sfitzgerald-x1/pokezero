@@ -25,6 +25,7 @@ from pokezero.foulplay_bridge import (
     _FOULPLAY_THINK_LINE_CAP,
     _FOULPLAY_THINK_SETTLE_GIVEUP_DECISIONS,
     _FOULPLAY_THINK_SETTLE_SECONDS,
+    _BattleBridge,
     _FoulPlayThinkClock,
     _ProcessLogBuffer,
     _foulplay_think_aggregate,
@@ -82,9 +83,105 @@ from pokezero.search import RootPUCTSearchTiming
 from pokezero.showdown import V2_2_REPLAY_OBSERVATION_SPEC
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 from pokezero.value_calibration import evaluate_value_calibration
+from _showdown_root import requires_showdown, showdown_root
 
 
 class FoulPlayBridgeTest(unittest.TestCase):
+    def test_snapshot_capture_uses_a_correlated_reply(self) -> None:
+        bridge = _BattleBridge(showdown_root=Path("/showdown"), node_binary="node")
+        sent: list[dict[str, object]] = []
+
+        async def send(command: dict[str, object]) -> None:
+            sent.append(command)
+            bridge.events.put_nowait({"type": "snapshot", "battleId": "other", "requestId": "snapshot-1"})
+            bridge.events.put_nowait(
+                {"type": "snapshot", "battleId": "b-1", "requestId": command["requestId"]}
+            )
+
+        bridge.send = send  # type: ignore[method-assign]
+        event = asyncio.run(bridge.capture_snapshot_event(battle_id="b-1"))
+
+        self.assertEqual(sent, [{"type": "snapshot", "battleId": "b-1", "requestId": "snapshot-1"}])
+        self.assertEqual(event["battleId"], "b-1")
+        self.assertEqual(bridge._deferred_events[0]["battleId"], "other")
+
+    def test_bridge_failure_wakes_a_targeted_wait(self) -> None:
+        bridge = _BattleBridge(showdown_root=Path("/showdown"), node_binary="node")
+        bridge._record_failure("bridge exited with status 17")
+
+        async def wait_for_snapshot() -> None:
+            await bridge.next_event_matching(lambda event: event.get("type") == "snapshot")
+
+        with self.assertRaisesRegex(RuntimeError, "status 17"):
+            asyncio.run(wait_for_snapshot())
+
+    def test_bridge_exit_reports_status_and_stderr_to_targeted_wait(self) -> None:
+        async def wait_for_exit() -> None:
+            bridge = _BattleBridge(showdown_root=Path("/showdown"), node_binary="node")
+            bridge.process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                "import sys; sys.stderr.write('bridge-sentinel\\n'); sys.stderr.flush(); raise SystemExit(17)",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            bridge._stdout_task = asyncio.create_task(bridge._drain_stdout())
+            bridge._stderr_task = asyncio.create_task(bridge._drain_stderr())
+            bridge._exit_task = asyncio.create_task(bridge._watch_process_exit())
+            try:
+                with self.assertRaisesRegex(RuntimeError, "(?s)status 17.*bridge-sentinel"):
+                    await bridge.next_event_matching(lambda event: event.get("type") == "snapshot")
+            finally:
+                await bridge.close()
+
+        asyncio.run(wait_for_exit())
+
+    def test_bridge_stdout_eof_while_child_lives_fails_promptly(self) -> None:
+        async def wait_for_eof() -> None:
+            bridge = _BattleBridge(showdown_root=Path("/showdown"), node_binary="node")
+            bridge.process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                "import os, time; os.close(1); time.sleep(5)",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            bridge._stdout_task = asyncio.create_task(bridge._drain_stdout())
+            bridge._stderr_task = asyncio.create_task(bridge._drain_stderr())
+            bridge._exit_task = asyncio.create_task(bridge._watch_process_exit())
+            try:
+                with self.assertRaisesRegex(RuntimeError, "stdout closed"):
+                    await bridge.next_event_matching(lambda event: event.get("type") == "snapshot")
+            finally:
+                await bridge.close()
+
+        asyncio.run(wait_for_eof())
+
+    @requires_showdown("exercises the Node battle bridge snapshot correlation path")
+    def test_node_bridge_snapshot_round_trip_echoes_request_id(self) -> None:
+        async def round_trip() -> None:
+            bridge = _BattleBridge(showdown_root=showdown_root(), node_binary="node")
+            await bridge.start()
+            try:
+                await bridge.send(
+                    {
+                        "type": "start",
+                        "battleId": "request-id-round-trip",
+                        "formatid": "gen3randombattle",
+                        "seed": "17",
+                    }
+                )
+                await bridge.next_event_matching(
+                    lambda event: event.get("type") == "started"
+                    and event.get("battleId") == "request-id-round-trip"
+                )
+                snapshot = await bridge.capture_snapshot_event(battle_id="request-id-round-trip")
+                self.assertEqual(snapshot["requestId"], "snapshot-1")
+            finally:
+                await bridge.close()
+
+        asyncio.run(round_trip())
+
     def test_capture_parser_forces_raw_policy_mode(self) -> None:
         parser = build_capture_arg_parser()
         args = parser.parse_args(["--checkpoint", "checkpoint.pt", "--out", "pool.jsonl"])

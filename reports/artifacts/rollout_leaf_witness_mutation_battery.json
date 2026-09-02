@@ -774,7 +774,7 @@
   "survived": 0,
   "targets": {
     "engine_search.py": "98461620c9a5ea9bc53d567dc99525ce8699738a0dcf8e1956a9ac3a7c7c2c04",
-    "foulplay_bridge.py": "2243c1e2b3bdb2ad97fa9d18e80d09b1b616b6307491d1c1e7ef99d007b3420f",
+    "foulplay_bridge.py": "69633b25ee715bb2a34e9b8645e1acf54694e2eb3364252792b88653cbb2c673",
     "foulplay_paired_eval.py": "770c6c522489e34524270ec6fcd139becf689e2035bf124b5725da57e9090f60",
     "foulplay_power_report.py": "8a24784085320c5e0c36769f41276ea67ae8eef554bf4157a7d16966beaa41c5",
     "hc_depth_grid.py": "fdd534de5b32d4b788b196de7fabb68073cb8ba4542851a638ee33067191b3c1",

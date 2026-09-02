@@ -281,6 +281,7 @@ function snapshotBattle(command) {
   emit({
     type: "snapshot",
     battleId: battle.battleId,
+    requestId: typeof command.requestId === "string" ? command.requestId : null,
     snapshot: {
       // Keep the engine state API explicit: snapshots are cloned simulator worlds, never
       // protocol replays and never a serialization of the live decision environment.

@@ -4665,8 +4665,34 @@ class _BattleBridge:
         self.stderr_lines: list[str] = []
         self._stdout_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
+        self._exit_task: asyncio.Task[None] | None = None
+        self._closing = False
+        self._failure_message: str | None = None
+        self._next_snapshot_request_id = 1
 
     async def start(self) -> None:
+        # Keep the bridge process on the evaluator's explicit CPU budget.  The
+        # outer evaluator deliberately constrains these variables for the
+        # fixed CPU-only B2 geometry; dropping them here silently leaves Node's
+        # native dependencies unconstrained.
+        bridge_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "POKEZERO_SHOWDOWN_ROOT": str(self.showdown_root),
+        }
+        for key in (
+            "OMP_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS",
+            "POKEZERO_TORCH_NUM_THREADS",
+            "POKEZERO_TORCH_NUM_INTEROP_THREADS",
+            "OMP_DYNAMIC",
+        ):
+            value = os.environ.get(key)
+            if value is not None:
+                bridge_env[key] = value
+        self._closing = False
         self.process = await asyncio.create_subprocess_exec(
             self.node_binary,
             str(BRIDGE_PATH),
@@ -4675,18 +4701,17 @@ class _BattleBridge:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={
-                "PATH": os.environ.get("PATH", ""),
-                "POKEZERO_SHOWDOWN_ROOT": str(self.showdown_root),
-            },
+            env=bridge_env,
         )
         self._stdout_task = asyncio.create_task(self._drain_stdout())
         self._stderr_task = asyncio.create_task(self._drain_stderr())
+        self._exit_task = asyncio.create_task(self._watch_process_exit())
 
     async def close(self) -> None:
         process = self.process
         if process is None:
             return
+        self._closing = True
         try:
             if process.returncode is None:
                 try:
@@ -4700,10 +4725,28 @@ class _BattleBridge:
                         process.kill()
                         await process.wait()
         finally:
-            for task in (self._stdout_task, self._stderr_task):
+            for task in (self._stdout_task, self._stderr_task, self._exit_task):
                 if task is not None:
                     task.cancel()
             self.process = None
+
+    def _record_failure(self, message: str) -> None:
+        if self._closing or self._failure_message is not None:
+            return
+        self._failure_message = message
+        self.events.put_nowait({"type": "error", "message": message})
+
+    async def _watch_process_exit(self) -> None:
+        process = self.process
+        assert process is not None
+        await process.wait()
+        # The stderr task is bounded by the closed child pipe once wait()
+        # returns.  Drain it before reporting so an exit diagnosis contains
+        # the child failure rather than an earlier generic stdout-EOF notice.
+        if self._stderr_task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._stderr_task
+        self._record_failure(self._exit_message())
 
     async def send(self, command: Mapping[str, Any]) -> None:
         if self.process is None or self.process.stdin is None or self.process.returncode is not None:
@@ -4745,13 +4788,49 @@ class _BattleBridge:
                 return event
             self._deferred_events.append(event)
 
+    async def capture_snapshot_event(self, *, battle_id: str) -> Mapping[str, Any]:
+        """Request a generic snapshot with a correlation id and await its exact reply."""
+
+        request_id = f"snapshot-{self._next_snapshot_request_id}"
+        self._next_snapshot_request_id += 1
+        await self.send({"type": "snapshot", "battleId": battle_id, "requestId": request_id})
+        return await self.next_event_matching(
+            lambda candidate: candidate.get("type") == "snapshot"
+            and candidate.get("battleId") == battle_id
+            and candidate.get("requestId") == request_id
+        )
+
     async def _drain_stdout(self) -> None:
         assert self.process is not None and self.process.stdout is not None
-        async for raw in self.process.stdout:
-            line = raw.decode("utf-8").strip()
-            if not line:
-                continue
-            self.events.put_nowait(json.loads(line))
+        try:
+            async for raw in self.process.stdout:
+                line = raw.decode("utf-8").strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError as error:
+                    self._record_failure(f"BattleStream bridge emitted malformed JSON: {error}.")
+                    return
+                if not isinstance(event, Mapping):
+                    self._record_failure("BattleStream bridge emitted a non-object JSON event.")
+                    return
+                self.events.put_nowait(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self._record_failure(f"BattleStream bridge stdout drain failed: {error}")
+        else:
+            # A child that exits normally closes stdout just before its return
+            # code and stderr become observable.  Give the exit watcher a
+            # short bounded chance to publish the more useful diagnosis.
+            process = self.process
+            if self._closing or process is None:
+                return
+            try:
+                await asyncio.wait_for(asyncio.shield(process.wait()), timeout=0.25)
+            except asyncio.TimeoutError:
+                self._record_failure("BattleStream bridge stdout closed before the requested reply.")
 
     async def _drain_stderr(self) -> None:
         assert self.process is not None and self.process.stderr is not None
@@ -4765,6 +4844,8 @@ class _BattleBridge:
             stderr = "\n".join(self.stderr_lines[-20:])
             suffix = f" Stderr:\n{stderr}" if stderr else ""
             return f"BattleStream bridge exited with status {self.process.returncode}.{suffix}"
+        if self._failure_message is not None:
+            return self._failure_message
         return "BattleStream bridge is not running."
 
 
@@ -4877,11 +4958,7 @@ class _LiveFoulPlayContinuationProbe:
             raise LiveFoulPlayContinuationError(
                 "live continuation smoke requires a simultaneous p1/p2 source boundary"
             )
-        await bridge.send({"type": "snapshot", "battleId": state.battle_id})
-        event = await bridge.next_event_matching(
-            lambda candidate: candidate.get("type") == "snapshot"
-            and candidate.get("battleId") == state.battle_id
-        )
+        event = await bridge.capture_snapshot_event(battle_id=state.battle_id)
         snapshot = event.get("snapshot")
         if not isinstance(snapshot, Mapping):
             raise LiveFoulPlayContinuationError("BattleStream returned a malformed generic snapshot")
@@ -4997,11 +5074,7 @@ class _LiveFoulPlayContinuationOracleController:
             raise LiveFoulPlayContinuationError(
                 "live continuation oracle requires a simultaneous p1/p2 source boundary"
             )
-        await bridge.send({"type": "snapshot", "battleId": state.battle_id})
-        event = await bridge.next_event_matching(
-            lambda candidate: candidate.get("type") == "snapshot"
-            and candidate.get("battleId") == state.battle_id
-        )
+        event = await bridge.capture_snapshot_event(battle_id=state.battle_id)
         snapshot = event.get("snapshot")
         if not isinstance(snapshot, Mapping):
             raise LiveFoulPlayContinuationError(
