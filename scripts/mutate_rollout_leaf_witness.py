@@ -838,6 +838,7 @@ ALL_TARGETS = tuple(
 _SUMMARY = re.compile(
     r"(?:(?P<failed>\d+) failed)|(?:(?P<errors>\d+) error)|(?:(?P<passed>\d+) passed)"
 )
+_SKIPPED = re.compile(r"(?P<skipped>\d+) skipped")
 
 
 def _sha256(path: Path) -> str:
@@ -873,7 +874,7 @@ def _classify(
             [],
         )
     blob = stdout + stderr
-    failed = errors = passed = 0
+    failed = errors = passed = skipped = 0
     for match in _SUMMARY.finditer(blob):
         if match.group("failed"):
             failed = max(failed, int(match.group("failed")))
@@ -881,6 +882,8 @@ def _classify(
             errors = max(errors, int(match.group("errors")))
         if match.group("passed"):
             passed = max(passed, int(match.group("passed")))
+    for match in _SKIPPED.finditer(blob):
+        skipped = max(skipped, int(match.group("skipped")))
     # `FAILED <nodeid>` AND `SUBFAILED(<params>) <nodeid>`. A subtest failure is
     # reported under the second spelling, and requiring only the first read THREE
     # GENUINE KILLS AS "DID NOT RUN" -- flattering in the direction that matters,
@@ -904,6 +907,15 @@ def _classify(
         return (
             "DID NOT RUN",
             f"pytest reported {errors} collection/setup error(s); no test was run",
+            [],
+        )
+    # A skipped killer can turn a real mutant into an apparent survivor.  A battery
+    # that did not execute every selected killer is an instrument failure, not a
+    # reduced-strength mutation result.
+    if skipped:
+        return (
+            "DID NOT RUN",
+            f"pytest skipped {skipped} selected test(s); no complete killer run",
             [],
         )
     if completed.returncode == 0:
@@ -1013,6 +1025,34 @@ def _run_killers(python: str, timeout: int) -> tuple[str, str, str, object, bool
     return completed.stdout, completed.stderr, resolved, completed, imported
 
 
+def _require_pytest(python: str) -> None:
+    """Refuse before mutating the tree when the required runner is absent.
+
+    The mutation verdicts depend on pytest's distinction between test failures and
+    collection/setup errors.  A Python that cannot import pytest cannot produce a
+    verdict about any mutant, so fail before replacing even one target file.
+    """
+
+    try:
+        completed = subprocess.run(
+            [python, "-c", "import pytest"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise InstrumentFailure(
+            f"cannot start the requested Python interpreter {python!r}: {exc}"
+        ) from exc
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        suffix = f": {detail}" if detail else ""
+        raise InstrumentFailure(
+            "pytest is required to run the rollout-leaf witness mutation battery; "
+            "install it in the selected --venv-python environment"
+            + suffix
+        )
+
+
 def _apply(edits: list[tuple[Path, str, str]], originals: dict[Path, str]) -> str | None:
     """Write the mutant. Returns a reason string when it cannot be applied."""
 
@@ -1063,6 +1103,8 @@ def main(argv: list[str] | None = None) -> int:
             print(line, file=sys.stderr)
         print(json.dumps({"ambiguous_or_missing_anchors": len(bad)}))
         return 1 if bad else 0
+
+    _require_pytest(args.venv_python)
 
     targets = list(ALL_TARGETS)
     originals = {path: path.read_text() for path in targets}
@@ -1228,6 +1270,14 @@ def main(argv: list[str] | None = None) -> int:
         # one directory that recorded it.
         "resolved_modules": sorted(_resolved_relative(line) for line in resolved_seen),
     }
+    if control_failures:
+        raise InstrumentFailure(
+            "controls did not produce their required verdicts: "
+            + ", ".join(
+                f"{c['name']} -> {c['status']} (required {c['required']})"
+                for c in control_failures
+            )
+        )
     if args.json and not args.only:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
@@ -1238,14 +1288,6 @@ def main(argv: list[str] | None = None) -> int:
             sort_keys=True,
         )
     )
-    if control_failures:
-        raise InstrumentFailure(
-            "controls did not produce their required verdicts: "
-            + ", ".join(
-                f"{c['name']} -> {c['status']} (required {c['required']})"
-                for c in control_failures
-            )
-        )
     return 0
 
 

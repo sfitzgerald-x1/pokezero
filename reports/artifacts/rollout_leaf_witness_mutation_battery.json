@@ -66,7 +66,7 @@
   ],
   "did_not_run": 0,
   "expected_equivalent": {},
-  "harness_sha256": "c95ea5700db85f2d28f3dba7a13c9df233536cb5e952e1a579418455b8971ba0",
+  "harness_sha256": "4629a8614de64a498fce9f372b1a68faa343796a149240217040e49767d699c2",
   "killed": 66,
   "killers": [
     "tests/test_rollout_model_priors.py",
@@ -774,7 +774,7 @@
   "survived": 0,
   "targets": {
     "engine_search.py": "98461620c9a5ea9bc53d567dc99525ce8699738a0dcf8e1956a9ac3a7c7c2c04",
-    "foulplay_bridge.py": "dbaee011d6df5a413ffa1888d157227f402db1fb7161c56a9c64238b428702c6",
+    "foulplay_bridge.py": "bfbdf5605d1785d781e4465a5f74227f00733f26218559adbd0c2980b7f583e0",
     "foulplay_paired_eval.py": "770c6c522489e34524270ec6fcd139becf689e2035bf124b5725da57e9090f60",
     "foulplay_power_report.py": "8a24784085320c5e0c36769f41276ea67ae8eef554bf4157a7d16966beaa41c5",
     "hc_depth_grid.py": "fdd534de5b32d4b788b196de7fabb68073cb8ba4542851a638ee33067191b3c1",
