@@ -353,6 +353,11 @@ def _require_oracle_candidate_receipt(
             record.get("continuation_decision_round_count"),
             field="candidate.continuation_decision_round_count",
         )
+        if continuation_decision_round_count > MAX_CONTINUATION_DECISION_ROUNDS:
+            raise B2EvaluationError(
+                "oracle receipt candidate exceeds the registered continuation "
+                "eligibility bound"
+            )
         terminal_after_fixed_joint_step = record.get("terminal_after_fixed_joint_step")
         if not isinstance(terminal_after_fixed_joint_step, bool):
             raise B2EvaluationError(

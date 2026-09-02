@@ -306,6 +306,16 @@ class B2EvaluatorTest(unittest.TestCase):
         with self.assertRaisesRegex(module.B2EvaluationError, "did not continue"):
             module.validate_b2_document(zero_without_terminal)
 
+        exceeds_registered_bound = _unit_document(module)
+        candidate = exceeds_registered_bound["oracle_continuation"]["game_results"][0][
+            "live_continuation_oracle"
+        ]["oracle_decisions"][0]["candidates"][1]
+        candidate["continuation_decision_round_count"] = (
+            module.MAX_CONTINUATION_DECISION_ROUNDS + 1
+        )
+        with self.assertRaisesRegex(module.B2EvaluationError, "eligibility bound"):
+            module.validate_b2_document(exceeds_registered_bound)
+
         capped = _unit_document(module)
         capped["raw"]["game_results"][0]["capped"] = True
         with self.assertRaisesRegex(module.B2EvaluationError, "capped"):
