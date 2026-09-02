@@ -799,6 +799,52 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
         self.assertEqual(continued.call_args.kwargs["config"].max_decision_rounds, 8)
         self.assertEqual(env.calls[-1], "close")
 
+    def test_candidate_continuation_bound_overrides_source_battle_cap(self) -> None:
+        boundary = LiveFoulPlayBoundary(
+            snapshot=SimpleNamespace(battle_id="candidate-bound", format_id="gen3randombattle"),
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+        completed = SimpleNamespace(
+            terminal=TerminalState(winner="p1", turn_count=9, capped=False),
+            decision_round_count=1,
+        )
+        effective_caps: list[int] = []
+
+        def capture_config(**kwargs: object) -> object:
+            effective_caps.append(kwargs["config"].max_decision_rounds)  # type: ignore[index,union-attr]
+            return completed
+
+        with patch(
+            "pokezero.live_foulplay_continuation.continue_rollout_from_current_state",
+            side_effect=capture_config,
+        ):
+            for source_decision_round, bound, expected_cap in (
+                (1, 128, 130),
+                (1, 256, 258),
+                (63, 128, 192),
+            ):
+                with self.subTest(
+                    source_decision_round=source_decision_round,
+                    bound=bound,
+                ):
+                    proof = run_live_foulplay_continuation(
+                        boundary=boundary,
+                        source_seed=108_000_000,
+                        source_decision_round=source_decision_round,
+                        pokezero_action=1,
+                        foulplay_action=2,
+                        foulplay_choice="move 3",
+                        env_factory=_FakeEnv,
+                        continuation_policy_factory=lambda: {"p1": object(), "p2": object()},
+                        rollout_config=RolloutConfig(max_decision_rounds=64),
+                        max_continuation_decision_rounds=bound,
+                    )
+                    self.assertFalse(proof["continuation"]["terminal"]["capped"])
+                    self.assertEqual(effective_caps[-1], expected_cap)
+
+        self.assertEqual(effective_caps, [130, 258, 192])
+
     def test_oracle_receipt_is_seat_relative_for_p2(self) -> None:
         boundary = LiveFoulPlayBoundary(
             snapshot=SimpleNamespace(battle_id="live-oracle-p2", format_id="gen3randombattle"),

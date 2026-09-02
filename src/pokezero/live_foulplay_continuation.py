@@ -231,7 +231,11 @@ def run_live_foulplay_continuation(
         raise LiveFoulPlayContinuationError(
             "live continuation requires distinct p1/p2 PokeZero and FoulPlay seats"
         )
-    if rollout_config.max_decision_rounds <= source_decision_round + 1 and not allow_terminal_fixed_step:
+    if (
+        max_continuation_decision_rounds is None
+        and rollout_config.max_decision_rounds <= source_decision_round + 1
+        and not allow_terminal_fixed_step
+    ):
         raise LiveFoulPlayContinuationError("continuation rollout leaves no decision round after the fixed joint step")
     env = env_factory()
     try:
@@ -278,12 +282,15 @@ def run_live_foulplay_continuation(
         if max_continuation_decision_rounds is not None:
             # This is a fail-closed eligibility bound, not action truncation: a
             # candidate that does not reach a terminal state within the bound
-            # raises below and cannot influence the selected source action.
+            # raises below and cannot influence the selected source action.  The
+            # speculative continuation starts from a restored live boundary, so
+            # its cap must be independent of the source battle's global cap;
+            # otherwise a source-game default could silently make a registered
+            # candidate bound smaller than the provenance says it is.
             continuation_config = replace(
                 rollout_config,
-                max_decision_rounds=min(
-                    rollout_config.max_decision_rounds,
-                    source_decision_round + 1 + max_continuation_decision_rounds,
+                max_decision_rounds=(
+                    source_decision_round + 1 + max_continuation_decision_rounds
                 ),
             )
         continuation = continue_rollout_from_current_state(
