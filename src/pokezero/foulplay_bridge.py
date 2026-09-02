@@ -4652,6 +4652,12 @@ class _FoulPlayWebsocketServer:
                 return choice
 
 
+# The BattleStream protocol emits one JSON event per line. A serialized snapshot
+# can legitimately be larger than asyncio's 64 KiB default StreamReader limit,
+# so retain a bounded ceiling that covers full battle-state snapshots.
+_BATTLE_BRIDGE_STDOUT_LINE_LIMIT_BYTES = 8 * 1024 * 1024
+
+
 class _BattleBridge:
     def __init__(self, *, showdown_root: Path, node_binary: str) -> None:
         self.showdown_root = showdown_root
@@ -4702,6 +4708,7 @@ class _BattleBridge:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=bridge_env,
+            limit=_BATTLE_BRIDGE_STDOUT_LINE_LIMIT_BYTES,
         )
         self._stdout_task = asyncio.create_task(self._drain_stdout())
         self._stderr_task = asyncio.create_task(self._drain_stderr())

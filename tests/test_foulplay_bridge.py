@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+import pokezero.foulplay_bridge as foulplay_bridge
 from pokezero.actions import ACTION_COUNT
 from pokezero.collection import read_rollout_records
 from pokezero.foulplay_bridge import (
@@ -156,6 +157,29 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 await bridge.close()
 
         asyncio.run(wait_for_eof())
+
+    def test_bridge_start_drains_a_snapshot_frame_larger_than_asyncio_default(self) -> None:
+        async def drain_large_snapshot_frame() -> None:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                bridge_script = Path(temp_dir) / "large_snapshot_bridge.py"
+                bridge_script.write_text(
+                    "import json, sys\n"
+                    "print(json.dumps({'type': 'snapshot', 'payload': 'x' * (128 * 1024)}), flush=True)\n"
+                    "sys.stdin.readline()\n",
+                    encoding="utf-8",
+                )
+                bridge = _BattleBridge(showdown_root=Path("/showdown"), node_binary=sys.executable)
+                with patch.object(foulplay_bridge, "BRIDGE_PATH", bridge_script):
+                    await bridge.start()
+                    try:
+                        event = await bridge.next_event_matching(
+                            lambda candidate: candidate.get("type") == "snapshot"
+                        )
+                        self.assertEqual(len(str(event["payload"])), 128 * 1024)
+                    finally:
+                        await bridge.close()
+
+        asyncio.run(drain_large_snapshot_frame())
 
     @requires_showdown("exercises the Node battle bridge snapshot correlation path")
     def test_node_bridge_snapshot_round_trip_echoes_request_id(self) -> None:
