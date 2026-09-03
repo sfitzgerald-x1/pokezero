@@ -625,10 +625,10 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
                 continuation_policy_factory=lambda: self.fail("runner is patched"),
                 rollout_config=RolloutConfig(max_decision_rounds=300),
                 max_continuation_decision_rounds=128,
-                expanded_continuation_decision_rounds=256,
+                expanded_continuation_decision_rounds=1024,
                 progress_callback=lambda event: progress.append(dict(event)),
             )
-        self.assertEqual(calls, [(0, 128), (0, 256), (1, 128)])
+        self.assertEqual(calls, [(0, 128), (0, 1024), (1, 128)])
         self.assertEqual(decision.action_index, 0)
         self.assertEqual(
             [event["event"] for event in progress],
@@ -638,7 +638,7 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
                 "candidate-completed", "decision-completed",
             ],
         )
-        self.assertEqual(decision.metadata["candidates"][0]["max_continuation_decision_rounds"], 256)
+        self.assertEqual(decision.metadata["candidates"][0]["max_continuation_decision_rounds"], 1024)
 
     def test_oracle_fails_closed_when_the_expanded_candidate_still_hits_its_bound(self) -> None:
         boundary = LiveFoulPlayBoundary(
@@ -671,9 +671,9 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
                     continuation_policy_factory=lambda: self.fail("runner is patched"),
                     rollout_config=RolloutConfig(max_decision_rounds=300),
                     max_continuation_decision_rounds=128,
-                    expanded_continuation_decision_rounds=256,
+                    expanded_continuation_decision_rounds=1024,
                 )
-        self.assertEqual(calls, [(0, 128), (0, 256)])
+        self.assertEqual(calls, [(0, 128), (0, 1024)])
 
     def test_oracle_records_terminal_fixed_step_candidate(self) -> None:
         boundary = LiveFoulPlayBoundary(

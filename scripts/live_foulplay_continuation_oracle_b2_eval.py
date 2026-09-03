@@ -38,7 +38,10 @@ REGISTERED_UNITS_PER_ORIENTATION = 600
 SHARDS_PER_WORKER = 24
 UNITS_PER_SHARD = 25
 MAX_CONTINUATION_DECISION_ROUNDS = 128
-EXPANDED_CONTINUATION_DECISION_ROUNDS = 256
+# A capped candidate is retried once from the same boundary at the source
+# workload's hard 1024-decision ceiling. A second cap remains a fail-closed
+# source failure, so no partial candidate can influence B2.
+EXPANDED_CONTINUATION_DECISION_ROUNDS = 1024
 _ORIENTATION_REGISTRATION = {
     "p1": {"foulplay_player": "p2", "seed_start": B2_SEED_START, "worker_index": 0},
     "p2": {

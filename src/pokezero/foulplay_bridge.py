@@ -895,9 +895,10 @@ class ControlledFoulPlayConfig:
     # continuation. It never truncates the live legal action set and a capped
     # candidate fails the source game rather than becoming a partial score.
     live_continuation_oracle_max_continuation_decision_rounds: int = 128
-    # A cap hit is re-run from the same captured boundary at this larger bound.
-    # A second cap is a hard failure, never a partial candidate score.
-    live_continuation_oracle_expanded_continuation_decision_rounds: int | None = 256
+    # A cap hit is re-run from the same captured boundary at the registered
+    # final eligibility ceiling. A second cap is a hard failure, never a
+    # partial candidate score.
+    live_continuation_oracle_expanded_continuation_decision_rounds: int | None = 1024
     # Optional operational telemetry root. The controller creates immutable,
     # action-only lifecycle records here; generic snapshots never reach disk.
     live_continuation_oracle_progress_dir: Path | None = None
@@ -9128,8 +9129,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--live-continuation-oracle-expanded-continuation-decision-rounds",
         type=int,
-        default=256,
-        help="One bounded exact-boundary retry after a capped candidate; a second cap fails closed.",
+        default=1024,
+        help="One exact-boundary retry at the registered final ceiling; a second cap fails closed.",
     )
     parser.add_argument(
         "--live-continuation-oracle-progress-dir",
@@ -9289,7 +9290,7 @@ def _config_from_args(
             args, "live_continuation_oracle_max_continuation_decision_rounds", 128
         ),
         live_continuation_oracle_expanded_continuation_decision_rounds=getattr(
-            args, "live_continuation_oracle_expanded_continuation_decision_rounds", 256
+            args, "live_continuation_oracle_expanded_continuation_decision_rounds", 1024
         ),
         live_continuation_oracle_progress_dir=getattr(
             args, "live_continuation_oracle_progress_dir", None
