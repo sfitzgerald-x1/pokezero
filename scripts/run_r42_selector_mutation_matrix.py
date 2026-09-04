@@ -27,9 +27,9 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TESTS = (
-    "tests/test_live_foulplay_continuation.py",
-    "tests/test_live_foulplay_continuation_oracle_b2_eval.py",
+TEST_MODULES = (
+    "tests.test_live_foulplay_continuation",
+    "tests.test_live_foulplay_continuation_oracle_b2_eval",
 )
 
 
@@ -132,15 +132,41 @@ def _mutated_copy(mutation: Mutation) -> tuple[tempfile.TemporaryDirectory[str],
     return temporary, checkout
 
 
+def _run_focused_tests(checkout: Path) -> subprocess.CompletedProcess[str]:
+    """Run the source-level tests against precisely ``checkout``.
+
+    The R42 source image deliberately avoids carrying a test-only dependency
+    such as pytest.  More importantly, merely changing the current directory
+    is not sufficient for a ``src/`` package: an installed base-image
+    ``pokezero`` could otherwise be imported instead of the deliberately
+    mutated copy.  A fresh interpreter with the copied ``src`` prepended to
+    ``PYTHONPATH`` establishes both facts before any mutant can be credited as
+    killed.
+    """
+
+    environment = dict(os.environ)
+    source_path = str(checkout / "src")
+    inherited = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        source_path if not inherited else source_path + os.pathsep + inherited
+    )
+    return subprocess.run(
+        [sys.executable, "-m", "unittest", "-q", *TEST_MODULES],
+        cwd=checkout,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+
 def run(*, source_commit: str | None = None) -> dict[str, object]:
     results: list[dict[str, object]] = []
     for mutation in MUTATIONS:
         temporary, checkout = _mutated_copy(mutation)
         try:
-            completed = subprocess.run(
-                [sys.executable, "-m", "pytest", "-q", *TESTS], cwd=checkout,
-                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
-            )
+            completed = _run_focused_tests(checkout)
             if completed.returncode == 0:
                 raise MutationError(f"SURVIVED {mutation.name}: focused tests passed")
             results.append({"name": mutation.name, "status": "KILLED", "exit_code": completed.returncode,

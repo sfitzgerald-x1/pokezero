@@ -26,6 +26,17 @@ class R42SelectorMutationMatrixTest(unittest.TestCase):
         with self.assertRaisesRegex(module.MutationError, "--source-commit"):
             module._source_commit("not-a-commit")
 
+    def test_targeted_mutations_are_killed_against_the_mutated_src_copy(self) -> None:
+        module = _module()
+        result = module.run(source_commit="a" * 40)
+        self.assertTrue(result["all_killed"])
+        self.assertEqual(
+            {item["name"] for item in result["mutations"]},
+            {item.name for item in module.MUTATIONS},
+        )
+        self.assertTrue(all(item["status"] == "KILLED" for item in result["mutations"]))
+        self.assertTrue(all(item["exit_code"] != 0 for item in result["mutations"]))
+
 
 if __name__ == "__main__":
     unittest.main()
