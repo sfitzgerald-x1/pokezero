@@ -127,13 +127,13 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`bddc3ce2644ae228…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`dff7179c443406c9…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
 legitimate, and it has now happened **once per row of the table below** — DE-NUMBERED on purpose,
 see the warning under it. Restricting `git log 7fcd9e19..HEAD` to **all** of
-the fingerprint's inputs — the 74 gen3 patches, `poke-engine-gen3-patches.txt`,
+the fingerprint's inputs — the 76 gen3 patches, `poke-engine-gen3-patches.txt`,
 `poke-engine-base-source.json`, the 12 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
 a SUPERSET of those rows, for the reason recorded below. ⚠ **The `input` column is DERIVED, and the third row was wrong on
@@ -324,7 +324,8 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | C1 Stage 1 (closeout) | `rust/pokezero-search/src/encoder.rs` (131 constant column/offset lookups resolved once at table load) | `b79d83e3e08d838e…` |
 | #1219 completed on #1249 | `rust/pokezero-search/src/encoder.rs` (all 8 per-leaf `format!` md keys → `md_key!`, which derives both spellings from one suffix token) | `ad64440abbfca493…` |
 | #1257 merge baseline | `rust/pokezero-search/src/tree.rs` — per-depth OCCUPANCY counter, merged with main's `encoder.rs` md-key change | `65092feac14da111…` |
-| current merged tree | 92-file, 12-source fingerprint input set | `bddc3ce2644ae228…` |
+| #1331 fixed-work FoulPlay MCTS | `third_party/0002-foulplay-seeded-fixed-mcts.patch` plus its manifest entry; fixed visits and seed are now source-bound | `dff7179c443406c9…` |
+| current merged tree | 94-file, 12-source fingerprint input set | `dff7179c443406c9…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -922,7 +923,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.support_gated_holdout` | 9.185 % |
 | `base.expected_counter_artifacts` | 406 |
 | `base.expected_sweep_artifacts` | 115 |
-| `base.patch_stack` | 75 |
+| `base.patch_stack` | 76 |
 | `base.section3_rows` | 82 |
 | `base.section4_candidates` | 27 |
 | `base.section4_drops` | 26 |
@@ -943,8 +944,8 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 12 |
-| `t1.hashed_input_files` | 93 |
-| `t1.head_fingerprint` | 8d27a5cc8e77962b |
+| `t1.hashed_input_files` | 94 |
+| `t1.head_fingerprint` | dff7179c443406c9 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
