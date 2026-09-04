@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`dff7179c443406c9…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`a6b50fec0622b6ee…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -325,7 +325,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | #1219 completed on #1249 | `rust/pokezero-search/src/encoder.rs` (all 8 per-leaf `format!` md keys → `md_key!`, which derives both spellings from one suffix token) | `ad64440abbfca493…` |
 | #1257 merge baseline | `rust/pokezero-search/src/tree.rs` — per-depth OCCUPANCY counter, merged with main's `encoder.rs` md-key change | `65092feac14da111…` |
 | #1331 fixed-work FoulPlay MCTS | `third_party/0002-foulplay-seeded-fixed-mcts.patch` plus its manifest entry; fixed visits and seed are now source-bound | `dff7179c443406c9…` |
-| current merged tree | 94-file, 12-source fingerprint input set | `dff7179c443406c9…` |
+| current merged tree | `third_party/poke-engine-gen3-seeded-mcts.patch` retargeted to the packaged Maturin wrapper; 94-file, 12-source fingerprint input set | `a6b50fec0622b6ee…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -945,7 +945,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 12 |
 | `t1.hashed_input_files` | 94 |
-| `t1.head_fingerprint` | dff7179c443406c9 |
+| `t1.head_fingerprint` | a6b50fec0622b6ee |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
