@@ -36,7 +36,7 @@ class LiveFoulPlayContinuationBoundExceeded(LiveFoulPlayContinuationError):
 
 
 LIVE_FOULPLAY_CONTINUATION_ORACLE_SCHEMA_VERSION = (
-    "pokezero.live-foulplay-continuation-oracle.v1"
+    "pokezero.live-foulplay-continuation-oracle.v2"
 )
 
 
@@ -53,6 +53,34 @@ class LiveFoulPlayContinuationOracleDecision:
 
     action_index: int
     metadata: Mapping[str, Any]
+
+
+def _select_scored_candidate(*, scored: Sequence[Mapping[str, Any]], raw_action: int,
+                             foulplay_player: PlayerId) -> Mapping[str, Any]:
+    """Select only a genuine score improvement, with safe deterministic ties.
+
+    The raw action owns an equal-score tie whenever it is a non-losing
+    candidate.  The sole exception is safety-critical: an immediate fixed-step
+    loss cannot be retained when another top-scoring candidate is not such a
+    loss.  That exception also prevents an arbitrary action-index tie-break
+    from selecting a known immediate loss.
+    """
+    if not scored:
+        raise LiveFoulPlayContinuationError("live continuation oracle scored no legal candidates")
+    best_score = max(float(candidate["score"]) for candidate in scored)
+    tied = [candidate for candidate in scored if float(candidate["score"]) == best_score]
+
+    def immediate_subject_loss(candidate: Mapping[str, Any]) -> bool:
+        terminal = candidate.get("terminal")
+        return (candidate.get("terminal_after_fixed_joint_step") is True and
+                isinstance(terminal, Mapping) and terminal.get("winner") == foulplay_player)
+
+    non_losing_tied = [candidate for candidate in tied if not immediate_subject_loss(candidate)]
+    eligible = non_losing_tied or tied
+    raw_candidate = next((candidate for candidate in eligible if candidate.get("action_index") == raw_action), None)
+    if raw_candidate is not None:
+        return raw_candidate
+    return min(eligible, key=lambda candidate: int(candidate["action_index"]))
 
 
 def _canonical_json(value: object) -> str:
@@ -575,10 +603,9 @@ def select_live_foulplay_continuation_oracle_action(
                 }
             )
 
-    # Stable action-index tie-break.  In particular, the raw action receives no
-    # privileged tie break: choosing it is an oracle result only when it wins the
-    # same comparison as every other candidate.
-    selected = max(scored, key=lambda candidate: (float(candidate["score"]), -int(candidate["action_index"])))
+    selected = _select_scored_candidate(
+        scored=scored, raw_action=raw_action, foulplay_player=foulplay_player,
+    )
     selected_action = int(selected["action_index"])
     if progress_callback is not None:
         progress_callback(

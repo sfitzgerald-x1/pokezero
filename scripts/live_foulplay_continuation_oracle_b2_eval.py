@@ -51,7 +51,7 @@ _ORIENTATION_REGISTRATION = {
     },
 }
 SOURCE_SCHEMA_VERSION = "pokezero.controlled-foulplay-benchmark.v1"
-ORACLE_RECEIPT_SCHEMA_VERSION = "pokezero.live-foulplay-continuation-oracle.v1"
+ORACLE_RECEIPT_SCHEMA_VERSION = "pokezero.live-foulplay-continuation-oracle.v2"
 SUCCESS_MARKER = "WROTE B2 LIVE FOULPLAY CONTINUATION ORACLE PAIRED UNIT"
 _EXPERIMENT_ID_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _SOURCE_FILE_PATHS = (
@@ -59,7 +59,14 @@ _SOURCE_FILE_PATHS = (
     "src/pokezero/foulplay_bridge.py",
     "src/pokezero/live_foulplay_continuation.py",
 )
-_ARM_EXECUTION_ORDERS = ("raw-then-oracle", "oracle-then-raw")
+_TWO_ARM_EXECUTION_ORDERS = ("raw-then-oracle", "oracle-then-raw")
+# The three-arm diagnostic is intentionally restricted to these two physical
+# schedules.  Oracle is always second; the two identical raw treatments trade
+# first/third position.  This lets its realized raw-control comparison detect
+# a time-budget/order effect without confounding the oracle estimate with
+# position in the arm sequence.
+_THREE_ARM_EXECUTION_ORDERS = ("raw-oracle-control", "control-oracle-raw")
+_ARM_EXECUTION_ORDERS = _TWO_ARM_EXECUTION_ORDERS + _THREE_ARM_EXECUTION_ORDERS
 _EXECUTION_KEYS = {"arm_execution_order", "raw_reproducibility_control"}
 
 
@@ -180,6 +187,8 @@ def _require_execution(
     control = execution.get("raw_reproducibility_control")
     if order not in _ARM_EXECUTION_ORDERS or type(control) is not bool:
         raise B2EvaluationError("execution has an unsupported arm order or raw-control flag")
+    if control != (order in _THREE_ARM_EXECUTION_ORDERS):
+        raise B2EvaluationError("execution arm order and raw-control flag disagree")
     if expected_experiment_id == EXPERIMENT_ID and (
         order != "raw-then-oracle" or control is not False
     ):
@@ -355,6 +364,23 @@ def _require_clean_integrity(summary: Mapping[str, Any], game: Mapping[str, Any]
         raise B2EvaluationError("B2 game contains captured refusal records")
 
 
+def _expected_oracle_action(*, scored: Sequence[Mapping[str, Any]], raw_action: int,
+                            foulplay_player: str) -> int:
+    """Recompute the source controller's raw-preserving safe tie rule."""
+    best_score = max(float(candidate["score"]) for candidate in scored)
+    tied = [candidate for candidate in scored if float(candidate["score"]) == best_score]
+
+    def immediate_subject_loss(candidate: Mapping[str, Any]) -> bool:
+        terminal = candidate["terminal"]
+        return (candidate["terminal_after_fixed_joint_step"] is True and
+                terminal["winner"] == foulplay_player)
+
+    eligible = [candidate for candidate in tied if not immediate_subject_loss(candidate)] or tied
+    raw_candidate = next((candidate for candidate in eligible if candidate["action_index"] == raw_action), None)
+    return int(raw_candidate["action_index"] if raw_candidate is not None else
+               min(eligible, key=lambda candidate: int(candidate["action_index"]))["action_index"])
+
+
 def _require_oracle_candidate_receipt(
     item: Mapping[str, Any], *, pokezero_player: str, foulplay_player: str
 ) -> None:
@@ -390,7 +416,7 @@ def _require_oracle_candidate_receipt(
     )
     if any(action >= ACTION_COUNT for action in legal) or len(set(legal)) != len(legal):
         raise B2EvaluationError("oracle receipt has malformed legal action indices")
-    scored: list[tuple[int, float]] = []
+    scored: list[Mapping[str, Any]] = []
     for candidate in candidates:
         record = _require_mapping(candidate, field="oracle candidate")
         _require_exact_keys(
@@ -456,8 +482,8 @@ def _require_oracle_candidate_receipt(
         )
         if expected_score is None or float(score) != expected_score:
             raise B2EvaluationError("oracle candidate terminal winner and score are inconsistent")
-        scored.append((action, float(score)))
-    actions = [action for action, _score in scored]
+        scored.append(record)
+    actions = [int(candidate["action_index"]) for candidate in scored]
     if len(set(actions)) != len(actions):
         raise B2EvaluationError("oracle receipt repeats a legal candidate action")
     if tuple(actions) != legal:
@@ -465,12 +491,14 @@ def _require_oracle_candidate_receipt(
     selected = _require_nonnegative_int(item.get("selected_action_index"), field="selected_action_index")
     if selected not in actions:
         raise B2EvaluationError("oracle receipt selected an action outside its candidates")
-    expected_selected = max(scored, key=lambda candidate: (candidate[1], -candidate[0]))[0]
-    if selected != expected_selected:
-        raise B2EvaluationError("oracle receipt does not use the stable max-score, lowest-index tie break")
     raw_action = _require_nonnegative_int(item.get("raw_action_index"), field="raw_action_index")
     if raw_action not in legal:
         raise B2EvaluationError("oracle receipt raw action is outside the recorded legal action set")
+    expected_selected = _expected_oracle_action(
+        scored=scored, raw_action=raw_action, foulplay_player=foulplay_player,
+    )
+    if selected != expected_selected:
+        raise B2EvaluationError("oracle receipt does not use the safe raw-preserving tie rule")
     if not isinstance(item.get("selected_changed_raw_action"), bool) or (
         bool(item["selected_changed_raw_action"]) != (selected != raw_action)
     ):
@@ -1058,11 +1086,16 @@ def _run_arm(
 
 
 def _paired_unit(args: argparse.Namespace) -> dict[str, object]:
-    ordered_arms = (
-        (("raw", False), ("oracle", True))
-        if args.arm_execution_order == "raw-then-oracle"
-        else (("oracle", True), ("raw", False))
-    )
+    if args.arm_execution_order == "raw-then-oracle":
+        ordered_arms = (("raw", False), ("oracle", True))
+    elif args.arm_execution_order == "oracle-then-raw":
+        ordered_arms = (("oracle", True), ("raw", False))
+    elif args.arm_execution_order == "raw-oracle-control":
+        ordered_arms = (("raw", False), ("oracle", True), ("raw-control", False))
+    elif args.arm_execution_order == "control-oracle-raw":
+        ordered_arms = (("raw-control", False), ("oracle", True), ("raw", False))
+    else:  # argparse and _require_execution reject this; retain fail-closed execution.
+        raise B2EvaluationError("unsupported physical arm order")
     arms: dict[str, Mapping[str, Any]] = {}
     for label, oracle in ordered_arms:
         arms[label] = _run_arm(
@@ -1084,9 +1117,7 @@ def _paired_unit(args: argparse.Namespace) -> dict[str, object]:
         "oracle_minus_raw_score": float(oracle_game["pokezero_score"]) - float(raw_game["pokezero_score"]),
     }
     if args.include_raw_reproducibility_control:
-        control = _run_arm(
-            args, seed=args.seed, seat=args.pokezero_player, oracle=False, label="raw-control",
-        )
+        control = arms["raw-control"]
         control_game = _require_controller_receipt(
             control, oracle=False, seat=args.pokezero_player, expected_seed=args.seed,
         )
@@ -1096,6 +1127,8 @@ def _paired_unit(args: argparse.Namespace) -> dict[str, object]:
         result["raw_control_minus_raw_score"] = (
             float(control_game["pokezero_score"]) - float(raw_game["pokezero_score"])
         )
+    elif "raw-control" in arms:
+        raise B2EvaluationError("three-arm diagnostic order requires a raw reproducibility control")
     return result
 
 
@@ -1122,8 +1155,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=_ARM_EXECUTION_ORDERS,
         default="raw-then-oracle",
         help=(
-            "Physical arm order. Counterbalance diagnostic units because live FoulPlay is "
-            "time-budgeted; registered B2 accepts only raw-then-oracle."
+            "Physical arm order. Three-arm diagnostics use raw-oracle-control or "
+            "control-oracle-raw so the oracle remains in the middle; registered B2 "
+            "accepts only raw-then-oracle."
         ),
     )
     parser.add_argument(
@@ -1174,6 +1208,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise B2EvaluationError(
             "registered B2 requires --arm-execution-order raw-then-oracle and no raw reproducibility control"
         )
+    if args.include_raw_reproducibility_control != (args.arm_execution_order in _THREE_ARM_EXECUTION_ORDERS):
+        raise B2EvaluationError("--arm-execution-order and raw reproducibility control must agree")
     expected = _ORIENTATION_REGISTRATION[args.pokezero_player]
     if args.foulplay_player != expected["foulplay_player"]:
         raise B2EvaluationError("--foulplay-player must be the external FoulPlay complement of --pokezero-player")
