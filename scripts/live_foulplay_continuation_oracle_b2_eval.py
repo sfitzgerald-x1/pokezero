@@ -59,6 +59,8 @@ _SOURCE_FILE_PATHS = (
     "src/pokezero/foulplay_bridge.py",
     "src/pokezero/live_foulplay_continuation.py",
 )
+_ARM_EXECUTION_ORDERS = ("raw-then-oracle", "oracle-then-raw")
+_EXECUTION_KEYS = {"arm_execution_order", "raw_reproducibility_control"}
 
 
 class B2EvaluationError(RuntimeError):
@@ -157,6 +159,34 @@ def _require_experiment_id(value: object, *, field: str) -> str:
     if not isinstance(value, str) or _EXPERIMENT_ID_RE.fullmatch(value) is None:
         raise B2EvaluationError(f"{field} must be a lowercase hyphenated experiment identity")
     return value
+
+
+def _require_execution(
+    payload: Mapping[str, Any], *, expected_experiment_id: str,
+) -> Mapping[str, Any]:
+    """Validate the physical arm schedule without loosening registered B2.
+
+    External FoulPlay is deliberately time-budgeted, so a diagnostic that
+    always runs raw before oracle can confound treatment with execution order.
+    A successor diagnostic may counterbalance that order and add a second raw
+    arm as a realized-noise control. The registered B2 protocol remains the
+    original two-arm raw-then-oracle experiment; it cannot silently inherit a
+    different schedule or denominator.
+    """
+
+    execution = _require_mapping(payload.get("execution"), field="execution")
+    _require_exact_keys(execution, field="execution", keys=_EXECUTION_KEYS)
+    order = execution.get("arm_execution_order")
+    control = execution.get("raw_reproducibility_control")
+    if order not in _ARM_EXECUTION_ORDERS or type(control) is not bool:
+        raise B2EvaluationError("execution has an unsupported arm order or raw-control flag")
+    if expected_experiment_id == EXPERIMENT_ID and (
+        order != "raw-then-oracle" or control is not False
+    ):
+        raise B2EvaluationError(
+            "registered B2 requires raw-then-oracle with no raw reproducibility control"
+        )
+    return execution
 
 
 _STATE_AUDIT_ALLOWED_FIELDS = frozenset(
@@ -775,6 +805,8 @@ def validate_experiment_document(
         raise B2EvaluationError("B2 unit is not a completed create-only atomic unit")
     if payload.get("status") != "PASS":
         raise B2EvaluationError("B2 document status is not PASS")
+    execution = _require_execution(payload, expected_experiment_id=expected_experiment_id)
+    has_raw_control = bool(execution["raw_reproducibility_control"])
     seat = payload.get("pokezero_player")
     seed = _require_nonnegative_int(payload.get("seed"), field="seed")
     if seat not in _ORIENTATION_REGISTRATION:
@@ -846,7 +878,10 @@ def validate_experiment_document(
         raise B2EvaluationError("B2 unit does not record the registered continuation eligibility bound")
     if registration.get("expanded_continuation_decision_rounds") != EXPANDED_CONTINUATION_DECISION_ROUNDS:
         raise B2EvaluationError("B2 unit does not record the registered continuation expansion bound")
-    if registration.get("arms") != ["raw", "live-continuation-oracle"]:
+    expected_arms = ["raw", "live-continuation-oracle"]
+    if has_raw_control:
+        expected_arms.append("raw-reproducibility-control")
+    if registration.get("arms") != expected_arms:
         raise B2EvaluationError("B2 unit has the wrong paired treatment arms")
     if registration.get("external_opponent") != "FoulPlay":
         raise B2EvaluationError("B2 unit does not name external FoulPlay")
@@ -900,6 +935,27 @@ def validate_experiment_document(
         float(oracle_game.get("pokezero_score")) - float(raw_game.get("pokezero_score"))
     ):
         raise B2EvaluationError("paired delta does not equal oracle score minus raw score")
+    control_payload = payload.get("raw_reproducibility_control")
+    control_delta = payload.get("raw_reproducibility_control_minus_raw_score")
+    if not has_raw_control:
+        if control_payload is not None or control_delta is not None:
+            raise B2EvaluationError("two-arm receipt unexpectedly carries raw reproducibility control evidence")
+        return
+    control = _require_mapping(control_payload, field="raw reproducibility control arm")
+    if control.get("treatment_policy_mode") != "raw-transformer-policy-reproducibility-control":
+        raise B2EvaluationError("raw reproducibility control has the wrong treatment identity")
+    control_game = _require_controller_receipt(control, oracle=False, seat=seat, expected_seed=seed)
+    for field in ("seed_start", "foulplay_random_seed", "foulplay_random_seed_schedule"):
+        if control.get(field) != raw.get(field):
+            raise B2EvaluationError(
+                f"raw reproducibility control disagrees with raw on common-random-number field {field}"
+            )
+    if _require_arm_provenance(control) != raw_provenance:
+        raise B2EvaluationError("raw reproducibility control disagrees with raw provenance")
+    if isinstance(control_delta, bool) or not isinstance(control_delta, (int, float)) or not math.isfinite(float(control_delta)):
+        raise B2EvaluationError("raw reproducibility control delta is not finite")
+    if float(control_delta) != float(control_game["pokezero_score"]) - float(raw_game["pokezero_score"]):
+        raise B2EvaluationError("raw reproducibility control delta does not equal control score minus raw score")
 
 
 def validate_b2_document(payload: Mapping[str, Any]) -> None:
@@ -945,7 +1001,9 @@ def _arm_provenance(args: argparse.Namespace, summary: Mapping[str, Any]) -> dic
     }
 
 
-def _run_arm(args: argparse.Namespace, *, seed: int, seat: str, oracle: bool) -> Mapping[str, Any]:
+def _run_arm(
+    args: argparse.Namespace, *, seed: int, seat: str, oracle: bool, label: str,
+) -> Mapping[str, Any]:
     command = [
         args.python,
         "-m",
@@ -1005,7 +1063,7 @@ def _run_arm(args: argparse.Namespace, *, seed: int, seat: str, oracle: bool) ->
     completed = subprocess.run(command, text=True, capture_output=True, env=environment, check=False)
     if completed.returncode != 0:
         raise B2EvaluationError(
-            f"{'oracle' if oracle else 'raw'} arm failed for seed={seed} seat={seat}: "
+            f"{label} arm failed for seed={seed} seat={seat}: "
             f"exit={completed.returncode}; stderr={completed.stderr[-1000:]}"
         )
     try:
@@ -1019,21 +1077,45 @@ def _run_arm(args: argparse.Namespace, *, seed: int, seat: str, oracle: bool) ->
 
 
 def _paired_unit(args: argparse.Namespace) -> dict[str, object]:
-    raw = _run_arm(args, seed=args.seed, seat=args.pokezero_player, oracle=False)
-    oracle = _run_arm(args, seed=args.seed, seat=args.pokezero_player, oracle=True)
+    ordered_arms = (
+        (("raw", False), ("oracle", True))
+        if args.arm_execution_order == "raw-then-oracle"
+        else (("oracle", True), ("raw", False))
+    )
+    arms: dict[str, Mapping[str, Any]] = {}
+    for label, oracle in ordered_arms:
+        arms[label] = _run_arm(
+            args, seed=args.seed, seat=args.pokezero_player, oracle=oracle, label=label,
+        )
+    raw = arms["raw"]
+    oracle = arms["oracle"]
     raw_game = _require_controller_receipt(
         raw, oracle=False, seat=args.pokezero_player, expected_seed=args.seed
     )
     oracle_game = _require_controller_receipt(
         oracle, oracle=True, seat=args.pokezero_player, expected_seed=args.seed
     )
-    return {
+    result: dict[str, object] = {
         "seed": args.seed,
         "seat": args.pokezero_player,
         "raw": {"treatment_policy_mode": "raw-transformer-policy", **dict(raw)},
         "oracle": {"treatment_policy_mode": "oracle-continuation", **dict(oracle)},
         "oracle_minus_raw_score": float(oracle_game["pokezero_score"]) - float(raw_game["pokezero_score"]),
     }
+    if args.include_raw_reproducibility_control:
+        control = _run_arm(
+            args, seed=args.seed, seat=args.pokezero_player, oracle=False, label="raw-control",
+        )
+        control_game = _require_controller_receipt(
+            control, oracle=False, seat=args.pokezero_player, expected_seed=args.seed,
+        )
+        result["raw_control"] = {
+            "treatment_policy_mode": "raw-transformer-policy-reproducibility-control", **dict(control),
+        }
+        result["raw_control_minus_raw_score"] = (
+            float(control_game["pokezero_score"]) - float(raw_game["pokezero_score"])
+        )
+    return result
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -1052,6 +1134,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "immutable identity for this paired unit series; defaults to the "
             "registered B2 study and must be overridden by a diagnostic gate"
+        ),
+    )
+    parser.add_argument(
+        "--arm-execution-order",
+        choices=_ARM_EXECUTION_ORDERS,
+        default="raw-then-oracle",
+        help=(
+            "Physical arm order. Counterbalance diagnostic units because live FoulPlay is "
+            "time-budgeted; registered B2 accepts only raw-then-oracle."
+        ),
+    )
+    parser.add_argument(
+        "--include-raw-reproducibility-control",
+        action="store_true",
+        help=(
+            "Run a second raw arm on the same seed as a realized FoulPlay-noise control. "
+            "Allowed only for an explicitly non-B2 diagnostic experiment."
         ),
     )
     parser.add_argument(
@@ -1088,6 +1187,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     experiment_id = _require_experiment_id(args.experiment_id, field="--experiment-id")
+    if experiment_id == EXPERIMENT_ID and (
+        args.arm_execution_order != "raw-then-oracle" or args.include_raw_reproducibility_control
+    ):
+        raise B2EvaluationError(
+            "registered B2 requires --arm-execution-order raw-then-oracle and no raw reproducibility control"
+        )
     expected = _ORIENTATION_REGISTRATION[args.pokezero_player]
     if args.foulplay_player != expected["foulplay_player"]:
         raise B2EvaluationError("--foulplay-player must be the external FoulPlay complement of --pokezero-player")
@@ -1124,6 +1229,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "success_marker": SUCCESS_MARKER,
         "pokezero_player": args.pokezero_player,
         "seed": args.seed,
+        "execution": {
+            "arm_execution_order": args.arm_execution_order,
+            "raw_reproducibility_control": args.include_raw_reproducibility_control,
+        },
         "source_files_sha256": _source_files_sha256(),
         "registration": {
             "registered_units_per_orientation": REGISTERED_UNITS_PER_ORIENTATION,
@@ -1141,7 +1250,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "candidate_cap": args.candidate_cap,
             "max_continuation_decision_rounds": args.max_continuation_decision_rounds,
             "expanded_continuation_decision_rounds": args.expanded_continuation_decision_rounds,
-            "arms": ["raw", "live-continuation-oracle"],
+            "arms": (
+                ["raw", "live-continuation-oracle", "raw-reproducibility-control"]
+                if args.include_raw_reproducibility_control
+                else ["raw", "live-continuation-oracle"]
+            ),
             "external_opponent": "FoulPlay",
             "checkpoint": str(args.checkpoint.resolve()),
             "checkpoint_sha256": _sha256_file(args.checkpoint),
@@ -1155,6 +1268,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "oracle_minus_raw_score": unit["oracle_minus_raw_score"],
         },
     }
+    if args.include_raw_reproducibility_control:
+        payload["raw_reproducibility_control"] = unit["raw_control"]
+        payload["raw_reproducibility_control_minus_raw_score"] = unit["raw_control_minus_raw_score"]
     validate_experiment_document(payload, expected_experiment_id=experiment_id)
     _write_new_json(args.out, payload)
     print(SUCCESS_MARKER)

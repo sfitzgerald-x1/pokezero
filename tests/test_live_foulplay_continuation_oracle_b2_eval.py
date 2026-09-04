@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -155,6 +157,7 @@ def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> di
 
 def _unit_document(
     module: object, *, seat: str = "p1", seed: int | None = None, registration_seed_start: int | None = None,
+    arm_execution_order: str = "raw-then-oracle", raw_reproducibility_control: bool = False,
 ) -> dict[str, object]:
     if seed is None:
         seed = registration_seed_start if registration_seed_start is not None else module._ORIENTATION_REGISTRATION[seat]["seed_start"]
@@ -163,7 +166,7 @@ def _unit_document(
     )
     raw = _bridge_summary(module, seat=seat, oracle=False, seed=seed)
     oracle = _bridge_summary(module, seat=seat, oracle=True, seed=seed)
-    return {
+    document = {
         "schema_version": module.SCHEMA_VERSION,
         "experiment_id": module.EXPERIMENT_ID,
         "complete": True,
@@ -171,6 +174,10 @@ def _unit_document(
         "status": "PASS",
         "pokezero_player": seat,
         "seed": seed,
+        "execution": {
+            "arm_execution_order": arm_execution_order,
+            "raw_reproducibility_control": raw_reproducibility_control,
+        },
         "source_files_sha256": {
             "scripts/live_foulplay_continuation_oracle_b2_eval.py": _digest("3"),
             "src/pokezero/foulplay_bridge.py": _digest("e"),
@@ -192,7 +199,11 @@ def _unit_document(
             "candidate_cap": 9,
             "max_continuation_decision_rounds": 128,
             "expanded_continuation_decision_rounds": 1024,
-            "arms": ["raw", "live-continuation-oracle"],
+            "arms": (
+                ["raw", "live-continuation-oracle", "raw-reproducibility-control"]
+                if raw_reproducibility_control
+                else ["raw", "live-continuation-oracle"]
+            ),
             "external_opponent": "FoulPlay",
             "checkpoint": "/checkpoint.pt",
             "checkpoint_sha256": _digest("f"),
@@ -206,6 +217,13 @@ def _unit_document(
             "oracle_minus_raw_score": 0.0,
         },
     }
+    if raw_reproducibility_control:
+        control = _bridge_summary(module, seat=seat, oracle=False, seed=seed)
+        document["raw_reproducibility_control"] = {
+            "treatment_policy_mode": "raw-transformer-policy-reproducibility-control", **control,
+        }
+        document["raw_reproducibility_control_minus_raw_score"] = 0.0
+    return document
 
 
 class B2EvaluatorTest(unittest.TestCase):
@@ -500,6 +518,55 @@ class B2EvaluatorTest(unittest.TestCase):
             ]
         )
         self.assertEqual(args.experiment_id, "root-oracle-b2-r40-durable-gate-20260904")
+
+    def test_diagnostic_counterbalancing_and_raw_control_are_provenance_bound(self) -> None:
+        module = _module()
+        diagnostic_id = "root-oracle-b2-r42-efficacy-pilot-20260904"
+        diagnostic = _unit_document(
+            module,
+            seat="p1",
+            seed=119_000_000,
+            registration_seed_start=119_000_000,
+            arm_execution_order="oracle-then-raw",
+            raw_reproducibility_control=True,
+        )
+        with self.assertRaisesRegex(module.B2EvaluationError, "registered B2 requires"):
+            module.validate_b2_document(diagnostic)
+        diagnostic["experiment_id"] = diagnostic_id
+        module.validate_experiment_document(diagnostic, expected_experiment_id=diagnostic_id)
+
+        bad_control = _unit_document(
+            module,
+            seat="p1",
+            seed=119_000_000,
+            registration_seed_start=119_000_000,
+            arm_execution_order="oracle-then-raw",
+            raw_reproducibility_control=True,
+        )
+        bad_control["experiment_id"] = diagnostic_id
+        bad_control["raw_reproducibility_control"]["foulplay_random_seed"] = 7
+        with self.assertRaisesRegex(module.B2EvaluationError, "seeds to its game seed"):
+            module.validate_experiment_document(bad_control, expected_experiment_id=diagnostic_id)
+
+    def test_paired_unit_respects_diagnostic_arm_order_and_raw_control(self) -> None:
+        module = _module()
+        args = SimpleNamespace(
+            seed=119_000_000,
+            pokezero_player="p1",
+            arm_execution_order="oracle-then-raw",
+            include_raw_reproducibility_control=True,
+        )
+        calls: list[tuple[str, bool]] = []
+
+        def fake_run_arm(_args: object, *, seed: int, seat: str, oracle: bool, label: str) -> dict[str, object]:
+            self.assertEqual((seed, seat), (119_000_000, "p1"))
+            calls.append((label, oracle))
+            return _bridge_summary(module, seat=seat, oracle=oracle, seed=seed)
+
+        with patch.object(module, "_run_arm", side_effect=fake_run_arm):
+            unit = module._paired_unit(args)
+        self.assertEqual(calls, [("oracle", True), ("raw", False), ("raw-control", False)])
+        self.assertEqual(unit["raw_control_minus_raw_score"], 0.0)
 
 
 if __name__ == "__main__":
