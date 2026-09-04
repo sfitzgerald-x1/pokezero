@@ -527,7 +527,7 @@ class B2EvaluatorTest(unittest.TestCase):
             seat="p1",
             seed=119_000_000,
             registration_seed_start=119_000_000,
-            arm_execution_order="control-oracle-raw",
+            arm_execution_order="raw-control-oracle",
             raw_reproducibility_control=True,
         )
         with self.assertRaisesRegex(module.B2EvaluationError, "registered B2 requires"):
@@ -540,7 +540,7 @@ class B2EvaluatorTest(unittest.TestCase):
             seat="p1",
             seed=119_000_000,
             registration_seed_start=119_000_000,
-            arm_execution_order="control-oracle-raw",
+            arm_execution_order="raw-control-oracle",
             raw_reproducibility_control=True,
         )
         bad_control["experiment_id"] = diagnostic_id
@@ -563,8 +563,12 @@ class B2EvaluatorTest(unittest.TestCase):
     def test_paired_unit_respects_three_arm_diagnostic_order_and_raw_control(self) -> None:
         module = _module()
         expected_calls = {
+            "oracle-raw-control": [("oracle", True), ("raw", False), ("raw-control", False)],
+            "oracle-control-raw": [("oracle", True), ("raw-control", False), ("raw", False)],
             "raw-oracle-control": [("raw", False), ("oracle", True), ("raw-control", False)],
             "control-oracle-raw": [("raw-control", False), ("oracle", True), ("raw", False)],
+            "raw-control-oracle": [("raw", False), ("raw-control", False), ("oracle", True)],
+            "control-raw-oracle": [("raw-control", False), ("raw", False), ("oracle", True)],
         }
         for order, expected in expected_calls.items():
             with self.subTest(order=order):
