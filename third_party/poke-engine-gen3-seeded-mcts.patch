@@ -1,0 +1,325 @@
+diff --git a/src/mcts.rs b/src/mcts.rs
+index 8b911d4..700e33d 100644
+--- a/src/mcts.rs
++++ b/src/mcts.rs
+@@ -6,6 +6,7 @@ use crate::state::State;
+ use crate::state::State;
+ use rand::distr::weighted::WeightedIndex;
+ use rand::prelude::*;
+-use rand::rng;
++use rand::rngs::StdRng;
++use rand::{rng, SeedableRng};
+ use std::collections::HashMap;
+ use std::time::Duration;
+@@ -93,10 +94,11 @@ impl Node {
+         choice
+     }
+ 
+-    pub unsafe fn selection(
++    pub unsafe fn selection<R: Rng + ?Sized>(
+         &mut self,
+         state: &mut State,
+         children: &mut HashMap<(usize, usize, usize), Box<[Node]>>,
++        rng: &mut R,
+     ) -> (*mut Node, usize, usize) {
+         if self.s1_options.is_none() {
+             let (s1_options, s2_options) = state.get_all_options();
+@@ -109,16 +111,19 @@ impl Node {
+         match children.get_mut(&key) {
+             Some(child_vector) => {
+                 let child_vec_ptr = child_vector as *mut Box<[Node]>;
+-                let chosen_child = self.sample_node(child_vec_ptr);
++                let chosen_child = self.sample_node(child_vec_ptr, rng);
+                 state.apply_instructions(&(*chosen_child).instructions.instruction_list);
+-                (*chosen_child).selection(state, children)
++                (*chosen_child).selection(state, children, rng)
+             }
+             None => (self as *mut Node, s1_mc_index, s2_mc_index),
+         }
+     }
+ 
+-    unsafe fn sample_node(&self, move_vector: *mut Box<[Node]>) -> *mut Node {
+-        let mut rng = rng();
++    unsafe fn sample_node<R: Rng + ?Sized>(
++        &self,
++        move_vector: *mut Box<[Node]>,
++        rng: &mut R,
++    ) -> *mut Node {
+         let weights: Vec<f64> = (*move_vector)
+             .iter()
+             .map(|x| x.instructions.percentage as f64)
+@@ -130,17 +135,18 @@ impl Node {
+                 weights,
+             )
+         });
+-        let chosen_node = &mut (&mut *move_vector)[dist.sample(&mut rng)];
++        let chosen_node = &mut (&mut *move_vector)[dist.sample(rng)];
+         let chosen_node_ptr = chosen_node as *mut Node;
+         chosen_node_ptr
+     }
+ 
+-    pub unsafe fn expand(
++    pub unsafe fn expand<R: Rng + ?Sized>(
+         &mut self,
+         state: &mut State,
+         s1_move_index: usize,
+         s2_move_index: usize,
+         children: &mut HashMap<(usize, usize, usize), Box<[Node]>>,
++        rng: &mut R,
+     ) -> *mut Node {
+         let s1_move = &self.s1_options.as_ref().unwrap()[s1_move_index].move_choice;
+         let s2_move = &self.s2_options.as_ref().unwrap()[s2_move_index].move_choice;
+@@ -169,7 +175,7 @@ impl Node {
+         // makes it a type that cannot be resized, which ensures the node
+         // addresses are stable for the children map keys
+         let mut boxed = this_pair_vec.into_boxed_slice();
+-        let new_node_ptr = self.sample_node(&mut boxed);
++        let new_node_ptr = self.sample_node(&mut boxed, rng);
+         state.apply_instructions(&(*new_node_ptr).instructions.instruction_list);
+ 
+         let key = (self as *mut Node as usize, s1_move_index, s2_move_index);
+@@ -257,14 +263,15 @@ pub struct MctsResult {
+     pub iteration_count: u32,
+ }
+ 
+-fn mcts_iteration(
++fn mcts_iteration<R: Rng + ?Sized>(
+     root_node: &mut Node,
+     state: &mut State,
+     root_eval: &f32,
+     children: &mut HashMap<(usize, usize, usize), Box<[Node]>>,
++    rng: &mut R,
+ ) {
+-    let (mut new_node, s1_move, s2_move) = unsafe { root_node.selection(state, children) };
+-    new_node = unsafe { (*new_node).expand(state, s1_move, s2_move, children) };
++    let (mut new_node, s1_move, s2_move) = unsafe { root_node.selection(state, children, rng) };
++    new_node = unsafe { (*new_node).expand(state, s1_move, s2_move, children, rng) };
+     let rollout_result = unsafe { (*new_node).rollout(state, root_eval) };
+     unsafe { (*new_node).backpropagate(rollout_result, state) }
+ }
+@@ -274,17 +281,27 @@ enum SearchLimit {
+     Iterations(u32),
+ }
+ 
+-fn run_mcts_loop(
++fn run_mcts_loop<R: Rng + ?Sized>(
+     root_node: &mut Node,
+     state: &mut State,
+     root_eval: &f32,
+     children: &mut HashMap<(usize, usize, usize), Box<[Node]>>,
+     limit: SearchLimit,
++    rng: &mut R,
+ ) {
+     let start_time = std::time::Instant::now();
+     loop {
+-        for _ in 0..1000 {
+-            mcts_iteration(root_node, state, root_eval, children);
++        let batch_size = match limit {
++            SearchLimit::Time(_) => 1000,
++            SearchLimit::Iterations(iterations) => {
++                std::cmp::min(1000, iterations.saturating_sub(root_node.times_visited))
++            }
++        };
++        for _ in 0..batch_size {
++            mcts_iteration(root_node, state, root_eval, children, rng);
++        }
++        if batch_size == 0 {
++            break;
+         }
+         if root_node.times_visited >= 10_000_000 {
+             break;
+@@ -310,6 +327,50 @@ pub fn perform_mcts(
+     side_two_options: Vec<MoveChoice>,
+     max_time: Duration,
+     max_iterations: u32,
++) -> MctsResult {
++    let mut entropy = rng();
++    let mut search_rng = StdRng::from_rng(&mut entropy);
++    perform_mcts_with_rng(
++        state,
++        side_one_options,
++        side_two_options,
++        max_time,
++        max_iterations,
++        &mut search_rng,
++    )
++}
++
++/// Run single-threaded MCTS with a caller-provided deterministic chance stream.
++///
++/// This is intentionally separate from `perform_mcts`: unseeded callers retain
++/// the historical entropy-backed behaviour, while an experiment can bind every
++/// chance-node sample to a reproducible seed and fixed iteration budget.
++pub fn perform_mcts_seeded(
++    state: &mut State,
++    side_one_options: Vec<MoveChoice>,
++    side_two_options: Vec<MoveChoice>,
++    max_time: Duration,
++    max_iterations: u32,
++    seed: u64,
++) -> MctsResult {
++    let mut search_rng = StdRng::seed_from_u64(seed);
++    perform_mcts_with_rng(
++        state,
++        side_one_options,
++        side_two_options,
++        max_time,
++        max_iterations,
++        &mut search_rng,
++    )
++}
++
++fn perform_mcts_with_rng<R: Rng + ?Sized>(
++    state: &mut State,
++    side_one_options: Vec<MoveChoice>,
++    side_two_options: Vec<MoveChoice>,
++    max_time: Duration,
++    max_iterations: u32,
++    rng: &mut R,
+ ) -> MctsResult {
+     let mut root_node = Node::new();
+     unsafe {
+@@ -330,6 +391,7 @@ pub fn perform_mcts(
+         &root_eval,
+         &mut children,
+         search_limit,
++        rng,
+     );
+ 
+     let result = MctsResult {
+diff --git a/poke-engine-py/src/lib.rs b/poke-engine-py/src/lib.rs
+index 795b3e5..19906f7 100644
+--- a/poke-engine-py/src/lib.rs
++++ b/poke-engine-py/src/lib.rs
+@@ -11,7 +11,7 @@ use poke_engine::engine::generate_instructions::{
+ use poke_engine::engine::items::Items;
+ use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Terrain, Weather};
+ use poke_engine::instruction::{Instruction, StateInstructions};
+-use poke_engine::mcts::{perform_mcts, MctsResult, MctsSideResult};
++use poke_engine::mcts::{perform_mcts, perform_mcts_seeded, MctsResult, MctsSideResult};
+ use poke_engine::mcts_threaded::perform_mcts_shared_tree;
+ use poke_engine::pokemon::PokemonName;
+ use poke_engine::search::iterative_deepen_expectiminimax;
+@@ -956,20 +956,35 @@ impl PyIterativeDeepeningResult {
+     }
+ }
+ 
+-#[pyfunction]
++#[pyfunction(signature=(py_state, duration_ms, iterations, threads, seed=None))]
+ fn mcts(
+     py_state: PyState,
+     duration_ms: u64,
+     iterations: u32,
+     threads: usize,
++    seed: Option<u64>,
+ ) -> PyResult<PyMctsResult> {
+     let mut state: State = py_state.into();
+     let duration = Duration::from_millis(duration_ms);
+     let (s1_options, s2_options) = state.root_get_all_options();
++    if seed.is_some() && threads > 1 {
++        return Err(pyo3::exceptions::PyValueError::new_err(
++            "seeded MCTS requires threads=1; shared-tree scheduling is not reproducible",
++        ));
++    }
+     let mcts_result = if threads > 1 {
+         perform_mcts_shared_tree(
+             &mut state, s1_options, s2_options, duration, iterations, threads,
+         )
++    } else if let Some(seed) = seed {
++        perform_mcts_seeded(
++            &mut state,
++            s1_options,
++            s2_options,
++            duration,
++            iterations,
++            seed,
++        )
+     } else {
+         perform_mcts(&mut state, s1_options, s2_options, duration, iterations)
+     };
+diff --git a/poke-engine-py/python/poke_engine/__init__.py b/poke-engine-py/python/poke_engine/__init__.py
+index 9e579cc..9915974 100644
+--- a/poke-engine-py/python/poke_engine/__init__.py
++++ b/poke-engine-py/python/poke_engine/__init__.py
+@@ -146,7 +146,11 @@ class MctsResult:
+ 
+ 
+ def monte_carlo_tree_search(
+-    state: State, duration_ms: int = 1000, iterations: int = 0, threads: int = 1
++    state: State,
++    duration_ms: int = 1000,
++    iterations: int = 0,
++    threads: int = 1,
++    seed: int | None = None,
+ ) -> MctsResult:
+     """
+     Perform monte-carlo-tree-search on the given state and for the given duration
+@@ -159,10 +163,12 @@ def monte_carlo_tree_search(
+     :type iterations: int
+     :param threads: number of threads to use for the search
+     :type threads: int
++    :param seed: deterministic chance-node seed; requires exactly one thread
++    :type seed: int | None
+     :return: the result of the search
+     :rtype: MctsResult
+     """
+-    return MctsResult._from_rust(mcts(state, duration_ms, iterations, threads))
++    return MctsResult._from_rust(mcts(state, duration_ms, iterations, threads, seed))
+ 
+ 
+ def iterative_deepening_expectiminimax(
+diff --git a/tests/test_gen3.rs b/tests/test_gen3.rs
+index 4f6d08a..8748b1f 100644
+--- a/tests/test_gen3.rs
++++ b/tests/test_gen3.rs
+@@ -13,7 +13,7 @@ use poke_engine::instruction::{
+     RemoveVolatileStatusInstruction, SetSleepTurnsInstruction, StateInstructions,
+     SwitchInstruction,
+ };
+-use poke_engine::mcts::perform_mcts;
++use poke_engine::mcts::{perform_mcts, perform_mcts_seeded, MctsResult};
+ use poke_engine::state::PokemonSideCondition;
+ use poke_engine::state::{
+     Move, PokemonIndex, PokemonMoveIndex, PokemonStatus, PokemonType, SideReference, State,
+@@ -69,5 +69,41 @@ fn foulplay_invalidweight_witness_has_no_invalid_chance_arm() {
+     assert_eq!(result.iteration_count, 10_000);
+ }
+ 
++fn assert_same_mcts_result(left: &MctsResult, right: &MctsResult) {
++    assert_eq!(left.iteration_count, right.iteration_count);
++    assert_eq!(left.s1.len(), right.s1.len());
++    assert_eq!(left.s2.len(), right.s2.len());
++    for (left_node, right_node) in left.s1.iter().zip(right.s1.iter()) {
++        assert_eq!(left_node.move_choice, right_node.move_choice);
++        assert_eq!(left_node.visits, right_node.visits);
++        assert_eq!(left_node.total_score.to_bits(), right_node.total_score.to_bits());
++    }
++    for (left_node, right_node) in left.s2.iter().zip(right.s2.iter()) {
++        assert_eq!(left_node.move_choice, right_node.move_choice);
++        assert_eq!(left_node.visits, right_node.visits);
++        assert_eq!(left_node.total_score.to_bits(), right_node.total_score.to_bits());
++    }
++}
++
++#[test]
++fn foulplay_seeded_mcts_repeats_exactly() {
++    let search = |seed| {
++        let mut state = State::deserialize(FOULPLAY_INVALIDWEIGHT_WITNESS);
++        let (side_one_options, side_two_options) = state.get_all_options();
++        perform_mcts_seeded(
++            &mut state,
++            side_one_options,
++            side_two_options,
++            Duration::from_secs(1),
++            10_001,
++            seed,
++        )
++    };
++    let first = search(109_200_600);
++    let second = search(109_200_600);
++    assert_eq!(first.iteration_count, 10_001);
++    assert_same_mcts_result(&first, &second);
++}
++
+ #[test]
+ fn test_regular_move_with_protect_side_condition() {

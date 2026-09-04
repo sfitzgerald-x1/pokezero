@@ -23,6 +23,15 @@ def _digest(letter: str) -> str:
     return letter * 64
 
 
+def _fixed_mcts_seed(*, base_seed: int, decision_index: int, sample_index: int) -> int:
+    import hashlib
+
+    return int.from_bytes(
+        hashlib.sha256(f"{base_seed}:{decision_index}:{sample_index}".encode("ascii")).digest()[:8],
+        "big",
+    )
+
+
 def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> dict[str, object]:
     foulplay = "p2" if seat == "p1" else "p1"
     game: dict[str, object] = {
@@ -84,6 +93,28 @@ def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> di
                 }
             ],
         }
+    fixed_iterations = 10_001
+    fixed_audit = {
+        "schema": module.FIXED_MCTS_SCHEMA_VERSION,
+        "decision_index": 0,
+        "sample_index": 0,
+        "mcts_seed": _fixed_mcts_seed(base_seed=seed, decision_index=0, sample_index=0),
+        "iterations_requested": fixed_iterations,
+        "total_visits": fixed_iterations,
+        "threads": 1,
+        "parallelism": 1,
+    }
+    game["opponent_think"] = [
+        {
+            "round": 0,
+            "status": "ok",
+            "fixed_mcts": {
+                "schema_version": module.FIXED_MCTS_SCHEMA_VERSION,
+                "audits": [fixed_audit],
+            },
+        }
+    ]
+    game["opponent_think_record_failures"] = 0
     provenance = {
         "bridge_schema_version": module.SOURCE_SCHEMA_VERSION,
         "bridge_source_sha256": _digest("e"),
@@ -96,6 +127,8 @@ def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> di
         "max_continuation_decision_rounds": 128,
         "expanded_continuation_decision_rounds": 1024,
         "foulplay_search_time_ms": 1000,
+        "foulplay_mcts_iterations": fixed_iterations,
+        "foulplay_fixed_mcts_audit_schema_version": module.FIXED_MCTS_SCHEMA_VERSION,
         "checkpoint_path": "/checkpoint.pt",
         "checkpoint_sha256": _digest("f"),
         "showdown_root": "/showdown",
@@ -149,7 +182,16 @@ def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> di
             "mode": "constant",
             "seeds": [seed],
         },
-        "foulplay_think": {"budget_ms_configured": 1000},
+        "foulplay_think": {
+            "schema_version": module.FOULPLAY_THINK_SCHEMA_VERSION,
+            "budget_ms_configured": 1000,
+            "fixed_mcts_iterations_configured": fixed_iterations,
+            "fixed_mcts_audit_required": True,
+            "decisions": 1,
+            "decisions_attempted": 1,
+            "record_failures": 0,
+            "miss_decisions": 0,
+        },
         "game_results": [game],
         "b2_provenance": provenance,
     }
@@ -415,6 +457,23 @@ class B2EvaluatorTest(unittest.TestCase):
         with self.assertRaisesRegex(module.B2EvaluationError, "unexpected receipt shape"):
             module.validate_b2_document(malformed_integrity)
 
+    def test_rejects_missing_or_tampered_fixed_mcts_receipts(self) -> None:
+        module = _module()
+        missing = _unit_document(module)
+        del missing["raw"]["game_results"][0]["opponent_think"][0]["fixed_mcts"]
+        with self.assertRaisesRegex(module.B2EvaluationError, "fixed_mcts"):
+            module.validate_b2_document(missing)
+
+        wrong_seed = _unit_document(module)
+        wrong_seed["raw"]["game_results"][0]["opponent_think"][0]["fixed_mcts"]["audits"][0]["mcts_seed"] = 0
+        with self.assertRaisesRegex(module.B2EvaluationError, "seed/work contract"):
+            module.validate_b2_document(wrong_seed)
+
+        missing_header = _unit_document(module)
+        missing_header["raw"]["foulplay_think"]["fixed_mcts_audit_required"] = False
+        with self.assertRaisesRegex(module.B2EvaluationError, "does not require"):
+            module.validate_b2_document(missing_header)
+
     def test_rejects_treatment_identity_that_confuses_raw_bridge_mode_with_b2_arm(self) -> None:
         module = _module()
         payload = _unit_document(module)
@@ -457,6 +516,7 @@ class B2EvaluatorTest(unittest.TestCase):
                 "--foulplay-player", "p2",
                 "--seed", "109000000",
                 "--registration-seed-start", "109000000",
+                "--foulplay-mcts-iterations", "10001",
                 "--max-decision-rounds", "1024",
                 "--max-continuation-decision-rounds", "128",
                 "--expanded-continuation-decision-rounds", "1024",
@@ -466,6 +526,7 @@ class B2EvaluatorTest(unittest.TestCase):
         self.assertEqual(args.registration_seed_start, 109_000_000)
         self.assertEqual(args.max_continuation_decision_rounds, 128)
         self.assertEqual(args.expanded_continuation_decision_rounds, 1024)
+        self.assertEqual(args.foulplay_mcts_iterations, 10_001)
         self.assertEqual(args.oracle_progress_dir, Path("/shared/oracle-progress"))
 
     def test_accepts_an_explicit_fresh_orientation_band_without_reusing_the_legacy_band(self) -> None:
@@ -514,6 +575,7 @@ class B2EvaluatorTest(unittest.TestCase):
                 "--foulplay-player", "p2",
                 "--seed", "119000000",
                 "--registration-seed-start", "119000000",
+                "--foulplay-mcts-iterations", "10001",
                 "--experiment-id", "root-oracle-b2-r40-durable-gate-20260904",
             ]
         )
