@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 from typing import NamedTuple, Sequence
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,6 +72,31 @@ class MutationError(RuntimeError):
     """The targeted source mutation battery is incomplete or a mutant survived."""
 
 
+def _source_commit(override: str | None) -> str:
+    """Return the frozen source commit without requiring a runtime ``.git`` tree.
+
+    The source image intentionally need not contain Git metadata.  The image
+    builder receipt already carries the immutable commit, so a provenance-bound
+    preflight passes that value explicitly while local developer invocation can
+    retain the convenient checked-out default.
+    """
+
+    if override is not None:
+        if re.fullmatch(r"[0-9a-f]{40}", override) is None:
+            raise MutationError("--source-commit must be a 40-character lowercase Git commit")
+        return override
+    try:
+        value = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, check=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        raise MutationError("source commit override is required when the source tree has no Git metadata") from exc
+    if re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise MutationError("Git did not report a 40-character lowercase source commit")
+    return value
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -106,7 +132,7 @@ def _mutated_copy(mutation: Mutation) -> tuple[tempfile.TemporaryDirectory[str],
     return temporary, checkout
 
 
-def run() -> dict[str, object]:
+def run(*, source_commit: str | None = None) -> dict[str, object]:
     results: list[dict[str, object]] = []
     for mutation in MUTATIONS:
         temporary, checkout = _mutated_copy(mutation)
@@ -124,8 +150,7 @@ def run() -> dict[str, object]:
     return {
         "schema_version": "pokezero.r42-selector-mutation-battery.v1",
         "complete": True,
-        "source_commit": subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True,
-                                         stdout=subprocess.PIPE, check=True).stdout.strip(),
+        "source_commit": _source_commit(source_commit),
         "source_files_sha256": {
             "src/pokezero/live_foulplay_continuation.py": _sha256(ROOT / "src/pokezero/live_foulplay_continuation.py"),
             "scripts/live_foulplay_continuation_oracle_b2_eval.py": _sha256(ROOT / "scripts/live_foulplay_continuation_oracle_b2_eval.py"),
@@ -139,9 +164,10 @@ def run() -> dict[str, object]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--source-commit")
     args = parser.parse_args(argv)
     try:
-        result = run()
+        result = run(source_commit=args.source_commit)
         if result["all_killed"] is not True:
             raise MutationError("targeted R42 mutation battery is incomplete")
         _write_once(args.out, result)
