@@ -50,6 +50,7 @@ from .local_showdown import (
     showdown_seed_from_int,
 )
 from .live_foulplay_continuation import (
+    LIVE_FOULPLAY_CONTINUATION_ORACLE_SCHEMA_VERSION,
     LiveFoulPlayBoundary,
     LiveFoulPlayContinuationError,
     reconstruct_live_foulplay_boundary,
@@ -1814,7 +1815,7 @@ class ControlledFoulPlayGameResult:
             payload["opponent_think_record_failures"] = self.opponent_think_failures
         if self.live_continuation_oracle_decisions or self.live_continuation_oracle_forced_boundary_raw_decisions:
             payload["live_continuation_oracle"] = {
-                "schema_version": "pokezero.live-foulplay-continuation-oracle.v1",
+                "schema_version": LIVE_FOULPLAY_CONTINUATION_ORACLE_SCHEMA_VERSION,
                 "controller_only_full_state": True,
                 "oracle_decisions": [dict(item) for item in self.live_continuation_oracle_decisions],
                 "oracle_decision_count": len(self.live_continuation_oracle_decisions),
@@ -2156,7 +2157,7 @@ class ControlledFoulPlayBenchmarkResult:
             "belief_set_source": self.config.belief_set_source_enabled(),
             "live_continuation_oracle": {
                 "enabled": self.config.live_continuation_oracle,
-                "schema_version": "pokezero.live-foulplay-continuation-oracle.v1",
+                "schema_version": LIVE_FOULPLAY_CONTINUATION_ORACLE_SCHEMA_VERSION,
                 "candidate_cap": self.config.live_continuation_oracle_candidate_cap,
                 "max_continuation_decision_rounds": (
                     self.config.live_continuation_oracle_max_continuation_decision_rounds
@@ -7915,7 +7916,7 @@ async def _handle_decision_boundary(
                     policy_decision,
                     metadata={
                         **dict(policy_decision.metadata),
-                        "schema_version": "pokezero.live-foulplay-continuation-oracle.v1",
+                        "schema_version": LIVE_FOULPLAY_CONTINUATION_ORACLE_SCHEMA_VERSION,
                         "controller": "live-foulplay-continuation-oracle",
                         "controller_status": "forced-boundary-raw",
                         "forced_boundary_requested_players": tuple(requested_players),

@@ -337,8 +337,36 @@ class B2EvaluatorTest(unittest.TestCase):
         decision["selected_action_index"] = 0
         decision["action_index"] = 0
         decision["first_restored_joint_step"]["p1"] = 0
-        with self.assertRaisesRegex(module.B2EvaluationError, "stable max-score"):
+        with self.assertRaisesRegex(module.B2EvaluationError, "safe raw-preserving"):
             module.validate_b2_document(malformed_selection)
+
+        old_lowest_index_tie = _unit_document(module)
+        decision = old_lowest_index_tie["oracle_continuation"]["game_results"][0]["live_continuation_oracle"]["oracle_decisions"][0]
+        for candidate in decision["candidates"]:
+            candidate["score"] = 0.5
+            candidate["terminal"]["winner"] = None
+        decision["raw_action_index"] = 1
+        decision["selected_action_index"] = 0
+        decision["action_index"] = 0
+        decision["selected_changed_raw_action"] = True
+        decision["first_restored_joint_step"]["p1"] = 0
+        with self.assertRaisesRegex(module.B2EvaluationError, "safe raw-preserving"):
+            module.validate_b2_document(old_lowest_index_tie)
+
+        immediate_loss_tie = _unit_document(module)
+        decision = immediate_loss_tie["oracle_continuation"]["game_results"][0]["live_continuation_oracle"]["oracle_decisions"][0]
+        for candidate in decision["candidates"]:
+            candidate["score"] = 0.0
+            candidate["terminal"]["winner"] = "p2"
+        decision["candidates"][1]["continuation_decision_round_count"] = 0
+        decision["candidates"][1]["terminal_after_fixed_joint_step"] = True
+        decision["raw_action_index"] = 1
+        decision["selected_action_index"] = 1
+        decision["action_index"] = 1
+        decision["selected_changed_raw_action"] = False
+        decision["first_restored_joint_step"]["p1"] = 1
+        with self.assertRaisesRegex(module.B2EvaluationError, "safe raw-preserving"):
+            module.validate_b2_document(immediate_loss_tie)
 
         mismatched_change_flag = _unit_document(module)
         decision = mismatched_change_flag["oracle_continuation"]["game_results"][0]["live_continuation_oracle"]["oracle_decisions"][0]

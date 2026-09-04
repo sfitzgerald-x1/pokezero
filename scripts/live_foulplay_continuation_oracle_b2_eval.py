@@ -51,7 +51,7 @@ _ORIENTATION_REGISTRATION = {
     },
 }
 SOURCE_SCHEMA_VERSION = "pokezero.controlled-foulplay-benchmark.v1"
-ORACLE_RECEIPT_SCHEMA_VERSION = "pokezero.live-foulplay-continuation-oracle.v1"
+ORACLE_RECEIPT_SCHEMA_VERSION = "pokezero.live-foulplay-continuation-oracle.v2"
 SUCCESS_MARKER = "WROTE B2 LIVE FOULPLAY CONTINUATION ORACLE PAIRED UNIT"
 _EXPERIMENT_ID_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _SOURCE_FILE_PATHS = (
@@ -325,6 +325,23 @@ def _require_clean_integrity(summary: Mapping[str, Any], game: Mapping[str, Any]
         raise B2EvaluationError("B2 game contains captured refusal records")
 
 
+def _expected_oracle_action(*, scored: Sequence[Mapping[str, Any]], raw_action: int,
+                            foulplay_player: str) -> int:
+    """Recompute the source controller's raw-preserving safe tie rule."""
+    best_score = max(float(candidate["score"]) for candidate in scored)
+    tied = [candidate for candidate in scored if float(candidate["score"]) == best_score]
+
+    def immediate_subject_loss(candidate: Mapping[str, Any]) -> bool:
+        terminal = candidate["terminal"]
+        return (candidate["terminal_after_fixed_joint_step"] is True and
+                terminal["winner"] == foulplay_player)
+
+    eligible = [candidate for candidate in tied if not immediate_subject_loss(candidate)] or tied
+    raw_candidate = next((candidate for candidate in eligible if candidate["action_index"] == raw_action), None)
+    return int(raw_candidate["action_index"] if raw_candidate is not None else
+               min(eligible, key=lambda candidate: int(candidate["action_index"]))["action_index"])
+
+
 def _require_oracle_candidate_receipt(
     item: Mapping[str, Any], *, pokezero_player: str, foulplay_player: str
 ) -> None:
@@ -360,7 +377,7 @@ def _require_oracle_candidate_receipt(
     )
     if any(action >= ACTION_COUNT for action in legal) or len(set(legal)) != len(legal):
         raise B2EvaluationError("oracle receipt has malformed legal action indices")
-    scored: list[tuple[int, float]] = []
+    scored: list[Mapping[str, Any]] = []
     for candidate in candidates:
         record = _require_mapping(candidate, field="oracle candidate")
         _require_exact_keys(
@@ -426,8 +443,8 @@ def _require_oracle_candidate_receipt(
         )
         if expected_score is None or float(score) != expected_score:
             raise B2EvaluationError("oracle candidate terminal winner and score are inconsistent")
-        scored.append((action, float(score)))
-    actions = [action for action, _score in scored]
+        scored.append(record)
+    actions = [int(candidate["action_index"]) for candidate in scored]
     if len(set(actions)) != len(actions):
         raise B2EvaluationError("oracle receipt repeats a legal candidate action")
     if tuple(actions) != legal:
@@ -435,12 +452,14 @@ def _require_oracle_candidate_receipt(
     selected = _require_nonnegative_int(item.get("selected_action_index"), field="selected_action_index")
     if selected not in actions:
         raise B2EvaluationError("oracle receipt selected an action outside its candidates")
-    expected_selected = max(scored, key=lambda candidate: (candidate[1], -candidate[0]))[0]
-    if selected != expected_selected:
-        raise B2EvaluationError("oracle receipt does not use the stable max-score, lowest-index tie break")
     raw_action = _require_nonnegative_int(item.get("raw_action_index"), field="raw_action_index")
     if raw_action not in legal:
         raise B2EvaluationError("oracle receipt raw action is outside the recorded legal action set")
+    expected_selected = _expected_oracle_action(
+        scored=scored, raw_action=raw_action, foulplay_player=foulplay_player,
+    )
+    if selected != expected_selected:
+        raise B2EvaluationError("oracle receipt does not use the safe raw-preserving tie rule")
     if not isinstance(item.get("selected_changed_raw_action"), bool) or (
         bool(item["selected_changed_raw_action"]) != (selected != raw_action)
     ):
