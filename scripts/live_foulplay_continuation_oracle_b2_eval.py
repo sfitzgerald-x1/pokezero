@@ -53,6 +53,7 @@ _ORIENTATION_REGISTRATION = {
 SOURCE_SCHEMA_VERSION = "pokezero.controlled-foulplay-benchmark.v1"
 ORACLE_RECEIPT_SCHEMA_VERSION = "pokezero.live-foulplay-continuation-oracle.v1"
 SUCCESS_MARKER = "WROTE B2 LIVE FOULPLAY CONTINUATION ORACLE PAIRED UNIT"
+_EXPERIMENT_ID_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _SOURCE_FILE_PATHS = (
     "scripts/live_foulplay_continuation_oracle_b2_eval.py",
     "src/pokezero/foulplay_bridge.py",
@@ -139,6 +140,22 @@ def _require_exact_keys(value: Mapping[str, Any], *, field: str, keys: set[str])
 def _require_sha256(value: object, *, field: str) -> str:
     if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
         raise B2EvaluationError(f"{field} must be a lowercase SHA-256 hex digest")
+    return value
+
+
+def _require_experiment_id(value: object, *, field: str) -> str:
+    """Require a stable, explicit identity for the immutable unit series.
+
+    The evaluator is shared by the registered B2 study and non-bankable
+    reliability gates.  Those gates may use a disjoint seed reservation, but
+    must never silently stamp their receipts with B2's experiment identity.
+    The caller supplies the identity and the validator receives it again as an
+    explicit expected value; this check is deliberately stricter than merely
+    accepting any JSON string in a receipt.
+    """
+
+    if not isinstance(value, str) or _EXPERIMENT_ID_RE.fullmatch(value) is None:
+        raise B2EvaluationError(f"{field} must be a lowercase hyphenated experiment identity")
     return value
 
 
@@ -716,13 +733,25 @@ def _require_arm_provenance(summary: Mapping[str, Any]) -> Mapping[str, Any]:
     return provenance
 
 
-def validate_b2_document(payload: Mapping[str, Any]) -> None:
-    """Validate one completed, registered B2 seat/seed unit before publication."""
+def validate_experiment_document(
+    payload: Mapping[str, Any], *, expected_experiment_id: str,
+) -> None:
+    """Validate one completed paired unit for one explicitly named experiment.
+
+    ``expected_experiment_id`` is deployment-owned evidence, not an inference
+    from the receipt.  Keeping it explicit lets a diagnostic use an isolated
+    seed band while preserving ``validate_b2_document`` as the strict default
+    used by the registered study.
+    """
+
+    expected_experiment_id = _require_experiment_id(
+        expected_experiment_id, field="expected experiment id"
+    )
 
     if payload.get("schema_version") != SCHEMA_VERSION:
         raise B2EvaluationError("unexpected B2 document schema")
-    if payload.get("experiment_id") != EXPERIMENT_ID:
-        raise B2EvaluationError("unexpected B2 experiment id")
+    if payload.get("experiment_id") != expected_experiment_id:
+        raise B2EvaluationError("unexpected paired-unit experiment id")
     if payload.get("complete") is not True or payload.get("write_protocol") != WRITE_PROTOCOL:
         raise B2EvaluationError("B2 unit is not a completed create-only atomic unit")
     if payload.get("status") != "PASS":
@@ -852,6 +881,12 @@ def validate_b2_document(payload: Mapping[str, Any]) -> None:
         float(oracle_game.get("pokezero_score")) - float(raw_game.get("pokezero_score"))
     ):
         raise B2EvaluationError("paired delta does not equal oracle score minus raw score")
+
+
+def validate_b2_document(payload: Mapping[str, Any]) -> None:
+    """Validate a completed receipt for the registered B2 study only."""
+
+    validate_experiment_document(payload, expected_experiment_id=EXPERIMENT_ID)
 
 
 def _arm_provenance(args: argparse.Namespace, summary: Mapping[str, Any]) -> dict[str, object]:
@@ -993,6 +1028,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--foulplay-player", choices=("p1", "p2"), required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument(
+        "--experiment-id",
+        default=EXPERIMENT_ID,
+        help=(
+            "immutable identity for this paired unit series; defaults to the "
+            "registered B2 study and must be overridden by a diagnostic gate"
+        ),
+    )
+    parser.add_argument(
         "--registration-seed-start",
         type=int,
         required=True,
@@ -1025,6 +1068,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    experiment_id = _require_experiment_id(args.experiment_id, field="--experiment-id")
     expected = _ORIENTATION_REGISTRATION[args.pokezero_player]
     if args.foulplay_player != expected["foulplay_player"]:
         raise B2EvaluationError("--foulplay-player must be the external FoulPlay complement of --pokezero-player")
@@ -1054,7 +1098,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     unit = _paired_unit(args)
     payload: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
-        "experiment_id": EXPERIMENT_ID,
+        "experiment_id": experiment_id,
         "complete": True,
         "write_protocol": WRITE_PROTOCOL,
         "status": "PASS",
@@ -1092,7 +1136,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "oracle_minus_raw_score": unit["oracle_minus_raw_score"],
         },
     }
-    validate_b2_document(payload)
+    validate_experiment_document(payload, expected_experiment_id=experiment_id)
     _write_new_json(args.out, payload)
     print(SUCCESS_MARKER)
     return 0

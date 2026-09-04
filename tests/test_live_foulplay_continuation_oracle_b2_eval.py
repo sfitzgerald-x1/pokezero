@@ -438,6 +438,41 @@ class B2EvaluatorTest(unittest.TestCase):
                     )
                 )
 
+    def test_requires_an_explicit_non_b2_identity_for_a_diagnostic_receipt(self) -> None:
+        module = _module()
+        diagnostic_id = "root-oracle-b2-r40-durable-gate-20260904"
+        diagnostic = _unit_document(module, seat="p1", seed=119_000_000,
+                                    registration_seed_start=119_000_000)
+        diagnostic["experiment_id"] = diagnostic_id
+
+        module.validate_experiment_document(
+            diagnostic, expected_experiment_id=diagnostic_id,
+        )
+        with self.assertRaisesRegex(module.B2EvaluationError, "paired-unit experiment id"):
+            module.validate_b2_document(diagnostic)
+        with self.assertRaisesRegex(module.B2EvaluationError, "paired-unit experiment id"):
+            module.validate_experiment_document(
+                diagnostic, expected_experiment_id="root-oracle-b2-transfer-foulplay-20260831",
+            )
+
+    def test_accepts_an_explicit_diagnostic_experiment_cli_identity(self) -> None:
+        module = _module()
+        args = module.build_arg_parser().parse_args(
+            [
+                "--checkpoint", "/checkpoint.pt",
+                "--showdown-root", "/showdown",
+                "--foulplay-root", "/foulplay",
+                "--foulplay-python", "/foulplay/.venv/bin/python",
+                "--out", "/shared/unit.json",
+                "--pokezero-player", "p1",
+                "--foulplay-player", "p2",
+                "--seed", "119000000",
+                "--registration-seed-start", "119000000",
+                "--experiment-id", "root-oracle-b2-r40-durable-gate-20260904",
+            ]
+        )
+        self.assertEqual(args.experiment_id, "root-oracle-b2-r40-durable-gate-20260904")
+
 
 if __name__ == "__main__":
     unittest.main()
