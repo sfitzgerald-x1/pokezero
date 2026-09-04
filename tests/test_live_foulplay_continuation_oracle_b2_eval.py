@@ -527,7 +527,7 @@ class B2EvaluatorTest(unittest.TestCase):
             seat="p1",
             seed=119_000_000,
             registration_seed_start=119_000_000,
-            arm_execution_order="oracle-then-raw",
+            arm_execution_order="control-oracle-raw",
             raw_reproducibility_control=True,
         )
         with self.assertRaisesRegex(module.B2EvaluationError, "registered B2 requires"):
@@ -540,7 +540,7 @@ class B2EvaluatorTest(unittest.TestCase):
             seat="p1",
             seed=119_000_000,
             registration_seed_start=119_000_000,
-            arm_execution_order="oracle-then-raw",
+            arm_execution_order="control-oracle-raw",
             raw_reproducibility_control=True,
         )
         bad_control["experiment_id"] = diagnostic_id
@@ -548,25 +548,43 @@ class B2EvaluatorTest(unittest.TestCase):
         with self.assertRaisesRegex(module.B2EvaluationError, "seeds to its game seed"):
             module.validate_experiment_document(bad_control, expected_experiment_id=diagnostic_id)
 
-    def test_paired_unit_respects_diagnostic_arm_order_and_raw_control(self) -> None:
-        module = _module()
-        args = SimpleNamespace(
+        incoherent_execution = _unit_document(
+            module,
+            seat="p1",
             seed=119_000_000,
-            pokezero_player="p1",
-            arm_execution_order="oracle-then-raw",
-            include_raw_reproducibility_control=True,
+            registration_seed_start=119_000_000,
+            arm_execution_order="raw-then-oracle",
+            raw_reproducibility_control=True,
         )
-        calls: list[tuple[str, bool]] = []
+        incoherent_execution["experiment_id"] = diagnostic_id
+        with self.assertRaisesRegex(module.B2EvaluationError, "order and raw-control flag disagree"):
+            module.validate_experiment_document(incoherent_execution, expected_experiment_id=diagnostic_id)
 
-        def fake_run_arm(_args: object, *, seed: int, seat: str, oracle: bool, label: str) -> dict[str, object]:
-            self.assertEqual((seed, seat), (119_000_000, "p1"))
-            calls.append((label, oracle))
-            return _bridge_summary(module, seat=seat, oracle=oracle, seed=seed)
+    def test_paired_unit_respects_three_arm_diagnostic_order_and_raw_control(self) -> None:
+        module = _module()
+        expected_calls = {
+            "raw-oracle-control": [("raw", False), ("oracle", True), ("raw-control", False)],
+            "control-oracle-raw": [("raw-control", False), ("oracle", True), ("raw", False)],
+        }
+        for order, expected in expected_calls.items():
+            with self.subTest(order=order):
+                args = SimpleNamespace(
+                    seed=119_000_000,
+                    pokezero_player="p1",
+                    arm_execution_order=order,
+                    include_raw_reproducibility_control=True,
+                )
+                calls: list[tuple[str, bool]] = []
 
-        with patch.object(module, "_run_arm", side_effect=fake_run_arm):
-            unit = module._paired_unit(args)
-        self.assertEqual(calls, [("oracle", True), ("raw", False), ("raw-control", False)])
-        self.assertEqual(unit["raw_control_minus_raw_score"], 0.0)
+                def fake_run_arm(_args: object, *, seed: int, seat: str, oracle: bool, label: str) -> dict[str, object]:
+                    self.assertEqual((seed, seat), (119_000_000, "p1"))
+                    calls.append((label, oracle))
+                    return _bridge_summary(module, seat=seat, oracle=oracle, seed=seed)
+
+                with patch.object(module, "_run_arm", side_effect=fake_run_arm):
+                    unit = module._paired_unit(args)
+                self.assertEqual(calls, expected)
+                self.assertEqual(unit["raw_control_minus_raw_score"], 0.0)
 
 
 if __name__ == "__main__":
