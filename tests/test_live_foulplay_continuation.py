@@ -577,6 +577,70 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
             )
         self.assertEqual(decision.action_index, 0)
 
+    def test_oracle_displaces_a_p2_immediate_loss_for_a_tied_nonimmediate_action(self) -> None:
+        boundary = LiveFoulPlayBoundary(
+            snapshot=SimpleNamespace(battle_id="live-p2-loss-tie", format_id="gen3randombattle"),
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+
+        def fake_run(**kwargs: object) -> dict[str, object]:
+            immediate = int(kwargs["pokezero_action"]) == 1
+            return {"continuation": {"decision_round_count": 0 if immediate else 1,
+                                     "terminal_after_fixed_joint_step": immediate,
+                                     "terminal": {"winner": "p1", "turn_count": 8, "capped": False}}}
+
+        with patch("pokezero.live_foulplay_continuation.run_live_foulplay_continuation", side_effect=fake_run):
+            decision = select_live_foulplay_continuation_oracle_action(
+                boundary=boundary, source_seed=108_000_000, source_decision_round=2, raw_action=1,
+                legal_actions=(0, 1), foulplay_action=3, foulplay_choice="move 4", pokezero_player="p2",
+                foulplay_player="p1", candidate_cap=2, env_factory=lambda: self.fail("runner is patched"),
+                continuation_policy_factory=lambda: self.fail("runner is patched"), rollout_config=RolloutConfig(max_decision_rounds=10),
+            )
+        self.assertEqual(decision.action_index, 0)
+
+    def test_oracle_keeps_raw_when_all_top_ties_are_immediate_losses(self) -> None:
+        boundary = LiveFoulPlayBoundary(
+            snapshot=SimpleNamespace(battle_id="live-all-loss-tie", format_id="gen3randombattle"),
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+
+        def fake_run(**_kwargs: object) -> dict[str, object]:
+            return {"continuation": {"decision_round_count": 0, "terminal_after_fixed_joint_step": True,
+                                     "terminal": {"winner": "p2", "turn_count": 8, "capped": False}}}
+
+        with patch("pokezero.live_foulplay_continuation.run_live_foulplay_continuation", side_effect=fake_run):
+            decision = select_live_foulplay_continuation_oracle_action(
+                boundary=boundary, source_seed=108_000_000, source_decision_round=2, raw_action=1,
+                legal_actions=(0, 1, 2), foulplay_action=3, foulplay_choice="move 4", pokezero_player="p1",
+                foulplay_player="p2", candidate_cap=3, env_factory=lambda: self.fail("runner is patched"),
+                continuation_policy_factory=lambda: self.fail("runner is patched"), rollout_config=RolloutConfig(max_decision_rounds=10),
+            )
+        self.assertEqual(decision.action_index, 1)
+
+    def test_oracle_chooses_lowest_safe_tie_when_raw_is_an_immediate_loss(self) -> None:
+        boundary = LiveFoulPlayBoundary(
+            snapshot=SimpleNamespace(battle_id="live-safe-tie-order", format_id="gen3randombattle"),
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+
+        def fake_run(**kwargs: object) -> dict[str, object]:
+            immediate = int(kwargs["pokezero_action"]) == 3
+            return {"continuation": {"decision_round_count": 0 if immediate else 1,
+                                     "terminal_after_fixed_joint_step": immediate,
+                                     "terminal": {"winner": "p2", "turn_count": 8, "capped": False}}}
+
+        with patch("pokezero.live_foulplay_continuation.run_live_foulplay_continuation", side_effect=fake_run):
+            decision = select_live_foulplay_continuation_oracle_action(
+                boundary=boundary, source_seed=108_000_000, source_decision_round=2, raw_action=3,
+                legal_actions=(2, 3, 0), foulplay_action=4, foulplay_choice="move 5", pokezero_player="p1",
+                foulplay_player="p2", candidate_cap=3, env_factory=lambda: self.fail("runner is patched"),
+                continuation_policy_factory=lambda: self.fail("runner is patched"), rollout_config=RolloutConfig(max_decision_rounds=10),
+            )
+        self.assertEqual(decision.action_index, 0)
+
     def test_oracle_binds_the_per_candidate_eligibility_limit_and_emits_progress(self) -> None:
         boundary = LiveFoulPlayBoundary(
             snapshot=SimpleNamespace(battle_id="live-bounded", format_id="gen3randombattle"),
