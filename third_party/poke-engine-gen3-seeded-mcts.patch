@@ -237,10 +237,10 @@ index 795b3e5..19906f7 100644
      } else {
          perform_mcts(&mut state, s1_options, s2_options, duration, iterations)
      };
-diff --git a/poke-engine-py/python/poke_engine/__init__.py b/poke-engine-py/python/poke_engine/__init__.py
+diff --git a/python/poke_engine/__init__.py b/python/poke_engine/__init__.py
 index 9e579cc..9915974 100644
---- a/poke-engine-py/python/poke_engine/__init__.py
-+++ b/poke-engine-py/python/poke_engine/__init__.py
+--- a/python/poke_engine/__init__.py
++++ b/python/poke_engine/__init__.py
 @@ -146,7 +146,11 @@ class MctsResult:
  
  

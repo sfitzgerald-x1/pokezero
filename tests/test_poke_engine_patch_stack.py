@@ -42,7 +42,8 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 #
 # 75 -> 76 (`poke-engine-gen3-seeded-mcts.patch`). The three control digests
 # remain unchanged across that bump, measured on the replay and not asserted
-# from the diff.
+# from the diff. The patch must update the root Python package source that
+# Maturin actually packages.
 EXPECTED_FINAL_SHA256 = {
     "src/gen3/generate_instructions.rs": "5640f931f8818ce6dd90aa98066265b8c091eaa1f918efc2ae1c03788114fe9c",
     "src/gen3/items.rs": "14415306c663e3e7a9a75f5a4882105cbb9bb91013ca96a35be3a30ca395ea93",
@@ -224,6 +225,9 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             py_binding = (source / "poke-engine-py/src/lib.rs").read_text(encoding="utf-8")
             self.assertIn("seeded MCTS requires threads=1", py_binding)
             self.assertIn("perform_mcts_seeded(", py_binding)
+            packaged_wrapper = (source / "python/poke_engine/__init__.py").read_text(encoding="utf-8")
+            self.assertIn("seed: int | None = None", packaged_wrapper)
+            self.assertIn("mcts(state, duration_ms, iterations, threads, seed)", packaged_wrapper)
             for relative_path, expected_sha256 in EXPECTED_FINAL_SHA256.items():
                 actual_sha256 = hashlib.sha256((source / relative_path).read_bytes()).hexdigest()
                 self.assertEqual(actual_sha256, expected_sha256, relative_path)
@@ -232,9 +236,9 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             self.assertEqual(
                 targets,
                 [
-                    "poke-engine-py/python/poke_engine/__init__.py",
                     "poke-engine-py/python/poke_engine/poke_engine.pyi",
                     "poke-engine-py/src/lib.rs",
+                    "python/poke_engine/__init__.py",
                     "src/choices.rs",
                     "src/gen3/abilities.rs",
                     "src/gen3/choice_effects.rs",
